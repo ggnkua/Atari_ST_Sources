@@ -1,0 +1,888 @@
+; Envmapped thick hemisphere..
+
+;******* OBJECT EQUATES ********
+
+Hemi.R:			=	300
+Hemi.STEPS:		=	6
+Hemi.FILLED:		=	1
+Hemi.INNER_R:		=	$6000
+
+Hemi.NUM_V:		=	Hemi.STEPS*Hemi.STEPS+2
+
+Hemi.WIBBLESPEED:	=	3
+
+Hemi.BUMPSIZE:		=	400
+
+			RSRESET
+Hemi.object:		RS.W	8192
+Hemi.BLOCK_SIZE:	RS.B	0
+
+;******* OBJECT TABLE ********
+
+; Must be first in object!!
+Hemi.table:
+	DC.L	Hemi.mainLoop
+	DC.L	Hemi.init
+	DC.L	rts
+	DC.L	Hemi.setRotMode
+	DC.L	Hemi.setClapMode
+	DC.L	Hemi.revRot
+	DC.L	Hemi.setBump
+	DC.L	0
+
+	IFND	DEMO_SYSTEM
+	INCLUDE	SFLY_DSP.S				; Include the CPU-DSP engine.
+	TEXT
+	ENDC
+
+;******* INIT SUBROUTINE ********
+
+; OUTPUT:
+; d0.l: =0 all clear, <0 error
+Hemi.init:
+	move.l	#Hemi.BLOCK_SIZE,d0
+	bsr.l	Mem.register
+
+	lea	sine_tbl,a1
+	bsr.l	Matrix.init
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;******* REALTIME INIT SUBROUTINE ********
+
+Hemi.realtimeInit:
+	move.l	#rts,vbl_gfx
+
+	bsr.l	Mem.getBlock
+	move.l	d0,Hemi.baseAdr
+
+	bsr.l	HumanFly.init
+
+	lea	Viewport.settingsTable,a0
+	move.w	#320,Viewport.XSCREEN(a0)
+	move.w	#200,Viewport.YSCREEN(a0)
+	move.w	#0,Viewport.XSTART(a0)
+	move.w	#50,Viewport.YSTART(a0)
+	move.w	#320,Viewport.XEND(a0)
+	move.w	#150,Viewport.YEND(a0)
+	move.w	#160,Viewport.XCENTER(a0)
+	move.w	#100,Viewport.YCENTER(a0)
+	move.w	#256+32,Viewport.ASPECT(a0)
+	move.w	#$100,Viewport.FOCAL(a0)
+	bsr.l	Viewport.update
+
+	lea	Hemi.textureTable,a0
+	bsr.l	Polygon.init
+
+	bsr.l	ObjectRegistry.clear
+
+	movea.l	Hemi.baseAdr,a0
+	adda.l	#Hemi.object,a0
+	bsr	Hemi.generate
+; d0.l=size of generated object
+	movea.l	Hemi.baseAdr,a0
+	adda.l	#Hemi.object,a0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi	.error
+
+	bsr	Hemi.setRotMode
+
+	moveq	#0,d0
+
+	move.w	monitormode,d1
+	cmpi.w	#vga60,d1
+	beq.s	.vga60
+	cmpi.w	#vga100,d1
+	beq.s	.vga100
+	cmpi.w	#rgb50,d1
+	beq.s	.rgb50
+; Unknown monitormode..
+	rts
+.vga60:	move.l	#vga60_16bit_320_200,Hemi.resRout
+	rts
+.vga100:move.l	#vga100_16bit_320_200,Hemi.resRout
+	rts
+.rgb50:	move.l	#rgb50_16bit_320_200,Hemi.resRout
+	rts
+
+.error:	moveq	#-1,d0
+	rts
+
+;******* SCREENINIT SUBROUTINE ********
+
+Hemi.initScreen:
+	movea.l	scr,a0
+	move.l	#$00000000,d0
+	move.w	#320*100-1,d7
+.loop:	move.l	d0,(a0)+
+	dbf	d7,.loop
+	rts
+
+;******* MAINLOOP SUBROUTINE ********
+
+Hemi.mainLoop:
+	movea.l	scr,a0
+	bsr.l	Primitive.setScreenbuffer
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr	Hemi.realtimeInit
+	tst.w	d0
+	bmi	.end
+	move.l	(sp)+,d0
+.end_realtime_init:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr	Hemi.initScreen
+.end_screeninit:
+
+; 0->1
+; 0<-1
+; axial rotation of hemi.
+	tst.w	Hemi.rotOn
+	beq.s	.end_rot
+	move.w	$04BC.w,d0
+	sub.w	Hemi.oldRotTime,d0
+	lsl.w	#4,d0
+	tst.w	Hemi.rotDir
+	bmi.s	.check0
+; 0->1
+	cmpi.w	#sintbllen/2,d0
+	blt.s	.clipped1
+	move.w	#sintbllen/2,d0
+	clr.w	Hemi.rotOn
+.clipped1:
+	move.w	d0,Hemi.rot
+	bra.s	.end_rot
+; 0<-1
+.check0:neg.w	d0
+	addi.w	#sintbllen/2,d0
+	bpl.s	.clipped0
+	clr.w	d0
+	clr.w	Hemi.rotOn
+.clipped0:
+	move.w	d0,Hemi.rot
+.end_rot:
+
+; bump shit..
+	tst.w	Hemi.bumpOn
+	beq.s	.end_bump
+	bsr	Hemi.bump
+.end_bump:
+
+	movea.l	Hemi.paintRout,a0
+	jsr	(a0)
+
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+
+	movea.l	Hemi.resRout,a0
+	suba.l	a1,a1
+	movea.l	d0,a2
+.again:	bsr.l	Screen.requestUpdate
+	tst.l	d0
+	bmi.s	.again
+	clr.l	Hemi.resRout
+.end:	rts
+
+;******* OBJECT SUBROUTINES ********
+
+Hemi.setRotMode:
+	move.l	#Hemi.paint,Hemi.paintRout
+	rts
+
+Hemi.setClapMode:
+	move.l	#Hemi.paintClaps,Hemi.paintRout
+	rts
+
+Hemi.revRot:
+	move.w	#1,Hemi.rotOn
+	neg.w	Hemi.rotDir
+	move.w	$04BC.w,Hemi.oldRotTime
+	rts
+
+Hemi.setBump:
+	move.w	#1,Hemi.bumpOn
+	move.l	$04BA.w,Hemi.bumpStart
+	rts
+
+Hemi.bump:
+	move.l	$04BA.w,d0
+	sub.l	Hemi.bumpStart,d0
+	cmpi.w	#Hemi.BUMPSIZE,d0
+	blt.s	.ok
+	clr.w	Hemi.bumpOn
+	clr.w	Hemi.dist
+	rts
+.ok:	subi.w	#Hemi.BUMPSIZE/2,d0
+	muls.w	d0,d0
+	neg.l	d0
+	addi.l	#(Hemi.BUMPSIZE/2)*(Hemi.BUMPSIZE/2),d0
+	lsr.l	#5,d0
+	addi.w	#0,d0
+	move.w	d0,Hemi.dist
+	rts
+
+Hemi.paint:
+	bsr.l	PrimitiveMesh.new
+
+	clr.w	d0
+	move.w	$04BC.w,d1
+	clr.w	d2
+	bsr.l	Matrix.generate
+
+	clr.w	d0
+	clr.w	d1
+	move.w	#1800,d2
+	bsr.l	Matrix.translate
+
+	bsr.l	Matrix.push
+
+; hemi 1
+	move.w	Hemi.rot,d0
+	clr.w	d1
+	clr.w	d2
+	bsr.l	Matrix.generate
+
+	clr.w	d0
+	clr.w	d1
+	clr.w	d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+; hemi 2
+	move.w	Hemi.rot,d0
+	neg.w	d0
+	addi.w	#sintbllen/2,d0
+	clr.w	d1
+	clr.w	d2
+	bsr.l	Matrix.generate
+
+	move.w	#+Hemi.R*2,d0
+	clr.w	d1
+	clr.w	d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+; hemi 3
+	move.w	Hemi.rot,d0
+	neg.w	d0
+	addi.w	#sintbllen/2,d0
+	clr.w	d1
+	clr.w	d2
+	bsr.l	Matrix.generate
+
+	move.w	#-Hemi.R*2,d0
+	clr.w	d1
+	clr.w	d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+	bsr.l	Matrix.pop
+
+	bsr.l	PrimitiveMesh.sortZ
+
+	bsr.l	PrimitiveMesh.complete
+
+	IFNE	1
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	moveq	#$00000000,d4
+	bsr.l	Viewport.paintRectangle
+	ELSE
+	movea.l	Hemi.rectAddressTable,a0
+	move.w	(a0)+,d7
+	beq.s	.end_restore
+	subq.w	#1,d7
+.restore_loop:
+	move.w	d7,-(sp)
+	movem.w	(a0)+,d1/d7
+	movem.w	(a0)+,d0/d6
+	move.l	a0,-(sp)
+	move.l	#$00000000,d4
+	bsr.l	Viewport.paintRectangle
+	movea.l	(sp)+,a0
+	move.w	(sp)+,d7
+	dbra	d7,.restore_loop
+.end_restore:
+	ENDC
+
+	movea.l	Hemi.rectAddressTable,a0
+	bsr.l	PrimitiveMesh.paint
+
+	lea	Hemi.rectAddressTable,a0
+ 	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+.end:	rts
+
+Hemi.paintClaps:
+	bsr.l	PrimitiveMesh.new
+
+	clr.w	d0
+	move.w	$04BC.w,d1
+	clr.w	d2
+	bsr.l	Matrix.generate
+
+	clr.w	d0
+	clr.w	d1
+	move.w	#1800,d2
+	bsr.l	Matrix.translate
+
+	bsr.l	Matrix.push
+
+; hemi 1
+	move.w	#-sintbllen/4,d0
+	move.w	#0,d1
+	move.w	#+sintbllen/4,d2
+	bsr.l	Matrix.generate
+
+	move.w	Hemi.dist,d0
+	neg.w	d0
+	clr.w	d1
+	clr.w	d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+; hemi 2
+	move.w	#+sintbllen/4,d0
+	move.w	#0,d1
+	move.w	#-sintbllen/4,d2
+	bsr.l	Matrix.generate
+
+	move.w	Hemi.dist,d0
+	clr.w	d1
+	clr.w	d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+	bsr.l	Matrix.pop
+
+	bsr.l	PrimitiveMesh.sortZ
+
+	bsr.l	PrimitiveMesh.complete
+
+	IFNE	1
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	moveq	#$00000000,d4
+	bsr.l	Viewport.paintRectangle
+	ELSE
+	movea.l	Hemi.rectAddressTable,a0
+	move.w	(a0)+,d7
+	beq.s	.end_restore
+	subq.w	#1,d7
+.restore_loop:
+	move.w	d7,-(sp)
+	movem.w	(a0)+,d1/d7
+	movem.w	(a0)+,d0/d6
+	move.l	a0,-(sp)
+	move.l	#$00000000,d4
+	bsr.l	Viewport.paintRectangle
+	movea.l	(sp)+,a0
+	move.w	(sp)+,d7
+	dbra	d7,.restore_loop
+.end_restore:
+	ENDC
+
+	movea.l	Hemi.rectAddressTable,a0
+	bsr.l	PrimitiveMesh.paint
+
+	lea	Hemi.rectAddressTable,a0
+ 	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+.end:	rts
+
+; 1 + 8 + 1, 10 points on curve, 9 lines on curve
+; INPUT:
+; a0: destination object
+; OUTPUT:
+; d0.l=size
+Hemi.generate:
+	movea.l	a0,a6
+
+	move.w	#2*(Hemi.STEPS*Hemi.STEPS+2),(a0)+	;#vertices+#normals
+	move.w	#Hemi.STEPS*Hemi.STEPS+2,(a0)+		;#normals
+
+	move.w	$0468.w,.time
+	lea	sine_tbl,a1
+
+	move.w	$04BC.w,d5
+	lsl.w	#Hemi.WIBBLESPEED,d5
+	Do_SinModulo	d5
+	Get_Sin	a1,d5,d5
+	asr.w	#8,d5
+	asr.w	#1,d5
+	addi.w	#$100,d5
+	muls.w	#Hemi.R,d5
+	asr.l	#8,d5
+	move.w	#Hemi.R,d5
+
+; Output top vertex..
+	clr.w	(a0)+
+	move.w	d5,(a0)+
+	clr.w	(a0)+
+
+	moveq	#1,d7
+
+; 0.1/9.2/9.3/9.4/9.5/9.6/9.7/9.8/9.1, 10 points, 9 lines
+; 1 top, 1 bottom, 8 inbetween points.. 
+
+; Outer loop (180 degrees)
+.r1_loop:
+	move.w	d7,d0
+	mulu.w	#(sintbllen/(Hemi.STEPS+1))/2,d0
+	move.w	d0,d1
+	Get_SinCos	a1,d0,d0,d3
+	cmpi.w	#sintbllen/4,d1
+	blt.s	.okido
+	neg.w	d3
+	muls.w	#Hemi.INNER_R,d0
+	muls.w	#Hemi.INNER_R,d3
+	add.l	d0,d0
+	add.l	d3,d3
+	swap	d0
+	swap	d3
+.okido:	muls.w	#Hemi.R,d0
+	muls.w	d5,d3
+	add.l	d0,d0
+	add.l	d3,d3
+	swap	d0					; d0.w=r2
+	swap	d3					; d3.w=r*cos(t1)
+
+	clr.w	d6
+
+; Inner loop (360 degrees)
+.r2_loop:
+	move.w	d6,d1
+	mulu.w	#sintbllen/Hemi.STEPS,d1
+	Get_SinCos	a1,d1,d1,d2
+	muls.w	d0,d1
+	muls.w	d0,d2
+	add.l	d1,d1
+	add.l	d2,d2
+	swap	d1
+	swap	d2
+	move.w	d1,(a0)+				; Output r2*cos(t2).
+	move.w	d3,(a0)+				; Output r*cos(t1).
+	move.w	d2,(a0)+				; Output r2*sin(t2).
+	addq.w	#1,d6
+	cmpi.w	#Hemi.STEPS,d6
+	blt.s	.r2_loop
+
+	addq.w	#1,d7
+	cmpi.w	#Hemi.STEPS+1,d7
+	blt.s	.r1_loop
+
+; Output bottom vertex..
+	clr.w	(a0)+
+	muls.w	#Hemi.INNER_R,d5
+	add.l	d5,d5
+	swap	d5
+	move.w	d5,(a0)+
+	clr.w	(a0)+
+
+;----------------
+; Normal vectors.
+
+	move.w	$04BC.w,d5
+	lsl.w	#Hemi.WIBBLESPEED,d5
+	Do_SinModulo	d5
+	Get_Sin	a1,d5,d5
+	asr.w	#8,d5
+	asr.w	#3,d5
+	addi.w	#$40,d5
+	move.w	#40,d5
+
+; Output top vertex..
+	clr.w	(a0)+
+	move.w	d5,(a0)+
+	clr.w	(a0)+
+
+	moveq	#1,d7
+
+; 0.1/9.2/9.3/9.4/9.5/9.6/9.7/9.8/9.1, 10 points, 9 lines
+; 1 top, 1 bottom, 8 inbetween points.. 
+
+; Outer loop (180 degrees)
+.n_r1_loop:
+	move.w	d7,d0
+	mulu.w	#(sintbllen/(Hemi.STEPS+1))/2,d0
+	move.w	d0,d1
+
+; transition vertex?
+	cmpi.w	#sintbllen/4,d0
+	blt.s	.outside
+	move.w	d0,d1
+	neg.w	d1
+	Do_SinModulo	d1
+	cmpi.w	#sintbllen/4+(sintbllen/(Hemi.STEPS+1))/2,d0
+	bhs.s	.angle_found
+;	move.w	d0,d1
+;	addi.w	#3*sintbllen/8,d1
+	bra.s	.angle_found
+.outside:
+	cmpi.w	#sintbllen/4-(sintbllen/(Hemi.STEPS+1))/2,d0
+	blt.s	.angle_found
+	move.w	d0,d1
+;	addi.w	#sintbllen/8,d1
+
+.angle_found:
+	Get_SinCos	a1,d1,d0,d3
+
+	muls.w	#128,d0
+	muls.w	d5,d3
+	add.l	d0,d0
+	add.l	d3,d3
+	swap	d0					; d0.w=r2
+	swap	d3					; d3.w=r*cos(t1)
+
+	clr.w	d6
+
+; Inner loop (360 degrees)
+.n_r2_loop:
+	move.w	d6,d1
+	mulu.w	#sintbllen/Hemi.STEPS,d1
+	Get_SinCos	a1,d1,d1,d2
+	muls.w	d0,d1
+	muls.w	d0,d2
+	add.l	d1,d1
+	add.l	d2,d2
+	swap	d1
+	swap	d2
+	move.w	d1,(a0)+				; Output r2*cos(t2).
+	move.w	d3,(a0)+				; Output r*cos(t1).
+	move.w	d2,(a0)+				; Output r2*sin(t2).
+	addq.w	#1,d6
+	cmpi.w	#Hemi.STEPS,d6
+	blt.s	.n_r2_loop
+
+	addq.w	#1,d7
+	cmpi.w	#Hemi.STEPS+1,d7
+	blt.s	.n_r1_loop
+
+; Output bottom vertex..
+	clr.w	(a0)+
+	neg.w	d5
+	move.w	d5,(a0)+
+	clr.w	(a0)+
+
+	clr.w	(a0)+					; Output #texels (0).
+
+;------------
+; Primitives
+
+; 1 top line, 1 bottom line, 7 inbetween lines
+	IFNE	Hemi.FILLED
+; Filled version. Head=n tris, tail=n tris, body=n*(n-1) quads
+; total=n*n faces.
+
+; Output primitives..
+	move.w	#Hemi.STEPS*(Hemi.STEPS+1),(a0)+
+
+; Output head.
+; 0-1-2, 0-2-3, 0-3-4,... 0, (i+1), (i+1) mod n +1
+	moveq	#Hemi.STEPS-1,d7
+.head_loop:
+	move.w	#Polygon.TRI|Polygon.ENVMAPPED|0,(a0)+
+	clr.w	(a0)+
+	moveq	#1,d0
+	add.w	d7,d0
+	move.w	d0,(a0)+
+	move.w	d7,d0
+	addq.w	#1,d0
+	divu.w	#Hemi.STEPS,d0
+	swap	d0
+	addq.w	#1,d0
+	move.w	d0,(a0)+
+
+; Normal refs..
+	move.w	#Hemi.NUM_V,(a0)+
+	move.w	#Hemi.NUM_V+1,d0
+	add.w	d7,d0
+	move.w	d0,(a0)+
+	clr.l	d0
+	move.w	d7,d0
+	addq.w	#1,d0
+	divu.w	#Hemi.STEPS,d0
+	swap	d0
+	addi.w	#Hemi.NUM_V+1,d0
+	move.w	d0,(a0)+
+	
+	dbra	d7,.head_loop
+
+; Output body.
+	moveq	#Hemi.STEPS-1-1,d7
+
+.segment_loop:
+	moveq	#Hemi.STEPS-1,d6
+
+; i, i+1, i+1+n, i+n -> i+n, i+1+n, i+1, i
+; 0, 1, 2, 3 -> 3, 2, 1, 0
+.quad_loop:
+	move.w	#Polygon.QUAD|Polygon.ENVMAPPED|0,(a0)+
+
+	move.w	d7,d1
+	addq.w	#1,d1
+	mulu.w	#Hemi.STEPS,d1
+
+; v4
+	move.w	d6,d0
+	add.w	d1,d0	
+	addq.w	#1,d0
+	move.w	d0,(a0)+
+
+; v3
+	clr.l	d0
+	move.w	d6,d0
+	addq.w	#1,d0
+	divu.w	#Hemi.STEPS,d0
+	swap	d0
+	add.w	d1,d0	
+	addq.w	#1,d0
+	move.w	d0,(a0)+
+
+	move.w	d7,d1
+	mulu.w	#Hemi.STEPS,d1
+
+; v2
+	clr.l	d0
+	move.w	d6,d0
+	addq.w	#1,d0
+	divu.w	#Hemi.STEPS,d0
+	swap	d0
+	add.w	d1,d0	
+	addq.w	#1,d0
+	move.w	d0,(a0)+
+
+; v1
+	move.w	d6,d0
+	add.w	d1,d0
+	addq.w	#1,d0
+	move.w	d0,(a0)+
+
+; Normal refs..
+	move.w	d7,d1
+	addq.w	#1,d1
+	mulu.w	#Hemi.STEPS,d1
+
+; v4
+	move.w	d6,d0
+	add.w	d1,d0	
+	addi.w	#Hemi.NUM_V+1,d0
+	move.w	d0,(a0)+
+
+; v3
+	clr.l	d0
+	move.w	d6,d0
+	addq.w	#1,d0
+	divu.w	#Hemi.STEPS,d0
+	swap	d0
+	add.w	d1,d0	
+	addi.w	#Hemi.NUM_V+1,d0
+	move.w	d0,(a0)+
+
+	move.w	d7,d1
+	mulu.w	#Hemi.STEPS,d1
+
+; v2
+	clr.l	d0
+	move.w	d6,d0
+	addq.w	#1,d0
+	divu.w	#Hemi.STEPS,d0
+	swap	d0
+	add.w	d1,d0	
+	addi.w	#Hemi.NUM_V+1,d0
+	move.w	d0,(a0)+
+
+; v1
+	move.w	d6,d0
+	add.w	d1,d0
+	addi.w	#Hemi.NUM_V+1,d0
+	move.w	d0,(a0)+
+
+	dbra	d6,.quad_loop
+
+	dbra	d7,.segment_loop
+
+; Output tail.
+; t, t-n+[(i+1) mod n], t-n+i
+; t=n*n+1
+	moveq	#Hemi.STEPS-1,d7
+
+.tail_loop:
+	move.w	#Polygon.TRI|Polygon.ENVMAPPED|0,(a0)+
+	move.w	#Hemi.STEPS*Hemi.STEPS+1,(a0)+
+	clr.l	d0
+	move.w	d7,d0
+	addq.w	#1,d0
+	divu.w	#Hemi.STEPS,d0
+	swap	d0
+	addi.w	#1+Hemi.STEPS*(Hemi.STEPS-1),d0
+	move.w	d0,(a0)+
+	move.w	#1+Hemi.STEPS*(Hemi.STEPS-1),d0
+	add.w	d7,d0
+	move.w	d0,(a0)+
+
+; Normal refs.
+	move.w	#Hemi.NUM_V+Hemi.STEPS*Hemi.STEPS+1,(a0)+
+	clr.l	d0
+	move.w	d7,d0
+	addq.w	#1,d0
+	divu.w	#Hemi.STEPS,d0
+	swap	d0
+	addi.w	#Hemi.NUM_V+1+Hemi.STEPS*(Hemi.STEPS-1),d0
+	move.w	d0,(a0)+
+	move.w	#Hemi.NUM_V+1+Hemi.STEPS*(Hemi.STEPS-1),d0
+	add.w	d7,d0
+	move.w	d0,(a0)+
+
+	dbra	d7,.tail_loop
+
+	ELSE
+; Wireframe version.
+
+; Output primitives..
+	move.w	#Hemi.STEPS*(Hemi.STEPS+1),(a0)+
+
+; Output head primitives.
+	moveq	#Hemi.STEPS-1,d7
+
+.head_lineloop:
+	move.w	#Primitive.LINETYPE|Polygon.FLATSHADED|0,(a0)+
+	clr.w	(a0)+
+	move.w	d7,d0
+	addq.w	#1,d0
+	move.w	d0,(a0)+
+	dbra	d7,.head_lineloop
+
+; Output body primitives.
+	moveq	#Hemi.STEPS-1-1,d7
+
+.lineseg_loop:
+	moveq	#Hemi.STEPS-1,d6
+
+.line_loop:
+	move.w	#Primitive.LINETYPE|Polygon.FLATSHADED|0,(a0)+
+	move.w	d7,d0
+	mulu.w	#Hemi.STEPS,d0
+	add.w	d6,d0
+	addq.w	#1,d0
+	move.w	d0,(a0)+
+	addi.w	#Hemi.STEPS,d0
+	move.w	d0,(a0)+
+	dbra	d6,.line_loop
+
+	dbra	d7,.lineseg_loop
+
+; Output tail primitives.
+	moveq	#Hemi.STEPS-1,d7
+	move.w	#Hemi.STEPS*Hemi.STEPS+1,d1
+
+.tail_lineloop:
+	move.w	#Primitive.LINETYPE|Polygon.FLATSHADED|0,(a0)+
+	move.w	d1,(a0)+
+	move.w	d1,d0
+	sub.w	d7,d0
+	subq.w	#1,d0
+	move.w	d0,(a0)+
+	dbra	d7,.tail_lineloop
+
+	ENDC
+
+	move.l	a0,d0
+	sub.l	a6,d0
+	rts
+
+.time:	DC.W	0
+
+;******* OBJECT DATA ********
+
+	DATA
+
+Hemi.textureTable:
+	DC.L	FlareGen.goldBuffer
+	DC.L	0
+
+Hemi.rectAddressTable:
+	DC.L	Hemi.rectangleTable
+	DC.L	Hemi.rectangleTable2
+	DC.L	Hemi.rectangleTable3
+
+Hemi.rotDir:
+	DC.W	-1
+
+Hemi.paintRout:
+	DC.L	Hemi.paint
+
+;******* OBJECT RESERVES ********
+
+	BSS
+
+Hemi.resRout:
+	DS.L	1
+
+Hemi.rectangleTable:
+	DS.W	4*10
+Hemi.rectangleTable2:
+	DS.W	4*10
+Hemi.rectangleTable3:
+	DS.W	4*10
+
+Hemi.rot:
+	DS.W	1
+Hemi.oldRot:
+	DS.W	1
+Hemi.oldRotTime:
+	DS.W	1				; ouwe rot
+Hemi.dist:
+	DS.W	1				; distance from eachother
+Hemi.bumpStart:
+	DS.L	1
+Hemi.bumpOn:
+	DS.W	1
+Hemi.rotOn:
+	DS.W	1
+
+Hemi.baseAdr:
+	DS.L	1
+
+;******* END OF DEMO-EFFECT OBJECT ********

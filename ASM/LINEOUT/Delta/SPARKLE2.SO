@@ -1,0 +1,855 @@
+; Human Flied sparkling. A screen for delta.
+
+;******* OBJECT TABLE ********
+
+; Must be first in object!!
+Sparkle.table:
+	DC.L	Sparkle.mainLoop
+	DC.L	Sparkle.init
+	DC.L	Sparkle.setRes
+	DC.L	Sparkle.setOneObject
+	DC.L	Sparkle.setScene
+	DC.L	Sparkle.rotate
+	DC.L	Sparkle.kickObjects			; kick 'n kill
+	DC.L	Sparkle.killObjects
+	DC.L	0
+
+	IFND	DEMO_SYSTEM
+	INCLUDE	SFLY_DSP.S				; Include the CPU-DSP engine.
+	TEXT
+	INCLUDE	OBJECT3D.I
+	TEXT
+	ENDC
+
+;******* OBJECT EQUATES ********
+
+Sparkle.GRAVITY:	=	0
+
+			RSRESET
+Particle.ORG:		RS.B	Vertex.SIZE
+Particle.DIR:		RS.B	Vertex.SIZE
+Particle.BIRTH:		RS.W	1
+Particle.TTL:		RS.W	1
+Particle.SIZE:		RS.B	0
+
+Sparkle.PARTICLES:	=	60			; 60 for std falcon..
+Sparkle.DISTANCE:	=	3000
+
+;******* RESOLUTION SETTING ROUTINE ********
+
+Sparkle.setRes:
+	IFEQ	testmode
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+; Unknown monitormode..
+	rts
+.vga60:	bra.l	vga60_16bit_320_200
+.vga100:bra.l	vga100_16bit_320_200
+.rgb50:	bra.l	rgb50_16bit_320_200
+	ENDC
+	rts
+
+;******* INIT SUBROUTINE ********
+
+; OUTPUT:
+; d0.l: =0 all clear, <0 error
+Sparkle.init:
+	lea	sine_tbl,a1
+	bsr.l	Matrix.init
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;******* REALTIME INIT SUBROUTINE ********
+
+Sparkle.realtimeInit:
+	move.l	#rts,vbl_gfx
+
+	bsr.l	HumanFly.init
+
+	lea	Viewport.settingsTable,a0
+	move.w	#320,Viewport.XSCREEN(a0)
+	move.w	#200,Viewport.YSCREEN(a0)
+	move.w	#0,Viewport.XSTART(a0)
+	move.w	#0,Viewport.YSTART(a0)
+	move.w	#320,Viewport.XEND(a0)
+	move.w	#200,Viewport.YEND(a0)
+	move.w	#160,Viewport.XCENTER(a0)
+	move.w	#100,Viewport.YCENTER(a0)
+	move.w	#256+32,Viewport.ASPECT(a0)
+	move.w	#$100,Viewport.FOCAL(a0)
+	bsr.l	Viewport.update
+
+	lea	Sparkle.textureTable,a0
+	bsr.l	Polygon.init
+
+	move.l	#$3161FD21,random
+
+	bsr.l	ObjectRegistry.clear
+
+	IFNE	1
+
+	lea	Object3d.spikey,a1
+	move.l	#Object3d.spikeyEnd-Object3d.spikey,d0
+	lea	Sparkle.spikey,a0
+	bsr.l	Object3d.copy
+
+	lea	Sparkle.spikey,a0
+	move.w	#0,d0
+	move.w	#8,d1
+	move.w	$04BC.w,d2
+	Do_SinModulo	d2
+	Get_Sin	sine_tbl,d2,d2
+	asr.w	#8,d2
+;	move.w	#$200/8,d2
+	bsr.l	Object3d.scale
+
+	lea	Sparkle.spikey,a0
+	move.l	#Object3d.spikeyEnd-Object3d.spikey,d0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi.s	.end
+
+	ELSE
+
+	lea	Sparkle.cube,a0
+	move.l	#Sparkle.cubeEnd-Sparkle.cube,d0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi	.end
+
+	ENDC
+
+	lea	Sparkle.object,a0
+	bsr.w	Sparkle.generate
+; d0.l=size of generated object
+	lea	Sparkle.object,a0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi	.end
+
+	bsr.l	flushAndDisableICache
+	move.w	#Primitive.WORD|Primitive.CEILADD,d0
+	moveq	#0,d1
+	bsr.l	Primitive.setPaintMode
+	bsr.l	restoreCache
+
+	bsr.w	Sparkle.setOneObject
+	clr.w	Sparkle.rotateMode
+	clr.w	Sparkle.objectDead
+	clr.w	Sparkle.camMoving
+	clr.w	Sparkle.objectMoving
+
+.end:	rts
+
+;******* MAINLOOP SUBROUTINE ********
+
+Sparkle.mainLoop:
+	move.w	$0468.w,.old468
+
+	movea.l	scr,a0
+	bsr.l	Primitive.setScreenbuffer
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	bsr.w	Sparkle.realtimeInit
+.end_realtime_init:
+
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	moveq	#$00000000,d4
+	bsr.l	Viewport.paintRectangle
+
+	bsr.w	Sparkle.paint
+
+	IFEQ	testmode
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	move.l	d0,d1
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+	ENDC
+
+	move.w	.old468(pc),d0
+.wait:	cmp.w	$0468.w,d0
+	beq.s	.wait
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.res_done
+	bsr.w	Sparkle.setRes
+.res_done:
+
+	rts
+
+.old468:DC.W	0
+
+;******* OBJECT SUBROUTINES ********
+
+Sparkle.setOneObject:
+	move.l	#Sparkle.addOneObject,Sparkle.sceneRout
+	clr.w	Sparkle.circleMode
+	rts
+
+Sparkle.setScene:
+	move.l	#Sparkle.addScene,Sparkle.sceneRout
+	st	Sparkle.circleMode
+	st	Sparkle.camMoving
+	move.w	$04BC.w,Sparkle.startTime
+	rts
+
+Sparkle.rotate:
+	st	Sparkle.rotateMode
+	clr.w	Sparkle.camMoving
+	move.w	$04BC.w,Sparkle.rotStart
+	rts
+
+Sparkle.kickObjects:
+	st	Sparkle.objectMoving
+	move.w	$04BC.w,Sparkle.moveStart
+	clr.w	Sparkle.camMoving
+	rts
+
+Sparkle.killObjects:
+	move.w	$04BC.w,Sparkle.killStart
+	st	Sparkle.objectDead
+	rts
+
+Sparkle.paint:
+
+	IFNE	1
+
+	bsr.l	ObjectRegistry.clear
+
+	IFNE	1
+
+	lea	Object3d.spikey,a1
+	move.l	#Object3d.spikeyEnd-Object3d.spikey,d0
+	lea	Sparkle.spikey,a0
+	bsr.l	Object3d.copy
+
+	lea	Sparkle.spikey,a0
+	move.w	#0,d0
+	move.w	#8,d1
+	move.w	$04BC.w,d2
+	Do_SinModulo	d2
+	Get_Sin	sine_tbl,d2,d2
+	addi.w	#$8000,d2
+	lsr.w	#8,d2
+	lsr.w	d2
+	addi.w	#$0020,d2
+	bsr.l	Object3d.scale
+
+	lea	Sparkle.spikey,a0
+	move.l	#Object3d.spikeyEnd-Object3d.spikey,d0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi	.end
+
+	ELSE
+
+	lea	Sparkle.cube,a0
+	move.l	#Sparkle.cubeEnd-Sparkle.cube,d0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi	.end
+
+	ENDC
+
+	lea	Sparkle.object,a0
+	bsr.w	Sparkle.generate
+; d0.l=size of generated object
+	lea	Sparkle.object,a0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi	.end
+
+	ELSE
+
+	lea	Sparkle.object,a0
+	bsr.w	Sparkle.generate
+; d0.l=size of generated object
+	lea	Sparkle.object,a0
+	move.l	d0,d2
+	moveq	#1,d0				; d0.w=handle
+	moveq	#%1001,d1			; Replace vertices+prims only.
+	bsr.l	ObjectRegistry.replace
+	tst.w	d0
+	bmi	.end
+
+	ENDC
+
+	movea.l	Sparkle.sceneRout,a0
+	jmp	(a0)
+
+.end:	rts
+
+Sparkle.addOneObject:
+	bsr.l	PrimitiveMesh.new
+
+; Do cube.
+	move.w	$04BC.w,d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#7,d0
+	lsr.l	#2,d0
+	mulu.w	#3,d1
+	mulu.w	#5,d2
+	bsr.l	Matrix.generate
+	clr.w	d0
+	clr.w	d1
+	move.w	#+Sparkle.DISTANCE,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+; Do sparkles.
+	clr.w	d0
+	clr.w	d1
+	clr.w	d2
+	bsr.l	Matrix.generate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#1,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+	bsr.l	PrimitiveMesh.sortZ
+	bsr.l	PrimitiveMesh.complete
+
+	movea.l	Sparkle.rectAddressTable,a0
+	bsr.l	PrimitiveMesh.paint
+
+	lea	Sparkle.rectAddressTable,a0
+ 	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+.end:	rts
+
+Sparkle.addScene:
+	bsr.l	PrimitiveMesh.new
+
+	move.w	#Sparkle.DISTANCE,d0
+	tst.w	Sparkle.objectMoving
+	beq.s	.store
+	move.w	$04BC.w,d1
+	sub.w	Sparkle.moveStart,d1
+	lsl.w	#5,d1
+	add.w	d1,d0
+.store:	move.w	d0,.distance
+
+; alpha = arctan(y/z).
+	clr.l	d0
+	tst.w	Sparkle.camMoving
+	beq.s	.okay
+	move.w	$04BC.w,d0
+	bra.s	.end_time
+.okay:	move.w	Sparkle.rotStart,d0
+.end_time:
+	sub.w	Sparkle.startTime,d0
+	lsl.l	#2,d0
+	move.l	d0,d1				; z
+	lsr.l	#2,d0				; y
+	movem.w	d0-d1,-(sp)
+	bsr.l	Frac.atan2
+; d1.w=rotation angle (rads)
+	mulu.l	#sintbllen/2,d1
+	divu.l	#31415,d1
+	mulu.l	#10000,d1			; 3.1415 -> sinttblen/2
+	swap	d1
+	move.w	d1,d0
+
+; World rotation..
+	clr.w	d1
+	clr.w	d2
+	bsr.l	Matrix.generate
+	bsr.l	Matrix.push
+
+; World y-rotation and translation..
+	clr.w	d0
+	clr.w	d1
+	tst.w	Sparkle.rotateMode
+	beq.s	.no_rot
+	move.w	$04BC.w,d1
+	sub.w	Sparkle.rotStart,d1
+	mulu.w	#3,d1
+	lsr.l	d1
+	cmpi.w	#2*sintbllen,d1
+	blt.s	.rot_done
+	clr.w	Sparkle.rotateMode
+	clr.w	d1
+.rot_done:
+	neg.w	d1
+.no_rot:clr.w	d2
+	bsr.l	Matrix.generate
+	clr.w	d0
+	movem.w	(sp)+,d1-d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	tst.w	Sparkle.objectDead
+	bne	.end_objects
+
+; Do cube1.
+	move.w	$04BC.w,d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#7,d0
+	lsr.l	#2,d0
+	mulu.w	#3,d1
+	neg.w	d1
+	mulu.w	#5,d2
+	bsr.l	Matrix.generate
+	clr.w	d0
+	clr.w	d1
+	move.w	.distance(pc),d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+; Do cube2.
+	move.w	$04BC.w,d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#11,d0
+	lsr.l	d0
+	neg.w	d0
+	mulu.w	#7,d1
+	lsr.l	d1
+	mulu.w	#5,d2
+	bsr.l	Matrix.generate
+	clr.w	d2
+	clr.w	d1
+	move.w	.distance(pc),d0
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+; Do cube3.
+	move.w	$04BC.w,d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#7,d0
+	mulu.w	#3,d1
+	mulu.w	#11,d2
+	lsr.l	d2
+	bsr.l	Matrix.generate
+	clr.w	d0
+	clr.w	d1
+	move.w	.distance(pc),d2
+	neg.w	d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+; Do cube4.
+	move.w	$04BC.w,d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#11,d0
+	lsr.l	#2,d0
+	mulu.w	#3,d1
+	mulu.w	#13,d2
+	lsr.l	#2,d2
+	bsr.l	Matrix.generate
+	clr.w	d2
+	clr.w	d1
+	move.w	.distance(pc),d0
+	neg.w	d0
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+.end_objects:
+
+; Do sparkles.
+	clr.w	d0
+	clr.w	d1
+	clr.w	d2
+	bsr.l	Matrix.generate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#1,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+	bsr.l	Matrix.pop			; Pop off world rotation.
+	bsr.l	Matrix.pop			; Pop off world translation.
+
+	bsr.l	PrimitiveMesh.sortZ
+	bsr.l	PrimitiveMesh.complete
+
+	movea.l	Sparkle.rectAddressTable,a0
+	bsr.l	PrimitiveMesh.paint
+
+	lea	Sparkle.rectAddressTable,a0
+ 	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+.end:	rts
+
+.distance:
+	DC.W	0
+
+; INPUT:
+; a0: destination object
+; OUTPUT:
+; d0.l=size
+Sparkle.generate:
+	movea.l	a0,a6
+
+	move.w	#Sparkle.PARTICLES,(a0)+		; #vertices+#normals
+	clr.w	(a0)+					; #normals
+
+; 1) if actual particle is out of range (time-starttime >= ttl)
+;   a) gen some random dirvector and store (hopefully not with 3d rots ajjj!)
+;   b) calc scalar to unity, make this the ttl and store
+;   c) store starttime
+;   d) calc and store origin
+; 2) calc actual position
+
+	lea	Sparkle.particleTable,a1
+	move.w	#Sparkle.PARTICLES-1,d7
+	move.w	$04BC.w,.time
+
+; polar spiral! c(u,v) = r(u,v)*[sin(v)cos(u), cos(v), sin(v)sin(u)]
+	lea	sine_tbl,a2
+	tst.w	Sparkle.objectDead
+	beq.s	.normal_spiral
+
+; simple 2d traject here!
+	move.w	.time(pc),d5
+	move.w	d5,d4
+	mulu.w	#3,d4
+	lsr.l	#2,d4
+	Do_SinModulo	d4
+	Do_SinModulo	d5
+	Get_Sin	a2,d5,d1
+	Get_Sin	a2,d4,d2
+	asr.w	#4,d1
+	asr.w	#5,d2
+	clr.w	d3
+	movem.w	d1-d2,.simple
+; Now calc the old traject and mix it.
+	bsr.w	.calc_spiral
+	move.w	$04BC.w,d0
+	sub.w	Sparkle.killStart,d0
+	cmpi.w	#$200,d0
+	blt.s	.killtime_ok
+	move.w	#$200,d0
+.killtime_ok:
+	movem.w	.simple(pc),d4-d5
+	muls.w	d0,d4
+	muls.w	d0,d5
+	subi.w	#$200,d0
+	neg.w	d0
+	muls.w	d0,d1
+	muls.w	d0,d2
+	muls.w	d0,d3
+	add.l	d4,d1
+	add.l	d5,d2
+	moveq	#9,d4
+	asr.l	d4,d1
+	asr.l	d4,d2
+	asr.l	d4,d3
+	bra.s	.center_calced
+
+.normal_spiral:
+	bsr.w	.calc_spiral
+
+.center_calced:
+	movem.w	d1-d3,.polar
+
+.loop:	move.w	.time(pc),d0
+	move.w	d0,d1
+	sub.w	Particle.BIRTH(a1),d0
+	cmp.w	Particle.TTL(a1),d0
+	bls.w	.particle_alive
+; Generate direction vector.
+; Just ugly hardcode now.
+; d1.w=time
+	move.w	d1,Particle.BIRTH(a1)
+
+; Calc origin.. todo: make this crossfade with dest traject.
+	movem.w	.polar(pc),d1-d3
+	movem.w	d1-d3,Particle.ORG(a1)
+
+	bsr.l	getNextRandom
+	andi.w	#$01FF,d0
+	subi.w	#$0100,d0
+	move.w	d0,Particle.DIR+Vertex.X(a1)
+
+;	bsr.l	getNextRandom
+	swap	d0
+
+	andi.w	#$01FF,d0
+	subi.w	#$0100,d0
+	move.w	d0,Particle.DIR+Vertex.Y(a1)
+	bsr.l	getNextRandom
+	andi.w	#$01FF,d0
+	subi.w	#$0100,d0
+	move.w	d0,Particle.DIR+Vertex.Z(a1)
+
+;	bsr.l	getNextRandom
+	swap	d0
+
+	andi.w	#$003F,d0
+	addi.w	#$0060,d0
+	move.w	d0,Particle.TTL(a1)
+	clr.w	d0
+.particle_alive:
+; d0.w=particle age
+	movem.w	Particle.DIR(a1),d1-d3
+	muls.w	d0,d1
+	muls.w	d0,d2
+	muls.w	d0,d3
+	asr.l	#6,d1
+	asr.l	#6,d2
+	asr.l	#6,d3
+
+; Now force it down with some gravity.
+	IFNE	Sparkle.GRAVITY
+	mulu.w	d0,d0
+	lsr.l	#5,d0
+	add.w	d0,d2
+	ENDC
+
+	add.w	Particle.ORG+Vertex.X(a1),d1
+	add.w	Particle.ORG+Vertex.Y(a1),d2
+	add.w	Particle.ORG+Vertex.Z(a1),d3
+	move.w	d1,(a0)+
+	move.w	d2,(a0)+
+	move.w	d3,(a0)+
+	adda.w	#Particle.SIZE,a1
+	dbra	d7,.loop
+
+	clr.w	(a0)+					; #texels
+
+	move.w	#Sparkle.PARTICLES,(a0)+		; #primitives
+	move.w	#Sparkle.PARTICLES-1,d7
+	lea	Sparkle.particleTable,a1
+	move.w	.time(pc),d1
+	clr.w	d2
+
+.primloop:
+	clr.l	d0
+	move.w	d1,d0
+	sub.w	Particle.BIRTH(a1),d0
+	lsl.l	#3,d0
+	move.w	Particle.TTL(a1),d3
+	addq.w	#1,d3
+	divu.w	d3,d0
+	andi.w	#7,d0
+	addq.w	#1,d0					; Add sprite offset (skip texture).
+	move.w	#Primitive.SPRITETYPE,(a0)
+	or.w	d0,(a0)+
+	move.w	d2,(a0)+
+	adda.w	#Particle.SIZE,a1
+	addq.w	#1,d2
+	dbra	d7,.primloop
+	
+	move.l	a0,d0
+	sub.l	a6,d0
+	rts
+
+; OUTPUT:
+; d1.w-d3.w=x,y,z
+.calc_spiral:
+	move.w	.time(pc),d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#7,d1
+;	lsr.l	d1
+	mulu.w	#23,d2
+	lsr.l	#4,d2
+	Do_SinModulo	d1			; d1.w=u
+	Do_SinModulo	d2			; d2.w=v
+	Get_SinCos	a2,d1,d1,d3		; d1.w=sin(u), d3.w=cos(u)
+	Get_SinCos	a2,d2,d2,d4		; d2.w=sin(v), d4.w=cos(v)
+	move.w	d2,d5
+	muls.w	d3,d5
+	add.l	d5,d5
+	swap	d5				; d5.w=v.x=sin(v)cos(u)
+	move.w	d1,d6
+	muls.w	d2,d6
+	add.l	d6,d6
+	swap	d6				; d6.w=v.z=sin(u)sin(v)
+	move.w	d5,d1				; d1.w=v.x=sin(v)cos(u)
+	move.w	d4,d2				; d2.w=v.y=cos(v)
+	move.w	d6,d3				; d3.w=v.z=sin(u)sin(v)
+	muls.w	#1000*2,d1
+	muls.w	#1000*2,d2
+	muls.w	#1000*2,d3
+	swap	d1				; d1.w=c.x=sin(v)cos(u)
+	swap	d2				; d2.w=c.y=cos(v)
+	swap	d3				; d3.w=c.z=sin(u)sin(v)
+
+; Shift center...
+	sub.w	Sparkle.startTime,d0
+	tst.w	Sparkle.circleMode
+	bne.s	.add_circle
+	clr.w	d0
+.add_circle:
+	mulu.w	#37,d0
+	lsr.l	#5,d0
+	neg.l	d0
+	Do_SinModulo	d0
+	Get_SinCos	a2,d0,d4,d5
+	muls.w	#Sparkle.DISTANCE*2,d4
+	muls.w	#Sparkle.DISTANCE*2,d5
+	swap	d4
+	swap	d5
+	add.w	d4,d1
+	add.w	d5,d3
+	rts
+
+.time:	DC.W	0
+.polar:	DC.W	0,0,0
+.simple:DC.W	0,0,0
+
+;******* OBJECT DATA ********
+
+	DATA
+
+Sparkle.sprite:
+	INCBIN	MINIBALL.RLE
+Sparkle.sprite2:
+	INCBIN	MINIBAL2.RLE
+Sparkle.sprite3:
+	INCBIN	MINIBAL3.RLE
+Sparkle.sprite4:
+	INCBIN	MINIBAL4.RLE
+Sparkle.sprite5:
+	INCBIN	MINIBAL5.RLE
+Sparkle.sprite6:
+	INCBIN	MINIBAL6.RLE
+Sparkle.sprite7:
+	INCBIN	MINIBAL7.RLE
+Sparkle.sprite8:
+	INCBIN	MINIBAL8.RLE
+
+Sparkle.textureTable:
+	DC.L	FlareGen.redBuffer
+	DC.L	Sparkle.sprite
+	DC.L	Sparkle.sprite2
+	DC.L	Sparkle.sprite3
+	DC.L	Sparkle.sprite4
+	DC.L	Sparkle.sprite5
+	DC.L	Sparkle.sprite6
+	DC.L	Sparkle.sprite7
+	DC.L	Sparkle.sprite8
+	DC.L	0
+
+Sparkle.rectAddressTable:
+	DC.L	Sparkle.rectangleTable
+	DC.L	Sparkle.rectangleTable2
+	DC.L	Sparkle.rectangleTable3
+
+Sparkle.cube:
+	DC.W	(.end-.start)/Vertex.SIZE	* amount of vertices
+	DC.W	(.end-.normstart)/Vertex.SIZE	* amount of normals
+.start:	DC.W	-400,-400,-400
+	DC.W	-400,400,-400
+	DC.W	400,-400,-400
+	DC.W	400,400,-400
+	DC.W	-400,-400,400
+	DC.W	-400,400,400
+	DC.W	400,-400,400
+	DC.W	400,400,400
+.normstart:
+	DC.W	-73,-73,-73
+	DC.W	-73,73,-73
+	DC.W	73,-73,-73
+	DC.W	73,73,-73
+	DC.W	-73,-73,73
+	DC.W	-73,73,73
+	DC.W	73,-73,73
+	DC.W	73,73,73
+.end:
+
+	DC.W	0
+
+	DC.W	6				* amount of primitives
+
+	DC.W	Polygon.QUAD|Polygon.GOURAUDSHADED|0,+0,1,3,2,+1,1,127,127
+	DC.W	Polygon.QUAD|Polygon.GOURAUDSHADED|0,+6,7,5,4,+1,1,127,127
+	DC.W	Polygon.QUAD|Polygon.GOURAUDSHADED|1,+4,5,1,0,+1,1,127,127
+	DC.W	Polygon.QUAD|Polygon.GOURAUDSHADED|1,+2,3,7,6,+1,1,127,127
+	DC.W	Polygon.QUAD|Polygon.GOURAUDSHADED|2,+5,7,3,1,+1,1,127,127
+	DC.W	Polygon.QUAD|Polygon.GOURAUDSHADED|2,+4,0,2,6,+1,1,127,127
+Sparkle.cubeEnd:
+
+;******* OBJECT RESERVES ********
+
+	BSS
+
+Sparkle.rectangleTable:
+	DS.W	4*10
+Sparkle.rectangleTable2:
+	DS.W	4*10
+Sparkle.rectangleTable3:
+	DS.W	4*10
+
+Sparkle.object:
+	DS.W	4096
+Sparkle.spikey:
+	DS.W	4096
+
+Sparkle.particleTable:
+	DS.B	Particle.SIZE*Sparkle.PARTICLES
+
+Sparkle.startTime:
+	DS.W	1
+Sparkle.moveStart:
+	DS.W	1
+Sparkle.sceneRout:
+	DS.L	1
+Sparkle.circleMode:
+	DS.W	1
+Sparkle.rotStart:
+	DS.W	1
+Sparkle.rotateMode:
+	DS.W	1
+Sparkle.objectMoving:
+	DS.W	1
+Sparkle.camMoving:
+	DS.W	1
+Sparkle.objectDead:
+	DS.W	1
+Sparkle.killStart:
+	DS.W	1
+
+;******* END OF DEMO-EFFECT OBJECT ********

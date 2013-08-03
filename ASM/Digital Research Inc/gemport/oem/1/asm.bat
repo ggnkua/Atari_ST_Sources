@@ -1,0 +1,2 @@
+\TOOLS\AS68 -S C:\TOOLS\ %1.S
+

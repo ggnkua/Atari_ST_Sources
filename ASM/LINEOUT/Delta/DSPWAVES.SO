@@ -1,0 +1,797 @@
+; Textured waves: amplitude and rotation. A dsp assisted screen for delta.
+
+; todo: twice as fast circular init.
+
+;======= OBJECT EQUATES ========
+
+;======= OBJECT TABLE ========
+
+; Must be first in object!!
+DspWaves.table:
+	DC.L	DspWaves.mainLoop
+	DC.L	DspWaves.init
+	DC.L	rts
+	DC.L	DspWaves.IncreaseWaveVelocity
+	DC.L	DspWaves.DecreaseWaveVelocity
+	DC.L	DspWaves.IncreaseTwistVelocity
+	DC.L	DspWaves.DecreaseTwistVelocity
+	DC.L	DspWaves.IncreaseRotation
+	DC.L	DspWaves.DecreaseRotation
+	DC.L	DspWaves.IncreaseScale
+	DC.L	DspWaves.DecreaseScale
+	DC.L	DspWaves.IncreaseWavestep
+	DC.L	DspWaves.DecreaseWavestep
+	DC.L	DspWaves.setNullText
+	DC.L	DspWaves.setLineText
+	DC.L	DspWaves.setPresentText
+	DC.L	DspWaves.setFunnyText
+	DC.L	DspWaves.setCodeText
+	DC.L	DspWaves.setMusicText
+	DC.L	0
+
+;======= INIT SUBROUTINE ========
+
+; OUTPUT: d0.l: 0   = All clear.
+;               neg = Error! Not initialized!
+DspWaves.init:
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= REALTIME INIT SUBROUTINE ========
+
+DspWaves.realtimeInit:
+; Requires Dsp.loadProgram function!
+	move.l	#(DspWaves.p56End-DspWaves.p56)/3,d0
+	lea	DspWaves.p56,a0
+	bsr	Dsp.loadProgram
+
+	bsr	DspWaves.initCircular
+
+	move.w	#$7FFF,DspWaves.scalar
+	move.w	#8,DspWaves.waveStep
+	clr.w	DspWaves.rotationAmp
+	clr.w	DspWaves.waveVelocity
+	clr.w	DspWaves.twistVelocity
+	move.l	#DspWaves.nullText,DspWaves.textAdr
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+* Unknown monitormode..
+	rts
+.vga60:	move.l	#vga60_16bit_160_200,DspWaves.resRout
+	rts
+.vga100:move.l	#vga100_16bit_160_100,DspWaves.resRout
+	rts
+.rgb50:	move.l	#rgb50_16bit_320_100,DspWaves.resRout
+	rts
+
+;======= SCREENINIT SUBROUTINE ========
+
+DspWaves.initScreen:
+	rts
+
+;======= MAINLOOP SUBROUTINE ========
+
+DspWaves.mainLoop:
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr	DspWaves.realtimeInit
+	move.l	(sp)+,d0
+.end_realtime_init:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr	DspWaves.initScreen
+.end_screeninit:
+
+	IFNE	0
+	movec	cacr,d0
+	move.l	d0,-(sp)
+	ori.w	#$1111,d0
+	andi.w	#$DFFF,d0
+	movec	d0,cacr
+	ENDC
+
+	bsr	DspWaves.calcTable
+	bsr	DspWaves.paintSined
+
+	IFNE	0
+	move.l	(sp)+,d0
+	movec	d0,cacr
+	ENDC
+
+	move.w	#160,d0
+	moveq	#0,d1
+	moveq	#42,d2
+	movea.l	scr,a0
+	movea.l	DspWaves.textAdr,a4
+
+	move.w	monitormode,d3
+	cmpi.w	#vga60,d3
+	beq.s	.vga60
+	cmpi.w	#rgb50,d3
+	beq.s	.rgb50
+;	cmpi.w	#vga100,d3
+;	beq.s	.vga100
+.vga100:bsr.l	DspWaves.paintText
+	bra.s	.end_font	
+.vga60:	bsr.l	DspWaves.paintTextV
+	bra.s	.end_font
+.rgb50:	bsr.l	DspWaves.paintTextH
+;	bra.s	.end_font
+.end_font:
+
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+
+	movea.l	DspWaves.resRout,a0
+	suba.l	a1,a1
+	movea.l	d0,a2
+.again:	bsr.l	Screen.requestUpdate
+	tst.l	d0
+	bmi.s	.again
+	clr.l	DspWaves.resRout
+
+	rts
+
+;======= OBJECT SUBROUTINES ========
+
+DspWaves.IncreaseWaveVelocity:
+	move.w	DspWaves.wavePosition,DspWaves.waveStartPos
+	move.w	$4bc.w,DspWaves.waveStart
+	addq.w	#1,DspWaves.waveVelocity
+	rts
+
+DspWaves.DecreaseWaveVelocity:
+	move.w	DspWaves.wavePosition,DspWaves.waveStartPos
+	move.w	$4bc.w,DspWaves.waveStart
+	subq.w	#1,DspWaves.waveVelocity
+	rts
+
+DspWaves.IncreaseTwistVelocity:
+	move.w	DspWaves.twistPosition,DspWaves.twistStartPos
+	move.w	$4bc.w,DspWaves.twistStart
+	addq.w	#2,DspWaves.twistVelocity
+	rts
+
+DspWaves.DecreaseTwistVelocity:
+	move.w	DspWaves.twistPosition,DspWaves.twistStartPos
+	move.w	$4bc.w,DspWaves.twistStart
+	subq.w	#2,DspWaves.twistVelocity
+	rts
+
+DspWaves.IncreaseRotation:
+	add.w	#$40,DspWaves.rotationAmp
+	rts
+
+DspWaves.DecreaseRotation:
+	sub.w	#$20,DspWaves.rotationAmp
+	rts
+
+DspWaves.IncreaseScale:
+	add.w	#$40,DspWaves.scalar
+	rts
+
+DspWaves.DecreaseScale:
+	sub.w	#$40,DspWaves.scalar
+	rts
+
+DspWaves.IncreaseWavestep:
+	addq.w	#1,DspWaves.waveStep
+	rts
+
+DspWaves.DecreaseWavestep:
+	subq.w	#1,DspWaves.waveStep
+	rts
+
+DspWaves.setNullText:
+	move.l	#DspWaves.nullText,DspWaves.textAdr
+	rts
+
+DspWaves.setLineText:
+	move.l	#DspWaves.lineText,DspWaves.textAdr
+	rts
+
+DspWaves.setPresentText:
+	move.l	#DspWaves.presentText,DspWaves.textAdr
+	rts
+
+DspWaves.setFunnyText:
+	move.l	#DspWaves.funnyText,DspWaves.textAdr
+	rts
+
+DspWaves.setCodeText:
+	move.l	#DspWaves.codeText,DspWaves.textAdr
+	rts
+
+DspWaves.setMusicText:
+	move.l	#DspWaves.musicText,DspWaves.textAdr
+	rts
+
+; Paints text in highcolor. Also handles 'returns'.
+; INPUT:
+; d0.w=screenwidth (pixels)
+; d1.w=x offset
+; d2.w=y offset
+; a0: screen (highcolor)
+; a4: text (nullterminated)
+DspWaves.paintText:
+	move.w	d0,.width
+	mulu.w	d0,d2
+	ext.l	d1
+	add.l	d1,d2
+	lea	(a0,d2.l*2),a0
+	move.l	a0,d4
+	lea	Font.pic,a1
+	lea	Font.charTable,a3
+
+.charloop:
+	clr.l	d0
+	move.b	(a4)+,d0
+	beq	.end
+	cmpi.w	#$0A,d0
+	bne	.char
+	addi.l	#16*160*2,d4
+	movea.l	d4,a0
+	bra.s	.charloop
+
+.char:	subi.b	#32,d0
+	mulu.w	#6,d0
+	movem.w	(a3,d0.l),d0-d2
+	mulu.w	#320,d0
+	add.l	d1,d0
+	move.w	d2,d5
+	subq.w	#1,d5
+	lea	(a1,d0.l*2),a2
+	movea.w	.width(pc),a6
+	movea.w	#320,a5
+	suba.l	d2,a6
+	suba.l	d2,a5
+	adda.l	a6,a6
+	adda.l	a5,a5
+	moveq	#16-1,d7
+
+.yloop:	move.w	d5,d6
+
+.xloop:	move.w	(a2)+,d0			; d0.w=src hc pixel
+	bne.s	.paint
+	addq	#2,a0
+	dbf	d6,.xloop
+	bra.s	.end_xloop
+
+.paint:
+	IFNE	1
+
+	move.w	(a0),d4
+	andi.w	#$F800,d4
+	add.w	d0,d4
+	bcc.s	.red_sat_done
+	moveq	#$FFFFFFFF,d4
+.red_sat_done:
+	andi.w	#$F800,d4			; d4.w=red
+
+	move.w	(a0),d3
+	andi.w	#$07E0,d3
+	lsl.w	#5,d3
+	move.w	d0,d1
+	lsl.w	#5,d1
+	add.w	d1,d3
+	bcc.s	.green_sat_done
+	moveq	#$FFFFFFFF,d3
+.green_sat_done:
+	andi.w	#$FC00,d3			; d3.w=green<<5
+	lsr.w	#5,d3				; d3.w=green
+	or.w	d3,d4				; d4.w=red|green
+
+	move.w	(a0),d3
+	andi.w	#$001F,d3
+	lsl.w	#3,d3
+	move.w	d0,d1
+	lsl.w	#3,d1
+	add.b	d1,d3
+	bcc.s	.blue_sat_done
+	moveq	#$FFFFFFFF,d3
+.blue_sat_done:
+	andi.w	#$00F8,d3			; d3.w=blue<<5
+	lsr.w	#3,d3				; d3.w=blue
+	or.w	d3,d4				; d4.w=red|green|blue
+
+	move.w	d4,(a0)+			; Store pixel.
+
+	ELSE
+
+	move.w	d0,(a0)+
+
+	ENDC
+
+	dbf	d6,.xloop
+
+.end_xloop:
+
+	adda.l	a6,a0
+	adda.l	a5,a2
+	dbf	d7,.yloop
+	
+	move.w	.width(pc),d0
+	mulu.w	#16*2,d0
+	suba.l	d0,a0
+	lea	2(a0,d2.l*2),a0
+
+	bra	.charloop
+
+.end:	rts
+
+.width:	DC.W	0
+
+; Paints text in highcolor. Also handles 'returns'.
+; INPUT:
+; d0.w=screenwidth (pixels)
+; d1.w=x offset
+; d2.w=y offset
+; a0: screen (highcolor)
+; a4: text (nullterminated)
+DspWaves.paintTextH:
+	move.w	d0,.width
+	mulu.w	d0,d2
+	ext.l	d1
+	add.l	d1,d2
+	lea	(a0,d2.l*4),a0
+	move.l	a0,d4
+	lea	Font.pic,a1
+	lea	Font.charTable,a3
+
+.charloop:
+	clr.l	d0
+	move.b	(a4)+,d0
+	beq	.end
+	cmpi.w	#$0A,d0
+	bne.s	.char
+	addi.l	#16*160*4,d4
+	movea.l	d4,a0
+	bra.s	.charloop
+
+.char:	subi.b	#32,d0
+	mulu.w	#6,d0
+	movem.w	(a3,d0.l),d0-d2
+	mulu.w	#320,d0
+	add.l	d1,d0
+	move.w	d2,d5
+	subq.w	#1,d5
+	lea	(a1,d0.l*2),a2
+	movea.w	.width(pc),a6
+	movea.w	#320,a5
+	suba.l	d2,a6
+	suba.l	d2,a5
+	adda.l	a6,a6
+	adda.l	a6,a6
+	adda.l	a5,a5
+	moveq	#16-1,d7
+
+.yloop:	move.w	d5,d6
+
+.xloop:	move.w	(a2)+,d0
+	bne.s	.paint
+	addq	#4,a0
+	dbf	d6,.xloop
+	bra.s	.end_xloop
+
+.paint:
+	IFNE	1
+
+	move.w	(a0),d4
+	andi.w	#$F800,d4
+	add.w	d0,d4
+	bcc.s	.red_sat_done
+	moveq	#$FFFFFFFF,d4
+.red_sat_done:
+	andi.w	#$F800,d4			; d4.w=red
+
+	move.w	(a0),d3
+	andi.w	#$07E0,d3
+	lsl.w	#5,d3
+	move.w	d0,d1
+	lsl.w	#5,d1
+	add.w	d1,d3
+	bcc.s	.green_sat_done
+	moveq	#$FFFFFFFF,d3
+.green_sat_done:
+	andi.w	#$FC00,d3			; d3.w=green<<5
+	lsr.w	#5,d3				; d3.w=green
+	or.w	d3,d4				; d4.w=red|green
+
+	move.w	(a0),d3
+	andi.w	#$001F,d3
+	lsl.w	#3,d3
+	move.w	d0,d1
+	lsl.w	#3,d1
+	add.b	d1,d3
+	bcc.s	.blue_sat_done
+	moveq	#$FFFFFFFF,d3
+.blue_sat_done:
+	andi.w	#$00F8,d3			; d3.w=blue<<5
+	lsr.w	#3,d3				; d3.w=blue
+	or.w	d3,d4				; d4.w=red|green|blue
+
+	move.w	d4,(a0)+			; Store pixel.
+	move.w	d4,(a0)+			; Store pixel.
+
+	ELSE
+
+	move.w	d0,(a0)+
+	move.w	d0,(a0)+
+
+	ENDC
+
+	dbf	d6,.xloop
+
+.end_xloop:
+
+	adda.l	a6,a0
+	adda.l	a5,a2
+	dbf	d7,.yloop
+	
+	move.w	.width(pc),d0
+	mulu.w	#16*4,d0
+	suba.l	d0,a0
+	lea	4(a0,d2.l*4),a0
+
+	bra	.charloop
+
+.end:	rts
+
+.width:	DC.W	0
+
+; Paints text in highcolor. Also handles 'returns'.
+; INPUT:
+; d0.w=screenwidth (pixels)
+; d1.w=x offset
+; d2.w=y offset
+; a0: screen (highcolor)
+; a4: text (nullterminated)
+DspWaves.paintTextV:
+	move.w	d0,.width
+	mulu.w	d0,d2
+	add.l	d2,d2
+	ext.l	d1
+	add.l	d1,d2
+	lea	(a0,d2.l*2),a0
+	move.l	a0,d4
+	lea	Font.pic,a1
+	lea	Font.charTable,a3
+
+.charloop:
+	clr.l	d0
+	move.b	(a4)+,d0
+	beq	.end
+	cmpi.w	#$0A,d0
+	bne.s	.char
+	addi.l	#32*160*2,d4
+	movea.l	d4,a0
+	bra.s	.charloop
+
+.char:	subi.b	#32,d0
+	mulu.w	#6,d0
+	movem.w	(a3,d0.l),d0-d2
+	mulu.w	#320,d0
+	add.l	d1,d0
+	move.w	d2,d5
+	subq.w	#1,d5
+	lea	(a1,d0.l*2),a2
+	movea.w	.width(pc),a6
+	move.l	a6,d3
+	adda.l	a6,a6
+	movea.w	#320,a5
+	suba.l	d2,a6
+	suba.l	d2,a5
+	adda.l	a6,a6
+	adda.l	a5,a5
+	moveq	#16-1,d7
+
+.yloop:	move.w	d5,d6
+
+.xloop:	move.w	(a2)+,d0
+	bne.s	.paint
+	addq	#2,a0
+	dbf	d6,.xloop
+	bra.s	.end_xloop
+
+.paint:
+	IFNE	1
+
+	move.w	(a0),d4
+	andi.w	#$F800,d4
+	add.w	d0,d4
+	bcc.s	.red_sat_done
+	moveq	#$FFFFFFFF,d4
+.red_sat_done:
+	andi.w	#$F800,d4			; d4.w=red
+
+	move.w	(a0),d3
+	andi.w	#$07E0,d3
+	lsl.w	#5,d3
+	move.w	d0,d1
+	lsl.w	#5,d1
+	add.w	d1,d3
+	bcc.s	.green_sat_done
+	moveq	#$FFFFFFFF,d3
+.green_sat_done:
+	andi.w	#$FC00,d3			; d3.w=green<<5
+	lsr.w	#5,d3				; d3.w=green
+	or.w	d3,d4				; d4.w=red|green
+
+	move.w	(a0),d3
+	andi.w	#$001F,d3
+	lsl.w	#3,d3
+	move.w	d0,d1
+	lsl.w	#3,d1
+	add.b	d1,d3
+	bcc.s	.blue_sat_done
+	moveq	#$FFFFFFFF,d3
+.blue_sat_done:
+	andi.w	#$00F8,d3			; d3.w=blue<<5
+	lsr.w	#3,d3				; d3.w=blue
+	or.w	d3,d4				; d4.w=red|green|blue
+
+; Store pixel.
+	move.w	d4,160*2(a0)
+	move.w	d4,(a0)+
+
+	ELSE
+
+	move.w	d0,160*2(a0)
+	move.w	d0,(a0)+
+	
+	ENDC
+
+	dbf	d6,.xloop
+
+.end_xloop:
+
+	adda.l	a6,a0
+	adda.l	a5,a2
+	dbf	d7,.yloop
+	
+	move.w	.width(pc),d0
+	mulu.w	#32*2,d0
+	suba.l	d0,a0
+	lea	2(a0,d2.l*2),a0
+
+	bra	.charloop
+
+.end:	rts
+
+.width:	DC.W	0
+
+
+
+* Calculates circular wavetable for circular plasma.
+DspWaves.initCircular:	
+	moveq	#-50,d7
+
+.yloop:	moveq	#-80,d6
+
+.xloop:	move.w	d6,d0
+	muls.w	d0,d0
+	move.w	d7,d1
+	muls.w	d1,d1
+	add.l	d0,d1
+	bsr.l	Math.sqrt
+	swap	d0
+	andi.l	#$000001ff,d0
+	sendLongToDsp	d0
+	addq.w	#1,d6
+	blt.s	.xloop
+
+	addq.w	#1,d7
+	cmpi.w	#50,d7
+	blt.s	.yloop
+
+	rts
+
+; p[t] = r[t](cos[phase[t]], sin[phase[t]])
+DspWaves.calcTable:
+	lea	sine_tbl,a1
+	move.w	$4bc.w,d0
+	move.w	d0,d5
+
+; Calc twist phase.
+	sub.w	DspWaves.twistStart,d5
+	muls.w	DspWaves.twistVelocity,d5
+	asr.l	#2,d5
+	add.w	DspWaves.twistStartPos,d5
+	move.w	d5,DspWaves.twistPosition
+
+; Calc wave phase.
+	sub.w	DspWaves.waveStart,d0
+	muls.w	DspWaves.waveVelocity,d0
+	asr.l	#2,d0
+	add.w	DspWaves.waveStartPos,d0
+	move.w	d0,DspWaves.wavePosition
+
+	move.w	DspWaves.waveStep,a6
+	move.w	DspWaves.rotationAmp,d4
+	move.w	DspWaves.scalar,d6
+	move.w	#95-1,d7
+; d0.w = t = 0
+
+.loop:	Do_SinModulo	d0
+	Do_SinModulo	d5
+; d0.w = t mod 2*pi
+	Get_Sin	a1,d0,d1
+	muls.w	d6,d1
+	add.l	d1,d1
+	swap	d1
+; d1.w = r[t]
+	Get_Sin	a1,d5,d2
+	muls.w	d4,d2
+	swap	d2
+	Do_SinModulo	d2
+; d2.w = phase[t]
+	Get_Cos	a1,d2,d3
+; d3.w = cos[phase[t]]
+	Get_Sin	a1,d2,d2
+; d2.w = sin[phase[t]]
+	muls.w	d1,d3
+	asr.l	#7,d3
+; d3.w = r[t]*cos[phase[t]]
+	muls.w	d1,d2
+	asr.l	#7,d2
+; d2.w = r[t]*sin[phase[t]]
+	sendLongToDsp	d3
+	sendLongToDsp	d2
+; p[t] = r[t](cos[phase[t]], sin[phase[t]])
+	add.w	a6,d0				; t := t + dt
+	add.w	a6,d5
+; p[t-1] = r[t-dt](cos[phase[t-dt]], sin[phase[t-dt]])
+	dbra	d7,.loop
+	rts
+
+DspWaves.paintSined:
+	movea.l	scr,a0
+	lea	Texture.16bTexture2+(256*128+128)*2,a1
+	lea	$ffffa206.w,a2
+	lea	$ffffa202.w,a5
+	moveq	#100-1,d7
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq	DspWaves.paintSinedVga60
+	cmpi.w	#vga100,d0
+	beq	DspWaves.paintSinedVga100
+	cmpi.w	#rgb50,d0
+	beq	DspWaves.paintSinedRgb50
+* Unknown monitormode..
+	rts
+
+DspWaves.paintSinedVga60:
+	movea.w	#160*2,a4
+
+.yloop:	moveq	#160/10-1,d6
+	lea	(a0,a4.l),a3
+
+.wait_for_da_bitch:
+	btst.b	#0,(a5)
+	beq.s	.wait_for_da_bitch
+
+.xloop:
+	REPT	10
+;	receiveWordFromDsp	d3
+	move.w	(a2),d3
+	move.w	(a1,d3.w*2),d3
+	move.w	d3,(a0)+
+	move.w	d3,(a3)+
+	ENDR
+	dbf	d6,.xloop
+
+	adda.l	a4,a0
+	dbf	d7,.yloop
+
+	rts
+
+DspWaves.paintSinedVga100:
+
+.yloop:	moveq	#160/10-1,d6
+.wait_for_da_bitch:
+	btst.b	#0,(a5)
+	beq.s	.wait_for_da_bitch
+
+.xloop:
+	REPT	10
+;	receiveWordFromDsp	d3
+	move.w	(a2),d3
+	move.w	(a1,d3.w*2),(a0)+
+	ENDR
+	dbf	d6,.xloop
+
+	dbf	d7,.yloop
+
+	rts
+
+DspWaves.paintSinedRgb50:
+
+.yloop:	moveq	#160/10-1,d6
+.wait_for_da_bitch:
+	btst.b	#0,(a5)
+	beq.s	.wait_for_da_bitch
+
+.xloop:
+	REPT	10
+;	receiveWordFromDsp	d3
+	move.w	(a2),d3
+	move.l	(a1,d3.w*2),(a0)+
+	ENDR
+	dbf	d6,.xloop
+
+	dbf	d7,.yloop
+
+	rts
+
+;======= OBJECT DATA ========
+
+	DATA
+
+DspWaves.p56:
+	INCBIN	WAVES.P56
+DspWaves.p56End
+
+DspWaves.lineText:
+	DC.B	"         -line out-",0
+DspWaves.presentText:
+	DC.B	"         :present:",0
+DspWaves.funnyText:
+	DC.B	" a funny production",0
+DspWaves.codeText:
+	DC.B	"      code: earx",0
+DspWaves.musicText:
+	DC.B	"     music: d-force",0
+DspWaves.nullText:
+	DC.B	0
+
+	EVEN
+
+;======= OBJECT RESERVES ========
+
+	BSS
+
+DspWaves.rotationAmp:
+	DS.W	1
+DspWaves.waveVelocity:
+	DS.W	1
+DspWaves.twistVelocity:
+	DS.W	1
+DspWaves.waveStart:
+	DS.W	1
+DspWaves.twistStart:
+	DS.W	1
+DspWaves.wavePosition:
+	DS.W	1
+DspWaves.twistPosition:
+	DS.W	1
+DspWaves.waveStartPos:
+	DS.W	1
+DspWaves.twistStartPos:
+	DS.W	1
+DspWaves.resRout:
+	DS.L	1
+
+DspWaves.scalar:
+	DS.W	1
+DspWaves.waveStep:
+	DS.W	1
+DspWaves.textAdr:
+	DS.L	1
+
+;======= END OF DEMO-EFFECT OBJECT ========

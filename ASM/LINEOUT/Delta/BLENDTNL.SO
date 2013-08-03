@@ -1,0 +1,569 @@
+; Tunnel stuffs with alpha craps.
+; Made for the delta demo..
+
+******** OBJECT EQUATES ********
+
+Blender.GEN_TEXTURE:	=	1
+
+			RSRESET
+Blender.mix_tbl:	RS.W	128*4*256
+Blender.picture16_buf:	RS.W	320*200
+Blender.BLOCK_SIZE:	RS.B	0
+
+******** OBJECT TABLE ********
+
+* Must be first in object!!
+Blender.table:
+	DC.L	Blender.mainLoop
+	DC.L	Blender.init
+	DC.L	rts
+	DC.L	INSTALL_LIGHTPATT1
+	DC.L	INSTALL_LIGHTPATT2
+	DC.L	INSTALL_LIGHTPATT3
+	DC.L	0
+
+******** INIT SUBROUTINE ********
+
+* OUTPUT: d0.l: 0   = All clear.
+*               neg = Error! Not initialized!
+Blender.init:
+	move.l	#Blender.BLOCK_SIZE,d0
+	bsr.l	Mem.register
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+Blender.initRealtime:
+	bsr.l	Mem.getBlock
+	move.l	d0,Blender.baseAdr
+
+	bsr	BlendTunnel.calcAlphaPic
+
+	IFNE	Blender.GEN_TEXTURE
+
+	lea	FlareGen.chromeInstTable,a1
+	lea	flowpal_tbl,a0
+	bsr.l	Pal.makeGradientTc
+
+	ELSE
+
+	lea	texture8pal_tbl,a1
+	lea	flowpal_tbl,a0
+	bsr	CONVERT_APEX2FALCPAL
+
+	ENDC
+
+	lea	fadepal_tbl,a0
+	lea	fadeflow_tbl,a1
+	bsr.l	Pal.makeGradientTc
+
+	movea.l	Blender.baseAdr,a0
+	adda.l	#Blender.mix_tbl,a0
+	lea	flowpal_tbl,a2
+	lea	fadepal_tbl,a1
+	movea.w	#256,a5
+	move.w	#-256,d7
+	bsr	CALC_MIXTABLE
+
+	move.l	$04BA.w,Blender.startTime
+
+	move.l	#rts,vbl_gfx
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+* Unknown monitormode..
+	rts
+.vga60:	move.l	#PAINT_BLENDTUNNEL160200,paintblendtunnelroutadr
+	move.l	#vga60_16bit_160_200,Blender.resRout
+	rts
+.vga100:move.l	#PAINT_BLENDTUNNEL160100,paintblendtunnelroutadr
+	move.l	#vga100_16bit_160_100,Blender.resRout
+	rts
+.rgb50:	move.l	#PAINT_BLENDTUNNEL320100,paintblendtunnelroutadr
+	move.l	#rgb50_16bit_320_100,Blender.resRout
+	rts
+
+******** MAINLOOP SUBROUTINE ********
+
+Blender.mainLoop:
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	bsr	Blender.initRealtime
+.end_realtime_init:
+
+	move.l	$04BA.w,d0
+	sub.l	Blender.startTime,d0
+	move.l	d0,Blender.time
+
+	movea.l	tunnelroutadr,a0
+	jsr	(a0)
+
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+
+	movea.l	Blender.resRout,a0
+	suba.l	a1,a1
+	movea.l	d0,a2
+.again:	bsr.l	Screen.requestUpdate
+	tst.l	d0
+	bmi.s	.again
+	clr.l	Blender.resRout
+	rts
+
+******** OBJECT SUBROUTINES ********
+
+INSTALL_LIGHTPATT1:
+	move.l	#MOVE_LIGHTMAP1,lightroutadr
+	rts
+
+INSTALL_LIGHTPATT2:
+	move.l	#MOVE_LIGHTMAP2,lightroutadr
+	rts
+
+INSTALL_LIGHTPATT3:
+	move.l	#MOVE_LIGHTMAP3,lightroutadr
+	rts
+
+; Calculates a bump, used for the alpha layer..
+BlendTunnel.calcAlphaPic:
+	movea.l	Blender.baseAdr,a0
+	adda.l	#Blender.picture16_buf,a0
+	lea	320*2(a0),a1
+	lea	(320*199*2.l,a0),a2
+	lea	320*2(a2),a3
+	move.w	#199,d7
+
+.yloop:	move.w	#319,d6
+
+.xloop:	move.w	d6,d0
+	mulu.w	d0,d0
+	move.w	d7,d1
+	mulu.w	d1,d1
+	add.l	d0,d1
+	bsr.l	Math.sqrt
+	swap	d0
+	lsr.w	#1,d0
+	not.b	d0
+	lsl.w	#7,d0
+	move.w	d0,(a0)+
+	move.w	d0,-(a1)
+	move.w	d0,(a2)+
+	move.w	d0,-(a3)
+	subq.w	#2,d6
+	bpl.s	.xloop
+
+	adda.w	#160*2,a0
+	adda.w	#480*2,a1
+	suba.w	#480*2,a2
+	suba.w	#160*2,a3
+	subq.w	#2,d7
+	bpl.s	.yloop
+
+	rts
+
+* Converts a 256 * 3byte APEX palette to a falcon $ffff9800 one.
+* INPUT: a0: output truecolor palette
+*        a1: apex palette table
+CONVERT_APEX2FALCPAL:
+	moveq	#0,d7
+	moveq	#0,d0
+
+.loop:	move.w	(a1)+,(a0)+
+	move.b	(a1)+,d0
+	move.w	d0,(a0)+
+	addq.b	#1,d7
+	bne.s	.loop
+	rts
+
+* Calculates a 64K highcolor-word lookup table from two 256 truecolor
+* palettes.
+* INPUT: d7.w: start intensity of palette1
+*        a0: highcolor lookuptable
+*        a1: truecolor palette1
+*        a2: truecolor palette2
+*        a5: number of entries in palette1
+CALC_MIXTABLE:
+	lea	Blender.tempBuffer,a3
+	clr.l	d6
+
+.preloop:
+	clr.l	d3
+	clr.l	d4
+	move.b	(a2)+,d3
+	move.b	(a2)+,d4
+	move.w	(a2)+,d5
+	mulu.w	d6,d3
+	mulu.w	d6,d4
+	mulu.w	d6,d5
+	move.l	d3,(a3)+
+	move.l	d4,(a3)+
+	move.l	d5,(a3)+
+	addq.b	#1,d6
+	bne.s	.preloop
+
+	movea.l	#$0000ffff,a6
+
+.palloop:
+	lea	Blender.tempBuffer,a3
+	clr.l	d0
+	clr.l	d1
+	move.b	(a1)+,d0
+	move.b	(a1)+,d1
+	move.w	(a1)+,d2
+	muls.w	d7,d0
+	muls.w	d7,d1
+	muls.w	d7,d2
+	add.l	d0,d0
+	add.l	d1,d1
+	add.l	d2,d2
+	moveq	#0,d6
+
+.colorloop:
+	movem.l	(a3)+,d3-d5
+	add.l	d0,d3
+	bpl.s	.red1_ok
+	clr.l	d3
+	bra.s	.red_ok
+.red1_ok:
+	cmp.l	a6,d3
+	blt.s	.red_ok
+	move.l	a6,d3
+.red_ok:
+	add.l	d1,d4
+	bpl.s	.green1_ok
+	clr.l	d4
+	bra.s	.green_ok
+.green1_ok:
+	cmp.l	a6,d4
+	blt.s	.green_ok
+	move.l	a6,d4
+.green_ok:
+	add.l	d2,d5
+	bpl.s	.blue1_ok
+	clr.l	d5
+	bra.s	.blue_ok
+.blue1_ok:
+	cmp.l	a6,d5
+	blt.s	.blue_ok
+	move.l	a6,d5
+.blue_ok:
+	andi.w	#%1111100000000000,d3
+	lsr.w	#5,d4
+	andi.w	#%0000011111100000,d4
+	lsr.w	#8,d5
+	lsr.w	#3,d5
+	or.w	d4,d3
+	or.w	d5,d3
+	move.w	d3,(a0)+
+	addq.b	#1,d6
+	bne.s	.colorloop
+
+	addq.w	#1,d7
+	cmp.w	a5,d7
+	blt.s	.palloop
+
+	rts
+
+* INPUT:
+* d0.w: angle
+* a3: lightmap
+* OUTPUT:
+* d1.l: intensity
+* a3: lightmap + offset
+MOVE_LIGHTMAP1:
+	move.w	d0,d2
+	move.w	d0,d3
+	mulu.w	#5,d3
+	lsr.w	#2,d3
+	Do_SinModulo	d2
+	Do_SinModulo	d3
+	Get_Sin	a0,d2,d2
+	Get_Sin	a0,d3,d3
+	muls.w	#320/2,d2
+	muls.w	#200/2,d3
+	swap	d2
+	swap	d3
+	addi.w	#80,d2
+	add.w	d2,d2
+	addi.w	#50,d3
+	muls.w	#640,d3
+	add.w	d2,d3
+	adda.l	d3,a3
+	moveq	#0,d1
+	move.w	d0,d1
+	rts
+
+* INPUT:
+* d0.w: angle
+* a3: lightmap
+* OUTPUT:
+* d1.l: intensity
+* a3: lightmap + offset
+MOVE_LIGHTMAP2:
+	move.w	d0,d2
+	move.w	d0,d3
+	mulu.w	#3,d3
+	mulu.w	#5,d2
+	lsr.w	#1,d2
+	Do_SinModulo	d2
+	Do_SinModulo	d3
+	Get_Sin	a0,d2,d2
+	Get_Sin	a0,d3,d3
+	muls.w	#320/2,d2
+	muls.w	#200/2,d3
+	swap	d2
+	swap	d3
+	addi.w	#80,d2
+	add.w	d2,d2
+	addi.w	#50,d3
+	muls.w	#640,d3
+	add.w	d2,d3
+	adda.l	d3,a3
+	moveq	#0,d1
+	move.w	d0,d1
+	rts
+
+* INPUT:
+* d0.w: angle
+* a3: lightmap
+* OUTPUT:
+* d1.l: intensity
+* a3: lightmap + offset
+MOVE_LIGHTMAP3:
+	move.w	d0,d2
+	move.w	d0,d3
+	mulu.w	#3,d3
+	mulu.w	#5,d2
+	lsr.w	#1,d2
+	Do_SinModulo	d2
+	Do_SinModulo	d3
+	Get_Sin	a0,d2,d2
+	Get_Sin	a0,d3,d3
+	muls.w	#320/2,d2
+	muls.w	#200/2,d3
+	swap	d2
+	swap	d3
+	addi.w	#80,d2
+	add.w	d2,d2
+	addi.w	#50,d3
+	muls.w	#640,d3
+	add.w	d2,d3
+	adda.l	d3,a3
+	move.w	d0,d1
+	Do_SinModulo	d1
+	Get_Sin	sine_tbl,d1,d1
+	asr.w	#8,d1
+	addi.w	#2000,d1
+	andi.l	#$ffff,d1
+	rts
+
+PAINT_BLENDSINETUNNEL:
+	lea	sine_tbl,a0
+	lea	Tunnel.offsetMap,a1
+	movea.l	Blender.baseAdr,a3
+	adda.l	#Blender.picture16_buf,a3
+	move.w	Blender.time+2,d0
+	move.w	d0,d2
+	Do_SinModulo	d2
+	Get_Sin	a0,d2,d2
+	move.w	d0,d3
+	mulu.w	#5,d3
+	lsr.w	#2,d3
+	Do_SinModulo	d3
+	Get_Sin	a0,d3,d3
+	muls.w	#320/2,d2
+	swap	d2
+	addi.w	#80,d2
+	add.w	d2,d2
+	muls.w	#200/2,d3
+	swap	d3
+	addi.w	#50,d3
+	muls.w	#640,d3
+	add.w	d2,d3
+	adda.l	d3,a1
+	movea.l	lightroutadr,a6
+	jsr	(a6)
+
+	IFNE	Blender.GEN_TEXTURE
+	lea	Texture.8bTexture1,a2
+	ELSE
+	lea	texture8pixel_dat,a2
+	ENDC
+
+	movea.l	Blender.baseAdr,a4
+	adda.l	#Blender.mix_tbl,a4
+	lsl.l	#5,d1
+	andi.w	#$ff00,d1
+.loop:	subi.l	#3*128*256,d1
+	bpl.s	.loop
+	addi.l	#3*128*256,d1
+.ok:	lea	(a4,d1.l*2),a4
+	move.w	d0,d2
+	lsr.w	#2,d2
+	Do_SinModulo	d2
+	Get_Sin	a0,d2,d2
+	asr.w	#5,d2
+	andi.w	#128-1,d2
+	lsr.w	#1,d0
+	andi.w	#128-1,d0
+	move.w	d0,d1
+	lsl.w	#8,d1
+	add.w	d1,d2
+	adda.w	d2,a2
+	movea.l	scr,a0
+	move.l	paintblendtunnelroutadr,a6
+	jmp	(a6)
+
+* Paints a tunnel on a 320*100 highcolor screen.
+* INPUT: a0: screen
+*        a1: offset table
+*        a2: texture (8bpp)
+*        a3: blend picture (8bpp)
+*        a4: mix table
+PAINT_BLENDTUNNEL320100:
+	movea.w	#160*2,a6
+	moveq	#100-1,d7
+	moveq	#0,d0
+	moveq	#0,d1
+
+* Does 16 pixels.
+.yloop:	moveq	#160/10-1,d6
+
+.chunkloop:
+	REPT	10
+	move.w	(a1)+,d0
+	move.w	(a3)+,d1
+	move.b	(a2,d0.l),d1
+	move.w	(a4,d1.l*2),(a0)+
+	move.w	(a4,d1.l*2),(a0)+
+	ENDR
+	dbra	d6,.chunkloop
+
+	adda.l	a6,a3
+	adda.l	a6,a1
+	dbra	d7,.yloop
+	rts
+
+* Paints a tunnel on a 160*100 highcolor screen.
+* INPUT: a0: screen
+*        a1: offset table
+*        a2: texture (8bpp)
+*        a3: blend picture (8bpp, <<8)
+*        a4: mix table
+PAINT_BLENDTUNNEL160100:
+	movea.w	#160*2,a6
+	moveq	#100-1,d7
+	moveq	#0,d0
+	moveq	#0,d1
+
+* Does 16 pixels.
+.yloop:	moveq	#160/16-1,d6
+
+.chunkloop:
+	REPT	16
+	move.w	(a1)+,d0
+	move.w	(a3)+,d1
+	move.b	(a2,d0.l),d1
+	move.w	(a4,d1.l*2),(a0)+
+	ENDR
+	dbra	d6,.chunkloop
+
+	adda.l	a6,a3
+	adda.l	a6,a1
+	dbra	d7,.yloop
+	rts
+
+* Paints a tunnel on a 160*200 highcolor screen.
+* INPUT: a0: screen
+*        a1: offset table
+*        a2: texture (8bpp)
+*        a3: blend picture (8bpp)
+*        a4: mix table
+PAINT_BLENDTUNNEL160200:
+	lea	160*2(a0),a5
+	movea.w	#160*2,a6
+	moveq	#100-1,d7
+	moveq	#0,d0
+	moveq	#0,d1
+
+* Does 16 pixels.
+.yloop:	moveq	#160/16-1,d6
+
+.chunkloop:
+	REPT	16
+	move.w	(a1)+,d0
+	move.w	(a3)+,d1
+	move.b	(a2,d0.l),d1
+	move.w	(a4,d1.l*2),(a0)+
+	move.w	(a4,d1.l*2),(a5)+
+	ENDR
+	dbra	d6,.chunkloop
+
+	adda.l	a6,a3
+	adda.l	a6,a1
+	adda.l	a6,a0
+	adda.l	a6,a5
+	dbra	d7,.yloop
+	rts
+
+******** OBJECT DATA ********
+
+	DATA
+
+	IFEQ	Blender.GEN_TEXTURE
+texture8_dat:
+	INCBIN	METAL256.APX
+texture8pal_tbl:	=	texture8_dat+$14
+texture8pixel_dat:	=	texture8_dat+$314
+	ENDC
+
+tunnelroutadr:
+	DC.L	PAINT_BLENDSINETUNNEL
+paintblendtunnelroutadr:
+	DC.L	PAINT_BLENDTUNNEL160100
+lightroutadr:
+	DC.L	MOVE_LIGHTMAP1
+
+fadeflow_tbl:
+	DC.W	4	(.end-.start)/4
+	DC.W	7
+.start:	DC.L	$ffff00ff
+	DC.L	$ffff00ff
+	DC.L	$00000000
+	DC.L	$ffff00ff
+	DC.L	$ffff00ff
+.end:
+
+******** OBJECT RESERVES ********
+
+	BSS
+
+	EVEN
+
+Blender.resRout:
+	DS.L	1
+Blender.startTime:
+	DS.L	1
+Blender.time:
+	DS.L	1
+flowpal_tbl:
+	DS.L	256
+fadepal_tbl:
+	DS.L	128*4
+Blender.baseAdr:
+	DS.L	1
+Blender.tempBuffer:
+	DS.L	256*3

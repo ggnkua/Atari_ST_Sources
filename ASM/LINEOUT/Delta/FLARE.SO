@@ -1,0 +1,696 @@
+; Flare. Looks okay. Maybe mess up colors to match demo a bit.
+; A screen for delta.
+
+;======= OBJECT EQUATES ========
+
+; Physical map dimensions.
+Flare.MAP_WIDTH:	=	256
+Flare.MAP_HEIGHT:	=	256
+Flare.MAP_SIZE:		=	Flare.MAP_WIDTH*Flare.MAP_HEIGHT
+Flare.MAP_MID:		=	Flare.MAP_WIDTH-160+(Flare.MAP_HEIGHT-100)*Flare.MAP_WIDTH
+
+; Logical (visible) map dimensions!
+Flare.WIDTH:		=	256
+Flare.HEIGHT:		=	256
+
+			RSRESET
+Flare.flowIndexTable:	RS.W	256
+Flare.flowColorTable:	RS.L	1024
+Flare.destFlowTable:	RS.L	64
+Flare.fieldTable:	RS.W	Flare.MAP_SIZE
+Flare.BLOCK_SIZE:	RS.B	0
+
+;======= OBJECT TABLE ========
+
+* Must be first in object!!
+Flare.table:
+	DC.L	Flare.mainLoop
+	DC.L	Flare.init
+	DC.L	Flare.setRes
+* Add more addresses here..
+	DC.L	0
+
+;======= RESOLUTION SETTING ROUTINE ========
+
+Flare.setRes:
+	IFEQ	testmode
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	beq.s	.end
+
+	move.l	#rts,vbl_gfx
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+* Unknown monitormode..
+	rts
+.vga60:	bra.l	vga60_16bit_160_200
+.vga100:bra.l	vga100_16bit_160_100
+.rgb50:	bra.l	rgb50_16bit_320_100
+	ENDC
+.end:	rts
+
+;======= INIT SUBROUTINE ========
+
+; OUTPUT:
+; d0.l: 0: All clear, <0: Error! Not initialized!
+Flare.init:
+	move.l	#Flare.BLOCK_SIZE,d0
+	bsr.l	Mem.register
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= REALTIME INIT SUBROUTINE ========
+
+Flare.realtimeInit:
+	move.l	#Flare.setRes,vbl_gfx
+
+	bsr.l	Mem.getBlock
+	move.l	d0,Flare.baseAdr
+
+	bsr.w	Flare.calcField
+	rts
+
+;======= SCREENINIT SUBROUTINE ========
+
+Flare.initScreen:
+; Insert screenarea initialising, etc. in here!
+	rts
+
+;======= MAINLOOP SUBROUTINE ========
+
+Flare.mainLoop:
+	move.w	$0468,.old468
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr.w	Flare.realtimeInit
+	move.l	(sp)+,d0
+.end_realtime_init:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr.w	Flare.initScreen
+.end_screeninit:
+
+	lea	Flare.flowOrderTable,a0
+	move.w	(a0)+,d0
+	addq	#2,a0
+	moveq	#1,d1
+	lsl.l	d0,d1
+	subq.w	#1,d1
+	move.w	$4bc.w,d0
+	lsr.w	#2,d0
+	move.w	d0,d2
+	lsr.w	#8,d2
+	and.w	d1,d2
+	lea	(a0,d2.w*4),a0
+	movea.l	(a0)+,a1
+	movea.l	(a0)+,a2
+	andi.w	#$00ff,d0
+	addq.w	#1,d0
+	movea.l	Flare.baseAdr,a0
+	adda.l	#Flare.destFlowTable,a0
+	bsr.w	Flare.interpolateInstructionTable
+
+; Calculate the new pallette.
+	movea.l	Flare.baseAdr,a1
+	adda.l	#Flare.destFlowTable,a1
+	movea.l	Flare.baseAdr,a0
+	adda.l	#Flare.flowColorTable,a0
+	bsr.l	Pal.makeGradient2Hc
+; Calculate spectrum.
+	bsr.w	Flare.calcSpectralFlowTable
+
+	IFNE	0
+	movec	cacr,d0
+	move.l	d0,-(sp)
+; d+i on and in burst
+; write alloc off.
+	ori.w	#%0001000100010001,d0
+	andi.w	#%1101111111111111,d0
+	movec	d0,cacr
+	ENDC
+
+; Paint the flare using current spectrum and pallette.
+	bsr.w	Flare.paint
+
+	IFNE	0
+	move.l	(sp)+,d0
+	movec	d0,cacr
+	ENDC
+
+	IFEQ	testmode
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	move.l	d0,d1
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+
+	move.w	.old468(pc),d0
+.wait:	cmp.w	$0468.w,d0
+	beq.s	.wait
+	ENDC
+
+	rts
+
+.old468:DC.W	0
+
+;======= OBJECT SUBROUTINES ========
+
+; Generate offsettable flare.
+; Only one quadrant is actually calculated. The rest is (inverse) mirrored.
+; 0 1  + -
+; 2 3  - +
+; note: due to optimisation, only works with square dimensions! w=h.
+Flare.calcField:
+
+	IFNE	1
+
+; speed-optimised version using precalced octant.
+	movea.l	Flare.baseAdr,a0
+	adda.l	#Flare.fieldTable,a0
+	lea	Tunnel.flareOctant,a6		; a6: flare data
+	lea	Tunnel.flareOctant,a5		; a6: flare data
+	lea	Flare.MAP_WIDTH*2(a0),a1
+	movea.l	a0,a2
+	adda.l	#Flare.MAP_WIDTH*(Flare.MAP_HEIGHT-1)*2,a2
+	movea.l	a0,a3
+	adda.l	#Flare.MAP_SIZE*2,a3
+	move.l	#Flare.MAP_HEIGHT-1,d7
+	clr.l	d5
+
+.yloop:	move.l	#Flare.MAP_WIDTH-1,d6
+	lea	(a5,d5.l),a4
+	move.w	#127*2,d3
+
+.xloop:	cmp.l	d6,d7
+	bhs.s	.calc
+
+; In lower triangle, so copy/mirror some shit.
+	move.w	(a4),d4
+	subi.w	#128*256,d4
+	move.w	d4,(a2)+
+	move.w	d4,-(a1)
+	not.w	d4
+	not.b	d4
+	move.w	d4,(a0)+
+	move.w	d4,-(a3)
+	adda.w	d3,a4
+	subq.w	#2,d3
+	bra.s	.next
+
+; In upper triangle, so calc it..
+.calc:	move.w	(a6)+,d4
+	move.w	d4,(a0)+
+	move.w	d4,-(a3)
+	not.w	d4
+	not.b	d4
+	move.w	d4,(a2)+
+	move.w	d4,-(a1)
+
+.next:	subq.w	#2,d6
+	bpl.s	.xloop
+
+	addq	#2,d5
+	adda.w	#(Flare.MAP_WIDTH/2)*2,a0
+	suba.w	#(Flare.MAP_WIDTH*3/2)*2,a2
+	adda.w	#(Flare.MAP_WIDTH*3/2)*2,a1
+	suba.w	#(Flare.MAP_WIDTH/2)*2,a3
+	subq.w	#2,d7
+	bpl.s	.yloop
+
+	ELSE
+
+	lea	Flare.squareTable,a0
+	move.w	#-255,d0
+
+.calc_sqr_loop:
+	move.w	d0,d1
+	muls.w	d1,d1
+	move.l	d1,(a0)+
+	addq.w	#2,d0
+	bmi.s	.calc_sqr_loop
+
+	movea.l	Flare.baseAdr,a0
+	adda.l	#Flare.fieldTable,a0
+	movea.l	a0,a6				; a6: flare data
+	lea	Flare.MAP_WIDTH*2(a0),a1
+	movea.l	a0,a2
+	adda.l	#Flare.MAP_WIDTH*(Flare.MAP_HEIGHT-1)*2,a2
+	movea.l	a0,a3
+	adda.l	#Flare.MAP_SIZE*2,a3
+	move.l	#Flare.MAP_HEIGHT-1,d7
+	lea	Flare.squareTable,a4
+
+.yloop:	move.l	#Flare.MAP_WIDTH-1,d6
+	move.l	(a4)+,d5
+	lea	Flare.squareTable,a5
+
+.xloop:	cmp.l	d6,d7
+	bhs.s	.calc
+
+; In lower triangle, so copy/mirror some shit.
+	move.w	(a6),d4
+	subi.w	#128*256,d4
+	move.w	d4,(a2)+
+	move.w	d4,-(a1)
+	neg.w	d4
+	neg.b	d4
+	move.w	d4,(a0)+
+	move.w	d4,-(a3)
+	bra.s	.next
+
+; In upper triangle, so calc it..
+.calc:
+
+; Calc raynumber.. tan(rayangle)=y/x, rayangle=arctan(y/x)
+	move.l	d7,d0
+	move.l	d6,d1
+	bsr.l	Frac.atan2
+; Convert radians to degrees [0..127].
+	lsr.l	#8,d1
+	mulu.w	#20860,d1
+	lsr.l	#8,d1
+	move.w	d1,d4
+
+; Calc ringnumber..
+	move.l	(a5),d1
+	add.l	d5,d1
+; d1.l=trunc(2x)^2+trunc(2y)^2
+	bsr.l	Math.sqrt
+; d0.l=sqrt[trunc(2x)^2+trunc(2y)^2]
+	divu.w	#362,d0				; d0=/(2*sqrt[2*(128)^2])
+	lsr.w	#8,d0
+	move.b	d0,d4
+
+	move.w	d4,(a0)+
+	move.w	d4,-(a3)
+	neg.w	d4
+	neg.b	d4
+	move.w	d4,(a2)+
+	move.w	d4,-(a1)
+
+.next:	addq	#4,a5
+	adda.w	#Flare.MAP_WIDTH*2,a6
+	subq.w	#2,d6
+	bpl.s	.xloop
+
+	adda.l	#(1-Flare.MAP_WIDTH*(Flare.MAP_HEIGHT/2))*2,a6
+	adda.w	#(Flare.MAP_WIDTH/2)*2,a0
+	suba.w	#(Flare.MAP_WIDTH*3/2)*2,a2
+	adda.w	#(Flare.MAP_WIDTH*3/2)*2,a1
+	suba.w	#(Flare.MAP_WIDTH/2)*2,a3
+	subq.w	#2,d7
+	bpl.s	.yloop
+
+	ENDC
+
+	rts
+
+* Interpolates between two truecolor instruction tables.
+* NOTE: Tables must all have the same length!
+* INPUT:
+* d0.w: interpolation point [1..256]
+* a0: destination instruction table
+* a1: truecolor instruction table start
+* a2: truecolor instruction table end
+Flare.interpolateInstructionTable:
+	move.w	(a1)+,d7
+	move.w	d7,(a0)+
+	move.w	(a1)+,(a0)+
+	subq.w	#1,d7
+	addq	#4,a2
+
+.loop:
+* Calculate source 2 colors.
+	moveq	#0,d1
+	move.b	(a2)+,d1
+	mulu.w	d0,d1
+	lsr.l	#8,d1
+	moveq	#0,d2
+	move.b	(a2)+,d2
+	mulu.w	d0,d2
+	lsr.l	#8,d2
+	moveq	#0,d3
+	move.w	(a2)+,d3
+	mulu.w	d0,d3
+	lsr.l	#8,d3
+
+	subi.w	#256,d0
+	neg.w	d0
+
+* Calculate source 1 colors.
+	moveq	#0,d4
+	move.b	(a1)+,d4
+	mulu.w	d0,d4
+	lsr.l	#8,d4
+	moveq	#0,d5
+	move.b	(a1)+,d5
+	mulu.w	d0,d5
+	lsr.l	#8,d5
+	moveq	#0,d6
+	move.w	(a1)+,d6
+	mulu.w	d0,d6
+	lsr.l	#8,d6
+
+	subi.w	#256,d0
+	neg.w	d0
+
+* Mix the bastards.
+	add.w	d1,d4
+	add.w	d2,d5
+	add.w	d3,d6
+
+* Output the color.
+	move.b	d4,(a0)+
+	move.b	d5,(a0)+
+	move.w	d6,(a0)+
+
+	dbra	d7,.loop
+	rts
+
+Flare.calcFlowTables:
+	movea.l	Flare.baseAdr,a0
+	adda.l	#Flare.flowColorTable,a0
+	move.w	#512-1,d6
+
+.colorloop:
+	move.w	#$ffd0,d1
+	move.w	d6,d0
+	move.w	#32-1,d2
+	add.w	d2,d2
+	add.w	d2,d1
+	add.w	d0,d1
+	bpl.s	.pok
+	moveq	#0,d1
+	bra.s	.oki
+.pok:	cmpi.w	#$01ff,d1
+	bls.s	.oki
+	move.w	#$01ff,d1
+	move.w	#$ffff,(a0)+
+	bra.s	.endcolor
+.oki:	lsl.w	#8,d1
+	move.w	d1,d0
+	andi.w	#$f800,d1
+	lsr.w	#6,d0
+	move.w	d0,d2
+	lsr.w	#8,d2
+	lsr.w	#1,d2
+	andi.w	#$07e0,d0
+	andi.w	#$001f,d2
+	or.w	d0,d1
+	or.w	d2,d1
+	move.w	d1,(a0)+
+.endcolor:
+	dbra	d6,.colorloop
+
+	rts
+
+; Calculates a spectral table as a sinoid. This uses 3 sines with different
+; period and phase.
+Flare.calcSpectralFlowTable:
+	lea	sine_tbl,a1
+	movea.l	Flare.baseAdr,a0
+	adda.l	#Flare.flowIndexTable,a0
+ 	move.w	#256-1,d7
+	move.w	$4bc.w,d1
+	move.w	d1,d2
+	move.w	d1,d3
+	mulu.w	#5,d3
+	lsr.l	#2,d3
+	mulu.w	#3,d1
+	movea.w	#8,a2
+	movea.w	#16,a3
+	movea.w	#16,a4
+* d1.w: phase 1
+* d2.w:	phase 2
+* d3.w:	phase 3
+* a2.w: angular step 1
+* a3.w: angular step 2
+* a4.w: angular step 3
+
+.loop:	Do_SinModulo	d1
+	Do_SinModulo	d2
+	Do_SinModulo	d3
+	move.w	(a1,d1.w*4),d0
+	add.w	2(a1,d2.w*4),d0
+	add.w	(a1,d3.w*4),d0
+	bmi.s	.negative
+	not.w	d0
+.negative:
+	lsr.w	#8,d0
+	move.w	d0,(a0)+
+	add.w	a2,d1
+	add.w	a3,d2
+	add.w	a4,d3
+	dbra	d7,.loop
+	rts
+
+Flare.paint:
+	movea.l	scr,a0
+	movea.l	Flare.baseAdr,a1
+	adda.l	#Flare.fieldTable+Flare.MAP_MID,a1
+
+	lea	sine_tbl,a2
+	move.w	$4bc.w,d0
+	move.w	d0,d1
+	mulu.w	#5,d1
+	lsr.w	#3,d1
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	Get_Sin	a2,d0,d0
+	Get_Cos	a2,d1,d1
+	muls.w	#Flare.WIDTH-160,d0
+	muls.w	#Flare.HEIGHT-100,d1
+	swap	d0
+	swap	d1
+	muls.w	#Flare.MAP_WIDTH,d1
+	add.w	d0,d1
+	lea	(a1,d1.w*2),a1
+
+	movea.l	Flare.baseAdr,a2
+	adda.l	#Flare.flowColorTable,a2
+	movea.l	Flare.baseAdr,a3
+	adda.l	#Flare.flowIndexTable,a3
+	moveq	#100-1,d7
+	moveq	#0,d0
+	moveq	#0,d1
+
+	move.w	monitormode,d2
+	cmpi.w	#vga60,d2
+	beq	Flare.paintVga60
+	cmpi.w	#vga100,d2
+	beq	Flare.paintVga100
+	cmpi.w	#rgb50,d2
+	beq	Flare.paintRgb50
+* Unknown monitormode..
+	rts
+
+Flare.paintVga100:
+.yloop:	moveq	#160/10-1,d6
+
+.xloop:
+	REPT	10
+	move.b	(a1)+,d1
+	move.w	(a3,d1.l*2),d0
+	move.b	(a1)+,d1
+	add.l	d1,d0
+	move.w	(a2,d0.l*4),(a0)+
+	ENDR
+	dbf	d6,.xloop
+
+	lea	(Flare.MAP_WIDTH-160)*2(a1),a1
+	dbf	d7,.yloop
+	rts
+
+Flare.paintVga60:
+	movea.w	#160*2,a5
+	lea	(a0,a5.l),a6
+
+.yloop:	moveq	#160/10-1,d6
+
+.xloop:
+	REPT	10
+	moveq	#0,d0
+	move.b	(a1)+,d1
+	move.b	(a1)+,d0
+	add.w	(a3,d1.l*2),d0
+	move.w	(a2,d0.l*4),d0
+	move.w	d0,(a0)+
+	move.w	d0,(a6)+
+	ENDR
+	dbf	d6,.xloop
+
+	lea	(Flare.MAP_WIDTH-160)*2(a1),a1
+	adda.l	a5,a0
+	adda.l	a5,a6
+	dbf	d7,.yloop
+	rts
+
+Flare.paintRgb50:
+.yloop:	moveq	#160/10-1,d6
+
+.xloop:
+	REPT	10
+	move.b	(a1)+,d1
+	move.w	(a3,d1.l*2),d0
+	move.b	(a1)+,d1
+	add.l	d1,d0
+	move.l	(a2,d0.l*4),(a0)+
+	ENDR
+	dbf	d6,.xloop
+
+	lea	(Flare.MAP_WIDTH-160)*2(a1),a1
+	dbf	d7,.yloop
+	rts
+
+;======= OBJECT DATA ========
+
+	DATA
+
+Flare.flowOrderTable:
+	DC.W	2,0				* 2log of amount, pad value
+	DC.L	Flare.flowTable2
+	DC.L	Flare.flowTable3
+	DC.L	Flare.flowTable4
+	DC.L	Flare.flowTable5
+	DC.L	Flare.flowTable2		* repeated first for wrapping
+
+Flare.flowTable1:
+	DC.W	18	(.end-.start)/4
+	DC.W	5
+.start:	DC.L	$00000000
+	DC.L	$003f0000
+	DC.L	$007f0000
+	DC.L	$3fdf0000
+	DC.L	$7fff0000
+	DC.L	$dfff0000
+	DC.L	$ffff0000
+	DC.L	$ffff003f
+	DC.L	$ffff007f
+	DC.L	$ffff00bf
+	DC.L	$ffff00ff
+	DC.L	$ffff00ff
+	DC.L	$ffff00ff
+	DC.L	$ffff00ff
+	DC.L	$ffff00ff
+	DC.L	$ffff00ff
+	DC.L	$ffff00ff
+	DC.L	$ffff00ff
+.end:
+
+Flare.flowTable2:
+	DC.W	18	(.end-.start)/4
+	DC.W	5
+.start:	DC.L	$ffff0000
+	DC.L	$ffff0000
+	DC.L	$ffff0000
+	DC.L	$ffff0000
+	DC.L	$ffff0000
+	DC.L	$ffff0000
+	DC.L	$ffff0000
+	DC.L	$ffbf0000
+	DC.L	$ff7f0000
+	DC.L	$ff3f0000
+	DC.L	$ff000000
+	DC.L	$ff000000
+	DC.L	$bf000000
+	DC.L	$7f000000
+	DC.L	$3f000000
+	DC.L	$00000000
+	DC.L	$00000000
+.end:
+
+Flare.flowTable3:
+	DC.W	18	(.end-.start)/4
+	DC.W	5
+.start:	DC.L	$00ff00ff
+	DC.L	$00ff00ff
+	DC.L	$00ff00ff
+	DC.L	$00ff00ff
+	DC.L	$00ff00ff
+	DC.L	$00ff00ff
+	DC.L	$00ff00ff
+	DC.L	$00bf00ff
+	DC.L	$007f00ff
+	DC.L	$003f00ff
+	DC.L	$000000ff
+	DC.L	$000000ff
+	DC.L	$000000bf
+	DC.L	$0000007f
+	DC.L	$0000003f
+	DC.L	$00000000
+	DC.L	$00000000
+.end:
+
+Flare.flowTable4:
+	DC.W	18	(.end-.start)/4
+	DC.W	5
+.start:	DC.L	$00ff00ff
+	DC.L	$00ff00ff
+	DC.L	$00ff00ff
+	DC.L	$00ff00ff
+	DC.L	$00ff00ff
+	DC.L	$00ff00ff
+	DC.L	$00ff00ff
+	DC.L	$00ff00bf
+	DC.L	$00ff007f
+	DC.L	$00ff003f
+	DC.L	$00ff0000
+	DC.L	$00ff0000
+	DC.L	$00bf0000
+	DC.L	$007f0000
+	DC.L	$003f0000
+	DC.L	$00000000
+	DC.L	$00000000
+.end:
+
+Flare.flowTable5:
+	DC.W	18	(.end-.start)/4
+	DC.W	5
+.start:	DC.L	$ffff0000
+	DC.L	$ffff0000
+	DC.L	$ffff0000
+	DC.L	$ffff0000
+	DC.L	$ffff0000
+	DC.L	$ffff0000
+	DC.L	$ffff0000
+	DC.L	$bfff0000
+	DC.L	$7fff0000
+	DC.L	$3fff0000
+	DC.L	$00ff0000
+	DC.L	$00ff0000
+	DC.L	$00bf0000
+	DC.L	$007f0000
+	DC.L	$003f0000
+	DC.L	$00000000
+	DC.L	$00000000
+.end:
+
+;======= OBJECT RESERVES ========
+
+	BSS
+
+Flare.baseAdr:
+	DS.L	1
+
+Flare.squareTable:
+	DS.L	128
+
+;======= END OF DEMO-EFFECT OBJECT ========

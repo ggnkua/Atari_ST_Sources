@@ -1,0 +1,815 @@
+; Raycasted plane. A screen for delta.
+
+;======= OBJECT EQUATES ========
+
+RayPlane.SPANLOG:	=	2
+
+RayPlane.XBLOCKSIZE:	=	1<<RayPlane.SPANLOG
+RayPlane.YBLOCKSIZE:	=	1<<RayPlane.SPANLOG
+
+RayPlane.WIDTH:		=	160
+RayPlane.HEIGHT:	=	100
+RayPlane.XBLOCKS:	=	RayPlane.WIDTH/RayPlane.XBLOCKSIZE
+RayPlane.YBLOCKS:	=	RayPlane.HEIGHT/RayPlane.YBLOCKSIZE+1
+RayPlane.DISTANCE:	=	$6000
+
+RayPlane.VECTORSCALE:	=	100
+
+;======= OBJECT TABLE ========
+
+* Must be first in object!!
+RayPlane.table:
+	DC.L	RayPlane.mainLoop
+	DC.L	RayPlane.init
+	DC.L	RayPlane.setRes
+* Add more addresses here..
+	DC.L	0
+
+;======= RESOLUTION SETTING ROUTINE ========
+
+RayPlane.setRes:
+	IFEQ	testmode
+	move.l	#rts,vbl_gfx
+
+	move.w	$0468.w,d0
+.ck468:	cmp.w	$0468.w,d0
+	beq.s	.ck468
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+* Unknown monitormode..
+	rts
+.vga60:	bra.l	vga60_16bit_160_200
+.vga100:bra.l	vga100_16bit_160_100
+.rgb50:	bra.l	rgb50_16bit_320_100
+	ENDC
+	rts
+
+;======= INIT SUBROUTINE ========
+
+* OUTPUT: d0.l: 0   = All clear.
+*               neg = Error! Not initialized!
+RayPlane.init:
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= REALTIME INIT SUBROUTINE ========
+
+RayPlane.realtimeInit:
+	move.w	$04BC.w,RayPlane.startTime
+	rts
+
+;======= SCREENINIT SUBROUTINE ========
+
+RayPlane.initScreen:
+* Insert screenarea initialising, etc. in here!
+	rts
+
+;======= MAINLOOP SUBROUTINE ========
+
+RayPlane.mainLoop:
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr	RayPlane.realtimeInit
+	move.l	(sp)+,d0
+.end_realtime_init:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr	RayPlane.initScreen
+.end_screeninit:
+
+	move.w	$04BC.w,d0
+	sub.w	RayPlane.startTime,d0
+	addi.w	#2048,d0
+	move.w	d0,d3
+	move.w	d0,d1
+	mulu.w	#3,d1
+	lsr.w	#3,d1
+	move.w	d0,d2
+	lsr.w	#1,d2
+	lsr.w	#2,d0
+	move.w	d0,RayPlane.xAngle
+	move.w	d1,RayPlane.yAngle
+	move.w	d2,RayPlane.zAngle
+	move.w	#$2000,RayPlane.planePos
+	move.w	d3,d0
+	lsl.w	#6,d0
+	move.w	d0,RayPlane.uOffset
+	bsr	RayPlane.calcGrid
+
+	lea	Texture.16bTexture2,a2
+	IFNE	0
+	bsr	RayPlane.calcColumns
+	bsr	RayPlane.paintColumns
+	ELSE
+	bsr	RayPlane.paint
+	ENDC
+
+	IFEQ	testmode
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	move.l	d0,d1
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+	ENDC
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.res_done
+	bsr	RayPlane.setRes
+.res_done:
+
+	rts
+
+;======= OBJECT SUBROUTINES ========
+
+; Seems to work ok, since there has been some patching on the overflow
+; errors (caused by combination of finite accuracy and use of maximum range).
+; INPUT:
+; d0.w: X rotation (a)
+; d1.w: Y rotation (b)
+; d2.w: Z rotation (c)
+RayPlane.generateMatrix:
+	lea	RayPlane.matrix,a0
+* 1> rotate 3 axis.
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	Do_SinModulo	d2
+	movea.w	d0,a3
+	movea.w	d1,a4
+	movea.w	d2,a5
+	lea	sine_tbl,a2
+
+* X := + x*cos(b)*cos(c)
+*      - y*cos(b)*sin(c)
+*      + z*sin(b)
+	Get_SinCos	a2,d1,d3,d4
+	Get_SinCos	a2,d2,d5,d6
+	muls.w	d4,d6				* / cos(b)*sin(c)
+	add.l	d6,d6				* |
+;	bvc.s	.skipxd6
+;	subq.l	#1,d6
+;.skipxd6:
+	swap	d6				* \
+	muls.w	d4,d5				* / -cos(b)*sin(c)
+	add.l	d5,d5				* |
+;	bvc.s	.skipxd5
+;	subq.l	#1,d5
+;.skipxd5:
+	swap	d5				* |
+	neg.w	d5				* \
+	move.w	d6,(a0)+
+	move.w	d5,(a0)+
+	move.w	d3,(a0)+
+	
+* Y := + x*(sin(a)*sin(b)*cos(c)+cos(a)*sin(c))
+*      + y*(cos(a)*cos(c)-sin(a)*sin(b)*sin(c))
+*      - z*sin(a)*cos(b)
+	Get_SinCos	a2,a3,d0,d1
+	Get_Sin		a2,a4,d2
+	Get_SinCos	a2,a5,d4,d5
+	muls.w	d0,d2
+	add.l	d2,d2
+;	bvc.s	.skipyd2
+;	subq.l	#1,d2
+;.skipyd2:
+	swap	d2
+	muls.w	d2,d5
+	add.l	d5,d5
+;	bvc.s	.skipyd5
+;	subq.l	#1,d5
+;.skipyd5:
+	swap	d5
+	muls.w	d1,d4
+	add.l	d4,d4
+;	bvc.s	.skipyd4
+;	subq.l	#1,d4
+;.skipyd4:
+	swap	d4
+	add.w	d4,d5
+	bvc.s	.skipyvd5
+	addq.w	#1,d5
+	neg.w	d5
+.skipyvd5:
+	move.w	d5,d3
+	;Get_SinCos	a2,a3,d0,d1
+	Get_Sin		a2,a4,d2
+	Get_SinCos	a2,a5,d4,d5
+	muls.w	d1,d5
+	add.l	d5,d5
+;	bvc.s	.skipy2d5
+;	subq.l	#1,d5
+;.skipy2d5:
+	swap	d5
+	muls.w	d0,d2
+	add.l	d2,d2
+;	bvc.s	.skipy2d2
+;	subq.l	#1,d2
+;.skipy2d2:
+	swap	d2
+	muls.w	d2,d4
+	add.l	d4,d4
+	swap	d4
+	sub.w	d4,d5
+	bvc.s	.skipyv2d5
+	addq.w	#1,d5
+	neg.w	d5
+.skipyv2d5:
+	Get_Cos		a2,a4,d4
+	muls.w	d0,d4
+	add.l	d4,d4
+;	bvc.s	.skipy2d4
+;	subq.l	#1,d4
+;.skipy2d4:
+	swap	d4
+	neg.w	d4
+	move.w	d3,(a0)+
+	move.w	d5,(a0)+
+	move.w	d4,(a0)+
+
+* Z := + x*(sin(a)*sin(c)-cos(a)*sin(b)*cos(c))
+*      + y*(cos(a)*sin(b)*sin(c)+sin(a)*cos(c))
+*      + z*cos(a)*cos(b)
+	Get_SinCos	a2,a3,d0,d1
+	Get_Sin		a2,a4,d2
+	Get_SinCos	a2,a5,d4,d5
+	muls.w	d0,d4
+	add.l	d4,d4
+;	bvc.s	.skipzd4
+;	subq.l	#1,d4
+;.skipzd4:
+	swap	d4
+	muls.w	d1,d2
+	add.l	d2,d2
+;	bvc.s	.skipzd2
+;	subq.l	#1,d2
+;.skipzd2:
+	swap	d2
+	muls.w	d2,d5
+	add.l	d5,d5
+	swap	d5
+	sub.w	d5,d4
+	bvc.s	.skipzvd4
+	addq.w	#1,d4
+	neg.w	d4
+.skipzvd4:
+	move.w	d4,d3
+	;Get_SinCos	a2,a3,d0,d1
+	Get_Sin		a2,a4,d2
+	Get_SinCos	a2,a5,d4,d5
+	muls.w	d1,d2
+	add.l	d2,d2
+;	bvc.s	.skipz2d2
+;	subq.l	#1,d2
+;.skipz2d2:
+	swap	d2
+	muls.w	d2,d4
+	add.l	d4,d4
+	swap	d4
+	muls.w	d0,d5
+	add.l	d5,d5
+;	bvc.s	.skipzd5
+;	subq.l	#1,d5
+;.skipzd5:
+	swap	d5
+	add.w	d4,d5
+	bvc.s	.skipzvd5
+	addq.w	#1,d5
+	neg.w	d5
+.skipzvd5:
+	Get_Cos		a2,a4,d4
+	muls.w	d1,d4
+	add.l	d4,d4
+;	bvc.s	.skipz2d4
+;	subq.l	#1,d4
+;.skipz2d4:
+	swap	d4
+	move.w	d3,(a0)+
+	move.w	d5,(a0)+
+	move.w	d4,(a0)+
+	rts
+
+RayPlane.transformVector:
+	lea	RayPlane.matrix,a1
+* X
+	move.w	d0,d3
+	move.w	d1,d4
+	move.w	d2,d5
+	muls.w	(a1)+,d3
+	muls.w	(a1)+,d4
+	muls.w	(a1)+,d5
+	add.l	d3,d5
+	add.l	d4,d5
+	add.l	d5,d5
+	swap	d5
+	move.w	d5,(a0)+			* Store coordinate.
+* Y
+	move.w	d0,d3
+	move.w	d1,d4
+	move.w	d2,d5
+	muls.w	(a1)+,d3
+	muls.w	(a1)+,d4
+	muls.w	(a1)+,d5
+	add.l	d3,d5
+	add.l	d4,d5
+	add.l	d5,d5
+	swap	d5
+	move.w	d5,(a0)+			* Store coordinate.
+* Z
+	move.w	d0,d3
+	move.w	d1,d4
+	move.w	d2,d5
+	muls.w	(a1)+,d3
+	muls.w	(a1)+,d4
+	muls.w	(a1)+,d5
+	add.l	d3,d5
+	add.l	d4,d5
+	add.l	d5,d5
+	swap	d5
+	move.w	d5,(a0)+			* Store coordinate.
+	rts
+
+RayPlane.calcGrid:
+
+		RSRESET
+.X0:		RS.W	1
+.Y0:		RS.W	1
+.Z0:		RS.W	1
+.X1:		RS.W	1
+.Y1:		RS.W	1
+.Z1:		RS.W	1
+.X2:		RS.W	1
+.Y2:		RS.W	1
+.Z2:		RS.W	1
+.DX:		RS.W	1
+.DY:		RS.W	1
+.DZ:		RS.W	1
+.CORNERSIZE:	RS.W	1
+
+; Step 1:
+; Set up corners of the viewcone.
+; This is done by rotating the corners according to camera parameters.
+
+; Generate rotation matrix..
+	move.w	RayPlane.xAngle,d0
+	move.w	RayPlane.yAngle,d1
+	move.w	RayPlane.zAngle,d2
+	bsr	RayPlane.generateMatrix
+
+; Transform (=rotate) the corner vectors.
+; Top-left corner...
+	move.w	#-RayPlane.WIDTH*RayPlane.VECTORSCALE,d0	; left x
+	move.w	#-RayPlane.HEIGHT*RayPlane.VECTORSCALE,d1	; top y
+	move.w	#RayPlane.DISTANCE,d2				; z
+	lea	.cornerTable+.X0(pc),a0
+	bsr	RayPlane.transformVector
+; Top-right corner...
+	move.w	#+RayPlane.WIDTH*RayPlane.VECTORSCALE,d0	; right x
+	move.w	#-RayPlane.HEIGHT*RayPlane.VECTORSCALE,d1	; top y
+	move.w	#RayPlane.DISTANCE,d2				; z
+	lea	.cornerTable+.X1(pc),a0
+	bsr	RayPlane.transformVector
+; Bottom-left corner...
+	move.w	#-RayPlane.WIDTH*RayPlane.VECTORSCALE,d0	; left x
+	move.w	#+RayPlane.HEIGHT*RayPlane.VECTORSCALE,d1	; bottom y
+	move.w	#RayPlane.DISTANCE,d2				; z
+	lea	.cornerTable+.X2(pc),a0
+	bsr	RayPlane.transformVector
+
+; Step 2:
+; Calculate interpolation steps across the viewcone.
+	lea	.cornerTable(pc),a2
+	movem.w	.X0(a2),d4-d6
+
+; Initialize xloop-steps.
+	movem.w	.X1(a2),d0-d2
+	sub.l	d4,d0
+	sub.l	d5,d1
+	sub.l	d6,d2
+	divs.w	#RayPlane.XBLOCKS,d0
+	divs.w	#RayPlane.XBLOCKS,d1
+	divs.w	#RayPlane.XBLOCKS,d2
+	movea.w	d0,a4
+	movea.w	d1,a5
+	movea.w	d2,a6
+
+; Initialize yloop-steps.
+	movem.w	.X2(a2),d0-d2
+	sub.l	d4,d0
+	sub.l	d5,d1
+	sub.l	d6,d2
+	divs.w	#RayPlane.YBLOCKS,d0
+	divs.w	#RayPlane.YBLOCKS,d1
+	divs.w	#RayPlane.YBLOCKS,d2
+	movem.w	d0-d2,.DX(a2)
+
+; Now calculate the grid.
+	clr.l	d1
+	move.w	RayPlane.planePos,d1
+	move.w	d1,d2
+	lsr.w	#2,d2
+	movea.w	d2,a1
+	lsl.l	#8,d1
+	moveq	#RayPlane.YBLOCKS,d7
+	lea	RayPlane.grid,a0
+	move.w	RayPlane.uOffset,d0
+
+.yloop:	swap	d7
+	move.w	#RayPlane.XBLOCKS,d7		; d7.w = x loopcounter
+
+; a0: grid
+; Calculate intersection points on the plane and store the coordinates (u,v).
+; l*Y=yi <=> l=yi/Y
+; l*X=xi=u
+; l*Z=zi=v
+
+.xloop:	move.l	d1,d2				; d2.l= yi
+	move.w	d5,d3
+	bpl.s	.pos
+	neg.w	d3
+.pos:
+
+;	cmp.w	a1,d3
+;	bgt.s	.okay
+;	move.w	a1,d3
+;.okay:
+
+	divs.w	d3,d2				; d2.w= l=yi/Y
+	move.w	d4,d3
+	muls.w	d2,d3
+	asr.l	#8,d3				; d3.w=u=l*x
+	move.w	d3,(a0)+
+	move.w	d6,d3
+	muls.w	d2,d3
+	asr.l	#8,d3
+;	add.w	d0,d3				; d3.w=v=z*l+v_offset
+	move.w	d3,(a0)+
+; Interpolate direction vector on the horizontal axis.
+	add.w	a4,d4
+	add.w	a5,d5
+	add.w	a6,d6
+	dbf	d7,.xloop
+
+; Interpolate direction vector on the vertical axis.
+	movem.w	(a2),d4-d6
+	add.w	.DX(a2),d4
+	add.w	.DY(a2),d5
+	add.w	.DZ(a2),d6
+	movem.w	d4-d6,(a2)
+
+	swap	d7
+	dbf	d7,.yloop
+	rts
+
+.cornerTable
+	DS.B	.CORNERSIZE
+
+RayPlane.calcColumns:
+	lea	RayPlane.grid,a1
+	lea	RayPlane.columns,a0
+	movea.l	#(1-(RayPlane.XBLOCKS+1)*RayPlane.YBLOCKS*RayPlane.YBLOCKSIZE)*4,a6
+	moveq	#RayPlane.XBLOCKS,d7
+
+.xloop:	moveq	#RayPlane.YBLOCKS-1,d6
+
+.yloop:	movem.w	(a1),d0/d1
+	lea	(RayPlane.XBLOCKS+1)*4(a1),a1
+	movem.w	(a1),d2/d3
+	sub.w	d0,d2
+	sub.w	d1,d3
+	asr.w	#RayPlane.SPANLOG,d2
+	asr.w	#RayPlane.SPANLOG,d3
+
+; spanloop
+	REPT	RayPlane.YBLOCKSIZE
+	movem.w	d0/d1,(a0)
+	lea	(RayPlane.XBLOCKS+1)*4(a0),a0
+	add.w	d2,d0
+	add.w	d3,d1
+	ENDR
+
+	dbra	d6,.yloop
+
+	adda.l	a6,a0
+	lea	(1-(RayPlane.XBLOCKS+1)*RayPlane.YBLOCKS)*4(a1),a1
+	dbra	d7,.xloop
+	rts
+
+; INPUT:
+; a2: address of texture
+RayPlane.paintColumns:
+	movea.l	scr,a0
+	lea	RayPlane.columns,a1
+	moveq	#100-1,d7	; y loop counter
+	clr.l	d4
+
+.scanline:
+	swap	d7
+	move.w	#RayPlane.XBLOCKS-1,d7	; x loop counter
+	
+.spanloop:
+	movem.w	(a1)+,d0/d1
+	movem.w	(a1),d2/d3			; d2.w=ru, d2.w=rv
+	sub.w	d0,d2				; d2.w=ru-lu
+	sub.w	d1,d3				; d3.w=rv-lv
+	asr.w	#RayPlane.SPANLOG,d2
+	asr.w	#RayPlane.SPANLOG,d3
+	movea.w	d2,a3				; a3.w=du x-increment
+	movea.w	d3,a4				; a4.w=dv x-increment
+
+	REPT	RayPlane.XBLOCKSIZE
+	move.w	d0,d4
+	move.w	d1,d5
+	lsr.w	#8,d5
+	move.b	d5,d4
+	move.w	(a2,d4.l*2),(a0)+
+	add.w	a3,d0				; u:=u+du (x-inc)
+	add.w	a4,d1				; v:=v+dv (x-inc)
+	ENDR
+
+	dbra	d7,.spanloop
+
+	addq	#4,a1
+	swap	d7
+	dbra	d7,.scanline
+	rts
+
+; INPUT:
+; a2: address of texture
+RayPlane.paint:
+	movea.l	scr,a0
+	lea	RayPlane.grid,a1
+	moveq	#RayPlane.YBLOCKS-1,d7	; y loop counter
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq	RayPlane.paintVga60
+	cmpi.w	#vga100,d0
+	beq.s	RayPlane.paintVga100
+	cmpi.w	#rgb50,d0
+	beq	RayPlane.paintRgb50
+; Unknown monitormode..
+	rts
+
+RayPlane.paintVga100:
+.scanline:
+	swap	d7
+	move.w	#RayPlane.XBLOCKS-1,d7	; x loop counter
+	
+.square:movem.w	(RayPlane.XBLOCKS+1)*4(a1),d2/d3
+	movem.w	(a1)+,d0/d1
+	movem.w	(a1),d4/d5			; d4.w=ru, d5.w=rv
+	sub.w	d0,d4				; d4.w=du x-increment
+	sub.w	d1,d5				; d5.w=dv x-increment
+	asr.w	#RayPlane.SPANLOG,d4
+	asr.w	#RayPlane.SPANLOG,d5
+	movea.w	d4,a3				; a3.w=du x-increment
+	movea.w	d5,a4				; a4.w=dv x-increment
+	sub.w	d0,d2
+	sub.w	d1,d3
+	asr.w	#RayPlane.SPANLOG,d2
+	asr.w	#RayPlane.SPANLOG,d3
+	movea.w	d2,a5				; a5.w=du for y-increment
+	movea.w	d3,a6				; a6.w=dv for y-increment
+	moveq	#RayPlane.XBLOCKSIZE-1,d6
+	clr.l	d4
+
+.spanloop:
+	move.w	d0,d2				; d2.w=u=lu
+	move.w	d1,d3				; d3.w=u=lv
+
+	REPT	RayPlane.XBLOCKSIZE
+	move.w	d2,d4
+	move.w	d3,d5
+	lsr.w	#8,d5
+	move.b	d5,d4
+	move.w	(a2,d4.l*2),(a0)+
+	add.w	a3,d2				; u:=u+du (x-inc)
+	add.w	a4,d3				; v:=v+dv (x-inc)
+	ENDR
+
+	add.w	a5,d0				; lu:=lu+du (y-inc)
+	add.w	a6,d1				; lv:=lv+dv (y-inc)
+	lea	(RayPlane.WIDTH-RayPlane.XBLOCKSIZE)*2(a0),a0
+	dbra	d6,.spanloop
+
+	lea	(-RayPlane.YBLOCKSIZE*RayPlane.WIDTH+RayPlane.XBLOCKSIZE)*2(a0),a0		; next nice little square
+	dbra	d7,.square
+
+	addq	#4,a1
+	lea	RayPlane.WIDTH*(RayPlane.YBLOCKSIZE-1)*2(a0),a0
+	swap	d7
+	dbra	d7,.scanline
+
+	rts
+
+RayPlane.paintVga60:
+.scanline:
+	swap	d7
+	move.w	#RayPlane.XBLOCKS-1,d7	; x loop counter
+	
+.square:movem.w	(RayPlane.XBLOCKS+1)*4(a1),d2/d3
+	movem.w	(a1)+,d0/d1
+	movem.w	(a1),d4/d5			; d4.w=ru, d5.w=rv
+	sub.w	d0,d4				; d4.w=du x-increment
+	sub.w	d1,d5				; d5.w=dv x-increment
+	asr.w	#RayPlane.SPANLOG,d4
+	asr.w	#RayPlane.SPANLOG,d5
+	movea.w	d4,a3				; a3.w=du x-increment
+	movea.w	d5,a4				; a4.w=dv x-increment
+	sub.w	d0,d2
+	sub.w	d1,d3
+	asr.w	#RayPlane.SPANLOG,d2
+	asr.w	#RayPlane.SPANLOG,d3
+	movea.w	d2,a5				; a5.w=du for y-increment
+	movea.w	d3,a6				; a6.w=dv for y-increment
+	moveq	#RayPlane.XBLOCKSIZE-1,d6
+	clr.l	d4
+
+.spanloop:
+	move.w	d0,d2				; d2.w=u=lu
+	move.w	d1,d3				; d3.w=u=lv
+
+	REPT	RayPlane.XBLOCKSIZE
+	move.w	d2,d4
+	move.w	d3,d5
+	lsr.w	#8,d5
+	move.b	d5,d4
+	move.w	(a2,d4.l*2),160*2(a0)
+	move.w	(a2,d4.l*2),(a0)+
+	add.w	a3,d2				; u:=u+du (x-inc)
+	add.w	a4,d3				; v:=v+dv (x-inc)
+	ENDR
+
+	add.w	a5,d0				; lu:=lu+du (y-inc)
+	add.w	a6,d1				; lv:=lv+dv (y-inc)
+	adda.w	#(RayPlane.WIDTH*2-RayPlane.XBLOCKSIZE)*2,a0
+	dbra	d6,.spanloop
+
+	adda.w	#(RayPlane.XBLOCKSIZE-RayPlane.YBLOCKSIZE*RayPlane.WIDTH*2)*2,a0		; next nice little square
+	dbra	d7,.square
+
+	addq	#4,a1
+	adda.w	#RayPlane.WIDTH*(2*RayPlane.YBLOCKSIZE-1)*2,a0
+	swap	d7
+	dbra	d7,.scanline
+
+	rts
+
+RayPlane.paintRgb50:
+.scanline:
+	swap	d7
+	move.w	#RayPlane.XBLOCKS-1,d7	; x loop counter
+	
+.square:movem.w	(RayPlane.XBLOCKS+1)*4(a1),d2/d3
+	movem.w	(a1)+,d0/d1
+	movem.w	(a1),d4/d5			; d4.w=ru, d5.w=rv
+	sub.w	d0,d4				; d4.w=du x-increment
+	sub.w	d1,d5				; d5.w=dv x-increment
+	asr.w	#RayPlane.SPANLOG,d4
+	asr.w	#RayPlane.SPANLOG,d5
+	movea.w	d4,a3				; a3.w=du x-increment
+	movea.w	d5,a4				; a4.w=dv x-increment
+	sub.w	d0,d2
+	sub.w	d1,d3
+	asr.w	#RayPlane.SPANLOG,d2
+	asr.w	#RayPlane.SPANLOG,d3
+	movea.w	d2,a5				; a5.w=du for y-increment
+	movea.w	d3,a6				; a6.w=dv for y-increment
+	moveq	#RayPlane.XBLOCKSIZE-1,d6
+	clr.l	d4
+
+.spanloop:
+	move.w	d0,d2				; d2.w=u=lu
+	move.w	d1,d3				; d3.w=u=lv
+
+	REPT	RayPlane.XBLOCKSIZE
+	move.w	d2,d4
+	move.w	d3,d5
+	lsr.w	#8,d5
+	move.b	d5,d4
+	move.w	(a2,d4.l*2),(a0)+
+	move.w	(a2,d4.l*2),(a0)+
+	add.w	a3,d2				; u:=u+du (x-inc)
+	add.w	a4,d3				; v:=v+dv (x-inc)
+	ENDR
+
+	add.w	a5,d0				; lu:=lu+du (y-inc)
+	add.w	a6,d1				; lv:=lv+dv (y-inc)
+	adda.w	#(RayPlane.WIDTH-RayPlane.XBLOCKSIZE)*4,a0
+	dbra	d6,.spanloop
+
+	adda.w	#(RayPlane.XBLOCKSIZE-RayPlane.YBLOCKSIZE*RayPlane.WIDTH)*4,a0		; next nice little square
+	dbra	d7,.square
+
+	addq	#4,a1
+	adda.w	#RayPlane.WIDTH*(RayPlane.YBLOCKSIZE-1)*4,a0
+	swap	d7
+	dbra	d7,.scanline
+
+	rts
+
+* INPUT:
+* a2: address of texture
+RayPlane.paintAcc:
+	movea.l	scr,a0
+	lea	RayPlane.grid,a1
+	lea	(RayPlane.XBLOCKS+1)*4(a1),a5
+	moveq	#RayPlane.YBLOCKS-1,d7	; y loop counter
+	clr.l	d0
+
+.scanline:
+	swap	d7
+	move.w	#RayPlane.XBLOCKS-1,d7	; x loop counter
+	
+.square:move.l	(a5)+,d1		* (u4,v4)
+	move.l	(a1)+,a3		* (u1,v1)
+	move.l	(a5),d2			* (u3,v3)
+	move.l	(a1),a4			* (u2,v2)
+	sub.l	a3,d1			* (u4-u1,v4-v1)
+	sub.l	a4,d2			* (u3-u2,v3-v2)
+	lsl.w	#RayPlane.SPANLOG,d1
+	lsl.w	#RayPlane.SPANLOG,d2
+	asr.w	#RayPlane.SPANLOG,d1
+	asr.w	#RayPlane.SPANLOG,d2
+	adda.l	a3,a3
+	adda.l	a4,a4
+	adda.l	a3,a3
+	adda.l	a4,a4
+	adda.l	a3,a3
+	adda.l	a4,a4
+	moveq	#RayPlane.YBLOCKSIZE-1,d6
+
+.Yspan:	move.l	a3,d3			* (uL,vL)
+	move.l	a4,d4			* (uR,vR)
+	sub.l	a3,d4			* (uR-uL,vR-vL)
+	asr.l	#RayPlane.SPANLOG,d4
+	lsl.w	#RayPlane.SPANLOG,d4
+	asr.w	#RayPlane.SPANLOG,d4
+
+	REPT	RayPlane.XBLOCKSIZE
+	move.w	d3,d0
+	move.l	d3,d5
+	rol.l	#8,d5
+	move.b	d5,d0
+	move.w	(a2,d0.l*2),(a0)+
+	add.l	d4,d3			* (u+du,v+dv)
+	ENDR
+
+	adda.w	#(RayPlane.WIDTH-RayPlane.XBLOCKSIZE)*2,a0	* next span
+	adda.l	d1,a3			* (uL+duL,vL+dvL)
+	adda.l	d2,a4			* (ur+duR,vR+dvR)
+	dbra	d6,.Yspan
+
+	adda.w	#(-RayPlane.YBLOCKSIZE*RayPlane.WIDTH+RayPlane.XBLOCKSIZE)*2,a0	* next nice little square
+	dbra	d7,.square
+
+	addq	#4,a1
+	addq	#4,a5
+	adda.w	#RayPlane.WIDTH*(RayPlane.YBLOCKSIZE-1)*2,a0
+	swap	d7
+	dbra	d7,.scanline
+	rts
+
+;======= OBJECT RESERVES ========
+
+	BSS
+
+RayPlane.xAngle:
+	DS.W	1
+RayPlane.yAngle:
+	DS.W	1
+RayPlane.zAngle:
+	DS.W	1
+RayPlane.planePos:
+	DS.W	1
+RayPlane.uOffset:
+	DS.W	1
+
+RayPlane.matrix:
+	DS.W	3*3
+
+RayPlane.grid:
+	DS.L	(RayPlane.XBLOCKS+1)*RayPlane.YBLOCKS
+RayPlane.columns:
+	DS.L	(RayPlane.XBLOCKS+1)*RayPlane.YBLOCKS*RayPlane.YBLOCKSIZE
+
+RayPlane.startTime:
+	DS.W	1
+
+;======= END OF DEMO-EFFECT OBJECT ========

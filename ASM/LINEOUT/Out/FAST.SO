@@ -1,0 +1,1015 @@
+; A testscreen for getting ufly upto speed.
+; Probably the ultimate 3d screen in speed on falcon.
+; start:    : 37fps (std, rgb50)
+; ??-05-2003: 40fps (std, rgb50)
+;             better pixelclearing innerloop
+; 05-06-2003: 44fps (std, rgb50)
+;             new (pessimised) polygon rout, instead of old tri-splitter.
+; 09-06-2003: 45fps (std, rgb50)
+;             killed divisions in poly rout
+; 10-06-2003: background picture restore also optimised
+; 16-06-2003: new complex object, all n-poly.. (170 polys = 360 tris)
+;             with backgnd 34fps (ct2 vga100), try on std!
+; 18-06-2003: tests on std falcon prove it's too slow with such complex
+;             objects... use simple objects.
+;             maybe xperience (26poly) objects, or spikecubes (24poly)
+;             objects, or who knows, maybe also more complex..
+;             i have an idea how to join two spikecubes giving 44 polys.
+; 22-06-2003: nice results with 100 poly (200 tri) object (with back!)
+;             25fps std falc, 50fps on ct2
+
+	IFND	DEMO_SYSTEM
+testmode:	=	0
+	move.l	#Fast.table,fxAdr
+	INCLUDE	TESTER.S
+	TEXT
+	ENDC	
+
+;======= OBJECT EQUATES ====================================================
+
+Fast.TRIBUF:=		1				; triple or double buffer?
+
+; 3d part
+Fast.SILHOUETTE:=	1
+Fast.BACKGND:=		1
+
+; 2d part (buildings)
+Fast.NUMBUILDINGS:=	5				; don't change!
+
+;======= OBJECT TABLE ======================================================
+
+; Must be first in object!!
+Fast.table:
+	DC.L	Fast.mainLoop
+	DC.L	Fast.init
+	DC.L	Fast.initRT
+	DC.L	Fast.deinitRT
+	DC.L	Fast.setFurthest
+	DC.L	Fast.setFar
+	DC.L	Fast.setFlash
+	DC.L	Fast.setIntro
+	DC.L	Fast.setMain
+	DC.L	Fast.resetBuildings
+	DC.L	Fast.setMoveBuilding1
+	DC.L	Fast.setMoveBuilding2
+	DC.L	Fast.setMoveBuilding3
+	DC.L	Fast.setMoveBuilding4
+	DC.L	Fast.setMoveBuilding5
+	DC.L	Fast.switchObject
+	DC.L	Fast.bumpObject
+	DC.L	0
+
+	IFND	DEMO_SYSTEM
+	INCLUDE	SFLY_DSP.S				; Include the CPU-DSP engine.
+	TEXT
+	ENDC
+
+;======= INIT SUBROUTINE ===================================================
+
+; OUTPUT:
+; d0.l: =0: All clear, <0: Error! Not initialized!
+Fast.init:
+	lea	sine_tbl,a1
+	bsr.l	Matrix.init
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= REALTIME INIT SUBROUTINE ==========================================
+
+Fast.initRT:
+	bsr.l	HumanFly.init
+
+	lea	Viewport.settingsTable,a0
+	move.w	#320,Viewport.XSCREEN(a0)
+	move.w	#200,Viewport.YSCREEN(a0)
+	move.w	#0,Viewport.XSTART(a0)
+	move.w	#0,Viewport.YSTART(a0)
+	move.w	#320,Viewport.XEND(a0)
+	move.w	#200,Viewport.YEND(a0)
+	move.w	#160,Viewport.XCENTER(a0)
+	move.w	#100,Viewport.YCENTER(a0)
+	move.w	#256+32,Viewport.ASPECT(a0)
+	move.w	#$100,Viewport.FOCAL(a0)
+	bsr.l	Viewport.update
+
+	lea	Fast.textureTable,a0
+	bsr.l	Polygon.init
+
+	move.w	#-1,Fast.times4
+	move.l	#Fast.binObj,Fast.obj
+	move.l	#Fast.binObjEnd-Fast.binObj,Fast.objSize
+	bsr	Fast.setObject
+
+	bsr	Fast.setFar
+	bsr	Fast.setIntro
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+; Unknown monitormode..
+.end:	rts
+.vga60:	move.l	#vga60_16bit_320_200,resRout
+	move.l	resRout,Fast.res
+	rts
+.vga100:move.l	#vga100_16bit_320_200,resRout
+	move.l	resRout,Fast.res
+	rts
+.rgb50:	move.l	#rgb50_16bit_320_200,resRout
+	move.l	resRout,Fast.res
+	rts
+
+Fast.deinitRT:
+	rts
+
+;======= SCREENINIT SUBROUTINE =============================================
+
+Fast.initScreen:
+	movea.l	scr,a0
+	tst.w	Fast.intro
+	bne.s	.end
+	lea	Fast.background+20,a1
+	bra.l	COPY_PIC32020016
+.end:	bra.l	CLEAR_320200TSCR
+	rts
+
+;======= MAINLOOP SUBROUTINE ===============================================
+
+Fast.mainLoop:
+	move.w	$0468.w,.old468
+
+	movea.l	scr,a0
+	bsr.l	Primitive.setScreenbuffer
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	IFNE	Fast.TRIBUF
+	cmpi.l	#3,d0
+	ELSE
+	cmpi.l	#2,d0
+	ENDC
+	bhs.s	.end_screeninit
+	bsr	Fast.initScreen
+.end_screeninit:
+
+	IFNE	0
+; Turn write-alloc and datacache lameness off (better for random access).
+	movec	cacr,d0
+	move.l	d0,-(sp)
+	bclr	#13,d0				; Disable write-alloc.
+	bclr	#8,d0 				; Disable datacache.
+	bset	#11,d0				; Clear datacache.
+	bset	#0,d0				; Enable instruction-burst.
+	movec	d0,cacr
+	ENDC
+
+; Calc the current z (when bumping)
+	tst.w	Fast.bumping
+	beq.s	.end_calc_z
+	move.w	$04BC.w,d0
+	sub.w	Fast.bumpStart,d0
+	lsl.w	#5,d0
+	cmpi.w	#$2000,d0
+	blt.s	.ok
+	move.w	#$2000,d0
+	clr.w	Fast.bumping
+.ok:	addi.w	#6200,d0
+	move.w	d0,Fast.z
+.end_calc_z:
+
+; Run the active painting routine..
+	movea.l	Fast.paintRout,a0
+	jsr	(a0)
+
+; Update flash flags
+	move.w	Fast.flash,Fast.wipeTable
+
+	IFNE	0
+; Restore cache to original state.
+	move.l	(sp)+,d0
+	movec	d0,cacr
+	ENDC
+
+	lea	Fast.timeTable,a0
+	IFNE	Fast.TRIBUF
+	move.w	(a0),d0
+	move.w	4(a0),(a0)
+	move.w	2(a0),4(a0)
+	move.w	d0,2(a0)
+	ELSE
+	move.w	(a0),d0
+	move.w	2(a0),(a0)
+	move.w	d0,2(a0)
+	ENDC
+
+	lea	Fast.wipeTable,a0
+	IFNE	Fast.TRIBUF
+	move.w	(a0),d0
+	move.w	4(a0),(a0)
+	move.w	2(a0),4(a0)
+	move.w	d0,2(a0)
+	ELSE
+	move.w	(a0),d0
+	move.w	2(a0),(a0)
+	move.w	d0,2(a0)
+	ENDC
+
+	lea	scr,a0
+	IFNE	Fast.TRIBUF
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	ELSE
+	move.l	(a0)+,d0
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	ENDC
+	movea.l	resRout,a0
+	clr.l	resRout
+	lea	Fast.black,a1
+	movea.l	d0,a2
+	
+	tst.w	Fast.flash
+	beq.s	.oki
+	bsr	.set_8bit
+	move.l	#Fast.set16BppMode,resRout
+.oki:	bsr.l	Screen.requestUpdate
+
+	clr.w	Fast.flash
+
+	IFNE	Fast.TRIBUF
+
+	move.w	.old468(pc),d0
+	moveq	#1,d3
+
+	cmpi.w	#rgb50,monitormode
+	beq.s	.wait
+;	cmpi.w	#vga100,monitormode
+;	bne.s	.wait
+
+	moveq	#2,d3
+.wait:	move.w	$0468.w,d2
+	sub.w	d0,d2
+	cmp.w	d3,d2
+	blt.s	.wait
+
+	ELSE
+
+	move.w	$0468.w,d0
+.wait:	cmp.w	$0468.w,d0
+	beq.s	.wait
+
+	ENDC
+
+	rts
+
+.old468:DC.W	0
+
+.set_8bit:
+	lea	empty,a2
+	lea	Fast.white,a1
+	move.l	#Fast.set8BplMode,a0
+	rts
+
+Fast.res:
+	DC.L	0
+
+Fast.white:
+	REPT	256
+	DC.L	$FFFFFFFF
+	ENDR
+Fast.black:
+	REPT	256
+	DC.L	0
+	ENDR
+
+;======= OBJECT SUBROUTINES ================================================
+
+Fast.set8BplMode:
+	move.w	d7,-(sp)
+	move.w	$FFFF8266.w,d7
+	andi.w	#%1111111011111111,d7		; tc mode off!
+	ori.w	#%0000000000010000,d7		; 8bpl mode on
+	move.w	d7,$FFFF8266.w
+	move.w	(sp)+,d7
+	rts
+
+Fast.set16BppMode:
+	move.w	d7,-(sp)
+	move.w	$FFFF8266.w,d7
+	andi.w	#%1111111111101111,d7		; 8bpl mode off!
+	ori.w	#%0000000100000000,d7		; tc mode on
+	move.w	d7,$FFFF8266.w
+	move.w	(sp)+,d7
+	rts
+
+;- intro part: moving buildings --------------------------------------------
+
+Fast.setIntro:
+	bsr	Fast.resetBuildings
+	st	Fast.intro
+	move.l	#Fast.introduceBuildings,Fast.paintRout
+	move.l	frmcnt,lastframecount
+	rts
+
+Fast.setMoveBuilding1:
+	move.l	$04BA.w,Fast.introStart
+	bsr	Fast.freeze
+	move.w	#0,Fast.movingBuilding
+	rts
+
+Fast.setMoveBuilding2:
+	move.l	$04BA.w,Fast.introStart
+	moveq	#1,d0
+	bsr	Fast.freeze
+	rts
+
+Fast.setMoveBuilding3:
+	move.l	$04BA.w,Fast.introStart
+	moveq	#2,d0
+	bsr	Fast.freeze
+	rts
+
+Fast.setMoveBuilding4:
+	move.l	$04BA.w,Fast.introStart
+	moveq	#3,d0
+	bsr	Fast.freeze
+	rts
+
+Fast.setMoveBuilding5:
+	move.l	$04BA.w,Fast.introStart
+	moveq	#4,d0
+	bsr	Fast.freeze
+	rts
+
+Fast.resetBuildings:
+	lea	Fast.spriteInfo,a0
+	clr.l	d0
+	REPT	3*2
+	move.l	d0,(a0)+
+	ENDR
+
+	moveq	#Fast.NUMBUILDINGS-1,d7
+	lea	Fast.buildingPosTable,a0
+	lea	Fast.buildingStartTable,a1
+.loop:	move.l	(a1)+,(a0)+
+	dbf	d7,.loop
+	move.w	#-1,Fast.movingBuilding
+	rts
+
+Fast.introStart:
+	DC.L	0
+
+; freezes current screen to backbuffer... or well, parts of it at least.
+; INPUT:
+; d0.w: new sprite num
+Fast.freeze:
+	move.w	d0,-(sp)
+
+; first fill old spriteinfo to get old rectangle to store..
+	move.w	Fast.movingBuilding,d0
+	bpl.s	.ok
+; if no building yet, set some dummy rectangle...
+	clr.w	d1
+	clr.w	d2
+	clr.w	d3
+	clr.w	d4
+	bra.s	.set
+.ok:	move.l	(Fast.buildingTable,d0.w*4),a0		; a0: rle sprite
+	movem.w	(a0),d5-d6				; d5.w=w, d6.w=h
+	lsr.w	d5					; d5.w=w/2
+	lsr.w	d6					; d6.w=h/2
+	movem.w	(Fast.buildingPosTable,d0.w*4),d1-d2	; d1.w=xm, d2.w=ym
+	move.w	d1,d3					; d3.w=xm
+	move.w	d2,d4					; d4.w=ym
+	sub.w	d5,d1					; d1.w=xm-w/2=x0
+	sub.w	d6,d2					; d2.w=ym-h/2=y0
+	add.w	d5,d3					; d3.w=xm+w/2=x1
+	add.w	d6,d4					; d4.w=ym+h/2=y1
+.set:	movem.w	d1-d4,Fast.spriteInfo
+
+; store new building number..
+	move.w	(sp)+,d0
+	move.w	d0,Fast.movingBuilding
+
+; now blit that old crap to store.
+	movem.w	Fast.spriteInfo,d0-d1/d6-d7		; x0,y0,x1,y1
+	lea	Fast.backBuffer,a0			; a0: dst
+	movea.l	scr,a1					; a1: src
+	bsr	Fast.blit
+	rts
+
+Fast.restoreBuilding:
+	movem.w	Fast.spriteInfo,d0-d1/d6-d7		; x0,y0,x1,y1
+	lea	Fast.backBuffer,a1			; a1: dst
+	movea.l	scr,a0					; a0: src
+	bsr	Fast.blit
+	rts
+
+; todo: optimise!
+; INPUT:
+; d0.w: left x
+; d1.w: upper y
+; d6.w: right x
+; d7.w: lower y
+; a0: dst
+; a1: src
+Fast.blit:
+	lea	Viewport.settingsTable,a2
+	move.w	d6,d2
+
+	cmp.w	Viewport.XSTART(a2),d0
+	bpl.s	.testx0
+	move.w	Viewport.XSTART(a2),d0
+.testx0:
+	cmp.w	Viewport.XEND(a2),d0
+	blt.s	.endtestx0
+	move.w	Viewport.XEND(a2),d0
+	subq.w	#1,d0
+.endtestx0:
+
+	cmp.w	Viewport.YSTART(a2),d1
+	bpl.s	.testy0
+	move.w	Viewport.YSTART(a2),d1
+.testy0:
+	cmp.w	Viewport.YEND(a2),d1
+	blt.s	.endtesty0
+	move.w	Viewport.YEND(a2),d1
+	subq.w	#1,d1
+.endtesty0:
+
+	cmp.w	Viewport.XSTART(a2),d6
+	bpl.s	.testx1
+	move.w	Viewport.XSTART(a2),d6
+.testx1:
+	cmp.w	Viewport.XEND(a2),d6
+	blt.s	.endtestx1
+	move.w	Viewport.XEND(a2),d6
+	move.w	d6,d2
+	subq.w	#1,d6
+.endtestx1:
+
+	cmp.w	Viewport.YSTART(a2),d7
+	bpl.s	.testy1
+	move.w	Viewport.YSTART(a2),d7
+.testy1:
+	cmp.w	Viewport.YEND(a2),d7
+	blt.s	.endtesty1
+	move.w	Viewport.YEND(a2),d7
+	subq.w	#1,d7
+.endtesty1:
+
+	move.w	d7,d3
+;	andi.w	#$FFFE,d2			; longeven startaddy! todo: make correct.
+	adda.w	d2,a0
+	adda.w	d2,a0
+	adda.w	d2,a1
+	adda.w	d2,a1
+	move.w	Viewport.XSCREEN(a2),d5
+	add.w	d5,d5
+	movea.w	d5,a4
+	mulu.w	d5,d3
+	adda.l	d3,a0
+	adda.l	d3,a1
+; w=r-l+1, ceil(w/2)=(w+1)/2=(r-l+2)/2
+	sub.w	d0,d6				; d6.w=r-l
+	addq.w	#2,d6				; d6.w=r-l+2
+	lsr.w	d6				; d6.w=(r-l+2)/2=ceil(w/2)
+	move.w	d6,d5
+	add.w	d6,d5
+	add.w	d5,d5
+	suba.w	d5,a4
+	sub.w	d1,d7
+	subq.w	#1,d6
+	bmi.s	.end
+	move.w	d6,d5
+
+.yloop:
+
+.xloop:	move.l	-(a1),-(a0)
+	dbf	d6,.xloop
+
+	move.w	d5,d6
+	suba.l	a4,a0
+	suba.l	a4,a1
+	dbf	d7,.yloop
+.end:	rts
+
+
+; paint sprites
+Fast.introduceBuildings:
+	bsr	Fast.restoreBuilding	
+
+; Interpolate positions..
+	move.w	Fast.movingBuilding,d1
+	bmi	.end
+
+	move.l	$04BA.w,d0
+	sub.l	Fast.introStart,d0
+	add.l	d0,d0
+	cmpi.l	#$100,d0
+	blt.s	.ok
+	move.w	#$0100,d0
+.ok:	move.w	#$0100,d5
+	sub.w	d0,d5
+; d0.w=t [0..$100], d5.w=$100-t
+	lea	(Fast.buildingPosTable,d1.w*4),a0
+	lea	(Fast.buildingStartTable,d1.w*4),a2
+	lea	(Fast.buildingDestTable,d1.w*4),a1
+	move.w	(a1)+,d1
+	move.w	(a1)+,d2
+	move.w	(a2)+,d3
+	move.w	(a2)+,d4
+	muls.w	d0,d1
+	muls.w	d0,d2
+	muls.w	d5,d3
+	muls.w	d5,d4
+	add.l	d3,d1
+	add.l	d4,d2
+	asr.l	#8,d1
+	asr.l	#8,d2
+	move.w	d1,(a0)+
+	move.w	d2,(a0)+
+.end_traject:
+
+; paint only one!
+	move.w	Fast.movingBuilding,d2
+	movem.w	(Fast.buildingPosTable,d2.w*4),d0-d1	; d0.w=x, d1.w=y
+	movea.l	(Fast.buildingTable,d2.w*4),a1		; a1: sprite
+; todo: save to spriteinfo..
+
+	movem.w	(a1),d5-d6				; d5.w=w, d6.w=h
+	lsr.w	d5					; d5.w=w/2
+	lsr.w	d6					; d6.w=h/2
+	movem.w	(Fast.buildingPosTable,d2.w*4),d0-d1	; d0.w=xm, d1.w=ym
+	move.w	d0,d3					; d3.w=xm
+	move.w	d1,d4					; d4.w=ym
+	sub.w	d5,d0					; d0.w=xm-w/2=x0
+	sub.w	d6,d1					; d1.w=ym-h/2=y0
+	add.w	d5,d3					; d3.w=xm+w/2=x1
+	add.w	d6,d4					; d4.w=ym+h/2=y1
+	movem.w	d0-d1/d3-d4,Fast.spriteInfo
+
+	movem.w	(Fast.buildingPosTable,d2.w*4),d0-d1	; d0.w=x, d1.w=y
+	bsr	Sprite.clipAndPaint
+
+; swap 'em...
+	lea	Fast.spriteInfo,a0
+	IFNE	Fast.TRIBUF
+	movem.l	(a0),d0-d5
+	movem.l	d0-d1,8(a0)
+	movem.l	d2-d3,16(a0)
+	movem.l	d4-d5,(a0)
+	ELSE
+	movem.l	(a0),d0-d3
+	movem.l	d0-d1,8(a0)
+	movem.l	d2-d3,(a0)
+	ENDC
+
+.end:	rts
+
+;- main part: 3d -----------------------------------------------------------
+
+Fast.setFar:
+	move.w	#6200,Fast.z
+	clr.w	Fast.bumping
+	rts
+
+Fast.setFurthest:
+	move.w	#10000,Fast.z
+	clr.w	Fast.bumping
+	rts
+
+Fast.setFlash:
+	st	Fast.flash
+	rts
+
+Fast.setMain:
+	clr.w	Fast.intro
+	move.l	#Fast.paintMain,Fast.paintRout
+	move.l	frmcnt,lastframecount
+	bsr	Fast.setFlash
+	rts
+
+Fast.switchObject:
+	not.w	Fast.times4
+	cmp.l	#Fast.earxObj,Fast.obj
+	beq.s	.ok
+	move.l	#Fast.earxObj,Fast.obj
+	move.l	#Fast.earxObjEnd-Fast.earxObj,Fast.objSize
+	bra.s	Fast.setObject
+.ok:	move.l	#Fast.binObj,Fast.obj
+	move.l	#Fast.binObjEnd-Fast.binObj,Fast.objSize
+	;bra.s	Fast.setObject
+
+Fast.setObject:
+	bsr.l	ObjectRegistry.clear
+	movea.l	Fast.obj,a0
+	move.l	Fast.objSize,d0
+	bsr.l	ObjectRegistry.set
+	rts
+
+Fast.bumpObject:
+	move.w	$04BC.w,Fast.bumpStart
+	st	Fast.bumping
+	rts
+
+Fast.bumping:
+	DC.W	0
+Fast.bumpStart:
+	DC.W	0
+
+
+; paint the foreground 3d object..
+Fast.paintMain:
+	move.w	$04BC.w,d0
+	move.w	d0,Fast.timeTable
+	moveq	#0,d1
+	bsr	Fast.paint
+	rts
+
+; INPUT:
+; d0.w=time
+; d1.w=object handle
+Fast.paint:
+	movem.w	d0-d1,-(sp)
+
+	IFNE	Fast.SILHOUETTE
+	movea.l	Fast.shadowAdrAdr,a0		; a0: log table adrs
+	movea.l	(a0),a0				; a0: current log table
+	bsr.l	PrimitiveMesh.newShadowed
+	ELSE
+	bsr.l	PrimitiveMesh.new
+	ENDC
+
+	movem.w	(sp),d0-d1
+
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#3,d1
+	lsr.l	d1
+	mulu.w	#5,d2
+	lsr.l	d2
+	bsr.l	Matrix.generate
+	move.w	#0,d0
+	move.w	#0,d1
+	move.w	Fast.z,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	movem.w	(sp),d0-d1
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+
+; Perform only on a 1 arm object...
+	tst.w	Fast.times4
+	beq	.end_times4
+
+	movem.w	(sp),d0-d1
+
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#3,d1
+	lsr.l	d1
+	mulu.w	#5,d2
+	lsr.l	d2
+	addi.w	#sintbllen/4,d2
+	bsr.l	Matrix.generate
+	move.w	#0,d0
+	move.w	#0,d1
+	move.w	Fast.z,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	movem.w	(sp),d0-d1
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+
+	movem.w	(sp),d0-d1
+
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#3,d1
+	lsr.l	d1
+	mulu.w	#5,d2
+	lsr.l	d2
+	addi.w	#sintbllen/2,d2
+	bsr.l	Matrix.generate
+	move.w	#0,d0
+	move.w	#0,d1
+	move.w	Fast.z,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	movem.w	(sp),d0-d1
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+
+	movem.w	(sp),d0-d1
+
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#3,d1
+	lsr.l	d1
+	mulu.w	#5,d2
+	lsr.l	d2
+	subi.w	#sintbllen/4,d2
+	bsr.l	Matrix.generate
+	move.w	#0,d0
+	move.w	#0,d1
+	move.w	Fast.z,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	movem.w	(sp),d0-d1
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+.end_times4:
+
+	movem.w	(sp)+,d0-d1
+	tst.w	d1
+	bne.s	.skip
+	bsr.l	PrimitiveMesh.sortZ
+.skip:
+	bsr.l	PrimitiveMesh.complete
+
+; parallel shit
+
+	IFEQ	Fast.SILHOUETTE
+	movea.l	Fast.rectAddressTable,a0
+	move.w	(a0)+,d7
+	beq.s	.end_restore
+	subq.w	#1,d7
+.restore_loop:
+	move.w	d7,-(sp)
+	movem.w	(a0)+,d1/d7
+	movem.w	(a0)+,d0/d6
+	move.l	a0,-(sp)
+	IFNE	Fast.BACKGND
+	lea	Fast.background+20,a1
+	bsr.l	Viewport.copyRectangle
+	ELSE
+	moveq	#$00000000,d4
+	bsr.l	Viewport.paintRectangle
+	ENDC
+	movea.l	(sp)+,a0
+	move.w	(sp)+,d7
+	dbra	d7,.restore_loop
+.end_restore:
+	ELSE
+
+	movea.l	Fast.shadowAdrAdr+4,a1		; a1: phys table adrs
+	movea.l	(a1),a1				; a1: current phys table
+	clr.l	d0
+
+	IFEQ	Fast.BACKGND
+
+	bsr.l	Polygon.clearShadows
+
+	ELSE
+
+;	tst.w	Fast.flash
+;	beq.s	.pic
+;.white:	moveq	#-1,d0
+;	movea.l	scr,a0
+;	bsr.l	WIPE_320200TSCR
+;	bra.s	.end_restore
+;.pic:	tst.w	Fast.wipeTable
+;	beq.s	.restore_shadows
+;.paint_pic:
+;	lea	Fast.background+20,a1
+;	movea.l	scr,a0
+;	bsr.l	COPY_PIC32020016	
+;	bra.s	.end_restore
+.restore_shadows:
+	lea	Fast.background+20,a0
+	bsr.l	Polygon.restoreShadows
+.end_restore:
+
+	ENDC
+
+	ENDC
+
+; end of parallel shit
+
+	movea.l	Fast.rectAddressTable,a0
+	bsr.l	PrimitiveMesh.paint
+
+	lea	Fast.rectAddressTable,a0
+	IFNE	Fast.TRIBUF
+ 	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+	ELSE
+ 	move.l	(a0)+,d0
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	ENDC
+
+;= shadow swapping =
+
+	movea.l	Fast.shadowAdrAdr,a0
+	IFNE	Fast.TRIBUF
+ 	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+	ELSE
+ 	move.l	(a0)+,d0
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	ENDC
+
+	movea.l	Fast.shadowAdrAdr+4,a0
+	IFNE	Fast.TRIBUF
+ 	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+	ELSE
+ 	move.l	(a0)+,d0
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	ENDC
+
+	move.w	.swapcount(pc),d0
+	addq.w	#1,d0
+	IFNE	Fast.TRIBUF
+	cmpi.w	#3,d0
+	ELSE
+	cmpi.w	#2,d0
+	ENDC
+	blt.s	.end_swapcount
+
+; Clear count and swap phys/log shadow tables..
+	clr.w	d0
+	lea	Fast.shadowAdrAdr,a0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d1,4(a0)
+
+.end_swapcount:
+	move.w	d0,.swapcount
+
+;= end shadow swapping =
+
+	rts
+
+.swapcount:
+	DC.W	0
+
+;======= OBJECT DATA =======================================================
+
+	DATA
+
+Fast.texture:
+	INCBIN	ENV64.APX
+
+Fast.textureTable:
+	DC.L	Fast.texture
+	DC.L	Fast.texture
+	DC.L	0
+
+Fast.rectAddressTable:
+	DC.L	Fast.rectTable
+	DC.L	Fast.rectTable2
+	DC.L	Fast.rectTable3
+
+Fast.earxObj:
+	INCLUDE	SPIKETR6.S
+Fast.earxObjEnd:
+
+Fast.binObj:
+	INCLUDE	EXTRUDED.S
+Fast.binObjEnd:
+
+Fast.z:	DC.W	3000
+
+Fast.shadowAdrAdr:
+	DC.L	Fast.shadowAdr
+	DC.L	Fast.shadowAdr2
+
+Fast.shadowAdr:
+	DC.L	Fast.shadowTable
+	DC.L	Fast.shadowTable2
+	DC.L	Fast.shadowTable3
+
+Fast.shadowAdr2:
+	DC.L	Fast.shadowTable4
+	DC.L	Fast.shadowTable5
+	DC.L	Fast.shadowTable6
+
+Fast.background:
+	INCBIN	BACKCREM.APX
+
+Fast.buildingTable:
+	DC.L	Fast.building1
+	DC.L	Fast.building2
+	DC.L	Fast.building3
+	DC.L	Fast.building4
+	DC.L	Fast.building5
+
+Fast.building1:
+	INCBIN	FLAT1.RLE
+Fast.building2:
+	INCBIN	FLAT2.RLE
+Fast.building3:
+	INCBIN	FLAT3.RLE
+Fast.building4:
+	INCBIN	FLAT4.RLE
+Fast.building5:
+	INCBIN	FLAT5.RLE
+
+Fast.paintRout:
+	DC.L	Fast.introduceBuildings
+
+Fast.intro:
+	DC.W	1
+
+Fast.buildingPosTable:
+	DS.L	Fast.NUMBUILDINGS
+Fast.buildingDestTable:
+	DC.W	95,46
+	DC.W	80,146
+	DC.W	238,163
+	DC.W	258,97
+	DC.W	232,37
+Fast.buildingStartTable:
+	DC.W	95-256,46
+	DC.W	80,146+256
+	DC.W	238,163+256
+	DC.W	258+256,97
+	DC.W	232,37-256
+
+Fast.movingBuilding:
+	DC.W	-1
+
+;======= OBJECT RESERVES ===================================================
+
+	BSS
+
+Fast.timeTable:
+	DS.W	3
+Fast.wipeTable:
+	DS.W	3
+Fast.flash:
+	DS.W	1
+
+Fast.rectTable:
+	DS.W	1+4*32
+Fast.rectTable2:
+	DS.W	1+4*32
+Fast.rectTable3:
+	DS.W	1+4*32
+
+Fast.shadowTable:
+	DS.W	1+4*2*200
+Fast.shadowTable2:
+	DS.W	1+4*2*200
+Fast.shadowTable3:
+	DS.W	1+4*2*200
+
+Fast.shadowTable4:
+	DS.W	1+4*2*200
+Fast.shadowTable5:
+	DS.W	1+4*2*200
+Fast.shadowTable6:
+	DS.W	1+4*2*200
+
+Fast.backBuffer:
+	DS.W	320*200			; again... alot of mem wasted!
+
+Fast.spriteInfo:
+	DS.W	4*3			; 3 screens..
+
+Fast.obj:
+	DS.L	1
+Fast.objSize:
+	DS.L	1
+Fast.times4:
+	DS.W	1

@@ -1,0 +1,927 @@
+; Semi transparant object with some kaleidoscope effect..
+; A screen for delta, again using ufly.
+
+;======= OBJECT EQUATES ========
+
+Transparant.STEPS:	=	10
+Transparant.RING_R:	=	100
+
+Transparant.R:		=	400
+Transparant.BALLSTEPS:	=	8
+Transparant.FILLED:	=	1
+
+Transparant.NUM_V:	=	Transparant.BALLSTEPS*Transparant.BALLSTEPS+2
+
+			RSRESET
+Transparant.ball:	RS.W	8192
+Transparant.BLOCK_SIZE:	RS.B	0
+
+;======= OBJECT TABLE ========
+
+; Must be first in object!!
+Transparant.table:
+	DC.L	Transparant.mainLoop
+	DC.L	Transparant.init
+	DC.L	Transparant.setRes
+	DC.L	Transparant.setSplit
+	DC.L	Transparant.setFull
+	DC.L	Transparant.flash
+	DC.L	Transparant.revDir
+	DC.L	Transparant.revDir2
+	DC.L	Transparant.setSpikey
+	DC.L	0
+
+	IFND	DEMO_SYSTEM
+	INCLUDE	SFLY_DSP.S
+	TEXT
+	INCLUDE	OBJECT3D.I
+	TEXT
+	ENDC
+
+;======= RESOLUTION SETTING ROUTINE ========
+
+Transparant.setRes:
+	IFEQ	testmode
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+; Unknown monitormode..
+	rts
+.vga60:	bra.l	vga60_16bit_320_200
+.vga100:bra.l	vga100_16bit_320_200
+.rgb50:	bra.l	rgb50_16bit_320_200
+	ENDC
+	rts
+
+;======= INIT SUBROUTINE ========
+
+; OUTPUT:
+; d0.l: =0 all clear, <0 error
+Transparant.init:
+	move.l	#Transparant.BLOCK_SIZE,d0
+	bsr.l	Mem.register
+
+	lea	sine_tbl,a1
+	bsr.l	Matrix.init
+
+	bsr.l	Transparant.halveTexture
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= REALTIME INIT SUBROUTINE ========
+
+Transparant.realtimeInit:
+	move.l	#rts,vbl_gfx
+
+	bsr.l	Mem.getBlock
+	move.l	d0,Transparant.baseAdr
+
+	move.w	$04BC.w,d0
+	move.w	d0,Transparant.startTime
+	move.w	d0,Transparant.startTime2
+	move.w	d0,Transparant.rStart
+
+	bsr.l	HumanFly.init
+
+	bsr	Transparant.setFull
+
+	lea	Transparant.textureTable,a0
+	bsr.l	Polygon.init
+
+	bsr.l	ObjectRegistry.clear
+
+	movea.l	Transparant.baseAdr,a0
+	adda.l	#Transparant.ball,a0
+	bsr.l	Transparant.generate
+; d0.l=size
+	movea.l	Transparant.baseAdr,a0
+	adda.l	#Transparant.ball,a0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi.s	.error
+
+	lea	Object3d.spikey,a0
+	move.l	#Object3d.spikeyEnd-Object3d.spikey,d0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi.s	.error
+
+	bsr.l	flushAndDisableICache
+	move.w	#Primitive.WORD|Primitive.ADD,d0
+	moveq	#0,d1
+	bsr.l	Primitive.setPaintMode
+	move.w	d0,d1
+	bsr.l	restoreCache
+	tst.w	d1
+	bmi.s	.error
+
+	clr.w	Transparant.objNum
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= SCREENINIT SUBROUTINE ========
+
+Transparant.initScreen:
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	move.l	#$00000000,d4
+	bsr.l	Viewport.paintRectangle
+	rts
+
+;======= MAINLOOP SUBROUTINE ========
+
+Transparant.mainLoop:
+	move.w	$0468.w,.old468
+
+	movea.l	scr,a0
+	bsr.l	Primitive.setScreenbuffer
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr.l	Transparant.realtimeInit
+	tst.l	d0
+	bmi	.end
+	move.l	(sp)+,d0
+.end_realtime_init:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr.l	Transparant.initScreen
+.end_screeninit:
+
+; Establish 'time' parameters.
+	move.w	$04BC.w,d0
+	move.w	d0,d1
+	move.w	d0,d2
+	sub.w	Transparant.startTime,d0
+	lsr.w	d0
+	muls.w	Transparant.dir,d0
+	add.w	Transparant.oldTime,d0
+	move.w	d0,Transparant.time
+	sub.w	Transparant.startTime2,d1
+	lsr.w	d1
+	muls.w	Transparant.dir2,d1
+	add.w	Transparant.oldTime2,d1
+	move.w	d1,Transparant.time2
+	sub.w	Transparant.rStart,d2
+	move.w	d2,Transparant.rTime
+
+	movea.l	Transparant.paintRout,a0
+	jsr	(a0)
+
+	IFEQ	testmode
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	move.l	d0,d1
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+	ENDC
+
+	move.w	.old468(pc),d0
+.wait:	cmp.w	$0468.w,d0
+	beq.s	.wait
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.res_done
+	bsr.l	Transparant.setRes
+.res_done:
+
+	clr.l	Transparant.bgcol
+
+.end:	rts
+
+.old468:DC.W	0
+
+;======= OBJECT SUBROUTINES ========
+
+Transparant.setFull:
+	move.l	#Transparant.paintFull,Transparant.paintRout
+
+; Set to use full 320*200 screen.
+	lea	Viewport.settingsTable,a0
+	move.w	#320,Viewport.XSCREEN(a0)
+	move.w	#200,Viewport.YSCREEN(a0)
+	move.w	#0,Viewport.XSTART(a0)
+	move.w	#0,Viewport.YSTART(a0)
+	move.w	#320,Viewport.XEND(a0)
+	move.w	#200,Viewport.YEND(a0)
+	move.w	#160,Viewport.XCENTER(a0)
+	move.w	#100,Viewport.YCENTER(a0)
+	move.w	#256+32,Viewport.ASPECT(a0)
+	move.w	#$100,Viewport.FOCAL(a0)
+	bsr.l	Viewport.update
+
+	rts
+
+Transparant.setSplit:
+	move.l	#Transparant.paintSplit,Transparant.paintRout
+
+; Set to use only a quarter of 320*200 screen.
+	lea	Viewport.settingsTable,a0
+	move.w	#320,Viewport.XSCREEN(a0)
+	move.w	#200,Viewport.YSCREEN(a0)
+	move.w	#0,Viewport.XSTART(a0)
+	move.w	#0,Viewport.YSTART(a0)
+	move.w	#160,Viewport.XEND(a0)
+	move.w	#100,Viewport.YEND(a0)
+	move.w	#160,Viewport.XCENTER(a0)
+	move.w	#100,Viewport.YCENTER(a0)
+	move.w	#256+32,Viewport.ASPECT(a0)
+	move.w	#$100,Viewport.FOCAL(a0)
+	bsr.l	Viewport.update
+
+	rts
+
+Transparant.flash:
+	move.l	#$FFFFFFFF,Transparant.bgcol
+	rts
+
+Transparant.revDir:
+	neg.w	Transparant.dir
+	move.w	$04BC.w,Transparant.startTime
+	move.w	Transparant.time,Transparant.oldTime
+	rts
+
+Transparant.revDir2:
+	neg.w	Transparant.dir2
+	move.w	$04BC.w,Transparant.startTime2
+	move.w	Transparant.time2,Transparant.oldTime2
+	rts
+
+Transparant.setSpikey:
+	move.w	#1,Transparant.objNum
+	rts
+
+Transparant.halveTexture:
+	lea	FlareGen.chromeBuffer,a1
+	lea	Transparant.texture1,a0
+	moveq	#5-1,d7
+.head_loop:
+	move.l	(a1)+,(a0)+
+	dbf	d7,.head_loop
+
+	move.w	#64*64-1,d7
+.loop:	move.w	(a1)+,d0
+	lsr.w	#1,d0
+	andi.w	#%0111101111101111,d0
+	move.w	d0,(a0)+
+	dbf	d7,.loop
+	rts
+
+; 1 + 8 + 1, 10 points on curve, 9 lines on curve
+; INPUT:
+; a0: destination object
+; OUTPUT:
+; d0.l=size
+Transparant.generate:
+	movea.l	a0,a6
+
+	move.w	#2*(Transparant.BALLSTEPS*Transparant.BALLSTEPS+2),(a0)+	;#vertices+#normals
+	move.w	#Transparant.BALLSTEPS*Transparant.BALLSTEPS+2,(a0)+		;#normals
+
+	move.w	$0468.w,.time
+	lea	sine_tbl,a1
+
+	move.w	#$60,d5
+
+; Output top vertex..
+	clr.w	(a0)+
+	move.w	d5,(a0)+
+	clr.w	(a0)+
+
+	moveq	#1,d7
+
+; 0.1/9.2/9.3/9.4/9.5/9.6/9.7/9.8/9.1, 10 points, 9 lines
+; 1 top, 1 bottom, 8 inbetween points.. 
+
+; Outer loop (180 degrees)
+.r1_loop:
+	move.w	d7,d0
+	mulu.w	#(sintbllen/(Transparant.BALLSTEPS+1))/2,d0
+	Get_SinCos	a1,d0,d0,d3
+	muls.w	#Transparant.R,d0
+	muls.w	d5,d3
+	add.l	d0,d0
+	add.l	d3,d3
+	swap	d0					; d0.w=r2
+	swap	d3					; d3.w=r*cos(t1)
+
+	clr.w	d6
+
+; Inner loop (360 degrees)
+.r2_loop:
+	move.w	d6,d1
+	mulu.w	#sintbllen/Transparant.BALLSTEPS,d1
+	Get_SinCos	a1,d1,d1,d2
+	muls.w	d0,d1
+	muls.w	d0,d2
+	add.l	d1,d1
+	add.l	d2,d2
+	swap	d1
+	swap	d2
+	move.w	d1,(a0)+				; Output r2*cos(t2).
+	move.w	d3,(a0)+				; Output r*cos(t1).
+	move.w	d2,(a0)+				; Output r2*sin(t2).
+	addq.w	#1,d6
+	cmpi.w	#Transparant.BALLSTEPS,d6
+	blt.s	.r2_loop
+
+	addq.w	#1,d7
+	cmpi.w	#Transparant.BALLSTEPS+1,d7
+	blt.s	.r1_loop
+
+; Output bottom vertex..
+	clr.w	(a0)+
+	neg.w	d5
+	move.w	d5,(a0)+
+	clr.w	(a0)+
+
+;----------------
+; Normal vectors.
+
+	move.w	#$7F,d5
+
+; Output top vertex..
+	clr.w	(a0)+
+	move.w	d5,(a0)+
+	clr.w	(a0)+
+
+	moveq	#1,d7
+
+; 0.1/9.2/9.3/9.4/9.5/9.6/9.7/9.8/9.1, 10 points, 9 lines
+; 1 top, 1 bottom, 8 inbetween points.. 
+
+; Outer loop (180 degrees)
+.n_r1_loop:
+	move.w	d7,d0
+	mulu.w	#(sintbllen/(Transparant.BALLSTEPS+1))/2,d0
+	Get_SinCos	a1,d0,d0,d3
+	muls.w	#90,d0
+	muls.w	d5,d3
+	add.l	d0,d0
+	add.l	d3,d3
+	swap	d0					; d0.w=r2
+	swap	d3					; d3.w=r*cos(t1)
+
+	clr.w	d6
+
+; Inner loop (360 degrees)
+.n_r2_loop:
+	move.w	d6,d1
+	mulu.w	#sintbllen/Transparant.BALLSTEPS,d1
+	Get_SinCos	a1,d1,d1,d2
+	muls.w	d0,d1
+	muls.w	d0,d2
+	add.l	d1,d1
+	add.l	d2,d2
+	swap	d1
+	swap	d2
+	move.w	d1,(a0)+				; Output r2*cos(t2).
+	move.w	d3,(a0)+				; Output r*cos(t1).
+	move.w	d2,(a0)+				; Output r2*sin(t2).
+	addq.w	#1,d6
+	cmpi.w	#Transparant.BALLSTEPS,d6
+	blt.s	.n_r2_loop
+
+	addq.w	#1,d7
+	cmpi.w	#Transparant.BALLSTEPS+1,d7
+	blt.s	.n_r1_loop
+
+; Output bottom vertex..
+	clr.w	(a0)+
+	neg.w	d5
+	move.w	d5,(a0)+
+	clr.w	(a0)+
+
+	clr.w	(a0)+					; Output #texels (0).
+
+;------------
+; Primitives
+
+; 1 top line, 1 bottom line, 7 inbetween lines
+
+; Filled version. Head=n tris, tail=n tris, body=n*(n-1) quads
+; total=n*n faces.
+
+; Output primitives..
+	move.w	#Transparant.BALLSTEPS*(Transparant.BALLSTEPS+1),(a0)+
+;	move.w	#Transparant.BALLSTEPS*Transparant.BALLSTEPS,(a0)+
+
+; Output head.
+; 0-1-2, 0-2-3, 0-3-4,... 0, (i+1), (i+1) mod n +1
+	moveq	#Transparant.BALLSTEPS-1,d7
+.head_loop:
+	move.w	#Polygon.TRI|Polygon.ENVMAPPED|0,(a0)+
+	clr.w	(a0)+
+	moveq	#1,d0
+	add.w	d7,d0
+	move.w	d0,(a0)+
+	move.w	d7,d0
+	addq.w	#1,d0
+	divu.w	#Transparant.BALLSTEPS,d0
+	swap	d0
+	addq.w	#1,d0
+	move.w	d0,(a0)+
+
+; Normal refs..
+	move.w	#Transparant.BALLSTEPS*Transparant.BALLSTEPS+2,(a0)+
+	move.w	#Transparant.BALLSTEPS*Transparant.BALLSTEPS+3,d0
+	add.w	d7,d0
+	move.w	d0,(a0)+
+	move.w	d7,d0
+	addq.w	#1,d0
+	divu.w	#Transparant.BALLSTEPS,d0
+	swap	d0
+	addi.w	#Transparant.BALLSTEPS*Transparant.BALLSTEPS+3,d0
+	move.w	d0,(a0)+
+	
+	dbra	d7,.head_loop
+
+; Output body.
+	moveq	#Transparant.BALLSTEPS-1-1,d7
+
+.segment_loop:
+	moveq	#Transparant.BALLSTEPS-1,d6
+
+; i, i+1, i+1+n, i+n -> i+n, i+1+n, i+1, i
+; 0, 1, 2, 3 -> 3, 2, 1, 0
+.quad_loop:
+	move.w	#Polygon.QUAD|Polygon.ENVMAPPED|0,(a0)+
+
+	move.w	d7,d1
+	addq.w	#1,d1
+	mulu.w	#Transparant.BALLSTEPS,d1
+
+; v4
+	move.w	d6,d0
+	add.w	d1,d0	
+	addq.w	#1,d0
+	move.w	d0,(a0)+
+
+; v3
+	clr.l	d0
+	move.w	d6,d0
+	addq.w	#1,d0
+	divu.w	#Transparant.BALLSTEPS,d0
+	swap	d0
+	add.w	d1,d0	
+	addq.w	#1,d0
+	move.w	d0,(a0)+
+
+	move.w	d7,d1
+	mulu.w	#Transparant.BALLSTEPS,d1
+
+; v2
+	clr.l	d0
+	move.w	d6,d0
+	addq.w	#1,d0
+	divu.w	#Transparant.BALLSTEPS,d0
+	swap	d0
+	add.w	d1,d0	
+	addq.w	#1,d0
+	move.w	d0,(a0)+
+
+; v1
+	move.w	d6,d0
+	add.w	d1,d0
+	addq.w	#1,d0
+	move.w	d0,(a0)+
+
+; Normal refs..
+	move.w	d7,d1
+	addq.w	#1,d1
+	mulu.w	#Transparant.BALLSTEPS,d1
+
+; v4
+	move.w	d6,d0
+	add.w	d1,d0	
+	addi.w	#Transparant.NUM_V+1,d0
+	move.w	d0,(a0)+
+
+; v3
+	clr.l	d0
+	move.w	d6,d0
+	addq.w	#1,d0
+	divu.w	#Transparant.BALLSTEPS,d0
+	swap	d0
+	add.w	d1,d0	
+	addi.w	#Transparant.NUM_V+1,d0
+	move.w	d0,(a0)+
+
+	move.w	d7,d1
+	mulu.w	#Transparant.BALLSTEPS,d1
+
+; v2
+	clr.l	d0
+	move.w	d6,d0
+	addq.w	#1,d0
+	divu.w	#Transparant.BALLSTEPS,d0
+	swap	d0
+	add.w	d1,d0	
+	addi.w	#Transparant.NUM_V+1,d0
+	move.w	d0,(a0)+
+
+; v1
+	move.w	d6,d0
+	add.w	d1,d0
+	addi.w	#Transparant.NUM_V+1,d0
+	move.w	d0,(a0)+
+
+	dbra	d6,.quad_loop
+
+	dbra	d7,.segment_loop
+
+; Output tail.
+; t, t-n+[(i+1) mod n], t-n+i
+; t=n*n+1
+	moveq	#Transparant.BALLSTEPS-1,d7
+
+.tail_loop:
+	move.w	#Polygon.TRI|Polygon.ENVMAPPED|0,(a0)+
+	move.w	#Transparant.BALLSTEPS*Transparant.BALLSTEPS+1,(a0)+
+	clr.l	d0
+	move.w	d7,d0
+	addq.w	#1,d0
+	divu.w	#Transparant.BALLSTEPS,d0
+	swap	d0
+	addi.w	#1+Transparant.BALLSTEPS*(Transparant.BALLSTEPS-1),d0
+	move.w	d0,(a0)+
+	move.w	#1+Transparant.BALLSTEPS*(Transparant.BALLSTEPS-1),d0
+	add.w	d7,d0
+	move.w	d0,(a0)+
+
+; Normal refs.
+	move.w	#Transparant.NUM_V+Transparant.BALLSTEPS*Transparant.BALLSTEPS+1,(a0)+
+	clr.l	d0
+	move.w	d7,d0
+	addq.w	#1,d0
+	divu.w	#Transparant.BALLSTEPS,d0
+	swap	d0
+	addi.w	#Transparant.NUM_V+1+Transparant.BALLSTEPS*(Transparant.BALLSTEPS-1),d0
+	move.w	d0,(a0)+
+	move.w	#Transparant.NUM_V+1+Transparant.BALLSTEPS*(Transparant.BALLSTEPS-1),d0
+	add.w	d7,d0
+	move.w	d0,(a0)+
+
+	dbra	d7,.tail_loop
+
+	move.l	a0,d0
+	sub.l	a6,d0
+	rts
+
+.time:	DC.W	0
+
+Transparant.paintFull:
+	bsr.l	PrimitiveMesh.new
+
+; world rotation.
+	clr.w	d0
+	move.w	Transparant.time,d1
+	move.w	d1,d2
+	lsl.w	#3,d1
+	mulu.w	#5,d2
+	Do_SinModulo	d2
+	Get_Sin	sine_tbl,d2,d2
+	asr.w	#8,d2
+	bsr.l	Matrix.generate
+
+	clr.w	d0
+	clr.w	d1
+	move.w	#2500,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+; bubble 1
+	move.w	Transparant.time,d0
+	move.w	d0,d1
+	move.w	d0,d2
+	add.w	d0,d0
+	mulu.w	#5,d1
+	lsr.l	#1,d1
+	mulu.w	#11,d2
+	lsr.l	#2,d2
+	bsr.l	Matrix.generate
+
+	move.w	#-500,d0
+	clr.w	d1
+	clr.w	d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	move.w	Transparant.objNum,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+; bubble 2
+	move.w	Transparant.time,d0
+	move.w	d0,d1
+	move.w	d0,d2
+	lsl.w	#3,d0
+	mulu.w	#3,d1
+	mulu.w	#7,d2
+	bsr.l	Matrix.generate
+
+	move.w	#+500,d0
+	clr.w	d1
+	clr.w	d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	move.w	Transparant.objNum,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+	bsr.l	Matrix.pop			; pop world rotation
+
+	bsr.l	PrimitiveMesh.sortZ
+	bsr.l	PrimitiveMesh.complete
+
+	IFNE	1
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	move.l	Transparant.bgcol,d4
+	bsr.l	Viewport.paintRectangle
+	ELSE
+; TODO: find out overlap shit!
+	movea.l	Transparant.rectAddressTable,a0
+	move.w	(a0)+,d7
+	beq.s	.end_restore
+	subq.w	#1,d7
+.restore_loop:
+	move.w	d7,-(sp)
+	movem.w	(a0)+,d1/d7
+	movem.w	(a0)+,d0/d6
+	move.l	a0,-(sp)
+	move.l	Transparant.bgcol,d4
+	bsr.l	Viewport.paintRectangle
+	movea.l	(sp)+,a0
+	move.w	(sp)+,d7
+	dbra	d7,.restore_loop
+.end_restore:
+	ENDC
+
+	movea.l	Transparant.rectAddressTable,a0
+	bsr.l	PrimitiveMesh.paint
+
+	lea	Transparant.rectAddressTable,a0
+ 	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+
+	moveq	#0,d0
+	rts
+
+.error:	moveq	#-1,d0
+	rts
+
+Transparant.paintSplit:
+	bsr.l	PrimitiveMesh.new
+
+; world rotation.
+	clr.w	d0
+	clr.w	d1
+	clr.w	d2
+	bsr.l	Matrix.generate
+
+	lea	sine_tbl,a1
+	move.w	Transparant.time,d0
+	move.w	Transparant.time2,d1
+	mulu.w	#7,d0
+	mulu.w	#11,d1
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	Get_Sin	a1,d0,d0
+	Get_Sin	a1,d1,d1
+	asr.w	d0
+	asr.w	d1
+	subi.w	#$4000,d0
+	subi.w	#$4000,d1
+	asr.w	#5,d0
+	asr.w	#5,d1
+	clr.w	d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+; Push bub1.
+	move.w	Transparant.rTime,d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#3,d1
+	mulu.w	#7,d2
+	lsr.l	#1,d2
+	bsr.l	Matrix.generate
+	move.w	Transparant.rTime,d0
+	move.w	d0,d2
+	mulu.w	#5,d0
+	mulu.w	#5,d2
+	Do_SinModulo	d0
+	Do_SinModulo	d2
+	Get_Sin	sine_tbl,d0,d0
+	Get_Sin	sine_tbl,d2,d2
+	asr.w	#8,d0
+	clr.w	d0
+	clr.w	d1
+	asr.w	#6,d2
+	addi.w	#3000,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	move.w	Transparant.objNum,d1
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+
+; Push bub2.
+	move.w	Transparant.rTime,d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#5,d0
+	lsr.l	#1,d0
+	mulu.w	#11,d1
+	lsr.l	#1,d1
+	mulu.w	#3,d2
+	bsr.l	Matrix.generate
+	move.w	Transparant.rTime,d0
+	move.w	d0,d2
+	mulu.w	#11,d0
+	mulu.w	#7,d2
+	Do_SinModulo	d0
+	Do_SinModulo	d2
+	Get_Sin	sine_tbl,d0,d0
+	Get_Sin	sine_tbl,d2,d2
+	asr.w	#8,d0
+	clr.w	d0
+	clr.w	d1
+	asr.w	#6,d2
+	addi.w	#3000,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	move.w	Transparant.objNum,d1
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+
+	bsr.l	Matrix.pop			; world
+
+	bsr.l	PrimitiveMesh.sortZ
+	bsr.l	PrimitiveMesh.complete
+
+	IFNE	1
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	move.l	Transparant.bgcol,d4
+	bsr.l	Viewport.paintRectangle
+	ELSE
+; TODO: find out overlap shit!
+	movea.l	Transparant.rectAddressTable,a0
+	move.w	(a0)+,d7
+	beq.s	.end_restore
+	subq.w	#1,d7
+.restore_loop:
+	move.w	d7,-(sp)
+	movem.w	(a0)+,d1/d7
+	movem.w	(a0)+,d0/d6
+	move.l	a0,-(sp)
+	move.l	Transparant.bgcol,d4
+	bsr.l	Viewport.paintRectangle
+	movea.l	(sp)+,a0
+	move.w	(sp)+,d7
+	dbra	d7,.restore_loop
+.end_restore:
+	ENDC
+
+	movea.l	Transparant.rectAddressTable,a0
+	bsr.l	PrimitiveMesh.paint
+
+	bsr.l	Transparant.mirrorQuad
+
+	lea	Transparant.rectAddressTable,a0
+ 	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+
+	moveq	#0,d0
+	rts
+
+.error:	moveq	#-1,d0
+	rts
+
+Transparant.mirrorQuad:
+	movea.l	scr,a0
+	lea	320*2(a0),a1
+	movea.l	a0,a2
+	adda.l	#320*199*2,a2
+	movea.l	a0,a3
+	adda.l	#320*200*2,a3
+	moveq	#100-1,d7
+
+.yloop:	moveq	#80-1,d6	
+
+.xloop:	move.l	(a0)+,d0
+	move.l	d0,(a2)+
+	swap	d0
+	move.w	d0,-(a1)
+	move.w	d0,-(a3)
+	swap	d0
+	move.w	d0,-(a1)
+	move.w	d0,-(a3)
+	dbf	d6,.xloop
+
+	adda.w	#160*2,a0
+	adda.w	#480*2,a1
+	suba.w	#480*2,a2
+	suba.w	#160*2,a3
+	dbf	d7,.yloop
+	rts
+
+;======= OBJECT DATA ========
+
+	DATA
+
+Transparant.textureTable:
+	DC.L	Transparant.texture1
+	DC.L	0
+
+Transparant.rectAddressTable:
+	DC.L	Transparant.rectTable
+	DC.L	Transparant.rectTable2
+	DC.L	Transparant.rectTable3
+
+Transparant.paintRout:
+	DC.L	Transparant.paintFull
+
+Transparant.dir:
+	DC.W	+1
+Transparant.dir2:
+	DC.W	+1
+
+;======= OBJECT RESERVES ========
+
+	BSS
+
+Transparant.rectTable:
+	DS.W	1+4*32
+Transparant.rectTable2:
+	DS.W	1+4*32
+Transparant.rectTable3:
+	DS.W	1+4*32
+
+Transparant.texture1:
+	DS.W	64*64+10
+
+Transparant.bgcol:
+	DS.L	1
+
+Transparant.rStart:
+	DS.W	1
+Transparant.rTime:
+	DS.W	1
+
+Transparant.startTime:
+	DS.W	1
+Transparant.time:
+	DS.W	1
+Transparant.oldTime:
+	DS.W	1
+Transparant.startTime2:
+	DS.W	1
+Transparant.time2:
+	DS.W	1
+Transparant.oldTime2:
+	DS.W	1
+Transparant.objNum:
+	DS.W	1
+
+Transparant.baseAdr:
+	DS.L	1
+
+;======= END OF DEMO-EFFECT OBJECT ========

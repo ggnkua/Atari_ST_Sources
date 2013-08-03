@@ -1,0 +1,1018 @@
+; bitchkicked dsp bilinear rotozoom.
+;
+; yeah, 25fps in rgb50 on std falc..
+;
+; update: seems faster since handshake is done only once per 2 pixels.
+; update: dsp mem-use optimised, is now much faster.
+
+;======= OBJECT TABLE ======================================================
+
+	IFND	DEMO_SYSTEM
+testmode:	=	0
+	move.l	#Bilerp.table,fxAdr
+	INCLUDE	TESTER.S
+	TEXT
+	INCLUDE	DSP.I
+	TEXT
+	ENDC	
+
+; Must be first in object!!
+Bilerp.table:
+	DC.L	Bilerp.mainLoop
+	DC.L	Bilerp.init
+	DC.L	Bilerp.initRT
+	DC.L	Bilerp.deinitRT
+	DC.L	Bilerp.setFadeIn
+	DC.L	Bilerp.setFadeOut
+	DC.L	Bilerp.setZooming2
+	DC.L	Bilerp.setCrawling
+	DC.L	Bilerp.setCrawling2
+	DC.L	Bilerp.setCrawling3
+	DC.L	Bilerp.setGlueZoom
+	DC.L	Bilerp.setCrawling4
+	DC.L	Bilerp.setCrawling5
+	DC.L	0
+
+;======= OBJECT EQUATES ====================================================
+
+Bilerp.DOUBLE:	=	1
+
+			RSRESET
+VectorTable.AX:		RS.W	1
+VectorTable.AY:		RS.W	1
+VectorTable.BX:		RS.W	1
+VectorTable.BY:		RS.W	1
+VectorTable.SIZE:	RS.B	0
+
+			RSRESET
+Bilerp.PAL:		RS.L	256
+Bilerp.BLOCK_SIZE:	RS.B	0
+
+;======= INIT SUBROUTINE ===================================================
+
+; OUTPUT:
+; d0.l: 0   = All clear, neg = Error! Not initialized!
+Bilerp.init:
+	move.l	#Bilerp.BLOCK_SIZE,d0
+	bsr.l	Mem.register
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= REALTIME INIT SUBROUTINE ==========================================
+
+Bilerp.initRT:
+	move.l	#rts,vbl_gfx
+
+	bsr.l	Mem.getBlock
+	move.l	d0,Bilerp.palAdr
+
+	lea	Bilerp.singlePal,a0
+	lea	Bilerp.texture128+20,a1
+	move.l	#256,d7
+	bsr.l	convertTc2Hc
+
+	lea	Bilerp.backedPal+256*2,a2
+	lea	Bilerp.singlePal+256*2,a1
+	movea.l	Bilerp.palAdr,a0
+	adda.w	#256*4,a0
+	clr.b	d0
+.loop:	move.w	-(a1),-(a0)
+	move.w	(a1),-(a0)
+	move.w	(a1),-(a2)
+	addq.b	#1,d0
+	bne.s	.loop
+
+	lea	Bilerp.p56,a0
+	move.l	#(Bilerp.p56End-Bilerp.p56)/3,d0
+	bsr.l	Dsp.loadProgram
+
+	lea	Bilerp.texture128+788,a0
+	move.w	#128*128-1,d7
+	clr.l	d0
+.tloop:	move.b	(a0)+,d0
+	sendLongToDsp	d0
+	dbf	d7,.tloop
+
+	bsr	Bilerp.setZooming2
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+; Unknown monitormode..
+.end:	rts
+.vga60:	move.l	#vga60_16bit_160_200,resRout
+	move.l	resRout,Bilerp.res
+	rts
+.vga100:move.l	#vga100_16bit_160_100,resRout
+	move.l	resRout,Bilerp.res
+	rts
+.rgb50:	move.l	#rgb50_16bit_320_100,resRout
+	move.l	resRout,Bilerp.res
+	rts
+
+;======= DEINITIALISATION ROUTINE ==========================================
+
+Bilerp.deinitRT:
+	rts
+
+;======= SCREENINIT SUBROUTINE =============================================
+
+Bilerp.initScreen:
+	rts
+
+;======= MAINLOOP SUBROUTINE ===============================================
+
+Bilerp.mainLoop:
+	move.w	$0468.w,old468
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr	Bilerp.initScreen
+.end_screeninit:
+
+; fading shit..
+	move.w	Bilerp.fadeDir,d0
+	beq.s	.end_fade
+	move.w	$04BC.w,d1
+	sub.w	Bilerp.fadeStart,d1		; d1.w=fadetime	
+; clip fadetime..
+	cmpi.w	#256,d1
+	ble.s	.fadetime_ok
+	move.w	#256,d1
+	clr.w	Bilerp.fadeDir			; Kill fading..
+.fadetime_ok:
+; calculate brightness from fadetime..
+	muls.w	d0,d1
+	tst.w	d0
+	bpl.s	.pos
+	addi.w	#256,d1
+.pos:
+; d1.w=brightness
+	move.w	d1,Bilerp.brightness
+	bsr	Bilerp.fade
+.end_fade:
+
+	movea.l	Bilerp.moveRout,a0
+	jsr	(a0)
+	bsr	Bilerp.paintTest
+
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	movea.l	resRout,a0
+	clr.l	resRout
+	lea	Bilerp.black,a1
+	movea.l	d0,a2
+	
+	tst.w	Bilerp.flash
+	beq.s	.oki
+	bsr	.set_8bit
+
+	move.l	Bilerp.res,resRout
+	move.l	frmcnt,d7
+	sub.l	lastframecount,d7
+	beq.s	.first
+	move.l	#Bilerp.set16BppMode,resRout
+.first:
+
+.oki:	bsr.l	Screen.requestUpdate
+	clr.w	Bilerp.flash
+
+;	move.w	old468,d0
+;.wait:	move.w	$0468.w,d1
+;	sub.w	d0,d1
+;	cmpi.w	#2,d1
+;	blt.s	.wait
+	move.w	$0468.w,d0
+.wait:	cmp.w	$0468.w,d0
+	beq.s	.wait
+	rts
+
+.set_8bit:
+	lea	empty,a2
+	lea	Bilerp.white,a1
+	move.l	#Bilerp.set8BplMode,a0
+	rts
+
+Bilerp.res:
+	DC.L	0
+
+Bilerp.white:
+	REPT	256
+	DC.L	$FFFFFFFF
+	ENDR
+Bilerp.black:
+	REPT	256
+	DC.L	0
+	ENDR
+
+;======= OBJECT SUBROUTINES ================================================
+
+Bilerp.set8BplMode:
+	move.w	d7,-(sp)
+	move.w	$FFFF8266.w,d7
+	andi.w	#%1111111011111111,d7		; tc mode off!
+	ori.w	#%0000000000010000,d7		; 8bpl mode on
+	move.w	d7,$FFFF8266.w
+	move.w	(sp)+,d7
+	rts
+
+Bilerp.set16BppMode:
+	move.w	d7,-(sp)
+	move.w	$FFFF8266.w,d7
+	andi.w	#%1111111111101111,d7		; 8bpl mode off!
+	ori.w	#%0000000100000000,d7		; tc mode on
+	move.w	d7,$FFFF8266.w
+	move.w	(sp)+,d7
+	rts
+
+Bilerp.setFlash:
+	st	Bilerp.flash
+	rts
+
+Bilerp.setZooming:
+	move.l	#Bilerp.calcPosition,Bilerp.moveRout
+	rts
+
+Bilerp.setZooming2:
+	move.l	#Bilerp.calcPosition2,Bilerp.moveRout
+	rts
+
+Bilerp.setCrawling:
+	move.l	#Bilerp.calcCrawlPosition,Bilerp.moveRout
+	bsr	setTime
+	bra	Bilerp.setFlash
+
+Bilerp.setCrawling2:
+	move.l	#Bilerp.calcCrawlPosition2,Bilerp.moveRout
+	bsr	setTime
+	bra	Bilerp.setFlash
+
+Bilerp.setCrawling3:
+	move.l	#Bilerp.calcCrawlPosition3,Bilerp.moveRout
+	bsr	setTime
+	bra	Bilerp.setFlash
+
+Bilerp.setCrawling4:
+	move.l	#Bilerp.calcCrawlPosition4,Bilerp.moveRout
+	bsr	setTime
+	bra	Bilerp.setFlash
+
+Bilerp.setCrawling5:
+	move.l	#Bilerp.calcCrawlPosition5,Bilerp.moveRout
+	bsr	setTime
+	bra	Bilerp.setFlash
+
+Bilerp.setGlueZoom:
+	move.l	#Bilerp.calcGluePosition,Bilerp.moveRout
+	bra	Bilerp.setFlash
+
+Bilerp.setFadeIn:
+	move.w	$04BC.w,Bilerp.fadeStart
+	move.w	#+1,Bilerp.fadeDir
+	rts
+
+Bilerp.setFadeOut:
+	move.w	$04BC.w,Bilerp.fadeStart
+	move.w	#-1,Bilerp.fadeDir
+	rts
+
+; d1.w=intensity
+Bilerp.fade:
+	lea	Bilerp.texture128+20,a2
+	lea	Bilerp.singlePal,a1
+	movea.l	Bilerp.palAdr,a0
+	clr.b	d0
+.loop:	clr.l	d2
+	move.b	(a2)+,d2
+	mulu.w	d1,d2
+	andi.w	#$F800,d2
+	clr.l	d3
+	move.b	(a2)+,d3
+	mulu.w	d1,d3
+	lsr.w	#5,d3
+	andi.w	#$07E0,d3
+	clr.l	d4
+	move.b	(a2)+,d4
+	mulu.w	d1,d4
+	lsr.w	#8,d4
+	lsr.w	#3,d4
+	or.w	d3,d2
+	or.w	d4,d2
+	move.w	d2,(a1)+
+	move.w	d2,(a0)+
+	move.w	d2,(a0)+
+	addq.b	#1,d0
+	bne.s	.loop
+	rts
+
+Bilerp.calcGluePosition:
+; First we calculate the current time.
+	bsr	getTime
+	move.l	d0,d1
+	move.l	d0,d6
+	lea	sine_tbl,a0
+
+; Now we calculate our center position.
+	move.w	d1,d3
+	mulu.w	#5,d1
+	lsr.l	#1,d1
+	mulu.w	#7,d3
+	lsr.l	#2,d3
+	Do_SinModulo	d1
+	Do_SinModulo	d3
+	Get_Sin	a0,d1,d2
+	Get_Sin	a0,d3,d3
+	swap	d2
+	swap	d3
+	clr.w	d2
+	clr.w	d3
+	asr.l	#6,d2
+	asr.l	#6,d3
+	move.l	#$40000000,d2
+	move.l	#$50000000,d3
+	movem.l	d2/d3,Bilerp.center
+
+; And now we calculate the current position in the trajectory.
+	mulu.w	#7,d0
+	lsr.l	d0
+	Do_SinModulo	d0
+	Get_SinCos	a0,d0,d0,d1
+; d0.w: +sin(fi)
+; d1.w: +cos(fi)
+
+; a'.x = +cos(fi)
+; a'.y = -sin(fi)
+	move.w	d1,d2
+	move.w	d0,d3
+	neg.w	d3
+; d2.w: a'.x, d3.w: a'.y
+; b'.x = +sin(fi)
+; b'.y = +cos(fi)
+	move.w	d0,d4
+	move.w	d1,d5
+; d4.w: b'.x, d5.w: b'.y
+
+; And we calculate the amount of zoom...
+	mulu.w	#7,d6
+	lsr.l	#3,d6
+	Do_SinModulo	d6
+	Get_Sin	a0,d6,d6
+	addi.w	#$8000,d6
+	andi.l	#$ffff,d6
+	lsr.w	#5,d6
+	move.w	#$4000,d6
+	bra	Bilerp.sendCoordsToDsp
+
+; "earx"
+Bilerp.calcCrawlPosition:
+; First we calculate the current time.
+	bsr	getTime
+	move.l	d0,d1
+	move.l	d0,d6
+	lea	sine_tbl,a0
+
+; Now we calculate our center position.
+	move.w	d1,d3
+	mulu.w	#13,d1
+	lsr.l	#1,d1
+	mulu.w	#17,d3
+	lsr.l	#2,d3
+	Do_SinModulo	d1
+	Do_SinModulo	d3
+	Get_Sin	a0,d1,d2
+	Get_Sin	a0,d3,d3
+	swap	d2
+	swap	d3
+	clr.w	d2
+	clr.w	d3
+	asr.l	#4,d2
+	asr.l	#4,d3
+	addi.l	#$80000000,d2
+	addi.l	#$D6000000,d3
+	movem.l	d2/d3,Bilerp.center
+
+; And now we calculate the current position in the trajectory.
+	mulu.w	#7,d0
+	lsr.l	#3,d0
+	subi.w	#$100,d0
+	Do_SinModulo	d0
+	Get_SinCos	a0,d0,d0,d1
+; d0.w: +sin(fi)
+; d1.w: +cos(fi)
+
+; a'.x = +cos(fi)
+; a'.y = -sin(fi)
+	move.w	d1,d2
+	move.w	d0,d3
+	neg.w	d3
+; d2.w: a'.x, d3.w: a'.y
+; b'.x = +sin(fi)
+; b'.y = +cos(fi)
+	move.w	d0,d4
+	move.w	d1,d5
+; d4.w: b'.x, d5.w: b'.y
+
+; And we calculate the amount of zoom...
+	mulu.w	#7,d6
+	lsr.l	#3,d6
+	Do_SinModulo	d6
+	Get_Sin	a0,d6,d6
+	addi.w	#$8000,d6
+	andi.l	#$ffff,d6
+	lsr.w	#5,d6
+	move.w	#$1800,d6
+	bra	Bilerp.sendCoordsToDsp
+
+Bilerp.sendCoordsToDsp:
+; And zoom the damn thing!
+	muls.w	d6,d2
+	muls.w	d6,d3
+	muls.w	d6,d4
+	muls.w	d6,d5
+	asr.l	#7,d2
+	asr.l	#7,d3
+	asr.l	#7,d4
+	asr.l	#7,d5
+	movea.l	d2,a2
+	movea.l	d3,a3
+	movea.l	d4,a4
+	movea.l	d5,a5
+	asr.l	#8,d2
+	asr.l	#8,d3
+	asr.l	#8,d4
+	asr.l	#8,d5
+	sendLongToDsp	d2
+	sendLongToDsp	d3
+	sendLongToDsp	d4
+	sendLongToDsp	d5
+
+	movem.l	Bilerp.center,d6/d7
+	lsr.l	d6
+	lsr.l	d7
+	move.l	a2,d2
+	move.l	a3,d3
+	move.l	a4,d4
+	move.l	a5,d5
+	muls.l	#80,d2
+	muls.l	#80,d3
+	sub.l	d2,d6
+	sub.l	d3,d7
+	muls.l	#50,d4
+	muls.l	#50,d5
+	sub.l	d4,d6				; d6.w=topleft_u
+	sub.l	d5,d7				; d7.w=topleft_v
+	lsr.l	#8,d6
+	lsr.l	#8,d7
+	andi.l	#$7FFFFF,d6
+	andi.l	#$7FFFFF,d7
+	sendLongToDsp	d6
+	sendLongToDsp	d7
+
+	rts
+
+; "crem"
+Bilerp.calcCrawlPosition2:
+; First we calculate the current time.
+	bsr	getTime
+	move.l	d0,d1
+	move.l	d0,d6
+	lea	sine_tbl,a0
+
+; Now we calculate our center position.
+	move.w	d1,d3
+	mulu.w	#23,d1
+	lsr.l	#2,d1
+	mulu.w	#27,d3
+	lsr.l	#2,d3
+	Do_SinModulo	d1
+	Do_SinModulo	d3
+	Get_Sin	a0,d1,d2
+	Get_Sin	a0,d3,d3
+	swap	d2
+	swap	d3
+	clr.w	d2
+	clr.w	d3
+	asr.l	#4,d2
+	asr.l	#4,d3
+	addi.l	#$B0000000,d2
+	addi.l	#$E8000000,d3
+	movem.l	d2/d3,Bilerp.center
+
+; And now we calculate the current position in the trajectory.
+	mulu.w	#5,d0
+	lsr.l	#2,d0
+	subi.w	#$100,d0
+	Do_SinModulo	d0
+	Get_SinCos	a0,d0,d0,d1
+; d0.w: +sin(fi)
+; d1.w: +cos(fi)
+
+; a'.x = +cos(fi)
+; a'.y = -sin(fi)
+	move.w	d1,d2
+	move.w	d0,d3
+	neg.w	d3
+; d2.w: a'.x, d3.w: a'.y
+; b'.x = +sin(fi)
+; b'.y = +cos(fi)
+	move.w	d0,d4
+	move.w	d1,d5
+; d4.w: b'.x, d5.w: b'.y
+
+; And we calculate the amount of zoom...
+	mulu.w	#7,d6
+	lsr.l	#3,d6
+	Do_SinModulo	d6
+	Get_Sin	a0,d6,d6
+	addi.w	#$8000,d6
+	andi.l	#$ffff,d6
+	lsr.w	#5,d6
+	move.w	#$1000,d6
+	bra	Bilerp.sendCoordsToDsp
+
+; "dforce"
+Bilerp.calcCrawlPosition3:
+; First we calculate the current time.
+	bsr	getTime
+	move.l	d0,d1
+	move.l	d0,d6
+	lea	sine_tbl,a0
+
+; Now we calculate our center position.
+	move.w	d1,d3
+	mulu.w	#27,d1
+	lsr.l	#2,d1
+	mulu.w	#23,d3
+	lsr.l	#2,d3
+	Do_SinModulo	d1
+	Do_SinModulo	d3
+	Get_Sin	a0,d1,d2
+	Get_Sin	a0,d3,d3
+	swap	d2
+	swap	d3
+	clr.w	d2
+	clr.w	d3
+	asr.l	#3,d2
+	asr.l	#5,d3
+	addi.l	#$C0000000,d2
+	addi.l	#$28000000,d3
+	movem.l	d2/d3,Bilerp.center
+
+; And now we calculate the current position in the trajectory.
+	mulu.w	#11,d0
+	lsr.l	#3,d0
+	subi.w	#$100,d0
+	Do_SinModulo	d0
+	Get_SinCos	a0,d0,d0,d1
+; d0.w: +sin(fi)
+; d1.w: +cos(fi)
+
+; a'.x = +cos(fi)
+; a'.y = -sin(fi)
+	move.w	d1,d2
+	move.w	d0,d3
+	neg.w	d3
+; d2.w: a'.x, d3.w: a'.y
+; b'.x = +sin(fi)
+; b'.y = +cos(fi)
+	move.w	d0,d4
+	move.w	d1,d5
+; d4.w: b'.x, d5.w: b'.y
+
+; And we calculate the amount of zoom...
+	mulu.w	#7,d6
+	lsr.l	#3,d6
+	Do_SinModulo	d6
+	Get_Sin	a0,d6,d6
+	addi.w	#$8000,d6
+	andi.l	#$ffff,d6
+	lsr.w	#5,d6
+	move.w	#$1600,d6
+	bra	Bilerp.sendCoordsToDsp
+
+; "evl"
+Bilerp.calcCrawlPosition4:
+; First we calculate the current time.
+	bsr	getTime
+	move.l	d0,d1
+	move.l	d0,d6
+	lea	sine_tbl,a0
+
+; Now we calculate our center position.
+	move.w	d1,d3
+	mulu.w	#31,d1
+	lsr.l	#2,d1
+	mulu.w	#17,d3
+	lsr.l	#1,d3
+	Do_SinModulo	d1
+	Do_SinModulo	d3
+	Get_Sin	a0,d1,d2
+	Get_Sin	a0,d3,d3
+	swap	d2
+	swap	d3
+	clr.w	d2
+	clr.w	d3
+	asr.l	#4,d2
+	asr.l	#4,d3
+	addi.l	#$4E000000,d2
+	addi.l	#$C4000000,d3
+	movem.l	d2/d3,Bilerp.center
+
+; And now we calculate the current position in the trajectory.
+	mulu.w	#3,d0
+	lsr.l	#2,d0
+	subi.w	#$100,d0
+	Do_SinModulo	d0
+	Get_SinCos	a0,d0,d0,d1
+; d0.w: +sin(fi)
+; d1.w: +cos(fi)
+
+; a'.x = +cos(fi)
+; a'.y = -sin(fi)
+	move.w	d1,d2
+	move.w	d0,d3
+	neg.w	d3
+; d2.w: a'.x, d3.w: a'.y
+; b'.x = +sin(fi)
+; b'.y = +cos(fi)
+	move.w	d0,d4
+	move.w	d1,d5
+; d4.w: b'.x, d5.w: b'.y
+
+; And we calculate the amount of zoom...
+	mulu.w	#7,d6
+	lsr.l	#3,d6
+	Do_SinModulo	d6
+	Get_Sin	a0,d6,d6
+	addi.w	#$8000,d6
+	andi.l	#$ffff,d6
+	lsr.w	#5,d6
+	move.w	#$1200,d6
+	bra	Bilerp.sendCoordsToDsp
+
+; "havoc"
+Bilerp.calcCrawlPosition5:
+; First we calculate the current time.
+	bsr	getTime
+	move.l	d0,d1
+	move.l	d0,d6
+	lea	sine_tbl,a0
+
+; Now we calculate our center position.
+	move.w	d1,d3
+	mulu.w	#17,d1
+	lsr.l	#2,d1
+	mulu.w	#31,d3
+	lsr.l	#2,d3
+	Do_SinModulo	d1
+	Do_SinModulo	d3
+	Get_Sin	a0,d1,d2
+	Get_Sin	a0,d3,d3
+	swap	d2
+	swap	d3
+	clr.w	d2
+	clr.w	d3
+	asr.l	#3,d2
+	asr.l	#5,d3
+	addi.l	#$48000000,d2
+	addi.l	#$18000000,d3
+	movem.l	d2/d3,Bilerp.center
+
+; And now we calculate the current position in the trajectory.
+	mulu.w	#13,d0
+	lsr.l	#4,d0
+	subi.w	#$100,d0
+	Do_SinModulo	d0
+	Get_SinCos	a0,d0,d0,d1
+; d0.w: +sin(fi)
+; d1.w: +cos(fi)
+
+; a'.x = +cos(fi)
+; a'.y = -sin(fi)
+	move.w	d1,d2
+	move.w	d0,d3
+	neg.w	d3
+; d2.w: a'.x, d3.w: a'.y
+; b'.x = +sin(fi)
+; b'.y = +cos(fi)
+	move.w	d0,d4
+	move.w	d1,d5
+; d4.w: b'.x, d5.w: b'.y
+
+; And we calculate the amount of zoom...
+	mulu.w	#7,d6
+	lsr.l	#3,d6
+	Do_SinModulo	d6
+	Get_Sin	a0,d6,d6
+	addi.w	#$8000,d6
+	andi.l	#$ffff,d6
+	lsr.w	#5,d6
+	move.w	#$1200,d6
+	bra	Bilerp.sendCoordsToDsp
+
+Bilerp.calcPosition:
+; First we calculate the current time.
+	bsr	getTime
+	move.l	d0,d1
+	move.l	d0,d6
+	lea	sine_tbl,a0
+
+; Now we calculate our center position.
+	mulu.w	#5,d1
+	lsr.l	#1,d1
+	Do_SinModulo	d1
+	Get_SinCos	a0,d1,d2,d3
+	swap	d2
+	swap	d3
+	clr.w	d2
+	clr.w	d3
+	asr.l	#2,d2
+	asr.l	#2,d3
+	addi.l	#$80000000,d2
+	addi.l	#$80000000,d3
+;	move.l	#$80000000,d2
+;	move.l	#$80000000,d3
+	movem.l	d2/d3,Bilerp.center
+
+; And now we calculate the current position in the trajectory.
+	Do_SinModulo	d0
+	Get_SinCos	a0,d0,d0,d1
+; d0.w: +sin(fi)
+; d1.w: +cos(fi)
+
+; a'.x = +cos(fi)
+; a'.y = -sin(fi)
+	move.w	d1,d2
+	move.w	d0,d3
+	neg.w	d3
+; d2.w: a'.x, d3.w: a'.y
+; b'.x = +sin(fi)
+; b'.y = +cos(fi)
+	move.w	d0,d4
+	move.w	d1,d5
+; d4.w: b'.x, d5.w: b'.y
+
+; And we calculate the amount of zoom...
+	mulu.w	#7,d6
+	lsr.l	#3,d6
+	Do_SinModulo	d6
+	Get_Sin	a0,d6,d6
+	addi.w	#$8000,d6
+	andi.l	#$ffff,d6
+	lsr.w	d6
+	bra	Bilerp.sendCoordsToDsp
+
+Bilerp.calcPosition2:
+; First we calculate the current time.
+	bsr	getTime
+	move.l	d0,d1
+	move.l	d0,d6
+	move.l	d0,d5
+	lea	sine_tbl,a0
+
+; Now we calculate our center position.
+
+; And we calculate the amount of zoom...
+	mulu.w	#7,d5
+	lsr.l	#3,d5
+	Do_SinModulo	d5
+	Get_Sin	a0,d5,d5
+	addi.w	#$8000,d5
+;	mulu.w	d5,d5
+;	swap	d5
+;	mulu.w	d5,d5
+;	swap	d5
+;	mulu.w	d5,d5
+;	swap	d5
+;	mulu.w	d5,d5
+;	swap	d5
+	andi.l	#$ffff,d5
+	lsr.w	#2,d5
+	addi.w	#$3000,d5
+
+	mulu.w	#5,d1
+	lsr.l	#1,d1
+	Do_SinModulo	d1
+	Get_SinCos	a0,d1,d2,d3
+	muls.w	d5,d2
+	muls.w	d5,d3
+	asr.l	#8,d2
+	asr.l	#8,d3
+	asr.l	#7,d2
+	asr.l	#7,d3
+	swap	d2
+	swap	d3
+	clr.w	d2
+	clr.w	d3
+	asr.l	#2,d2
+	asr.l	#2,d3
+	addi.l	#$80000000,d2
+	addi.l	#$80000000,d3
+;	move.l	#$80000000,d2
+;	move.l	#$80000000,d3
+	movem.l	d2/d3,Bilerp.center
+
+; And now we calculate the current position in the trajectory.
+;	clr.w	d0
+	Do_SinModulo	d0
+	Get_SinCos	a0,d0,d0,d1
+; d0.w: +sin(fi)
+; d1.w: +cos(fi)
+
+; a'.x = +cos(fi)
+; a'.y = -sin(fi)
+	move.w	d1,d2
+	move.w	d0,d3
+	neg.w	d3
+; d2.w: a'.x, d3.w: a'.y
+; b'.x = +sin(fi)
+; b'.y = +cos(fi)
+	move.w	d0,d4
+	move.w	d1,d5
+; d4.w: b'.x, d5.w: b'.y
+
+; And we calculate the amount of zoom...
+	mulu.w	#7,d6
+	lsr.l	#3,d6
+	Do_SinModulo	d6
+	Get_Sin	a0,d6,d6
+	addi.w	#$8000,d6
+	andi.l	#$ffff,d6
+	lsr.w	#2,d6
+	addi.w	#$400,d6
+	bra	Bilerp.sendCoordsToDsp
+
+Bilerp.paintTest:
+	movea.l	scr,a0
+	lea	$FFFFA202.w,a2
+	lea	$FFFFA207.w,a3
+	clr.l	d0				; for paloffset
+
+	move.w	monitormode,d1
+	cmpi.w	#vga60,d1
+	beq	Bilerp.paintVga60		; no good vga60 yet
+	cmpi.w	#vga100,d1
+	beq.s	Bilerp.paintVga100
+	cmpi.w	#rgb50,d1
+	beq	Bilerp.paintRgb50
+; Unknown monitormode..
+;.end:	rts
+
+Bilerp.paintVga100:
+	lea	Bilerp.singlePal,a1	
+	IFNE	Bilerp.DOUBLE
+	lea	-1(a3),a4
+	move.w	#16000/(10*2)-1,d7		; todo: look at size!
+	moveq	#1,d1
+
+.loop:
+; 250 bytes in instr cache, maximum!!
+	REPT	10
+	and.b	d1,(a2)				; btst.b #0,(a2), todo: does this not hamper mixer?
+	beq.s	*-2
+	move.b	(a4),d0				; todo: look at size!! this version does 2 in 1!
+	move.w	(a1,d0.l*2),(a0)+		; Lookup color and store. todo: word/long!
+	move.b	(a3),d0
+	move.w	(a1,d0.l*2),(a0)+		; Lookup color and store. todo: word/long!
+	ENDR
+	dbf	d7,.loop
+	ELSE
+	move.w	#16000/25-1,d7
+	moveq	#1,d1
+
+.loop:
+; 250 bytes in instr cache, maximum!!
+	REPT	25
+	and.b	d1,(a2)				; btst.b #0,(a2), todo: does this not hamper mixer?
+	beq.s	*-2
+	move.b	(a3),d0
+	move.w	(a1,d0.l*2),(a0)+		; Lookup color and store.
+	ENDR
+	dbf	d7,.loop
+	ENDC
+	rts
+
+Bilerp.paintVga60:
+	lea	-1(a3),a4
+	moveq	#1,d1
+	lea	Bilerp.singlePal,a1	
+	movea.w	#160*2,a6
+	moveq	#100-1,d7
+
+.yloop:	lea	(a0,a6.l),a5
+	moveq	#160/(10*2)-1,d6
+
+.xloop:
+	REPT	10
+	and.b	d1,(a2)				; btst.b #0,(a2), todo: does this not hamper mixer?
+	beq.s	*-2
+	move.b	(a4),d0				; todo: look at size!! this version does 2 in 1!
+	move.w	(a1,d0.l*2),(a0)+		; Lookup color and store. todo: word/long!
+	move.b	(a3),d0
+	move.w	(a1,d0.l*2),(a0)+		; Lookup color and store. todo: word/long!
+	move.l	-4(a0),(a5)+
+	ENDR
+	dbf	d6,.xloop
+
+	adda.l	a6,a0
+	dbf	d7,.yloop
+	rts
+
+; this is just about 25fps at the moment. it must get faster (music!).
+Bilerp.paintRgb50:
+	movea.l	Bilerp.palAdr,a1
+	IFNE	Bilerp.DOUBLE
+	lea	-1(a3),a4
+	move.w	#16000/(10*2)-1,d7		; todo: look at size!
+	moveq	#1,d1
+
+.loop:
+; 250 bytes in instr cache, maximum!!
+	REPT	10
+	and.b	d1,(a2)				; btst.b #0,(a2), todo: does this not hamper mixer?
+	beq.s	*-2
+
+;	move.w	(a4),d0				; todo: look at size!! this version does 2 in 1!
+;	move.l	(a1,d0.l*8),(a0)+		; Lookup color and store. todo: word/long!
+;	move.l	4(a1,d0.l*8),(a0)+		; Lookup color and store. todo: word/long!
+	move.b	(a4),d0				; todo: look at size!! this version does 2 in 1!
+	move.l	(a1,d0.l*4),(a0)+		; Lookup color and store. todo: word/long!
+	move.b	(a3),d0
+	move.l	(a1,d0.l*4),(a0)+		; Lookup color and store. todo: word/long!
+
+	ENDR
+	dbf	d7,.loop
+
+	ELSE
+	move.w	#16000/25-1,d7
+	moveq	#1,d1
+	
+.loop:
+; 250 bytes in instr cache, maximum!!
+	REPT	25
+	and.b	d1,(a2)				; btst.b #0,(a2), todo: does this not hamper mixer?
+	beq.s	*-2
+	move.b	(a3),d0
+	move.l	(a1,d0.l*4),(a0)+		; Lookup color and store.
+	ENDR
+	dbf	d7,.loop
+	ENDC
+	rts
+
+;======= OBJECT DATA =======================================================
+
+	DATA
+
+Bilerp.texture128:
+	INCBIN	TEXTN128.APX	TEXTU128.APX
+
+Bilerp.p56:
+	INCBIN	BILERP.P56
+Bilerp.p56End:
+	EVEN
+
+Bilerp.moveRout:
+	DC.L	Bilerp.calcPosition
+
+Bilerp.flash:
+	DC.W	0
+
+;======= OBJECT RESERVES ===================================================
+
+	BSS
+
+Bilerp.startTime:
+	DS.L	1
+Bilerp.scaledVectorTable:
+	DS.B	VectorTable.SIZE
+Bilerp.center:
+	DS.L	2
+Bilerp.distoStrength:
+	DS.W	1
+Bilerp.palAdr:
+	DS.L	1
+Bilerp.singlePal:
+	DS.W	256
+Bilerp.brightness:
+	DS.W	1
+Bilerp.fadeStart:
+	DS.W	1
+Bilerp.fadeDir:
+	DS.W	1
+Bilerp.backedPal:
+	DS.W	256*2
+

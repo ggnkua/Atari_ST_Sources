@@ -1,0 +1,781 @@
+; Radial blur. 160*100 hicolor.
+;
+; Needs at least 4 pixeladds to look good. Increasingly small scalefactors
+; give best results (long lines).
+;
+; It's best to shift entire picture 3 bits right. But this gives very little
+; color info (2bit R, 3 bits G, 2 bits B) So it might be best to make a
+; 24b picture out of a 15b picture? Would be more precise. Slightly slower
+; tho.
+;
+; Maybe it's best to prescale a number of pictures, to avoid extra
+; mem reads and lookups. Maybe this is cachemiss city. Hell, we'll see
+; when it gets too slow. 
+;
+; Hhhmm. It seems it actually is too slow. 6 adds looks great, but slows
+; down on CT2 to 25fps in vga100. Snails!! Prescaling would be the best
+; option to me. At least you don't need nasty quadrants and offsets anymore
+; so it basicly be alot faster. An additional goodie, is that you can do
+; 2 pixels in one go. It would seem to me that this would almost double
+; speed and I need that.
+;
+; Ah! another solution. It seems by doing half the indexing and using longs
+; in one go, it also still looks quite good and is much faster (40fps!).
+; However, this might be due to TTRAM being much better for longword stuff!
+;
+; Best so far is: prescaling and just adding pictures toghether longwise.
+; Seems hyperfast. Something like 78fps on CT2 vga100.
+; Well.. It might be fast, but there are some contra's: very memory
+; intensive, very low colordepth.
+;
+; With all methods thusfar it seems best to keep focus on the center.
+; Otherwise you can clearly see the multiple picture copies.
+;
+; Now trying 8bit mode. I think this might really improve shit!
+;
+; 8bit mode looks a bit shitty. I think the picture causes it. I think
+; it must be damn smooth and spread out. This would give a 'blobbish'
+; effect which looks great (judging from a gba demo I saw).
+;
+; I redid all the scales with equates to make experiments easy. Now it
+; seems the scales must really be low (big mem use!) and it looks quite
+; cool in highcolor!
+
+;======= OBJECT EQUATES ========
+
+Radial.DARKEN:	=	1				; 1: darken the picture, 0: leave it
+
+Radial.SCALES:	=	5
+
+Radial.SCALE1:	=	$EC	;$E8
+Radial.SCALE2:	=	$D8	;$D0
+Radial.SCALE3:	=	$C4	;$B8
+Radial.SCALE4:	=	$B0	;$A0
+Radial.SCALE5:	=	$9C	;$88
+
+Radial.W1:	=	256*256/Radial.SCALE1+1
+Radial.W2:	=	256*256/Radial.SCALE2+1
+Radial.W3:	=	256*256/Radial.SCALE3+1
+Radial.W4:	=	256*256/Radial.SCALE4+1
+Radial.W5:	=	256*256/Radial.SCALE5+1
+
+Radial.H1:	=	200*256/Radial.SCALE1
+Radial.H2:	=	200*256/Radial.SCALE2
+Radial.H3:	=	200*256/Radial.SCALE3
+Radial.H4:	=	200*256/Radial.SCALE4
+Radial.H5:	=	200*256/Radial.SCALE5
+
+Radial.M1:	=	Radial.W1*(Radial.H1/2-50)+Radial.W1/2-80
+Radial.M2:	=	Radial.W2*(Radial.H2/2-50)+Radial.W2/2-80
+Radial.M3:	=	Radial.W3*(Radial.H3/2-50)+Radial.W3/2-80
+Radial.M4:	=	Radial.W4*(Radial.H4/2-50)+Radial.W4/2-80
+Radial.M5:	=	Radial.W5*(Radial.H5/2-50)+Radial.W5/2-80
+
+			RSRESET
+Radial.pic:		RS.W	256*200
+Radial.scaledPic1:	RS.W	Radial.W1*Radial.H1
+Radial.scaledPic2:	RS.W	Radial.W2*Radial.H2
+Radial.scaledPic3:	RS.W	Radial.W3*Radial.H3
+Radial.scaledPic4:	RS.W	Radial.W4*Radial.H4
+Radial.scaledPic5:	RS.W	Radial.W5*Radial.H5+1000
+Radial.BLOCK_SIZE:	RS.B	0
+
+;======= OBJECT TABLE ========
+
+; Must be first in object!!
+Radial.table:
+	DC.L	Radial.mainLoop
+	DC.L	Radial.init
+	DC.L	Radial.setRes
+; Add more addresses here..
+	DC.L	0
+
+	IFND	DEMO_SYSTEM
+	INCLUDE	..\DELTA\SFLY_DSP.S
+	TEXT
+	ENDC
+
+;======= RESOLUTION SETTING ROUTINE ========
+
+Radial.setRes:
+	IFEQ	testmode
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+; Unknown monitormode..
+	rts
+.vga60:	bra.l	vga60_16bit_160_200
+.vga100:bra.l	vga100_16bit_160_100
+.rgb50:	bra.l	rgb50_16bit_320_100
+	ENDC
+	rts
+
+;======= INIT SUBROUTINE ========
+
+; OUTPUT:
+; d0.l: =0 all clear, <0 error
+Radial.init:
+	move.l	#Radial.BLOCK_SIZE,d0
+	bsr.l	Mem.register
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= REALTIME INIT SUBROUTINE ========
+
+Radial.realtimeInit:
+	move.l	#rts,vbl_gfx
+
+	bsr.l	Mem.getBlock
+	move.l	d0,Radial.baseAdr
+
+	bsr.l	HumanFly.init
+
+	lea	Viewport.settingsTable,a0
+	move.w	#256,Viewport.XSCREEN(a0)
+	move.w	#200,Viewport.YSCREEN(a0)
+	move.w	#0,Viewport.XSTART(a0)
+	move.w	#0,Viewport.YSTART(a0)
+	move.w	#256,Viewport.XEND(a0)
+	move.w	#200,Viewport.YEND(a0)
+	move.w	#128,Viewport.XCENTER(a0)
+	move.w	#100,Viewport.YCENTER(a0)
+	move.w	#256+32,Viewport.ASPECT(a0)
+	move.w	#$100,Viewport.FOCAL(a0)
+	bsr.l	Viewport.update
+
+	lea	Radial.colInstTable,a1
+	lea	Radial.pal,a0
+	bsr.l	Pal.makeGradientHc
+
+	lea	Radial.textureTable,a0
+	lea	Radial.pal,a1
+	bsr.l	Polygon.init
+
+	bsr	Radial.clearScaleBuf
+	bsr	Radial.initPic
+
+	IFNE	Radial.DARKEN
+	bsr	Radial.darkenPicture
+	ENDC
+
+	bsr	Radial.fillScaleTables
+
+.end:	rts
+
+;======= SCREENINIT SUBROUTINE ========
+
+Radial.initScreen:
+	rts
+
+;======= MAINLOOP SUBROUTINE ========
+
+Radial.mainLoop:
+	move.w	$0468.w,.old468
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr	Radial.realtimeInit
+	move.l	(sp)+,d0
+.end_realtime_init:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	move.l	d0,-(sp)
+	bsr	Radial.initScreen
+	move.l	(sp)+,d0
+.end_screeninit:
+
+.scale:	subq.l	#1,d0
+	bmi.s	.still
+	cmpi.l	#Radial.SCALES,d0
+	bhi.s	.end_scaling
+	beq.s	.start
+	move.l	d0,d7
+	bsr	Radial.scalePic
+.still:	clr.w	d0
+	clr.w	d1
+	bra.s	.paint
+.start:	move.w	$04BC.w,Radial.startTime
+.end_scaling:
+
+	bsr	Radial.calcPicCenter
+
+.paint:	bsr	Radial.blurPics
+
+	IFEQ	testmode
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	move.l	d0,d1
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+	ENDC
+
+	move.w	.old468(pc),d0
+.wait:	cmp.w	$0468.w,d0
+	beq.s	.wait
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.res_done
+	bsr	Radial.setRes
+.res_done:
+
+	rts
+
+.old468:DC.W	0
+
+;======= OBJECT SUBROUTINES ========
+
+Radial.initPic:
+; Paint delta logo..
+	movea.l	Radial.baseAdr,a0
+	adda.l	#Radial.pic,a0
+	bsr.l	Primitive.setScreenbuffer
+
+	lea	Radial.gouPoly,a1
+	bsr.l	Polygon.paintClippedGouraudshaded
+	lea	Radial.gouPoly2,a1
+	bsr.l	Polygon.paintClippedGouraudshaded
+	lea	Radial.gouPoly3,a1
+	bsr.l	Polygon.paintClippedGouraudshaded
+
+; Put some puke on the background..
+	lea	Texture.8bTexture1,a1
+	movea.l	Radial.baseAdr,a0
+	adda.l	#Radial.pic,a0
+	lea	FlareGen.fogPal,a2
+	move.w	#256*200-1,d7
+	clr.l	d0
+.loop:	move.b	(a1)+,d0
+	lsr.w	d0
+	move.w	(a2,d0.l*2),d1
+	move.w	(a0),d4
+	move.w	d1,d2
+	move.w	d1,d3
+	move.w	d4,d5
+	move.w	d4,d6
+	andi.w	#$F800,d1
+	andi.w	#$07E0,d2
+	andi.w	#$001F,d3
+	andi.w	#$F800,d4
+	andi.w	#$07E0,d5
+	andi.w	#$001F,d6
+	add.w	d1,d4
+	bcc.s	.r_ok
+	move.w	#$F800,d4
+.r_ok:	add.w	d2,d5
+	cmpi.w	#$07E0,d5
+	blt.s	.g_ok
+	move.w	#$07E0,d5
+.g_ok:	add.w	d3,d6
+	cmpi.w	#$001F,d6
+	blt.s	.b_ok
+	move.w	#$001F,d6
+.b_ok:	or.w	d4,d6
+	or.w	d5,d6
+	move.w	d6,(a0)+
+	dbf	d7,.loop
+
+	rts
+
+Radial.clearScaleBuf:
+	movea.l	Radial.baseAdr,a0
+	clr.l	d0
+	move.l	#Radial.BLOCK_SIZE/8-1,d7
+.loop:	move.l	d0,(a0)+
+	move.l	d0,(a0)+
+	subq.l	#1,d7
+	bne.s	.loop
+	rts
+
+Radial.darkenPicture:
+	movea.l	Radial.baseAdr,a0
+	adda.l	#Radial.pic,a0
+	move.w	#256*200-1,d7
+
+.loop:	clr.l	d0
+	clr.l	d1
+	clr.l	d2
+	move.w	(a0),d0
+	move.w	d0,d1
+	move.w	d0,d2
+	andi.w	#$F800,d0
+	andi.w	#$07E0,d1
+	andi.w	#$001F,d2
+	add.w	d2,d2
+
+	divu.w	#Radial.SCALES+1,d0
+	divu.w	#Radial.SCALES+1,d1
+	divu.w	#Radial.SCALES+1,d2
+
+	btst	#10,d0
+	beq.s	.r_rounded
+	addi.w	#$0400,d0
+.r_rounded:
+	btst	#4,d1
+	beq.s	.g_rounded
+	addi.w	#$0020,d1
+	cmpi.w	#$07E0/(Radial.SCALES+1),d1
+	blt.s	.g_rounded
+	move.w	#($07E0/(Radial.SCALES+1))&$07E0,d1
+.g_rounded:
+	lsr.w	d2
+	bcc.s	.b_rounded
+	addq.w	#1,d2
+.b_rounded:
+
+	andi.w	#$F800,d0
+	andi.w	#$07E0,d1
+	andi.w	#$001F,d2
+	or.w	d1,d0
+	or.w	d2,d0
+	move.w	d0,(a0)+
+	dbf	d7,.loop
+	rts
+
+; Output prescaled pictures in various sizes.
+Radial.scaleStuff:
+; Make pointer table to scaled piccies.
+	lea	Radial.picAddys,a0
+	movea.l	Radial.baseAdr,a1
+	movea.l	a1,a2
+	adda.l	#Radial.scaledPic1,a2
+	move.l	a2,(a0)+
+	movea.l	a1,a2
+	adda.l	#Radial.scaledPic2,a2
+	move.l	a2,(a0)+
+	movea.l	a1,a2
+	adda.l	#Radial.scaledPic3,a2
+	move.l	a2,(a0)+
+	movea.l	a1,a2
+	adda.l	#Radial.scaledPic4,a2
+	move.l	a2,(a0)+
+	movea.l	a1,a2
+	adda.l	#Radial.scaledPic5,a2
+	move.l	a2,(a0)+
+
+	clr.l	d7
+
+; Scale the shit!
+.loop:	clr.l	d3
+	move.w	(Radial.scaleTable,d7.l*2),d0
+	add.w	d0,d0
+	movea.l	(Radial.picAddys,d7.l*4),a0
+	movea.l	Radial.baseAdr,a1
+	adda.l	#Radial.pic,a1
+	clr.w	d2
+
+; Measure linewidth (in bytes).
+	clr.w	d1
+	moveq	#0,d6
+.count_width_loop:
+	addq.w	#1,d6
+	add.w	d0,d1
+	bcc.s	.count_width_loop
+	subi.w	#160,d6
+	add.w	d6,d6
+	move.w	d6,(Radial.widthTable,d7.l*2)
+
+; Scale picture..
+.yloop:	clr.w	d1
+
+.xloop:	move.w	d1,d4
+	move.w	d2,d3
+	lsr.w	#8,d4
+	move.b	d4,d3
+	move.w	(a1,d3.l*2),(a0)+
+	add.w	d0,d1
+	bcc.s	.xloop
+
+	add.w	d0,d2
+	cmpi.w	#200<<8,d2
+	blo.s	.yloop
+
+	addq.w	#1,d7
+	cmpi.w	#Radial.SCALES,d7
+	blt.s	.loop
+	rts
+
+; Fills picadr- and width- tables.
+Radial.fillScaleTables:
+; Make pointer table to scaled piccies.
+	lea	Radial.picAddys,a0
+	movea.l	Radial.baseAdr,a1
+	movea.l	a1,a2
+	adda.l	#Radial.scaledPic1,a2
+	move.l	a2,(a0)+
+	movea.l	a1,a2
+	adda.l	#Radial.scaledPic2,a2
+	move.l	a2,(a0)+
+	movea.l	a1,a2
+	adda.l	#Radial.scaledPic3,a2
+	move.l	a2,(a0)+
+	movea.l	a1,a2
+	adda.l	#Radial.scaledPic4,a2
+	move.l	a2,(a0)+
+	movea.l	a1,a2
+	adda.l	#Radial.scaledPic5,a2
+	move.l	a2,(a0)+
+
+
+	clr.l	d7
+
+.loop:	move.w	(Radial.scaleTable,d7.l*2),d0
+	add.w	d0,d0
+
+; Measure linewidth (in bytes).
+	clr.w	d1
+	moveq	#0,d6
+.count_width_loop:
+	addq.w	#1,d6
+	add.w	d0,d1
+	bcc.s	.count_width_loop
+	subi.w	#160,d6
+	add.w	d6,d6
+	move.w	d6,(Radial.widthTable,d7.l*2)
+
+	addq.w	#1,d7
+	cmpi.w	#Radial.SCALES,d7
+	blt.s	.loop
+	rts
+
+
+; Scale the shit!
+; INPUT:
+; d7.l=picnum
+Radial.scalePic:
+	clr.l	d3
+	move.w	(Radial.scaleTable,d7.l*2),d0
+	add.w	d0,d0
+	movea.l	(Radial.picAddys,d7.l*4),a0
+	movea.l	Radial.baseAdr,a1
+	adda.l	#Radial.pic,a1
+	clr.w	d2
+
+; Scale picture..
+.yloop:	clr.w	d1
+
+.xloop:	move.w	d1,d4
+	move.w	d2,d3
+	lsr.w	#8,d4
+	move.b	d4,d3
+	move.w	(a1,d3.l*2),(a0)+
+	add.w	d0,d1
+	bcc.s	.xloop
+
+	add.w	d0,d2
+	cmpi.w	#200<<8,d2
+	blo.s	.yloop
+
+	rts
+
+; OUTPUT:
+; a0: centered picture
+Radial.calcPicAddy:
+	movea.l	Radial.baseAdr,a0
+	adda.l	#Radial.pic,a0
+	move.w	$04BC.w,d0
+	move.w	d0,d1
+;	mulu.w	#3,d0
+	mulu.w	#5,d1
+	lsr.l	#2,d1
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	Get_Sin	sine_tbl,d0,d0
+	Get_Sin	sine_tbl,d1,d1
+	muls.w	#256-160,d0
+	muls.w	#200-100,d1
+	swap	d0
+	swap	d1
+	addi.w	#(256-160)/2,d0
+	addi.w	#(200-100)/2,d1
+	ext.l	d0
+	mulu.w	#256,d1
+	add.l	d0,d1
+	lea	(a0,d1.l*2),a0
+	rts
+
+; OUTPUT:
+; d0.w=x center (16b signed frac)
+; d1.w=y center (16b signed frac)
+Radial.calcPicCenter:
+	move.w	$04BC.w,d0
+	move.w	d0,d2
+	move.w	d0,d1
+;	mulu.w	#3,d0
+	mulu.w	#5,d1
+	lsr.l	#2,d1
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	Get_Sin	sine_tbl,d0,d0
+	Get_Sin	sine_tbl,d1,d1
+
+	sub.w	Radial.startTime,d2
+	lsr.w	#2,d2
+	cmpi.w	#256,d2
+	blt.s	.ok
+	move.w	#256,d2
+.ok:
+
+	muls.w	d2,d0
+	muls.w	d2,d1
+	asr.l	#8,d0
+	asr.l	#8,d1
+	rts
+
+; INPUT:
+; d0.w=x center, d1.w=y center (signed frac)
+Radial.blurPics:
+	movea.l	Radial.baseAdr,a0
+	adda.l	#Radial.pic+(256*50+128-80)*2,a0
+	clr.l	d3
+	move.w	d0,d2
+	move.w	d1,d3
+	muls.w	#256-160,d2
+	muls.w	#200-100,d3
+	swap	d2
+	swap	d3
+	ext.l	d2
+	ext.l	d3
+	lsl.l	#8,d3
+	add.l	d2,d3
+	lea	(a0,d3.l*2),a0
+
+	movea.l	Radial.baseAdr,a1
+	adda.l	#Radial.scaledPic1+Radial.M1*2,a1
+	clr.l	d3
+	move.w	d0,d2
+	move.w	d1,d3
+	muls.w	#(256-160)*256/Radial.SCALE1,d2
+	muls.w	#(200-100)*256/Radial.SCALE1,d3
+	swap	d2
+	swap	d3
+	ext.l	d2
+	muls.w	#Radial.W1,d3
+	add.l	d2,d3
+	lea	(a1,d3.l*2),a1
+
+	movea.l	Radial.baseAdr,a2
+	adda.l	#Radial.scaledPic2+Radial.M2*2,a2
+	clr.l	d3
+	move.w	d0,d2
+	move.w	d1,d3
+	muls.w	#(256-160)*256/Radial.SCALE2,d2
+	muls.w	#(200-100)*256/Radial.SCALE2,d3
+	swap	d2
+	swap	d3
+	ext.l	d2
+	muls.w	#Radial.W2,d3
+	add.l	d2,d3
+	lea	(a2,d3.l*2),a2
+
+	movea.l	Radial.baseAdr,a3
+	adda.l	#Radial.scaledPic3+Radial.M3*2,a3
+	clr.l	d3
+	move.w	d0,d2
+	move.w	d1,d3
+	muls.w	#(256-160)*256/Radial.SCALE3,d2
+	muls.w	#(200-100)*256/Radial.SCALE3,d3
+	swap	d2
+	swap	d3
+	ext.l	d2
+	muls.w	#Radial.W3,d3
+	add.l	d2,d3
+	lea	(a3,d3.l*2),a3
+
+	movea.l	Radial.baseAdr,a4
+	adda.l	#Radial.scaledPic4+Radial.M4*2,a4
+	clr.l	d3
+	move.w	d0,d2
+	move.w	d1,d3
+	muls.w	#(256-160)*256/Radial.SCALE4,d2
+	muls.w	#(200-100)*256/Radial.SCALE4,d3
+	swap	d2
+	swap	d3
+	ext.l	d2
+	muls.w	#Radial.W4,d3
+	add.l	d2,d3
+	lea	(a4,d3.l*2),a4
+
+	movea.l	Radial.baseAdr,a5
+	adda.l	#Radial.scaledPic5+Radial.M5*2,a5
+	clr.l	d3
+	move.w	d0,d2
+	move.w	d1,d3
+	muls.w	#(256-160)*256/Radial.SCALE5,d2
+	muls.w	#(200-100)*256/Radial.SCALE5,d3
+	swap	d2
+	swap	d3
+	ext.l	d2
+	muls.w	#Radial.W5,d3
+	add.l	d2,d3
+	lea	(a5,d3.l*2),a5
+
+	movea.l	scr,a6
+	moveq	#100-1,d7
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	RadialBlur.paintVga60
+	cmpi.w	#vga100,d0
+	beq.s	RadialBlur.paintVga100
+	cmpi.w	#rgb50,d0
+	beq.s	RadialBlur.paintRgb50
+; Unknown monitormode..
+;	rts
+
+RadialBlur.paintVga100:
+.yloop:	moveq	#80-1,d6
+
+.xloop:	move.l	(a0)+,d0
+	add.l	(a1)+,d0
+	add.l	(a2)+,d0
+	add.l	(a3)+,d0
+	add.l	(a4)+,d0
+	add.l	(a5)+,d0
+	move.l	d0,(a6)+
+	dbf	d6,.xloop
+
+	movem.w	Radial.widthTable,d1-d5
+	adda.w	#(256-160)*2,a0
+	adda.l	d1,a1
+	adda.l	d2,a2
+	adda.l	d3,a3
+	adda.l	d4,a4
+	adda.l	d5,a5
+	dbf	d7,.yloop
+	rts
+
+RadialBlur.paintVga60:
+.yloop:	moveq	#80-1,d6
+
+.xloop:	move.l	(a0)+,d0
+	add.l	(a1)+,d0
+	add.l	(a2)+,d0
+	add.l	(a3)+,d0
+	add.l	(a4)+,d0
+	add.l	(a5)+,d0
+	move.l	d0,160*2(a6)
+	move.l	d0,(a6)+
+	dbf	d6,.xloop
+
+	movem.w	Radial.widthTable,d1-d5
+	adda.w	#(256-160)*2,a0
+	adda.l	d1,a1
+	adda.l	d2,a2
+	adda.l	d3,a3
+	adda.l	d4,a4
+	adda.l	d5,a5
+	adda.w	#160*2,a6
+	dbf	d7,.yloop
+	rts
+
+RadialBlur.paintRgb50:
+.yloop:	moveq	#80-1,d6
+
+.xloop:	move.l	(a0)+,d0
+	add.l	(a1)+,d0
+	add.l	(a2)+,d0
+	add.l	(a3)+,d0
+	add.l	(a4)+,d0
+	add.l	(a5)+,d0
+	move.l	d0,d1
+	swap	d1
+	move.w	d0,d1
+	move.l	d1,(a6)+
+	move.w	d0,(a6)+
+	move.w	d0,(a6)+
+	dbf	d6,.xloop
+
+	movem.w	Radial.widthTable,d1-d5
+	adda.w	#(256-160)*2,a0
+	adda.l	d1,a1
+	adda.l	d2,a2
+	adda.l	d3,a3
+	adda.l	d4,a4
+	adda.l	d5,a5
+	dbf	d7,.yloop
+	rts
+
+;======= OBJECT DATA ========
+
+	DATA
+
+Radial.textureTable:
+	DC.L	0
+
+Radial.gouPoly:
+	DC.W	0
+	DC.W	4
+	DC.W	-025+128,+030+100,000
+	DC.W	-005+128,-010+100,000
+	DC.W	+000+128,-060+100,255
+	DC.W	-060+128,+060+100,255
+Radial.gouPoly2:
+	DC.W	0
+	DC.W	4
+	DC.W	+000+128,-060+100,255
+	DC.W	-005+128,-010+100,000
+	DC.W	+015+128,+030+100,000
+	DC.W	+060+128,+060+100,255
+Radial.gouPoly3:
+	DC.W	0
+	DC.W	4
+	DC.W	-060+128,+060+100,255
+	DC.W	+060+128,+060+100,255
+	DC.W	+015+128,+030+100,000
+	DC.W	-025+128,+030+100,000
+
+Radial.scaleTable:
+	DC.W	Radial.SCALE1/2
+	DC.W	Radial.SCALE2/2
+	DC.W	Radial.SCALE3/2
+	DC.W	Radial.SCALE4/2
+	DC.W	Radial.SCALE5/2
+
+Radial.colInstTable:
+	DC.W	(.end-.start)/4-1
+	DC.W	4
+.start:	DC.L	$00000000
+	DC.L	$7f7f007f
+	DC.L	$ffff00ff
+	DC.L	$ffff00ff
+	DC.L	$FFFF00FF
+	DC.L	$ffff00ff
+	DC.L	$ffff00ff
+	DC.L	$7f7f007F
+	DC.L	$00000000
+.end:
+
+;======= OBJECT RESERVES ========
+
+	BSS
+
+Radial.pal:
+	DS.W	128
+Radial.widthTable:
+	DS.W	Radial.SCALES
+Radial.picAddys:
+	DS.L	Radial.SCALES
+Radial.baseAdr:
+	DS.L	1
+Radial.startTime:
+	DS.W	1
+Radial.rectTable:
+	DS.W	100
+
+;======= END OF DEMO-EFFECT OBJECT ========

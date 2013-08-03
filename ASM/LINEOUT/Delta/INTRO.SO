@@ -1,0 +1,677 @@
+; Intro screen for 'delta'.
+; Uses some 'stripes' and 3d wireframe.
+
+;======= OBJECT EQUATES ====================================================
+
+			RSRESET
+Intro.PAL:		RS.W	256
+Intro.STRIPTABLE:	RS.L	320				; start.w, width.w
+Intro.LOGO:		RS.W	320*200
+Intro.RECTBUFFER:	RS.W	100
+Intro.PICPAL:		RS.W	256
+Intro.BLOCK_SIZE:	RS.B	0
+
+;======= OBJECT TABLE ======================================================
+
+; Must be first in object!!
+Intro.table:
+	DC.L	Intro.mainLoop
+	DC.L	Intro.init
+	DC.L	rts
+	DC.L	Intro.setEarxLogo
+	DC.L	Intro.setPresentsLogo
+	DC.L	Intro.setDeltaRout
+	DC.L	0
+
+	IFND	DEMO_SYSTEM
+	INCLUDE	SFLY_DSP.S
+	TEXT
+	ENDC
+
+;======= INIT SUBROUTINE ===================================================
+
+; OUTPUT:
+; d0.l: =0: All clear, <0: Error, not initialized!
+Intro.init:
+	move.l	#Intro.BLOCK_SIZE,d0
+	bsr.l	Mem.register
+
+	lea	sine_tbl,a1
+	bsr.l	Matrix.init
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= REALTIME INIT SUBROUTINE ==========================================
+
+Intro.realtimeInit:
+	move.l	#rts,vbl_gfx
+
+	bsr.l	Mem.getBlock
+	move.l	d0,Intro.baseAdr
+
+	bsr.l	HumanFly.init
+
+	lea	Viewport.settingsTable,a0
+	move.w	#320,Viewport.XSCREEN(a0)
+	move.w	#200,Viewport.YSCREEN(a0)
+	move.w	#0,Viewport.XSTART(a0)
+	move.w	#0,Viewport.YSTART(a0)
+	move.w	#320,Viewport.XEND(a0)
+	move.w	#200,Viewport.YEND(a0)
+	move.w	#160,Viewport.XCENTER(a0)
+	move.w	#100,Viewport.YCENTER(a0)
+	move.w	#256+32,Viewport.ASPECT(a0)
+	move.w	#$100,Viewport.FOCAL(a0)
+	bsr.l	Viewport.update
+
+	movea.l	Intro.baseAdr,a0
+	adda.l	#Intro.PAL,a0
+	lea	Intro.flowTable,a1
+	bsr.l	Pal.makeGradientHc
+
+	lea	Intro.textureTable,a0
+	movea.l	Intro.baseAdr,a1
+	adda.l	#Intro.PAL,a1
+	bsr.l	Polygon.init
+
+; Clear 2nd palette..
+	movea.l	Intro.baseAdr,a0
+	adda.l	#Intro.PAL+128*2,a0
+	moveq	#128/2-1,d7
+	clr.l	d0
+.clearloop:
+	move.l	d0,(a0)+
+	dbf	d7,.clearloop
+
+	bsr.l	ObjectRegistry.clear
+
+	lea	Intro.deltaLined,a0
+	move.l	#Intro.deltaLinedEnd-Intro.deltaLined,d0
+	bsr.l	ObjectRegistry.set
+
+	lea	Intro.deltaShadow,a0
+	move.l	#Intro.deltaShadowEnd-Intro.deltaShadow,d0
+	bsr.l	ObjectRegistry.set
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+; Unknown monitormode..
+	rts
+.vga60:	move.l	#vga60_16bit_320_200,Intro.resRout
+	rts
+.vga100:move.l	#vga100_16bit_320_200,Intro.resRout
+	rts
+.rgb50:	move.l	#rgb50_16bit_320_200,Intro.resRout
+	rts
+
+;======= SCREENINIT SUBROUTINE =============================================
+
+Intro.initScreen:
+	movea.l	scr,a0
+	bsr.l	CLEAR_320200TSCR
+	rts
+
+;======= MAINLOOP SUBROUTINE ===============================================
+
+Intro.mainLoop:
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr.w	Intro.realtimeInit
+	move.l	(sp)+,d0
+.end_realtime_init:
+	move.w	Intro.newLogo,d1
+	subq.w	#1,d1
+	bmi.s	.check_intro_start
+	move.w	d1,Intro.newLogo
+	bra.s	.end_screeninit
+.check_intro_start:
+	cmpi.l	#1,d0
+	bhs.s	.end_screeninit
+	bsr.w	Intro.initScreen
+.end_screeninit:
+
+	movea.l	Intro.paintRout,a0
+	jsr	(a0)
+
+	moveq	#1,d2				; d2.w=#vbls
+	move.w	$0468.w,d0
+	cmpi.w	#vga100,monitormode
+	bne.s	.ck468
+	moveq	#2,d2				; d2.w=#vbls
+.ck468:	move.w	$0468.w,d1
+	sub.w	d0,d1
+	cmp.w	d2,d1
+	blt.s	.ck468
+
+	movea.l	Intro.resRout,a0
+	suba.l	a1,a1
+	movea.l	scr,a2
+	bsr.l	Screen.requestUpdate
+	clr.l	Intro.resRout
+	rts
+
+;======= OBJECT SUBROUTINES ================================================
+
+Intro.setEarxLogo:
+	bsr	Intro.paintPic
+	bsr	Intro.initStrips
+	rts
+
+Intro.setPresentsLogo:
+	movea.l	Intro.baseAdr,a0
+	adda.l	#Intro.LOGO,a0
+	bsr.l	CLEAR_320200TSCR
+	bsr	Intro.paintPresents
+	bsr	Intro.initStrips
+	rts
+
+Intro.setDeltaRout:
+	move.l	#Intro.paintDelta,Intro.paintRout
+	move.l	frmcnt,Intro.startFrame
+	move.l	$04BA.w,Intro.zoomStart
+	rts
+
+Intro.initStrips:
+; Create strips ordered left to right.
+	movea.l	Intro.baseAdr,a0
+	adda.l	#Intro.STRIPTABLE,a0
+	move.l	random,d0
+	clr.w	d6
+	clr.w	d5
+	move.w	#320,d7
+
+.loop:	move.l	d0,d1
+	mulu.w	d0,d0
+	rol.l	d1,d0
+	eor.l	d1,d0
+	addq.l	#5,d0
+	move.w	d0,d2
+	andi.w	#$0007,d2			; d2.w=width-1
+	move.w	d5,(a0)+			; Store start.
+	move.w	d2,(a0)+			; Store width-1.
+	addq.w	#1,d6
+	addq.w	#1,d2				; d2.w=width
+	add.w	d2,d5				; d5.w=curwidth+width
+	sub.w	d2,d7				; d7.w=remaining width
+	bgt.s	.loop
+
+	add.w	d7,-(a0)			; Adjust last width.
+	move.w	d6,Intro.numStrips		; Store #strips.
+
+	move.l	d0,random
+
+; Now mess up the ordering a bit..
+	moveq	#100-1,d7
+	movea.l	Intro.baseAdr,a0
+	adda.l	#Intro.STRIPTABLE,a0
+	move.l	random,d0
+
+.mess_loop:
+; Calc random pairs..
+	move.l	d0,d1
+	mulu.w	d0,d0
+	eor.l	d1,d0
+	rol.l	d1,d0
+	addq.l	#5,d0
+
+	clr.l	d2
+	move.w	d0,d2
+	divu.w	Intro.numStrips,d2
+	swap	d2
+	move.l	d0,d3
+	clr.w	d3
+	swap	d3
+	divu.w	Intro.numStrips,d3
+	swap	d3
+; d2.w=first index, d3.w=second index
+
+; Swap the pair.
+	move.l	(a0,d2.w*4),d4
+	move.l	(a0,d3.w*4),(a0,d2.w*4)
+	move.l	d4,(a0,d3.w*4)
+
+	dbf	d7,.mess_loop
+
+	move.l	d0,random
+
+; Set #strips done to zero.
+	clr.w	Intro.stripsDone
+	move.w	#1,Intro.newLogo
+	move.l	#Intro.paintStrips,Intro.paintRout
+	rts
+
+Intro.paintPic:
+	lea	Intro.logoPic+20,a1
+	movea.l	Intro.baseAdr,a0
+	adda.l	#Intro.PICPAL,a0
+	move.w	#256,d7
+	bsr.l	convertTc2Hc	
+
+	lea	Intro.logoPic+788,a1
+	movea.l	Intro.baseAdr,a0
+	movea.l	a0,a2
+	adda.l	#Intro.LOGO,a0
+	adda.l	#Intro.PICPAL,a2
+	move.w	#320*200/10-1,d7
+	clr.l	d0
+.loop:
+	REPT	10
+	move.b	(a1)+,d0			; d0.l=colorindex
+	move.w	(a2,d0.l*2),(a0)+		; Index and store highcolor pixel.
+	ENDR
+	dbf	d7,.loop
+	rts
+
+Intro.paintPresents:
+	lea	Font.pic,a1
+	movea.l	Intro.baseAdr,a0
+	adda.l	#Intro.LOGO+(74*320+44)*2,a0
+
+; 'p'
+	movea.l	a1,a2
+	adda.l	#(130*320+4)*2,a2
+	moveq	#56-1,d7
+
+.p_yloop:
+	moveq	#33-1,d6
+
+.p_xloop:
+	move.w	(a2)+,(a0)+
+	dbf	d6,.p_xloop
+
+	adda.w	#(320-33)*2,a0
+	adda.w	#(320-33)*2,a2
+	dbf	d7,.p_yloop
+
+	adda.l	#(36-56*320)*2,a0
+
+; 'r'
+	movea.l	a1,a2
+	adda.w	#116*2,a2
+	moveq	#45-1,d7
+
+.r_yloop:
+	moveq	#17-1,d6
+
+.r_xloop:
+	move.w	(a2)+,(a0)+
+	dbf	d6,.r_xloop
+
+	adda.w	#(320-17)*2,a0
+	adda.w	#(320-17)*2,a2
+	dbf	d7,.r_yloop
+
+	adda.w	#(18-45*320)*2,a0
+
+; 'e'
+	movea.l	a1,a2
+	adda.w	#38*2,a2
+	moveq	#45-1,d7
+
+.e_yloop:
+	moveq	#34-1,d6
+
+.e_xloop:
+	move.w	(a2)+,(a0)+
+	dbf	d6,.e_xloop
+
+	adda.w	#(320-34)*2,a0
+	adda.w	#(320-34)*2,a2
+	dbf	d7,.e_yloop
+
+	adda.w	#(36-45*320)*2,a0
+
+; 's'
+	movea.l	a1,a2
+	adda.l	#(130*320+41)*2,a2
+	moveq	#45-1,d7
+
+.s_yloop:
+	moveq	#23-1,d6
+
+.s_xloop:
+	move.w	(a2)+,(a0)+
+	dbf	d6,.s_xloop
+
+	adda.w	#(320-23)*2,a0
+	adda.w	#(320-23)*2,a2
+	dbf	d7,.s_yloop
+
+	adda.w	#(26-45*320)*2,a0
+
+; 'e' (second)
+	movea.l	a1,a2
+	adda.w	#38*2,a2
+	moveq	#45-1,d7
+
+.e2_yloop:
+	moveq	#34-1,d6
+
+.e2_xloop:
+	move.w	(a2)+,(a0)+
+	dbf	d6,.e2_xloop
+
+	adda.w	#(320-34)*2,a0
+	adda.w	#(320-34)*2,a2
+	dbf	d7,.e2_yloop
+
+	adda.w	#(36-45*320)*2,a0
+
+; 'n'
+	movea.l	a1,a2
+	adda.l	#(130*320+70)*2,a2
+	moveq	#45-1,d7
+
+.n_yloop:
+	moveq	#29-1,d6
+
+.n_xloop:
+	move.w	(a2)+,(a0)+
+	dbf	d6,.n_xloop
+
+	adda.w	#(320-29)*2,a0
+	adda.w	#(320-29)*2,a2
+	dbf	d7,.n_yloop
+
+	adda.w	#(32-45*320)*2,a0
+
+; 't'
+	movea.l	a1,a2
+	adda.w	#209*2,a2
+	moveq	#45-1,d7
+
+.t_yloop:
+	moveq	#17-1,d6
+
+.t_xloop:
+	move.w	(a2)+,(a0)+
+	dbf	d6,.t_xloop
+
+	adda.w	#(320-17)*2,a0
+	adda.w	#(320-17)*2,a2
+	dbf	d7,.t_yloop
+
+	adda.w	#(20-45*320)*2,a0
+
+; 's' (second)
+	movea.l	a1,a2
+	adda.l	#(130*320+41)*2,a2
+	moveq	#45-1,d7
+
+.s2_yloop:
+	moveq	#23-1,d6
+
+.s2_xloop:
+	move.w	(a2)+,(a0)+
+	dbf	d6,.s2_xloop
+
+	adda.w	#(320-23)*2,a0
+	adda.w	#(320-23)*2,a2
+	dbf	d7,.s2_yloop
+
+	rts
+
+Intro.paintStrips:
+	movea.l	scr,a0
+	movea.l	Intro.baseAdr,a1
+	movea.l	a1,a2
+	adda.l	#Intro.LOGO,a1
+	adda.l	#Intro.STRIPTABLE,a2
+	move.w	Intro.numStrips,d7
+	move.w	Intro.stripsDone,d0
+	cmp.w	d0,d7
+	beq.s	.end
+
+	lea	(a2,d0.w*4),a2
+	move.w	(a2)+,d1			; d1.w=start
+	add.w	d1,d1
+	adda.w	d1,a0
+	adda.w	d1,a1
+	move.w	(a2)+,d0			; d0.w=stripwidth-1
+	movea.w	#320,a6
+	suba.w	d0,a6
+	subq	#1,a6
+	adda.l	a6,a6
+	move.w	#200-1,d7
+
+.yloop:	move.w	d0,d6
+
+.xloop:	move.w	(a1)+,(a0)+
+	dbf	d6,.xloop
+
+	adda.l	a6,a0
+	adda.l	a6,a1
+	dbf	d7,.yloop
+
+	addq.w	#1,Intro.stripsDone
+
+.end:	rts
+
+Intro.paintDelta:
+; Swap screens.
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+
+	movea.l	scr,a0
+	bsr.l	Primitive.setScreenbuffer
+
+; Wipe old..
+	move.l	frmcnt,d0
+	sub.l	Intro.startFrame,d0
+	subq.l	#1,d0
+	bgt.s	.clear_deltas
+	movea.l	scr,a0
+	bsr.l	CLEAR_320200TSCR
+	bra.s	.wiping_done
+
+.clear_deltas:
+	bsr.l	PrimitiveMesh.new	
+
+	move.w	.time+2(pc),d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#3,d1
+	mulu.w	#7,d2
+	lsr.l	#2,d1
+	lsr.l	#2,d2
+	bsr.l	Matrix.generate
+	clr.w	d0
+	clr.w	d1
+	move.w	.time+2(pc),d2
+	sub.w	Intro.zoomStart+2,d2
+	addi.w	#200,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#1,d1
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+
+	bsr.l	PrimitiveMesh.complete
+
+; parallel shit!
+;	clr.w	Intro.pal+64*2
+; end of parallel shit!
+	movea.l	Intro.baseAdr,a0
+	adda.l	#Intro.RECTBUFFER,a0
+	bsr.l	PrimitiveMesh.paint
+.wiping_done:
+
+; Time stuffs.
+	move.w	.time(pc),.time+2
+	move.w	$04BC.w,.time
+
+; Paint new..
+	bsr.l	PrimitiveMesh.new	
+
+	move.w	.time(pc),d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#3,d1
+	mulu.w	#7,d2
+	lsr.l	#2,d1
+	lsr.l	#2,d2
+	bsr.l	Matrix.generate
+	clr.w	d0
+	clr.w	d1
+	move.w	.time(pc),d2
+	sub.w	Intro.zoomStart+2,d2
+	addi.w	#200,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+
+	bsr.l	PrimitiveMesh.sortZ
+
+	bsr.l	PrimitiveMesh.complete
+
+; parallel shit!
+;	move.w	#$FFFF,Intro.pal+64*2
+; end of parallel shit!
+
+	movea.l	Intro.baseAdr,a0
+	adda.l	#Intro.RECTBUFFER,a0
+	bsr.l	PrimitiveMesh.paint
+	rts
+
+.time:	DC.W	0
+	DC.W	0
+
+;======= OBJECT DATA =======================================================
+
+	DATA
+
+Intro.paintRout:
+	DC.L	rts
+
+Intro.textureTable:
+	DC.L	0
+
+Intro.deltaLined:
+	DC.W	18,9
+	DC.W	-140,128-50,0
+	DC.W	0,-120-50,0
+	DC.W	140,128-50,0
+	DC.W	-70,84-50,0
+	DC.W	0,-40-50,0
+	DC.W	70,84-50,0
+	DC.W	-100,106-50,40
+	DC.W	0,-80-50,40
+	DC.W	100,106-50,40
+
+	DC.W	-105,+058,+000
+	DC.W	+000,-127,+000
+	DC.W	+105,+058,+000
+	DC.W	-052,+025,+000
+	DC.W	+000,-068,+000
+	DC.W	+052,+025,+000
+	DC.W	-075,+042,+030
+	DC.W	+000,-098,+030
+	DC.W	+075,+042,+030
+
+	DC.W	0
+
+	DC.W	18
+	DC.W	Primitive.LINETYPE|Polygon.PHONGSHADED,0,1,9,10
+	DC.W	Primitive.LINETYPE|Polygon.PHONGSHADED,1,2,10,11
+	DC.W	Primitive.LINETYPE|Polygon.PHONGSHADED,2,0,11,9
+	DC.W	Primitive.LINETYPE|Polygon.PHONGSHADED,3,4,12,13
+	DC.W	Primitive.LINETYPE|Polygon.PHONGSHADED,4,5,13,14
+	DC.W	Primitive.LINETYPE|Polygon.PHONGSHADED,5,3,14,12
+	DC.W	Primitive.LINETYPE|Polygon.PHONGSHADED,6,7,15,16
+	DC.W	Primitive.LINETYPE|Polygon.PHONGSHADED,7,8,16,17
+	DC.W	Primitive.LINETYPE|Polygon.PHONGSHADED,8,6,17,15
+	DC.W	Primitive.LINETYPE|Polygon.PHONGSHADED,0,3,9,12
+	DC.W	Primitive.LINETYPE|Polygon.PHONGSHADED,3,6,12,15
+	DC.W	Primitive.LINETYPE|Polygon.PHONGSHADED,6,0,15,9
+	DC.W	Primitive.LINETYPE|Polygon.PHONGSHADED,1,4,10,13
+	DC.W	Primitive.LINETYPE|Polygon.PHONGSHADED,4,7,13,16
+	DC.W	Primitive.LINETYPE|Polygon.PHONGSHADED,7,1,16,10
+	DC.W	Primitive.LINETYPE|Polygon.PHONGSHADED,2,5,11,14
+	DC.W	Primitive.LINETYPE|Polygon.PHONGSHADED,5,8,14,17
+	DC.W	Primitive.LINETYPE|Polygon.PHONGSHADED,8,2,17,11
+Intro.deltaLinedEnd:
+
+Intro.deltaShadow:
+	DC.W	9,0
+	DC.W	-140,128-50,0
+	DC.W	0,-120-50,0
+	DC.W	140,128-50,0
+	DC.W	-70,84-50,0
+	DC.W	0,-40-50,0
+	DC.W	70,84-50,0
+	DC.W	-100,106-50,40
+	DC.W	0,-80-50,40
+	DC.W	100,106-50,40
+
+	DC.W	0
+
+	DC.W	18
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED|1,0,1
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED|1,1,2
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED|1,2,0
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED|1,3,4
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED|1,4,5
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED|1,5,3
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED|1,6,7
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED|1,7,8
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED|1,8,6
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED|1,0,3
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED|1,3,6
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED|1,6,0
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED|1,1,4
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED|1,4,7
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED|1,7,1
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED|1,2,5
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED|1,5,8
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED|1,8,2
+Intro.deltaShadowEnd:
+
+Intro.flowTable:
+	DC.W	1
+	DC.W	7
+.start:	DC.L	$ffff00ff
+	DC.L	$00000000
+.end:
+
+Intro.logoPic:
+	INCBIN	LOGO.APX
+
+;======= OBJECT RESERVES ===================================================
+
+	BSS
+
+Intro.numStrips:
+	DS.W	1
+Intro.stripsDone:
+	DS.W	1
+Intro.newLogo:
+	DS.W	1
+Intro.startFrame:
+	DS.L	1
+Intro.zoomStart:
+	DS.L	1
+Intro.baseAdr:
+	DS.L	1
+Intro.resRout:
+	DS.L	1

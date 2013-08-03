@@ -1,0 +1,1011 @@
+; A voxelspace rout for delta demo.
+; Based on the one in FungleBeats. Slightly faster when tilt is turned off.
+; Perspective correct and free directional.
+
+;======= OBJECT EQUATES ========
+
+Voxel.GENERATE:	=	1
+
+; Voxel controlling values
+raylength:	=	64			; The bigger, the further the view stretches.
+tunnelvision:	=	12			; The lower, the wider the view.
+
+			RSRESET
+Voxel.heightMap:	RS.B	256*256
+Voxel.colorMap:		RS.W	256*256
+Voxel.zheight_tbl:	RS.W	raylength*$100
+Voxel.cosMulTable:	RS.W	160*raylength
+Voxel.BLOCK_SIZE:	RS.B	0
+
+;======= OBJECT TABLE ========
+
+* Must be first in object!!
+Voxel.table:
+	DC.L	DEMOFXMAINLOOP
+	DC.L	INIT_DEMOFX
+	DC.L	rts
+	DC.L	Voxel.setForward
+	DC.L	Voxel.goLeft
+	DC.L	Voxel.goRight
+	DC.L	Voxel.setFall
+	DC.L	0
+
+;======= INIT SUBROUTINE ========
+
+* OUTPUT: d0.l: 0   = All clear.
+*               neg = Error! Not initialized!
+INIT_DEMOFX:
+	move.l	#Voxel.BLOCK_SIZE,d0
+	bsr.l	Mem.register
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+Voxel.initRealtime:
+	bsr.l	Mem.getBlock
+	move.l	d0,Voxel.baseAdr
+
+; perspective, rotation precalcs
+	bsr	CALC_PERSPTABLES
+	bsr	CALC_DISTTABLE
+
+	bsr	Voxel.calcCosMulTable
+
+; texture precalcs
+	lea	Voxel.goldInstTable,a1
+	lea	Voxel.goldPal,a0
+	bsr.l	Pal.makeGradientHc
+
+	lea	Voxel.chromeInstTable,a1
+	lea	Voxel.chromePal,a0
+	bsr.l	Pal.makeGradientHc
+
+	bsr	Voxel.genMaps
+
+	bsr	Voxel.setFall
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+* Unknown monitormode..
+.vga60:	move.l	#Voxel.paintVga60,Voxel.paintRout
+	move.l	#vga60_16bit_160_200,Voxel.resRout
+	rts
+.vga100:move.l	#Voxel.paintVga100,Voxel.paintRout
+	move.l	#vga100_16bit_160_100,Voxel.resRout
+	rts
+.rgb50:	move.l	#Voxel.paintRgb50,Voxel.paintRout
+	move.l	#rgb50_16bit_320_100,Voxel.resRout
+	rts
+
+;======= SCREENINIT SUBROUTINE ========
+
+INIT_DEMOFXSCREEN:
+	movea.l	scr,a0
+	bra.l	CLEAR_320100TSCR
+
+;======= MAINLOOP SUBROUTINE ========
+
+DEMOFXMAINLOOP:
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.init_done
+	move.l	d0,-(sp)
+	bsr	Voxel.initRealtime
+	move.l	(sp)+,d0
+.init_done:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr	INIT_DEMOFXSCREEN
+.end_screeninit:
+
+	bsr	UPDATE_OBSERVER
+
+	tst.w	Voxel.fallOn
+	beq.s	.fall_done
+	bsr	Voxel.fallDown
+.fall_done:
+
+	IFNE	Voxel.GENERATE
+	movea.l	Voxel.baseAdr,a1
+	movea.l	a1,a2
+	adda.l	#Voxel.colorMap,a1
+	adda.l	#Voxel.heightMap,a2
+	ELSE
+	lea	color_pic+20,a1
+	lea	height_pic,a2
+	ENDC
+
+	move.l	Voxel.paintRout,a0
+	jsr	(a0)
+
+	lea	skyadr_tbl,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,-8(a0)
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+
+	movea.l	Voxel.resRout,a0
+	suba.l	a1,a1
+	move.l	d0,a2
+.again:	bsr.l	Screen.requestUpdate
+	tst.l	d0
+	bmi.s	.again
+	clr.l	Voxel.resRout
+	rts
+
+;======= OBJECT SUBROUTINES ========
+
+	TEXT
+
+Voxel.setForward:
+	move.w	#64,speed
+	rts
+
+Voxel.goLeft:
+	move.w	playerangle,Voxel.oldAngle
+	move.l	$04BC.w,Voxel.turnStart
+	move.w	#-1,Voxel.turnDirection
+	rts
+
+Voxel.goRight:
+	move.w	playerangle,Voxel.oldAngle
+	move.l	$04BC.w,Voxel.turnStart
+	move.w	#+1,Voxel.turnDirection
+	rts
+
+Voxel.setFall:
+	clr.w	Voxel.turnDirection
+	clr.w	playerangle
+	clr.w	Voxel.oldAngle
+	clr.w	playerx
+	clr.w	playery
+	st	Voxel.fallOn
+	move.l	$04BA.w,Voxel.fallStart
+	rts
+
+Voxel.fallDown:
+	move.l	$04BA.w,d0
+	sub.l	Voxel.fallStart,d0
+	lsl.l	#3,d0
+	neg.l	d0
+	addi.w	#8000,d0
+	cmpi.w	#2000,d0
+	bhs.s	.ok
+	move.w	#2000,elevation
+	clr.w	Voxel.fallOn
+	rts
+.ok	move.w	d0,elevation
+	rts
+
+; Generates heightfield and texture...
+Voxel.genMaps:
+	move.w	#256,d6
+	move.w	#256,d7
+	movea.l	Voxel.baseAdr,a0
+	adda.l	#Voxel.colorMap,a0
+	bsr	Voxel.genMarble
+
+; First, generate the heightfield.
+; This is simply done by scaling up a blocky maze to 8*8 blocks.
+; 32*32 -> 256*256
+	lea	Voxel.maze+788,a1
+	movea.l	Voxel.baseAdr,a0
+	adda.l	#Voxel.heightMap,a0
+	moveq	#32-1,d7
+
+.h_yloop:
+	moveq	#32-1,d6
+
+.h_xloop:
+	move.b	(a1)+,d0
+	lsr.b	#3,d0
+	move.w	d0,d1
+	lsl.w	#8,d1
+	move.b	d0,d1
+	move.l	d1,d2
+	swap	d2
+	move.w	d1,d2
+	moveq	#8-1,d5
+
+.h_blockloop:
+	move.l	d2,(a0)+
+	move.l	d2,(a0)+
+	adda.w	#256-8,a0
+	dbf	d5,.h_blockloop
+
+	suba.w	#256*8-8,a0
+	dbf	d6,.h_xloop
+
+	adda.w	#256*7,a0
+	dbf	d7,.h_yloop
+
+; Secondly, make the colortexture.
+	movea.l	Voxel.baseAdr,a0
+	movea.l	a0,a1
+	adda.l	#Voxel.colorMap,a0
+	adda.l	#Voxel.heightMap,a1
+	lea	Voxel.chromePal,a2
+	lea	Voxel.goldPal,a3
+	move.w	#256-1,d7
+	clr.l	d1
+
+.c_yloop:
+	move.w	#256-1,d6	
+
+.c_xloop:
+	move.w	(a0),d1
+	move.b	(a1)+,d0
+	beq.s	.dark
+	move.w	(a2,d1.l*2),(a0)+
+	bra.s	.next
+.dark:	move.w	(a3,d1.l*2),(a0)+
+.next:	dbf	d6,.c_xloop
+
+	dbf	d7,.c_yloop
+	rts
+
+; Very small and nice 'marble' texture generator.
+; Ripped from lost 4ktro by lucky/inter.
+; INPUT:
+; d6.w=width (w)
+; d7.w=height (w)
+; a0: dst buffer (w*h words)
+Voxel.genMarble:
+	move.l      A0,-(SP)
+
+; Make a row of noise...
+	move.w      D6,D0
+	bra.s       marmor_w6
+marmor_l0:
+	move.w      D1,(A0)+
+marmor_w6:
+	rol.l       #5,D5
+	eori.l      #$3551462F,D5
+	addq.l      #1,D5
+	move.w      D5,D2
+	and.w       #7,D2
+	cmp.w       #7,D2
+	bne.s       marmor_w4
+	moveq       #6,D2
+marmor_w4:
+	add.w       D2,D1
+	subq.w      #3,D1
+	bpl.s       marmor_w0
+	moveq       #0,D1
+marmor_w0:
+	cmp.w       #$27,D1
+	ble.s       marmor_w1
+	moveq       #$27,D1
+marmor_w1:
+	dbra        D0,marmor_l0
+
+; Back to rowstart...
+	move.w      D6,D0
+	neg.w       D0
+	lsl.w       #1,D0
+	lea         0(A0,D0.w),A1
+
+; Average and add a pass of noise to the whole texture (?).
+; a1,a2,a3 lag behind a0, so output hights are 'recycled' for averaging.
+; Nice trick. Very fast.
+	lea         2(A1),A2
+	lea         4(A2),A3
+	move.w      D7,D0
+	subq.w      #1,D0
+	mulu.w      D6,D0				; d0.w=w*(h-1)
+	subq.w      #1,D0
+marmor_l1:
+	move.w      (A2)+,D1
+	add.w       D1,D1
+	add.w       (A1)+,D1
+	add.w       (A3)+,D1
+	lsr.w       #2,D1
+	move.l	d5,d2
+	rol.l       #5,D5
+	eori.l      #-$3A5E8A3B,D5
+	addq.l      #7,D5
+	move.w      D5,D2
+	and.w       #7,D2
+	cmp.w       #7,D2
+	bne.s       marmor_w5
+	moveq       #6,D2
+marmor_w5:
+	add.w       D2,D1
+	subq.w      #3,D1
+	bpl.s       marmor_w2
+	moveq       #0,D1
+marmor_w2:
+	cmp.w       #39,D1
+	ble.s       marmor_w3
+	moveq       #39,D1
+marmor_w3:
+	move.w      D1,(A0)+
+	dbra        D0,marmor_l1
+
+	movea.l     (SP)+,A0
+	rts         
+
+UPDATE_OBSERVER:
+; Perform turn if required.
+	move.w	Voxel.turnDirection,d0
+	beq.s	.no_turn
+	move.w	$04BC.w,d1
+	sub.w	Voxel.turnStart,d1
+	mulu.w	#6,d1
+	cmpi.w	#sintbllen*5/16,d1
+	blt.s	.angle_ok
+	move.w	#sintbllen*5/16,d1
+	clr.w	Voxel.turnDirection
+.angle_ok:
+	muls.w	d0,d1
+	add.w	Voxel.oldAngle,d1
+	move.w	d1,playerangle
+.no_turn:
+
+; Update player position..
+	move.w	speed(pc),d3
+	move.l	$4ba.w,d1
+	move.l	d1,d2
+	sub.l	.last4ba(pc),d1
+	move.l	d2,.last4ba
+	muls.w	d1,d3
+	asr.w	#4,d3
+	move.w	playerangle,d0
+	Do_SinModulo	d0
+	move.w	(xanglestep_tbl,d0.w*2),d1
+	move.w	(yanglestep_tbl,d0.w*2),d2
+	muls.w	d3,d1
+	muls.w	d3,d2
+	asr.w	#4,d1
+	asr.w	#4,d2
+	add.w	d1,playerx
+	add.w	d2,playery
+	rts
+
+.last4ba:
+	DC.L	0
+speed:	DC.W	0
+
+CALC_PERSPTABLES:
+; Calculate conventional 1/Z-table first.
+	lea	persp_tbl,a0
+	move.l	#$FFFF,d1
+	moveq	#1,d7
+	move.w	#raylength,d6
+.loop:	move.l	d1,d0
+	move.w	d7,d4
+	divu.w	d4,d0
+	move.w	d0,(a0)+
+	addq.w	#1,d7
+	cmp.w	d6,d7
+	bls.s	.loop
+
+; Then calculate precalced 2d-height for the 256 3d-heights at every Z
+; point.
+; 2d_height = get2dHeight(h,z)
+	movea.l	Voxel.baseAdr,a0
+	adda.l	#Voxel.zheight_tbl,a0
+	lea	persp_tbl,a1
+	move.w	#raylength-1,d7
+
+.loop2:	move.w	(a1)+,d3				; d3.w=1/z
+	clr.w	d2
+
+.inloop2:
+	move.w	d3,d0
+	mulu.w	d2,d0
+	lsl.l	#5,d0					; Increase height a bit
+	tst.w	d0
+	swap	d0
+	bpl.s	.end_round
+	addq.w	#1,d0
+.end_round:
+	move.w	d0,(a0)+
+	addq.b	#1,d2
+	bne.s	.inloop2
+
+	dbf	d7,.loop2
+
+	rts
+
+CALC_DISTTABLE:
+	lea	xanglestep_tbl,a0
+	lea	yanglestep_tbl,a1
+	lea	sine_tbl,a2
+	move.w	eyedistance,d2
+	move.w	raydistance,d3
+	move.w	#tunnelvision,d6
+	move.w	#sintbllen-1,d7
+.loop	movem.w	(a2)+,d0-d1			* Get next sin and cos.
+	move.w	d0,d4
+	move.w	d1,d5
+	muls.w	d2,d4
+	muls.w	d2,d5
+	muls.w	d3,d0
+	muls.w	d3,d1
+	sub.l	d4,d0
+	sub.l	d5,d1
+	asr.l	#8,d0
+	divs.w	d6,d0
+	move.w	d0,(a1)+
+	asr.l	#8,d1
+	divs.w	d6,d1
+	move.w	d1,(a0)+
+	dbra	d7,.loop
+	rts
+
+Voxel.calcCosMulTable:
+	movea.l	Voxel.baseAdr,a0
+	adda.l	#Voxel.cosMulTable,a0
+	lea	sine_tbl,a1
+	move.w	#-240,d0			; d0.w=a
+
+.columnloop:	
+	move.w	d0,d2
+	Do_SinModulo	d2
+	Get_Cos	a1,d2,d1			; d1.w=cos(a)
+	moveq	#0,d7				; d7.w=dist
+
+.rayloop:
+	move.w	d7,d2
+	muls.w	d1,d2
+	add.l	d2,d2
+	swap	d2				; d2.w=cos(a)*dist
+	tst.w	d2
+	bpl.s	.end_round
+	addq.w	#1,d2
+.end_round:
+	move.w	d2,(a0)+			; Store cos(a)*dist.
+	addq.w	#1,d7
+	cmpi.w	#raylength,d7
+	blt.s	.rayloop
+
+	addq.w	#3,d0
+	cmpi.w	#240,d0
+	blt.s	.columnloop
+	rts
+
+; Draw the Voxel.
+; INPUT:
+; a1: color map
+; a2: height-field
+Voxel.paintVga100:
+; Initialize projected heigth for this evelation and roll.
+	lea	Voxel.persp_tbl(pc),a0
+	move.w	roll,d3
+	move.w	elevation,d1
+	moveq	#1,d7
+	move.l	#$FFFF,d2
+
+.proj_heigth_loop:
+	move.l	d2,d0
+	move.w	d7,d4
+	divu.w	d4,d0
+	mulu.w	d1,d0
+	tst.w	d0
+	swap	d0
+	bpl.s	.end_round
+	addq.w	#1,d0
+.end_round:
+	add.w	d3,d0
+	move.w	d0,(a0)+
+	addq.w	#1,d7
+	cmpi.w	#raylength,d7
+	blt.s	.proj_heigth_loop
+
+; Initialize angle of first ray..
+	moveq	#0,d1
+	move.w	playerangle(pc),d1
+	subi.w	#240,d1
+	Do_SinModulo	d1
+	move.w	d1,Voxel.rayangle
+
+; Plot voxel.
+	movea.l	skyadr_tbl,a5
+	movea.l	scr,a0
+	adda.l	#160*99*2,a0
+	move.w	#160-1,d7
+	move.l	a0,Voxel.screen
+	clr.l	d2
+	move.w	Voxel.rayangle(pc),d0
+	move.l	#-160*2,d6
+	movea.l	Voxel.baseAdr,a6
+	adda.l	#Voxel.cosMulTable,a6
+	lea	Voxel.persp_tbl(pc),a4
+	clr.l	d4
+
+.column_loop:
+	move.w	d7,d1
+	subi.w	#160/2-1,d1
+	muls.w	tiltx(pc),d1
+	swap	d1
+	move.w	d1,Voxel.tiltfactor
+
+	swap	d7
+	move.w	playerx(pc),d1
+	move.w	playery(pc),d2
+	lea	Voxel.gxstep(pc),a3
+	move.w	(xanglestep_tbl,d0.w*2),(a3)+
+	move.w	(yanglestep_tbl,d0.w*2),(a3)+
+
+	move.w	Voxel.rayangle(pc),d0
+	sub.w	playerangle(pc),d0
+	Do_SinModulo	d0
+	move.w	(sine_tbl+2,d0.w*4),Voxel.cos
+
+	moveq	#100,d0				* topmountain:=scrlines
+	movea.l	Voxel.baseAdr,a3
+	adda.l	#Voxel.zheight_tbl,a3
+	move.w	#raylength-1,d7			* Number of steps in ray..
+.rayloop:
+	move.l	d2,d5
+	move.w	d1,d4
+	lsr.w	#8,d4
+	move.b	d4,d5				; d5.l=position in map
+	move.w	(a6)+,d4			; d4.w=z=distance*cos(a)
+	move.w	(a4,d4.l*2),d3			; d3.w=elevation/z+roll
+	lsl.l	#8,d4				; d4.l=z*$100
+	move.b	(a2,d5.l),d4			; d4.l=z*$100+h
+	sub.w	(a3,d4.l*2),d3			; d3.w= projected h = elevation/z+roll-h/z
+; d3.w= ph = (elevation-h)/z + roll
+;	add.w	Voxel.tiltfactor(pc),d3		; Add tilt.
+	move.w	d0,d4
+	sub.w	d3,d4
+; d4.w = dph = top - ph
+	ble.s	.endl
+; Projected height out of screen?
+	tst.w	d3
+	bpl.s	.draw_line
+	lea	(a6,d7.w*2),a6			; a6: next z column
+	move.w	d0,d4
+	beq.s	.next_column
+	clr.w	d7				; End of ray.
+	clr.l	d3				; ph=0
+.draw_line:
+	move.w	(a1,d5.l*2),d5			; d5.w=color
+	subq.w	#1,d4
+.pixlp:	move.w	d5,(a0)
+	adda.l	d6,a0				; Go up one screenline.
+	dbf	d4,.pixlp
+	move.w	d3,d0				; top=ph
+; Move to next map-pos.
+.endl:	add.w	Voxel.gxstep(pc),d1
+	add.w	Voxel.gystep(pc),d2
+	dbf	d7,.rayloop
+
+.next_column:
+; Restore background slice.
+	move.w	(a5),d1
+	move.w	d0,(a5)+
+	sub.w	d1,d0
+	ble.s	.no_background_restore
+	subq.w	#1,d0
+	clr.w	d1
+.restore_loop:
+	move.w	d1,(a0)
+	adda.l	d6,a0				* Go up one screenline.
+	dbf	d0,.restore_loop
+.no_background_restore:
+; Increase angle..
+	move.w	Voxel.rayangle(pc),d0
+	addq.w	#3,d0
+	Do_SinModulo	d0
+	move.w	d0,Voxel.rayangle
+; Kick in next vertical screenline and loop..
+	addq.l	#2,Voxel.screen
+	movea.l	Voxel.screen(pc),a0
+	swap	d7
+	dbf	d7,.column_loop
+	rts
+
+; Draw the Voxel.
+; INPUT:
+; a1: color map
+; a2: height-field
+Voxel.paintVga60:
+; Initialize projected heigth for this evelation and roll.
+	lea	Voxel.persp_tbl(pc),a0
+	move.w	roll,d3
+	move.w	elevation,d1
+	moveq	#1,d7
+	move.l	#$FFFF,d2
+
+.proj_heigth_loop:
+	move.l	d2,d0
+	move.w	d7,d4
+	divu.w	d4,d0
+	mulu.w	d1,d0
+	tst.w	d0
+	swap	d0
+	bpl.s	.end_round
+	addq.w	#1,d0
+.end_round:
+	add.w	d3,d0
+	move.w	d0,(a0)+
+	addq.w	#1,d7
+	cmpi.w	#raylength,d7
+	blt.s	.proj_heigth_loop
+
+; Initialize angle of first ray..
+	moveq	#0,d1
+	move.w	playerangle(pc),d1
+	subi.w	#240,d1
+	Do_SinModulo	d1
+	move.w	d1,Voxel.rayangle
+
+; Plot voxel.
+	movea.l	skyadr_tbl,a5
+	movea.l	scr,a0
+	adda.l	#160*199*2,a0
+	move.w	#160-1,d7
+	move.l	a0,Voxel.screen
+	clr.l	d2
+	move.w	Voxel.rayangle(pc),d0
+	move.l	#-160*2,d6
+	movea.l	Voxel.baseAdr,a6
+	adda.l	#Voxel.cosMulTable,a6
+	lea	Voxel.persp_tbl(pc),a4
+	clr.l	d4
+
+.column_loop:
+	move.w	d7,d1
+	subi.w	#160/2-1,d1
+	muls.w	tiltx(pc),d1
+	swap	d1
+	move.w	d1,Voxel.tiltfactor
+
+	swap	d7
+	move.w	playerx(pc),d1
+	move.w	playery(pc),d2
+	lea	Voxel.gxstep(pc),a3
+	move.w	(xanglestep_tbl,d0.w*2),(a3)+
+	move.w	(yanglestep_tbl,d0.w*2),(a3)+
+
+	move.w	Voxel.rayangle(pc),d0
+	sub.w	playerangle(pc),d0
+	Do_SinModulo	d0
+	move.w	(sine_tbl+2,d0.w*4),Voxel.cos
+
+	moveq	#100,d0				* topmountain:=scrlines
+	movea.l	Voxel.baseAdr,a3
+	adda.l	#Voxel.zheight_tbl,a3
+	move.w	#raylength-1,d7			* Number of steps in ray..
+.rayloop:
+	move.l	d2,d5
+	move.w	d1,d4
+	lsr.w	#8,d4
+	move.b	d4,d5				; d5.l=position in map
+	move.w	(a6)+,d4			; d4.w=z=distance*cos(a)
+	move.w	(a4,d4.l*2),d3			; d3.w=elevation/z+roll
+	lsl.l	#8,d4				; d4.l=z*$100
+	move.b	(a2,d5.l),d4			; d4.l=z*$100+h
+	sub.w	(a3,d4.l*2),d3			; d3.w= projected h = elevation/z+roll-h/z
+; d3.w= ph = (elevation-h)/z + roll
+;	add.w	Voxel.tiltfactor(pc),d3		; Add tilt.
+	move.w	d0,d4
+	sub.w	d3,d4
+; d4.w = dph = top - ph
+	ble.s	.endl
+; Projected height out of screen?
+	tst.w	d3
+	bpl.s	.draw_line
+	lea	(a6,d7.w*2),a6			; a6: next z column
+	move.w	d0,d4
+	beq.s	.next_column
+	clr.w	d7				; End of ray.
+	clr.l	d3				; ph=0
+.draw_line:
+	move.w	(a1,d5.l*2),d5			; d5.w=color
+	subq.w	#1,d4
+.pixlp:	REPT	2
+	move.w	d5,(a0)
+	adda.l	d6,a0				; Go up one screenline.
+	ENDR
+	dbf	d4,.pixlp
+	move.w	d3,d0				; top=ph
+; Move to next map-pos.
+.endl:	add.w	Voxel.gxstep(pc),d1
+	add.w	Voxel.gystep(pc),d2
+	dbf	d7,.rayloop
+
+.next_column:
+; Restore background slice.
+	move.w	(a5),d1
+	move.w	d0,(a5)+
+	sub.w	d1,d0
+	ble.s	.no_background_restore
+	subq.w	#1,d0
+	clr.w	d1
+.restore_loop:
+	REPT	2
+	move.w	d1,(a0)
+	adda.l	d6,a0				* Go up one screenline.
+	ENDR
+	dbf	d0,.restore_loop
+.no_background_restore:
+; Increase angle..
+	move.w	Voxel.rayangle(pc),d0
+	addq.w	#3,d0
+	Do_SinModulo	d0
+	move.w	d0,Voxel.rayangle
+; Kick in next vertical screenline and loop..
+	addq.l	#2,Voxel.screen
+	movea.l	Voxel.screen(pc),a0
+	swap	d7
+	dbf	d7,.column_loop
+	rts
+
+; Draw the Voxel.
+; INPUT:
+; a1: color map
+; a2: height-field
+Voxel.paintRgb50:
+; Initialize projected heigth for this evelation and roll.
+	lea	Voxel.persp_tbl(pc),a0
+	move.w	roll,d3
+	move.w	elevation,d1
+	moveq	#1,d7
+	move.l	#$FFFF,d2
+
+.proj_heigth_loop:
+	move.l	d2,d0
+	move.w	d7,d4
+	divu.w	d4,d0
+	mulu.w	d1,d0
+	tst.w	d0
+	swap	d0
+	bpl.s	.end_round
+	addq.w	#1,d0
+.end_round:
+	add.w	d3,d0
+	move.w	d0,(a0)+
+	addq.w	#1,d7
+	cmpi.w	#raylength,d7
+	blt.s	.proj_heigth_loop
+
+; Initialize angle of first ray..
+	moveq	#0,d1
+	move.w	playerangle(pc),d1
+	subi.w	#240,d1
+	Do_SinModulo	d1
+	move.w	d1,Voxel.rayangle
+
+; Plot voxel.
+	movea.l	skyadr_tbl,a5
+	movea.l	scr,a0
+	adda.l	#160*99*4,a0
+	move.w	#160-1,d7
+	move.l	a0,Voxel.screen
+	clr.l	d2
+	move.w	Voxel.rayangle(pc),d0
+	move.l	#-160*4,d6
+	movea.l	Voxel.baseAdr,a6
+	adda.l	#Voxel.cosMulTable,a6
+	lea	Voxel.persp_tbl(pc),a4
+	clr.l	d4
+
+.column_loop:
+	move.w	d7,d1
+	subi.w	#160/2-1,d1
+	muls.w	tiltx(pc),d1
+	swap	d1
+	move.w	d1,Voxel.tiltfactor
+
+	swap	d7
+	move.w	playerx(pc),d1
+	move.w	playery(pc),d2
+	lea	Voxel.gxstep(pc),a3
+	move.w	(xanglestep_tbl,d0.w*2),(a3)+
+	move.w	(yanglestep_tbl,d0.w*2),(a3)+
+
+	move.w	Voxel.rayangle(pc),d0
+	sub.w	playerangle(pc),d0
+	Do_SinModulo	d0
+	move.w	(sine_tbl+2,d0.w*4),Voxel.cos
+
+	moveq	#100,d0				* topmountain:=scrlines
+	movea.l	Voxel.baseAdr,a3
+	adda.l	#Voxel.zheight_tbl,a3
+	move.w	#raylength-1,d7			* Number of steps in ray..
+.rayloop:
+	move.l	d2,d5
+	move.w	d1,d4
+	lsr.w	#8,d4
+	move.b	d4,d5				; d5.l=position in map
+	move.w	(a6)+,d4			; d4.w=z=distance*cos(a)
+	move.w	(a4,d4.l*2),d3			; d3.w=elevation/z+roll
+	lsl.l	#8,d4				; d4.l=z*$100
+	move.b	(a2,d5.l),d4			; d4.l=z*$100+h
+	sub.w	(a3,d4.l*2),d3			; d3.w= projected h = elevation/z+roll-h/z
+; d3.w= ph = (elevation-h)/z + roll
+;	add.w	Voxel.tiltfactor(pc),d3		; Add tilt.
+	move.w	d0,d4
+	sub.w	d3,d4
+; d4.w = dph = top - ph
+	ble.s	.endl
+; Projected height out of screen?
+	tst.w	d3
+	bpl.s	.draw_line
+	lea	(a6,d7.w*2),a6			; a6: next z column
+	move.w	d0,d4
+	beq.s	.next_column
+	clr.w	d7				; End of ray.
+	clr.l	d3				; ph=0
+.draw_line:
+	move.w	(a1,d5.l*2),d5			; d5.w=color
+	move.w	d5,d0
+	swap	d5
+	move.w	d0,d5
+	subq.w	#1,d4
+.pixlp:	move.l	d5,(a0)
+	adda.l	d6,a0				; Go up one screenline.
+	dbf	d4,.pixlp
+	move.w	d3,d0				; top=ph
+; Move to next map-pos.
+.endl:	add.w	Voxel.gxstep(pc),d1
+	add.w	Voxel.gystep(pc),d2
+	dbf	d7,.rayloop
+
+.next_column:
+; Restore background slice.
+	move.w	(a5),d1
+	move.w	d0,(a5)+
+	sub.w	d1,d0
+	ble.s	.no_background_restore
+	subq.w	#1,d0
+	clr.l	d1
+.restore_loop:
+	move.l	d1,(a0)
+	adda.l	d6,a0				* Go up one screenline.
+	dbf	d0,.restore_loop
+.no_background_restore:
+; Increase angle..
+	move.w	Voxel.rayangle(pc),d0
+	addq.w	#3,d0
+	Do_SinModulo	d0
+	move.w	d0,Voxel.rayangle
+; Kick in next vertical screenline and loop..
+	addq.l	#4,Voxel.screen
+	movea.l	Voxel.screen(pc),a0
+	swap	d7
+	dbf	d7,.column_loop
+	rts
+
+Voxel.screen:
+	DS.L	1
+Voxel.cos:
+	DS.W	1
+Voxel.rayangle:
+	DS.W	1				* Angle of current ray
+Voxel.gxstep:
+	DS.W	1
+Voxel.gystep:
+	DS.W	1				* Fixed point step value of ray
+Voxel.tiltfactor:
+	DS.W	1
+Voxel.persp_tbl:
+	DS.L	raylength
+
+* View Variables
+playerangle:
+	DC.W	0				* Viewer's direction
+playerx:DC.W	0				* Viewer's coordinates
+playery:DC.W	0
+tiltx:	DC.L	0
+
+;======= OBJECT DATA ========
+
+	DATA
+
+	IFEQ	Voxel.GENERATE
+height_pic:
+	INCBIN	HEIGHT.PC8			* Ground_image
+color_pic:
+	INCBIN	GROUND.APX			* Color_image
+	ENDC
+
+Voxel.maze:
+	INCBIN	MAZE.APX
+
+skyadr_tbl:
+	DC.L	sky1_tbl
+	DC.L	sky2_tbl
+	DC.L	sky3_tbl
+
+elevation:
+	DC.W	2000
+raydistance:
+	DC.W	64				* Length of rays
+cloudx: DC.W	0				* Cloud position
+eyedistance:
+	DC.W	64+32				* Changes perspective
+roll:	DC.W	0
+
+Voxel.goldInstTable:
+	DC.W	(.end-.start)/4-1
+	DC.W	3
+.start:	DC.L	$00000000
+	DC.L	$5F1F0000
+	DC.L	$9F5F0000
+	DC.L	$CF9F0000
+	DC.L	$FFFF0000
+	DC.L	$FFFF00FF
+	DC.L	$FFFF00FF
+	DC.L	$FFFF00FF
+	DC.L	$FFFF00FF
+.end:
+
+Voxel.chromeInstTable:
+	DC.W	(.end-.start)/4-1
+	DC.W	3
+.start:	DC.L	$0F000000
+	DC.L	$4F2F002F
+	DC.L	$847F007F
+	DC.L	$C4BF00BF
+	DC.L	$FFFF00FF
+	DC.L	$FFFF00FF
+	DC.L	$FFFF00FF
+	DC.L	$FFFF00FF
+	DC.L	$FFFF00FF
+.end:
+
+;======= OBJECT RESERVES ========
+
+	BSS
+
+Voxel.resRout:
+	DS.L	1
+
+Voxel.goldPal:
+	DS.W	256
+Voxel.chromePal:
+	DS.W	256
+
+xanglestep_tbl:
+	DS.W	sintbllen
+yanglestep_tbl:
+	DS.W	sintbllen
+
+* Heightfield tables
+persp_tbl:
+	DS.W	raylength
+
+* Sky heighttables.
+sky1_tbl:
+	DS.W	160
+sky2_tbl:
+	DS.W	160
+sky3_tbl:
+	DS.W	160
+
+Voxel.paintRout:
+	DS.L	1
+Voxel.oldAngle:
+	DS.W	1
+Voxel.turnStart:
+	DS.W	1
+Voxel.turnDirection:
+	DS.W	1
+
+Voxel.fallOn:
+	DS.W	1
+Voxel.fallStart:
+	DS.L	1
+
+Voxel.baseAdr:
+	DS.L	1

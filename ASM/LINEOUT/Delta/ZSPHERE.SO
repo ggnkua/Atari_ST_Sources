@@ -1,0 +1,1675 @@
+; Z buffered molecule display. A screen for delta.
+; Features some feedback, and 'thermal' vibration.
+
+;======= OBJECT EQUATES ========
+
+ZSphere.MAX_RADIUS:	=	80
+ZSphere.SQRTTABLESIZE:	=	ZSphere.MAX_RADIUS*ZSphere.MAX_RADIUS*2
+
+			RSRESET
+ZSphere.SQRTTABLE:	RS.B	ZSphere.SQRTTABLESIZE
+ZSphere.SQUARETABLE:	RS.W	ZSphere.MAX_RADIUS*2
+ZSphere.PALOFFSETTABLE:	RS.L	ZSphere.MAX_RADIUS
+ZSphere.WHITEBUFFER:	RS.W	3320				; 81(81+1)/2 -1
+ZSphere.REDBUFFER:	RS.W	3320				; 81(81+1)/2 -1
+ZSphere.ZBUFFER:	RS.W	160*100
+ZSphere.BUF:		RS.W	160*100
+ZSphere.BUF2:		RS.W	160*100
+ZSphere.BLOCK_SIZE:	RS.B	0
+
+;======= OBJECT TABLE ========
+
+* Must be first in object!!
+ZSphere.table:
+	DC.L	ZSphere.mainLoop
+	DC.L	ZSphere.init
+	DC.L	ZSphere.setRes
+	DC.L	ZSphere.setWaterModel
+	DC.L	ZSphere.setMethaneModel
+	DC.L	ZSphere.setClearScreen
+	DC.L	ZSphere.setFeedbackScreen
+	DC.L	ZSphere.setSingle
+	DC.L	ZSphere.setDouble
+	DC.L	ZSphere.setBounce
+	DC.L	ZSphere.setBounce2
+	DC.L	ZSphere.setBounce3
+	DC.L	ZSphere.setBounce4
+	DC.L	ZSphere.setMoveOff
+	DC.L	0
+
+;======= RESOLUTION SETTING ROUTINE ========
+
+ZSphere.setRes:
+	IFEQ	testmode
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	beq.s	.end
+
+	move.l	#rts,vbl_gfx
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+* Unknown monitormode..
+	rts
+.vga60:	bra.l	vga60_16bit_160_200
+.vga100:bra.l	vga100_16bit_160_100
+.rgb50:	bra.l	rgb50_16bit_320_100
+	ENDC
+.end:	rts
+
+;======= INIT SUBROUTINE ========
+
+* OUTPUT: d0.l: 0   = All clear.
+*               neg = Error! Not initialized!
+ZSphere.init:
+	move.l	#ZSphere.BLOCK_SIZE,d0
+	bsr.l	Mem.register
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= REALTIME INIT SUBROUTINE ========
+
+ZSphere.realtimeInit:
+	move.l	#ZSphere.setRes,vbl_gfx
+
+	bsr.l	Mem.getBlock
+	move.l	d0,ZSphere.baseAdr
+
+	bsr.w	ZSphere.initBallCols
+	bsr.w	ZSphere.initSqrtTable
+	bsr.w	ZSphere.initSquareTable
+	bsr.w	ZSphere.initWhitePalettes
+	bsr.w	ZSphere.initRedPalettes
+
+	bsr	ZSphere.setWaterModel
+	bsr	ZSphere.setClearScreen
+	bsr	ZSphere.setSingle
+	clr.w	ZSphere.moveOff
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+; Unknown monitormode.. take 1*1 (vga100)
+	move.l	#scr,ZSphere.scrAdrAdr
+	move.l	#scr+8,ZSphere.oldScrAdrAdr
+	move.l	#rts,ZSphere.copyRout
+	rts
+.vga60:	move.l	#ZSphere.bufAdr,ZSphere.scrAdrAdr
+	move.l	#ZSphere.bufAdr2,ZSphere.oldScrAdrAdr
+	move.l	#ZSphere.copyVga60,ZSphere.copyRout
+	rts
+.rgb50:	move.l	#ZSphere.bufAdr,ZSphere.scrAdrAdr
+	move.l	#ZSphere.bufAdr2,ZSphere.oldScrAdrAdr
+	move.l	#ZSphere.copyRgb50,ZSphere.copyRout
+	rts
+
+;======= SCREENINIT SUBROUTINE ========
+
+ZSphere.initScreen:
+	rts
+
+;======= MAINLOOP SUBROUTINE ========
+
+ZSphere.mainLoop:
+	move.w	$0468.w,.old468
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr	ZSphere.realtimeInit
+ 	move.l	(sp)+,d0
+.end_realtime_init:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr	ZSphere.initScreen
+.end_screeninit:
+
+	movea.l	ZSphere.clearRout,a0
+	jsr	(a0)
+
+	bsr	ZSphere.clearZBuffer
+
+	movea.l	ZSphere.paintRout,a0
+	jsr	(a0)
+
+	movea.l	ZSphere.copyRout,a0
+	jsr	(a0)
+
+	cmpi.w	#vga100,monitormode
+	beq.s	.swap_done
+	move.l	ZSphere.oldScrAdrAdr,d0
+	move.l	ZSphere.scrAdrAdr,ZSphere.oldScrAdrAdr
+	move.l	d0,ZSphere.scrAdrAdr
+.swap_done:
+
+	IFEQ	testmode
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	move.l	d0,d1
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+
+	move.w	.old468(pc),d0
+.wait:	cmp.w	$0468.w,d0
+	beq.s	.wait
+	ENDC
+
+	rts
+
+.old468:DC.W	0
+
+;======= OBJECT SUBROUTINES ========
+
+ZSphere.setWaterModel:
+	move.l	#ZSphere.waterModel,ZSphere.model
+	rts
+
+ZSphere.setMethaneModel:
+	move.l	#ZSphere.methaneModel,ZSphere.model
+	rts
+
+ZSphere.setClearScreen:
+	move.l	#ZSphere.clearScreen,ZSphere.clearRout
+	rts
+
+ZSphere.setFeedbackScreen:
+	move.l	#ZSphere.feedbackScreen,ZSphere.clearRout
+	rts
+
+ZSphere.setSingle:
+	move.l	#ZSphere.paintSingle,ZSphere.paintRout
+	rts
+
+ZSphere.setDouble:
+	move.l	#ZSphere.paintDoubleVibr,ZSphere.paintRout
+	rts
+
+; lower
+ZSphere.setBounce:
+	move.l	#ZSphere.paintBouncing,ZSphere.paintRout
+	move.w	#+$0500,ZSphere.yOffset
+	move.w	#-1,ZSphere.bounceDir
+	move.w	#+1,ZSphere.walkDir
+	move.l	$04BA.w,ZSphere.bounceStart
+	clr.w	ZSphere.swapCoords
+	rts
+
+; right
+ZSphere.setBounce2:
+	move.l	#ZSphere.paintBouncing,ZSphere.paintRout
+	move.w	#+$0500,ZSphere.yOffset
+	move.w	#-1,ZSphere.bounceDir
+	move.w	#-1,ZSphere.walkDir
+	move.l	$04BA.w,ZSphere.bounceStart
+	st	ZSphere.swapCoords
+	rts
+
+; upper
+ZSphere.setBounce3:
+	move.l	#ZSphere.paintBouncing,ZSphere.paintRout
+	move.w	#-$0500,ZSphere.yOffset
+	move.w	#+1,ZSphere.bounceDir
+	move.w	#-1,ZSphere.walkDir
+	move.l	$04BA.w,ZSphere.bounceStart
+	clr.w	ZSphere.swapCoords
+	rts
+
+; left
+ZSphere.setBounce4:
+	move.l	#ZSphere.paintBouncing,ZSphere.paintRout
+	move.w	#-$0500,ZSphere.yOffset
+	move.w	#+1,ZSphere.bounceDir
+	move.w	#+1,ZSphere.walkDir
+	move.l	$04BA.w,ZSphere.bounceStart
+	st	ZSphere.swapCoords
+	rts
+
+ZSphere.setMoveOff:
+	st	ZSphere.moveOff
+	move.l	$04BA.w,ZSphere.bounceStart
+	rts
+
+ZSphere.initBallCols:
+	lea	ZSphere.ballColTable,a0
+	move.l	ZSphere.baseAdr,d0
+	move.l	d0,d2
+	move.l	d0,d3
+	move.l	d0,d1
+	addi.l	#ZSphere.WHITEBUFFER,d0
+	addi.l	#ZSphere.REDBUFFER,d1
+	move.l	d0,(a0)+
+	move.l	d1,(a0)+
+
+	addi.l	#ZSphere.BUF,d2
+	addi.l	#ZSphere.BUF2,d3
+	move.l	d2,ZSphere.bufAdr
+	move.l	d3,ZSphere.bufAdr2
+	rts
+
+ZSphere.initSqrtTable:
+	movea.l	ZSphere.baseAdr,a0
+	adda.l	#ZSphere.SQRTTABLE,a0
+	move.w	#ZSphere.SQRTTABLESIZE-1,d7
+	clr.l	d6
+
+.loop:	move.l	d6,d1
+	bsr.l	Math.sqrt
+	swap	d0
+	move.w	d0,(a0)+
+	addq.w	#1,d6
+	dbra	d7,.loop
+	rts
+
+ZSphere.initSquareTable:
+	movea.l	ZSphere.baseAdr,a0
+	adda.l	#ZSphere.SQUARETABLE,a0
+	move.w	#ZSphere.MAX_RADIUS-1,d7
+
+.loop:	move.w	d7,d0
+	mulu.w	d7,d0
+	neg.l	d0
+	move.w	d0,(a0)+
+	dbf	d7,.loop
+
+	move.w	#ZSphere.MAX_RADIUS-1,d7
+	movea.l	a0,a1
+.mirror_loop:
+	move.w	-(a1),(a0)+
+	dbf	d7,.mirror_loop
+	rts
+
+ZSphere.initWhitePalettes:
+	moveq	#1,d7
+	movea.l	ZSphere.baseAdr,a0
+	movea.l	a0,a1
+	adda.l	#ZSphere.WHITEBUFFER,a0
+	adda.l	#ZSphere.PALOFFSETTABLE,a1
+
+.loop:	move.w	d7,-(sp)
+	bsr	ZSphere.initColorTable
+	move.w	(sp)+,d7
+	move.l	a0,d0
+	sub.l	ZSphere.baseAdr,d0
+	subi.l	#ZSphere.WHITEBUFFER,d0
+	move.l	d0,(a1)+
+	addq.w	#1,d7
+	cmpi.w	#ZSphere.MAX_RADIUS,d7
+	bls.s	.loop
+	rts
+
+ZSphere.initRedPalettes:
+	moveq	#1,d7
+	movea.l	ZSphere.baseAdr,a0
+	movea.l	a0,a1
+	adda.l	#ZSphere.REDBUFFER,a0
+	adda.l	#ZSphere.PALOFFSETTABLE,a1
+
+.loop:	move.w	d7,-(sp)
+	bsr	ZSphere.initRedColorTable
+	move.w	(sp)+,d7
+	move.l	a0,d0
+	sub.l	ZSphere.baseAdr,d0
+	subi.l	#ZSphere.REDBUFFER,d0
+	move.l	d0,(a1)+
+	addq.w	#1,d7
+	cmpi.w	#ZSphere.MAX_RADIUS,d7
+	bls.s	.loop
+	rts
+
+; INPUT:
+; d7.w: tablesize
+; a0: colortable
+ZSphere.initColorTable:
+	clr.l	d0
+
+.loop:	move.l	d0,d1
+	move.l	d0,d2
+	move.l	d0,d3
+	lsl.l	#5,d1
+	divu.w	d7,d1
+	lsl.l	#5,d2
+	lsl.l	#6,d2
+	divu.w	d7,d2
+	swap	d3
+	divu.w	d7,d3
+	andi.w	#$001f,d1
+	andi.w	#$07e0,d2
+	andi.w	#$f800,d3
+	or.w	d1,d3
+	or.w	d2,d3
+	move.w	d3,(a0)+
+	addq.w	#1,d0
+	cmp.w	d7,d0
+	blt.s	.loop
+	rts
+
+; INPUT:
+; d7.w: tablesize
+; a0: colortable
+ZSphere.initRedColorTable:
+	clr.l	d0
+
+.loop:	move.l	d0,d3
+	swap	d3
+	divu.w	d7,d3
+	andi.w	#$f800,d3
+	move.w	d3,(a0)+
+	addq.w	#1,d0
+	cmp.w	d7,d0
+	blt.s	.loop
+	rts
+
+ZSphere.clearZBuffer:
+	movea.l	ZSphere.baseAdr,a0
+	adda.l	#ZSphere.ZBUFFER,a0
+	move.w	#160*100/8-1,d7
+	move.l	#$80008000,d0
+
+.yloop:
+	REPT	4
+	move.l	d0,(a0)+
+	ENDR
+	dbra	d7,.yloop
+	rts
+
+ZSphere.paintSingle:
+	movea.l	ZSphere.model,a1
+	bsr	ZSphere.addModel
+	rts
+
+ZSphere.paintDoubleVibr:
+	clr.w	d0
+	tst.w	ZSphere.moveOff
+	beq.s	.no_d0_fuk
+	move.w	$04BC.w,d0
+	sub.w	ZSphere.bounceStart+2,d0
+.no_d0_fuk:
+	addi.w	#1000,d0
+	move.w	d0,-(sp)
+	neg.w	d0
+	movea.l	ZSphere.model,a1
+	bsr	ZSphere.addVibrModel1
+	move.w	(sp)+,d0
+	movea.l	ZSphere.model,a1
+	bsr	ZSphere.addVibrModel2
+	rts
+
+ZSphere.paintBouncing:
+	movea.l	ZSphere.model,a1
+	bsr	ZSphere.addBounceModel
+	rts
+
+; Seems to work ok, since there has been some patching on the overflow
+; errors (caused by combination of finite accuracy and use of maximum range).
+; INPUT:
+; d0.w: X rotation (a)
+; d1.w: Y rotation (b)
+; d2.w: Z rotation (c)
+ZSphere.generateMatrix:
+	lea	ZSphere.tempMatrix,a0
+* 1> rotate 3 axis.
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	Do_SinModulo	d2
+	movea.w	d0,a3
+	movea.w	d1,a4
+	movea.w	d2,a5
+	lea	sine_tbl,a2
+
+* X := + x*cos(b)*cos(c)
+*      - y*cos(b)*sin(c)
+*      + z*sin(b)
+	Get_SinCos	a2,d1,d3,d4
+	Get_SinCos	a2,d2,d5,d6
+	muls.w	d4,d6				* / cos(b)*sin(c)
+	add.l	d6,d6				* |
+;	bvc.s	.skipxd6
+;	subq.l	#1,d6
+;.skipxd6:
+	swap	d6				* \
+	muls.w	d4,d5				* / -cos(b)*sin(c)
+	add.l	d5,d5				* |
+;	bvc.s	.skipxd5
+;	subq.l	#1,d5
+;.skipxd5:
+	swap	d5				* |
+	neg.w	d5				* \
+	move.w	d6,(a0)+
+	move.w	d5,(a0)+
+	move.w	d3,(a0)+
+	
+* Y := + x*(sin(a)*sin(b)*cos(c)+cos(a)*sin(c))
+*      + y*(cos(a)*cos(c)-sin(a)*sin(b)*sin(c))
+*      - z*sin(a)*cos(b)
+	Get_SinCos	a2,a3,d0,d1
+	Get_Sin		a2,a4,d2
+	Get_SinCos	a2,a5,d4,d5
+	muls.w	d0,d2
+	add.l	d2,d2
+;	bvc.s	.skipyd2
+;	subq.l	#1,d2
+;.skipyd2:
+	swap	d2
+	muls.w	d2,d5
+	add.l	d5,d5
+;	bvc.s	.skipyd5
+;	subq.l	#1,d5
+;.skipyd5:
+	swap	d5
+	muls.w	d1,d4
+	add.l	d4,d4
+;	bvc.s	.skipyd4
+;	subq.l	#1,d4
+;.skipyd4:
+	swap	d4
+	add.w	d4,d5
+	bvc.s	.skipyvd5
+	addq.w	#1,d5
+	neg.w	d5
+.skipyvd5:
+	move.w	d5,d3
+	;Get_SinCos	a2,a3,d0,d1
+	Get_Sin		a2,a4,d2
+	Get_SinCos	a2,a5,d4,d5
+	muls.w	d1,d5
+	add.l	d5,d5
+;	bvc.s	.skipy2d5
+;	subq.l	#1,d5
+;.skipy2d5:
+	swap	d5
+	muls.w	d0,d2
+	add.l	d2,d2
+;	bvc.s	.skipy2d2
+;	subq.l	#1,d2
+;.skipy2d2:
+	swap	d2
+	muls.w	d2,d4
+	add.l	d4,d4
+	swap	d4
+	sub.w	d4,d5
+	bvc.s	.skipyv2d5
+	addq.w	#1,d5
+	neg.w	d5
+.skipyv2d5:
+	Get_Cos		a2,a4,d4
+	muls.w	d0,d4
+	add.l	d4,d4
+;	bvc.s	.skipy2d4
+;	subq.l	#1,d4
+;.skipy2d4:
+	swap	d4
+	neg.w	d4
+	move.w	d3,(a0)+
+	move.w	d5,(a0)+
+	move.w	d4,(a0)+
+
+* Z := + x*(sin(a)*sin(c)-cos(a)*sin(b)*cos(c))
+*      + y*(cos(a)*sin(b)*sin(c)+sin(a)*cos(c))
+*      + z*cos(a)*cos(b)
+	Get_SinCos	a2,a3,d0,d1
+	Get_Sin		a2,a4,d2
+	Get_SinCos	a2,a5,d4,d5
+	muls.w	d0,d4
+	add.l	d4,d4
+;	bvc.s	.skipzd4
+;	subq.l	#1,d4
+;.skipzd4:
+	swap	d4
+	muls.w	d1,d2
+	add.l	d2,d2
+;	bvc.s	.skipzd2
+;	subq.l	#1,d2
+;.skipzd2:
+	swap	d2
+	muls.w	d2,d5
+	add.l	d5,d5
+	swap	d5
+	sub.w	d5,d4
+	bvc.s	.skipzvd4
+	addq.w	#1,d4
+	neg.w	d4
+.skipzvd4:
+	move.w	d4,d3
+	;Get_SinCos	a2,a3,d0,d1
+	Get_Sin		a2,a4,d2
+	Get_SinCos	a2,a5,d4,d5
+	muls.w	d1,d2
+	add.l	d2,d2
+;	bvc.s	.skipz2d2
+;	subq.l	#1,d2
+;.skipz2d2:
+	swap	d2
+	muls.w	d2,d4
+	add.l	d4,d4
+	swap	d4
+	muls.w	d0,d5
+	add.l	d5,d5
+;	bvc.s	.skipzd5
+;	subq.l	#1,d5
+;.skipzd5:
+	swap	d5
+	add.w	d4,d5
+	bvc.s	.skipzvd5
+	addq.w	#1,d5
+	neg.w	d5
+.skipzvd5:
+	Get_Cos		a2,a4,d4
+	muls.w	d1,d4
+	add.l	d4,d4
+;	bvc.s	.skipz2d4
+;	subq.l	#1,d4
+;.skipz2d4:
+	swap	d4
+	move.w	d3,(a0)+
+	move.w	d5,(a0)+
+	move.w	d4,(a0)+
+
+* Translation vector := (0,0,0)
+	moveq	#0,d0
+	move.l	d0,(a0)+
+	move.l	d0,(a0)+
+	move.l	d0,(a0)+
+
+	rts
+
+; Give the object a unit-matrix and a translation of (0,0,0).
+ZSphere.loadUnityMatrix:
+	move.w	#$7fff,d0
+	moveq	#0,d1
+	lea	ZSphere.tempMatrix,a0
+	move.w	d0,(a0)+
+	move.w	d1,(a0)+
+	move.w	d1,(a0)+
+	move.w	d1,(a0)+
+	move.w	d0,(a0)+
+	move.w	d1,(a0)+
+	move.w	d1,(a0)+
+	move.w	d1,(a0)+
+	move.w	d0,(a0)+
+	move.l	d1,(a0)+
+	move.l	d1,(a0)+
+	move.l	d1,(a0)+
+	rts
+
+; Copy a matrix from, one location to the other.
+; INPUT:
+; a0: destination matrix
+; a1: source matrix
+ZSphere.copyMatrix:
+	moveq	#15-1,d7
+.loop:	move.w	(a1)+,(a0)+
+	dbra	d7,.loop
+	rts
+
+; Translate the matrix translation vector.
+; INPUT:
+; d0.w: X translation
+; d1.w: Y translation
+; d2.w: Z translation
+ZSphere.translateMatrix:
+	lea	ZSphere.tempMatrix+9*2,a0
+	add.w	d0,(a0)
+	add.w	d1,4(a0)
+	add.w	d2,8(a0)
+	rts
+
+; Routine that multiplies the scale- and rotation-matrix AND also the
+; translation vector. The matrix to be multiplied is the temporary matrix.
+; This means this _must_ be inititialized.
+; INPUT:
+; a0: destination matrix
+; a1: matrix to multiply with (source)
+ZSphere.multiplyMatrix:
+; Multiply matrix.
+	movea.l	a0,a3
+	lea	ZSphere.tempMatrix,a0
+	moveq	#3-1,d7
+
+.rowloop:
+	movem.w	(a1)+,d0-d2
+	moveq	#3-1,d6
+
+.columnloop:
+	move.w	d0,d3
+	move.w	d1,d4
+	move.w	d2,d5
+	muls.w	(a0),d3
+	muls.w	3*2(a0),d4
+	muls.w	2*3*2(a0),d5
+	add.l	d3,d5
+	add.l	d4,d5
+	add.l	d5,d5
+	swap	d5
+	move.w	d5,(a3)+
+	addq	#2,a0
+	dbra	d6,.columnloop
+
+	subq	#2*3,a0
+	dbra	d7,.rowloop
+
+* Multiply (=rotate & scale) translation vector.
+	lea	-2*3*3(a1),a1
+	movem.l	9*2(a0),d0-d2
+	moveq	#3-1,d7
+
+.vectorloop:
+	move.l	d0,d3
+	move.w	(a1)+,d4
+	ext.l	d4
+	muls.l	d4,d4:d3
+	add.l	d3,d3
+	addx.l	d4,d4
+	move.w	d4,d3
+	swap	d3
+	move.l	d1,d4
+	move.w	(a1)+,d5
+	ext.l	d5
+	muls.l	d5,d5:d4
+	add.l	d4,d4
+	addx.l	d5,d5
+	move.w	d5,d4
+	swap	d4
+	move.l	d2,d5
+	move.w	(a1)+,d6
+	ext.l	d6
+	muls.l	d6,d6:d5
+	add.l	d5,d5
+	addx.l	d6,d6
+	move.w	d6,d5
+	swap	d5
+	add.l	d3,d5
+	add.l	d4,d5
+	move.l	d5,(a3)+
+	dbra	d7,.vectorloop
+
+; Add new matrix's translation.
+	movem.l	-12(a3),d0-d2
+	add.l	(a1)+,d0
+	add.l	(a1)+,d1
+	add.l	(a1)+,d2
+	movem.l	d0-d2,-12(a3)
+	rts
+
+; Pushes a previously generated matrix on the stack.
+ZSphere.pushMatrix:
+; First check for stack overflow.
+	move.w	ZSphere.matrixStackTop,d0
+	cmpi.w	#8,d0
+	bhs.s	.end
+; The stack is not full..
+
+; If this is the first matrix on the stack, then simply copy it.
+.multiply_matrix:
+	tst.w	d0
+	bne.s	.not_first_entry
+	lea	ZSphere.matrixStack,a0
+	lea	ZSphere.tempMatrix,a1
+	bsr	ZSphere.copyMatrix
+	bra.s	.end_multiply_matrix
+; Otherwise, multiply it with the previous entry.
+.not_first_entry:
+	lea	ZSphere.matrixStack,a0
+	mulu.w	#15*2,d0
+	adda.l	d0,a0				* a0 := address of current entry
+	lea	-15*2(a0),a1			* a1 := address of previous entry
+	bsr	ZSphere.multiplyMatrix
+.end_multiply_matrix:
+
+; Increase the stacktop by one.
+	addq.w	#1,ZSphere.matrixStackTop
+.end:	rts
+
+; Pops the top matrix off the stack.
+ZSphere.popMatrix:
+	tst.w	ZSphere.matrixStackTop
+	beq.s	.end
+	subq.w	#1,ZSphere.matrixStackTop
+.end:	rts
+
+; Transforms a vertex from 4d to 2d (perspective+width calcs included!).
+; INPUT:
+; a2: source 3d vertex (x,y,z,w)
+; OUTPUT:
+; d0.w: X
+; d1.w: Y
+; d2.w: WIDTH
+; d3.w: Z (=z)
+ZSphere.transformVertex:
+
+; Get temp 2d vertex address.
+	lea	.temp(pc),a0
+
+; Get current matrix...
+	lea	ZSphere.matrixStack,a1
+	move.w	ZSphere.matrixStackTop,d1
+	ble	.end
+	subq.w	#1,d1
+	mulu.w	#15*2,d1
+	adda.l	d1,a1
+; a1 = matrix
+	movem.l	9*2(a1),d6/a3/a6
+	movea.l	a0,a4
+
+	movem.w	(a2)+,d0-d2
+
+* X
+	move.w	d0,d3
+	move.w	d1,d4
+	move.w	d2,d5
+	muls.w	(a1)+,d3
+	muls.w	(a1)+,d4
+	muls.w	(a1)+,d5
+	add.l	d3,d5
+	add.l	d4,d5
+	add.l	d5,d5
+	add.l	d6,d5				* Translate coordinate.
+	swap	d5
+	move.w	d5,(a0)+			* Store coordinate.
+* Y
+	move.w	d0,d3
+	move.w	d1,d4
+	move.w	d2,d5
+	muls.w	(a1)+,d3
+	muls.w	(a1)+,d4
+	muls.w	(a1)+,d5
+	add.l	d3,d5
+	add.l	d4,d5
+	add.l	d5,d5
+	add.l	a3,d5				* Translate coordinate.
+	swap	d5
+	move.w	d5,(a0)+			* Store coordinate.
+* Z
+	move.w	d0,d3
+	move.w	d1,d4
+	move.w	d2,d5
+	muls.w	(a1)+,d3
+	muls.w	(a1)+,d4
+	muls.w	(a1)+,d5
+	add.l	d3,d5
+	add.l	d4,d5
+	add.l	d5,d5
+	add.l	a6,d5				* Translate coordinate.
+	swap	d5
+	move.w	d5,(a0)+			* Store coordinate.
+.end_transform:
+
+.perspectivation:
+	movea.l	a4,a0
+	move.w	a5,d7
+	movem.w	(a0),d0/d1/d2
+	lsl.l	#8,d0
+	lsl.l	#8,d1
+	addi.w	#$100,d2
+	divs.w	d2,d0
+	divs.w	d2,d1
+	addi.w	#160/2,d0
+	addi.w	#100/2,d1
+	moveq	#0,d4
+	move.w	(a2),d4
+	lsl.l	#8,d4
+	divs.w	d2,d4
+	move.w	4(a0),d3			; d3.w=Z
+	move.w	d4,d2				; d2.w=WIDTH
+.end_perspectivation:
+
+.end:	rts
+
+.temp:	DS.W	3				; X,Y,Z
+
+; Adds spheres to the scene.
+; Uses a 3d particle model.
+; "You're in the right position to suck my balls." 
+; INPUT:
+; a1: model
+ZSphere.addBounceModel:
+	move.w	$4bc.w,.time
+
+	move.w	(a1)+,.num
+
+	move.l	a1,-(sp)
+; Push world rotation matrix.
+	move.w	.time(pc),d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#5,d1
+	lsr.w	#2,d1
+	mulu.w	#7,d2
+	lsr.w	#2,d2
+	bsr	ZSphere.generateMatrix
+	move.w	$04BC.w,d0
+	sub.w	ZSphere.bounceStart+2,d0
+	move.w	d0,d1
+	mulu.w	#17,d0
+	andi.w	#$0FFF,d0
+	subi.w	#$0800,d0
+	mulu.w	#14,d1
+	Do_SinModulo	d1
+	Get_Sin	sine_tbl,d1,d1
+
+	asr.w	#5,d1
+	bpl.s	.abs_done
+	neg.w	d1
+.abs_done:
+	muls.w	ZSphere.bounceDir,d1
+	add.w	ZSphere.yOffset,d1
+	muls.w	ZSphere.walkDir,d0
+
+	tst.w	ZSphere.swapCoords
+	beq.s	.end_swap
+	exg	d0,d1
+.end_swap:
+
+	move.w	#10000,d2
+	bsr	ZSphere.translateMatrix
+	bsr	ZSphere.pushMatrix
+	movea.l	(sp)+,a1
+
+; Transform all balls.
+	moveq	#0,d7
+	
+.loop:	move.l	a1,-(sp)
+	move.w	d7,-(sp)
+	move.w	.time(pc),d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#3,d0
+	lsr.w	#2,d0
+	mulu.w	#5,d1
+	lsr.w	#1,d1
+	mulu.w	#7,d2
+	lsr.w	#3,d2
+	bsr	ZSphere.generateMatrix
+	clr.l	d0
+	clr.l	d1
+	clr.l	d2
+	bsr	ZSphere.translateMatrix
+	bsr	ZSphere.pushMatrix
+	lea	.temp(pc),a2
+	movea.l	2(sp),a1
+	move.w	(a1)+,(a2)
+	move.w	(a1)+,2(a2)
+	move.w	(a1)+,4(a2)
+	move.w	(a1)+,6(a2)
+	move.l	a1,2(sp)
+	bsr	ZSphere.transformVertex
+	cmpi.w	#ZSphere.MAX_RADIUS-1,d2
+	blo.s	.radius_okay
+	move.w	#ZSphere.MAX_RADIUS-1,d2
+.radius_okay:
+	addq.w	#1,d2
+	movea.l	ZSphere.baseAdr,a6
+	adda.l	#ZSphere.PALOFFSETTABLE,a6
+	move.l	(a6,d2.w*4),d4
+	move.l	2(sp),a1
+	move.w	(a1)+,d5
+	move.l	a1,2(sp)
+	movea.l	(ZSphere.ballColTable,d5.w*4),a6
+	lea	(a6,d4.l),a6
+
+	neg.w	d3				; z=-Z (due to z buffer direction!)
+	lsr.w	#4,d3				; limit depthrange
+
+	tst.w	(sp)
+	bne.s	.not_first
+	bsr	ZSphere.paint1stSphere
+	bra.s	.end_paint
+.not_first:
+	bsr	ZSphere.paintSphere
+.end_paint
+
+	bsr	ZSphere.popMatrix
+	move.w	(sp)+,d7
+	movea.l	(sp)+,a1
+	addq.w	#1,d7
+	cmp.w	.num(pc),d7
+	blt	.loop
+
+	bsr	ZSphere.popMatrix
+	rts
+
+.temp:	DS.W	4				; x,y,z,w
+.num:	DC.W	0
+.time:	DC.W	0
+
+
+; Adds spheres to the scene.
+; Uses a 3d particle model.
+; "You're in the right position to suck my balls." 
+; INPUT:
+; a1: model
+ZSphere.addModel:
+
+	move.w	$4bc.w,.time
+
+	move.w	(a1)+,.num
+
+	move.l	a1,-(sp)
+; Push world rotation matrix.
+	move.w	.time(pc),d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#5,d1
+	lsr.w	#2,d1
+	mulu.w	#7,d2
+	lsr.w	#2,d2
+	bsr	ZSphere.generateMatrix
+	move.w	.time(pc),d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#7,d0
+	lsr.l	#1,d0
+	mulu.w	#11,d1
+	lsr.l	#1,d1
+	mulu.w	#13,d2
+	lsr.l	#2,d2
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	Do_SinModulo	d2
+	Get_Sin	sine_tbl,d0,d0
+	Get_Sin	sine_tbl,d1,d1
+	Get_Sin	sine_tbl,d2,d2
+	asr.w	#5,d0
+	asr.w	#5,d1
+	asr.w	#3,d2
+	addi.w	#10000,d2
+	bsr	ZSphere.translateMatrix
+	bsr	ZSphere.pushMatrix
+	movea.l	(sp)+,a1
+
+; Transform all balls.
+	moveq	#0,d7
+	
+.loop:	move.l	a1,-(sp)
+	move.w	d7,-(sp)
+	move.w	.time(pc),d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#3,d0
+	lsr.w	#2,d0
+	mulu.w	#5,d1
+	lsr.w	#1,d1
+	mulu.w	#7,d2
+	lsr.w	#3,d2
+	bsr	ZSphere.generateMatrix
+	clr.l	d0
+	clr.l	d1
+	clr.l	d2
+	bsr	ZSphere.translateMatrix
+	bsr	ZSphere.pushMatrix
+	lea	.temp(pc),a2
+	movea.l	2(sp),a1
+	move.w	(a1)+,(a2)
+	move.w	(a1)+,2(a2)
+	move.w	(a1)+,4(a2)
+	move.w	(a1)+,6(a2)
+	move.l	a1,2(sp)
+	bsr	ZSphere.transformVertex
+	cmpi.w	#ZSphere.MAX_RADIUS-1,d2
+	blo.s	.radius_okay
+	move.w	#ZSphere.MAX_RADIUS-1,d2
+.radius_okay:
+	addq.w	#1,d2
+	movea.l	ZSphere.baseAdr,a6
+	adda.l	#ZSphere.PALOFFSETTABLE,a6
+	move.l	(a6,d2.w*4),d4
+	move.l	2(sp),a1
+	move.w	(a1)+,d5
+	move.l	a1,2(sp)
+	movea.l	(ZSphere.ballColTable,d5.w*4),a6
+	lea	(a6,d4.l),a6
+
+	neg.w	d3				; z=-Z (due to z buffer direction!)
+	lsr.w	#4,d3				; limit depthrange
+
+	tst.w	(sp)
+	bne.s	.not_first
+	bsr	ZSphere.paint1stSphere
+	bra.s	.end_paint
+.not_first:
+	bsr	ZSphere.paintSphere
+.end_paint
+
+	bsr	ZSphere.popMatrix
+	move.w	(sp)+,d7
+	movea.l	(sp)+,a1
+	addq.w	#1,d7
+	cmp.w	.num(pc),d7
+	blt	.loop
+
+	bsr	ZSphere.popMatrix
+	rts
+
+.temp:	DS.W	4				; x,y,z,w
+.num:	DC.W	0
+.time:	DC.W	0
+
+; Adds spheres to the scene.
+; Uses a 3d particle model.
+; "You're in the right position to suck my balls." 
+; INPUT:
+; d0.w=x offset
+; a1: model
+ZSphere.addVibrModel1:
+	move.w	d0,.x
+
+	move.w	$04BC.w,.time
+
+	move.w	(a1)+,.num
+
+	move.l	a1,-(sp)
+; Push world rotation matrix.
+	move.w	.time(pc),d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#5,d1
+	lsr.w	#2,d1
+	mulu.w	#7,d2
+	lsr.w	#2,d2
+	bsr	ZSphere.generateMatrix
+	move.w	.time(pc),d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#47,d0
+	mulu.w	#59,d1
+	mulu.w	#71,d2
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	Do_SinModulo	d2
+	Get_Sin	sine_tbl,d0,d0
+	Get_Sin	sine_tbl,d1,d1
+	Get_Sin	sine_tbl,d2,d2
+	asr.w	#8,d0
+	asr.w	#8,d1
+	asr.w	#8,d2
+	addi.w	#10000,d2
+	bsr	ZSphere.translateMatrix
+	bsr	ZSphere.pushMatrix
+	movea.l	(sp)+,a1
+
+; Transform all balls.
+	moveq	#0,d7
+	
+.loop:	move.l	a1,-(sp)
+	move.w	d7,-(sp)
+	move.w	.time(pc),d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#3,d0
+	lsr.w	#2,d0
+	mulu.w	#5,d1
+	lsr.w	#1,d1
+	mulu.w	#7,d2
+	lsr.w	#3,d2
+	clr.w	d0
+	clr.w	d1
+	clr.w	d2
+	bsr	ZSphere.generateMatrix
+	move.w	.x(pc),d0
+	clr.w	d1
+	clr.w	d2
+	bsr	ZSphere.translateMatrix
+	bsr	ZSphere.pushMatrix
+	lea	.temp(pc),a2
+	movea.l	2(sp),a1
+	move.w	(a1)+,(a2)
+	move.w	(a1)+,2(a2)
+	move.w	(a1)+,4(a2)
+	move.w	(a1)+,6(a2)
+	move.l	a1,2(sp)
+	bsr	ZSphere.transformVertex
+	cmpi.w	#ZSphere.MAX_RADIUS-1,d2
+	blo.s	.radius_okay
+	move.w	#ZSphere.MAX_RADIUS-1,d2
+.radius_okay:
+	addq.w	#1,d2
+	movea.l	ZSphere.baseAdr,a6
+	adda.l	#ZSphere.PALOFFSETTABLE,a6
+	move.l	(a6,d2.w*4),d4
+	move.l	2(sp),a1
+	move.w	(a1)+,d5
+	move.l	a1,2(sp)
+	movea.l	(ZSphere.ballColTable,d5.w*4),a6
+	lea	(a6,d4.l),a6
+
+	neg.w	d3				; z=-Z (due to z buffer direction!)
+	lsr.w	#4,d3				; limit depthrange
+
+;	tst.w	(sp)
+;	bne.s	.not_first
+;	bsr	ZSphere.paint1stSphere
+;	bra.s	.end_paint
+;.not_first:
+	bsr	ZSphere.paintSphere
+;.end_paint
+
+	bsr	ZSphere.popMatrix
+	move.w	(sp)+,d7
+	movea.l	(sp)+,a1
+	addq.w	#1,d7
+	cmp.w	.num(pc),d7
+	blt	.loop
+
+	bsr	ZSphere.popMatrix
+	rts
+
+.x:	DC.W	0
+.temp:	DS.W	4				; x,y,z,w
+.num:	DC.W	0
+.time:	DC.W	0
+
+; Adds spheres to the scene.
+; Uses a 3d particle model.
+; "You're in the right position to suck my balls." 
+; INPUT:
+; d0.w=x offset
+; a1: model
+ZSphere.addVibrModel2:
+	move.w	d0,.x
+
+	move.w	$04BC.w,.time
+
+	move.w	(a1)+,.num
+
+	move.l	a1,-(sp)
+; Push world rotation matrix.
+	move.w	.time(pc),d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#5,d1
+	lsr.w	#2,d1
+	mulu.w	#7,d2
+	lsr.w	#2,d2
+	bsr	ZSphere.generateMatrix
+	move.w	.time(pc),d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#59,d0
+	mulu.w	#67,d1
+	mulu.w	#79,d2
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	Do_SinModulo	d2
+	Get_Sin	sine_tbl,d0,d0
+	Get_Sin	sine_tbl,d1,d1
+	Get_Sin	sine_tbl,d2,d2
+	asr.w	#8,d0
+	asr.w	#8,d1
+	asr.w	#8,d2
+	addi.w	#10000,d2
+	bsr	ZSphere.translateMatrix
+	bsr	ZSphere.pushMatrix
+	movea.l	(sp)+,a1
+
+; Transform all balls.
+	moveq	#0,d7
+	
+.loop:	move.l	a1,-(sp)
+	move.w	d7,-(sp)
+	move.w	.time(pc),d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#3,d0
+	lsr.w	#2,d0
+	mulu.w	#5,d1
+	lsr.w	#1,d1
+	mulu.w	#7,d2
+	lsr.w	#3,d2
+	move.w	#sintbllen/2,d0
+	clr.w	d1
+	clr.w	d2
+	bsr	ZSphere.generateMatrix
+	move.w	.x(pc),d0
+	clr.w	d1
+	clr.w	d2
+	bsr	ZSphere.translateMatrix
+	bsr	ZSphere.pushMatrix
+	lea	.temp(pc),a2
+	movea.l	2(sp),a1
+	move.w	(a1)+,(a2)
+	move.w	(a1)+,2(a2)
+	move.w	(a1)+,4(a2)
+	move.w	(a1)+,6(a2)
+	move.l	a1,2(sp)
+	bsr	ZSphere.transformVertex
+	cmpi.w	#ZSphere.MAX_RADIUS-1,d2
+	blo.s	.radius_okay
+	move.w	#ZSphere.MAX_RADIUS-1,d2
+.radius_okay:
+	addq.w	#1,d2
+	movea.l	ZSphere.baseAdr,a6
+	adda.l	#ZSphere.PALOFFSETTABLE,a6
+	move.l	(a6,d2.w*4),d4
+	move.l	2(sp),a1
+	move.w	(a1)+,d5
+	move.l	a1,2(sp)
+	movea.l	(ZSphere.ballColTable,d5.w*4),a6
+	lea	(a6,d4.l),a6
+
+	neg.w	d3				; z=-Z (due to z buffer direction!)
+	lsr.w	#4,d3				; limit depthrange
+
+;	tst.w	(sp)
+;	bne.s	.not_first
+;	bsr	ZSphere.paint1stSphere
+;	bra.s	.end_paint
+;.not_first:
+	bsr	ZSphere.paintSphere
+;.end_paint
+
+	bsr	ZSphere.popMatrix
+	move.w	(sp)+,d7
+	movea.l	(sp)+,a1
+	addq.w	#1,d7
+	cmp.w	.num(pc),d7
+	blt	.loop
+
+	bsr	ZSphere.popMatrix
+	rts
+
+.x:	DC.W	0
+.temp:	DS.W	4				; x,y,z,w
+.num:	DC.W	0
+.time:	DC.W	0
+
+
+; INPUT:
+; d0.w: left x
+; d1.w: top y
+; d2.w: width
+; d3.w: heigth
+; OUTPUT:
+; d0.w: left x
+; d1.w: top y
+; d2.w: width
+; d3.w: height
+; d4.w: clipped off left x
+; d5.w: clipped off top y
+; d6.w: 0=offsceen, 1=onscreen
+ZSphere.clip:
+	clr.l	d4				; d4.w = clipped off left x(=0)
+	move.w	d0,d6
+	add.w	d2,d6				; d6.w = right x
+	ble.s	.offscreen
+	tst.w	d0
+	bpl.s	.test_right_x
+; Clipped on left side.
+	add.w	d0,d2				; d2.w = width - clipped off left x
+	move.w	d0,d4
+	neg.w	d4				; d4.w = clipped off left x
+	clr.l	d0				; d0.w = left x(=0)
+.test_right_x:
+	subi.w	#160,d6				; d6.w = clipped off right x
+	bls.s	.right_x_not_clipped
+	cmpi.w	#160,d0
+	bge.s	.offscreen
+; Clipped on right side.
+	sub.w	d6,d2				; d2.w = width - clipped off right x
+.right_x_not_clipped:
+
+	clr.l	d5				; d5.w = clipped off top y(=0)
+	move.w	d1,d6
+	add.w	d3,d6				; d6.w = bottom y
+	ble.s	.offscreen
+	tst.w	d1
+	bpl.s	.test_bottom_y
+; Clipped on top side.
+	add.w	d1,d3				; d3.w = heigth - clipped off top y
+	move.w	d1,d5
+	neg.w	d5				; d5.w = clipped off top y
+	clr.l	d1				; d1.w = top y(=0)
+.test_bottom_y:
+	subi.w	#100,d6				; d6.w = clipped off bottom y
+	bls.s	.bottom_y_not_clipped
+	cmpi.w	#100,d1
+	bge.s	.offscreen
+; Clipped on right side.
+	sub.w	d6,d3				; d3.w = height - clipped off top y
+.bottom_y_not_clipped:
+
+.onscreen:
+	moveq	#1,d6
+	rts
+.offscreen:
+	moveq	#0,d6
+	rts
+
+; INPUT:
+; d0.w: center x
+; d1.w: center y
+; d2.w: radius
+; d3.w: center z
+; a6: color table
+ZSphere.paintSphere:
+
+	sub.w	d2,d0
+	sub.w	d2,d1
+; d0.w: left x
+; d1.w: top y
+
+	movem.w	d2/d3,-(sp)
+	add.w	d2,d2
+	move.w	d2,d3
+
+	bsr	ZSphere.clip
+; d2.w = width
+; d3.w = height
+; d4.w = cliplx
+; d5.w = clipty
+
+	movea.w	d2,a0
+	move.w	d3,d7
+	movem.w	(sp)+,d2/d3
+
+	tst.w	d6
+	beq	.end
+
+	movea.l	ZSphere.baseAdr,a2
+	movea.l	a2,a1
+	movea.l	a2,a5
+
+	move.w	#ZSphere.MAX_RADIUS,d6
+	sub.w	d2,d6				; d6.w = MAX_RADIUS - r
+	add.w	d4,d6				; d6.w = MAX_R - r + cliplx
+	adda.l	#ZSphere.SQUARETABLE,a2
+	movea.l	a2,a3
+	lea	(a2,d6.w*2),a2			; a2: x square lookup
+	move.w	#ZSphere.MAX_RADIUS,d6
+	sub.w	d2,d6				; d6.w = MAX_RADIUS - r
+	add.w	d5,d6				; d6.w = MAX_R - r + clipty
+	lea	(a3,d6.w*2),a3			; a3: y square lookup
+
+	adda.l	#ZSphere.SQRTTABLE,a1
+	adda.l	#ZSphere.ZBUFFER,a5
+
+	subq.w	#1,d7				; d7.w = height-1
+	move.w	a0,d5				; d5.w = width
+	subq.w	#1,d5				; d5.w = width-1
+
+	mulu.w	d2,d2
+; d2.w = r^2
+
+; Now paint the graphics.
+	movea.l	ZSphere.scrAdrAdr,a0
+	movea.l	(a0),a0
+	ext.l	d0
+	mulu.w	#160,d1
+	add.l	d0,d1
+	add.l	d1,d1
+	adda.l	d1,a5
+	adda.l	d1,a0
+
+	clr.l	d0
+	clr.l	d1
+	clr.l	d4
+
+; z = sqrt(r^2-x^2-y^2)
+.yloop:	movea.l	a2,a4
+	move.w	d5,d6
+	move.w	(a3)+,d0
+
+.xloop:	move.w	(a4)+,d1
+	add.w	d0,d1
+	add.w	d2,d1
+	bmi.s	.end_pixel
+	move.w	(a1,d1.l*2),d1
+	move.w	d1,d4
+	add.w	d3,d1
+	cmp.w	(a5),d1
+	blt.s	.end_pixel
+	move.w	d1,(a5)
+	move.w	(a6,d4.l*2),(a0)
+.end_pixel:
+	addq	#2,a0
+	addq	#2,a5
+	dbra	d6,.xloop
+
+	lea	159*2(a0),a0
+	suba.w	d5,a0
+	suba.w	d5,a0
+	lea	159*2(a5),a5
+	suba.w	d5,a5
+	suba.w	d5,a5
+	dbra	d7,.yloop
+.end:	rts
+
+; INPUT:
+; d0.w: center x
+; d1.w: center y
+; d2.w: radius
+; d3.w: center z
+; a6: color table
+ZSphere.paint1stSphere:
+
+	sub.w	d2,d0
+	sub.w	d2,d1
+; d0.w: left x
+; d1.w: top y
+
+	movem.w	d2/d3,-(sp)
+	add.w	d2,d2
+	move.w	d2,d3
+
+	bsr	ZSphere.clip
+; d2.w = width
+; d3.w = height
+; d4.w = cliplx
+; d5.w = clipty
+
+	movea.w	d2,a0
+	move.w	d3,d7
+	movem.w	(sp)+,d2/d3
+
+	tst.w	d6
+	beq	.end
+
+	movea.l	ZSphere.baseAdr,a2
+	movea.l	a2,a1
+	movea.l	a2,a5
+
+	move.w	#ZSphere.MAX_RADIUS,d6
+	sub.w	d2,d6				; d6.w = MAX_RADIUS - r
+	add.w	d4,d6				; d6.w = MAX_R - r + cliplx
+	adda.l	#ZSphere.SQUARETABLE,a2
+	movea.l	a2,a3
+	lea	(a2,d6.w*2),a2			; a2: x square lookup
+	move.w	#ZSphere.MAX_RADIUS,d6
+	sub.w	d2,d6				; d6.w = MAX_RADIUS - r
+	add.w	d5,d6				; d6.w = MAX_R - r + clipty
+	lea	(a3,d6.w*2),a3			; a3: y square lookup
+
+	adda.l	#ZSphere.SQRTTABLE,a1
+	adda.l	#ZSphere.ZBUFFER,a5
+
+	subq.w	#1,d7				; d7.w = height-1
+	move.w	a0,d5				; d5.w = width
+	subq.w	#1,d5				; d5.w = width-1
+
+	mulu.w	d2,d2
+; d2.w = r^2
+
+; Now paint the graphics.
+	movea.l	ZSphere.scrAdrAdr,a0
+	movea.l	(a0),a0
+	ext.l	d0
+	mulu.w	#160,d1
+	add.l	d0,d1
+	add.l	d1,d1
+	adda.l	d1,a5
+	adda.l	d1,a0
+
+	clr.l	d0
+	clr.l	d1
+	clr.l	d4
+
+; z = sqrt(r^2-x^2-y^2)
+.yloop:	movea.l	a2,a4
+	move.w	d5,d6
+	move.w	(a3)+,d0
+
+.xloop:	move.w	(a4)+,d1
+	add.w	d0,d1
+	add.w	d2,d1
+	bmi.s	.end_pixel
+	move.w	(a1,d1.l*2),d1
+	move.w	(a6,d1.l*2),(a0)
+	add.w	d3,d1
+	move.w	d1,(a5)
+.end_pixel:
+	addq	#2,a0
+	addq	#2,a5
+	dbra	d6,.xloop
+
+	lea	159*2(a0),a0
+	suba.w	d5,a0
+	suba.w	d5,a0
+	lea	159*2(a5),a5
+	suba.w	d5,a5
+	suba.w	d5,a5
+	dbra	d7,.yloop
+.end:	rts
+
+; INPUT:
+; a0: screen (160*100 words)
+ZSphere.clearScreen:
+	movea.l	ZSphere.scrAdrAdr,a0
+	movea.l	(a0),a0
+	move.w	#160*100/2-1,d7
+	clr.l	d0
+.loop:	move.l	d0,(a0)+
+	dbf	d7,.loop
+	rts
+
+ZSphere.feedbackScreen:
+	movea.l	ZSphere.scrAdrAdr,a0
+	movea.l	(a0),a0
+	movea.l	ZSphere.oldScrAdrAdr,a1
+	movea.l	(a1),a1
+	lea	80*2(a0),a2
+	lea	160*50*2(a0),a3
+	lea	(160*50+80)*2(a0),a4
+	moveq	#50-1,d7
+
+.yloop:	moveq	#40-1,d6
+
+.xloop:	move.w	(a1),d0
+	addq	#4,a1
+	swap	d0
+	move.w	(a1),d0
+	addq	#4,a1
+	move.l	d0,(a0)+
+	move.l	d0,(a2)+
+	move.l	d0,(a3)+
+	move.l	d0,(a4)+
+	dbf	d6,.xloop
+
+	adda.w	#80*2,a0
+	adda.w	#160*2,a1
+	adda.w	#80*2,a2
+	adda.w	#80*2,a3
+	adda.w	#80*2,a4
+	dbf	d7,.yloop
+	rts
+
+ZSphere.copyVga60:
+	move.w	#160,d0
+	move.w	#100,d1
+	movea.l	ZSphere.scrAdrAdr,a1
+	movea.l	(a1),a1
+	movea.l	scr,a0
+	bra.l	DOUBLE_BUFFERV
+
+ZSphere.copyRgb50:
+	move.w	#160,d0
+	move.w	#100,d1
+	movea.l	ZSphere.scrAdrAdr,a1
+	movea.l	(a1),a1
+	movea.l	scr,a0
+	bra.l	DOUBLE_BUFFERH
+
+;======= OBJECT DATA ========
+
+	DATA
+
+; Largest ball first please due to z buffer optimisation =;)
+ZSphere.waterModel:
+	DC.W	3				; 3 balls
+	DC.W	+0000,+0000,+0000,600,0		; x,y,z,r,c
+	DC.W	-0400,+0400,+0000,500,1		; x,y,z,r,c
+	DC.W	+0400,+0400,+0000,500,1		; x,y,z,r,c
+
+ZSphere.methaneModel:
+	DC.W	5				; 5 balls
+	DC.W	+0000,+0000,+0000,600,0		; x,y,z,r,c
+	DC.W	+0433,-0250,+0250,500,1		; x,y,z,r,c
+	DC.W	-0433,-0250,+0250,500,1		; x,y,z,r,c
+	DC.W	+0000,+0500,+0250,500,1		; x,y,z,r,c
+	DC.W	+0000,+0000,-0559,500,1		; x,y,z,r,c
+
+ZSphere.model:
+	DC.L	ZSphere.waterModel
+
+ZSphere.paintRout:
+	DC.L	ZSphere.paintSingle
+
+ZSphere.clearRout:
+	DC.L	ZSphere.clearScreen
+
+;======= OBJECT RESERVES ========
+
+	BSS
+
+ZSphere.matrixStackTop:
+	DS.W	1
+ZSphere.tempMatrix:
+	DS.W	15
+ZSphere.matrixStack:				* page flipping transformation matrix
+	DS.W	15*8
+
+ZSphere.copyRout:
+	DS.L	1
+ZSphere.scrAdrAdr:				; address of the address of the screenaddress (eh, yeah ;))
+	DS.L	1
+ZSphere.oldScrAdrAdr:
+	DS.L	1
+ZSphere.baseAdr:
+	DS.L	1
+
+ZSphere.bufAdr:
+	DS.L	1				; phys ptr
+ZSphere.bufAdr2:
+	DS.L	1				; log ptr
+
+ZSphere.ballColTable:
+	DS.L	2				; white, red table ptrs
+
+ZSphere.yOffset:
+	DS.W	1
+ZSphere.bounceDir:
+	DS.W	1
+ZSphere.bounceStart:
+	DS.L	1
+ZSphere.walkDir:
+	DS.W	1
+ZSphere.swapCoords:
+	DS.W	1
+ZSphere.moveOff:
+	DS.W	1
+
+;======= END OF DEMO-EFFECT OBJECT ========

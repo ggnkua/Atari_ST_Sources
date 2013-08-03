@@ -1,0 +1,193 @@
+ lea text,a0
+ move.l a0,a5
+ lea endtext,a1
+ move.l a1,d0
+ sub.l a0,d0
+ move.l d0,d5
+ clr.w -(sp)
+ pea filename
+ move.W #$3c,-(sp)
+ trap #1
+ add.l #8,sp
+ move.w d0,d3
+ move.l a5,-(sp)
+ move.l d5,-(sp)
+ move.w d3,-(sp)
+ move.w #$40,-(sp)
+ trap #1
+ add.l #12,sp
+ move.w d3,-(sp)
+ move.w #$3e,-(sp)
+ trap #1
+ addq.l #4,sp
+ clr.w -(sp)
+ trap #1 
+filename:
+ dc.B 'c:\boss\dec_23r.bin',0
+	even
+text:
+
+Z0004:MOVEM.L D0-A6,-(A7)
+      MOVE.W  $FFFF8240.W,-(A7)
+      LEA	LONG(PC),A4
+      move.l	d0,(a4)
+      CMPI.B  #$4C,(A0)+
+      BNE     Z0026
+      CMPI.B  #$53,(A0)+
+      BNE     Z0026
+      CMPI.B  #$44,(A0)+
+      BNE     Z0026
+      CMPI.B  #$21,(A0)+
+      BNE     Z0026
+      LEA 	Z0010+2(pc),a1
+      LEA	8(A0),A3
+      MOVE.L	A3,(A1)
+      MOVE.L 	A3,A1
+      MOVE.L  (A0)+,D0
+      LEA	LONG(PC),A4
+      MOVE.L	D0,(A4)
+      ADDA.L  D0,A1
+      MOVE.L  D0,A4
+      MOVE.L  (A0)+,D0
+      ADDA.L  D0,A3
+      MOVE.L  A3,A0 
+      SUBQ.L  #8,A0 
+      TST.W   -(A0) 
+      BPL.S   Z0006 
+      SUBQ.L  #1,A0 
+Z0006:MOVE.B  -(A0),D5
+Z0007:LSL.B   #1,D5 
+      BNE.S   Z0008 
+      MOVE.B  -(A0),D5
+      ROXL.B  #1,D5 
+Z0008:BCC.S   Z0010 
+      CLR.W   D1
+      LSL.B   #1,D5 
+      BNE.S   Z0009 
+      MOVE.B  -(A0),D5
+      ROXL.B  #1,D5 
+Z0009:BCC.S   Z000F 
+      LEA     Z000E(PC),A3
+      MOVEQ   #3,D3 
+Z000A:CLR.W   D1
+      MOVE.B  0(A3,D3.W),D2 
+      EXT.W   D2
+      MOVEQ   #-1,D4
+      LSL.W   D2,D4 
+      NOT.W   D4
+      SUBQ.W  #1,D2 
+Z000B:LSL.B   #1,D5 
+      BNE.S   Z000C 
+      MOVE.B  -(A0),D5
+      ROXL.B  #1,D5 
+Z000C:ROXL.W  #1,D1 
+      DBF     D2,Z000B
+      TST.W   D3
+      BEQ.S   Z000D 
+      CMP.W   D1,D4 
+      DBNE    D3,Z000A
+Z000D:MOVE.B  4(A3,D3.W),D2 
+      EXT.W   D2
+      ADD.W   D2,D1 
+      BRA.S   Z000F 
+Z000E:DC.B   $0A,$03,$02,$02,$0E,$07,$04,$01
+Z000F:MOVE.B  -(A0),-(A1) 
+      MOVE.W  D5,$FFFF8240.W
+      DBF     D1,Z000F
+Z0010:LEA     0,A3
+      CMPA.L  A3,A0 
+      BLE     Z0025 
+      LEA     Z0017(PC),A3
+      MOVEQ   #3,D2 
+Z0011:LSL.B   #1,D5 
+      BNE.S   Z0012 
+      MOVE.B  -(A0),D5
+      ROXL.B  #1,D5 
+Z0012:BCC.S   Z0013 
+      DBF     D2,Z0011
+Z0013:CLR.W   D1
+      ADDQ.W  #1,D2 
+      MOVE.B  0(A3,D2.W),D3 
+      BEQ.S   Z0016 
+      EXT.W   D3
+      SUBQ.W  #1,D3 
+Z0014:LSL.B   #1,D5 
+      BNE.S   Z0015 
+      MOVE.B  -(A0),D5
+      ROXL.B  #1,D5 
+Z0015:ROXL.W  #1,D1 
+      DBF     D3,Z0014
+Z0016:MOVE.B  5(A3,D2.W),D3 
+      EXT.W   D3
+      ADD.W   D3,D1 
+      BRA     Z0018 
+Z0017:DC.B   $0A,$02,$01,$00,$00,$0A,$06,$04
+      DC.B   $03,$02
+Z0018:CMPI.W  #2,D1 
+      BEQ.S   Z001F 
+      LEA     Z001E(PC),A3
+      MOVEQ   #1,D3 
+Z0019:LSL.B   #1,D5 
+      BNE.S   Z001A 
+      MOVE.B  -(A0),D5
+      ROXL.B  #1,D5 
+Z001A:BCC.S   Z001B 
+      DBF     D3,Z0019
+Z001B:ADDQ.W  #1,D3 
+      CLR.W   D2
+      MOVE.B  0(A3,D3.W),D4 
+      EXT.W   D4
+Z001C:LSL.B   #1,D5 
+      BNE.S   Z001D 
+      MOVE.B  -(A0),D5
+      ROXL.B  #1,D5 
+Z001D:ROXL.W  #1,D2 
+      DBF     D4,Z001C
+      LSL.W   #1,D3 
+      ADD.W   4(A3,D3.W),D2 
+      BRA.S   Z0023 
+Z001E:DC.B   $0B,$04,$07,$00,$01,' ',$00,$00
+      DC.B   $00,' ',$00,$00
+Z001F:CLR.W   D2
+      MOVEQ   #5,D3 
+      CLR.W   D4
+      LSL.B   #1,D5 
+      BNE.S   Z0020 
+      MOVE.B  -(A0),D5
+      ROXL.B  #1,D5 
+Z0020:BCC.S   Z0021 
+      MOVEQ   #8,D3 
+      MOVEQ   #$40,D4 
+Z0021:LSL.B   #1,D5 
+      BNE.S   Z0022 
+      MOVE.B  -(A0),D5
+      ROXL.B  #1,D5 
+Z0022:ROXL.W  #1,D2 
+      DBF     D3,Z0021
+      ADD.W   D4,D2 
+Z0023:LEA     0(A1,D2.W),A2 
+      EXT.L   D1
+      ADDA.L  D1,A2 
+      SUBQ.W  #1,D1 
+Z0024:MOVE.B  -(A2),-(A1) 
+      DBF     D1,Z0024
+      BRA     Z0007
+      
+Z0025 MOVE.L 	Z0010+2(pc),a1
+      MOVE.L 	Z0010+2(pc),a0
+      SUB.W	#12,A1
+      MOVE.L	A4,D0
+RECOP MOVE.B	(A0)+,(A1)+
+      SUBQ.L	#1,D0
+      BNE.S	RECOP
+      MOVE.L	#0,(A1)+
+      MOVE.L	#0,(A1)+
+      MOVE.L	#0,(A1)+
+       
+Z0026:MOVE.W  (A7)+,$FFFF8240.W
+      MOVEM.L (A7)+,D0-A6
+      MOVE.L	LONG(PC),D0
+      RTS 
+LONG	DC.L	0
+endtext
+

@@ -1,0 +1,376 @@
+; Many cubes/objects. A screen that uses u-fly. For the delta-demo.
+
+******** OBJECT EQUATES ********
+
+SxT4Cubes.DIMENSION:	=	5			; <6  (!!!)
+SxT4Cubes.DIMSQR:	=	SxT4Cubes.DIMENSION*SxT4Cubes.DIMENSION
+
+******** OBJECT TABLE ********
+
+* Must be first in object!!
+SxT4Cubes.table:
+	DC.L	SxT4Cubes.mainLoop
+	DC.L	SxT4Cubes.init
+	DC.L	rts
+	DC.L	SxT4Cubes.switchRot
+	DC.L	SxT4Cubes.resetTime
+	DC.L	0
+
+	IFND	DEMO_SYSTEM
+	INCLUDE	SFLY_DSP.S				* Include the CPU-DSP engine.
+	TEXT
+	INCLUDE	OBJECT3D.I
+	TEXT
+	ENDC
+
+******** INIT SUBROUTINE ********
+
+* OUTPUT: d0.l: 0   = All clear.
+*               neg = Error! Not initialized!
+SxT4Cubes.init:
+	lea	sine_tbl,a1
+	bsr.l	Matrix.init
+
+	bsr	SxT4Cubes.calcWave
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+******** REALTIME INIT SUBROUTINE ********
+
+SxT4Cubes.realtimeInit:
+; Init u fly..
+	bsr.l	HumanFly.init
+
+	lea	Viewport.settingsTable,a0
+	move.w	#320,Viewport.XSCREEN(a0)
+	move.w	#200,Viewport.YSCREEN(a0)
+	move.w	#0,Viewport.XSTART(a0)
+	move.w	#0,Viewport.YSTART(a0)
+	move.w	#320,Viewport.XEND(a0)
+	move.w	#200,Viewport.YEND(a0)
+	move.w	#160,Viewport.XCENTER(a0)
+	move.w	#100,Viewport.YCENTER(a0)
+	move.w	#256+32,Viewport.ASPECT(a0)
+	move.w	#$100,Viewport.FOCAL(a0)
+	bsr.l	Viewport.update
+
+	lea	SxT4Cubes.textureTable,a0
+	bsr.l	Polygon.init
+
+	bsr.l	ObjectRegistry.clear
+
+	lea	Object3d.spikey,a1
+	move.l	#Object3d.spikeyEnd-Object3d.spikey,d0
+	lea	SxT4Cubes.spikey,a0
+	bsr.l	Object3d.copy
+
+	lea	SxT4Cubes.spikey,a0
+	move.w	#0,d0
+	move.w	#8,d1
+	move.w	#$200/5,d2
+	bsr.l	Object3d.scale
+
+	lea	SxT4Cubes.spikey,a0
+	move.l	#Object3d.spikeyEnd-Object3d.spikey,d0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi.s	.error
+
+	clr.w	SxT4Cubes.objRotating
+
+	clr.l	d0
+	move.w	monitormode,d1
+	cmpi.w	#vga60,d1
+	beq.s	.vga60
+	cmpi.w	#vga100,d1
+	beq.s	.vga100
+	cmpi.w	#rgb50,d1
+	beq.s	.rgb50
+* Unknown monitormode..
+	rts
+.vga60:	move.l	#vga60_16bit_320_200,SxT4Cubes.resRout
+	rts
+.vga100:move.l	#vga100_16bit_320_200,SxT4Cubes.resRout
+	rts
+.rgb50:	move.l	#rgb50_16bit_320_200,SxT4Cubes.resRout
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+******** SCREENINIT SUBROUTINE ********
+
+SxT4Cubes.initScreen:
+	rts
+
+******** MAINLOOP SUBROUTINE ********
+
+SxT4Cubes.mainLoop:
+	IFNE	0
+	movec	cacr,d0
+	move.l	d0,-(sp)
+	bclr	#13,d0					; no write alloc
+	bset	#11,d0					; clear d cache
+	bclr	#8,d0					; d cache
+	bset	#4,d0					; i burst
+	bset	#0,d0					; i cache
+	movec	d0,cacr
+	ENDC
+
+	movea.l	scr,a0
+	bsr.l	Primitive.setScreenbuffer
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr	SxT4Cubes.realtimeInit
+	move.l	(sp)+,d0
+.end_realtime_init:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr	SxT4Cubes.initScreen
+.end_screeninit:
+
+	bsr.l	PrimitiveMesh.new
+
+	move.w	$04BC.w,d0
+	sub.w	SxT4Cubes.startTime,d0
+	move.w	d0,SxT4Cubes.time
+
+	bsr	SxT4Cubes.addCubes
+
+	bsr.l	PrimitiveMesh.sortZ
+	bsr.l	PrimitiveMesh.complete
+
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	moveq	#$00000000,d4
+	movea.l	scr,a0
+	bsr.l	Viewport.paintRectangle
+
+	movea.l	rectangleTableAddresses,a0
+	bsr.l	PrimitiveMesh.paint
+
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+
+	movea.l	SxT4Cubes.resRout,a0
+	suba.l	a1,a1
+	move.l	d0,a2
+.again:	bsr.l	Screen.requestUpdate
+	tst.l	d0
+	bmi.s	.again
+	clr.l	SxT4Cubes.resRout
+
+	IFNE	0
+	move.l	(sp)+,d0
+	movec	d0,cacr
+	ENDC
+
+	rts
+
+******** OBJECT SUBROUTINES ********
+
+SxT4Cubes.switchRot:
+	not.w	SxT4Cubes.objRotating
+
+SxT4Cubes.resetTime:
+	move.w	$04BC.w,SxT4Cubes.startTime
+	rts
+
+SxT4Cubes.calcWave:
+	lea	SxT4Cubes.waveMatrix,a0
+	moveq	#SxT4Cubes.DIMENSION-1,d7
+
+.yloop:	moveq	#SxT4Cubes.DIMENSION-1,d6
+
+.xloop:	move.w	d6,d0
+	move.w	d7,d1
+; x2
+	add.w	d0,d0
+	add.w	d1,d1
+; center..
+	subq.w	#SxT4Cubes.DIMENSION-1,d0
+	subq.w	#SxT4Cubes.DIMENSION-1,d1
+
+	muls.w	d0,d0
+	muls.w	d1,d1
+	add.l	d0,d1
+	bsr.l	Math.sqrt
+	mulu.l	#200,d0
+	swap	d0
+	move.w	d0,(a0)+
+	dbf	d6,.xloop
+
+	dbf	d7,.yloop
+	rts
+
+SxT4Cubes.addCubes:
+; Push world rotation matrix.
+	move.w	$04BC.w,d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#5,d1
+	lsr.l	#3,d1
+	mulu.w	#7,d2
+	lsr.l	#3,d2
+	bsr.l	Matrix.generate
+	move.w	#0,d0
+	move.w	#0,d1
+	move.w	#7000,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+; Transform all cubes.
+	lea	SxT4Cubes.rotTable,a1
+	clr.w	.count
+	clr.w	.ycount
+	move.w	#-1500,.yc
+
+.yloop:	clr.w	.xcount
+	move.w	#-1500,.xc
+	
+.xloop:
+; Rotate object..
+	tst.w	SxT4Cubes.objRotating
+	beq.s	.skip_rot
+	movem.w	(a1)+,d0-d2
+	move.w	SxT4Cubes.time,d3
+	mulu.w	d3,d0
+	mulu.w	d3,d1
+	mulu.w	d3,d2
+	lsr.l	#8,d0
+	lsr.l	#8,d1
+	lsr.l	#8,d2
+	bra.s	.rotate_it
+.skip_rot:
+	clr.w	d0
+	clr.w	d1
+	clr.w	d2
+.rotate_it:
+	move.l	a1,-(sp)
+	bsr.l	Matrix.generate
+
+; Translate object in matrix..
+; Fetch wave-height..
+	move.w	.count(pc),d7
+	move.w	(SxT4Cubes.waveMatrix,d7.w*2),d0
+	add.w	$04BC.w,d0
+	Do_SinModulo	d0
+	Get_Sin	sine_tbl,d0,d2
+	asr.w	#4,d2
+
+	movem.w	.xc(pc),d0-d1
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+
+	move.l	(sp)+,a1
+
+	addq.w	#1,.count
+	addi.w	#1200,.xc
+
+	addq.w	#1,.xcount
+	cmpi.w	#SxT4Cubes.DIMENSION,.xcount(pc)
+	blt	.xloop
+
+	addi.w	#1200,.yc
+
+	addq.w	#1,.ycount
+	cmpi.w	#SxT4Cubes.DIMENSION,.ycount(pc)
+	blt	.yloop
+
+	bsr.l	Matrix.pop
+
+	rts
+
+.count:	DC.W	0
+.xcount:DC.W	0
+.ycount:DC.W	0
+.xc:	DC.W	0
+.yc:	DC.W	0
+
+******** OBJECT DATA ********
+
+	DATA
+
+; x,y,z rotation speed table, for matrix of objects.
+SxT4Cubes.rotTable:
+	DC.W	$0100,$0180,$00C0
+	DC.W	$01B0,$0120,$0110
+	DC.W	$0120,$00D0,$0130
+	DC.W	$0110,$0170,$0090
+	DC.W	$0130,$01A0,$0070
+	DC.W	$00C0,$0160,$0120
+	DC.W	$00D0,$0070,$00A0
+	DC.W	$00E0,$00F0,$0170
+	DC.W	$0140,$0080,$0120
+	DC.W	$01E0,$0160,$0130
+	DC.W	$0090,$0110,$00B0
+	DC.W	$00E0,$0080,$0100
+	DC.W	$0150,$0090,$00E0
+	DC.W	$00F0,$0100,$0120
+	DC.W	$00A0,$0130,$0090
+	DC.W	$0160,$0150,$0110
+	DC.W	$01E0,$00E0,$0170
+	DC.W	$0140,$0180,$0020
+	DC.W	$01E0,$0060,$0130
+	DC.W	$0090,$0010,$00B0
+	DC.W	$00E0,$0080,$0100
+	DC.W	$0110,$0090,$01C0
+	DC.W	$00F0,$0100,$0120
+	DC.W	$0200,$0110,$0190
+	DC.W	$0160,$0150,$0090
+	DC.W	$0130,$0080,$0110
+
+SxT4Cubes.textureTable:
+	DC.L	FlareGen.chromeBuffer
+	DC.L	0
+
+rectangleTableAddresses:
+	DC.L	rectangleTable
+	DC.L	rectangleTable2
+	DC.L	rectangleTable3
+
+******** OBJECT RESERVES ********
+
+	BSS
+
+SxT4Cubes.resRout:
+	DS.L	1
+
+rectangleTable:
+	DS.W	1+4*32
+rectangleTable2:
+	DS.W	1+4*32
+rectangleTable3:
+	DS.W	1+4*32
+
+SxT4Cubes.time:
+	DS.W	1
+SxT4Cubes.startTime:
+	DS.W	1
+SxT4Cubes.objRotating:
+	DS.W	1
+
+SxT4Cubes.waveMatrix:
+	DS.W	SxT4Cubes.DIMSQR
+
+SxT4Cubes.spikey:
+	DS.W	1000
+
+******** END OF DEMO-EFFECT OBJECT ********

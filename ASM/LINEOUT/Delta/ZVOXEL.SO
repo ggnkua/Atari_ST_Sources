@@ -1,0 +1,988 @@
+; Fogged freedirectional voxelspace. A screen for delta.
+
+;======= OBJECT EQUATES ========
+
+; Voxel controlling values
+ZVoxel.RAYLENGTH:	=	64		; The bigger, the further the view stretches.
+ZVoxel.TUNNELVISION:	=	16		; The lower, the wider the view.
+
+			RSRESET
+; Heightfield tables
+ZVoxel.perspTable:	RS.W	ZVoxel.RAYLENGTH
+ZVoxel.zHeightTable:	RS.W	ZVoxel.RAYLENGTH*$100
+ZVoxel.hPal:		RS.W	1024
+ZVoxel.flowPal:		RS.L	256
+ZVoxel.fadePal:		RS.L	128*4
+ZVoxel.mixTable:	RS.W	256*256*2
+ZVoxel.zAngleTable:	RS.W	160*ZVoxel.RAYLENGTH
+ZVoxel.BLOCK_SIZE:	RS.B	0
+
+;======= OBJECT TABLE ========
+
+* Must be first in object!!
+ZVoxel.table:
+	DC.L	ZVoxel.mainLoop
+	DC.L	ZVoxel.init
+	DC.L	ZVoxel.setRes
+	DC.L	rts
+	DC.L	rts
+	DC.L	rts
+	DC.L	rts
+	DC.L	ZVoxel.tiltLeft			; '7'
+	DC.L	ZVoxel.pullUp			; '8'
+	DC.L	ZVoxel.tiltRight		; '9'
+	DC.L	ZVoxel.decAlt			; '-'
+	DC.L	ZVoxel.stickLeft		; '4'
+	DC.L	rts
+	DC.L	ZVoxel.stickRight		; '6'
+	DC.L	ZVoxel.incAlt			; '+'
+	DC.L	rts
+	DC.L	ZVoxel.pullDown			; '2'
+	DC.L	0
+
+;======= RESOLUTION SETTING ROUTINE ========
+
+ZVoxel.setRes:
+	IFEQ	testmode
+	move.l	#rts,vbl_gfx
+
+	move.w	$0468.w,d0
+.ck468:	cmp.w	$0468.w,d0
+	beq.s	.ck468
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+* Unknown monitormode..
+	rts
+.vga60:	bra.l	vga60_16bit_160_200
+.vga100:bra.l	vga100_16bit_160_100
+.rgb50:	bra.l	rgb50_16bit_320_100
+	ENDC
+	rts
+
+;======= INIT SUBROUTINE ========
+
+* OUTPUT: d0.l: 0   = All clear.
+*               neg = Error! Not initialized!
+ZVoxel.init:
+	move.l	#ZVoxel.BLOCK_SIZE,d0
+	bsr.l	Mem.register
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= REALTIME INIT SUBROUTINE ========
+
+ZVoxel.realtimeInit:
+	bsr.l	Mem.getBlock
+	move.l	d0,ZVoxel.baseAdr
+
+	bsr	ZVoxel.calcPerspTables
+	bsr	ZVoxel.calcDistTable
+
+	movea.l	ZVoxel.baseAdr,a0
+	adda.l	#ZVoxel.fadePal,a0
+	lea	ZVoxel.fadeFlowPal,a1
+	bsr.l	Pal.makeGradientTc
+
+	movea.l	ZVoxel.baseAdr,a0
+	adda.l	#ZVoxel.hPal,a0
+	lea	ZVoxel.hFlowPal,a1
+	bsr.l	Pal.makeGradientTc
+
+	movea.l	ZVoxel.baseAdr,a0
+	movea.l	a0,a1
+	movea.l	a0,a2
+	adda.l	#ZVoxel.mixTable,a0
+	adda.l	#ZVoxel.fadePal,a1
+	movea.w	#256,a5
+	move.w	#-256,d7
+	adda.l	#ZVoxel.hPal,a2
+;	adda.l	#ZVoxel.flowPal,a2
+	bsr	ZVoxel.calcMixTable
+
+	clr.w	ZVoxel.playerAngle
+	clr.w	ZVoxel.playerX
+	clr.w	ZVoxel.playerY
+	clr.w	ZVoxel.tiltX
+	clr.w	ZVoxel.speed
+	move.w	#25,ZVoxel.roll
+	clr.w	ZVoxel.xDir
+	clr.w	ZVoxel.dirChanged
+	clr.l	ZVoxel.oldPos
+	clr.w	ZVoxel.oldXDir
+	clr.w	ZVoxel.oldSpeed
+	clr.w	ZVoxel.oldAngle
+
+	rts
+
+;======= SCREENINIT SUBROUTINE ========
+
+ZVoxel.initScreen:
+* Insert screenarea initialising, etc. in here!
+	rts
+
+;======= MAINLOOP SUBROUTINE ========
+
+ZVoxel.mainLoop:
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr	ZVoxel.realtimeInit
+	move.l	(sp)+,d0
+.end_realtime_init:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr	ZVoxel.initScreen
+.end_screeninit:
+
+	bsr	ZVoxel.updateCam
+
+	movea.l	ZVoxel.baseAdr,a1
+	adda.l	#ZVoxel.mixTable,a1
+	move.l	#$3800,d0
+	lea	(a1,d0.l*2),a1
+	move.w	(a1),ZVoxel.skyColor
+	move.w	(a1),ZVoxel.skyColor+2
+	lea	Texture.8bTexture1,a2
+	bsr	ZVoxel.paint
+
+	lea	ZVoxel.skyAdrTable,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,-8(a0)
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+
+	IFEQ	testmode
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	move.l	d0,d1
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+	ENDC
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.res_done
+	bsr	ZVoxel.setRes
+.res_done:
+
+	rts
+
+;======= OBJECT SUBROUTINES ========
+
+ZVoxel.tiltLeft:
+	move.w	#-3,ZVoxel.xDir
+	st	ZVoxel.dirChanged
+	rts
+
+ZVoxel.pullDown:
+	subq.w	#1,ZVoxel.speed
+	addq.w	#1,ZVoxel.roll
+	st	ZVoxel.dirChanged
+	rts
+
+ZVoxel.tiltRight:
+	move.w	#+3,ZVoxel.xDir
+	st	ZVoxel.dirChanged
+	rts
+
+ZVoxel.decAlt:
+	subi.w	#64,ZVoxel.elevation
+	rts
+
+ZVoxel.stickLeft:
+	move.w	#-1,ZVoxel.xDir
+	st	ZVoxel.dirChanged
+	rts
+
+ZVoxel.stickRight:
+	move.w	#+1,ZVoxel.xDir
+	st	ZVoxel.dirChanged
+	rts
+
+ZVoxel.incAlt:
+	addi.w	#64,ZVoxel.elevation
+	rts
+
+ZVoxel.pullUp:
+	addq.w	#1,ZVoxel.speed
+	subq.w	#1,ZVoxel.roll
+	st	ZVoxel.dirChanged
+	rts
+
+; Calculates a 64K highcolor-word lookup table from two truecolor palettes.
+; INPUT:
+; d7.w: start intensity of palette1
+; a0: highcolor lookuptable
+; a1: truecolor palette1
+; a2: truecolor palette2 (256 entries)
+; a5: #entries in palette1
+ZVoxel.calcMixTable:
+	movea.l	#$0000ffff,a6
+
+.palloop:
+	moveq	#0,d0
+	moveq	#0,d1
+	move.b	(a1)+,d0
+	move.b	(a1)+,d1
+	move.w	(a1)+,d2
+	muls.w	d7,d0
+	muls.w	d7,d1
+	muls.w	d7,d2
+	lsl.l	#1,d0
+;	bpl.s	.r_ok
+;	clr.l	d0
+.r_ok:	lsl.l	#1,d1
+;	bpl.s	.g_ok
+;	clr.l	d1
+.g_ok:	lsl.l	#1,d2
+;	bpl.s	.b_ok
+;	clr.l	d2
+.b_ok:	moveq	#0,d6
+
+.colorloop:
+	moveq	#0,d3
+	moveq	#0,d4
+	move.b	(a2)+,d3
+	move.b	(a2)+,d4
+	move.w	(a2)+,d5
+	mulu.w	d6,d3
+	mulu.w	d6,d4
+	mulu.w	d6,d5
+	add.l	d0,d3
+	bpl.s	.red1_ok
+	moveq	#0,d3
+	bra.s	.red_ok
+.red1_ok:
+	cmp.l	a6,d3
+	blt.s	.red_ok
+	move.w	a6,d3
+.red_ok:
+	add.l	d1,d4
+	bpl.s	.green1_ok
+	moveq	#0,d4
+	bra.s	.green_ok
+.green1_ok:
+	cmp.l	a6,d4
+	blt.s	.green_ok
+	move.w	a6,d4
+.green_ok:
+	add.l	d2,d5
+	bpl.s	.blue1_ok
+	moveq	#0,d5
+	bra.s	.blue_ok
+.blue1_ok:
+	cmp.l	a6,d5
+	blt.s	.blue_ok
+	move.w	a6,d5
+.blue_ok:
+	andi.w	#%1111100000000000,d3
+	lsr.w	#5,d4
+	andi.w	#%0000011111100000,d4
+	lsr.w	#8,d5
+	lsr.w	#3,d5
+	or.w	d4,d3
+	or.w	d5,d3
+	move.w	d3,(a0)+
+	;move.w	d3,(a0)+
+	addq.b	#1,d6
+	bne.s	.colorloop
+
+	lea	-256*4(a2),a2
+	addq.w	#4,d7
+	cmp.w	a5,d7
+	blt.s	.palloop
+	rts
+
+ZVoxel.updateCam:
+
+; first update cam..
+	move.w	ZVoxel.oldSpeed,d3
+	move.l	ZVoxel.oldTime,d1
+	move.w	ZVoxel.oldAngle,d0
+
+	move.l	$04BA.w,d2
+	sub.l	d1,d2
+
+; banking rout.. cheap shit, certainly no real controls.
+	move.w	ZVoxel.oldXDir,d5
+	beq.s	.no_bank
+	move.l	d2,d4
+	mulu.w	#3,d4
+	lsr.l	#1,d4
+	cmpi.l	#sintbllen/4,d4
+	blt.s	.ok
+	move.w	#sintbllen/4,d4
+	st	ZVoxel.dirChanged
+	clr.w	ZVoxel.oldXDir
+	clr.w	ZVoxel.xDir
+.ok:	move.w	d4,d6
+	add.w	d4,d4
+	Get_Sin	sine_tbl,d4,d4
+	Get_Sin	sine_tbl,d6,d6
+	muls.w	d4,d4
+	muls.w	d6,d6
+	add.l	d4,d4
+	add.l	d6,d6
+	swap	d4
+	swap	d6
+	muls.w	d4,d4
+	muls.w	d6,d6
+	add.l	d4,d4
+	add.l	d6,d6
+	swap	d4
+	swap	d6
+	muls.w	d5,d6
+	muls.w	d5,d4
+	asr.l	#2,d4
+	move.w	d4,ZVoxel.tiltX
+	asr.l	#8,d6
+	add.w	ZVoxel.oldAngle,d6
+	move.w	d6,ZVoxel.playerAngle
+.no_bank:
+
+	muls.w	d2,d3
+	asr.l	#4,d3
+	Do_SinModulo	d0
+	move.w	(ZVoxel.xAngleStepTable,d0.w*2),d1
+	move.w	(ZVoxel.yAngleStepTable,d0.w*2),d2
+	muls.w	d3,d1
+	muls.w	d3,d2
+	asr.l	#4,d1
+	asr.l	#4,d2
+	add.w	ZVoxel.oldPos,d1
+	add.w	ZVoxel.oldPos+2,d2
+	move.w	d1,ZVoxel.playerX
+	move.w	d2,ZVoxel.playerY
+
+	tst.w	ZVoxel.dirChanged
+	beq.s	.no_change
+	move.w	ZVoxel.speed,ZVoxel.oldSpeed
+	move.w	ZVoxel.playerAngle,ZVoxel.oldAngle
+	move.l	ZVoxel.playerX,ZVoxel.oldPos
+	move.w	ZVoxel.xDir,ZVoxel.oldXDir
+	move.l	$4BA.W,ZVoxel.oldTime
+.no_change:
+
+	clr.w	ZVoxel.dirChanged
+	rts
+
+ZVoxel.calcPerspTables:
+* Calculate conventional 1/Z-table first.
+	movea.l	ZVoxel.baseAdr,a0
+	adda.l	#ZVoxel.perspTable,a0
+	move.l	#4096,d1
+	moveq	#1,d7
+	move.w	#ZVoxel.RAYLENGTH,d6
+.loop	move.l	d1,d0
+	divu.w	d7,d0
+	move.w	d0,(a0)+
+	addq.w	#1,d7
+	cmp.w	d6,d7
+	bls.s	.loop
+* Then calculate precalced 2d-height for the 256 3d-heights at every Z
+* point.
+	movea.l	ZVoxel.baseAdr,a1
+	movea.l	a1,a0
+	adda.l	#ZVoxel.perspTable,a1
+	adda.l	#ZVoxel.zHeightTable,a0
+	move.w	#ZVoxel.RAYLENGTH-1,d7
+.loop2:	move.w	(a1)+,d0
+	move.w	d0,d3
+	moveq	#0,d2
+.inloop2:
+	move.w	d3,d0
+	mulu.w	d2,d0
+	move.l	d0,d1
+	lsr.l	#6,d0
+	lsr.l	#8,d1
+	sub.l	d1,d0
+	move.w	d0,(a0)+
+	addq.b	#1,d2
+	bne.s	.inloop2
+	dbra	d7,.loop2
+	rts
+
+ZVoxel.calcDistTable:
+	lea	ZVoxel.xAngleStepTable,a0
+	lea	ZVoxel.yAngleStepTable,a1
+	lea	sine_tbl,a2
+	move.w	ZVoxel.eyedistance,d2
+	move.w	ZVoxel.raydistance,d3
+	move.w	#ZVoxel.TUNNELVISION,d6
+	move.w	#sintbllen-1,d7
+.loop	movem.w	(a2)+,d0-d1			* Get next sin and cos.
+	move.w	d0,d4
+	move.w	d1,d5
+	muls.w	d2,d4
+	muls.w	d2,d5
+	muls.w	d3,d0
+	muls.w	d3,d1
+	sub.l	d4,d0
+	sub.l	d5,d1
+	asr.l	#8,d0
+	divs.w	d6,d0
+	move.w	d0,(a1)+
+	asr.l	#8,d1
+	divs.w	d6,d1
+	move.w	d1,(a0)+
+	dbra	d7,.loop
+	rts
+
+ZVoxel.calcZAngleTable:
+	movea.l	ZVoxel.baseAdr,a0
+	adda.l	#ZVoxel.zAngleTable,a0
+	lea	sine_tbl,a1
+	move.w	#-80*3,d7			; d7.w = angle
+
+.angle_loop:
+	move.w	d7,d0
+	Do_SinModulo	d0
+	Get_Cos	a1,d0,d0
+	clr.w	d6				; d6.w = radius
+
+.radius_loop:
+	move.w	d6,d1
+	muls.w	d0,d1
+	asr.l	#7,d1
+	move.w	d1,(a0)+
+	addq.w	#1,d6
+	cmpi.w	#ZVoxel.RAYLENGTH,d6
+	blt.s	.radius_loop
+
+	addq.w	#3,d7
+	cmpi.w	#80*3,d7
+	blt.s	.angle_loop
+	rts
+
+; Draws the Voxel. This uses z cue shade.
+; INPUT:
+; a1: address of palette (alpha!)
+; a2: address of height map
+ZVoxel.paint:
+* Initialize drawing stuffs..
+	movea.l	ZVoxel.baseAdr,a4
+	adda.l	#ZVoxel.perspTable,a4
+	lea	ZVoxel.persp_tbl(pc),a0
+	moveq	#ZVoxel.RAYLENGTH-1,d7
+	moveq	#12,d2
+	move.w	ZVoxel.roll,d3
+	move.w	ZVoxel.elevation,d1
+.plop:	move.w	(a4)+,d0
+	mulu.w	d1,d0
+	lsr.l	d2,d0
+	add.w	d3,d0
+	move.w	d0,(a0)+
+	dbra	d7,.plop
+
+* Initialize angle of first ray..
+	moveq	#0,d1
+	move.w	ZVoxel.playerAngle(pc),d1
+	subi.w	#240,d1
+	Do_SinModulo	d1
+	move.w	d1,ZVoxel.rayangle
+
+* Plot voxel.
+	movea.l	ZVoxel.skyAdrTable,a5
+	movea.l	scr,a0
+	move.w	#160-1,d7
+	clr.l	d2
+	move.w	ZVoxel.rayangle(pc),d0
+	move.w	#$00ff,d2
+	clr.l	d4
+	clr.l	d5
+	move.w	monitormode,d6
+	cmpi.w	#vga60,d6
+	beq	ZVoxel.paintVga60
+	cmpi.w	#vga100,d6
+	beq	ZVoxel.paintVga100
+	cmpi.w	#rgb50,d6
+	beq	ZVoxel.paintRgb50
+	rts
+
+ZVoxel.rayangle:
+	DS.W	1				* Angle of current ray
+ZVoxel.gxstep:
+	DS.W	1
+ZVoxel.gystep:
+	DS.W	1				* Fixed point step value of ray
+ZVoxel.tiltfactor:
+	DS.W	1
+ZVoxel.persp_tbl:
+	DS.W	ZVoxel.RAYLENGTH
+
+ZVoxel.paintVga100:
+	move.l	#-160*2,d6
+	adda.l	#160*99*2,a0
+	movea.l	a0,a6
+
+.xloop:	move.w	d7,d1
+	subi.w	#160/2-1,d1
+	muls.w	ZVoxel.tiltX(pc),d1
+	swap	d1
+	move.w	d1,ZVoxel.tiltfactor
+
+	swap	d7
+	move.l	ZVoxel.playerX(pc),d1
+	lea	ZVoxel.gxstep(pc),a3
+	move.w	(ZVoxel.xAngleStepTable.w,pc,d0.w*2),(a3)+
+	move.w	(ZVoxel.yAngleStepTable.w,pc,d0.w*2),(a3)+
+	moveq	#100,d0				* topmountain:=scrlines
+	movea.l	ZVoxel.baseAdr,a3
+	adda.l	#ZVoxel.zHeightTable,a3
+	lea	ZVoxel.persp_tbl(pc),a4
+	move.w	#ZVoxel.RAYLENGTH-1,d7		* Number of steps in ray..
+
+.rayloop:
+	move.l	d1,d3
+	move.w	d1,d5
+	rol.l	#8,d3
+	move.b	d3,d5				; d5.l = map offset
+	move.w	d7,d4
+	move.w	(a4)+,d3
+	lsl.w	#8,d4
+	move.b	(a2,d5.l),d4			* d4.l: height
+	move.w	(a1,d4.l*2),d5
+	and.w	d2,d4
+	sub.w	(a3,d4.l*2),d3			* Optimised multiply and shift. -> Get onscreen height of current point.
+	lea	$100*2(a3),a3			* Move to next multiply-table.
+	add.w	ZVoxel.tiltfactor(pc),d3
+	move.w	d0,d4
+	sub.w	d3,d4
+	ble.s	.endl
+	tst.w	d3				* / For clipping off
+	bpl.s	.plot				* \ the mountains.
+	move.w	d0,d4
+	beq.s	.nxt
+	clr.w	d7
+	clr.l	d3
+.plot:	subq.w	#1,d4
+.pixlp:	move.w	d5,(a0)
+	adda.l	d6,a0				* Go up one screenline.
+	dbra	d4,.pixlp
+	move.w	d3,d0				* topmountain:=newpos
+.endl:	add.l	ZVoxel.gxstep(pc),d1
+	dbra	d7,.rayloop
+
+.nxt:
+* Restore background slice.
+	move.w	(a5),d1
+	move.w	d0,(a5)+
+	sub.w	d1,d0
+	ble.s	.no_background_restore
+	subq.w	#1,d0
+	;move.w	ZVoxel.skyColor(pc),d1
+	clr.w	d1
+.restore_loop:
+	move.w	d1,(a0)
+	adda.l	d6,a0				* Go up one screenline.
+	dbra	d0,.restore_loop
+.no_background_restore:
+* Increase angle..
+	move.w	ZVoxel.rayangle(pc),d0
+	addq.w	#3,d0
+	Do_SinModulo	d0
+	move.w	d0,ZVoxel.rayangle
+* Kick in next vertical screenline and loop..
+	addq	#2,a6
+	movea.l	a6,a0
+	swap	d7
+	dbra	d7,.xloop
+	rts
+
+ZVoxel.paintVga60:
+	move.l	#-160*2,d6
+	adda.l	#160*199*2,a0
+	movea.l	a0,a6
+
+.xloop:	move.w	d7,d1
+	subi.w	#160/2-1,d1
+	muls.w	ZVoxel.tiltX(pc),d1
+	swap	d1
+	move.w	d1,ZVoxel.tiltfactor
+
+	swap	d7
+	move.l	ZVoxel.playerX(pc),d1
+	lea	ZVoxel.gxstep(pc),a3
+	move.w	(ZVoxel.xAngleStepTable.w,pc,d0.w*2),(a3)+
+	move.w	(ZVoxel.yAngleStepTable.w,pc,d0.w*2),(a3)+
+	moveq	#100,d0				* topmountain:=scrlines
+	movea.l	ZVoxel.baseAdr,a3
+	adda.l	#ZVoxel.zHeightTable,a3
+	lea	ZVoxel.persp_tbl(pc),a4
+	move.w	#ZVoxel.RAYLENGTH-1,d7		* Number of steps in ray..
+
+.rayloop:
+	move.l	d1,d3
+	move.w	d1,d5
+	rol.l	#8,d3
+	move.b	d3,d5				; d5.l = map offset
+	move.w	d7,d4
+	move.w	(a4)+,d3
+	lsl.w	#8,d4
+	move.b	(a2,d5.l),d4			* d4.l: height
+	move.w	(a1,d4.l*2),d5
+	and.w	d2,d4
+	sub.w	(a3,d4.l*2),d3			* Optimised multiply and shift. -> Get onscreen height of current point.
+	lea	$100*2(a3),a3			* Move to next multiply-table.
+	add.w	ZVoxel.tiltfactor(pc),d3
+	move.w	d0,d4
+	sub.w	d3,d4
+	ble.s	.endl
+	tst.w	d3				* / For clipping off
+	bpl.s	.plot				* \ the mountains.
+	move.w	d0,d4
+	beq.s	.nxt
+	clr.w	d7
+	clr.l	d3
+.plot:	subq.w	#1,d4
+.pixlp:	move.w	d5,(a0)
+	adda.l	d6,a0				* Go up one screenline.
+	move.w	d5,(a0)
+	adda.l	d6,a0				* Go up one screenline.
+	dbra	d4,.pixlp
+	move.w	d3,d0				* topmountain:=newpos
+.endl:	add.l	ZVoxel.gxstep(pc),d1
+	dbra	d7,.rayloop
+
+.nxt:
+* Restore background slice.
+	move.w	(a5),d1
+	move.w	d0,(a5)+
+	sub.w	d1,d0
+	ble.s	.no_background_restore
+	subq.w	#1,d0
+	;move.w	ZVoxel.skyColor(pc),d1
+	clr.w	d1
+.restore_loop:
+	move.w	d1,(a0)
+	adda.l	d6,a0				* Go up one screenline.
+	move.w	d1,(a0)
+	adda.l	d6,a0				* Go up one screenline.
+	dbra	d0,.restore_loop
+.no_background_restore:
+* Increase angle..
+	move.w	ZVoxel.rayangle(pc),d0
+	addq.w	#3,d0
+	Do_SinModulo	d0
+	move.w	d0,ZVoxel.rayangle
+* Kick in next vertical screenline and loop..
+	addq	#2,a6
+	movea.l	a6,a0
+	swap	d7
+	dbra	d7,.xloop
+	rts
+
+ZVoxel.paintRgb50:
+	move.l	#-161*4,d6
+	adda.l	#160*99*4,a0
+	movea.l	a0,a6
+
+.xloop:	move.w	d7,d1
+	subi.w	#160/2-1,d1
+	muls.w	ZVoxel.tiltX(pc),d1
+	swap	d1
+	move.w	d1,ZVoxel.tiltfactor
+
+	swap	d7
+	move.l	ZVoxel.playerX(pc),d1
+	lea	ZVoxel.gxstep(pc),a3
+	move.w	(ZVoxel.xAngleStepTable.w,pc,d0.w*2),(a3)+
+	move.w	(ZVoxel.yAngleStepTable.w,pc,d0.w*2),(a3)+
+	moveq	#100,d0				* topmountain:=scrlines
+	movea.l	ZVoxel.baseAdr,a3
+	adda.l	#ZVoxel.zHeightTable,a3
+	lea	ZVoxel.persp_tbl(pc),a4
+	move.w	#ZVoxel.RAYLENGTH-1,d7		* Number of steps in ray..
+
+.rayloop:
+	move.l	d1,d3
+	move.w	d1,d5
+	rol.l	#8,d3
+	move.b	d3,d5				; d5.l = map offset
+	move.w	(a4)+,d3
+	move.w	d7,d4
+	lsl.w	#8,d4
+	move.b	(a2,d5.l),d4			; d4.l: height
+	move.w	(a1,d4.l*2),d5
+	and.w	d2,d4
+	sub.w	(a3,d4.l*2),d3			; Optimised multiply and shift. -> Get onscreen height of current point.
+	lea	$100*2(a3),a3			; Move to next multiply-table.
+	add.w	ZVoxel.tiltfactor(pc),d3
+	move.w	d0,d4
+	sub.w	d3,d4
+	ble.s	.endl
+	tst.w	d3				; For clipping off
+	bpl.s	.plot				; the mountains.
+	move.w	d0,d4
+	beq.s	.nxt
+	clr.w	d7
+	clr.l	d3
+.plot:	subq.w	#1,d4
+.pixlp:	move.w	d5,(a0)+
+	move.w	d5,(a0)+
+	adda.l	d6,a0				; Go up one screenline.
+	dbra	d4,.pixlp
+	move.w	d3,d0				; topmountain:=newpos
+.endl:	add.l	ZVoxel.gxstep(pc),d1
+	dbra	d7,.rayloop
+
+.nxt:
+* Restore background slice.
+	move.w	(a5),d1
+	move.w	d0,(a5)+
+	sub.w	d1,d0
+	ble.s	.no_background_restore
+	subq.w	#1,d0
+	;move.l	ZVoxel.skyColor(pc),d1
+	clr.l	d1
+.restore_loop:
+	move.l	d1,(a0)+
+	adda.l	d6,a0				* Go up one screenline.
+	dbra	d0,.restore_loop
+.no_background_restore:
+* Increase angle..
+	move.w	ZVoxel.rayangle(pc),d0
+	addq.w	#3,d0
+	Do_SinModulo	d0
+	move.w	d0,ZVoxel.rayangle
+* Kick in next vertical screenline and loop..
+	addq	#4,a6
+	movea.l	a6,a0
+	swap	d7
+	dbra	d7,.xloop
+	rts
+
+; Draws the Voxel. This uses correct perspective (div by Z) and z cue shade.
+; INPUT:
+; a1: address of color map
+; a2: address of height map
+ZVoxel.paintCorrect:
+* Initialize drawing stuffs..
+	movea.l	ZVoxel.baseAdr,a4
+	adda.l	#ZVoxel.perspTable,a4
+	lea	.persp_tbl(pc),a0
+	moveq	#ZVoxel.RAYLENGTH-1,d7
+	moveq	#12,d2
+	move.w	ZVoxel.roll,d3
+	move.w	ZVoxel.elevation,d1
+.plop:	move.w	(a4)+,d0
+	mulu.w	d1,d0
+	lsr.l	d2,d0
+	add.w	d3,d0
+	move.w	d0,(a0)+
+	dbra	d7,.plop
+
+* Initialize angle of first ray..
+	moveq	#0,d1
+	move.w	ZVoxel.playerAngle(pc),d1
+	subi.w	#240,d1
+	Do_SinModulo	d1
+	move.w	d1,.rayangle
+
+* Plot voxel.
+	movea.l	ZVoxel.skyAdrTable,a5
+	movea.l	scr,a0
+	adda.l	#160*99*2,a0
+	move.w	#160-1,d7
+	movea.l	a0,a6
+	clr.l	d2
+	move.w	.rayangle(pc),d0
+	move.l	#-160*2,d6
+
+.xloop:	move.w	d7,d1
+	subi.w	#160/2-1,d1
+	muls.w	ZVoxel.tiltX(pc),d1
+	swap	d1
+	move.w	d1,.tiltfactor
+
+	swap	d7
+	move.w	ZVoxel.playerX(pc),d1
+	move.w	ZVoxel.playerY(pc),d2
+	lea	.gxstep(pc),a3
+	move.w	(ZVoxel.xAngleStepTable.w,pc,d0.w*2),(a3)+
+	move.w	(ZVoxel.yAngleStepTable.w,pc,d0.w*2),(a3)+
+	moveq	#100,d0				* topmountain:=scrlines
+	movea.l	ZVoxel.baseAdr,a3
+	adda.l	#ZVoxel.zHeightTable,a3
+	lea	.persp_tbl(pc),a4
+	move.w	#ZVoxel.RAYLENGTH-1,d7		* Number of steps in ray..
+
+.rayloop:
+	move.l	d2,d5
+	move.w	d1,d4
+	lsr.w	#8,d4
+	move.b	d4,d5				* d5.l: position in map
+	clr.l	d4
+	move.b	(a2,d5.l),d4			* d4.l: height
+	move.w	(a4)+,d3
+	sub.w	(a3,d4.l*2),d3			* Optimised multiply and shift. -> Get onscreen height of current point.
+	lea	$100*2(a3),a3			* Move to next multiply-table.
+	add.w	.tiltfactor(pc),d3
+	move.w	d0,d4
+	sub.w	d3,d4
+	ble.s	.endl
+	move.w	(a1,d5.l*2),d5
+	tst.w	d3				* / For clipping off
+	bpl.s	.plot				* \ the mountains.
+	move.w	d0,d4
+	beq.s	.nxt
+	clr.w	d7
+	clr.l	d3
+.plot:	subq.w	#1,d4
+.pixlp:	move.w	d5,(a0)
+	adda.l	d6,a0				* Go up one screenline.
+	dbra	d4,.pixlp
+	move.w	d3,d0				* topmountain:=newpos
+.endl:	add.w	.gxstep(pc),d1			* / Move to next map-
+	add.w	.gystep(pc),d2			* \ position in ray.
+	dbra	d7,.rayloop
+
+.nxt:
+* Restore background slice.
+	move.w	(a5),d1
+	move.w	d0,(a5)+
+	sub.w	d1,d0
+	ble.s	.no_background_restore
+	subq.w	#1,d0
+	clr.w	d1
+.restore_loop:
+	move.w	d1,(a0)
+	adda.l	d6,a0				* Go up one screenline.
+	dbra	d0,.restore_loop
+.no_background_restore:
+* Increase angle..
+	move.w	.rayangle(pc),d0
+	addq.w	#3,d0
+	Do_SinModulo	d0
+	move.w	d0,.rayangle
+* Kick in next vertical screenline and loop..
+	addq	#2,a6
+	movea.l	a6,a0
+	swap	d7
+	dbra	d7,.xloop
+	rts
+
+.rayangle:
+	DS.W	1				* Angle of current ray
+.gxstep:
+	DS.W	1
+.gystep:
+	DS.W	1				* Fixed point step value of ray
+.tiltfactor:
+	DS.W	1
+.persp_tbl:
+	DS.W	ZVoxel.RAYLENGTH
+
+* View Variables
+ZVoxel.playerAngle:
+	DC.W	0				* Viewer's direction
+ZVoxel.playerX:
+	DC.W	0				* Viewer's coordinates
+ZVoxel.playerY:
+	DC.W	0
+ZVoxel.skyColor:
+	DC.L	0
+ZVoxel.tiltX:
+	DC.W	0
+
+ZVoxel.xAngleStepTable:
+	DS.W	sintbllen
+ZVoxel.yAngleStepTable:
+	DS.W	sintbllen
+
+;======= OBJECT DATA ========
+
+	DATA
+
+ZVoxel.skyAdrTable:
+	DC.L	ZVoxel.skyTable1
+	DC.L	ZVoxel.skyTable2
+	DC.L	ZVoxel.skyTable3
+
+ZVoxel.elevation:
+	DC.W	8000
+ZVoxel.raydistance:
+	DC.W	64				* Length of rays
+ZVoxel.cloudx:
+	DC.W	0				* Cloud position
+ZVoxel.eyedistance:
+	DC.W	64+32				* Changes perspective
+
+ZVoxel.fadeFlowPal:
+	DC.W	4	(.end-.start)/4
+	DC.W	7
+.start:
+
+;	DC.L	$FFFF00FF
+;	DC.L	$BFBF00BF
+	DC.L	$FFFF00FF
+	DC.L	$3F3F003F
+
+	DC.L	$00000000
+	DC.L	$00000000
+	DC.L	$00000000
+.end:
+
+ZVoxel.hFlowPal:
+	DC.W	8	(.end-.start)/4
+	DC.W	5
+.start:	DC.L	$0000007F
+	DC.L	$0000007F
+	DC.L	$7F7F0000
+	DC.L	$7F7F0000
+	DC.L	$007F0000
+	DC.L	$7F7F007F
+	DC.L	$FFFF00FF
+	DC.L	$FFFF00FF
+.end:	
+
+;======= OBJECT RESERVES ========
+
+	BSS
+
+; Sky heighttables.
+ZVoxel.skyTable1:
+	DS.W	160
+ZVoxel.skyTable2:
+	DS.W	160
+ZVoxel.skyTable3:
+	DS.W	160
+
+ZVoxel.baseAdr:
+	DS.L	1
+
+ZVoxel.oldTime:
+	DS.L	1
+ZVoxel.oldPos:
+	DS.L	1
+ZVoxel.oldXDir:
+	DS.W	1
+ZVoxel.oldSpeed:
+	DS.W	1
+ZVoxel.oldAngle:
+	DS.W	1
+ZVoxel.speed:
+	DS.W	1
+ZVoxel.xDir:
+	DS.W	1
+ZVoxel.roll:
+	DS.W	1
+ZVoxel.dirChanged:
+	DS.W	1
+
+;======= END OF DEMO-EFFECT OBJECT ========

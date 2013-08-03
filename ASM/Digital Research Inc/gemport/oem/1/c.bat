@@ -1,0 +1,9 @@
+\TOOLS\CP68 %1.C %1.I
+\TOOLS\C068 %1.I %1.1 %1.2 %1.3 -F
+DEL %1.I
+\TOOLS\C168 %1.1 %1.2 %1.S
+DEL %1.1
+DEL %1.2
+\TOOLS\AS68 -L -U -S C:\TOOLS\ %1.S
+DEL %1.S
+

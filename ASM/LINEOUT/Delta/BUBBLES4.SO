@@ -1,0 +1,921 @@
+; Envmapped bubbles screen. Wibble wobble..
+
+;******* OBJECT EQUATES ********
+
+Bubbles.R:		=	200
+Bubbles.STEPS:		=	8
+Bubbles.FILLED:		=	1
+
+Bubbles.NUM_V:		=	Bubbles.STEPS*Bubbles.STEPS+2
+
+Bubbles.WIBBLESPEED:	=	5
+
+Bubbles.BACKCOL:	=	$01E701E7		; $00$3C$38
+Bubbles.BACKCOL2:	=	$00080008		; $00$00$64
+
+			RSRESET
+Bubbles.object:		RS.W	10000
+Bubbles.BLOCK_SIZE:	RS.B	0
+
+;******* OBJECT TABLE ********
+
+; Must be first in object!!
+Bubbles.table:
+	DC.L	Bubbles.mainLoop
+	DC.L	Bubbles.init
+	DC.L	Bubbles.setRes
+	DC.L	Bubbles.setZoom
+	DC.L	Bubbles.setFade
+	DC.L	Bubbles.set3d
+	DC.L	Bubbles.setWipe
+	DC.L	0
+
+	IFND	DEMO_SYSTEM
+	INCLUDE	SFLY_DSP.S				; Include the CPU-DSP engine.
+	TEXT
+	ENDC
+
+;******* RESOLUTION SETTING ROUTINE ********
+
+Bubbles.setRes:
+	IFEQ	testmode
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+; Unknown monitormode..
+	rts
+.vga60:	bra.l	vga60_16bit_320_200
+.vga100:bra.l	vga100_16bit_320_200
+.rgb50:	bra.l	rgb50_16bit_320_200
+	ENDC
+	rts
+
+;******* INIT SUBROUTINE ********
+
+; OUTPUT:
+; d0.l: =0 all clear, <0 error
+Bubbles.init:
+	move.l	#Bubbles.BLOCK_SIZE,d0
+	bsr.l	Mem.register
+
+	lea	sine_tbl,a1
+	bsr.l	Matrix.init
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;******* REALTIME INIT SUBROUTINE ********
+
+Bubbles.realtimeInit:
+	move.l	#rts,vbl_gfx
+
+	bsr.l	Mem.getBlock
+	move.l	d0,Bubbles.objAdr
+
+	bsr.l	HumanFly.init
+
+	lea	Viewport.settingsTable,a0
+	move.w	#320,Viewport.XSCREEN(a0)
+	move.w	#200,Viewport.YSCREEN(a0)
+	move.w	#0,Viewport.XSTART(a0)
+	move.w	#0,Viewport.YSTART(a0)
+	move.w	#320,Viewport.XEND(a0)
+	move.w	#200,Viewport.YEND(a0)
+	move.w	#160,Viewport.XCENTER(a0)
+	move.w	#100,Viewport.YCENTER(a0)
+	move.w	#256+32,Viewport.ASPECT(a0)
+	move.w	#$100,Viewport.FOCAL(a0)
+	bsr.l	Viewport.update
+
+	lea	Bubbles.textureTable,a0
+	bsr.l	Polygon.init
+
+	lea	Bubbles.gradTable,a1
+	lea	Bubbles.backPal,a0
+	bsr.l	Pal.makeGradientHc
+
+	bsr	Bubbles.setFade
+
+	clr.w	Bubbles.wiping
+
+	rts
+
+;******* SCREENINIT SUBROUTINE ********
+
+Bubbles.initScreen:
+	rts
+
+;******* MAINLOOP SUBROUTINE ********
+
+Bubbles.mainLoop:
+	move.w	$0468.w,.old468
+
+	movea.l	scr,a0
+	bsr.l	Primitive.setScreenbuffer
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr.w	Bubbles.realtimeInit
+	move.l	(sp)+,d0
+.end_realtime_init:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr.w	Bubbles.initScreen
+.end_screeninit:
+
+; Set viewport dimensions.
+	tst.w	Bubbles.wiping
+	bne.s	.wipe
+	clr.w	d0
+	move.w	#320,d1
+	bra.s	.end_set_vp
+.wipe:	move.w	$04BC.w,d0
+	sub.w	Bubbles.wipeStart,d0
+	lsr.w	#2,d0
+	cmpi.w	#160,d0
+	ble.s	.width_ok
+	move.w	#160,d0
+	move.l	#rts,Bubbles.paintRout
+.width_ok:
+	move.w	d0,d1
+	subi.w	#320,d1
+	neg.w	d1
+.end_set_vp:
+; Update viewport dimensions.
+	lea	Viewport.settingsTable,a0
+	move.w	d0,Viewport.XSTART(a0)
+	move.w	d1,Viewport.XEND(a0)
+	bsr.l	Viewport.update
+
+; Paint bubbles.
+	movea.l	Bubbles.paintRout,a0
+	jsr	(a0)
+
+; Wipe a bit..
+	lea	Viewport.settingsTable,a0
+	move.w	Viewport.XSTART(a0),d0
+	tst.w	d0
+	beq.s	.end_wiping
+	move.w	Viewport.XEND(a0),d1
+	move.w	d0,d2
+	sub.w	Bubbles.dimTable,d2
+	move.w	Bubbles.dimTable,d3
+	bsr	Bubbles.wipeColumn
+	move.w	Bubbles.dimTable+2,d2
+	sub.w	d1,d2
+	move.w	d1,d3
+	bsr	Bubbles.wipeColumn
+	movem.w	d0-d1,Bubbles.dimTable
+.end_wiping:
+
+; Swap dimension tables..
+	lea	Bubbles.dimTable,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+
+	IFEQ	testmode
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	move.l	d0,d1
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+	ENDC
+
+	move.w	.old468(pc),d0
+.wait:	cmp.w	$0468.w,d0
+	beq.s	.wait
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.res_done
+	bsr.w	Bubbles.setRes
+.res_done:
+
+	rts
+
+.old468:DC.W	0
+
+;******* OBJECT SUBROUTINES ********
+
+Bubbles.setZoom:
+	st	Bubbles.zooming
+	move.w	#2000,Bubbles.distance
+	move.w	$04BC.w,Bubbles.zoomStart
+	rts
+
+Bubbles.setFade:
+	move.l	#Bubbles.paintFade,Bubbles.paintRout
+	move.w	$04BC.w,Bubbles.fadeStart
+	rts
+
+Bubbles.set3d:
+	clr.w	Bubbles.zooming
+	move.w	#2000,Bubbles.distance
+	move.l	#Bubbles.paint3d,Bubbles.paintRout
+	move.w	$04BC.w,Bubbles.sceneStart
+	rts
+
+Bubbles.setWipe:
+	move.w	$04BC.w,Bubbles.wipeStart
+	st	Bubbles.wiping
+	rts
+
+; INPUT:
+; d2.w=width
+; d3.w=x_offset
+Bubbles.wipeColumn:
+	addq.w	#2,d2
+	subq.w	#1,d3
+	bpl.s	.offset_ok
+	clr.w	d3
+.offset_ok:
+	movea.w	#320,a6
+	suba.w	d2,a6
+	subq.w	#1,d2
+	bmi.s	.end
+	movea.l	scr,a0
+	lea	(a0,d3.w*2),a0
+	adda.l	a6,a6
+	move.w	#200-1,d7
+	moveq	#$0008,d4
+
+.yloop:	move.w	d2,d6
+
+.xloop:	move.w	d4,(a0)+
+	dbf	d6,.xloop
+
+	adda.l	a6,a0
+	dbf	d7,.yloop
+
+.end:	rts
+
+Bubbles.paintFade:
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	move.w	$04BC.w,d4
+	sub.w	Bubbles.fadeStart,d4
+	lsr.w	#2,d4
+	cmpi.w	#63,d4
+	blt.s	.ok
+	moveq	#63,d4
+	bsr	Bubbles.set3d
+.ok:	move.w	(Bubbles.backPal,d4.w*2),d4
+	move.w	d4,d2
+	swap	d4
+	move.w	d2,d4
+	bsr.l	Viewport.paintRectangle
+	rts
+
+Bubbles.paint3d:
+	tst.w	Bubbles.zooming
+	beq.s	.end_zooming
+	move.w	$04BC.w,d0
+	sub.w	Bubbles.zoomStart,d0
+	neg.w	d0
+	addi.w	#2000,d0
+	cmpi.w	#1000,d0
+	bgt.s	.distance_okay
+	move.w	#1000,d0
+	clr.w	Bubbles.zooming
+.distance_okay:
+	move.w	d0,Bubbles.distance
+.end_zooming:
+
+	bsr.w	Bubbles.paint
+	rts
+
+Bubbles.paint:
+; Calc bubble heights..
+	clr.l	d0
+	clr.l	d1
+	clr.l	d2
+	move.w	$04BC.w,d0
+	sub.w	Bubbles.sceneStart,d0
+	move.w	d0,d1
+	move.w	d0,d2
+
+	subi.w	#$555,d0
+	bmi.s	.y1_calced
+	andi.w	#$7FF,d0
+.y1_calced:
+	subi.w	#$2AA,d1
+	bmi.s	.y2_calced
+	andi.w	#$7FF,d1
+.y2_calced:
+	tst.w	d2
+	bmi.s	.y3_calced
+	andi.w	#$7FF,d2
+.y3_calced:
+
+	neg.w	d0
+	neg.w	d1
+	neg.w	d2
+	addi.w	#$400,d0
+	addi.w	#$400,d1
+	addi.w	#$400,d2
+	movem.w	d0-d2,Bubbles.y1
+
+	bsr.l	PrimitiveMesh.new
+
+	bsr.l	ObjectRegistry.clear
+	movea.l	Bubbles.objAdr,a0
+	bsr	Bubbles.generate
+; d0.l=size of generated object
+	movea.l	Bubbles.objAdr,a0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi	.end
+
+; world rotation.
+	clr.w	d0
+;	move.w	$04BC.w,d1
+;	lsl.w	#3,d1
+;	move.w	d1,d2
+;	lsr.w	#1,d2
+	clr.w	d1
+	clr.w	d2
+	bsr.l	Matrix.generate
+
+	clr.w	d0
+	clr.w	d1
+	move.w	Bubbles.distance,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+; bubble 1
+	move.w	$04BC.w,d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#5,d1
+	lsr.l	#2,d1
+	mulu.w	#21,d2
+	lsr.l	#2,d2
+	bsr.l	Matrix.generate
+
+	move.w	$04BC.w,d0
+	mulu.w	#23,d0
+	lsr.l	#3,d0
+	Do_SinModulo	d0
+	Get_Sin	sine_tbl,d0,d0
+	asr.w	#7,d0
+	move.w	Bubbles.y1,d1
+	clr.w	d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+; bubble 2
+	move.w	$04BC.w,d0
+	move.w	d0,d1
+	move.w	d0,d2
+	lsl.w	d0
+	mulu.w	#3,d1
+	mulu.w	#7,d2
+	lsr.l	#2,d1
+	lsr.l	#2,d2
+	bsr.l	Matrix.generate
+
+	move.w	$04BC.w,d0
+	mulu.w	#13,d0
+	lsr.l	#2,d0
+	addi.w	#sintbllen/4,d0
+	Do_SinModulo	d0
+	Get_Sin	sine_tbl,d0,d0
+	asr.w	#7,d0
+	move.w	Bubbles.y2,d1
+	clr.w	d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+; bubble 3
+	move.w	$04BC.w,d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#5,d0
+	lsr.l	#2,d0
+	mulu.w	#11,d1
+	lsr.l	#3,d1
+	mulu.w	#13,d2
+	lsr.l	#3,d2
+	bsr.l	Matrix.generate
+
+	move.w	$04BC.w,d0
+	mulu.w	#11,d0
+	lsr.l	#2,d0
+	addi.w	#sintbllen/4,d0
+	Do_SinModulo	d0
+	Get_Sin	sine_tbl,d0,d0
+	asr.w	#7,d0
+	move.w	Bubbles.y3,d1
+	clr.w	d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+	bsr.l	Matrix.pop			; pop world rotation
+
+	bsr.l	PrimitiveMesh.sortZ
+
+	bsr.l	PrimitiveMesh.complete
+
+	IFNE	0
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	move.l	#Bubbles.BACKCOL,d4
+	bsr	Viewport.paintRectangle
+	ELSE
+	movea.l	Bubbles.rectAddressTable,a0
+	move.w	(a0)+,d7
+	beq.s	.end_restore
+	subq.w	#1,d7
+.restore_loop:
+	move.w	d7,-(sp)
+	movem.w	(a0)+,d1/d7
+	movem.w	(a0)+,d0/d6
+	move.l	a0,-(sp)
+	move.l	#Bubbles.BACKCOL,d4
+	bsr.l	Viewport.paintRectangle
+	movea.l	(sp)+,a0
+	move.w	(sp)+,d7
+	dbra	d7,.restore_loop
+.end_restore:
+	ENDC
+
+	movea.l	Bubbles.rectAddressTable,a0
+	bsr.l	PrimitiveMesh.paint
+
+	lea	Bubbles.rectAddressTable,a0
+ 	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+.end:	rts
+
+; 1 + 8 + 1, 10 points on curve, 9 lines on curve
+; INPUT:
+; a0: destination object
+; OUTPUT:
+; d0.l=size
+Bubbles.generate:
+	movea.l	a0,a6
+
+	move.w	#2*(Bubbles.STEPS*Bubbles.STEPS+2),(a0)+	;#vertices+#normals
+	move.w	#Bubbles.STEPS*Bubbles.STEPS+2,(a0)+		;#normals
+
+	move.l	$04BA.w,d0
+	lsr.l	#2,d0
+	move.w	d0,.time
+	lea	sine_tbl,a1
+
+	move.w	$04BC.w,d5
+	lsl.w	#Bubbles.WIBBLESPEED,d5
+	Do_SinModulo	d5
+	Get_Sin	a1,d5,d5
+	asr.w	#8,d5
+	asr.w	#1,d5
+	addi.w	#$100,d5
+	muls.w	#Bubbles.R,d5
+	asr.l	#8,d5
+
+; Output top vertex..
+	clr.w	(a0)+
+	move.w	d5,(a0)+
+	clr.w	(a0)+
+
+	moveq	#1,d7
+
+; 0.1/9.2/9.3/9.4/9.5/9.6/9.7/9.8/9.1, 10 points, 9 lines
+; 1 top, 1 bottom, 8 inbetween points.. 
+
+; Outer loop (180 degrees)
+.r1_loop:
+	move.w	d7,d0
+	mulu.w	#(sintbllen/(Bubbles.STEPS+1))/2,d0
+	Get_SinCos	a1,d0,d0,d3
+	muls.w	#Bubbles.R,d0
+	muls.w	d5,d3
+	add.l	d0,d0
+	add.l	d3,d3
+	swap	d0					; d0.w=r2
+	swap	d3					; d3.w=r*cos(t1)
+
+	clr.w	d6
+
+; Inner loop (360 degrees)
+.r2_loop:
+	move.w	d6,d1
+	mulu.w	#sintbllen/Bubbles.STEPS,d1
+	Get_SinCos	a1,d1,d1,d2
+	muls.w	d0,d1
+	muls.w	d0,d2
+	add.l	d1,d1
+	add.l	d2,d2
+	swap	d1
+	swap	d2
+	move.w	d1,(a0)+				; Output r2*cos(t2).
+	move.w	d3,(a0)+				; Output r*cos(t1).
+	move.w	d2,(a0)+				; Output r2*sin(t2).
+	addq.w	#1,d6
+	cmpi.w	#Bubbles.STEPS,d6
+	blt.s	.r2_loop
+
+	addq.w	#1,d7
+	cmpi.w	#Bubbles.STEPS+1,d7
+	blt.s	.r1_loop
+
+; Output bottom vertex..
+	clr.w	(a0)+
+	neg.w	d5
+	move.w	d5,(a0)+
+	clr.w	(a0)+
+
+;----------------
+; Normal vectors.
+
+	move.w	$04BC.w,d5
+	lsl.w	#Bubbles.WIBBLESPEED,d5
+	Do_SinModulo	d5
+	Get_Sin	a1,d5,d5
+	asr.w	#8,d5
+	asr.w	#3,d5
+	addi.w	#$60,d5
+
+; Output top vertex..
+	clr.w	(a0)+
+	move.w	d5,(a0)+
+	clr.w	(a0)+
+
+	moveq	#1,d7
+
+; 0.1/9.2/9.3/9.4/9.5/9.6/9.7/9.8/9.1, 10 points, 9 lines
+; 1 top, 1 bottom, 8 inbetween points.. 
+
+; Outer loop (180 degrees)
+.n_r1_loop:
+	move.w	d7,d0
+	mulu.w	#(sintbllen/(Bubbles.STEPS+1))/2,d0
+	Get_SinCos	a1,d0,d0,d3
+	muls.w	#128,d0
+	muls.w	d5,d3
+	add.l	d0,d0
+	add.l	d3,d3
+	swap	d0					; d0.w=r2
+	swap	d3					; d3.w=r*cos(t1)
+
+	clr.w	d6
+
+; Inner loop (360 degrees)
+.n_r2_loop:
+	move.w	d6,d1
+	mulu.w	#sintbllen/Bubbles.STEPS,d1
+	Get_SinCos	a1,d1,d1,d2
+	muls.w	d0,d1
+	muls.w	d0,d2
+	add.l	d1,d1
+	add.l	d2,d2
+	swap	d1
+	swap	d2
+	move.w	d1,(a0)+				; Output r2*cos(t2).
+	move.w	d3,(a0)+				; Output r*cos(t1).
+	move.w	d2,(a0)+				; Output r2*sin(t2).
+	addq.w	#1,d6
+	cmpi.w	#Bubbles.STEPS,d6
+	blt.s	.n_r2_loop
+
+	addq.w	#1,d7
+	cmpi.w	#Bubbles.STEPS+1,d7
+	blt.s	.n_r1_loop
+
+; Output bottom vertex..
+	clr.w	(a0)+
+	neg.w	d5
+	move.w	d5,(a0)+
+	clr.w	(a0)+
+
+	clr.w	(a0)+					; Output #texels (0).
+
+;------------
+; Primitives
+
+; 1 top line, 1 bottom line, 7 inbetween lines
+	IFNE	Bubbles.FILLED
+; Filled version. Head=n tris, tail=n tris, body=n*(n-1) quads
+; total=n*n faces.
+
+; Output primitives..
+	move.w	#Bubbles.STEPS*(Bubbles.STEPS+1),(a0)+
+;	move.w	#Bubbles.STEPS*Bubbles.STEPS,(a0)+
+
+; Output head.
+; 0-1-2, 0-2-3, 0-3-4,... 0, (i+1), (i+1) mod n +1
+	moveq	#Bubbles.STEPS-1,d7
+.head_loop:
+	move.w	#Polygon.TRI|Polygon.ENVMAPPED|0,(a0)+
+	clr.w	(a0)+
+	moveq	#1,d0
+	add.w	d7,d0
+	move.w	d0,(a0)+
+	move.w	d7,d0
+	addq.w	#1,d0
+	divu.w	#Bubbles.STEPS,d0
+	swap	d0
+	addq.w	#1,d0
+	move.w	d0,(a0)+
+
+; Normal refs..
+	move.w	#Bubbles.STEPS*Bubbles.STEPS+2,(a0)+
+	move.w	#Bubbles.STEPS*Bubbles.STEPS+3,d0
+	add.w	d7,d0
+	move.w	d0,(a0)+
+	move.w	d7,d0
+	addq.w	#1,d0
+	divu.w	#Bubbles.STEPS,d0
+	swap	d0
+	addi.w	#Bubbles.STEPS*Bubbles.STEPS+3,d0
+	move.w	d0,(a0)+
+	
+	dbra	d7,.head_loop
+
+; Output body.
+	moveq	#Bubbles.STEPS-1-1,d7
+
+.segment_loop:
+	moveq	#Bubbles.STEPS-1,d6
+
+; i, i+1, i+1+n, i+n -> i+n, i+1+n, i+1, i
+; 0, 1, 2, 3 -> 3, 2, 1, 0
+.quad_loop:
+	move.w	#Polygon.QUAD|Polygon.ENVMAPPED|0,(a0)+
+
+	move.w	d7,d1
+	addq.w	#1,d1
+	mulu.w	#Bubbles.STEPS,d1
+
+; v4
+	move.w	d6,d0
+	add.w	d1,d0	
+	addq.w	#1,d0
+	move.w	d0,(a0)+
+
+; v3
+	clr.l	d0
+	move.w	d6,d0
+	addq.w	#1,d0
+	divu.w	#Bubbles.STEPS,d0
+	swap	d0
+	add.w	d1,d0	
+	addq.w	#1,d0
+	move.w	d0,(a0)+
+
+	move.w	d7,d1
+	mulu.w	#Bubbles.STEPS,d1
+
+; v2
+	clr.l	d0
+	move.w	d6,d0
+	addq.w	#1,d0
+	divu.w	#Bubbles.STEPS,d0
+	swap	d0
+	add.w	d1,d0	
+	addq.w	#1,d0
+	move.w	d0,(a0)+
+
+; v1
+	move.w	d6,d0
+	add.w	d1,d0
+	addq.w	#1,d0
+	move.w	d0,(a0)+
+
+; Normal refs..
+	move.w	d7,d1
+	addq.w	#1,d1
+	mulu.w	#Bubbles.STEPS,d1
+
+; v4
+	move.w	d6,d0
+	add.w	d1,d0	
+	addi.w	#Bubbles.NUM_V+1,d0
+	move.w	d0,(a0)+
+
+; v3
+	clr.l	d0
+	move.w	d6,d0
+	addq.w	#1,d0
+	divu.w	#Bubbles.STEPS,d0
+	swap	d0
+	add.w	d1,d0	
+	addi.w	#Bubbles.NUM_V+1,d0
+	move.w	d0,(a0)+
+
+	move.w	d7,d1
+	mulu.w	#Bubbles.STEPS,d1
+
+; v2
+	clr.l	d0
+	move.w	d6,d0
+	addq.w	#1,d0
+	divu.w	#Bubbles.STEPS,d0
+	swap	d0
+	add.w	d1,d0	
+	addi.w	#Bubbles.NUM_V+1,d0
+	move.w	d0,(a0)+
+
+; v1
+	move.w	d6,d0
+	add.w	d1,d0
+	addi.w	#Bubbles.NUM_V+1,d0
+	move.w	d0,(a0)+
+
+	dbra	d6,.quad_loop
+
+	dbra	d7,.segment_loop
+
+; Output tail.
+; t, t-n+[(i+1) mod n], t-n+i
+; t=n*n+1
+	moveq	#Bubbles.STEPS-1,d7
+
+.tail_loop:
+	move.w	#Polygon.TRI|Polygon.ENVMAPPED|0,(a0)+
+	move.w	#Bubbles.STEPS*Bubbles.STEPS+1,(a0)+
+	clr.l	d0
+	move.w	d7,d0
+	addq.w	#1,d0
+	divu.w	#Bubbles.STEPS,d0
+	swap	d0
+	addi.w	#1+Bubbles.STEPS*(Bubbles.STEPS-1),d0
+	move.w	d0,(a0)+
+	move.w	#1+Bubbles.STEPS*(Bubbles.STEPS-1),d0
+	add.w	d7,d0
+	move.w	d0,(a0)+
+
+; Normal refs.
+	move.w	#Bubbles.NUM_V+Bubbles.STEPS*Bubbles.STEPS+1,(a0)+
+	clr.l	d0
+	move.w	d7,d0
+	addq.w	#1,d0
+	divu.w	#Bubbles.STEPS,d0
+	swap	d0
+	addi.w	#Bubbles.NUM_V+1+Bubbles.STEPS*(Bubbles.STEPS-1),d0
+	move.w	d0,(a0)+
+	move.w	#Bubbles.NUM_V+1+Bubbles.STEPS*(Bubbles.STEPS-1),d0
+	add.w	d7,d0
+	move.w	d0,(a0)+
+
+	dbra	d7,.tail_loop
+
+	ELSE
+; Wireframe version.
+
+; Output primitives..
+	move.w	#Bubbles.STEPS*(Bubbles.STEPS+1),(a0)+
+
+; Output head primitives.
+	moveq	#Bubbles.STEPS-1,d7
+
+.head_lineloop:
+	move.w	#Primitive.LINETYPE|Polygon.FLATSHADED|0,(a0)+
+	clr.w	(a0)+
+	move.w	d7,d0
+	addq.w	#1,d0
+	move.w	d0,(a0)+
+	dbra	d7,.head_lineloop
+
+; Output body primitives.
+	moveq	#Bubbles.STEPS-1-1,d7
+
+.lineseg_loop:
+	moveq	#Bubbles.STEPS-1,d6
+
+.line_loop:
+	move.w	#Primitive.LINETYPE|Polygon.FLATSHADED|0,(a0)+
+	move.w	d7,d0
+	mulu.w	#Bubbles.STEPS,d0
+	add.w	d6,d0
+	addq.w	#1,d0
+	move.w	d0,(a0)+
+	addi.w	#Bubbles.STEPS,d0
+	move.w	d0,(a0)+
+	dbra	d6,.line_loop
+
+	dbra	d7,.lineseg_loop
+
+; Output tail primitives.
+	moveq	#Bubbles.STEPS-1,d7
+	move.w	#Bubbles.STEPS*Bubbles.STEPS+1,d1
+
+.tail_lineloop:
+	move.w	#Primitive.LINETYPE|Polygon.FLATSHADED|0,(a0)+
+	move.w	d1,(a0)+
+	move.w	d1,d0
+	sub.w	d7,d0
+	subq.w	#1,d0
+	move.w	d0,(a0)+
+	dbra	d7,.tail_lineloop
+
+	ENDC
+
+	move.l	a0,d0
+	sub.l	a6,d0
+	rts
+
+.time:	DC.W	0
+
+;******* OBJECT DATA ********
+
+	DATA
+
+Bubbles.textureTable:
+	DC.L	FlareGen.redBuffer
+	DC.L	0
+
+Bubbles.rectAddressTable:
+	DC.L	Bubbles.rectangleTable
+	DC.L	Bubbles.rectangleTable2
+	DC.L	Bubbles.rectangleTable3
+
+Bubbles.distance:
+	DC.W	2000
+
+Bubbles.gradTable:
+	DC.W	1
+	DC.W	6
+	DC.L	$003C0078
+	DC.L	$003C0038
+
+Bubbles.dimTable:
+	DC.W	0,320
+	DC.W	0,320
+	DC.W	0,320
+
+;******* OBJECT RESERVES ********
+
+	BSS
+
+Bubbles.backPal:
+	DS.W	64
+
+Bubbles.rectangleTable:
+	DS.W	4*10
+Bubbles.rectangleTable2:
+	DS.W	4*10
+Bubbles.rectangleTable3:
+	DS.W	4*10
+
+Bubbles.zooming:
+	DS.W	1
+Bubbles.zoomStart:
+	DS.W	1
+Bubbles.fadeStart:
+	DS.W	1
+Bubbles.sceneStart:
+	DS.W	1
+Bubbles.objAdr:
+	DS.L	1
+
+Bubbles.y1:
+	DS.W	1
+Bubbles.y2:
+	DS.W	1
+Bubbles.y3:
+	DS.W	1
+
+Bubbles.wipeStart:
+	DS.W	1
+Bubbles.wiping:
+	DS.W	1
+
+Bubbles.paintRout:
+	DS.L	1
+
+;******* END OF DEMO-EFFECT OBJECT ********

@@ -1,0 +1,1663 @@
+; A nautilus seashell disturbs the society of clambs.
+; A screen for the delta demo using ufly.
+
+;======= OBJECT EQUATES ====================================================
+
+Conch.BACKCOL:	=	$01EF01EF			; $00$3C$78
+
+; clamb
+Conch.CL_RINGS:	=	4 5				; #points in spiral
+Conch.CL_SPIRS:	=	6 8				; #spirals
+Conch.CL_RADIUS:=	700				; final length of spiral
+Conch.CL_ANGLE:	=	sintbllen/2			; final angle of spiral
+
+; conch
+Conch.CO_RINGS:	=	24 24
+Conch.CO_SPIRS:	=	8 10
+Conch.CO_RADIUS:=	400				; final length of spiral
+Conch.CO_ANGLE:	=	sintbllen*2			; final angle of spiral
+
+; horn
+Conch.RINGS:	=	12				; #points in spiral
+Conch.SPIRALS:	=	12				; #spirals
+Conch.POINTS:	=	Conch.RINGS*Conch.SPIRALS
+Conch.POLYS:	=	(Conch.RINGS-1)*Conch.SPIRALS
+Conch.RADIUS:	=	400				; final length of spiral
+Conch.ANGLE:	=	sintbllen*2			; final angle of spiral
+Conch.ALPHA:	=	$2000				; variance in spiral amp
+
+			RSRESET
+Conch.conch:		RS.W	10000
+Conch.clamb:		RS.W	10000
+Conch.BLOCK_SIZE:	RS.B	0
+
+;======= OBJECT TABLE ======================================================
+
+; Must be first in object!!
+Conch.table:
+	DC.L	Conch.mainLoop
+	DC.L	Conch.init
+	DC.L	rts
+	DC.L	Conch.stopClambs
+	DC.L	Conch.startClambs
+	DC.L	Conch.setCloseUp
+	DC.L	Conch.endCloseUp
+	DC.L	Conch.setFadeIn
+	DC.L	0
+
+	IFND	DEMO_SYSTEM
+	INCLUDE	SFLY_DSP.S				; Include the CPU-DSP engine.
+	TEXT
+	ENDC
+
+;======= INIT SUBROUTINE ===================================================
+
+; OUTPUT:
+; d0.l: 0   = All clear, neg = Error! Not initialized!
+Conch.init:
+	move.l	#Conch.BLOCK_SIZE,d0
+	bsr.l	Mem.register
+
+	lea	sine_tbl,a1
+	bsr.l	Matrix.init
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= REALTIME INIT SUBROUTINE ==========================================
+
+Conch.realtimeInit:
+	move.l	#rts,vbl_gfx
+
+	bsr.l	Mem.getBlock
+
+	move.l	d0,d1
+	addi.l	#Conch.conch,d1
+	move.l	d1,Conch.conchAdr
+	move.l	d0,d1
+	addi.l	#Conch.clamb,d1
+	move.l	d1,Conch.clambAdr
+
+	bsr.l	HumanFly.init
+
+	lea	Viewport.settingsTable,a0
+	move.w	#320,Viewport.XSCREEN(a0)
+	move.w	#200,Viewport.YSCREEN(a0)
+	move.w	#0,Viewport.XSTART(a0)
+	move.w	#0,Viewport.YSTART(a0)
+	move.w	#320,Viewport.XEND(a0)
+	move.w	#200,Viewport.YEND(a0)
+	move.w	#160,Viewport.XCENTER(a0)
+	move.w	#100,Viewport.YCENTER(a0)
+	move.w	#256+32,Viewport.ASPECT(a0)
+	move.w	#$100,Viewport.FOCAL(a0)
+	bsr.l	Viewport.update
+
+	lea	Conch.textureTable,a0
+	lea	Conch.colorTable,a1
+	bsr.l	Polygon.init
+
+	bsr.l	ObjectRegistry.clear
+
+	move.w	#Conch.CL_RADIUS,d0
+	move.w	#Conch.CL_ANGLE,d1
+	move.w	#Conch.CL_SPIRS,d2
+	move.w	#Conch.CL_RINGS,d3
+	moveq	#1,d4
+	movea.l	Conch.clambAdr,a0
+	bsr.w	Conch.initTriClambObject
+; d0.l=size of generated object
+	movea.l	Conch.clambAdr,a0
+	bsr.l	ObjectRegistry.set
+
+	move.w	#Conch.CO_RADIUS,d0
+	move.w	#Conch.CO_ANGLE,d1
+	move.w	#Conch.CO_SPIRS,d2
+	move.w	#Conch.CO_RINGS,d3
+	moveq	#0,d4
+	movea.l	Conch.conchAdr,a0
+	bsr.w	Conch.initClambObject
+; d0.l=size of generated object
+	movea.l	Conch.conchAdr,a0
+	bsr.l	ObjectRegistry.set
+
+	lea	Conch.gradTable,a1
+	lea	Conch.backPal,a0
+	bsr.l	Pal.makeGradientHc
+
+	bsr	Conch.setFadeIn
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+; Unknown monitormode..
+	rts
+.vga60:	move.l	#vga60_16bit_320_200,Conch.resRout
+	rts
+.vga100:move.l	#vga100_16bit_320_200,Conch.resRout
+	rts
+.rgb50:	move.l	#rgb50_16bit_320_200,Conch.resRout
+	rts
+
+;======= SCREENINIT SUBROUTINE =============================================
+
+Conch.initScreen:
+	rts
+
+;======= MAINLOOP SUBROUTINE ===============================================
+
+Conch.mainLoop:
+	movea.l	scr,a0
+	bsr.l	Primitive.setScreenbuffer
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr	Conch.realtimeInit
+	move.l	(sp)+,d0
+.end_realtime_init:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr	Conch.initScreen
+.end_screeninit:
+
+	move.w	$04BC.w,d0
+	sub.w	Conch.clambsStartTime,d0
+	move.w	d0,Conch.time
+	tst.w	Conch.clambsMoving
+	bne.s	.end_time_shit
+	clr.w	Conch.time
+.end_time_shit:
+
+	movea.l	Conch.paintRout,a0
+	jsr	(a0)
+
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+
+	movea.l	Conch.resRout,a0
+	suba.l	a1,a1
+	movea.l	d0,a2
+.again	bsr.l	Screen.requestUpdate
+	tst.l	d0
+	bmi.s	.again
+	clr.l	Conch.resRout
+	rts
+
+;======= OBJECT SUBROUTINES ================================================
+
+Conch.stopClambs:
+	move.l	#Conch.paintScene,Conch.paintRout
+	move.w	$04BC.w,Conch.stillStartTime
+	clr.w	Conch.clambsMoving
+	rts
+
+Conch.startClambs:
+	move.l	#Conch.paintScene,Conch.paintRout
+	move.w	#1,Conch.clambsMoving
+	move.w	$04BC.w,Conch.clambsStartTime
+	rts
+
+Conch.setCloseUp:
+	move.l	#Conch.paint,Conch.paintRout
+	move.w	$04BC.w,Conch.closeStartTime
+	clr.w	Conch.closeMode
+	rts
+
+Conch.endCloseUp:
+	move.l	#Conch.paint,Conch.paintRout
+	move.w	$04BC.w,Conch.closeStartTime
+	st	Conch.closeMode
+	rts
+
+Conch.setFadeIn:
+	move.w	$04BC.w,Conch.startTime
+	move.l	#Conch.paintFade,Conch.paintRout
+	rts
+
+Conch.paintScene:
+	tst.w	Conch.clambsMoving
+	bne.s	.swim_little_dolpin
+	bsr	Conch.paintStillClamb
+	bra.s	.end_paint
+.swim_little_dolpin:
+	bsr	Conch.paintSwimmingClamb
+.end_paint:
+	rts
+
+; Generates conch-like shell. This uses spirals with various slopes and
+; heights. This one looks more like a horn sadly..
+;
+; parametrisation:
+;
+; parameters: 0<=t<angle, 0<=tau<2pi
+; tau controls 'rings', t controls 'spirals'
+;
+; x=r*sin(t), y=r*cos(t), z=R*alpha*cos(tau)*t
+; r=R[1+alpha*sin(tau)]*t
+; R=final radius of spiral, alpha=variance in spiral (makes the cone)
+;
+; OUTPUT:
+; d0.l=size of object
+Conch.init3dHornObject:
+	movea.l	Conch.conchAdr,a0
+	lea	sine_tbl,a1
+	move.w	#Conch.POINTS,(a0)+		; Store #points+#normals.
+	clr.w	(a0)+
+	clr.w	d7
+
+.spiral_loop:
+	moveq	#Conch.SPIRALS-1,d6
+
+.ring_loop:
+	move.w	d6,d0
+	move.w	d7,d2
+
+; Calc sin(t), cos(t).
+	mulu.w	#Conch.ANGLE/Conch.RINGS,d2	; d2.w=t
+	Do_SinModulo	d2
+	Get_SinCos	a1,d2,d2,d3
+
+; Calc sin(tau), cos(tau).
+	mulu.w	#sintbllen/Conch.SPIRALS,d0	; d0.w=tau
+	Get_SinCos	a1,d0,d0,d1
+
+; Calc r.
+	muls.w	#Conch.ALPHA,d0
+	add.l	d0,d0
+	swap	d0				; d0.w=alpha*sin(tau)
+	muls.w	#Conch.RADIUS,d0
+	add.l	d0,d0
+	swap	d0				; d0.w=R*alpha*sin(tau)
+	addi.w	#Conch.RADIUS,d0		; d0.w=R[1+alpha*sin(tau)]
+	mulu.w	d7,d0
+	divu.w	#Conch.RINGS,d0			; d0.w=R[1+alpha*sin(tau)]*t
+
+; Calc (x,y) and store.
+	muls.w	d0,d2
+	muls.w	d0,d3
+	add.l	d2,d2
+	add.l	d3,d3
+	swap	d2
+	swap	d3
+	move.w	d2,(a0)+
+	move.w	d3,(a0)+
+
+; Calc z and store.
+	muls.w	d7,d1
+	divs.w	#Conch.RINGS,d1
+	muls.w	#Conch.ALPHA,d1
+	add.l	d1,d1
+	swap	d1
+	muls.w	#Conch.RADIUS,d1
+	add.l	d1,d1
+	swap	d1
+	move.w	d1,(a0)+
+
+	dbf	d6,.ring_loop
+
+	addq.w	#1,d7
+	cmpi.w	#Conch.RINGS,d7
+	blt.s	.spiral_loop
+
+; 2d
+	clr.w	(a0)+
+
+; polys
+	move.w	#Conch.POLYS,(a0)+
+	moveq	#Conch.RINGS-2,d7
+	
+; Make a spiral..
+.poly_spiral_loop:
+	moveq	#Conch.SPIRALS-1,d6
+
+; Make a ring..
+.poly_ring_loop:
+; Output polyhead.
+	move.w	#Polygon.QUAD|Polygon.FLATSHADED,d1
+	move.w	d7,d0
+	eor.w	d6,d0
+	andi.w	#1,d0
+	or.w	d0,d1
+	move.w	d1,(a0)+
+
+	move.w	d7,d0
+	mulu.w	#Conch.SPIRALS,d0
+; row*n + i
+	move.w	d0,d1
+	add.w	d6,d1
+	move.w	d1,(a0)+
+; row*n + [(i+1) mod n]
+	clr.l	d1
+	move.w	d6,d1
+	addq.w	#1,d1
+	divu.w	#Conch.SPIRALS,d1
+	swap	d1
+	add.w	d0,d1
+	move.w	d1,(a0)+
+; row*(n+1) + [(i+1) mod n]
+	addi.w	#Conch.SPIRALS,d1
+	move.w	d1,(a0)+
+; row*(n+1) + i
+	move.w	d0,d1
+	add.w	d6,d1
+	addi.w	#Conch.SPIRALS,d1
+	move.w	d1,(a0)+
+
+	dbf	d6,.poly_ring_loop
+
+	dbf	d7,.poly_spiral_loop
+
+; Calc size..
+	suba.l	Conch.conchAdr,a0
+	move.l	a0,d0
+	rts
+
+; Generates conch-like shell. This is a gapless one.
+; Can be used to make both conch and clambs depending on angle.
+;
+; parametrisation:
+;
+; parameters: 0<=t<angle, 0<=tau<2pi
+; tau controls position in 'ring', t controls position in 'spiral'
+;
+; if t<2pi:
+;
+; r(t,tau) = r1(t,tau)
+;
+; else
+;
+; r(t,tau) = r2(t,tau)
+; 
+; x = r(t,tau)*sin(t), n.x=sin(tau)*sin(t)
+; y = r(t,tau)*cos(t), n.y=sin(tau)*cos(t)
+; z = R*cos(tau)/2,    n.z=cos(tau)
+;
+;              1+sin(tau)     R*t
+; r1(t,tau) = ------------ * -----
+;                  2          2pi
+;
+; r2(t,tau)=R[t/2pi-1+(1+sin(tau))/2]
+;
+; R=radius of spiral when t=2pi
+;
+; INPUT:
+; d0.w=radius
+; d1.w=angle
+; d2.w=spirals
+; d3.w=rings
+; d4.w=inside generation (=0:no, >0:yes)
+; a0: dst u-fly obj
+; OUTPUT:
+; d0.l=size of object
+Conch.initClambObject:
+	movea.l	a0,a6
+	move.w	d0,.radius
+	move.w	d1,.angle
+	move.w	d2,.spirals
+	move.w	d3,.rings
+	move.w	d4,.inside
+
+	lea	sine_tbl,a1
+	move.w	.rings(pc),d0
+	mulu.w	.spirals(pc),d0
+	move.w	d0,.points
+	move.w	d0,(a0)
+	add.w	d0,(a0)+			; Store #points+#normals.
+	move.w	d0,(a0)+			; Store #normals
+	mulu.w	#Vertex.SIZE,d0
+	lea	(a0,d0.l),a2			; a2: normals
+	clr.w	d7
+
+.spiral_loop:
+	move.w	.spirals(pc),d6
+	subq.w	#1,d6
+
+.ring_loop:
+	move.w	d6,d0
+	move.w	d7,d2
+
+; Calc sin(t), cos(t).
+	mulu.w	.angle(pc),d2
+	move.w	.rings(pc),d3
+	subq.w	#1,d3
+	divu.w	d3,d2				; d2.w=t
+	move.w	d2,d4				; d4.w=t
+	Do_SinModulo	d2			; d2.w=t mod 2pi
+	Get_SinCos	a1,d2,d2,d3
+; d2.w=sin(t), d3.w=cos(t)
+
+; Calc sin(tau), cos(tau).
+	mulu.w	#sintbllen,d0
+	divu.w	.spirals(pc),d0			; d0.w=tau
+	Get_SinCos	a1,d0,d0,d1
+; d0.w=sin(tau), d1.w=cos(tau)
+
+; Store normal.
+	move.w	d2,d5
+	muls.w	d0,d5
+	add.l	d5,d5
+	swap	d5
+	ext.l	d5
+	divs.w	#257,d5
+	move.w	d5,(a2)+			; Store n.x.
+	move.w	d3,d5
+	muls.w	d0,d5
+	add.l	d5,d5
+	swap	d5
+	ext.l	d5
+	divs.w	#257,d5
+	move.w	d5,(a2)+			; Store n.y.
+	move.w	d1,d5
+	ext.l	d5
+	divs.w	#257,d5
+	move.w	d5,(a2)+			; Store n.z.
+
+; Calculate r(t,tau) function.. all shit is positive!
+	addi.l	#$8000,d0			; d0.w=[sin(tau)+1]/2 (frac)
+; t<2pi ??
+	cmpi.w	#sintbllen,d4
+	bhs.s	.t_is_high
+	mulu.w	d4,d0				; d0.l=t*[sin(tau)+1]/2 (16:16)
+	divu.w	#sintbllen,d0			; d0.w=t*[sin(tau)+1]/2*2pi (frac)
+	mulu.w	.radius(pc),d0			; d0.l=R*t*[sin(tau)+1]/2*2pi (16:16)
+	swap	d0				; d0.w=r1(t,tau) (int)
+	bra.s	.end_calc_r
+; t is hi. calc r2..
+.t_is_high:
+	move.w	d4,d5
+	subi.w	#sintbllen,d5
+	mulu.w	#$10000/sintbllen,d5		; d5.l=t/2pi-1 (16:16)
+	add.l	d5,d0				; d0.l=t/2pi-1+[sin(tau)+1]/2 (16:16)
+	lsr.l	#8,d0
+	mulu.w	.radius(pc),d0
+	lsr.l	#8,d0				; d0.w=r2(t,tau) (int)
+
+; Make sure spiral joins. No gaps!
+	mulu.w	#$00E8,d0
+	lsr.l	#8,d0
+
+.end_calc_r:
+; d0.w=r(t,tau) (int)
+
+; Calc (x,y) and store.
+	muls.w	d0,d2
+	muls.w	d0,d3
+	add.l	d2,d2
+	add.l	d3,d3
+	swap	d2				; d2.w=r(t,tau)*sin(t)
+	swap	d3				; d3.w=r(t,tau)*cos(t)
+	move.w	d2,(a0)+
+	move.w	d3,(a0)+
+
+; Calc z and store.
+	muls.w	d4,d1
+	divs.w	.angle(pc),d1
+	muls.w	.radius(pc),d1			; d1.l=R*cos(tau)/2 (16:16)
+	swap	d1				; d1.w=R*cos(tau)/2 (int)
+	move.w	d1,(a0)+
+
+	dbf	d6,.ring_loop
+
+	addq.w	#1,d7
+	cmp.w	.rings(pc),d7
+	blt	.spiral_loop
+
+	movea.l	a2,a0				; a0: texels
+
+; texels
+	clr.w	(a0)+
+
+; polys
+	move.w	.rings(pc),d0
+	subq.w	#1,d0
+	mulu.w	.spirals(pc),d0
+	tst.w	.inside(pc)
+	beq.s	.no_inside
+	add.w	d0,d0				; d0.w=#frontpolys+#backpolys
+.no_inside:
+	move.w	d0,(a0)+			; Store #polys.
+	move.w	.rings(pc),d7
+	subq.w	#2,d7
+	
+; Make a spiral..
+.poly_spiral_loop:
+	move.w	.spirals(pc),d6
+	subq.w	#1,d6
+
+; Make a ring..
+.poly_ring_loop:
+; Output polyhead.
+	move.w	#Polygon.QUAD|Polygon.GOURAUDSHADED|3,(a0)+
+
+; Vertex refs.
+	move.w	d7,d0
+	mulu.w	.spirals(pc),d0
+; row*n + i
+	move.w	d0,d1
+	add.w	d6,d1
+	move.w	d1,(a0)+
+; row*n + [(i+1) mod n]
+	clr.l	d1
+	move.w	d6,d1
+	addq.w	#1,d1
+	divu.w	.spirals(pc),d1
+	swap	d1
+	add.w	d0,d1
+	move.w	d1,(a0)+
+; row*(n+1) + [(i+1) mod n]
+	add.w	.spirals(pc),d1
+	move.w	d1,(a0)+
+; row*(n+1) + i
+	move.w	d0,d1
+	add.w	d6,d1
+	add.w	.spirals(pc),d1
+	move.w	d1,(a0)+
+
+; Gouraud indices.
+	move.l	#$00100010,(a0)+
+	move.l	#$00300030,(a0)+
+
+	dbf	d6,.poly_ring_loop
+
+	dbf	d7,.poly_spiral_loop
+
+	tst.w	.inside(pc)
+	beq	.end
+
+; Output backface polys (parelmoer).
+	move.w	.rings(pc),d7
+	subq.w	#2,d7
+	
+; Make a spiral..
+.bpoly_spiral_loop:
+	move.w	.spirals(pc),d6
+	subq.w	#1,d6
+
+; Make a ring..
+.bpoly_ring_loop:
+; Output polyhead.
+	move.w	#Polygon.QUAD|Polygon.ENVMAPPED|0,(a0)+
+
+; Vertex refs.
+	move.w	d7,d0
+	mulu.w	.spirals(pc),d0			; d0.w=row*n
+; row*n + [(i+1) mod n]
+	clr.l	d1
+	move.w	d6,d1
+	addq.w	#1,d1
+	divu.w	.spirals(pc),d1
+	swap	d1
+	move.w	d1,d2				; d2.w=(i+1) mod n
+	add.w	d0,d1
+	move.w	d1,(a0)+
+; row*n + i
+	move.w	d6,d1
+	add.w	d0,d1
+	move.w	d1,(a0)+
+; row*(n+1) + i
+	add.w	.spirals(pc),d1
+	move.w	d1,(a0)+
+; row*(n+1) + [(i+1) mod n]
+	move.w	d0,d1
+	add.w	.spirals(pc),d1
+	add.w	d2,d1
+	move.w	d1,(a0)+
+
+; Store normal refs.
+	REPT	4
+	move.w	-8(a0),d0
+	add.w	.points(pc),d0
+	move.w	d0,(a0)+
+	ENDR
+
+	dbf	d6,.bpoly_ring_loop
+
+	dbf	d7,.bpoly_spiral_loop
+
+; Calc size..
+.end:	suba.l	a6,a0
+	move.l	a0,d0
+	rts
+
+.radius:DC.W	0
+.angle:	DC.W	0
+.spirals:
+	DC.W	0
+.rings:	DC.W	0
+.inside:DC.W	0
+.points:DC.W	0
+
+; Generates conch-like shell. This is a gapless one.
+; Can be used to make both conch and clambs depending on angle.
+;
+; parametrisation:
+;
+; parameters: 0<=t<angle, 0<=tau<2pi
+; tau controls position in 'ring', t controls position in 'spiral'
+;
+; if t<2pi:
+;
+; r(t,tau) = r1(t,tau)
+;
+; else
+;
+; r(t,tau) = r2(t,tau)
+; 
+; x = r(t,tau)*sin(t), n.x=sin(tau)*sin(t)
+; y = r(t,tau)*cos(t), n.y=sin(tau)*cos(t)
+; z = R*cos(tau)/2,    n.z=cos(tau)
+;
+;              1+sin(tau)     R*t
+; r1(t,tau) = ------------ * -----
+;                  2          2pi
+;
+; r2(t,tau)=R[t/2pi-1+(1+sin(tau))/2]
+;
+; R=radius of spiral when t=2pi
+;
+; INPUT:
+; d0.w=radius
+; d1.w=angle
+; d2.w=spirals
+; d3.w=rings
+; d4.w=inside generation (=0:no, >0:yes)
+; a0: dst u-fly obj
+; OUTPUT:
+; d0.l=size of object
+Conch.initTriClambObject:
+	movea.l	a0,a6
+	move.w	d0,.radius
+	move.w	d1,.angle
+	move.w	d2,.spirals
+	move.w	d3,.rings
+	move.w	d4,.inside
+
+	lea	sine_tbl,a1
+	move.w	.rings(pc),d0
+	mulu.w	.spirals(pc),d0
+	move.w	d0,.points
+	move.w	d0,(a0)
+	add.w	d0,(a0)+			; Store #points+#normals.
+	move.w	d0,(a0)+			; Store #normals
+	mulu.w	#Vertex.SIZE,d0
+	lea	(a0,d0.l),a2			; a2: normals
+	clr.w	d7
+
+.spiral_loop:
+	move.w	.spirals(pc),d6
+	subq.w	#1,d6
+
+.ring_loop:
+	move.w	d6,d0
+	move.w	d7,d2
+
+; Calc sin(t), cos(t).
+	mulu.w	.angle(pc),d2
+	move.w	.rings(pc),d3
+	subq.w	#1,d3
+	divu.w	d3,d2				; d2.w=t
+	move.w	d2,d4				; d4.w=t
+	Do_SinModulo	d2			; d2.w=t mod 2pi
+	Get_SinCos	a1,d2,d2,d3
+; d2.w=sin(t), d3.w=cos(t)
+
+; Calc sin(tau), cos(tau).
+	mulu.w	#sintbllen,d0
+	divu.w	.spirals(pc),d0			; d0.w=tau
+	Get_SinCos	a1,d0,d0,d1
+; d0.w=sin(tau), d1.w=cos(tau)
+
+; Store normal.
+	move.w	d2,d5
+	muls.w	d0,d5
+	add.l	d5,d5
+	swap	d5
+	ext.l	d5
+	divs.w	#257,d5
+	move.w	d5,(a2)+			; Store n.x.
+	move.w	d3,d5
+	muls.w	d0,d5
+	add.l	d5,d5
+	swap	d5
+	ext.l	d5
+	divs.w	#257,d5
+	move.w	d5,(a2)+			; Store n.y.
+	move.w	d1,d5
+	ext.l	d5
+	divs.w	#257,d5
+	move.w	d5,(a2)+			; Store n.z.
+
+; Calculate r(t,tau) function.. all shit is positive!
+	addi.l	#$8000,d0			; d0.w=[sin(tau)+1]/2 (frac)
+; t<2pi ??
+	cmpi.w	#sintbllen,d4
+	bhs.s	.t_is_high
+	mulu.w	d4,d0				; d0.l=t*[sin(tau)+1]/2 (16:16)
+	divu.w	#sintbllen,d0			; d0.w=t*[sin(tau)+1]/2*2pi (frac)
+	mulu.w	.radius(pc),d0			; d0.l=R*t*[sin(tau)+1]/2*2pi (16:16)
+	swap	d0				; d0.w=r1(t,tau) (int)
+	bra.s	.end_calc_r
+; t is hi. calc r2..
+.t_is_high:
+	move.w	d4,d5
+	subi.w	#sintbllen,d5
+	mulu.w	#$10000/sintbllen,d5		; d5.l=t/2pi-1 (16:16)
+	add.l	d5,d0				; d0.l=t/2pi-1+[sin(tau)+1]/2 (16:16)
+	lsr.l	#8,d0
+	mulu.w	.radius(pc),d0
+	lsr.l	#8,d0				; d0.w=r2(t,tau) (int)
+
+; Make sure spiral joins. No gaps!
+	mulu.w	#$00E8,d0
+	lsr.l	#8,d0
+
+.end_calc_r:
+; d0.w=r(t,tau) (int)
+
+; Calc (x,y) and store.
+	muls.w	d0,d2
+	muls.w	d0,d3
+	add.l	d2,d2
+	add.l	d3,d3
+	swap	d2				; d2.w=r(t,tau)*sin(t)
+	swap	d3				; d3.w=r(t,tau)*cos(t)
+	move.w	d2,(a0)+
+	move.w	d3,(a0)+
+
+; Calc z and store.
+	muls.w	d4,d1
+	divs.w	.angle(pc),d1
+	muls.w	.radius(pc),d1			; d1.l=R*cos(tau)/2 (16:16)
+	swap	d1				; d1.w=R*cos(tau)/2 (int)
+	move.w	d1,(a0)+
+
+	dbf	d6,.ring_loop
+
+	addq.w	#1,d7
+	cmp.w	.rings(pc),d7
+	blt	.spiral_loop
+
+	movea.l	a2,a0				; a0: texels
+
+; texels
+	clr.w	(a0)+
+
+; polys
+	move.w	.rings(pc),d0
+	subq.w	#1,d0
+	mulu.w	.spirals(pc),d0
+	tst.w	.inside(pc)
+	beq.s	.no_inside
+	add.w	d0,d0				; d0.w=#frontpolys+#backpolys
+.no_inside:
+	add.w	d0,d0				; d0.w=#tris=#quads*2
+	move.w	d0,(a0)+			; Store #polys.
+	move.w	.rings(pc),d7
+	subq.w	#2,d7
+	movea.l	a0,a2				; a2: polys
+	
+; Make a spiral..
+.poly_spiral_loop:
+	move.w	.spirals(pc),d6
+	subq.w	#1,d6
+
+; Make a ring..
+.poly_ring_loop:
+; Output polyhead.
+	move.w	#Polygon.TRI|Polygon.GOURAUDSHADED|3,(a0)+
+; Vertex refs.
+	move.w	d7,d0
+	mulu.w	.spirals(pc),d0
+; row*n + i, 0
+	move.w	d0,d1
+	add.w	d6,d1
+	move.w	d1,(a0)+
+	move.w	d1,d2
+; row*n + [(i+1) mod n], 1
+	clr.l	d1
+	move.w	d6,d1
+	addq.w	#1,d1
+	divu.w	.spirals(pc),d1
+	swap	d1
+	add.w	d0,d1
+	move.w	d1,(a0)+
+	move.w	d1,d3
+; row*(n+1) + [(i+1) mod n], 2
+	add.w	.spirals(pc),d1
+	move.w	d1,(a0)+
+	move.w	d1,d4
+
+; Gouraud indices. 0,1,2
+	move.l	#$00100010,(a0)+
+	move.w	#$0030,(a0)+
+
+; 0,2,3
+	move.w	#Polygon.TRI|Polygon.GOURAUDSHADED|3,(a0)+
+	move.w	d2,(a0)+			; 0
+	move.w	d4,(a0)+			; 2
+; row*(n+1) + i, 3
+	move.w	d0,d1
+	add.w	d6,d1
+	add.w	.spirals(pc),d1
+	move.w	d1,(a0)+
+
+; Gouraud indices. 0,2,3
+	move.w	#$0010,(a0)+
+	move.l	#$00300030,(a0)+
+
+	dbf	d6,.poly_ring_loop
+
+	dbf	d7,.poly_spiral_loop
+
+	tst.w	.inside(pc)
+	beq	.end
+
+; Output backface polys (parelmoer).
+	move.w	.rings(pc),d7
+	subq.w	#1,d7
+	mulu.w	.spirals(pc),d7
+	add.l	d7,d7
+	
+.bpoly_loop:
+
+; Output polyhead.
+	move.w	#Polygon.TRI|Polygon.ENVMAPPED|0,(a0)+
+	addq	#2,a2
+
+; Vertex refs.
+	move.w	0(a2),(a0)+
+	move.w	4(a2),(a0)+
+	move.w	2(a2),(a0)+
+
+; Normal indices.
+	REPT	3
+	move.w	-6(a0),d1
+	add.w	.points(pc),d1
+	move.w	d1,(a0)+
+	ENDR
+
+	adda.w	#Vertex.SIZE*2,a2
+	dbf	d7,.bpoly_loop
+
+; Calc size..
+.end:	suba.l	a6,a0
+	move.l	a0,d0
+	rts
+
+.radius:DC.W	0
+.angle:	DC.W	0
+.spirals:
+	DC.W	0
+.rings:	DC.W	0
+.inside:DC.W	0
+.points:DC.W	0
+
+; Just fades a backgroundcolor.
+Conch.paintFade:
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	move.w	$04BC.w,d4
+	sub.w	Conch.startTime,d4
+	lsr.w	#2,d4
+	cmpi.w	#63,d4
+	blt.s	.ok
+	moveq	#63,d4
+.ok:	move.w	(Conch.backPal,d4.w*2),d4
+	move.w	d4,d2
+	swap	d4
+	move.w	d2,d4
+	bsr.l	Viewport.paintRectangle
+	rts
+
+; Paint seashell.
+Conch.paint:
+	bsr.l	PrimitiveMesh.new
+
+; world rot
+	move.w	$04BC.w,d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#3,d0
+	lsr.l	d0
+	mulu.w	#13,d1
+	lsr.l	#3,d1
+	mulu.w	#7,d2
+	lsr.l	#2,d2
+	bsr.l	Matrix.generate
+	clr.w	d0
+
+	move.w	$04BC.w,d1
+	sub.w	Conch.closeStartTime,d1
+	tst.w	Conch.closeMode
+	bne.s	.second_mode
+	subi.w	#300,d1
+	bmi.s	.y_ok
+	clr.w	d1
+.y_ok:	muls.w	d1,d1
+	lsr.l	#6,d1
+	bra.s	.y_calced
+.second_mode:
+	muls.w	d1,d1
+	lsr.l	#6,d1
+	neg.w	d1
+.y_calced:
+
+	move.w	#2000,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+; top clamb
+	clr.w	d0
+	clr.w	d1
+	move.w	#sintbllen/10,d2
+	bsr.l	Matrix.generate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+; bottom clamb
+	clr.w	d0
+	move.w	#sintbllen/2,d1
+	move.w	#sintbllen/10,d2
+	bsr.l	Matrix.generate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+	bsr.l	Matrix.pop			; pop world rot
+
+	bsr.l	PrimitiveMesh.sortZ
+
+	bsr.l	PrimitiveMesh.complete
+
+	IFNE	0
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	move.l	#Conch.BACKCOL,d4
+	bsr.l	Viewport.paintRectangle
+	ELSE
+	movea.l	Conch.rectAddressTable,a0
+	move.w	(a0)+,d7
+	beq.s	.end_restore
+	subq.w	#1,d7
+.restore_loop:
+	move.w	d7,-(sp)
+	movem.w	(a0)+,d1/d7
+	movem.w	(a0)+,d0/d6
+	move.l	a0,-(sp)
+	move.l	#Conch.BACKCOL,d4
+	bsr.l	Viewport.paintRectangle
+	movea.l	(sp)+,a0
+	move.w	(sp)+,d7
+	dbra	d7,.restore_loop
+.end_restore:
+	ENDC
+
+	movea.l	Conch.rectAddressTable,a0
+	bsr.l	PrimitiveMesh.paint
+
+	lea	Conch.rectAddressTable,a0
+ 	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+.end:	rts
+
+; Clambs just chilling out.
+Conch.paintStillClamb:
+	move.w	$04BC.w,d0
+	sub.w	Conch.stillStartTime,d0
+	subi.w	#700,d0
+	bmi.s	.time_ok
+	clr.w	d0
+.time_ok:
+	muls.w	d0,d0
+	lsr.l	#7,d0
+	neg.w	d0
+	addi.w	#800,d0
+	move.w	d0,.ypos
+
+	bsr.l	PrimitiveMesh.new
+
+; clamb #1
+	move.w	$04BC.w,d1
+	Do_SinModulo	d1
+	Get_Sin	sine_tbl,d1,d1
+	asr.w	#8,d1
+	clr.w	d0
+	addi.w	#sintbllen/10,d1
+	move.w	#sintbllen/4,d2
+	bsr.l	Matrix.generate
+	move.w	#-1400,d0
+	move.w	.ypos(pc),d1
+	move.w	#5000,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+; Calc clamb pos and rot...
+	lea	sine_tbl,a1
+	move.w	#0,d2
+	move.w	d2,d3
+	Do_SinModulo	d3
+	Get_SinCos	a1,d3,d3,d4
+	exg	d3,d4
+	asr.l	#6,d3
+	asr.l	#5,d4
+	neg.l	d4
+	add.l	d2,d4
+	add.l	d2,d4
+	lsr.l	#1,d4
+	move.w	d4,.clamb1_pos
+	add.w	d3,d2
+	Do_SinModulo	d2
+	Get_Cos	a1,d2,d2
+	addi.w	#$8000,d2
+	lsr.w	#8,d2
+	move.w	d2,.zrot
+
+; clamb top
+	clr.w	d0
+	clr.w	d1
+	move.w	.zrot(pc),d2
+	bsr.l	Matrix.generate
+	clr.w	d0
+	move.w	.clamb1_pos(pc),d1
+	clr.w	d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+; clamb bottom
+	clr.w	d0
+	move.w	#sintbllen/2,d1
+	move.w	.zrot(pc),d2
+	bsr.l	Matrix.generate
+	clr.w	d0
+	move.w	.clamb1_pos(pc),d1
+	clr.w	d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+	bsr.l	Matrix.pop
+
+; clamb #2
+	move.w	$04BC.w,d1
+	mulu.w	#3,d1
+	lsr.l	d1
+	Do_SinModulo	d1
+	Get_Sin	sine_tbl,d1,d1
+	asr.w	#8,d1
+	clr.w	d0
+	addi.w	#sintbllen*3/8,d1
+	move.w	#sintbllen/4,d2
+	bsr.l	Matrix.generate
+	move.w	#1200,d0
+	move.w	.ypos(pc),d1
+	move.w	#5000,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+; Calc clamb pos and rot...
+	lea	sine_tbl,a1
+	move.w	#0,d2
+	move.w	d2,d3
+	Do_SinModulo	d3
+	Get_SinCos	a1,d3,d3,d4
+	exg	d3,d4
+	asr.l	#6,d3
+	asr.l	#5,d4
+	neg.l	d4
+	add.l	d2,d4
+	add.l	d2,d4
+	lsr.l	#1,d4
+	move.w	d4,.clamb1_pos
+	add.w	d3,d2
+	Do_SinModulo	d2
+	Get_Cos	a1,d2,d2
+	addi.w	#$8000,d2
+	lsr.w	#8,d2
+	move.w	d2,.zrot
+
+; clamb top
+	clr.w	d0
+	clr.w	d1
+	move.w	.zrot(pc),d2
+	bsr.l	Matrix.generate
+	clr.w	d0
+	move.w	.clamb1_pos(pc),d1
+	clr.w	d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+; clamb bottom
+	clr.w	d0
+	move.w	#sintbllen/2,d1
+	move.w	.zrot(pc),d2
+	bsr.l	Matrix.generate
+	clr.w	d0
+	move.w	.clamb1_pos(pc),d1
+	clr.w	d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+	bsr.l	Matrix.pop
+
+; clamb #3
+	move.w	$04BC.w,d1
+	mulu.w	#5,d1
+	lsr.l	#2,d1
+	Do_SinModulo	d1
+	Get_Sin	sine_tbl,d1,d1
+	asr.w	#8,d1
+	move.w	#-sintbllen/10,d0
+	addi.w	#-sintbllen/4+sintbllen/24,d1
+	move.w	#sintbllen/4,d2
+	bsr.l	Matrix.generate
+	move.w	#+100,d0
+	move.w	.ypos(pc),d1
+	move.w	#5500,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+; Calc clamb pos and rot...
+	lea	sine_tbl,a1
+	move.w	#0,d2
+	move.w	d2,d3
+	Do_SinModulo	d3
+	Get_SinCos	a1,d3,d3,d4
+	exg	d3,d4
+	asr.l	#6,d3
+	asr.l	#5,d4
+	neg.l	d4
+	add.l	d2,d4
+	add.l	d2,d4
+	lsr.l	#2,d4
+	move.w	d4,.clamb1_pos
+	add.w	d3,d2
+	Do_SinModulo	d2
+	Get_Cos	a1,d2,d2
+	addi.w	#$8000,d2
+	lsr.w	#8,d2
+	move.w	d2,.zrot
+
+; clamb top
+	clr.w	d0
+	clr.w	d1
+	move.w	.zrot(pc),d2
+	bsr.l	Matrix.generate
+	clr.w	d0
+	move.w	.clamb1_pos(pc),d1
+	clr.w	d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+; clamb bottom
+	clr.w	d0
+	move.w	#sintbllen/2,d1
+	move.w	.zrot(pc),d2
+	bsr.l	Matrix.generate
+	clr.w	d0
+	move.w	.clamb1_pos(pc),d1
+	clr.w	d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+	bsr.l	Matrix.pop
+.end_add_clambs:
+
+	bsr.l	PrimitiveMesh.sortZ
+
+	bsr.l	PrimitiveMesh.complete
+
+	IFNE	0
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	move.l	#Conch.BACKCOL,d4
+	bsr.l	Viewport.paintRectangle
+	ELSE
+	movea.l	Conch.rectAddressTable,a0
+	move.w	(a0)+,d7
+	beq.s	.end_restore
+	subq.w	#1,d7
+.restore_loop:
+	move.w	d7,-(sp)
+	movem.w	(a0)+,d1/d7
+	movem.w	(a0)+,d0/d6
+	move.l	a0,-(sp)
+	move.l	#Conch.BACKCOL,d4
+	bsr.l	Viewport.paintRectangle
+	movea.l	(sp)+,a0
+	move.w	(sp)+,d7
+	dbra	d7,.restore_loop
+.end_restore:
+	ENDC
+
+	movea.l	Conch.rectAddressTable,a0
+	bsr.l	PrimitiveMesh.paint
+
+	lea	Conch.rectAddressTable,a0
+ 	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+.end:	rts
+
+.zrot:	DC.W	0
+.clamb1_pos:
+	DC.W	0
+.ypos:	DC.W	0
+
+; Try to paint some clambing clambs.
+; Open-shut movement of clambs seems hard, still not too realistic.
+Conch.paintSwimmingClamb:
+	bsr.l	PrimitiveMesh.new
+
+	move.w	Conch.time,d0
+	subi.w	#$0080,d0
+	blt.s	.add_clambs
+
+	lsl.l	#2,d0
+	subi.l	#2700,d0
+	move.w	d0,-(sp)
+
+	move.w	Conch.time,d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#7,d0
+	lsr.l	#3,d0
+	mulu.w	#3,d1
+	lsr.l	#1,d1
+	mulu.w	#5,d2
+	lsr.l	#2,d2
+	bsr.l	Matrix.generate
+	move.w	(sp)+,d0
+	clr.w	d1
+	move.w	#3000,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#1,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+.add_clambs:
+	cmpi.w	#$0280,Conch.time
+	bhs	.end_add_clambs
+
+; clamb #1
+	clr.w	d0
+	move.w	#sintbllen/10,d1
+	move.w	#sintbllen/4,d2
+	bsr.l	Matrix.generate
+	move.w	#-1400,d0
+	move.w	#800,d1
+	move.w	#5000,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+; Calc clamb pos and rot...
+	lea	sine_tbl,a1
+	move.w	Conch.time,d2
+	mulu.w	#20,d2
+	move.w	d2,d3
+	Do_SinModulo	d3
+	Get_SinCos	a1,d3,d3,d4
+	exg	d3,d4
+	asr.l	#6,d3
+	asr.l	#5,d4
+	neg.l	d4
+	add.l	d2,d4
+	add.l	d2,d4
+	lsr.l	#1,d4
+	move.w	d4,.clamb1_pos
+	add.w	d3,d2
+	Do_SinModulo	d2
+	Get_Cos	a1,d2,d2
+	addi.w	#$8000,d2
+	lsr.w	#8,d2
+	move.w	d2,.zrot
+
+; clamb top
+	clr.w	d0
+	clr.w	d1
+	move.w	.zrot(pc),d2
+	bsr.l	Matrix.generate
+	clr.w	d0
+	move.w	.clamb1_pos(pc),d1
+	clr.w	d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+; clamb bottom
+	clr.w	d0
+	move.w	#sintbllen/2,d1
+	move.w	.zrot(pc),d2
+	bsr.l	Matrix.generate
+	clr.w	d0
+	move.w	.clamb1_pos(pc),d1
+	clr.w	d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+	bsr.l	Matrix.pop
+
+; clamb #2
+	clr.w	d0
+	move.w	#sintbllen*3/8,d1
+	move.w	#sintbllen/4,d2
+	bsr.l	Matrix.generate
+	move.w	#1200,d0
+	move.w	#800,d1
+	move.w	#5000,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+; Calc clamb pos and rot...
+	lea	sine_tbl,a1
+	move.w	Conch.time,d2
+	mulu.w	#19,d2
+	move.w	d2,d3
+	Do_SinModulo	d3
+	Get_SinCos	a1,d3,d3,d4
+	exg	d3,d4
+	asr.l	#6,d3
+	asr.l	#5,d4
+	neg.l	d4
+	add.l	d2,d4
+	add.l	d2,d4
+	lsr.l	#1,d4
+	move.w	d4,.clamb1_pos
+	add.w	d3,d2
+	Do_SinModulo	d2
+	Get_Cos	a1,d2,d2
+	addi.w	#$8000,d2
+	lsr.w	#8,d2
+	move.w	d2,.zrot
+
+; clamb top
+	clr.w	d0
+	clr.w	d1
+	move.w	.zrot(pc),d2
+	bsr.l	Matrix.generate
+	clr.w	d0
+	move.w	.clamb1_pos(pc),d1
+	clr.w	d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+; clamb bottom
+	clr.w	d0
+	move.w	#sintbllen/2,d1
+	move.w	.zrot(pc),d2
+	bsr.l	Matrix.generate
+	clr.w	d0
+	move.w	.clamb1_pos(pc),d1
+	clr.w	d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+	bsr.l	Matrix.pop
+
+; clamb #3
+	move.w	#-sintbllen/10,d0
+	move.w	#-sintbllen/4+sintbllen/24,d1
+	move.w	#sintbllen/4,d2
+	bsr.l	Matrix.generate
+	move.w	#+100,d0
+	move.w	#800,d1
+	move.w	#5500,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+; Calc clamb pos and rot...
+	lea	sine_tbl,a1
+	move.w	Conch.time,d2
+	mulu.w	#17,d2
+	move.w	d2,d3
+	Do_SinModulo	d3
+	Get_SinCos	a1,d3,d3,d4
+	exg	d3,d4
+	asr.l	#6,d3
+	asr.l	#5,d4
+	neg.l	d4
+	add.l	d2,d4
+	add.l	d2,d4
+	lsr.l	#2,d4
+	move.w	d4,.clamb1_pos
+	add.w	d3,d2
+	Do_SinModulo	d2
+	Get_Cos	a1,d2,d2
+	addi.w	#$8000,d2
+	lsr.w	#8,d2
+	move.w	d2,.zrot
+
+; clamb top
+	clr.w	d0
+	clr.w	d1
+	move.w	.zrot(pc),d2
+	bsr.l	Matrix.generate
+	clr.w	d0
+	move.w	.clamb1_pos(pc),d1
+	clr.w	d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+; clamb bottom
+	clr.w	d0
+	move.w	#sintbllen/2,d1
+	move.w	.zrot(pc),d2
+	bsr.l	Matrix.generate
+	clr.w	d0
+	move.w	.clamb1_pos(pc),d1
+	clr.w	d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+	bsr.l	Matrix.pop
+.end_add_clambs:
+
+	bsr.l	PrimitiveMesh.sortZ
+
+	bsr.l	PrimitiveMesh.complete
+
+	IFNE	0
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	move.l	#Conch.BACKCOL,d4
+	bsr.l	Viewport.paintRectangle
+	ELSE
+	movea.l	Conch.rectAddressTable,a0
+	move.w	(a0)+,d7
+	beq.s	.end_restore
+	subq.w	#1,d7
+.restore_loop:
+	move.w	d7,-(sp)
+	movem.w	(a0)+,d1/d7
+	movem.w	(a0)+,d0/d6
+	move.l	a0,-(sp)
+	move.l	#Conch.BACKCOL,d4
+	bsr.l	Viewport.paintRectangle
+	movea.l	(sp)+,a0
+	move.w	(sp)+,d7
+	dbra	d7,.restore_loop
+.end_restore:
+	ENDC
+
+	movea.l	Conch.rectAddressTable,a0
+	bsr.l	PrimitiveMesh.paint
+
+	lea	Conch.rectAddressTable,a0
+ 	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+.end:	rts
+
+.zrot:	DC.W	0
+.clamb1_pos:
+	DC.W	0
+
+;======= OBJECT DATA =======================================================
+
+	DATA
+
+Conch.textureTable:
+	DC.L	FlareGen.parelMoerBuffer
+	DC.L	0
+
+Conch.rectAddressTable:
+	DC.L	Conch.rectangleTable
+	DC.L	Conch.rectangleTable2
+	DC.L	Conch.rectangleTable3
+
+Conch.colorTable:
+	REPT	128
+	DC.W	$FFFF
+	ENDR
+	REPT	128
+	DC.W	%1111100000000000
+	ENDR
+	REPT	16
+	DC.W	%1111111111111111
+	DC.W	%1111110111101111
+	DC.W	%1111101111100111
+	DC.W	%1111100111100011
+	DC.W	%1111100111100011
+	DC.W	%1111101111100111
+	DC.W	%1111110111101111
+	DC.W	%1111111111111111
+	ENDR
+	REPT	8
+	DC.W	%1111111111111111
+	DC.W	%1111111111111111
+	DC.W	%1111111011110111
+	DC.W	%1111110111101111
+	DC.W	%1111110100001100
+	DC.W	%1111101111100111
+	DC.W	%1111101100000101
+	DC.W	%1111100111100011
+	DC.W	%1111100111100011
+	DC.W	%1111101100000101
+	DC.W	%1111101111100111
+	DC.W	%1111110100001100
+	DC.W	%1111110111101111
+	DC.W	%1111111011110111
+	DC.W	%1111111111111111
+	DC.W	%1111111111111111
+	ENDR
+
+Conch.gradTable:
+	DC.W	1
+	DC.W	6
+	DC.L	$FFFF00FF
+	DC.L	$003C0078
+
+;======= OBJECT RESERVES ===================================================
+
+	BSS
+
+Conch.backPal:
+	DS.W	64
+
+Conch.conchAdr:
+	DS.L	1
+Conch.clambAdr:
+	DS.L	1
+
+Conch.rectangleTable:
+	DS.W	4*10
+Conch.rectangleTable2:
+	DS.W	4*10
+Conch.rectangleTable3:
+	DS.W	4*10
+
+Conch.startTime:
+	DS.W	1
+Conch.time:
+	DS.W	1
+Conch.clambsMoving:
+	DS.W	1
+Conch.clambsStartTime:
+	DS.W	1
+Conch.closeStartTime:
+	DS.W	1
+Conch.stillStartTime:
+	DS.W	1
+Conch.closeMode:
+	DS.W	1
+
+Conch.paintRout:
+	DS.L	1
+Conch.resRout:
+	DS.L	1

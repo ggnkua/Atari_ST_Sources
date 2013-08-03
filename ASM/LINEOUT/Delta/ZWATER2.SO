@@ -1,0 +1,547 @@
+; Fixed voxel water. A screen for delta.
+
+;======= EQUATES ========
+
+ZWater.WIDTH:		=	150
+ZWater.HEIGHT:		=	78
+ZWater.TOTALWIDTH:	=	ZWater.WIDTH+1
+ZWater.TOTALHEIGHT:	=	ZWater.HEIGHT+1
+
+;======= OBJECT TABLE ========
+
+* Must be first in object!!
+ZWater.table:
+	DC.L	ZWater.mainLoop
+	DC.L	ZWater.init
+	DC.L	ZWater.setRes
+	DC.L	ZWater.setPiss
+	DC.L	ZWater.setRain
+	DC.L	ZWater.setDrop
+	DC.L	ZWater.setPic
+	DC.L	0
+
+;======= RESOLUTION SETTING ROUTINE ========
+
+ZWater.setRes:
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	beq.s	.end
+
+	move.l	#rts,vbl_gfx
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+; Unknown monitormode..
+	rts
+.vga60:	bra.l	vga60_16bit_160_200
+.vga100:bra.l	vga100_16bit_160_100
+.rgb50:	bra.l	rgb50_16bit_320_100
+.end:	rts
+
+;======= INIT SUBROUTINE ========
+
+* OUTPUT: d0.l: 0   = All clear.
+*               neg = Error! Not initialized!
+ZWater.init:
+	lea	ZWater.palette,a0
+	lea	ZWater.flowPal,a1
+	bsr.l	Pal.makeGradientHc
+
+	move.l	#$516A32F1,random
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= REALTIME INIT SUBROUTINE ========
+
+ZWater.realtimeInit:
+	move.l	#ZWater.setRes,vbl_gfx
+
+; Run dsp proggy..
+	move.l	#(ZWater.p56End-ZWater.p56)/3,d0
+	lea	ZWater.p56,a0
+	bsr.l	Dsp.loadProgram
+
+	bsr	ZWater.sendPal
+
+	move.w	$04BC.w,ZWater.startTime
+	rts
+
+;======= SCREENINIT SUBROUTINE ========
+
+ZWater.initScreen:
+	movea.l	scr,a0
+	bsr.l	CLEAR_320100TSCR
+	rts
+
+;======= MAINLOOP SUBROUTINE ========
+
+ZWater.mainLoop:
+	move.w	$0468.w,.old468
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr	ZWater.realtimeInit
+	move.l	(sp)+,d0
+.end_realtime_init:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr	ZWater.initScreen
+.end_screeninit:
+
+	movea.l	ZWater.dropRout,a0
+	jsr	(a0)
+
+	bsr	ZWater.paint
+
+	move.w	.old468(pc),d0
+	moveq	#1,d3
+	cmpi.w	#vga100,monitormode
+	bne.s	.wait
+	moveq	#2,d3
+.wait:	move.w	$0468.w,d2
+	sub.w	d0,d2
+	cmp.w	d3,d2
+	blt.s	.wait
+
+	IFEQ	testmode
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	move.l	d0,d1
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+	ENDC
+
+	rts
+
+.old468:DC.W	0
+
+;======= OBJECT SUBROUTINES ========
+
+ZWater.setPiss:
+	move.w	$04BC.w,ZWater.startTime
+	move.l	#ZWater.piss,ZWater.dropRout
+	rts
+
+ZWater.setRain:
+	move.w	$04BC.w,ZWater.startTime
+	move.l	#ZWater.rain,ZWater.dropRout
+	rts
+
+ZWater.setDrop:
+	move.w	$04BC.w,ZWater.startTime
+	move.l	#ZWater.dropBigOne,ZWater.dropRout
+	rts
+
+ZWater.setPic:
+	move.w	$04BC.w,ZWater.startTime
+	move.l	#ZWater.sendPic,ZWater.dropRout
+	rts
+
+ZWater.sendPal:
+	lea	ZWater.palette,a0
+	move.w	#256-1,d7
+.loop:	sendWordToDsp	(a0)+
+	dbf	d7,.loop
+	rts
+
+ZWater.piss:
+	lea	ZWater.dropTable,a0
+	move.w	#1,(a0)+
+	move.w	$04BC.w,d0
+	sub.w	ZWater.startTime,d0
+	move.w	d0,d1
+	mulu.w	#11,d1
+	lsr.l	#3,d1
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	lea	sine_tbl,a1
+	Get_Sin	a1,d0,d0
+	Get_Cos	a1,d1,d1
+	muls.w	#ZWater.WIDTH*9/10,d0
+	muls.w	#ZWater.HEIGHT*8/10,d1
+	swap	d0
+	swap	d1
+	addi.w	#ZWater.TOTALWIDTH/2,d0
+	addi.w	#ZWater.TOTALHEIGHT/2,d1
+	mulu.w	#ZWater.TOTALWIDTH,d1
+	add.w	d0,d1
+	move.w	d1,(a0)+
+	move.w	#-500,(a0)+
+	lea	ZWater.dropTable,a0
+	bra	ZWater.sendDrops
+
+ZWater.rain:
+	lea	ZWater.dropTable,a0
+	move.w	#1,(a0)+
+
+	move.l	random,d0
+	move.l	d0,d1
+	mulu.w	d0,d0
+	eor.l	d1,d0
+	addq.l	#7,d0
+	move.l	d0,random
+
+	muls.w	#ZWater.WIDTH*9/10,d0
+	muls.w	#ZWater.HEIGHT*7/10,d1
+	swap	d0
+	swap	d1
+	addi.w	#ZWater.TOTALWIDTH/2,d0
+	addi.w	#ZWater.HEIGHT*9/20,d1
+	mulu.w	#ZWater.TOTALWIDTH,d1
+	add.w	d0,d1
+	move.w	d1,(a0)+
+	move.w	#-500,(a0)+
+	lea	ZWater.dropTable,a0
+	bra	ZWater.sendDrops
+
+ZWater.dropBigOne:
+	lea	ZWater.dropTable,a0
+	move.w	$04BC.w,d0
+	sub.w	ZWater.startTime,d0
+	andi.w	#$0400,d0
+	bne.s	.send_none
+
+	move.w	#ZWater.TOTALWIDTH*(ZWater.HEIGHT/2)+ZWater.TOTALWIDTH/2,d1
+	move.w	#1500,d2
+	move.w	#6,(a0)+
+	move.w	d1,(a0)+
+	move.w	d2,(a0)+
+	addq.w	#1,d1
+	move.w	d1,(a0)+
+	move.w	d2,(a0)+
+	addq.w	#1,d1
+	move.w	d1,(a0)+
+	move.w	d2,(a0)+
+	addi.w	#ZWater.TOTALWIDTH-2,d1
+	move.w	d1,(a0)+
+	move.w	d2,(a0)+
+	addq.w	#1,d1
+	move.w	d1,(a0)+
+	move.w	d2,(a0)+
+	addq.w	#1,d1
+	move.w	d1,(a0)+
+	move.w	d2,(a0)+
+	lea	ZWater.dropTable,a0
+	bra	ZWater.sendDrops
+.send_none:
+	move.w	#0,(a0)
+	bra	ZWater.sendDrops
+
+; Drops a heightfield in the water.
+ZWater.sendPic:
+	move.w	$04BC.w,d0
+	sub.w	ZWater.startTime,d0
+	clr.l	d6
+	move.w	d0,d6
+	andi.w	#$0400,d0
+	bne	.send_none
+
+	moveq	#-1,d0
+	sendLongToDsp	d0
+
+	lea	ZWater.rleMap,a1
+	movem.w	(a1)+,d2/d3
+	movea.l	a1,a2					; a2=scanoffsets
+	lea	(a1,d3.l*2),a1				; skip scanoffset table
+	move.l	d2,d0
+	move.l	d3,d1
+	lsr.l	#1,d0
+	lsr.l	#1,d1
+	neg.l	d0
+	neg.l	d1
+	addi.l	#ZWater.TOTALWIDTH/2,d0
+	addi.l	#ZWater.TOTALHEIGHT/2,d1
+	sendLongToDsp	d0				; lx
+	sendLongToDsp	d1				; ty
+	sendLongToDsp	d2				; w
+	sendLongToDsp	d3				; h
+	lsl.w	#6,d6
+	lsl.l	#7,d6
+	sendLongToDsp	d6				; z
+
+	clr.l	d0
+	subq.w	#1,d3
+	lea	$FFFFA204.w,a0
+
+.yloop:	move.w	(a2)+,d0
+	lea	(a1,d0.l),a3
+	clr.l	d6
+
+.wait:	btst.b	#1,$FFFFA202.w
+	beq.s	.wait
+
+.block_loop:
+	move.w	(a3)+,d0
+	bmi.s	.masked
+; Send some emptyness..
+	move.l	d0,(a0)
+	bra.s	.next
+; Process some pixels..
+.masked:move.l	d0,(a0)
+	andi.w	#$7FFF,d0
+	move.w	d0,d4
+	subq.w	#1,d4
+.pixel_loop:
+	clr.l	d1
+	move.b	(a3)+,d1
+	lsl.l	#1,d1
+	move.l	d1,(a0)
+	dbra	d4,.pixel_loop
+.next:	add.w	d0,d6
+	cmp.w	d2,d6
+	blt.s	.block_loop
+
+	dbra	d3,.yloop
+	rts
+
+.send_none:
+	clr.l	d0
+	sendLongToDsp	d0
+	rts
+
+ZWater.dropDummy:
+	lea	ZWater.dropTable,a0
+	clr.w	(a0)
+	bra	ZWater.sendDrops
+	
+; INPUT:
+; a0: droplet table
+ZWater.sendDrops:
+	moveq	#0,d7
+	move.w	(a0)+,d7
+	sendLongToDsp	d7
+	subq.w	#1,d7
+	bmi.s	.end
+
+.loop:	move.w	(a0)+,d0
+	sendLongToDsp	d0
+	move.w	(a0)+,d0
+	ext.l	d0
+	sendLongToDsp	d0
+	dbra	d7,.loop
+
+.end:	rts
+
+ZWater.paint:
+	movea.l	scr,a0
+	move.w	#ZWater.WIDTH-1,d7
+	lea	$FFFFA206.w,a4
+	clr.l	d0
+	clr.l	d5
+	moveq	#1<<4-1,d3
+
+	move.w	monitormode,d1
+	cmpi.w	#vga60,d1
+	beq	ZWater.paintVga60
+	cmpi.w	#rgb50,d1
+	beq	ZWater.paintRgb50
+
+ZWater.paintVga100:
+	adda.l	#(160*99+(160-ZWater.WIDTH)/2)*2,a0
+	movea.w	#160*2,a5
+	lea	.jump(pc),a3
+
+.columnloop:
+	movea.l	a0,a6
+
+.zloop:
+; Paint the column.
+	receiveWordFromDsp	d0
+	move.w	d0,d1
+	move.w	d0,d6
+	and.l	d3,d0
+	lsr.w	#4,d6
+	neg.l	d0
+	jmp	(a3,d0.l*4)
+
+.loop:
+	REPT	1<<4
+	move.w	(a4),(a6)
+	suba.l	a5,a6
+	ENDR
+.jump:	dbf	d6,.loop
+
+; Clear the rest of the column.
+	moveq	#100,d2				; d2.b=top=100
+	sub.w	d1,d2
+	ble.s	.end_clear
+	subq.w	#1,d2
+.clearloop:
+	move.w	d5,(a6)
+	suba.l	a5,a6
+	dbf	d2,.clearloop
+.end_clear:
+
+	addq	#2,a0				; Move to next column.
+	dbf	d7,.columnloop
+	rts
+
+ZWater.paintVga60:
+	adda.l	#(160*199+(160-ZWater.WIDTH)/2)*2,a0
+	movea.w	#160*2,a5
+	lea	.jump(pc),a3
+
+.columnloop:
+	movea.l	a0,a6
+
+.zloop:
+; Paint the column.
+	receiveWordFromDsp	d0
+	move.w	d0,d1
+	move.w	d0,d6
+	and.l	d3,d0
+	lsr.w	#4,d6
+	mulu.w	#10,d0
+	neg.l	d0
+	jmp	(a3,d0.l)
+
+.loop:
+	REPT	1<<4
+	move.w	(a4),d0
+	move.w	d0,(a6)
+	suba.l	a5,a6
+	move.w	d0,(a6)
+	suba.l	a5,a6
+	ENDR
+.jump:	dbf	d6,.loop
+
+; Clear the rest of the column.
+	moveq	#100,d2				; d2.b=top=100
+	sub.w	d1,d2
+	ble.s	.end_clear
+	subq.w	#1,d2
+.clearloop:
+	move.w	d5,(a6)
+	suba.l	a5,a6
+	move.w	d5,(a6)
+	suba.l	a5,a6
+	dbf	d2,.clearloop
+.end_clear:
+
+	addq	#2,a0				; Move to next column.
+	dbf	d7,.columnloop
+	rts
+
+ZWater.paintRgb50:
+	adda.l	#(320*99+2*((160-ZWater.WIDTH)/2))*2,a0
+	movea.w	#320*2,a5
+	lea	2(a5),a2
+	lea	.jump(pc),a3
+
+.columnloop:
+	movea.l	a0,a6
+
+.zloop:
+; Paint the column.
+	receiveWordFromDsp	d0
+	move.w	d0,d1
+	move.w	d0,d6
+	and.l	d3,d0
+	lsr.w	#4,d6
+	neg.l	d0
+	jmp	(a3,d0.l*8)
+
+.loop:
+	REPT	1<<4
+	move.w	(a4),d0
+	move.w	d0,(a6)+
+	move.w	d0,(a6)
+	suba.l	a2,a6
+	ENDR
+.jump:	dbf	d6,.loop
+
+; Clear the rest of the column.
+	moveq	#100,d2				; d2.b=top=100
+	sub.w	d1,d2
+	ble.s	.end_clear
+	subq.w	#1,d2
+.clearloop:
+	move.l	d5,(a6)
+	suba.l	a5,a6
+	dbf	d2,.clearloop
+.end_clear:
+
+	addq	#4,a0				; Move to next column.
+	dbf	d7,.columnloop
+	rts
+
+;======= OBJECT DATA ========
+
+	DATA
+
+ZWater.p56:
+	INCBIN	ZWATER2B.P56
+ZWater.p56End:
+	EVEN
+
+ZWater.flowPal:
+	IFNE	1
+	DC.W	(.end-.start)/4-1
+	DC.W	5
+.start:	DC.L	$00000000
+	DC.L	$00000000
+	DC.L	$0F280018
+	DC.L	$1F500030
+	DC.L	$2F780058
+	DC.L	$3FA00070
+	DC.L	$4FC80088
+	DC.L	$5FF000A0
+	DC.L	$6FFF00B8
+	DC.L	$7FFF00D0
+	DC.L	$8FFF00E8
+	DC.L	$9FFF00F0
+	DC.L	$AFFF00FF
+	DC.L	$BFFF00FF
+.end:	
+	ELSE
+	DC.W	9
+	DC.W	5
+.start:	DC.L	$00000000
+	DC.L	$00000000
+	DC.L	$3F000000
+	DC.L	$9F000000
+	DC.L	$FF3F003F
+	DC.L	$FF7F007F
+	DC.L	$FFFF00FF
+	DC.L	$FFFF00FF
+	DC.L	$FFFF00FF
+	DC.L	$FFFF00FF
+.end:	
+	ENDC
+
+ZWater.rleMap:
+	INCBIN	WHEEL.RLE
+	EVEN
+
+ZWater.dropRout:
+;	DC.L	ZWater.dropDummy
+	DC.L	ZWater.piss
+
+;======= OBJECT RESERVES ========
+
+	BSS
+
+ZWater.dropTable:	
+	DS.L	1+32
+ZWater.palette:
+	DS.W	4096
+ZWater.startTime:
+	DS.W	1
+
+;======= END OF DEMO-EFFECT OBJECT ========

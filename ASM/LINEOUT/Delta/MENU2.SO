@@ -1,0 +1,1051 @@
+; Delta menu screen.
+; Special version: uses 2vbl update on 3d/blur, 1vbl on rest.
+; This actually looks better (longer blurtime) and saves cputime.
+; Now uses ufly for tridis as well..
+
+******** OBJECT EQUATES ********
+
+Menu.DELTA_W:	=	160
+
+			RSRESET
+Menu.COLORTABLE:	RS.W	128
+Menu.3DBUFFER1:		RS.W	80*80
+Menu.3DBUFFER2:		RS.W	80*80
+Menu.SLOWFADEPAL:	RS.W	1<<16
+Menu.ELTA:		RS.W	Menu.DELTA_W*45
+Menu.PAL:		RS.W	2048
+Menu.RLELOGO:		RS.W	2+Menu.DELTA_W*45
+Menu.OPTIONSBUF:	RS.W	320*16
+Menu.STRIPTABLE:	RS.L	160				; start.w, width.w
+Menu.BLOCK_SIZE:	RS.B	0
+
+******** OBJECT TABLE ********
+
+* Must be first in object!!
+Menu.table:
+	DC.L	Menu.mainLoop
+	DC.L	Menu.init
+	DC.L	Menu.setRes
+	DC.L	INSTALL_ELTAMOVEIN
+	DC.L	INSTALL_ELTAMOVEOUT
+	DC.L	Menu.triggerOptions
+	DC.L	Menu.setA
+	DC.L	0
+
+	IFND	DEMO_SYSTEM
+	INCLUDE	SFLY_DSP.S
+	TEXT
+	ENDC
+
+******** RESOLUTION SETTING ROUTINE ********
+
+Menu.setRes:
+	IFEQ	testmode
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+* Unknown monitormode..
+.vga60:	bra.l	vga60_16bit_320_200
+.vga100:bra.l	vga100_16bit_320_200
+.rgb50:	bra.l	rgb50_16bit_320_200
+	ENDC
+	rts
+
+******** INIT SUBROUTINE ********
+
+* OUTPUT: d0.l: 0   = All clear.
+*               neg = Error! Not initialized!
+Menu.init:
+	move.l	#Menu.BLOCK_SIZE,d0
+	bsr.l	Mem.register
+
+	lea	sine_tbl,a1
+	bsr.l	Matrix.init
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+Menu.initRealtime:
+	move.l	#rts,vbl_gfx
+
+	bsr.l	Mem.getBlock
+	move.l	d0,Menu.baseAdr
+
+	bsr.w	Menu.clearBuffers
+	bsr.w	Menu.calcSlowFadePal
+	bsr.w	Menu.precalcElta
+	bsr.w	Menu.initOptions
+
+	movea.l	Menu.baseAdr,a0
+	adda.l	#Menu.PAL,a0
+	lea	Menu.flowTable,a1
+	bsr.l	Pal.makeGradientHc
+
+	bsr.w	Menu.initTables
+
+	bsr.l	HumanFly.init
+
+; init constant viewport stuffs..
+	lea	Viewport.settingsTable,a0
+	move.w	#0,Viewport.XSTART(a0)
+	move.w	#0,Viewport.YSTART(a0)
+	move.w	#256,Viewport.ASPECT(a0)
+	move.w	#$100,Viewport.FOCAL(a0)
+
+	lea	Menu.textureTable,a0
+	movea.l	Menu.baseAdr,a1
+	adda.l	#Menu.COLORTABLE,a1
+	bsr.l	Polygon.init
+
+	bsr.l	ObjectRegistry.clear
+
+	lea	Menu.deltaObject,a0
+	move.l	#Menu.deltaObjectEnd-Menu.deltaObject,d0
+	bsr.l	ObjectRegistry.set
+
+	bsr.l	flushAndDisableICache
+	move.w	#Primitive.WORD|Primitive.MOVE,d0
+	moveq	#0,d1
+	bsr.l	Primitive.setPaintMode
+	move.w	d0,d1
+	bsr.l	restoreCache
+;	tst.w	d1
+;	bmi.s	.error
+
+	clr.w	eltamovedirection
+	clr.w	eltamovecount
+	clr.w	eltamovespeed
+	clr.w	Menu.optionsActive
+
+	move.w	$04BC.w,Menu.startTime
+	rts
+
+******** SCREENINIT SUBROUTINE ********
+
+Menu.initScreen:
+	movea.l	scr,a0
+	bra.l	CLEAR_320200TSCR
+
+******** MAINLOOP SUBROUTINE ********
+
+Menu.mainLoop:
+	movea.l	scr,a0
+	bsr.l	Primitive.setScreenbuffer
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtimeinit
+	move.l	d0,-(sp)
+	bsr	Menu.initRealtime
+	move.l	(sp)+,d0
+.end_realtimeinit:
+	cmpi.l	#2,d0
+	bhs.s	.end_screeninit
+	bsr	Menu.initScreen
+.end_screeninit:
+
+	tst.w	Menu.optionsActive
+	beq.s	.end_options
+; Paint strip of options graphics (if required)..
+	bsr.w	Menu.paintStrips
+.end_options:
+
+; Clear background behind logo..
+	bsr	Menu.clearDeltaBack
+
+; Paint 3d stuffs to internal buffer.
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	andi.w	#1,d0
+	bne.s	.second
+	bsr	Menu.paint3d1stFrame
+	bra.s	.end_paint_3d
+.second:bsr	Menu.paint3d2ndFrame
+.end_paint_3d:
+
+; Paint 3d buffer to screen..
+	bsr	Menu.copy3dBuffer
+
+; Paint logo to screen..
+	bsr	Menu.calcLogoPos
+	bsr	Menu.paintLogo
+
+; Swap 3d buffers..
+; Done only when 3d buffer is produced (after 2 frames!).
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	andi.w	#1,d0
+	beq.s	.end_swap
+	lea	Menu.3dBufAdr,a0
+	move.l	(a0)+,d0
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+.end_swap:
+
+	IFEQ	testmode
+	lea	scr,a0
+	move.l	(a0),d0
+	move.l	8(a0),(a0)
+	move.l	d0,d1
+	move.l	d0,8(a0)
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+
+	IFNE	1
+	move.w	$468.w,d0
+.wait_vbl_loop:
+	cmp.w	$468.w,d0
+	beq.s	.wait_vbl_loop
+	cmpi.w	#vga100,monitormode
+	bne.s	.no_double_vbl
+	move.w	$468.w,d0
+.wait_2ndvbl_loop:
+	cmp.w	$468.w,d0
+	beq.s	.wait_2ndvbl_loop
+.no_double_vbl:
+	ENDC
+	ENDC
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.res_done
+	bsr	Menu.setRes
+.res_done:
+
+	rts
+
+******** OBJECT SUBROUTINES ********
+
+INSTALL_ELTAMOVEIN:
+	move.w	#+1,eltamovedirection
+	rts
+
+INSTALL_ELTAMOVEOUT:
+	move.w	#-1,eltamovedirection
+	rts
+
+Menu.triggerOptions:
+	st	Menu.optionsActive
+	rts
+
+Menu.setA:
+	moveq	#2,d0
+	bra.s	Menu.setBlinking
+	rts
+
+; INPUT:
+; d0.w=selection 0:'a', 1:'b', 2:'c'
+Menu.setBlinking:
+	move.w	d0,Menu.partNum
+	move.l	#Menu.blinkChar,vbl_gfx
+
+	movea.l	scr+8,a0				; phys
+	adda.l	#(184*320+8)*2,a0
+	movea.l	Menu.baseAdr,a1
+	adda.l	#Menu.OPTIONSBUF,a1
+	moveq	#16-1,d7
+
+.yloop:	move.w	#80-1,d6
+
+.xloop:	move.l	(a1)+,(a0)+
+	dbf	d6,.xloop
+
+	adda.w	#(320-160)*2,a0
+	adda.w	#(320-160)*2,a1
+	dbf	d7,.yloop
+
+	rts
+
+Menu.blinkChar:
+	move.w	$0468.w,d0
+	andi.w	#$000F,d0
+	bne.s	.end
+
+	move.w	Menu.partNum,d0
+	beq.s	.aa
+	subq.w	#1,d0
+	bne.s	.cee
+.bee:	moveq	#21+69,d0
+	bra.s	.paint
+.aa:	moveq	#0+69,d0
+	bra.s	.paint	
+.cee:	moveq	#56+69,d0
+
+.paint:	movea.l	scr+8,a0
+	lea	(a0,d0.l*2),a0
+	adda.l	#183*320*2,a0
+	moveq	#16-1,d7
+
+.yloop:	moveq	#6-1,d6
+
+.xloop:	not.l	(a0)+
+	dbf	d6,.xloop
+
+	adda.w	#(320-12)*2,a0
+	dbf	d7,.yloop
+.end:	rts
+
+Menu.clearBuffers:
+	movea.l	Menu.baseAdr,a0
+	movea.l	a0,a1
+	movea.l	a0,a2
+	adda.l	#Menu.ELTA,a0
+	move.w	#Menu.DELTA_W*45-1,d7
+	clr.l	d0
+.loop1:	move.w	d0,(a0)+
+	dbf	d7,.loop1
+
+	adda.l	#Menu.3DBUFFER1,a1
+	move.w	#80*80-1,d7
+.loop2:	move.l	d0,(a1)+
+	dbf	d7,.loop2
+
+	adda.l	#Menu.OPTIONSBUF,a2
+	move.w	#320*16/2-1,d7
+.loop3:	move.l	d0,(a2)+
+	dbf	d7,.loop3
+	rts
+
+Menu.initTables:
+; Setup ufly texture table.
+	lea	Menu.textureTable,a0
+	move.l	Menu.baseAdr,d0
+	addi.l	#Menu.RLELOGO,d0
+	move.l	d0,(a0)+
+	clr.l	(a0)+
+
+; Setup phys, log 3d buffers..
+	lea	Menu.3dBufAdr,a0
+	move.l	Menu.baseAdr,d0
+	move.l	d0,d1
+	addi.l	#Menu.3DBUFFER1,d0
+	addi.l	#Menu.3DBUFFER2,d1
+	move.l	d0,(a0)+
+	move.l	d1,(a0)+
+	rts
+
+Menu.calcLogoPos:
+	move.w	eltamovedirection,d2
+	beq.s	.end_move
+	bgt.s	.increase_speed
+.decrease_speed:
+	move.w	eltamovespeed,d0
+	move.w	eltamovecount,d1
+	subq.w	#1,d0
+	add.w	d0,d1
+	bmi.s	.clip_1
+	cmpi.w	#Menu.DELTA_W*10,d1
+	blt.s	.ok
+	moveq	#0,d0
+	move.w	#Menu.DELTA_W*10,d1
+	clr.w	eltamovedirection
+	bra.s	.ok
+.clip_1:
+	moveq	#0,d0
+	moveq	#0,d1
+	clr.w	eltamovedirection
+	bra.s	.ok
+.increase_speed:
+	move.w	eltamovespeed,d0
+	move.w	eltamovecount,d1
+	addq.w	#1,d0
+	add.w	d0,d1
+	bmi.s	.clip_2
+	cmpi.w	#Menu.DELTA_W*10,d1
+	blo.s	.ok
+	moveq	#0,d0
+	move.w	#Menu.DELTA_W*10,d1
+	clr.w	eltamovedirection
+	bra.s	.ok
+.clip_2:
+	moveq	#0,d0
+	moveq	#0,d1
+	clr.w	eltamovedirection
+.ok:	move.w	d0,eltamovespeed
+	move.w	d1,eltamovecount
+.end_move:
+	rts
+
+; Converts a highcolor bitmap into an rle bitmap.
+; INPUT:
+; d0.w: width
+; d1.w: height
+; a0: dst highcolor rle bitmap
+; a1: src highcolor bitmap
+Menu.convertBlock2RLE:
+	move.w	d0,(a0)+
+	move.w	d1,d7
+	move.w	d1,(a0)+			; Store amount of lines.
+	subq.w	#1,d7
+	movea.l	a0,a2				; Backup address of offsettable.
+	lea	(a0,d1.w*2),a0
+	movea.l	a0,a3				; Backup start of rle data.
+
+.yloop:	move.l	a0,d1				; / Write offset to table.
+	sub.l	a3,d1				; |
+	move.w	d1,(a2)+			; \
+
+	move.w	d0,d6
+	subq.w	#1,d6
+	moveq	#0,d4				; blockcount := 0
+
+.check_mask:
+	move.w	(a1)+,d1
+	beq.s	.unmasked
+
+.masked:
+	addq.w	#1,d4				; Increase blockcount.
+	movea.l	a0,a6
+	move.w	#$8000,(a0)+
+	move.w	d1,(a0)+
+	moveq	#1,d5				; blocksize := 1
+	dbra	d6,.masked_loop
+	bra.s	.next_row
+.masked_loop:
+	move.w	(a1)+,d1
+	bne.s	.proceed_masked
+	or.w	d5,(a6)
+	bra.s	.unmasked
+.proceed_masked:
+	move.w	d1,(a0)+
+	addq.w	#1,d5				; Increase blocksize.
+	dbra	d6,.masked_loop
+	bra.s	.next_row
+
+.unmasked:
+	addq.w	#1,d4				; Increase blockcount.
+	movea.l	a0,a6
+	move.w	#$0000,(a0)+
+	moveq	#1,d5				; blocksize := 1
+	dbra	d6,.unmasked_loop
+	bra.s	.next_row
+.unmasked_loop:
+	move.w	(a1)+,d1
+	beq.s	.proceed_unmasked
+	or.w	d5,(a6)
+	bra.s	.masked
+.proceed_unmasked:
+	addq.w	#1,d5				; Increase blocksize.
+	dbra	d6,.unmasked_loop
+
+.next_row:
+	or.w	d5,(a6)				; Store blocksize.
+	dbra	d7,.yloop
+
+	rts
+
+Menu.calcSlowFadePal:
+	movea.l	Menu.baseAdr,a0
+	adda.l	#Menu.SLOWFADEPAL,a0
+	clr.l	d7
+	move.w	#%1111100000000000,d3
+	move.w	#%0000011111000000,d4
+	move.w	#%0000000000011111,d5
+
+.loop:	move.l	d7,d0
+	move.l	d7,d1
+	and.w	d3,d0
+	and.w	d4,d1
+	movea.l	d0,a1
+	movea.l	d1,a2
+	lsl.l	#8,d0
+	lsl.l	#8,d1
+	sub.l	a1,d0
+	sub.l	a2,d1
+	lsr.l	#8,d0
+	lsr.l	#8,d1
+	and.w	d3,d0
+	and.w	d4,d1
+	or.w	d1,d0
+	moveq	#32-1,d6
+
+.blueloop:
+	move.l	d7,d2
+	and.w	d5,d2
+	movea.l	d2,a3
+	lsl.l	#8,d2
+	sub.l	a3,d2
+	lsr.l	#8,d2
+	and.w	d5,d2
+	or.w	d0,d2
+	move.w	d2,(a0)+
+	addq.w	#1,d7	
+
+	dbf	d6,.blueloop
+
+	tst.w	d7
+	bne.s	.loop
+
+	rts
+
+; Initialize options graphics..
+Menu.initOptions:
+
+	bsr.w	Menu.initStrips
+
+	movea.l	Menu.baseAdr,a0
+	adda.l	#Menu.OPTIONSBUF,a0
+	lea	Font.pic,a1
+	lea	Font.charTable,a3
+	lea	.text(pc),a4
+
+.charloop:
+	clr.l	d0
+	move.b	(a4)+,d0
+	beq.s	.end
+	subi.b	#32,d0
+	blt.s	.charloop
+	
+	mulu.w	#6,d0
+	movem.w	(a3,d0.l),d0-d2
+	mulu.w	#320,d0
+	add.l	d1,d0
+	move.w	d2,d5
+	subq.w	#1,d5
+	lea	(a1,d0.l*2),a2
+	movea.w	#320,a6
+	suba.l	d2,a6
+	adda.l	a6,a6
+	moveq	#16-1,d7
+
+.yloop:	move.w	d5,d6
+
+.xloop:	move.w	(a2)+,(a0)+
+	dbf	d6,.xloop
+
+	adda.l	a6,a0
+	adda.l	a6,a2
+	dbf	d7,.yloop
+	
+	suba.w	#320*16*2,a0
+	lea	2(a0,d2.l*2),a0
+
+	bra.s	.charloop
+
+.end:	rts
+
+.text:	DC.B	"choose a, b or c                     esc: exit",0
+	EVEN
+
+Menu.paintStrips:
+	movea.l	scr,a0					; log
+	movea.l	scr+8,a3				; phys
+	adda.l	#(184*320+8)*2,a0
+	adda.l	#(184*320+8)*2,a3
+	movea.l	Menu.baseAdr,a1
+	movea.l	a1,a2
+	adda.l	#Menu.OPTIONSBUF,a1
+	adda.l	#Menu.STRIPTABLE,a2
+	move.w	Menu.numStrips,d7
+	move.w	Menu.stripsDone,d0
+	cmp.w	d0,d7
+	beq.s	.end
+
+	lea	(a2,d0.w*4),a2
+	move.w	(a2)+,d1			; d1.w=start
+	add.w	d1,d1
+	adda.w	d1,a0
+	adda.w	d1,a3
+	adda.w	d1,a1
+	move.w	(a2)+,d0			; d0.w=stripwidth-1
+	movea.w	#320,a6
+	suba.w	d0,a6
+	subq	#1,a6
+	adda.l	a6,a6
+	moveq	#16-1,d7
+
+.yloop:	move.w	d0,d6
+
+.xloop:	move.w	(a1),(a0)+
+	move.w	(a1)+,(a3)+
+	dbf	d6,.xloop
+
+	adda.l	a6,a0
+	adda.l	a6,a3
+	adda.l	a6,a1
+	dbf	d7,.yloop
+
+	addq.w	#1,Menu.stripsDone
+
+.end:	rts
+
+; Create strips ordered left to right.
+Menu.initStrips:
+	movea.l	Menu.baseAdr,a0
+	adda.l	#Menu.STRIPTABLE,a0
+	move.l	random,d0
+	clr.w	d6
+	clr.w	d5
+	move.w	#312,d7
+
+.loop:	move.l	d0,d1
+	mulu.w	d0,d0
+	rol.l	d1,d0
+	eor.l	d1,d0
+	addq.l	#5,d0
+	move.w	d0,d2
+	andi.w	#$0007,d2			; d2.w=width-1
+	move.w	d5,(a0)+			; Store start.
+	move.w	d2,(a0)+			; Store width-1.
+	addq.w	#1,d6
+	addq.w	#1,d2				; d2.w=width
+	add.w	d2,d5				; d5.w=curwidth+width
+	sub.w	d2,d7				; d7.w=remaining width
+	bgt.s	.loop
+
+	add.w	d7,-(a0)			; Adjust last width.
+	move.w	d6,Menu.numStrips		; Store #strips.
+
+	move.l	d0,random
+
+; Now mess up the ordering a bit..
+	moveq	#100-1,d7
+	movea.l	Menu.baseAdr,a0
+	adda.l	#Menu.STRIPTABLE,a0
+	move.l	random,d0
+
+.mess_loop:
+; Calc random pairs..
+	move.l	d0,d1
+	mulu.w	d0,d0
+	eor.l	d1,d0
+	rol.l	d1,d0
+	addq.l	#5,d0
+
+	clr.l	d2
+	move.w	d0,d2
+	divu.w	Menu.numStrips,d2
+	swap	d2
+	move.l	d0,d3
+	clr.w	d3
+	swap	d3
+	divu.w	Menu.numStrips,d3
+	swap	d3
+; d2.w=first index, d3.w=second index
+
+; Swap the pair.
+	move.l	(a0,d2.w*4),d4
+	move.l	(a0,d3.w*4),(a0,d2.w*4)
+	move.l	d4,(a0,d3.w*4)
+
+	dbf	d7,.mess_loop
+
+	move.l	d0,random
+
+; Set #strips done to zero.
+	clr.w	Menu.stripsDone
+	rts
+
+Menu.paint3d1stFrame:
+	bsr	Menu.blur8080Upper
+	rts
+
+Menu.paint3d2ndFrame:
+	movea.l	Menu.3dBufAdr,a0
+	bsr.l	Primitive.setScreenbuffer
+
+	lea	Viewport.settingsTable,a0
+	move.w	#80,Viewport.XSCREEN(a0)
+	move.w	#80,Viewport.YSCREEN(a0)
+	move.w	#80,Viewport.XEND(a0)
+	move.w	#80,Viewport.YEND(a0)
+	move.w	#40,Viewport.XCENTER(a0)
+	move.w	#40,Viewport.YCENTER(a0)
+	bsr.l	Viewport.update
+
+	bsr.l	PrimitiveMesh.new	
+
+	move.w	$04BC.w,d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#3,d1
+	mulu.w	#7,d2
+	lsr.l	#2,d1
+	lsr.l	#2,d2
+	bsr.l	Matrix.generate
+	clr.w	d0
+	clr.w	d1
+	move.w	#295,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+
+	bsr.l	PrimitiveMesh.complete
+
+; parallel shit!
+	bsr.w	Menu.blur8080Lower
+
+	move.w	$04BC.w,d0
+	sub.w	Menu.startTime,d0
+	lsr.w	#2,d0
+	andi.w	#$0FFF,d0
+	lsr.w	#2,d0
+	movea.l	Menu.baseAdr,a0
+	adda.l	#Menu.PAL,a0
+	movea.l	Menu.baseAdr,a1
+	adda.l	#Menu.COLORTABLE,a1
+	move.w	(a0,d0.w*2),64*2(a1)
+; end of parallel shit!
+
+	lea	.rectBuffer(pc),a0
+	bsr.l	PrimitiveMesh.paint
+
+	rts
+
+.rectBuffer:
+	DS.W	100
+
+Menu.copy3dBuffer:
+	movea.l	scr,a0
+	adda.l	#(320*60+120)*2,a0
+	movea.l	Menu.3dBufAdr+4,a1			; phys buffer
+	moveq	#80-1,d7
+	movea.w	#(320-80)*2,a6
+
+.yloop:
+	REPT	80/2
+	move.l	(a1)+,(a0)+
+	ENDR
+	adda.l	a6,a0
+	dbf	d7,.yloop
+	rts
+
+Menu.blur8080Upper:
+	movea.l	Menu.3dBufAdr,a0		; phys
+	movea.l	Menu.3dBufAdr+4,a1		; log
+	movea.l	Menu.baseAdr,a2
+	adda.l	#Menu.SLOWFADEPAL,a2
+	move.w	#80*40/20-1,d7
+	clr.l	d0
+
+.loop:
+	REPT	20
+	move.w	(a1)+,d0
+	move.w	(a2,d0.l*2),(a0)+
+	ENDR
+	dbf	d7,.loop
+	rts
+
+Menu.blur8080Lower:
+	movea.l	Menu.3dBufAdr,a0		; phys
+	movea.l	Menu.3dBufAdr+4,a1		; log
+	adda.w	#80*40*2,a0
+	adda.w	#80*40*2,a1
+	movea.l	Menu.baseAdr,a2
+	adda.l	#Menu.SLOWFADEPAL,a2
+	move.w	#80*40/20-1,d7
+	clr.l	d0
+
+.loop:
+	REPT	20
+	move.w	(a1)+,d0
+	move.w	(a2,d0.l*2),(a0)+
+	ENDR
+	dbf	d7,.loop
+	rts
+
+Menu.precalcElta:
+	movea.l	Menu.baseAdr,a0
+	adda.l	#Menu.ELTA,a0
+	lea	Font.pic,a1
+
+; d 
+	movea.l	a1,a2
+	adda.l	#229*2,a2
+	moveq	#45-1,d7
+
+.d_yloop:
+	moveq	#34-1,d6
+
+.d_xloop:
+	move.w	(a2)+,(a0)+
+	dbf	d6,.d_xloop
+
+	adda.w	#(Menu.DELTA_W-34)*2,a0
+	adda.w	#(320-34)*2,a2
+	dbf	d7,.d_yloop
+
+	adda.w	#(40-Menu.DELTA_W*45)*2,a0
+
+; e
+	movea.l	a1,a2
+	adda.l	#38*2,a2
+	moveq	#45-1,d7
+
+.e_yloop:
+	moveq	#34-1,d6
+
+.e_xloop:
+	move.w	(a2)+,(a0)+
+	dbf	d6,.e_xloop
+
+	adda.w	#(Menu.DELTA_W-34)*2,a0
+	adda.w	#(320-34)*2,a2
+	dbf	d7,.e_yloop
+
+	adda.w	#(40-Menu.DELTA_W*45)*2,a0
+
+; l
+	movea.l	a1,a2
+	adda.l	#196*2,a2
+	moveq	#45-1,d7
+
+.l_yloop:
+	moveq	#9-1,d6
+
+.l_xloop:
+	move.w	(a2)+,(a0)+
+	dbf	d6,.l_xloop
+
+	adda.w	#(Menu.DELTA_W-9)*2,a0
+	adda.w	#(320-9)*2,a2
+	dbf	d7,.l_yloop
+
+	adda.w	#(15-Menu.DELTA_W*45)*2,a0
+
+; t
+	movea.l	a1,a2
+	adda.l	#210*2,a2
+	moveq	#45-1,d7
+
+.t_yloop:
+	moveq	#17-1,d6
+
+.t_xloop:
+	move.w	(a2)+,(a0)+
+	dbf	d6,.t_xloop
+
+	adda.w	#(Menu.DELTA_W-17)*2,a0
+	adda.w	#(320-17)*2,a2
+	dbf	d7,.t_yloop
+
+	adda.w	#(23-Menu.DELTA_W*45)*2,a0
+
+; a
+	movea.l	a1,a2
+	adda.l	#76*2,a2
+	moveq	#45-1,d7
+
+.a_yloop:
+	moveq	#34-1,d6
+
+.a_xloop:
+	move.w	(a2)+,(a0)+
+	dbf	d6,.a_xloop
+
+	adda.w	#(Menu.DELTA_W-34)*2,a0
+	adda.w	#(320-34)*2,a2
+	dbf	d7,.a_yloop
+
+	movea.l	Menu.baseAdr,a1
+	movea.l	a1,a0
+	adda.l	#Menu.ELTA,a1
+	adda.l	#Menu.RLELOGO,a0
+	move.w	#160,d0
+	moveq	#45,d1
+	bsr.w	Menu.convertBlock2RLE
+
+	rts
+
+Menu.clearDeltaBack:
+	movea.l	scr,a0
+	adda.l	#(320*78-120)*2,a0
+	moveq	#45-1,d7
+	clr.l	d0
+	movea.w	#(320-120)*2,a6
+
+.yloop:
+	REPT	120/2
+	move.l	d0,(a0)+
+	ENDR
+
+	adda.l	a6,a0
+	dbf	d7,.yloop
+	rts
+
+Menu.paintLogo:
+	movea.l	scr,a0
+	bsr.l	Primitive.setScreenbuffer
+
+	lea	Viewport.settingsTable,a0
+	move.w	#320,Viewport.XSCREEN(a0)
+	move.w	#200,Viewport.YSCREEN(a0)
+	move.w	#320,Viewport.XEND(a0)
+	move.w	#200,Viewport.YEND(a0)
+	move.w	#160,Viewport.XCENTER(a0)
+	move.w	#100,Viewport.YCENTER(a0)
+	bsr.l	Viewport.update
+
+	clr.l	d0
+	move.w	eltamovecount,d0
+	divu.w	#5,d0
+	andi.w	#$fffe,d0
+	move.w	#Menu.DELTA_W-1,d4
+	lsr.w	#1,d0
+	sub.w	d0,d4
+	addi.w	#241,d4
+	move.w	d4,d0
+	movea.l	scr,a0
+	movea.l	Menu.baseAdr,a1
+	adda.l	#Menu.RLELOGO,a1
+	moveq	#99,d1
+	bra.l	Sprite.clipAndPaint
+
+******** OBJECT DATA ********
+
+	DATA
+
+Menu.deltaObject:
+	DC.W	9,0
+	DC.W	-70,64-25,0
+	DC.W	0,-60-25,0
+	DC.W	70,64-25,0
+	DC.W	-35,42-25,0
+	DC.W	0,-20-25,0
+	DC.W	35,42-25,0
+	DC.W	-50,53-25,20
+	DC.W	0,-40-25,20
+	DC.W	50,53-25,20
+
+	DC.W	0
+
+	DC.W	18
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED,0,1
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED,1,2
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED,2,0
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED,3,4
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED,4,5
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED,5,3
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED,6,7
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED,7,8
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED,8,6
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED,0,3
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED,3,6
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED,6,0
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED,1,4
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED,4,7
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED,7,1
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED,2,5
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED,5,8
+	DC.W	Primitive.LINETYPE|Polygon.FLATSHADED,8,2
+Menu.deltaObjectEnd:
+
+Menu.flowTable:
+	DC.W	(.end-.start)/4
+	DC.W	5
+.start:
+
+	IFNE	1
+
+	DC.L	$ffff00ff
+	DC.L	$7fff007f
+	DC.L	$00ff0000
+	DC.L	$00ff0000
+	DC.L	$00ff003f
+	DC.L	$00df007f
+	DC.L	$007f00df
+	DC.L	$003f00ff
+	DC.L	$000000ff
+	DC.L	$000000ff
+	DC.L	$3f3f00ff
+	DC.L	$7f7f00ff
+	DC.L	$dfdf00ff
+	DC.L	$ffff00ff
+	DC.L	$ffff00ff
+	DC.L	$ffff00df
+	DC.L	$ffff007f
+	DC.L	$ffff003f
+	DC.L	$ffff0000
+	DC.L	$ffdf0000
+	DC.L	$ff7f0000
+	DC.L	$ff3f0000
+	DC.L	$ff000000
+	DC.L	$ff000000
+	DC.L	$ff00003f
+	DC.L	$ff00007f
+	DC.L	$ff0000df
+	DC.L	$ff0000ff
+	DC.L	$ff0000ff
+	DC.L	$ff3f00ff
+	DC.L	$ff7f00ff
+	DC.L	$ffdf00ff
+	DC.L	$ffff00ff
+
+	ELSE
+
+	DC.L	$00000000
+	DC.L	$007f0000
+	DC.L	$00ff0000
+	DC.L	$00ff0000
+	DC.L	$00ff003f
+	DC.L	$00df007f
+	DC.L	$007f00df
+	DC.L	$003f00ff
+	DC.L	$000000ff
+	DC.L	$000000ff
+	DC.L	$3f3f00ff
+	DC.L	$7f7f00ff
+	DC.L	$dfdf00ff
+	DC.L	$ffff00ff
+	DC.L	$ffff00ff
+	DC.L	$ffff00df
+	DC.L	$ffff007f
+	DC.L	$ffff003f
+	DC.L	$ffff0000
+	DC.L	$ffdf0000
+	DC.L	$ff7f0000
+	DC.L	$ff3f0000
+	DC.L	$ff000000
+	DC.L	$ff000000
+	DC.L	$ff00003f
+	DC.L	$ff00007f
+	DC.L	$ff0000df
+	DC.L	$ff0000ff
+	DC.L	$ff0000ff
+	DC.L	$df0000df
+	DC.L	$7f00007f
+	DC.L	$3f00003f
+	DC.L	$00000000
+
+	ENDC
+.end:
+
+******** OBJECT RESERVES ********
+
+	BSS
+
+Menu.textureTable:
+	DS.L	2				; ptr to elta, 0
+Menu.3dBufAdr:
+	DS.L	2				; phys,log 3d buffer ptrs
+eltamovedirection:
+	DS.W	1
+eltamovecount:
+	DS.W	1
+eltamovespeed:
+	DS.W	1
+Menu.startTime:
+	DS.W	1
+Menu.baseAdr:
+	DS.L	1
+Menu.stripsDone:
+	DS.W	1
+Menu.numStrips:
+	DS.W	1
+Menu.optionsActive:
+	DS.W	1
+Menu.partNum:
+	DS.W	1

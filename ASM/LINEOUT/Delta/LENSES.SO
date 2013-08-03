@@ -1,0 +1,792 @@
+; Lenses screen for delta. Ultra lame thusfar, needs dsp
+; (and maybe some alpha?). Already a 2 in 1 fx, but still stupid looking,
+; bah...
+; Again by earx. What do you expect then, there are no other 68k coders in
+; direct vicinity of Culemborg.
+;
+; Divine inspiration: let's make lens-blobs.
+
+;======= OBJECT EQUATES ====================================================
+
+Lenses.BLOBMODE:	=	1				; blobs or 1 lousy lens
+Lenses.NUM_BLOBS:	=	4
+Lenses.RADIUS:		=	26				; must be even and <32 (for speed)
+Lenses.BLOBRAD:		=	Lenses.RADIUS
+Lenses.ZOOM_OUT:	=	4				; -2log of zoom (z>0)
+
+Lenses.BLOBSHIFT:	=	10				; shi(f)t
+
+; Don't change.
+Lenses.R_SQUARE:	=	Lenses.RADIUS*Lenses.RADIUS
+Lenses.B_SQUARE:	=	Lenses.BLOBRAD*Lenses.BLOBRAD
+Lenses.DIAM:		=	Lenses.RADIUS*2			; d=2r
+Lenses.AREA:		=	Lenses.DIAM*Lenses.DIAM		; A=d*d
+
+			RSRESET
+Lenses.offsetMap:	RS.W	Lenses.AREA
+Lenses.heightMap:	RS.W	Lenses.AREA
+Lenses.hiTexture:	RS.W	128*256
+Lenses.texture:		RS.W	(256+128)*256
+Lenses.blobBuffer:	RS.W	160*100
+Lenses.divTable:	RS.W	65536
+Lenses.BLOCK_SIZE:	RS.B	0
+
+;======= OBJECT TABLE ======================================================
+
+; Must be first in object!!
+Lenses.table:
+	DC.L	Lenses.mainLoop
+	DC.L	Lenses.init
+	DC.L	Lenses.setRes
+	DC.L	Lenses.addOne
+	DC.L	Lenses.subOne
+	DC.L	Lenses.setTraject
+	DC.L	0
+
+;======= RESOLUTION SETTING ROUTINE ========================================
+
+Lenses.setRes:
+	IFEQ	testmode
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	beq.s	.end
+
+	move.l	#rts,vbl_gfx
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.l	vga60_16bit_160_200
+	cmpi.w	#vga100,d0
+	beq.l	vga100_16bit_160_100
+	cmpi.w	#rgb50,d0
+	beq.l	rgb50_16bit_320_100
+; Unknown monitormode..
+.end:	rts
+	ENDC
+	rts
+
+;======= INIT SUBROUTINE ===================================================
+
+; OUTPUT:
+; d0.l: 0   = All clear, neg = Error! Not initialized!
+Lenses.init:
+	move.l	#Lenses.BLOCK_SIZE,d0
+	bsr.l	Mem.register
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= REALTIME INIT SUBROUTINE ==========================================
+
+Lenses.realtimeInit:
+	move.l	#Lenses.setRes,vbl_gfx
+
+	bsr.l	Mem.getBlock
+	move.l	d0,d1
+	addi.l	#Lenses.offsetMap,d1
+	move.l	d1,Lenses.offsetMapAdr
+	move.l	d0,d1
+	addi.l	#Lenses.heightMap,d1
+	move.l	d1,Lenses.heightMapAdr
+	move.l	d0,d1
+	addi.l	#Lenses.hiTexture,d1
+	move.l	d1,Lenses.hiTextureAdr
+	move.l	d0,d1
+	addi.l	#Lenses.texture,d1
+	move.l	d1,Lenses.textureAdr
+	move.l	d0,d1
+	addi.l	#Lenses.blobBuffer,d1
+	move.l	d1,Lenses.blobAdr
+	move.l	d0,d1
+	addi.l	#Lenses.divTable,d1
+	move.l	d1,Lenses.divTableAdr
+
+; mid
+	movea.l	Lenses.textureAdr,a0
+	lea	Texture.8bTexture1,a1
+	lea	Texture.crapPal,a2
+	clr.w	d7
+	clr.l	d0
+.conv_loop:
+	move.b	(a1)+,d0
+	move.w	(a2,d0.l*2),(a0)+
+	addq.w	#1,d7
+	bne.s	.conv_loop
+
+; lower
+	lea	Texture.8bTexture1,a1
+	clr.w	d7
+	clr.l	d0
+.conv_loop_l:
+	move.b	(a1)+,d0
+	move.w	(a2,d0.l*2),(a0)+
+	addq.w	#1,d7
+	bpl.s	.conv_loop_l
+
+; upper
+	movea.l	Lenses.hiTextureAdr,a0
+	lea	Texture.8bTexture1+128*256,a1
+	clr.w	d7
+	clr.l	d0
+.conv_loop_u:
+	move.b	(a1)+,d0
+	move.w	(a2,d0.l*2),(a0)+
+	addq.w	#1,d7
+	bpl.s	.conv_loop_u
+
+	IFEQ	Lenses.BLOBMODE
+	bsr.w	Lenses.calcOffsetMap
+	ELSE
+	bsr.w	Lenses.calcBump
+	bsr.w	Lenses.calcDivTable
+	ENDC
+
+	clr.w	Lenses.backMoving
+	move.w	#1,Lenses.numLenses
+
+	rts
+
+;======= SCREENINIT SUBROUTINE =============================================
+
+Lenses.initScreen:
+; Insert screenarea initialising, etc. in here!
+	rts
+
+;======= MAINLOOP SUBROUTINE ===============================================
+
+Lenses.mainLoop:
+	move.w	$0468.w,old468
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr	Lenses.realtimeInit
+	move.l	(sp)+,d0
+.end_realtime_init:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr	Lenses.initScreen
+.end_screeninit:
+
+	IFNE	Lenses.BLOBMODE
+
+	bsr.w	Lenses.clearBlobBuffer
+	move.w	Lenses.numLenses,-(sp)
+
+	subq.w	#1,(sp)
+	bmi	.end_add
+	move.w	$04BC.w,d0
+	move.w	d0,d1
+	mulu.w	#11,d0
+	lsr.l	#2,d0
+	mulu.w	#7,d1
+	lsr.l	#1,d1
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	lea	sine_tbl,a1
+	Get_Sin	a1,d0,d0
+	Get_Cos	a1,d1,d1
+	muls.w	#160-Lenses.DIAM,d0
+	muls.w	#100-Lenses.DIAM,d1
+	swap	d0
+	swap	d1
+	bsr.w	Lenses.addBlob
+
+	subq.w	#1,(sp)
+	bmi	.end_add
+	move.w	$04BC.w,d0
+	move.w	d0,d1
+	mulu.w	#13,d0
+	lsr.l	#2,d0
+	mulu.w	#5,d1
+	lsr.l	#1,d1
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	lea	sine_tbl,a1
+	Get_Sin	a1,d0,d0
+	Get_Cos	a1,d1,d1
+	muls.w	#160-Lenses.DIAM,d0
+	muls.w	#100-Lenses.DIAM,d1
+	swap	d0
+	swap	d1
+	bsr.w	Lenses.addBlob
+
+	subq.w	#1,(sp)
+	bmi	.end_add
+	move.w	$04BC.w,d0
+	move.w	d0,d1
+	mulu.w	#17,d0
+	lsr.l	#2,d0
+	mulu.w	#27,d1
+	lsr.l	#4,d1
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	lea	sine_tbl,a1
+	Get_Sin	a1,d0,d0
+	Get_Cos	a1,d1,d1
+	muls.w	#160-Lenses.DIAM,d0
+	muls.w	#100-Lenses.DIAM,d1
+	swap	d0
+	swap	d1
+	bsr.w	Lenses.addBlob
+
+	subq.w	#1,(sp)
+	bmi	.end_add
+	move.w	$04BC.w,d0
+	move.w	d0,d1
+	mulu.w	#19,d0
+	lsr.l	#2,d0
+	mulu.w	#3,d1
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	lea	sine_tbl,a1
+	Get_Sin	a1,d0,d0
+	Get_Cos	a1,d1,d1
+	muls.w	#160-Lenses.DIAM,d0
+	muls.w	#100-Lenses.DIAM,d1
+	swap	d0
+	swap	d1
+	bsr.w	Lenses.addBlob
+
+.end_add:
+	addq	#2,sp
+	bsr.w	Lenses.paintBlob
+
+	ELSE
+
+	bsr.w	Lenses.paintBackground
+
+	move.w	$04BC.w,d0
+	move.w	d0,d1
+	mulu.w	#11,d0
+	lsr.l	#2,d0
+	mulu.w	#7,d1
+	lsr.l	#1,d1
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	lea	sine_tbl,a1
+	Get_Sin	a1,d0,d0
+	Get_Cos	a1,d1,d1
+	muls.w	#160-Lenses.DIAM,d0
+	muls.w	#100-Lenses.DIAM,d1
+	swap	d0
+	swap	d1
+	bsr.w	Lenses.paintLens
+
+	ENDC
+
+	IFEQ	testmode
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	move.l	d0,d1
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+	ENDC
+
+	move.w	old468,d0
+.wait:	cmp.w	$0468.w,d0
+	beq.s	.wait
+
+	rts
+
+;======= OBJECT SUBROUTINES ================================================
+
+Lenses.addOne:
+	addq.w	#1,Lenses.numLenses
+	rts
+
+Lenses.subOne:
+	subq.w	#1,Lenses.numLenses
+	rts
+
+Lenses.setTraject:
+	st	Lenses.backMoving
+	move.w	$04BC.w,Lenses.trajStart
+	rts
+
+; Calculate the blob heightbuffer..
+Lenses.calcBump:
+	movea.l	Lenses.heightMapAdr,a0
+	moveq	#Lenses.DIAM-1,d7
+
+.yloop:	moveq	#Lenses.DIAM-1,d6
+
+.xloop:	move.w	d6,d0
+	move.w	d7,d1
+	muls.w	d0,d0
+	muls.w	d1,d1
+	add.l	d0,d1
+	cmpi.l	#Lenses.B_SQUARE*4,d1
+	blt.s	.in
+	move.l	#$ffff,d0
+	bra.s	.calc
+.in	moveq	#0,d0
+	divu.l	#Lenses.B_SQUARE*4,d1:d0
+	clr.w	d0
+	swap	d0
+.calc	move.l	#$ffff,d2
+	sub.l	d0,d2
+	mulu.w	d2,d2
+	swap	d2
+	mulu.w	d2,d2
+	clr.w	d2
+	swap	d2
+	andi.l	#$ffff,d2
+	divu.w	#Lenses.NUM_BLOBS*2,d2			; *2 for signed crap
+	move.w	d2,(a0)+
+	subq.w	#2,d6
+	bpl.s	.xloop
+
+	subq.w	#2,d7
+	bpl.s	.yloop
+	rts
+
+Lenses.calcOffsetMap:
+; Fill entire map with (x,y)->(x,y).
+	movea.l	Lenses.offsetMapAdr,a0
+	moveq	#-Lenses.RADIUS,d7
+
+.yloop:	moveq	#-Lenses.RADIUS,d6
+
+.xloop:	move.w	d7,d0
+	lsl.w	#8,d0
+	add.w	d6,d0
+	move.w	d0,(a0)+
+	addq.w	#1,d6
+	cmpi.w	#+Lenses.RADIUS,d6
+	blt.s	.xloop
+
+	addq.w	#1,d7
+	cmpi.w	#+Lenses.RADIUS,d7
+	blt.s	.yloop
+
+; Fill lens-part with special sauce.
+	movea.l	Lenses.offsetMapAdr,a0		; a0: upperleft
+	lea	Lenses.DIAM*2(a0),a1		; a1: upperright
+	lea	Lenses.AREA*2(a0),a3		; a3: lowerright
+	lea	-Lenses.DIAM*2(a3),a2		; a2: lowerleft
+	movea.w	#Lenses.RADIUS-1,a6
+	moveq	#Lenses.RADIUS*2-1,d7
+	
+.vloop:	moveq	#Lenses.RADIUS*2-1,d6
+	movea.w	#Lenses.RADIUS-1,a5
+
+.uloop:	move.w	d6,d0
+	move.w	d7,d1
+	mulu.w	d0,d0
+	mulu.w	d1,d1
+	add.l	d1,d0
+	move.l	#Lenses.R_SQUARE*4,d1
+	sub.l	d0,d1
+	cmpi.w	#Lenses.R_SQUARE/12,d1		; Get rid of fester-edge!
+	ble.s	.next
+.calc:	bsr.l	Math.sqrt			; d0.l=z*2 (16:16)
+	swap	d0				; d0.w=z*2
+	clr.l	d1
+	clr.l	d2
+	move.w	d6,d1				; d1.w=x
+	lsl.l	#Lenses.ZOOM_OUT,d1		; d1.w=X=x/zoom
+	divu.w	d0,d1				; d1.w=X/z
+	move.w	d1,d3				; d3.w=X/z
+	move.w	d7,d2				; d2.w=y
+	lsl.l	#Lenses.ZOOM_OUT,d2		; d2.w=Y=y/zoom
+	divu.w	d0,d2				; d2.w=Y/z
+	mulu.w	#256,d2				; d2.w=160(Y/z)
+	add.w	d2,d1				; d1.w=160(Y/z)+X/z
+	move.w	d1,-(a3)			; Store lr offset.
+	neg.w	d1
+	move.w	d1,(a0)+			; Store ul offset.
+	move.w	d3,d1
+	sub.w	d2,d1
+	move.w	d1,-(a1)			; Store ur offset.
+	move.w	d2,d1
+	sub.w	d3,d1
+	move.w	d1,(a2)+			; Store ll offset.
+	subq.w	#2,d6
+	bpl.s	.uloop
+	bra.s	.end_uloop
+
+.next:	subq	#2,a1
+	subq	#2,a3
+	addq	#2,a0
+	addq	#2,a2
+	subq.w	#2,d6
+	bpl.s	.uloop
+
+.end_uloop:
+	adda.w	#Lenses.RADIUS*2,a0
+	adda.w	#Lenses.RADIUS*6,a1
+	suba.w	#Lenses.RADIUS*6,a2
+	suba.w	#Lenses.RADIUS*2,a3
+	subq.w	#2,d7
+	bpl.s	.vloop
+	rts
+
+Lenses.paintBackground:
+	movea.l	scr,a0
+	move.l	Lenses.textureAdr,a1
+	adda.l	#(78*256+48)*2,a1
+	movea.w	#(256-160)*2,a6
+	moveq	#100-1,d7
+
+.yloop:	moveq	#80-1,d6
+
+.xloop:	move.l	(a1)+,(a0)+
+	dbf	d6,.xloop
+
+	adda.l	a6,a1
+	dbf	d7,.yloop
+	rts
+
+; No fucking clip yet!
+; INPUT:
+; d0.w=x (center)
+; d1.w=y (center)
+Lenses.paintLens:
+	move.w	d0,d2
+	move.w	d1,d3
+
+	movea.l	scr,a0
+	subi.w	#Lenses.RADIUS,d2
+	subi.w	#Lenses.RADIUS,d3
+	addi.w	#80,d2
+	addi.w	#50,d3
+	mulu.w	#160,d3
+	add.w	d2,d3
+	lea	(a0,d3.w*2),a0
+
+	addi.w	#128,d0
+	addi.w	#128,d1
+	mulu.w	#256,d1
+	add.w	d0,d1
+	movea.l	Lenses.textureAdr,a1
+	lea	(a1,d1.l*2),a1
+
+	movea.l	Lenses.offsetMapAdr,a2
+	movea.w	#(160-Lenses.DIAM)*2,a6
+	moveq	#Lenses.DIAM-1,d7
+
+.yloop:	moveq	#Lenses.DIAM-1,d6
+
+.xloop:	move.w	(a2)+,d0
+	move.w	(a1,d0.w*2),(a0)+
+	dbf	d6,.xloop
+
+	adda.l	a6,a0
+	dbf	d7,.yloop
+	rts
+
+Lenses.clearBlobBuffer:
+	movea.l	Lenses.blobAdr,a0
+	move.w	#160*100/16-1,d7
+	clr.l	d0
+.loop:
+	REPT	8
+	move.l	d0,(a0)+
+	ENDR
+	dbf	d7,.loop
+	rts
+
+; No fucking clip yet!
+; INPUT:
+; d0.w=x (center)
+; d1.w=y (center)
+Lenses.addBlob:
+	move.w	d0,d2
+	move.w	d1,d3
+	addi.w	#80-Lenses.RADIUS,d2
+	addi.w	#50-Lenses.RADIUS,d3
+	mulu.w	#160,d3
+	add.w	d2,d3
+	addi.w	#80+Lenses.RADIUS,d0
+	addi.w	#50+Lenses.RADIUS-1,d1
+	mulu.w	#160,d1
+	add.w	d0,d1
+	movea.l	Lenses.blobAdr,a0
+	lea	(a0,d1.w*2),a1
+	lea	(a0,d3.w*2),a0
+	lea	Lenses.DIAM*2(a0),a3
+	lea	-Lenses.DIAM*2(a1),a4
+	movea.l	Lenses.heightMapAdr,a2
+	movea.w	#(160-Lenses.RADIUS)*2,a5
+	movea.w	#(160+Lenses.RADIUS)*2,a6
+	moveq	#Lenses.RADIUS*2,d1
+	moveq	#Lenses.RADIUS-1,d7
+
+	IFNE	1
+
+.yloop:
+	REPT	Lenses.RADIUS/2
+	move.l	(a2)+,d0
+	move.l	d0,d2
+	swap	d2
+	add.l	d0,(a0)+
+	add.l	d2,-(a1)
+	add.l	d0,(a4)+
+	add.l	d2,-(a3)
+	ENDR
+
+	ELSE
+
+.yloop:	moveq	#Lenses.RADIUS/2-1,d6
+
+.xloop:	move.l	(a2)+,d0
+	move.l	d0,d2
+	swap	d2
+	add.l	d0,(a0)+
+	add.l	d2,-(a1)
+	add.l	d0,(a4)+
+	add.l	d2,-(a3)
+	dbf	d6,.xloop
+
+	ENDC
+
+	adda.l	a5,a0
+	suba.l	a5,a1
+	adda.l	a6,a3
+	suba.l	a6,a4
+	dbf	d7,.yloop
+	rts
+
+Lenses.paintBlob:
+	movea.l	scr,a0
+	movea.l	Lenses.textureAdr,a1
+	adda.l	#(256*(128-50)+(128-80))*2,a1
+
+	tst.w	Lenses.backMoving
+	beq.s	.traj_done
+	move.w	$04BC.w,d0
+	sub.w	Lenses.trajStart,d0
+	move.w	d0,d1
+	mulu.w	#7,d0
+	mulu.w	#3,d1
+	lsr.l	#2,d0
+	lsr.l	d1
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	lea	sine_tbl,a2
+	Get_Sin	a2,d0,d0
+	Get_Sin	a2,d1,d1
+	muls.w	#256-160,d0
+	muls.w	#256-100,d1
+	swap	d0
+	swap	d1
+	lsl.w	#8,d1
+	add.w	d0,d1
+	lea	(a1,d1.w*2),a1
+.traj_done:
+
+	movea.l	Lenses.blobAdr,a2
+	movea.l	Lenses.divTableAdr,a3
+	movea.w	#(256-160)*2,a6
+	move.w	#1<<Lenses.BLOBSHIFT,d3
+	moveq	#+80,d5
+	moveq	#-50,d7
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	Lenses.paintBlobVga60
+	cmpi.w	#vga100,d0
+	beq.s	Lenses.paintBlobVga100
+	cmpi.w	#rgb50,d0
+	beq	Lenses.paintBlobRgb50
+; Unknown monitormode..
+.end:	rts
+
+Lenses.paintBlobVga100:
+.yloop:	moveq	#-80,d6
+
+.xloop:	move.w	(a2)+,d2
+	cmp.w	d3,d2
+	bgt.s	.inside
+	move.w	(a1)+,(a0)+
+	addq.w	#1,d6
+	cmp.w	d5,d6
+	blt.s	.xloop
+	bra.s	.next_line
+
+.inside:move.w	d2,d4
+	move.b	d6,d4
+	move.b	d7,d2
+	move.w	(a3,d2.w*2),d1
+	lsl.w	#8,d1
+	add.w	(a3,d4.w*2),d1
+	move.w	(a1,d1.w*2),(a0)+
+	addq	#2,a1
+	addq.w	#1,d6
+	cmp.w	d5,d6
+	blt.s	.xloop
+
+.next_line:
+	adda.l	a6,a1
+	addq.w	#1,d7
+	cmpi.w	#+50,d7
+	blt.s	.yloop
+	rts
+
+Lenses.paintBlobVga60:
+	movea.w	#160*2,a5
+	lea	160*2(a0),a4
+
+.yloop:	moveq	#-80,d6
+
+.xloop:	move.w	(a2)+,d2
+	cmp.w	d3,d2
+	bgt.s	.inside
+	move.w	(a1),(a0)+
+	move.w	(a1)+,(a4)+
+	addq.w	#1,d6
+	cmp.w	d5,d6
+	blt.s	.xloop
+	bra.s	.next_line
+
+.inside:move.w	d2,d4
+	move.b	d6,d4
+	move.b	d7,d2
+	move.w	(a3,d2.w*2),d1
+	lsl.w	#8,d1
+	add.w	(a3,d4.w*2),d1
+	move.w	(a1,d1.w*2),(a0)+
+	move.w	(a1,d1.w*2),(a4)+
+	addq	#2,a1
+	addq.w	#1,d6
+	cmp.w	d5,d6
+	blt.s	.xloop
+
+.next_line:
+	adda.l	a6,a1
+	adda.l	a5,a0
+	adda.l	a5,a4
+	addq.w	#1,d7
+	cmpi.w	#+50,d7
+	blt.s	.yloop
+	rts
+
+Lenses.paintBlobRgb50:
+.yloop:	moveq	#-80,d6
+
+.xloop:	move.w	(a2)+,d2
+	cmp.w	d3,d2
+	bgt.s	.inside
+	move.w	(a1),(a0)+
+	move.w	(a1)+,(a0)+
+	addq.w	#1,d6
+	cmp.w	d5,d6
+	blt.s	.xloop
+	bra.s	.next_line
+
+.inside:move.w	d2,d4
+	move.b	d6,d4
+	move.b	d7,d2
+	move.w	(a3,d2.w*2),d1
+	lsl.w	#8,d1
+	add.w	(a3,d4.w*2),d1
+	move.l	(a1,d1.w*2),(a0)+
+	addq	#2,a1
+	addq.w	#1,d6
+	cmp.w	d5,d6
+	blt.s	.xloop
+
+.next_line:
+	adda.l	a6,a1
+	addq.w	#1,d7
+	cmpi.w	#+50,d7
+	blt.s	.yloop
+	rts
+
+Lenses.paintBlobTidy:
+	movea.l	scr,a0
+	movea.l	Lenses.textureAdr,a1
+	adda.l	#(256*128+128)*2,a1
+	movea.l	Lenses.blobAdr,a2
+	movea.w	#(256-160)*2,a6
+	move.w	#1<<Lenses.BLOBSHIFT,d3
+	moveq	#Lenses.BLOBSHIFT+1,d4
+	moveq	#+80,d5
+	moveq	#-50,d7
+
+.yloop:	moveq	#-80,d6
+
+.xloop:	move.w	(a2)+,d2
+	cmp.w	d3,d2
+	bgt.s	.inside
+	move.w	d6,d0
+	move.w	d7,d1
+	bra.s	.plot
+.inside:move.w	d6,d0
+	move.w	d7,d1
+	ext.l	d0
+	ext.l	d1
+	lsl.l	d4,d0
+	lsl.l	d4,d1
+	divs.w	d2,d0
+	divs.w	d2,d1
+	add.w	d6,d0
+	add.w	d7,d1
+.plot:	lsl.w	#8,d1
+	add.w	d0,d1
+	move.w	(a1,d1.w*2),(a0)+
+	addq.w	#1,d6
+	cmp.w	d5,d6
+	blt.s	.xloop
+
+	addq.w	#1,d7
+	cmpi.w	#+50,d7
+	blt.s	.yloop
+	rts
+
+; y=denom, x=num
+Lenses.calcDivTable:
+	movea.l	Lenses.divTableAdr,a0
+	adda.w	#256*2,a0
+	moveq	#1,d7
+
+.yloop:	move.b	d7,d1
+	lsl.w	#8,d1
+	clr.w	d6
+
+.xloop:	clr.l	d0
+	move.w	d6,d0
+	ext.w	d0
+	swap	d0
+	divs.w	d1,d0
+	asr.w	#5,d0
+	move.w	d0,(a0)+
+	addq.b	#1,d6
+	bcc.s	.xloop
+
+	addq.b	#1,d7
+	bcc.s	.yloop
+	rts
+
+;======= OBJECT RESERVES ===================================================
+
+	BSS
+
+Lenses.numLenses:
+	DS.W	1
+Lenses.backMoving:
+	DS.W	1
+Lenses.trajStart:
+	DS.W	1
+
+Lenses.offsetMapAdr:
+	DS.L	1
+Lenses.heightMapAdr:
+	DS.L	1
+Lenses.hiTextureAdr:
+	DS.L	1
+Lenses.textureAdr:
+	DS.L	1
+Lenses.blobAdr:
+	DS.L	1
+Lenses.divTableAdr:
+	DS.L	1

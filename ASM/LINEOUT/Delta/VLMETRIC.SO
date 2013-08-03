@@ -1,0 +1,828 @@
+; Stasis interrupted. Fire.. in.. cryogenic.. compartment.
+; Somekind of light-thru-wall effect, for delta..
+; Uses u-fly ofcourse.
+
+******** OBJECT EQUATES ********
+
+Volumetric.POINT:		=	800		; timepoint
+Volumetric.VECTORLENGTH:	=	0 300		; length of emitted rays
+
+******** OBJECT TABLE ********
+
+* Must be first in object!!
+Volumetric.table:
+	DC.L	Volumetric.mainLoop
+	DC.L	Volumetric.init
+	DC.L	Volumetric.setRes
+	DC.L	Volumetric.triggerEnter
+	DC.L	Volumetric.incLength
+	DC.L	Volumetric.decLength
+	DC.L	Volumetric.switchLite
+	DC.L	Volumetric.setExit
+	DC.L	Volumetric.triggerZoom
+	DC.L	0
+
+	IFND	DEMO_SYSTEM
+	INCLUDE	SFLY_DSP.S				* Include the CPU-DSP engine.
+	TEXT
+	ENDC
+
+******** RESOLUTION SETTING ROUTINE ********
+
+Volumetric.setRes:
+	IFEQ	testmode
+	move.l	#rts,vbl_gfx
+
+	move.w	$0468.w,d0
+.ck468:	cmp.w	$0468.w,d0
+	beq.s	.ck468
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+* Unknown monitormode..
+	rts
+.vga60:	bra.l	vga60_16bit_320_200
+.vga100:bra.l	vga100_16bit_320_200
+.rgb50:	bra.l	rgb50_16bit_320_200
+	ENDC
+	rts
+
+******** INIT SUBROUTINE ********
+
+; OUTPUT:
+; d0.l: =0: all clear
+;       <0: error, not initialized
+Volumetric.init:
+	lea	sine_tbl,a1
+	bsr.l	Matrix.init
+
+;	bsr	Volumetric.calcFadePal
+
+* Insert pre-running initialising stuff here! Loading, precalculating, etc.
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+******** REALTIME INIT SUBROUTINE ********
+
+Volumetric.realtimeInit:
+	bsr	Volumetric.resetTime
+
+	bsr.l	HumanFly.init
+
+	lea	Viewport.settingsTable,a0
+	move.w	#320,Viewport.XSCREEN(a0)
+	move.w	#200,Viewport.YSCREEN(a0)
+	move.w	#0,Viewport.XSTART(a0)
+	move.w	#0,Viewport.YSTART(a0)
+	move.w	#320,Viewport.XEND(a0)
+	move.w	#200,Viewport.YEND(a0)
+	move.w	#160,Viewport.XCENTER(a0)
+	move.w	#100,Viewport.YCENTER(a0)
+	move.w	#256+32,Viewport.ASPECT(a0)
+	move.w	#$100,Viewport.FOCAL(a0)
+	bsr.l	Viewport.update
+
+	bsr	Volumetric.initPal
+
+	lea	Volumetric.textureTable,a0
+	lea	Volumetric.colorTable,a1
+	bsr.l	Polygon.init
+
+	move.l	#Volumetric.enter,Volumetric.movementRout
+	move.l	#Volumetric.fadeLiteOut,Volumetric.liteRout
+	move.l	#Volumetric.VECTORLENGTH,Volumetric.vectorLength
+	clr.w	Volumetric.lite
+	clr.w	Volumetric.exit
+	rts
+
+******** SCREENINIT SUBROUTINE ********
+
+Volumetric.initScreen:
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	moveq	#$00000000,d4
+	bsr.l	Viewport.paintRectangle
+	rts
+
+******** MAINLOOP SUBROUTINE ********
+
+Volumetric.mainLoop:
+	move.w	$0468.w,.old468
+
+	movea.l	scr,a0
+	bsr.l	Primitive.setScreenbuffer
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr	Volumetric.realtimeInit
+	move.l	(sp)+,d0
+.end_realtime_init:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr	Volumetric.initScreen
+.end_screeninit:
+
+	movea.l	Volumetric.liteRout,a0
+	jsr	(a0)
+	movea.l	Volumetric.movementRout,a0
+	jsr	(a0)
+
+	bsr	Volumetric.getTime
+	lea	sine_tbl,a0
+	move.w	d0,d1
+	mulu.w	#5,d0
+	lsr.w	#1,d0
+	mulu.w	#3,d1
+	lsr.w	#1,d1
+	addi.w	#$580,d0
+	addi.w	#$280,d1
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	Get_Sin	a0,d0,d0
+	Get_Sin	a0,d1,d1
+	asr.w	#7,d0
+	asr.w	#7,d1
+	move.w	#$80,d2
+	movem.w	d0-d2,Volumetric.center
+
+	IFNE	0
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	moveq	#$00000000,d4
+	bsr.l	Viewport.paintRectangle
+	ELSE
+	movea.l	Volumetric.rectTableAddys,a0
+	move.w	(a0)+,d7
+	beq.s	.end_restore
+	subq.w	#1,d7
+.restore_loop:
+	move.w	d7,-(sp)
+	movem.w	(a0)+,d1/d7
+	movem.w	(a0)+,d0/d6
+	move.l	a0,-(sp)
+	moveq	#$00000000,d4
+	bsr.l	Viewport.paintRectangle
+	movea.l	(sp)+,a0
+	move.w	(sp)+,d7
+	dbra	d7,.restore_loop
+.end_restore:
+	ENDC
+
+	bsr.l	ObjectRegistry.clear
+
+	lea	Volumetric.deltaContour,a1
+	bsr	Volumetric.createConcave
+; d0.l= object size
+
+	lea	Volumetric.object,a0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi	.error
+
+	bsr.l	PrimitiveMesh.new
+
+	movem.w	Volumetric.rotation,d0-d2
+	bsr.l	Matrix.generate
+	movem.w	Volumetric.translation,d0-d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+	bsr.l	PrimitiveMesh.complete
+
+	movea.l	Volumetric.rectTableAddys,a0
+	bsr.l	PrimitiveMesh.paint
+
+;	bsr	Volumetric.paintLogo
+
+	lea	Volumetric.rectTableAddys,a0
+ 	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+
+	lea	scr,a0
+ 	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+	IFEQ	testmode
+	move.l	d0,d1
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+	ENDC
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.res_done
+	bsr	Volumetric.setRes
+.res_done:
+
+	move.w	.old468(pc),d0
+.cmp:	cmp.w	$468.w,d0
+	beq.s	.cmp
+
+.error:	rts
+
+.old468:DC.W	0
+
+******** OBJECT SUBROUTINES ********
+
+Volumetric.incLength:
+	addq.l	#8,Volumetric.vectorLength
+	rts
+
+Volumetric.decLength:
+	subq.l	#8,Volumetric.vectorLength
+	rts
+
+Volumetric.triggerEnter:
+	bsr	Volumetric.resetTime
+	move.l	#Volumetric.enter,Volumetric.movementRout
+	rts
+
+Volumetric.switchLite:
+	bsr	Volumetric.resetLiteTime
+	not.w	Volumetric.lite
+	bne.s	.fade_in
+	move.l	#Volumetric.fadeLiteOut,Volumetric.liteRout
+	rts
+.fade_in:
+	move.l	#Volumetric.fadeLiteIn,Volumetric.liteRout
+	rts
+
+Volumetric.setExit:
+	bsr	Volumetric.resetExitTime
+	move.l	#Volumetric.exitDelta,Volumetric.movementRout
+	rts
+
+Volumetric.triggerZoom:
+	bsr	Volumetric.resetZoomTime
+	move.l	#Volumetric.zoom,Volumetric.movementRout
+	rts
+
+Volumetric.standStill:
+	lea	Volumetric.rotation,a0
+	REPT	3
+	clr.w	(a0)+
+	ENDR
+	lea	Volumetric.translation,a0
+	clr.w	(a0)+
+	clr.w	(a0)+
+	move.w	#$0400,(a0)+
+	rts
+
+Volumetric.exitDelta:
+	bsr	Volumetric.getExitTime
+	move.l	d0,d2
+	clr.w	d0
+	clr.w	d1
+	mulu.w	d2,d2
+	lsr.l	#7,d2
+	movem.w	d0-d2,Volumetric.rotation
+
+	bsr	Volumetric.getExitTime
+	mulu.w	d0,d0
+	lsr.l	#8,d0
+	clr.w	d1
+	move.w	#$0400,d2
+	movem.w	d0-d2,Volumetric.translation
+	rts
+
+Volumetric.enter:
+	bsr	Volumetric.getTime
+	cmpi.l	#$00000400,d0
+	blt.s	.move_pos
+	clr.w	d0
+	move.w	#$0400,d2
+	bra.s	.end_calc_pos
+.move_pos:
+	move.w	d0,d2
+	subi.w	#$0400,d2
+	muls.w	d2,d2
+	lsr.l	#8,d2
+	lsr.l	#2,d2
+	neg.l	d2
+	move.w	d2,d0
+	addi.w	#$0400,d2
+	asr.w	#1,d0
+.end_calc_pos:
+	clr.w	d1
+	movem.w	d0-d2,Volumetric.translation
+
+	lea	Volumetric.rotation,a0
+	REPT	3
+	clr.w	(a0)+
+	ENDR
+	rts
+
+Volumetric.zoom:
+	bsr	Volumetric.getZoomTime
+	cmpi.l	#$00000100,d0
+	blt.s	.move_pos
+	move.w	#$0100,d0
+.move_pos:
+	move.w	d0,d2
+	mulu.w	d2,d2
+	lsr.l	#7,d2
+	neg.l	d2
+	addi.w	#$0400,d2
+.end_calc_pos:
+	clr.w	d0
+	clr.w	d1
+	movem.w	d0-d2,Volumetric.translation
+
+	lea	Volumetric.rotation,a0
+	REPT	3
+	clr.w	(a0)+
+	ENDR
+	rts
+
+; OUTPUT:
+; d0.l=time
+Volumetric.getTime:
+	move.l	$04BA.w,d0
+	sub.l	Volumetric.startTime,d0
+	rts
+
+Volumetric.resetTime:
+	move.l	$04BA.w,Volumetric.startTime
+	rts
+
+; OUTPUT:
+; d0.l=time
+Volumetric.getLiteTime:
+	move.l	$04BA.w,d0
+	sub.l	Volumetric.startLiteTime,d0
+	rts
+
+Volumetric.resetLiteTime:
+	move.l	$04BA.w,Volumetric.startLiteTime
+	rts
+
+; OUTPUT:
+; d0.l=time
+Volumetric.getExitTime:
+	move.l	$04BA.w,d0
+	sub.l	Volumetric.startExitTime,d0
+	rts
+
+Volumetric.resetExitTime:
+	move.l	$04BA.w,Volumetric.startExitTime
+	rts
+
+; OUTPUT:
+; d0.l=time
+Volumetric.getZoomTime:
+	move.l	$04BA.w,d0
+	sub.l	Volumetric.startZoomTime,d0
+	rts
+
+Volumetric.resetZoomTime:
+	move.l	$04BA.w,Volumetric.startZoomTime
+	rts
+
+Volumetric.fadeLiteIn:
+	bsr	Volumetric.getLiteTime
+	cmpi.l	#300,d0
+	blt.s	.length_okay
+	move.l	#300,d0
+.length_okay:
+	move.l	d0,Volumetric.vectorLength
+.end:	rts
+
+Volumetric.fadeLiteOut:
+	bsr	Volumetric.getLiteTime
+	neg.l	d0
+	addi.l	#300,d0
+	bpl.s	.length_okay
+	clr.l	d0
+.length_okay:
+	move.l	d0,Volumetric.vectorLength
+.end:	rts
+
+Volumetric.initPal:
+	lea	Volumetric.colorTable,a0
+
+	move.w	#$ffff,d0
+	moveq	#32-1,d7
+
+.greyloop:
+	move.w	d0,(a0)+
+	move.w	d0,(a0)+
+	subi.w	#$0821,d0
+	move.w	d0,(a0)+
+	move.w	d0,(a0)+
+	subi.w	#$0020,d0
+	dbra	d7,.greyloop
+
+	move.w	#$ffff,d0
+	moveq	#128-1,d7
+.whiteloop:
+	move.w	d0,(a0)+
+	dbra	d7,.whiteloop
+	rts
+
+; INPUT:
+; a1: contour table
+; OUTPUT:
+; d0.l: output size
+Volumetric.createConcave:
+	clr.l	d0
+	move.w	(a1)+,d7				; d7.w=#vertices
+	ble	.end
+
+	movea.l	a1,a6					; a6: vertex table
+	movea.l	a1,a4					; a4: vertex table
+
+; First we center the points to vectors.
+	lea	Volumetric.lineTable,a0
+	movem.w	Volumetric.center,d3/d4/d5
+	subq.w	#1,d7
+	move.w	d7,d6
+
+.center_loop:
+	movem.w	(a1)+,d0/d1/d2
+	sub.w	d3,d0
+	sub.w	d4,d1
+	sub.w	d5,d2
+	move.w	d0,(a0)+
+	move.w	d1,(a0)+
+	move.w	d2,(a0)+
+	dbra	d7,.center_loop
+
+	movea.l	a1,a5					; a5: line table
+
+; Now we normalize the vectors.
+	lea	Volumetric.lineTable,a0
+	move.w	d6,d7
+	move.l	Volumetric.vectorLength,d5
+
+; norm(a,l) = a*l/|a|
+.norm_loop:
+	movem.w	(a0),d0-d2
+	muls.w	d0,d0
+	muls.w	d1,d1
+	muls.w	d2,d2
+	add.l	d0,d1
+	add.l	d2,d1
+	bsr.l	CALC_ATARISQRT
+	swap	d0
+	movem.w	(a0),d1-d3
+	muls.w	d5,d1
+	muls.w	d5,d2
+	muls.w	d5,d3
+	divs.w	d0,d1
+	divs.w	d0,d2
+	divs.w	d0,d3
+	add.w	(a4)+,d1
+	add.w	(a4)+,d2
+	add.w	(a4)+,d3
+	move.w	d1,(a0)+
+	move.w	d2,(a0)+
+	move.w	d3,(a0)+
+	dbra	d7,.norm_loop
+
+; Now we pump the vectors and mesh data in a HumanFly object...
+	lea	Volumetric.object,a0
+	move.w	d6,d0
+	addq.w	#1,d0
+	add.w	d0,d0
+	move.w	d0,(a0)+			; Store amount of vertices.
+	clr.w	(a0)+				; Store amount of normals (=0).
+
+; Store original vertices.
+	move.w	d6,d7
+.store_orgvertex_loop:
+	move.w	(a6)+,(a0)+
+	move.w	(a6)+,(a0)+
+
+	move.w	(a6)+,(a0)+
+	dbra	d7,.store_orgvertex_loop
+
+; Store projected vertices.
+	lea	Volumetric.lineTable,a1
+	move.w	d6,d7
+.store_projvertex_loop:
+	move.w	(a1)+,(a0)+
+	move.w	(a1)+,(a0)+
+	move.w	(a1)+,(a0)+
+	dbra	d7,.store_projvertex_loop
+
+	clr.w	(a0)+				; Store amount of 2d vertices (=0).
+
+	move.w	(a5)+,d0			; d0.w=#lines=#sidepolys
+	move.w	d6,d1
+	addq.w	#1,d1
+	move.w	d0,d6
+	add.w	(a5,d0.w*4),d0			; d0.w=#sidepolys+#basepolys=#polys
+	move.w	d0,(a0)+			; Store amount of polys.
+	subq.w	#1,d6
+; d1.w=#org vertices
+; d6.w=#sidepolys-1
+
+; Store the polygons. The loops transforms a line into a polygon using
+; it's original and projected vertices.
+; poly: (a,a',b',b)
+	move.w	#Polygon.QUAD|Polygon.GOURAUDSHADED|0,d0
+.store_poly_loop:
+	move.w	d0,(a0)+
+	move.w	(a5)+,d7
+	move.w	d7,(a0)+			; Store a.
+	move.w	d7,d2
+	add.w	d1,d2
+	move.w	d2,(a0)+			; Store a'.
+	move.w	(a5)+,d7
+	move.w	d7,d2
+	add.w	d1,d2
+	move.w	d2,(a0)+			; Store b'.
+	move.w	d7,(a0)+			; Store b.
+
+; Shading still a dummy!!
+	move.w	#1,(a0)+
+	move.w	#125,(a0)+
+	move.w	#125,(a0)+
+	move.w	#1,(a0)+
+	dbra	d6,.store_poly_loop
+
+	move.w	(a5)+,d7
+	beq.s	.end
+	subq.w	#1,d7
+
+.base_poly_loop:
+	move.w	(a5)+,d5
+	subq.w	#1,d5
+	move.w	d5,d3
+	moveq	#Primitive.TYPESHIFT,d4
+	lsl.w	d4,d3
+	ori.w	#Polygon.FLATSHADED|1,d3
+	move.w	d3,(a0)+
+
+.base_vertex_loop:
+	move.w	(a5)+,(a0)+
+	dbra	d5,.base_vertex_loop
+
+	dbra	d7,.base_poly_loop
+
+; Calculate object size.
+	move.l	a0,d0
+	subi.l	#Volumetric.object,d0
+
+.end:	rts
+
+Volumetric.calcFadePal:
+	lea	Volumetric.fadepalTable,a0
+	moveq	#0,d7
+
+.loop:	move.w	d7,d0
+	move.w	d7,d1
+	move.w	d7,d2
+	andi.w	#%1111100000000000,d0
+	andi.w	#%0000011111000000,d1
+	andi.w	#%0000000000011111,d2
+	mulu.w	#$00ff,d0
+	mulu.w	#$00ff,d1
+	mulu.w	#$00ff,d2
+	lsr.l	#8,d0
+	lsr.l	#8,d1
+	lsr.l	#8,d2
+	andi.w	#%1111100000000000,d0
+	andi.w	#%0000011111000000,d1
+	andi.w	#%0000000000011111,d2
+	or.w	d2,d0
+	or.w	d1,d0
+	move.w	d0,(a0)+
+	addq.w	#1,d7	
+	bne.s	.loop
+	rts
+
+; Ugly shit. Not needed!
+	IFNE	0
+Volumetric.paintLogo:
+; Calc window dimensions..
+	clr.l	d3
+	move.w	$04BC.w,d3
+	lsr.w	d3
+	divu.w	#$00CC,d3
+	clr.w	d3
+	swap	d3
+	addi.w	#$0034,d3
+	move.l	#64<<8,d5
+	divu.w	d3,d5
+	move.w	d5,.segTable
+
+	lea	Volumetric.fadepalTable,a3
+
+; First, clear last crap..
+	movea.l	scr,a0
+	movea.l	scr+8,a2
+	move.w	d5,d0
+	movea.w	d0,a5
+	adda.l	a5,a5
+	lsr.w	d0
+	sub.w	d0,d5
+	move.w	#160-1,d4
+	sub.w	d5,d4
+	move.w	#160,d6
+	sub.w	d0,d6
+
+	subq.w	#1,d6
+	moveq	#18-1,d7
+	clr.l	d0
+
+.clearloop1:
+	move.w	d6,d5
+
+.clearxloop:
+	move.w	(a2)+,d0
+	move.w	(a3,d0.l*2),(a0)+
+	dbf	d5,.clearxloop
+
+	adda.l	a5,a0
+	adda.l	a5,a2
+	move.w	d4,d5
+
+.clearxloop2:
+	move.w	(a2)+,d0
+	move.w	(a3,d0.l*2),(a0)+
+	dbf	d5,.clearxloop2
+
+	dbf	d7,.clearloop1
+
+; Secondly, paint logo..
+	lea	Volumetric.deltaLogo+20,a1
+	movea.l	scr,a0
+	movea.l	scr+8,a2
+	move.w	.segTable(pc),d5
+	move.w	d5,d4
+	lsr.w	d4
+	neg.w	d4
+	lea	(a0,d4.w*2),a0
+	adda.w	#160*2,a0
+	lea	(a2,d4.w*2),a2
+	adda.w	#160*2,a2
+
+	subq.w	#1,d5
+	lsl.l	#8,d3
+	moveq	#18-1,d7
+	clr.l	d1
+
+.yloop:	move.w	d5,d6
+	clr.l	d4
+
+.xloop:	move.w	(a1,d4.w*2),d2
+	lsr.w	#2,d2
+	andi.w	#%0011100111000111,d2
+	move.w	(a2)+,d1
+
+	add.w	(a3,d1.l*2),d2
+	bcc.s	.no_ceil
+	moveq	#$FFFFFFFF,d2
+.no_ceil:
+	move.w	d2,(a0)+
+;	or.w	(a3,d1.l*2),d2
+;	move.w	d2,(a0)+
+
+	swap	d4
+	add.l	d3,d4
+	swap	d4
+	dbra	d6,.xloop
+
+	adda.w	#320*2,a0
+	adda.w	#320*2,a2
+	suba.w	d5,a0
+	suba.w	d5,a0
+	suba.w	d5,a2
+	suba.w	d5,a2
+	subq	#2,a0
+	subq	#2,a2
+	adda.w	#64*2,a1
+	dbra	d7,.yloop
+
+; swap segment lengths.
+	lea	.segTable(pc),a0
+	move.w	(a0),d0
+	move.w	4(a0),(a0)
+	move.w	2(a0),4(a0)
+	move.w	d0,2(a0)
+
+	rts
+
+.segTable:
+	DC.W	0,0,0
+	ENDC
+
+******** OBJECT DATA ********
+
+	DATA
+
+;Volumetric.deltaLogo:
+;	INCBIN	DELTALE2.APX
+
+Volumetric.textureTable:
+	DC.L	0
+
+Volumetric.center:
+	DC.W	0,20,100
+
+;    /\
+;   //\\
+;  //__\\
+; /______\
+Volumetric.deltaContour:
+	DC.W	6				; # vertices
+	DC.W	-100,+100,0
+	DC.W	+000,-100,0
+	DC.W	+100,+100,0
+	DC.W	-070,+070,0
+	DC.W	+000,-070,0
+	DC.W	+070,+070,0
+	DC.W	6				; # lines
+	DC.W	0,1
+	DC.W	1,2
+	DC.W	2,0
+	DC.W	4,3
+	DC.W	5,4
+	DC.W	3,5
+	DC.W	3				; # base polys
+	DC.W	4,3,4,1,0
+	DC.W	4,4,5,2,1
+	DC.W	4,5,3,0,2
+
+Volumetric.rectTableAddys:
+	DC.L	Volumetric.rectTable
+	DC.L	Volumetric.rectTable2
+	DC.L	Volumetric.rectTable3
+
+******** OBJECT RESERVES ********
+
+	BSS
+
+Volumetric.colorTable:
+	DS.W	256
+
+Volumetric.rectangleTable:
+	DS.W	4*3*10
+
+Volumetric.lineTable:
+	DS.W	1000
+
+Volumetric.object:
+	DS.W	2
+	DS.B	100*Vertex.SIZE
+	DS.W	1
+	DS.W	1000
+
+Volumetric.startTime:
+	DS.L	1
+Volumetric.startLiteTime:
+	DS.L	1
+Volumetric.startExitTime:
+	DS.L	1
+Volumetric.startZoomTime:
+	DS.L	1
+
+Volumetric.rectTable:
+	DS.W	1+4*32
+Volumetric.rectTable2:
+	DS.W	1+4*32
+Volumetric.rectTable3:
+	DS.W	1+4*32
+
+Volumetric.rotation:
+	DS.W	3
+Volumetric.translation:
+	DS.W	3
+
+Volumetric.fadepalTable:
+;	DS.W	65536
+
+Volumetric.movementRout:
+	DS.L	1
+Volumetric.liteRout:
+	DS.L	1
+Volumetric.vectorLength:
+	DS.L	1
+Volumetric.lite:
+	DS.W	1
+Volumetric.exit:
+	DS.W	1
+
+******** END OF DEMO-EFFECT OBJECT ********

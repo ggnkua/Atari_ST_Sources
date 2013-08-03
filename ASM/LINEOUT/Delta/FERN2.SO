@@ -1,0 +1,514 @@
+;******* OBJECT EQUATES ********
+
+Fern.SCALAR:		=	$8000
+Fern.MAXSTEPS:		=	8			; >0 & <8
+
+			RSRESET
+Fern.KEY_L:		RS.W	1
+Fern.KEY_M:		RS.W	1
+Fern.KEY_R:		RS.W	1
+Fern.KEY_SKEWAMP:	RS.W	1
+Fern.KEY_DIFFAMP:	RS.W	1
+Fern.KEY_SIZE:		RS.B	0
+
+; conifeer (leilandi, small)
+; left=12
+; mid=25
+; right=12
+; skewamp=$80
+; diffamp=$80
+
+; oak
+; left=21
+; mid=30
+; right=21
+; skewamp=$80
+; diffamp=$180
+
+; pine
+; left=12
+; mid=30
+; right=12
+; skewamp=0
+; diffamp=$280
+
+; 'sad'
+; left=16
+; mid=28
+; right=12
+; skewamp=$100
+; diffamp=0
+
+; mutant
+; left=30
+; mid=30
+; right=12
+; skewamp=$100
+; diffamp=$280
+
+;******* OBJECT TABLE ********
+
+; Must be first in object!!
+Fern.table:
+	DC.L	Fern.mainLoop
+	DC.L	Fern.init
+	DC.L	Fern.setRes
+	DC.L	Fern.incLeftLen
+	DC.L	Fern.decLeftLen
+	DC.L	Fern.incMidLen
+	DC.L	Fern.decMidLen
+	DC.L	Fern.incRightLen
+	DC.L	Fern.decRightLen
+	DC.L	Fern.incSkewAmp
+	DC.L	Fern.decSkewAmp
+	DC.L	Fern.incDiffAmp
+	DC.L	Fern.decDiffAmp
+	DC.L	0
+
+	IFND	DEMO_SYSTEM
+	INCLUDE	SFLY_DSP.S
+	TEXT
+	ENDC
+
+;******* RESOLUTION SETTING ROUTINE ********
+
+Fern.setRes:
+	IFEQ	testmode
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+; Unknown monitormode..
+	rts
+.vga60:	bra.l	vga60_16bit_320_200
+.vga100:bra.l	vga100_16bit_320_200
+.rgb50:	bra.l	rgb50_16bit_320_200
+	ENDC
+	rts
+
+;******* INIT SUBROUTINE ********
+
+; OUTPUT:
+; d0.l: =0 all clear, <0 error
+Fern.init:
+	lea	sine_tbl,a1
+	bsr.l	Matrix.init
+
+	tst.w	detail
+	beq.s	.lo_crap
+	move.w	#Fern.MAXSTEPS,Fern.steps
+	bra.s	.success
+.lo_crap:
+	move.w	#Fern.MAXSTEPS-1,Fern.steps
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;******* REALTIME INIT SUBROUTINE ********
+
+Fern.realtimeInit:
+	move.l	#rts,vbl_gfx
+
+	bsr.l	HumanFly.init
+
+	lea	Viewport.settingsTable,a0
+	move.w	#320,Viewport.XSCREEN(a0)
+	move.w	#200,Viewport.YSCREEN(a0)
+	move.w	#0,Viewport.XSTART(a0)
+	move.w	#0,Viewport.YSTART(a0)
+	move.w	#320,Viewport.XEND(a0)
+	move.w	#200,Viewport.YEND(a0)
+	move.w	#160,Viewport.XCENTER(a0)
+	move.w	#100,Viewport.YCENTER(a0)
+	move.w	#256+32,Viewport.ASPECT(a0)
+	move.w	#$100,Viewport.FOCAL(a0)
+	bsr.l	Viewport.update
+
+	lea	Fern.textureTable,a0
+	lea	Fern.pal,a1
+	bsr.l	Polygon.init
+
+	move.l	$04BA.w,Fern.startTime
+	rts
+
+;******* SCREENINIT SUBROUTINE ********
+
+Fern.initScreen:
+	rts
+
+;******* MAINLOOP SUBROUTINE ********
+
+Fern.mainLoop:
+	move.w	$0468.w,.old468
+
+	movea.l	scr,a0
+	bsr.l	Primitive.setScreenbuffer
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr.w	Fern.realtimeInit
+	move.l	(sp)+,d0
+.end_realtime_init:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr.w	Fern.initScreen
+.end_screeninit:
+
+; Calculate current time.
+	move.l	$04BA.w,d0
+	sub.l	Fern.startTime,d0
+	move.l	d0,Fern.time
+
+; Calculate control values..
+	bsr.w	Fern.morph
+
+; Control the tree.
+	move.w	Fern.time+2,d0
+	move.w	d0,d2
+	mulu.w	#5,d2
+	lsr.l	#2,d2
+	move.w	d0,Fern.startAngle
+	move.w	d0,d1
+	mulu.w	#3,d0
+	lsr.l	#3,d0
+	mulu.w	#7,d1
+	lsr.l	#3,d1
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	Get_Sin	sine_tbl,d0,d0
+	Get_Sin	sine_tbl,d1,d1
+
+	muls.w	Fern.skewAmp,d0
+	add.l	d0,d0
+	swap	d0
+	move.w	d0,Fern.skew
+
+	muls.w	Fern.diffAmp,d1
+	add.l	d1,d1
+	swap	d1
+	move.w	d1,Fern.angDiff
+
+; Paint the tree.
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	move.l	#$00080008,d4
+	bsr.l	Viewport.paintRectangle
+
+	bsr.w	Fern.paint3
+
+	IFEQ	testmode
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	move.l	d0,d1
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+	ENDC
+
+	move.w	.old468(pc),d0
+.wait:	cmp.w	$0468.w,d0
+	beq.s	.wait
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.res_done
+	bsr.w	Fern.setRes
+.res_done:
+
+	rts
+
+.old468:DC.W	0
+
+;******* OBJECT SUBROUTINES ********
+
+Fern.incLeftLen:
+	addq.l	#1,Fern.leftLength
+	rts
+
+Fern.decLeftLen:
+	subq.l	#1,Fern.leftLength
+	rts
+
+Fern.incMidLen:
+	addq.l	#1,Fern.midLength
+	rts
+
+Fern.decMidLen:
+	subq.l	#1,Fern.midLength
+	rts
+
+Fern.incRightLen:
+	addq.l	#1,Fern.rightLength
+	rts
+
+Fern.decRightLen:
+	subq.l	#1,Fern.rightLength
+	rts
+
+Fern.switchCenter:
+	move.w	#100,Fern.yCenter
+	rts
+
+Fern.incSkewAmp:
+	addi.w	#$80,Fern.skewAmp
+	rts
+
+Fern.decSkewAmp:
+	subi.w	#$80,Fern.skewAmp
+	rts
+
+Fern.incDiffAmp:
+	addi.w	#$80,Fern.diffAmp
+	rts
+
+Fern.decDiffAmp:
+	subi.w	#$80,Fern.diffAmp
+	rts
+
+Fern.morph:
+	move.l	Fern.time,d0
+	move.l	d0,d1
+	lsr.l	#8,d1
+	lsr.l	#2,d1
+	andi.w	#$03FF,d0
+	lsl.w	#5,d0
+	move.l	d1,d2
+	addq.w	#1,d2
+	divu.w	Fern.keyTable,d1
+	divu.w	Fern.keyTable,d2
+	swap	d1
+	swap	d2
+	mulu.w	#Fern.KEY_SIZE,d1
+	mulu.w	#Fern.KEY_SIZE,d2
+	lea	(Fern.keyTable+2,d1.l),a1		; a1: startkey
+	lea	(Fern.keyTable+2,d2.l),a2		; a1: endkey
+	lea	Fern.tempCtrlTable,a0
+	moveq	#5-1,d7
+	bsr.s	Fern.interpolate
+
+	lea	Fern.controlTable,a0
+	lea	Fern.tempCtrlTable,a1
+	addq	#2,a0
+	move.w	(a1)+,(a0)+
+	addq	#2,a0
+	move.w	(a1)+,(a0)+
+	addq	#2,a0
+	move.w	(a1)+,(a0)+
+	move.l	(a1)+,(a0)+
+	rts
+
+; Perform a linear morph between vertices.
+; INPUT:
+; d0.w: 0-32767 morph index
+; d7.w=coords-1
+; a0: destination vertices
+; a1: begin vertices
+; a2: end vertices
+Fern.interpolate:
+	move.w	#32767,d3
+	sub.w	d0,d3
+
+.loop:	move.w	(a1)+,d1
+	move.w	(a2)+,d2
+	muls.w	d3,d1
+	muls.w	d0,d2
+	add.l	d1,d2
+	add.l	d2,d2
+	swap	d2
+	move.w	d2,(a0)+
+	dbf	d7,.loop
+
+	rts
+
+Fern.paint3:
+	lea	Fern.stack,a6
+	clr.w	.level
+
+; Initialize parent branch..
+;	move.w	Fern.skew,d0
+	move.w	Fern.startAngle,d0
+
+;	move.l	Fern.midLength,d1
+;	swap	d1
+	move.l	#25<<16,d1
+
+	move.w	d0,(a6)+			; angle
+	move.l	d1,(a6)+			; length=63
+	move.w	Fern.xCenter,(a6)+		; x=0
+	clr.w	(a6)+
+	move.w	Fern.yCenter,(a6)+		; y=0
+	clr.w	(a6)+
+
+; INPUT:
+; -$E(a6)=parent branch angle
+; -$C(a6)=parent length
+; -$8(a6)=parent branch endpoint x
+; -$4(a6)=parent branch endpoint y
+; d0.w=angle
+; d1.l=length
+.paintTree:
+	move.w	.level(pc),Line.colorNum
+
+	move.w	d0,(a6)+				; 2
+	move.l	d1,(a6)+				; 6
+	Do_SinModulo	d0
+	Get_SinCos	sine_tbl,d0,d2,d3
+	swap	d1
+	muls.w	d1,d2
+	muls.w	d1,d3
+	add.l	d2,d2
+	add.l	d3,d3
+	add.l	-8-6(a6),d2
+	add.l	-4-6(a6),d3
+	move.l	d2,(a6)+				; 10
+	move.l	d3,(a6)+				; 14
+
+; First, paint the line between current and parent point..
+	move.l	a6,-(sp)
+	move.w	-8(a6),d0				; x0
+	move.w	-4(a6),d1				; y0
+	move.w	-8-14(a6),d2				; x1
+	move.w	-4-14(a6),d3				; y1
+; d0.w=x0, d1.w=y0, d2.w=x1, d3.w=y1
+	bsr.l	Line.paintFlatshaded
+	movea.l	(sp)+,a6
+
+	move.w	.level(pc),d0
+	addq.w	#1,d0
+	move.w	d0,.level
+	cmp.w	Fern.steps(pc),d0
+	beq.s	.end
+
+; Paint the center first. This is DFS, required to paint the leaves last!
+
+; center branch
+	move.w	-14(a6),d0
+	add.w	Fern.skew(pc),d0
+	move.l	-12(a6),d1
+	mulu.l	Fern.midLength(pc),d1
+	lsr.l	#8,d1
+	bsr.s	.paintTree
+
+; left branch
+	move.w	-14(a6),d0
+	sub.w	Fern.angDiff(pc),d0
+	add.w	Fern.skew(pc),d0
+	move.l	-12(a6),d1
+	mulu.l	Fern.leftLength(pc),d1
+	lsr.l	#8,d1
+	bsr	.paintTree
+
+; right branch
+	move.w	-14(a6),d0
+	add.w	Fern.angDiff(pc),d0
+	add.w	Fern.skew(pc),d0
+	move.l	-12(a6),d1
+	mulu.l	Fern.rightLength(pc),d1
+	lsr.l	#8,d1
+	bsr	.paintTree
+
+.end:	subq.w	#1,.level			; Decrease level.
+	suba.w	#14,a6				; Pop stuff off the stack.
+	rts
+
+.level:	DC.W	0
+
+Fern.steps:
+	DS.W	1
+Fern.startAngle:
+	DS.W	1
+Fern.angDiff:
+	DS.W	1
+Fern.skew:
+	DS.W	1
+
+Fern.controlTable:
+Fern.midLength:
+	DS.L	1
+Fern.leftLength:
+	DS.L	1
+Fern.rightLength:
+	DS.L	1
+Fern.skewAmp:
+	DS.W	1
+Fern.diffAmp:
+	DS.W	1
+
+;******* OBJECT DATA ********
+
+	DATA
+
+Fern.textureTable:
+	DC.L	0
+Fern.pal:
+	REPT	128
+	DC.W	15<<11+7<<5
+	ENDR
+	REPT	128
+	DC.W	13<<11+15<<5
+	ENDR
+	REPT	128
+	DC.W	11<<11+23<<5
+	ENDR
+	REPT	128
+	DC.W	9<<11+31<<5
+	ENDR
+	REPT	128
+	DC.W	7<<11+39<<5
+	ENDR
+	REPT	128
+	DC.W	5<<11+47<<5
+	ENDR
+	REPT	128
+	DC.W	3<<11+55<<5
+	ENDR
+	REPT	128
+	DC.W	1<<11+63<<5
+	ENDR
+
+Fern.yCenter:
+	DC.W	100
+Fern.xCenter:
+	DC.W	160
+
+Fern.keyTable:
+	DC.W	(.end-.start)/Fern.KEY_SIZE
+.start:	DC.W	1,1,1,0,0			; l,m,r,skewamp,diffamp
+	DC.W	12*8,25*8,12*8,$80,$80
+	DC.W	21*8,30*8,21*8,$80,$180
+	DC.W	12*8,30*8,12*8,0,$280
+	DC.W	16*8,28*8,12*8,$100,0
+	DC.W	30*8,30*8,12*8,$100,$280
+	DC.W	27*8,25*8,12*8,-$100,$180
+	DC.W	10*8,25*8,10*8,-$180,$100
+.end:
+
+;******* OBJECT RESERVES ********
+
+	BSS
+
+Fern.startTime:
+	DS.L	1
+Fern.time:
+	DS.L	1
+
+Fern.tempCtrlTable:
+	DS.W	5
+
+Fern.stack:
+	DS.L	4*(Fern.MAXSTEPS+1)
+
+;******* END OF DEMO-EFFECT OBJECT ********

@@ -1,0 +1,1059 @@
+; Merging spirals screen, for delta. Uses Ufly.
+; Rotating spiral experiment. Let's hope for some psychedelic shit.
+; Parametrised, elegant and straightforward. Sadly, still no quadrangles.
+
+;======= OBJECT EQUATES ========
+
+Spiral.STEPS:		=	30
+
+			RSRESET
+Spiral.object1:		RS.W	4096
+Spiral.object2:		RS.W	4096
+Spiral.BLOCK_SIZE:	RS.B	0
+
+;======= OBJECT TABLE ========
+
+; Must be first in object!!
+Spiral.table:
+	DC.L	Spiral.mainLoop
+	DC.L	Spiral.init
+	DC.L	Spiral.setRes
+	DC.L	Spiral.switchWorldRot
+	DC.L	Spiral.zoomIn
+	DC.L	Spiral.zoomOut
+	DC.L	Spiral.rotXLeft
+	DC.L	Spiral.rotXRight
+	DC.L	Spiral.rotYLeft
+	DC.L	Spiral.rotYRight
+	DC.L	0
+
+	IFND	DEMO_SYSTEM
+	INCLUDE	SFLY_DSP.S
+	TEXT
+	ENDC
+
+;======= RESOLUTION SETTING ROUTINE ========
+
+Spiral.setRes:
+	move.l	frmcnt,d0
+	cmp.l	lastframecount,d0
+	beq.s	.end
+
+	move.l	#rts,vbl_gfx
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+; Unknown monitormode..
+	rts
+.vga60:	bra.l	vga60_16bit_320_200
+.vga100:bra.l	vga100_16bit_320_200
+.rgb50:	bra.l	rgb50_16bit_320_200
+.end:	rts
+
+;======= INIT SUBROUTINE ========
+
+; OUTPUT:
+; d0.l: =0 all clear, <0 error
+Spiral.init:
+	move.l	#Spiral.BLOCK_SIZE,d0
+	bsr.l	Mem.register
+
+	lea	sine_tbl,a1
+	bsr.l	Matrix.init
+
+	lea	Spiral.texture,a0
+	move.l	#"Word",(a0)+
+	move.l	#"PerP",(a0)+
+	move.l	#"ixel",(a0)+
+	move.l	#$00400040,(a0)+
+	lea	FlareGen.chromePal,a1
+	moveq	#6,d0
+	moveq	#3,d1
+	move.l	#$16710182,d2
+	bsr.l	Texture.createWords2
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= REALTIME INIT SUBROUTINE ========
+
+Spiral.realtimeInit:
+	move.l	#Spiral.setRes,vbl_gfx
+
+	bsr.l	Mem.getBlock
+	move.l	d0,Spiral.baseAdr
+
+	bsr.l	HumanFly.init
+
+	lea	Viewport.settingsTable,a0
+	move.w	#320,Viewport.XSCREEN(a0)
+	move.w	#200,Viewport.YSCREEN(a0)
+	move.w	#0,Viewport.XSTART(a0)
+	move.w	#0,Viewport.YSTART(a0)
+	move.w	#320,Viewport.XEND(a0)
+	move.w	#200,Viewport.YEND(a0)
+	move.w	#160,Viewport.XCENTER(a0)
+	move.w	#100,Viewport.YCENTER(a0)
+	move.w	#256+32,Viewport.ASPECT(a0)
+	move.w	#$100,Viewport.FOCAL(a0)
+	bsr.l	Viewport.update
+
+	lea	Spiral.textureTable,a0
+	bsr.l	Polygon.init
+
+	bsr.l	ObjectRegistry.clear
+
+	move.w	#$140,d0
+	move.w	#0,d1
+	movea.l	Spiral.baseAdr,a0
+	adda.l	#Spiral.object1,a0
+	bsr	Spiral.generateSolid
+; d0.l=size
+
+	movea.l	Spiral.baseAdr,a0
+	adda.l	#Spiral.object1,a0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi.s	.error
+
+	move.w	#$C0,d0
+	move.w	#1,d1
+	movea.l	Spiral.baseAdr,a0
+	adda.l	#Spiral.object2,a0
+	bsr	Spiral.generateSolid
+; d0.l=size
+
+	movea.l	Spiral.baseAdr,a0
+	adda.l	#Spiral.object2,a0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi.s	.error
+
+	move.w	$04BC.w,Spiral.startTime
+	addi.w	#500,Spiral.startTime
+	move.w	#2000,Spiral.z
+	clr.w	Spiral.xRot
+	clr.w	Spiral.yRot
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= SCREENINIT SUBROUTINE ========
+
+Spiral.initScreen:
+	rts
+
+;======= MAINLOOP SUBROUTINE ========
+
+Spiral.mainLoop:
+	move.w	$0468.w,.old468
+
+	movea.l	scr,a0
+	bsr.l	Primitive.setScreenbuffer
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr	Spiral.realtimeInit
+	tst.l	d0
+	bmi	.end
+	move.l	(sp)+,d0
+.end_realtime_init:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr	Spiral.initScreen
+.end_screeninit:
+
+; zoom..
+	move.w	Spiral.zoomDir,d2
+	beq.s	.end_zoom
+	move.w	Spiral.oldZ,d0
+	move.w	$04BC.w,d1
+	sub.w	Spiral.zoomStart,d1
+	lsl.w	#4,d1
+	cmpi.w	#1000,d1
+	blt.s	.in_range
+	move.w	#1000,d1
+	muls.w	d2,d1
+	clr.w	Spiral.zoomDir
+	add.w	d1,d0
+	move.w	d0,Spiral.oldZ
+	move.w	d0,Spiral.z
+	bra.s	.end_zoom
+.in_range:
+	muls.w	d2,d1
+	add.w	d1,d0
+	move.w	d0,Spiral.z
+.end_zoom:
+
+; x rotation..
+	move.w	Spiral.xRotDir,d2
+	beq.s	.end_xrot
+	move.w	Spiral.oldXRot,d0
+	move.w	$04BC.w,d1
+	sub.w	Spiral.xRotStart,d1
+	lsl.w	#3,d1
+	cmpi.w	#sintbllen/4,d1
+	blt.s	.in_range_xr
+	move.w	#sintbllen/4,d1
+	muls.w	d2,d1
+	clr.w	Spiral.xRotDir
+	add.w	d1,d0
+	move.w	d0,Spiral.oldXRot
+	move.w	d0,Spiral.xRot
+	bra.s	.end_xrot
+.in_range_xr:
+	muls.w	d2,d1
+	add.w	d1,d0
+	move.w	d0,Spiral.xRot
+.end_xrot:
+
+; y rotation..
+	move.w	Spiral.yRotDir,d2
+	beq.s	.end_yrot
+	move.w	Spiral.oldYRot,d0
+	move.w	$04BC.w,d1
+	sub.w	Spiral.yRotStart,d1
+	lsl.w	#3,d1
+	cmpi.w	#sintbllen/4,d1
+	blt.s	.in_range_yr
+	move.w	#sintbllen/4,d1
+	muls.w	d2,d1
+	clr.w	Spiral.yRotDir
+	add.w	d1,d0
+	move.w	d0,Spiral.oldYRot
+	move.w	d0,Spiral.yRot
+	bra.s	.end_yrot
+.in_range_yr:
+	muls.w	d2,d1
+	add.w	d1,d0
+	move.w	d0,Spiral.yRot
+.end_yrot:
+
+	bsr	Spiral.paint
+
+; bg color shit!
+	tst.l	Spiral.bgCol
+	beq.s	.end_bgcol
+	clr.l	Spiral.bgCol
+.end_bgcol:
+
+	IFEQ	testmode
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	move.l	d0,d1
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+	ENDC
+
+	move.w	.old468(pc),d0
+.wait:	cmp.w	$0468.w,d0
+	beq.s	.wait
+
+.end:	rts
+
+.old468:DC.W	0
+
+;======= OBJECT SUBROUTINES ========
+
+Spiral.switchWorldRot:
+	not.w	Spiral.worldRot
+	move.w	$04BC.w,Spiral.worldRotStart
+	not.l	Spiral.bgCol
+	rts
+
+Spiral.zoomIn:
+	move.w	#-1,Spiral.zoomDir
+	move.w	Spiral.z,Spiral.oldZ
+	move.w	$04BC.w,Spiral.zoomStart
+	not.l	Spiral.bgCol
+	rts
+
+Spiral.zoomOut:
+	move.w	#+1,Spiral.zoomDir
+	move.w	Spiral.z,Spiral.oldZ
+	move.w	$04BC.w,Spiral.zoomStart
+	not.l	Spiral.bgCol
+	rts
+
+Spiral.rotXLeft:
+	move.w	#-1,Spiral.xRotDir
+	move.w	Spiral.xRot,Spiral.oldXRot
+	move.w	$04BC.w,Spiral.xRotStart
+	not.l	Spiral.bgCol
+	rts
+
+Spiral.rotXRight:
+	move.w	#+1,Spiral.xRotDir
+	move.w	Spiral.xRot,Spiral.oldXRot
+	move.w	$04BC.w,Spiral.xRotStart
+	not.l	Spiral.bgCol
+	rts
+
+Spiral.rotYLeft:
+	move.w	#-1,Spiral.yRotDir
+	move.w	Spiral.yRot,Spiral.oldYRot
+	move.w	$04BC.w,Spiral.yRotStart
+	not.l	Spiral.bgCol
+	rts
+
+Spiral.rotYRight:
+	move.w	#+1,Spiral.yRotDir
+	move.w	Spiral.yRot,Spiral.oldYRot
+	move.w	$04BC.w,Spiral.yRotStart
+	not.l	Spiral.bgCol
+	rts
+
+	IFNE	0
+; Generates spiral object.
+;
+;         (cos(t))   d c(t)        (-sin(t))
+; c(t) = l(sin(t)),  ------ = t = l(+cos(t))
+; -       (a*t   )     dt     -    (a      )
+;
+; l = 1/sqrt(1+a*a) =      1
+;                     -----------
+;                         _______
+;                        /     2 
+;                      \/ 1 + a
+;                
+; Some dot-, crossproducts and substitutions later...
+;
+;      (+sin(t))       (+cos(t))
+; u = l(-cos(t)),  v = (+sin(t))
+; -    (1/a    )   -   (0      )
+;
+; u and v are perpendicular to eachother as well as to t.
+; -     -                                              -
+;
+; Also these vectors are all normalized.
+;
+; INPUT:
+; d0.w=width [0..$7FFF]
+; d1.w=colornum
+; a0: destination object
+; OUTPUT:
+; d0.l=size
+Spiral.generate:
+	movea.l	a0,a6
+	move.w	d0,d2
+	move.w	d1,d6
+
+	move.w	#Spiral.STEPS*4,(a0)+		;#vertices+#normals
+	clr.w	(a0)+				;#normals
+
+	lea	sine_tbl,a1
+	move.w	#Spiral.STEPS-1,d7
+
+; a=1/62, l=1/sqrt(9/8)=sqrt(8/9)=2*sqrt(2)/3
+
+.loop:	move.w	d7,d0
+	lsl.w	#7,d0
+	Do_SinModulo	d0
+	Get_SinCos	a1,d0,d0,d1
+	muls.w	d2,d0
+	muls.w	d2,d1
+	add.l	d0,d0
+	add.l	d1,d1
+	swap	d0
+	swap	d1
+	move.w	d7,d3
+	lsl.w	#5,d3
+	subi.w	#Spiral.STEPS*32/2,d3
+	movea.l	a0,a2
+	move.w	d0,(a0)+
+	move.w	d1,(a0)+
+	move.w	d3,(a0)+
+	movea.l	a2,a0
+
+; Calc u.
+	move.w	d7,d0
+	lsl.w	#7,d0
+	Do_SinModulo	d0
+	Get_SinCos	a1,d0,d0,d1
+	muls.w	d2,d0
+	muls.w	d2,d1
+	asr.l	#2,d0
+	asr.l	#2,d1
+	swap	d0
+	swap	d1
+	exg.l	d0,d1
+	neg.w	d0
+; Calc scalar..
+	move.w	d2,d3
+	asr.w	#2,d3
+;	moveq	#63,d3
+
+; d0.w=u.x, d1.w=u.y, d3.w=u.z=1/a.
+
+; Calc v vectors.
+	move.w	d7,d4
+	lsl.w	#7,d4
+	Do_SinModulo	d4
+	Get_SinCos	a1,d4,d4,d5
+	muls.w	d2,d4
+	muls.w	d2,d5
+	asr.l	d4
+	asr.l	d5
+; TODO: find out scalar
+	swap	d4
+	swap	d5
+; d4.w=v.x, d5.w=v.y, v.z=0.
+
+; (-u/2,-v/2)
+	movem.w	(a2),a3-a5
+	suba.w	d0,a3
+	suba.w	d1,a4
+	suba.w	d3,a5
+	suba.w	d4,a3
+	suba.w	d5,a4
+	move.w	a3,(a0)+
+	move.w	a4,(a0)+
+	move.w	a5,(a0)+
+
+	add.w	d0,d0
+	add.w	d1,d1
+	add.w	d3,d3
+	add.w	d4,d4
+	add.w	d5,d5
+
+; (+u/2,-v/2)
+	movem.w	(a2),a3-a5
+	adda.w	d0,a3
+	adda.w	d1,a4
+	adda.w	d3,a5
+	move.w	a3,(a0)+
+	move.w	a4,(a0)+
+	move.w	a5,(a0)+
+
+; (+u/2,+v/2)
+	adda.w	d4,a3
+	adda.w	d5,a4
+	move.w	a3,(a0)+
+	move.w	a4,(a0)+
+	move.w	a5,(a0)+
+
+; (-u/2,+v/2)
+	suba.w	d0,a3
+	suba.w	d1,a4
+	suba.w	d3,a5
+	move.w	a3,(a0)+
+	move.w	a4,(a0)+
+	move.w	a5,(a0)+
+
+	dbra	d7,.loop
+
+	clr.w	(a0)+				; #texels
+
+;------------
+; Primitives
+
+; Output primitives..
+	ori.w	#Primitive.LINETYPE|Polygon.FLATSHADED,d6
+	move.w	#Spiral.STEPS*4-4,(a0)+	; #primitives
+	clr.w	d7
+
+.primloop:
+	move.w	d6,(a0)+
+	move.w	d7,(a0)+
+	addq.w	#1,d7
+	move.w	d7,(a0)+
+
+	move.w	d6,(a0)+
+	move.w	d7,(a0)+
+	addq.w	#1,d7
+	move.w	d7,(a0)+
+
+	move.w	d6,(a0)+
+	move.w	d7,(a0)+
+	addq.w	#1,d7
+	move.w	d7,(a0)+
+
+	move.w	d6,(a0)+
+	move.w	d7,(a0)+
+	subq.w	#3,d7
+	move.w	d7,(a0)+
+
+	addq.w	#4,d7
+
+	cmpi.w	#Spiral.STEPS*4-2,d7
+	blt.s	.primloop
+
+	move.l	a0,d0
+	sub.l	a6,d0
+	rts
+	ENDC
+
+; Generates spiral object.
+; INPUT:
+; d0.w=width [0..$7FFF]
+; d1.w=colornum
+; a0: destination object
+; OUTPUT:
+; d0.l=size
+Spiral.generateSolid:
+	movea.l	a0,a6
+	move.w	d0,d2
+	move.w	d1,d6
+
+	move.w	#Spiral.STEPS*4+2,(a0)+		;#vertices+#normals
+	clr.w	(a0)+				;#normals
+
+	move.l	a0,-(sp)
+	lea	sine_tbl,a1
+	move.w	#Spiral.STEPS-1,d7
+
+; a=1/8, l=1/sqrt(9/8)=sqrt(8/9)=2*sqrt(2)/3
+
+.loop:	move.w	d7,d0
+	lsl.w	#7,d0
+	Do_SinModulo	d0
+	Get_SinCos	a1,d0,d0,d1
+	muls.w	d2,d0
+	muls.w	d2,d1
+	add.l	d0,d0
+	add.l	d1,d1
+	swap	d0
+	swap	d1
+	move.w	d7,d3
+	lsl.w	#5,d3
+	subi.w	#Spiral.STEPS*32/2,d3
+	movea.l	a0,a2
+	move.w	d0,(a0)+
+	move.w	d1,(a0)+
+	move.w	d3,(a0)+
+	movea.l	a2,a0
+
+; Calc u.
+	move.w	d7,d0
+	lsl.w	#7,d0
+	Do_SinModulo	d0
+	Get_SinCos	a1,d0,d0,d1
+	lsl.l	#6,d0
+	lsl.l	#6,d1
+	swap	d0
+	swap	d1
+	exg.l	d0,d1
+	neg.w	d0
+; Calc scalar..
+	moveq	#63,d3
+; d0.w=u.x, d1.w=u.y, d3.w=u.z=1/a.
+
+; Calc v vectors.
+	move.w	d7,d4
+	lsl.w	#7,d4
+	Do_SinModulo	d4
+	Get_SinCos	a1,d4,d4,d5
+	lsl.l	#7,d4
+	lsl.l	#7,d5
+	swap	d4
+	swap	d5
+; d4.w=v.x, d5.w=v.y, v.z=0.
+
+; (+u/2,+v/2)
+	movem.w	(a2),a3-a5
+	adda.w	d0,a3
+	adda.w	d1,a4
+	adda.w	d3,a5
+	adda.w	d4,a3
+	adda.w	d5,a4
+	move.w	a3,(a0)+
+	move.w	a4,(a0)+
+	move.w	a5,(a0)+
+
+	add.w	d0,d0
+	add.w	d1,d1
+	add.w	d3,d3
+	add.w	d4,d4
+	add.w	d5,d5
+
+; (+u/2,-v/2)
+	suba.w	d4,a3
+	suba.w	d5,a4
+	move.w	a3,(a0)+
+	move.w	a4,(a0)+
+	move.w	a5,(a0)+
+
+; (-u/2,-v/2)
+	suba.w	d0,a3
+	suba.w	d1,a4
+	suba.w	d3,a5
+	move.w	a3,(a0)+
+	move.w	a4,(a0)+
+	move.w	a5,(a0)+
+
+; (-u/2,+v/2)
+	adda.w	d4,a3
+	adda.w	d5,a4
+	move.w	a3,(a0)+
+	move.w	a4,(a0)+
+	move.w	a5,(a0)+
+
+	dbf	d7,.loop
+
+; Head and tail vertices...
+
+	move.w	#(-128)&(sintbllen-1),d0
+	Get_SinCos	a1,d0,d0,d1
+	muls.w	d2,d0
+	muls.w	d2,d1
+	add.l	d0,d0
+	add.l	d1,d1
+	swap	d0
+	swap	d1
+	move.w	d0,(a0)+
+	move.w	d1,(a0)+
+	move.w	#-(Spiral.STEPS+1)*32/2,(a0)+
+
+	move.w	#(Spiral.STEPS<<7)&(sintbllen-1),d0
+	Get_SinCos	a1,d0,d0,d1
+	muls.w	d2,d0
+	muls.w	d2,d1
+	add.l	d0,d0
+	add.l	d1,d1
+	swap	d0
+	swap	d1
+	move.w	d0,(a0)+
+	move.w	d1,(a0)+
+	move.w	#Spiral.STEPS<<5-Spiral.STEPS*32/2,(a0)+
+
+; --------------------
+; Texel shit!
+
+	movea.l	(sp)+,a5
+	move.w	#Spiral.STEPS*4+2,(a0)+		; #texels
+	move.w	#Spiral.STEPS-1,d7
+
+.texelloop:
+; Calc u.
+	move.w	d7,d0
+	lsl.w	#7,d0
+	Do_SinModulo	d0
+	Get_SinCos	a1,d0,d0,d1
+	lsl.l	#6,d0
+	lsl.l	#6,d1
+	swap	d0
+	swap	d1
+	exg.l	d0,d1
+	neg.w	d0
+; Calc scalar..
+	moveq	#63,d3
+; d0.w=u.x, d1.w=u.y, d3.w=u.z=1/a.
+
+; Calc v vectors.
+	move.w	d7,d4
+	lsl.w	#7,d4
+	Do_SinModulo	d4
+	Get_SinCos	a1,d4,d4,d5
+	lsl.l	#7,d4
+	lsl.l	#7,d5
+	swap	d4
+	swap	d5
+; d4.w=v.x, d5.w=v.y, v.z=0.
+
+; (+u/2,+v/2)
+	movea.w	#128,a3
+	movea.w	#128,a4
+	movea.w	#128,a5
+	adda.w	d0,a3
+	adda.w	d1,a4
+	adda.w	d4,a3
+	adda.w	d5,a4
+	move.w	a3,(a0)+
+	move.w	a4,(a0)+
+
+	add.w	d0,d0
+	add.w	d1,d1
+	add.w	d3,d3
+	add.w	d4,d4
+	add.w	d5,d5
+
+; (+u/2,-v/2)
+	suba.w	d4,a3
+	suba.w	d5,a4
+	move.w	a3,(a0)+
+	move.w	a4,(a0)+
+
+; (-u/2,-v/2)
+	suba.w	d0,a3
+	suba.w	d1,a4
+	move.w	a3,(a0)+
+	move.w	a4,(a0)+
+
+; (-u/2,+v/2)
+	adda.w	d4,a3
+	adda.w	d5,a4
+	move.w	a3,(a0)+
+	move.w	a4,(a0)+
+	dbf	d7,.texelloop
+
+; Head and tail texels..
+	move.l	#$00800080,(a0)+
+	move.l	#$00800080,(a0)+
+
+;------------
+; Primitives
+
+; Output primitives..
+	move.w	#(Spiral.STEPS-1)*8+8,(a0)+		; #primitives
+
+	move.w	#Polygon.TRI|Polygon.TEXTUREMAPPED,d6
+
+; head, tail
+	move.w	d6,(a0)+
+	clr.w	(a0)+
+	move.w	#1,(a0)+
+	move.w	#Spiral.STEPS*4+1,(a0)+
+	move.l	-6(a0),(a0)+
+	move.w	-6(a0),(a0)+
+
+	move.w	d6,(a0)+
+	move.w	#1,(a0)+
+	move.w	#2,(a0)+
+	move.w	#Spiral.STEPS*4+1,(a0)+
+	move.l	-6(a0),(a0)+
+	move.w	-6(a0),(a0)+
+
+	move.w	d6,(a0)+
+	move.w	#2,(a0)+
+	move.w	#3,(a0)+
+	move.w	#Spiral.STEPS*4+1,(a0)+
+	move.l	-6(a0),(a0)+
+	move.w	-6(a0),(a0)+
+
+	move.w	d6,(a0)+
+	move.w	#3,(a0)+
+	clr.w	(a0)+
+	move.w	#Spiral.STEPS*4+1,(a0)+
+	move.l	-6(a0),(a0)+
+	move.w	-6(a0),(a0)+
+	
+	move.w	d6,(a0)+
+	move.w	#Spiral.STEPS*4-3,(a0)+
+	move.w	#Spiral.STEPS*4-4,(a0)+
+	move.w	#Spiral.STEPS*4,(a0)+
+	move.l	-6(a0),(a0)+
+	move.w	-6(a0),(a0)+
+
+	move.w	d6,(a0)+
+	move.w	#Spiral.STEPS*4-2,(a0)+
+	move.w	#Spiral.STEPS*4-3,(a0)+
+	move.w	#Spiral.STEPS*4,(a0)+
+	move.l	-6(a0),(a0)+
+	move.w	-6(a0),(a0)+
+
+	move.w	d6,(a0)+
+	move.w	#Spiral.STEPS*4-1,(a0)+
+	move.w	#Spiral.STEPS*4-2,(a0)+
+	move.w	#Spiral.STEPS*4,(a0)+
+	move.l	-6(a0),(a0)+
+	move.w	-6(a0),(a0)+
+
+	move.w	d6,(a0)+
+	move.w	#Spiral.STEPS*4-4,(a0)+
+	move.w	#Spiral.STEPS*4-1,(a0)+
+	move.w	#Spiral.STEPS*4,(a0)+
+	move.l	-6(a0),(a0)+
+	move.w	-6(a0),(a0)+
+	
+	move.w	#Spiral.STEPS-2,d7
+
+.primloop:
+; t1
+	move.w	d6,(a0)+
+	move.w	d7,d0
+	lsl.w	#2,d0
+	move.w	d0,(a0)+
+	move.w	d7,d1
+	addq.w	#1,d1
+	lsl.w	#2,d1
+	move.w	d1,(a0)+
+	move.w	d0,d2
+	move.w	d1,d3
+	addq.w	#1,d1
+	move.w	d1,(a0)+
+	addq.w	#1,d0
+
+	move.l	-6(a0),(a0)+
+	move.w	-6(a0),(a0)+
+
+; t1a
+	move.w	d6,(a0)+
+	move.w	d0,(a0)+
+	subq.w	#1,d0
+	move.w	d0,(a0)+
+	addq.w	#1,d0
+	move.w	d1,(a0)+
+
+	move.l	-6(a0),(a0)+
+	move.w	-6(a0),(a0)+
+
+; t2
+	move.w	d6,(a0)+
+	move.w	d0,(a0)+
+	move.w	d1,(a0)+
+	addq.w	#1,d1
+	move.w	d1,(a0)+
+	addq.w	#1,d0
+
+	move.l	-6(a0),(a0)+
+	move.w	-6(a0),(a0)+
+
+; t2a
+	move.w	d6,(a0)+
+	move.w	d0,(a0)+
+	subq.w	#1,d0
+	move.w	d0,(a0)+
+	addq.w	#1,d0
+	move.w	d1,(a0)+
+
+	move.l	-6(a0),(a0)+
+	move.w	-6(a0),(a0)+
+
+; t3
+	move.w	d6,(a0)+
+	move.w	d0,(a0)+
+	move.w	d1,(a0)+
+	addq.w	#1,d1
+	move.w	d1,(a0)+
+	addq.w	#1,d0
+
+	move.l	-6(a0),(a0)+
+	move.w	-6(a0),(a0)+
+
+; t3a
+	move.w	d6,(a0)+
+	move.w	d0,(a0)+
+	subq.w	#1,d0
+	move.w	d0,(a0)+
+	addq.w	#1,d0
+	move.w	d1,(a0)+
+
+	move.l	-6(a0),(a0)+
+	move.w	-6(a0),(a0)+
+
+; t4
+	move.w	d6,(a0)+
+	move.w	d0,(a0)+
+	move.w	d1,(a0)+
+	move.w	d3,(a0)+
+
+	move.l	-6(a0),(a0)+
+	move.w	-6(a0),(a0)+
+
+; t4a
+	move.w	d6,(a0)+
+	move.w	d0,(a0)+
+	move.w	d3,(a0)+
+	subq.w	#3,d0
+	move.w	d0,(a0)+
+
+	move.l	-6(a0),(a0)+
+	move.w	-6(a0),(a0)+
+	dbra	d7,.primloop
+
+	move.l	a0,d0
+	sub.l	a6,d0
+	rts
+
+
+Spiral.paint:
+	bsr.l	PrimitiveMesh.new
+
+	tst.w	Spiral.worldRot
+	bne.s	.rot_world			
+	clr.w	d2
+	bra.s	.gen
+.rot_world:					; rot wereld!
+	move.w	$04BC.w,d2
+	sub.w	Spiral.worldRotStart,d2
+	mulu.w	#3,d2
+	lsr.l	#2,d2
+.gen:	move.w	Spiral.xRot,d0
+	move.w	Spiral.yRot,d1
+	bsr.l	Matrix.generate
+	clr.w	d0
+	clr.w	d1
+	move.w	Spiral.z,d2
+	bsr.l	Matrix.translate
+
+	bsr.l	Matrix.push
+
+; Push spiral1.
+	move.w	$04BC.w,d2
+	sub.w	Spiral.startTime,d2
+	mulu.w	#11,d2
+	lsr.l	#1,d2
+	clr.w	d0
+	clr.w	d1
+	bsr.l	Matrix.generate
+	clr.w	d0
+	clr.w	d1
+	move.w	$04BC.w,d2
+	sub.w	Spiral.startTime,d2
+	mulu.w	#5,d2
+	lsr.l	#1,d2
+	Do_SinModulo	d2
+	Get_Sin	sine_tbl,d2,d2
+	asr.w	#5,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+
+; Push spiral2.
+	move.w	$04BC.w,d2
+	sub.w	Spiral.startTime,d2
+	mulu.w	#7,d2
+	neg.l	d2
+	clr.w	d0
+	clr.w	d1
+	bsr.l	Matrix.generate
+	clr.w	d0
+	clr.w	d1
+	move.w	$04BC.w,d2
+	sub.w	Spiral.startTime,d2
+	mulu.w	#7,d2
+	lsr.l	#2,d2
+	Do_SinModulo	d2
+	Get_Sin	sine_tbl,d2,d2
+	asr.w	#5,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#1,d1
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+
+	bsr.l	Matrix.pop
+
+	bsr.l	PrimitiveMesh.sortZ
+	bsr.l	PrimitiveMesh.complete
+
+	IFNE	1
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	move.l	Spiral.bgCol,d4
+	bsr.l	Viewport.paintRectangle
+	ELSE
+	movea.l	Spiral.rectAddressTable,a0
+	move.w	(a0)+,d7
+	beq.s	.end_restore
+	subq.w	#1,d7
+.restore_loop:
+	move.w	d7,-(sp)
+	movem.w	(a0)+,d1/d7
+	movem.w	(a0)+,d0/d6
+	move.l	a0,-(sp)
+	moveq	#0,d4
+	bsr	Viewport.paintRectangle
+	movea.l	(sp)+,a0
+	move.w	(sp)+,d7
+	dbra	d7,.restore_loop
+.end_restore:
+	ENDC
+
+	movea.l	Spiral.rectAddressTable,a0
+	bsr.l	PrimitiveMesh.paint
+
+	lea	Spiral.rectAddressTable,a0
+ 	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+
+	moveq	#0,d0
+	rts
+
+.error:	moveq	#-1,d0
+	rts
+
+;======= OBJECT DATA ========
+
+	DATA
+
+Spiral.textureTable:
+	DC.L	Spiral.texture
+	DC.L	0
+
+Spiral.rectAddressTable:
+	DC.L	Spiral.rectTable
+	DC.L	Spiral.rectTable2
+	DC.L	Spiral.rectTable3
+
+;======= OBJECT RESERVES ========
+
+	BSS
+
+Spiral.rectTable:
+	DS.W	1+4*32
+Spiral.rectTable2:
+	DS.W	1+4*32
+Spiral.rectTable3:
+	DS.W	1+4*32
+
+Spiral.texture:
+	DS.W	10+64*64
+
+Spiral.worldRot:
+	DS.W	1
+Spiral.worldRotStart:
+	DS.W	1
+Spiral.zoomStart:
+	DS.W	1
+Spiral.oldZ:
+	DS.W	1
+Spiral.zoomDir:
+	DS.W	1
+Spiral.xRot:
+	DS.W	1
+Spiral.xRotStart:
+	DS.W	1
+Spiral.oldXRot:
+	DS.W	1
+Spiral.xRotDir:
+	DS.W	1
+Spiral.yRot:
+	DS.W	1
+Spiral.yRotStart:
+	DS.W	1
+Spiral.oldYRot:
+	DS.W	1
+Spiral.yRotDir:
+	DS.W	1
+Spiral.bgCol:
+	DS.L	1
+Spiral.startTime:
+	DS.W	1
+Spiral.z:
+	DS.W	1
+
+Spiral.baseAdr:
+	DS.L	1
+
+;======= END OF DEMO-EFFECT OBJECT ========

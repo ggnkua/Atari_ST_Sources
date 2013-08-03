@@ -1,0 +1,486 @@
+; Rotozoom (bending). Lame old shit for delta.
+
+;======= OBJECT EQUATES ========
+
+			RSRESET
+VectorTable.AX:		RS.W	1
+VectorTable.AY:		RS.W	1
+VectorTable.BX:		RS.W	1
+VectorTable.BY:		RS.W	1
+VectorTable.SIZE:	RS.B	0
+
+;======= OBJECT TABLE ========
+
+* Must be first in object!!
+RotoZoomer.table:
+	DC.L	RotoZoomerMAINLOOP
+	DC.L	INIT_RotoZoomer
+	DC.L	SET_RotoZoomerRES
+	DC.L	RotoZoomer.startTrajectory
+	DC.L	RotoZoomer.triggerDistoMode
+	DC.L	RotoZoomer.increaseDisto
+	DC.L	RotoZoomer.decreaseDisto
+* Add more addresses here..
+	DC.L	0
+
+;======= RESOLUTION SETTING ROUTINE ========
+
+SET_RotoZoomerRES:
+	bsr	RotoZoomer.startTrajectory
+
+	IFEQ	testmode
+	move.l	#rts,vbl_gfx
+
+	move.w	$0468.w,d0
+.ck468:	cmp.w	$0468.w,d0
+	beq.s	.ck468
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+* Unknown monitormode..
+	rts
+.vga60:	bra.l	vga60_16bit_160_200
+	rts
+.vga100:
+	bra.l	vga100_16bit_160_100
+	rts
+.rgb50:	bra.l	rgb50_16bit_320_100
+	ENDC
+	rts
+
+;======= INIT SUBROUTINE ========
+
+* OUTPUT: d0.l: 0   = All clear.
+*               neg = Error! Not initialized!
+INIT_RotoZoomer:
+	moveq	#0,d0
+	rts
+
+RotoZoomer.initRealtime
+	clr.w	RotoZoomer.distoStrength
+	clr.w	RotoZoomer.distMode
+	rts
+
+;======= MAINLOOP SUBROUTINE ========
+
+RotoZoomerMAINLOOP:
+	move.w	$468.w,.old468
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_init
+	bsr	RotoZoomer.initRealtime
+.end_init:
+
+	bsr	RotoZoomer.calcPosition
+
+	IFNE	0
+	movec	cacr,d0
+	move.l	d0,-(sp)
+	bclr	#13,d0					; no write alloc
+	bclr	#12,d0					; d burst off
+	bset	#11,d0					; clear d cache
+	bclr	#8,d0					; d cache off
+	bset	#4,d0					; i burst on
+	bset	#0,d0					; i cache on
+	movec	d0,cacr
+	ENDC
+
+	bsr	RotoZoomer.paint
+
+	IFNE	0
+	move.l	(sp)+,d0
+	movec	d0,cacr
+	ENDC
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.res_done
+	bsr	SET_RotoZoomerRES
+.res_done:
+
+	IFEQ	testmode
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	move.l	d0,d1
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+	ENDC
+
+	move.w	.old468(pc),d0
+.wait468:
+	cmp.w	$468.w,d0
+;	beq.s	.wait468
+	rts
+
+.old468:
+	DC.W	0
+
+;======= OBJECT SUBROUTINES ========
+
+	TEXT
+
+RotoZoomer.startTrajectory:
+	move.l	$4ba.w,RotoZoomer.startTime
+	rts
+
+RotoZoomer.triggerDistoMode:
+	not.w	RotoZoomer.distMode
+	rts
+
+RotoZoomer.increaseDisto:
+	addq.w	#6,RotoZoomer.distoStrength
+	rts
+
+RotoZoomer.decreaseDisto:
+	subq.w	#6,RotoZoomer.distoStrength
+	rts
+
+RotoZoomer.calcPosition:
+* First we calculate the current time.
+	move.l	$4ba.w,d0
+	sub.l	RotoZoomer.startTime,d0
+	move.l	d0,d1
+	move.l	d0,d6
+	lea	sine_tbl,a0
+
+* Now we calculate our center position.
+	mulu.w	#5,d1
+	lsr.l	#2,d1
+	Do_SinModulo	d1
+	Get_SinCos	a0,d1,d2,d3
+	asl.l	#1,d2
+	asl.l	#1,d3
+;	moveq	#0,d2
+;	moveq	#0,d3
+	movem.w	d2/d3,RotoZoomer.center
+
+* And now we calculate the current position in the trajectory.
+	Do_SinModulo	d0
+	Get_SinCos	a0,d0,d0,d1
+* d0.w: +sin(fi)
+* d1.w: +cos(fi)
+
+* a'.x = +cos(fi)*a.x +sin(fi)*a.y
+* a'.y = -sin(fi)*a.x +cos(fi)*a.y
+	move.w	d1,d2
+	move.w	d0,d3
+	muls.w	#256,d2
+	muls.w	#-256,d3
+	add.l	d2,d2
+	add.l	d3,d3
+	swap	d2
+	swap	d3
+* d2.w: a'.x, d3.w: a'.y
+* b'.x = +cos(fi)*b.x +sin(fi)*b.y
+* b'.y = -sin(fi)*b.x +cos(fi)*b.y
+	move.w	d0,d4
+	move.w	d1,d5
+	muls.w	#256,d4
+	muls.w	#256,d5
+	add.l	d4,d4
+	add.l	d5,d5
+	swap	d4
+	swap	d5
+* d4.w: b'.x, d5.w: b'.y
+	movem.w	d2-d5,RotoZoomer.vectorTable
+
+* And we calculate the amount of zoom...
+	Do_SinModulo	d6
+	Get_Sin	a0,d6,d6
+	addi.w	#$8000,d6
+	andi.l	#$ffff,d6
+	divu.w	#230,d6
+	addi.w	#$20,d6
+* And zoom the damn thing!
+	muls.w	d6,d2
+	muls.w	d6,d3
+	muls.w	d6,d4
+	muls.w	d6,d5
+	asr.l	#8,d2
+	asr.l	#8,d3
+	asr.l	#8,d4
+	asr.l	#8,d5
+	movem.w	d2-d5,RotoZoomer.scaledVectorTable
+
+	rts
+
+RotoZoomer.paint:
+	IFNE	1
+	movem.w	RotoZoomer.scaledVectorTable,d0-d3
+* d0.w: a.x, d1.w: a.y, d2.w: b.x, d3.w: b.y
+	movem.w	RotoZoomer.center,d6/d7
+	move.w	d0,d4
+	move.w	d1,d5
+	muls.w	#50,d4
+	muls.w	#50,d5
+	sub.w	d4,d6
+	sub.w	d5,d7
+	move.w	d2,d4
+	move.w	d3,d5
+	muls.w	#80,d4
+	muls.w	#80,d5
+	sub.w	d4,d6
+	sub.w	d5,d7
+* a
+	ror.l	#8,d1
+	move.w	d1,d5
+	move.w	d0,d1
+	movea.l	d1,a4
+* b
+	ror.l	#8,d3
+	move.w	d3,d4
+	move.w	d2,d3
+
+* top-left
+	ror.l	#8,d7
+	movea.w	d7,a3
+	move.w	d6,d7
+	movea.l	d7,a2
+	ELSE
+* top-left
+	movea.l	#$00000000,a2
+	movea.l	#$00000000,a3
+* a
+	movea.l	#$70000000,a4
+	move.l	#$00000001,d5
+* b
+	move.l	#$60000100,d3
+	move.l	#$00000003,d4
+	ENDC
+
+	movea.l	scr,a0
+	lea	Texture.16bTexture2,a1
+	moveq	#100-1,d7
+	moveq	#0,d2
+
+	move.w	monitormode,d0
+	tst.w	RotoZoomer.distMode
+	bne.s	.dist_it
+* Branch to the undistorted painters.
+	cmpi.w	#vga60,d0
+	beq	RotoZoomer.paintVga60
+	cmpi.w	#vga100,d0
+	beq	RotoZoomer.paintVga100
+	cmpi.w	#rgb50,d0
+	beq	RotoZoomer.paintRgb50
+* Unknown monitormode..
+	rts
+
+* Branch to the distorted painters. (the nausea special!)
+.dist_it:
+	cmpi.w	#vga60,d0
+	beq	RotoZoomer.distoPaintVga60
+	cmpi.w	#vga100,d0
+	beq	RotoZoomer.distoPaintVga100
+	cmpi.w	#rgb50,d0
+	beq	RotoZoomer.distoPaintRgb50
+* Unknown monitormode..
+	rts
+
+RotoZoomer.paintVga60:
+	lea	160*2(a0),a5
+
+.yloop:	moveq	#16-1,d6
+	move.l	a2,d0
+	move.l	a3,d1
+
+.chunkloop:
+	REPT	10
+	move.w	d0,d2
+	move.b	d1,d2
+
+;	move.w	(a1,d2.l*2),(a0)+
+;	move.w	(a1,d2.l*2),(a5)+
+	move.w	(a1,d2.l*2),d2
+	move.w	d2,(a5)+
+	move.w	d2,(a0)+
+
+	add.l	d3,d0
+	addx.b	d4,d1
+	ENDR
+	dbra	d6,.chunkloop
+
+	move.l	a2,d0
+	move.l	a3,d1
+	add.l	a4,d0
+	addx.b	d5,d1
+	movea.l	d0,a2
+	movea.l	d1,a3
+	lea	160*2(a0),a0
+	lea	160*2(a5),a5
+	dbra	d7,.yloop
+	rts
+
+RotoZoomer.paintVga100:
+
+.yloop:	moveq	#16-1,d6
+	move.l	a2,d0
+	move.l	a3,d1
+
+.chunkloop:
+	REPT	10
+	move.w	d0,d2
+	move.b	d1,d2
+	move.w	(a1,d2.l*2),(a0)+
+	add.l	d3,d0
+	addx.b	d4,d1
+	ENDR
+	dbra	d6,.chunkloop
+
+	move.l	a2,d0
+	move.l	a3,d1
+	add.l	a4,d0
+	addx.b	d5,d1
+	movea.l	d0,a2
+	movea.l	d1,a3
+	dbra	d7,.yloop
+	rts
+
+RotoZoomer.paintRgb50:
+
+.yloop:	moveq	#16-1,d6
+	move.l	a2,d0
+	move.l	a3,d1
+
+.chunkloop:
+	REPT	10
+	move.w	d0,d2
+	move.b	d1,d2
+
+	move.w	(a1,d2.l*2),d2
+	move.w	d2,(a0)+
+	move.w	d2,(a0)+
+;	move.w	(a1,d2.l*2),(a0)+
+;	move.w	(a1,d2.l*2),(a0)+
+
+	add.l	d3,d0
+	addx.b	d4,d1
+	ENDR
+	dbra	d6,.chunkloop
+
+	move.l	a2,d0
+	move.l	a3,d1
+	add.l	a4,d0
+	addx.b	d5,d1
+	movea.l	d0,a2
+	movea.l	d1,a3
+	dbra	d7,.yloop
+	rts
+
+RotoZoomer.distoPaintVga60:
+	lea	160*2(a0),a5
+	movea.l	d3,a6
+
+.yloop:	moveq	#16-1,d6
+	move.l	a2,d0
+	move.l	a3,d1
+	move.l	a6,d3
+
+.chunkloop:
+	REPT	10
+	move.w	d0,d2
+	move.b	d1,d2
+	move.w	(a1,d2.l*2),(a0)+
+	move.w	(a1,d2.l*2),(a5)+
+	add.l	d3,d0
+	addx.b	d4,d1
+	ENDR
+	add.w	RotoZoomer.distoStrength,d3
+	dbra	d6,.chunkloop
+
+	move.l	a2,d0
+	move.l	a3,d1
+	add.l	a4,d0
+	addx.b	d5,d1
+	movea.l	d0,a2
+	movea.l	d1,a3
+	lea	160*2(a0),a0
+	lea	160*2(a5),a5
+	dbra	d7,.yloop
+	rts
+
+RotoZoomer.distoPaintVga100:
+	movea.l	d3,a6
+
+.yloop:	moveq	#16-1,d6
+	move.l	a2,d0
+	move.l	a3,d1
+	move.l	a6,d3
+
+.chunkloop:
+	REPT	10
+	move.w	d0,d2
+	move.b	d1,d2
+	move.w	(a1,d2.l*2),(a0)+
+	add.l	d3,d0
+	addx.b	d4,d1
+	ENDR
+	add.w	RotoZoomer.distoStrength,d3
+	dbra	d6,.chunkloop
+
+	move.l	a2,d0
+	move.l	a3,d1
+	add.l	a4,d0
+	addx.b	d5,d1
+	movea.l	d0,a2
+	movea.l	d1,a3
+	dbra	d7,.yloop
+	rts
+
+RotoZoomer.distoPaintRgb50:
+	movea.l	d3,a6
+
+.yloop:	moveq	#16-1,d6
+	move.l	a2,d0
+	move.l	a3,d1
+	move.l	a6,d3
+
+.chunkloop:
+	REPT	10
+	move.w	d0,d2
+	move.b	d1,d2
+	move.w	(a1,d2.l*2),(a0)+
+	move.w	(a1,d2.l*2),(a0)+
+	add.l	d3,d0
+	addx.b	d4,d1
+	ENDR
+	add.w	RotoZoomer.distoStrength,d3
+	dbra	d6,.chunkloop
+
+	move.l	a2,d0
+	move.l	a3,d1
+	add.l	a4,d0
+	addx.b	d5,d1
+	movea.l	d0,a2
+	movea.l	d1,a3
+	dbra	d7,.yloop
+	rts
+
+;======= OBJECT RESERVES ========
+
+	BSS
+
+RotoZoomer.startTime:
+	DS.L	1
+RotoZoomer.vectorTable:
+	DS.B	VectorTable.SIZE
+RotoZoomer.scaledVectorTable:
+	DS.B	VectorTable.SIZE
+RotoZoomer.center:
+	DS.W	2
+RotoZoomer.distMode:
+	DS.W	1
+RotoZoomer.distoStrength:
+	DS.W	1
+
+;======= END OF DEMO-EFFECT OBJECT ========

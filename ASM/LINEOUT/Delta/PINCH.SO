@@ -1,0 +1,794 @@
+; Pinchy offsetmap effect! Lame tunnelfuckup by earx. A screen for delta.
+
+;======= OBJECT EQUATES ========
+
+			RSRESET
+Pinch.offsetTable:	RS.W	320*200
+Pinch.FONT:		RS.W	320*200
+Pinch.BLOCK_SIZE:	RS.B	0
+
+;======= OBJECT TABLE ========
+
+; Must be first in object!!
+Pinch.table:
+	DC.L	Pinch.mainLoop
+	DC.L	Pinch.init
+	DC.L	Pinch.setRes
+	DC.L	Pinch.setText1
+	DC.L	Pinch.setText2
+	DC.L	Pinch.setText3
+	DC.L	Pinch.setFadeIn
+	DC.L	Pinch.setFadeOut
+	DC.L	0
+
+;======= RESOLUTION SETTING ROUTINE ========
+
+Pinch.setRes:
+	IFEQ	testmode
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+; Unknown monitormode..
+	rts
+.vga60:	bra.l	vga60_16bit_160_200
+.vga100:bra.l	vga100_16bit_160_100
+.rgb50:	bra.l	rgb50_16bit_320_100
+	ENDC
+	rts
+
+;======= INIT SUBROUTINE ========
+
+; OUTPUT:
+; d0.l: =0 all clear, <0 error
+Pinch.init:
+	move.l	#Pinch.BLOCK_SIZE,d0
+	bsr.l	Mem.register
+
+	lea	Pinch.chromeInstTable,a1
+	lea	Pinch.chromePal,a0
+	bsr.l	Pal.makeGradientTc
+
+	lea	Pinch.chromePal,a2
+	lea	Pinch.alphaTable,a0
+	bsr	Pinch.calcMixTable
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= REALTIME INIT SUBROUTINE ========
+
+Pinch.realtimeInit:
+	move.l	#rts,vbl_gfx
+
+	bsr.l	Mem.getBlock
+	move.l	d0,Pinch.baseAdr
+
+	move.l	d0,d1
+	addi.l	#Pinch.FONT,d1
+	move.l	d1,Pinch.fontAdr
+
+	lea	Font.degasPic,a1
+	movea.l	Pinch.fontAdr,a0
+	bsr	Pinch.convertDegas
+
+	lea	Pinch.buf1+160*8*2,a0
+	lea	Pinch.text1,a4
+	bsr	Pinch.paintTextToBuf
+
+	lea	Pinch.buf2+160*8*2,a0
+	lea	Pinch.text2,a4
+	bsr	Pinch.paintTextToBuf
+
+	lea	Pinch.buf3,a0
+	lea	Pinch.text3,a4
+	bsr	Pinch.paintTextToBuf
+
+	bsr	Pinch.calcMap
+
+	move.l	$04BA.w,Pinch.startTime
+	clr.w	Pinch.sceneNum
+	clr.l	Pinch.sumTime
+	clr.w	Pinch.fadeDir
+	clr.w	Pinch.fadePos
+	rts
+
+;======= MAINLOOP SUBROUTINE ========
+
+Pinch.mainLoop:
+	move.w	$0468.w,.old468
+	move.w	$04BC.w,Pinch.frameTime
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	bsr	Pinch.realtimeInit
+.end_realtime_init:
+
+	lea	Pinch.storyTable,a0
+	move.w	(a0)+,d7
+	move.l	$04BA.w,d0
+	sub.l	Pinch.startTime,d0
+	move.w	Pinch.sceneNum,d2
+	cmp.w	d2,d7
+	beq.s	.scene_done
+	move.l	(a0,d2.w*8),d3
+	movea.l	4(a0,d2.w*8),a0
+	sub.l	Pinch.sumTime,d0		; d0.l=time-point
+	cmp.l	d3,d0
+	blt.s	.scene_done
+	addq.w	#1,Pinch.sceneNum
+	add.l	d3,Pinch.sumTime
+	jsr	(a0)
+.scene_done:
+
+	move.w	Pinch.fadeDir,d0
+	beq.s	.end_fade
+	move.l	$04BA.w,d1
+	sub.l	Pinch.fadeStart,d1
+	lsr.l	#4,d1
+	cmpi.l	#15,d1
+	blt.s	.fade_done
+	moveq	#15,d1
+	clr.w	Pinch.fadeDir
+.fade_done:
+	muls.w	d0,d1
+	tst.w	d0
+	bgt.s	.pos_ok
+	addi.w	#15,d1
+.pos_ok:move.w	d1,Pinch.fadePos
+.end_fade:
+
+	bsr	Pinch.paintUp
+	bsr	Pinch.alphaCraps
+	bsr	Pinch.paintDown
+
+	IFEQ	testmode
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	move.l	d0,d1
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+	ENDC
+
+	move.w	.old468(pc),d0
+.wait:	cmp.w	$0468.w,d0
+	beq.s	.wait
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.res_done
+	bsr	Pinch.setRes
+.res_done:
+
+	rts
+
+.old468:DC.W	0
+
+;======= OBJECT SUBROUTINES ========
+
+Pinch.setText1:
+	move.l	#(42*160+24)*2,Pinch.textOffset
+	move.l	#Pinch.buf1,Pinch.layerAdr
+	rts
+
+Pinch.setText2:
+	move.l	#(42*160+8)*2,Pinch.textOffset
+	move.l	#Pinch.buf2,Pinch.layerAdr
+	rts
+
+Pinch.setText3:
+	move.l	#34*160*2,Pinch.textOffset
+	move.l	#Pinch.buf3,Pinch.layerAdr
+	rts
+
+Pinch.setFadeIn:
+	move.l	$04BA.w,Pinch.fadeStart
+	move.w	#+1,Pinch.fadeDir
+	rts
+
+Pinch.setFadeOut:
+	move.l	$04BA.w,Pinch.fadeStart
+	move.w	#-1,Pinch.fadeDir
+	rts
+
+; Calculates a highcolor-word lookup table from two truecolor palettes.
+; INPUT:
+; a0: dst highcolor lookuptable
+; a2: truecolor palette (256 entries)
+Pinch.calcMixTable:
+
+; 1: saturated part..
+	moveq	#16-1,d7
+
+.sat_loop:
+	moveq	#0,d6
+
+.satcolorloop:
+	moveq	#0,d3
+	moveq	#0,d4
+	move.b	(a2)+,d3
+	move.b	(a2)+,d4
+	move.w	(a2)+,d5
+	lsl.w	#8,d3
+	lsl.w	#3,d4
+	lsr.w	#3,d5
+	andi.w	#%1111100000000000,d3
+	andi.w	#%0000011111100000,d4
+	or.w	d4,d3
+	or.w	d5,d3
+	move.w	d3,(a0)+
+;	move.w	d3,(a0)+
+	addq.b	#1,d6
+	bne.s	.satcolorloop
+
+	suba.w	#256*4,a2
+	dbf	d7,.sat_loop
+
+; 2: darkened part..
+	moveq	#16-1,d7
+
+.dark_loop:
+	moveq	#0,d6
+
+.darkcolorloop:
+	moveq	#0,d3
+	moveq	#0,d4
+	move.b	(a2)+,d3
+	move.b	(a2)+,d4
+	move.w	(a2)+,d5
+	mulu.w	d7,d3
+	mulu.w	d7,d4
+	mulu.w	d7,d5
+	lsr.l	#4,d3
+	bcc.s	.r_done
+	addq.w	#1,d3
+.r_done:lsr.l	#4,d4
+	bcc.s	.g_done
+	addq.w	#1,d4
+.g_done:lsr.l	#4,d5
+	bcc.s	.b_done
+	addq.w	#1,d5
+.b_done:lsl.w	#8,d3
+	lsl.w	#3,d4
+	lsr.w	#3,d5
+	andi.w	#%1111100000000000,d3
+	andi.w	#%0000011111100000,d4
+	or.w	d4,d3
+	or.w	d5,d3
+	move.w	d3,(a0)+
+;	move.w	d3,(a0)+
+	addq.b	#1,d6
+	bne.s	.darkcolorloop
+
+	suba.w	#256*4,a2
+	dbf	d7,.dark_loop
+
+	rts
+
+; INPUT:
+; a0: dst hc pic (320*200)
+; a1: degas pi1
+Pinch.convertDegas:
+; Convert pal..
+	addq	#2,a1
+	lea	Pinch.fontPal,a2
+	moveq	#16-1,d7
+
+.pal_loop:
+	move.w	(a1)+,d0
+	move.w	d0,d1
+	move.w	d0,d2
+	move.w	d0,d3
+	clr.b	d0
+	lsl.w	#5,d0
+	bcc.s	.end_red
+	bset	#$C,d0				; Set ls red bit.
+.end_red:
+; d0.w=highcol (red)
+	lsl.w	#4,d1
+	andi.w	#$0700,d1			; d1.w=green msbits
+	andi.w	#$0080,d2			; d2.w=green lsbit
+	or.w	d1,d0				; d0.w=red+(green msbits)
+	or.w	d2,d0				; d0.w=red+green
+; Do blue..
+	move.w	d3,d1
+	andi.w	#$0007,d1
+	lsl.w	#2,d1				; d1.w=blue msbits
+	or.w	d1,d0				; d0.w=red+green+(blue msbits)
+	lsr.w	#3,d3
+	andi.w	#1,d3				; d3.w=blue lsbit
+	or.w	d3,d0				; d0.w=red+green+blue
+
+	move.w	d0,(a2)+			; Store color.
+	dbf	d7,.pal_loop
+
+	IFNE	1
+	lea	Pinch.pal,a2
+	ELSE
+	suba.w	#16*2,a2
+	ENDC
+
+; Convert pixels..
+; a2: pal
+	moveq	#320/16,d0
+	move.w	#200,d1
+	moveq	#4,d2
+	bra.l	Bitmap.convIBplToHC
+
+; INPUT:
+; a0: dst buffer
+; a4: text
+Pinch.paintTextToBuf:
+	move.l	a0,d4
+	movea.l	Pinch.fontAdr,a1
+	lea	Font.charTable,a3
+
+.charloop:
+	clr.l	d0
+	move.b	(a4)+,d0
+	beq.s	.end
+	cmpi.w	#$0A,d0
+	bne.s	.char
+	addi.l	#16*160*2,d4
+	movea.l	d4,a0
+	bra.s	.charloop
+
+.char:	subi.b	#32,d0
+	mulu.w	#6,d0
+	movem.w	(a3,d0.l),d0-d2
+	mulu.w	#320,d0
+	add.l	d1,d0
+	move.w	d2,d5
+	subq.w	#1,d5
+	lea	(a1,d0.l*2),a2
+	movea.w	#160,a6
+	movea.w	#320,a5
+	suba.l	d2,a6
+	suba.l	d2,a5
+	adda.l	a6,a6
+	adda.l	a5,a5
+	moveq	#16-1,d7
+
+.yloop:	move.w	d5,d6
+
+.xloop:	move.w	(a2)+,(a0)+
+	dbf	d6,.xloop
+
+	adda.l	a6,a0
+	adda.l	a5,a2
+	dbf	d7,.yloop
+	
+	suba.w	#160*16*2,a0
+	lea	2(a0,d2.l*2),a0
+
+	bra.s	.charloop
+
+.end:	rts
+
+; Weird pinch stuff..
+; Calcs only one quadrant and mirrors/copies the rest..
+Pinch.calcMap:
+	lea	Pinch.squareTable,a0
+	move.w	#-319,d0
+
+.calc_sqr_loop:
+	move.w	d0,d1
+	muls.w	d1,d1
+	move.l	d1,(a0)+
+	addq.w	#2,d0
+	cmpi.w	#+319,d0
+	blt.s	.calc_sqr_loop
+
+	moveq	#$7F,d5
+	movea.l	Pinch.baseAdr,a0
+	movea.l	a0,a3
+	movea.l	a0,a4
+	movea.l	a0,a5
+	adda.l	#Pinch.offsetTable,a0
+	adda.l	#Pinch.offsetTable+320*200*2,a3
+	adda.l	#Pinch.offsetTable+320*2,a4
+	adda.l	#Pinch.offsetTable+320*199*2,a5
+	lea	Pinch.squareTable+60*4,a1
+	move.w	#+199,d7
+
+.yloop:	move.w	#+319,d6
+	move.l	(a1)+,d4
+	lea	Pinch.squareTable,a2
+
+.xloop:	move.l	(a2)+,d1
+	add.l	d4,d1
+	lsr.l	#4,d1
+	clr.l	d2
+	clr.l	d3
+	move.w	d6,d2
+	move.w	d7,d3
+	swap	d2
+	swap	d3
+	divs.w	d1,d2
+	divs.w	d1,d3
+	asr.w	#6,d2
+	asr.w	#6,d3
+	and.w	d5,d2
+	and.w	d5,d3
+	move.b	d2,(a0)+
+	move.b	d3,(a0)+
+	not.b	d2
+	and.w	d5,d2
+	move.b	d3,-(a4)
+	move.b	d2,-(a4)
+	not.b	d3
+	and.w	d5,d3
+	move.b	d3,-(a3)
+	move.b	d2,-(a3)
+	not.b	d2
+	and.w	d5,d2
+	move.b	d2,(a5)+
+	move.b	d3,(a5)+
+
+	subq.w	#2,d6
+	bpl.s	.xloop
+
+	adda.w	#160*2,a0
+	adda.w	#480*2,a4
+	suba.w	#160*2,a3
+	suba.w	#480*2,a5
+	subq.w	#2,d7
+	bpl.s	.yloop
+	rts
+
+Pinch.alphaCraps:
+	clr.l	d0
+	move.w	Pinch.frameTime,d0
+	lsr.w	d0
+	andi.w	#$7F,d0
+	lea	Texture.8bTexture1,a1
+	lea	(a1,d0.l),a1
+	movea.l	Pinch.baseAdr,a2
+	adda.l	#Pinch.offsetTable,a2
+	move.w	Pinch.frameTime,d0
+	move.w	d0,d1
+	mulu.w	#3,d0
+	lsr.l	d0
+	mulu.w	#7,d1
+	lsr.l	#2,d1
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	lea	sine_tbl,a3
+	Get_Sin	a3,d0,d0
+	Get_Sin	a3,d1,d1
+	muls.w	#320-160,d0
+	muls.w	#200-100,d1
+	swap	d0
+	swap	d1
+	addi.w	#160-80,d0
+	addi.w	#100-50,d1
+	mulu.w	#320,d1
+	add.w	d0,d1
+	andi.l	#$FFFF,d1
+
+	movea.l	scr,a0
+	lea	(a2,d1.l*2),a2
+	movea.l	Pinch.layerAdr,a3
+	move.w	Pinch.fadePos,d1
+	mulu.w	#256*2,d1
+	lea	(Pinch.alphaTable.l,d1.l),a4
+	move.l	#160*34*2,d1
+	lea	(320*34*2.l,a2),a2
+
+	moveq	#32-1,d7
+	clr.l	d0
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	Pinch.paintAVga60
+	cmpi.w	#vga100,d0
+	beq.s	Pinch.paintAVga100
+	cmpi.w	#rgb50,d0
+	beq.s	Pinch.paintARgb50
+; Unknown monitormode..
+	rts
+
+Pinch.paintAVga100:
+	adda.l	d1,a0
+
+.yloop:	moveq	#80-1,d6
+
+.xloop:
+	REPT	2
+	move.w	(a2)+,d0
+	move.w	(a3)+,d1
+	move.b	(a1,d0.l),d1
+	move.w	(a4,d1.l*2),(a0)+
+	ENDR
+	dbf	d6,.xloop
+
+	adda.w	#160*2,a2
+	dbf	d7,.yloop
+	rts
+
+Pinch.paintAVga60:
+	lea	(a0,d1.l*2),a0
+
+.yloop:	moveq	#80-1,d6
+	lea	160*2(a0),a5
+
+.xloop:	REPT	2
+	move.w	(a2)+,d0
+	move.w	(a3)+,d1
+	move.b	(a1,d0.l),d1
+	move.w	(a4,d1.l*2),(a0)+
+	move.w	(a4,d1.l*2),(a5)+
+	ENDR
+	dbf	d6,.xloop
+
+	adda.w	#160*2,a2
+	adda.w	#160*2,a0
+	dbf	d7,.yloop
+	rts
+
+Pinch.paintARgb50:
+	lea	(a0,d1.l*2),a0
+
+.yloop:	moveq	#80-1,d6
+
+.xloop:	REPT	2
+	move.w	(a2)+,d0
+	move.w	(a3)+,d1
+	move.b	(a1,d0.l),d1
+	move.w	(a4,d1.l*2),(a0)+
+	move.w	(a4,d1.l*2),(a0)+
+	ENDR
+	dbf	d6,.xloop
+
+	adda.w	#160*2,a2
+	dbf	d7,.yloop
+	rts
+
+Pinch.paintUp:
+	clr.l	d0
+	move.w	Pinch.frameTime,d0
+	lsr.w	d0
+	andi.w	#$7F,d0
+	lea	Texture.16bTexture1,a1
+	lea	(a1,d0.l*2),a1
+	movea.l	Pinch.baseAdr,a2
+	adda.l	#Pinch.offsetTable,a2
+	move.w	Pinch.frameTime,d0
+	move.w	d0,d1
+	mulu.w	#3,d0
+	lsr.l	d0
+	mulu.w	#7,d1
+	lsr.l	#2,d1
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	lea	sine_tbl,a3
+	Get_Sin	a3,d0,d0
+	Get_Sin	a3,d1,d1
+	muls.w	#320-160,d0
+	muls.w	#200-100,d1
+	swap	d0
+	swap	d1
+	addi.w	#160-80,d0
+	addi.w	#100-50,d1
+	mulu.w	#320,d1
+	add.w	d0,d1
+	andi.l	#$FFFF,d1
+
+	movea.l	scr,a0
+	lea	(a2,d1.l*2),a2
+
+	moveq	#34-1,d7
+	clr.l	d0
+	clr.l	d1
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq	Pinch.paintVga60
+	cmpi.w	#vga100,d0
+	beq	Pinch.paintVga100
+	cmpi.w	#rgb50,d0
+	beq	Pinch.paintRgb50
+; Unknown monitormode..
+	rts
+
+Pinch.paintDown:
+	clr.l	d0
+	move.w	Pinch.frameTime,d0
+	lsr.w	d0
+	andi.w	#$7F,d0
+	lea	Texture.16bTexture1,a1
+	lea	(a1,d0.l*2),a1
+	movea.l	Pinch.baseAdr,a2
+	adda.l	#Pinch.offsetTable,a2
+	move.w	Pinch.frameTime,d0
+	move.w	d0,d1
+	mulu.w	#3,d0
+	lsr.l	d0
+	mulu.w	#7,d1
+	lsr.l	#2,d1
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	lea	sine_tbl,a3
+	Get_Sin	a3,d0,d0
+	Get_Sin	a3,d1,d1
+	muls.w	#320-160,d0
+	muls.w	#200-100,d1
+	swap	d0
+	swap	d1
+	addi.w	#160-80,d0
+	addi.w	#100-50,d1
+	mulu.w	#320,d1
+	add.w	d0,d1
+	andi.l	#$FFFF,d1
+
+	movea.l	scr,a0
+	lea	(a2,d1.l*2),a2
+
+	moveq	#34-1,d7
+	clr.l	d0
+	move.l	#160*66*2,d1
+	lea	(a2,d1.l*2),a2
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq	Pinch.paintVga60
+	cmpi.w	#vga100,d0
+	beq	Pinch.paintVga100
+	cmpi.w	#rgb50,d0
+	beq	Pinch.paintRgb50
+; Unknown monitormode..
+	bra	Pinch.paintVga100
+	rts
+
+Pinch.paintVga100:
+	adda.l	d1,a0
+
+.yloop:	moveq	#80-1,d6
+
+.xloop:	REPT	2
+	move.w	(a2)+,d0
+	move.w	(a1,d0.l*2),(a0)+
+	ENDR
+	dbf	d6,.xloop
+
+	adda.w	#160*2,a2
+	dbf	d7,.yloop
+	rts
+
+Pinch.paintVga60:
+	lea	(a0,d1.l*2),a0
+
+.yloop:	moveq	#80-1,d6
+	lea	160*2(a0),a3
+
+.xloop:	REPT	2
+	move.w	(a2)+,d0
+	move.w	(a1,d0.l*2),(a0)+
+	move.w	(a1,d0.l*2),(a3)+
+	ENDR
+	dbf	d6,.xloop
+
+	adda.w	#160*2,a2
+	adda.w	#160*2,a0
+	dbf	d7,.yloop
+	rts
+
+Pinch.paintRgb50:
+	lea	(a0,d1.l*2),a0
+
+.yloop:	moveq	#80-1,d6
+
+.xloop:	REPT	2
+	move.w	(a2)+,d0
+	move.w	(a1,d0.l*2),(a0)+
+	move.w	(a1,d0.l*2),(a0)+
+	ENDR
+	dbf	d6,.xloop
+
+	adda.w	#160*2,a2
+	dbf	d7,.yloop
+	rts
+
+;======= OBJECT DATA ========
+
+	DATA
+
+Pinch.text1:
+	DC.B	"    this was part a.",0
+Pinch.text2:
+	DC.B	" ..part b is up next..",0
+Pinch.text3:
+	DC.B	" so do not hit space",$0A
+	DC.B	"    like a monkey",0
+
+	EVEN
+
+Pinch.pal:
+	DC.W	$0F00,$0E00,$0D00,$0C00,$0B00,$0A00,$0900,$0800
+	DC.W	$0700,$0600,$0500,$0400,$0300,$0200,$0100,$0000
+
+Pinch.chromeInstTable:
+	DC.W	(.end-.start)/4-1
+	DC.W	5
+.start:	DC.L	$0F000000
+	DC.L	$4F2F002F
+	DC.L	$847F007F
+	DC.L	$C4BF00BF
+	DC.L	$FFFF00FF
+	DC.L	$FFFF00FF
+	DC.L	$FFFF00FF
+	DC.L	$FFFF00FF
+	DC.L	$FFFF00FF
+.end:
+
+Pinch.layerAdr:
+	DC.L	Pinch.buf1
+
+Pinch.storyTable:
+	DC.W	(.end-.start)/8
+.start:	DC.L	800,Pinch.setText1
+	DC.L	000,Pinch.setFadeIn
+	DC.L	800,Pinch.setFadeOut
+	DC.L	400,Pinch.setText2
+	DC.L	000,Pinch.setFadeIn
+	DC.L	800,Pinch.setFadeOut
+	DC.L	400,Pinch.setText3
+	DC.L	000,Pinch.setFadeIn
+	DC.L	800,Pinch.setFadeOut
+.end:
+
+;======= OBJECT RESERVES ========
+
+	BSS
+
+Pinch.baseAdr:
+	DS.L	1
+Pinch.buf1:
+	DS.W	160*32
+Pinch.buf2:
+	DS.W	160*32
+Pinch.buf3:
+	DS.W	160*32
+Pinch.fontPal:
+	DS.W	16
+
+Pinch.textOffset:
+	DS.L	1
+Pinch.alphaTable:
+	DS.W	32*256
+Pinch.chromePal:
+	DS.L	256
+
+Pinch.fadeStart:
+	DS.L	1
+Pinch.fadeDir:
+	DS.W	1
+Pinch.fadePos:
+	DS.W	1
+Pinch.startTime:
+	DS.L	1
+Pinch.sceneNum:
+	DS.L	1
+Pinch.sumTime:
+	DS.L	1
+
+Pinch.frameTime:
+	DS.W	1
+
+Pinch.squareTable:
+	DS.L	320
+
+Pinch.fontAdr:
+	DS.L	1

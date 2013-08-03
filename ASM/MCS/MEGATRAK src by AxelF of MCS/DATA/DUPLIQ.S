@@ -1,0 +1,17 @@
+M	SET	0
+	rept	65
+	MOVE.B	M(A0),M(A1)
+	MOVE.B	M+7(A0),M+7(A1)
+	MOVE.B	M(A0),M(A2)
+	MOVE.B	M+7(A0),M+7(A2)
+	MOVE.B	M(A0),M(A3)
+	MOVE.B	M+7(A0),M+7(A3)
+	MOVE.B	M(A0),M(A4)
+	MOVE.B	M+7(A0),M+7(A4)
+	MOVE.B	M(A0),M(A5)
+	MOVE.B	M+7(A0),M+7(A5)
+M	SET	M+160
+	ENDR	
+	rts
+	dc.b	'fin'
+	

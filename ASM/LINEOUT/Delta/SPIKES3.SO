@@ -1,0 +1,501 @@
+; Ring field of spikes.
+
+******** OBJECT TABLE ********
+
+* Must be first in object!!
+CSpikes.table:
+	DC.L	CSpikes.mainLoop
+	DC.L	CSpikes.init
+	DC.L	rts
+	DC.L	0
+
+; Include the Human Fly engine. The shouldn't be important if it conforms
+; to Human Fly interface standards.
+	IFND	DEMO_SYSTEM
+	INCLUDE	SFLY_DSP.S			; Include the CPU-DSP engine.
+	TEXT
+	ENDC
+
+******** OBJECT EQUATES ********
+
+CSpikes.POINTS:		=	16			; points in ring >1 !!
+CSpikes.RINGS:		=	11			; #rings >1 !!
+
+CSpikes.VCOUNT:		=	1+CSpikes.POINTS*CSpikes.RINGS
+CSpikes.POLYCOUNT:	=	CSpikes.POINTS*CSpikes.RINGS
+CSpikes.TRICOUNT:	=	CSpikes.POINTS
+CSpikes.QUADCOUNT:	=	CSpikes.POINTS*(CSpikes.RINGS-1)
+
+CSpikes.POINTTABLE_SIZE:=	2+Vertex.SIZE*CSpikes.VCOUNT
+CSpikes.TXTTABLE_SIZE:	=	1+Vertex2d.SIZE*CSpikes.VCOUNT
+CSpikes.PRIMLIST_SIZE:	=	1+CSpikes.TRICOUNT*7+CSpikes.QUADCOUNT*9
+
+CSpikes.GRIDSIZE:	=	CSpikes.POINTTABLE_SIZE+CSpikes.TXTTABLE_SIZE+CSpikes.PRIMLIST_SIZE	; in words!
+
+			RSRESET
+CSpikes.screen:		RS.W	160*100
+CSpikes.BLOCK_SIZE:	RS.B	0
+
+******** INIT SUBROUTINE ********
+
+* OUTPUT: d0.l: 0   = All clear.
+*               neg = Error! Not initialized!
+CSpikes.init:
+	move.l	#CSpikes.BLOCK_SIZE,d0
+	bsr.l	Mem.register
+
+	lea	sine_tbl,a1
+	bsr.l	Matrix.init
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+******** REALTIME INIT SUBROUTINE ********
+
+CSpikes.realtimeInit:
+	move.l	#rts,vbl_gfx
+
+	bsr.l	Mem.getBlock
+	move.l	d0,d1
+	addi.l	#CSpikes.screen,d1
+	move.l	d1,CSpikes.screenAdr
+
+	bsr.l	HumanFly.init
+
+	lea	Viewport.settingsTable,a0
+	move.w	#160,Viewport.XSCREEN(a0)
+	move.w	#100,Viewport.YSCREEN(a0)
+	move.w	#0,Viewport.XSTART(a0)
+	move.w	#0,Viewport.YSTART(a0)
+	move.w	#160,Viewport.XEND(a0)
+	move.w	#100,Viewport.YEND(a0)
+	move.w	#80,Viewport.XCENTER(a0)
+	move.w	#50,Viewport.YCENTER(a0)
+	move.w	#256+32,Viewport.ASPECT(a0)
+	move.w	#$100,Viewport.FOCAL(a0)
+	bsr.l	Viewport.update
+
+	lea	CSpikes.textureTable,a0
+	move.l	#Texture.spaceTexture,(a0)
+	bsr.l	Polygon.init
+
+	bsr.l	ObjectRegistry.clear
+
+	moveq	#0,d0
+	lea	CSpikes.grid,a0
+	bsr.w	CSpikes.generate
+; d0.l=size of generated grid
+
+	lea	CSpikes.grid,a0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi.s	.error
+
+	move.w	$04BC.w,CSpikes.startTime
+
+	moveq	#0,d0
+	move.w	monitormode,d1
+	cmpi.w	#vga60,d1
+	beq.s	.vga60
+	cmpi.w	#vga100,d1
+	beq.s	.vga100
+	cmpi.w	#rgb50,d1
+	beq.s	.rgb50
+* Unknown monitormode..
+	rts
+.vga60:	move.l	#vga60_16bit_160_200,CSpikes.resRout
+	rts
+.vga100:move.l	#vga100_16bit_160_100,CSpikes.resRout
+	rts
+.rgb50:	move.l	#rgb50_16bit_320_100,CSpikes.resRout
+	rts
+
+.error:	moveq	#-1,d0
+	rts
+
+******** MAINLOOP SUBROUTINE ********
+
+CSpikes.mainLoop:
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	bsr	CSpikes.realtimeInit
+	tst.w	d0
+	bmi	.end
+.end_realtime_init:
+
+	bsr	CSpikes.setScreenAddy
+
+	bsr.l	PrimitiveMesh.new
+
+	bsr.w	CSpikes.addGrid
+	tst.l	d0
+	bmi	.end
+
+	bsr.l	PrimitiveMesh.sortZ
+	bsr.l	PrimitiveMesh.complete
+
+;-- start of parallel part..
+	moveq	#1,d0
+	lea	CSpikes.grid,a0
+	bsr.w	CSpikes.generate
+
+	bsr.w	CSpikes.flushScreen	
+; todo: put flush back in here?
+;-- parallel part ends here...
+
+	movea.l	CSpikes.rectAddressTable,a0
+	bsr.l	PrimitiveMesh.paint
+
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	movea.l	CSpikes.resRout,a0
+	suba.l	a1,a1
+	movea.l	d0,a2
+	move.l	frmcnt,d0
+	cmp.l	lastframecount,d0
+	beq.s	.no_refresh			; don't show screen when its still crap!
+	bsr.l	Screen.requestUpdate
+	clr.l	CSpikes.resRout
+.no_refresh:
+.end:	rts
+
+******** OBJECT SUBROUTINES ********
+
+CSpikes.setScreenAddy:
+	move.w	monitormode,d0
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	movea.l	CSpikes.screenAdr,a0
+	bra.l	Primitive.setScreenbuffer
+.vga100:movea.l	scr,a0
+	bra.l	Primitive.setScreenbuffer
+
+; INPUT:
+; d0.l=genflags (0:total, 1:only points)
+; a0=output buffer
+; OUTPUT:
+; d0.l=size of object
+CSpikes.generate:
+	movea.l	a0,a6
+	move.w	d0,-(sp)
+
+; Generate 3d vertices.
+	lea	sine_tbl,a2
+	move.w	#CSpikes.VCOUNT,(a0)+
+	clr.w	(a0)+
+	move.w	$04BC.w,d5
+	sub.w	CSpikes.startTime,d5
+	add.w	d5,d5
+	moveq	#1,d7
+
+; Output first point.
+	clr.w	(a0)+
+	clr.w	(a0)+
+	move.w	d5,d0
+	neg.w	d0
+	Do_SinModulo	d0
+	Get_Sin	a2,d0,d0
+	move.w	d0,d1
+	asr.w	#6,d0
+	asr.w	#7,d1
+	add.w	d1,d0
+	move.w	d0,(a0)+
+
+	tst.w	(sp)+
+	bne	.gen_points_special
+
+.vyloop:
+; Generate row.
+	clr.w	d6
+
+.vxloop:move.w	d6,d0
+	mulu.w	#sintbllen/CSpikes.POINTS,d0
+	Get_SinCos	a2,d0,d0,d1
+	muls.w	d7,d0
+	muls.w	d7,d1
+	asr.l	#8,d0
+	asr.l	#8,d1
+	move.w	d0,(a0)+
+	move.w	d1,(a0)+
+	move.w	d7,d0
+	mulu.w	#sintbllen*2/CSpikes.POINTS,d0
+	sub.w	d5,d0
+	Do_SinModulo	d0
+	Get_Sin	a2,d0,d0
+	move.w	d0,d1
+	asr.w	#6,d0
+	asr.w	#7,d1
+	add.w	d1,d0
+	move.w	d0,(a0)+
+	addq.w	#1,d6
+	cmpi.w	#CSpikes.POINTS,d6
+	blt.s	.vxloop
+
+	addq.w	#1,d7
+	cmpi.w	#CSpikes.RINGS+1,d7
+	blt.s	.vyloop
+
+	bra.s	.end_gen_points
+
+.gen_points_special:
+
+.vyloop_s:
+; Generate row.
+	moveq	#CSpikes.POINTS-1,d6
+
+.vxloop_s:
+	addq	#4,a0
+	move.w	d7,d0
+	mulu.w	#sintbllen*2/CSpikes.POINTS,d0
+	sub.w	d5,d0
+	Do_SinModulo	d0
+	Get_Sin	a2,d0,d0
+	move.w	d0,d1
+	asr.w	#6,d0
+	asr.w	#7,d1
+	add.w	d1,d0
+	move.w	d0,(a0)+
+	dbf	d6,.vxloop_s
+
+	addq.w	#1,d7
+	cmpi.w	#CSpikes.RINGS+1,d7
+	blt.s	.vyloop_s
+
+	bra	.end
+
+.end_gen_points:
+
+; Generate texture vertices.
+	move.w	#CSpikes.VCOUNT,(a0)+
+	moveq	#1,d7
+	move.w	$04BC.w,d5
+	sub.w	CSpikes.startTime,d5
+	Do_SinModulo	d5
+	Get_Sin	a2,d5,d5
+	addi.w	#$4000,d5
+
+	clr.l	(a0)+
+
+.vloop:	clr.w	d6
+
+.uloop:	move.w	d6,d0
+	mulu.w	#sintbllen/CSpikes.POINTS,d0
+	Do_SinModulo	d0
+	Get_SinCos	a2,d0,d0,d1
+	muls.w	d7,d0
+	muls.w	d7,d1
+	asr.l	#8,d0
+	asr.l	#8,d1
+	asr.l	#1,d0
+	asr.l	#1,d1
+	andi.w	#$00FF,d0
+	andi.w	#$00FF,d1
+	move.w	d0,(a0)+
+	move.w	d1,(a0)+
+	addq.w	#1,d6
+	cmpi.w	#CSpikes.POINTS,d6
+	blt.s	.uloop
+
+	addq.w	#1,d7
+	cmpi.w	#CSpikes.RINGS+1,d7
+	blt.s	.vloop
+
+; Generate primitives.
+	moveq	#CSpikes.POINTS-1,d6
+	move.w	#CSpikes.POLYCOUNT,(a0)+
+	move.w	d6,d5
+
+.headloop:
+	move.w	#Polygon.TRI|Polygon.TEXTUREMAPPED|0,(a0)+
+
+	move.w	d6,d0
+	addq.w	#1,d0
+	move.w	d0,(a0)+				; p0=x
+
+	clr.w	(a0)+					; p0=0
+
+	clr.l	d0
+	move.w	d6,d0
+	addq.w	#1,d0
+	divu.w	#CSpikes.POINTS,d0
+	swap	d0
+	addq.w	#1,d0
+	move.w	d0,(a0)+				; p0=(x+1) mod p
+
+	REPT	3
+	move.w	-6(a0),(a0)+
+	ENDR
+
+	dbra	d6,.headloop
+
+	move.w	d5,d6
+	moveq	#CSpikes.RINGS-2,d7
+
+.ringloop:
+
+.bodyloop:
+	move.w	#Polygon.QUAD|Polygon.TEXTUREMAPPED|0,(a0)+
+
+	move.w	d7,d0
+	mulu.w	#CSpikes.POINTS,d0
+	add.w	d6,d0
+	addq.w	#1,d0
+	move.w	d0,(a0)+				; p0=1+a+r*w
+
+	clr.l	d0
+	move.w	d6,d0
+	addq.w	#1,d0
+	divu.w	#CSpikes.POINTS,d0
+	swap	d0
+	addq.w	#1,d0
+	move.w	d7,d1
+	mulu.w	#CSpikes.POINTS,d1
+	add.w	d1,d0
+	move.w	d0,(a0)+				; p1=1 + (a+1) mod w + r*w
+
+	clr.l	d0
+	move.w	d6,d0
+	addq.w	#1,d0
+	divu.w	#CSpikes.POINTS,d0
+	swap	d0
+	addq.w	#1,d0
+	move.w	d7,d1
+	addq.w	#1,d1
+	mulu.w	#CSpikes.POINTS,d1
+	add.w	d1,d0
+	move.w	d0,(a0)+				; p2=1 + (a+1) mod w + (r+1)*w
+
+	move.w	d7,d0
+	addq.w	#1,d0
+	mulu.w	#CSpikes.POINTS,d0
+	add.w	d6,d0
+	addq.w	#1,d0
+	move.w	d0,(a0)+				; p3=1 + a+(r+1)*w
+
+	move.l	-8(a0),(a0)+
+	move.l	-8(a0),(a0)+
+
+	dbra	d6,.bodyloop
+
+	move.w	d5,d6
+	dbra	d7,.ringloop
+
+
+.end:	move.l	a0,d0
+	sub.l	a6,d0
+	rts
+
+CSpikes.addGrid:
+	lea	CSpikes.grid,a0
+	moveq	#0,d0				; handle
+	moveq	#%0001,d1			; Replace only 3d vertices.
+	move.l	#CSpikes.GRIDSIZE*2,d2		; objsize
+	bsr.l	ObjectRegistry.replace
+
+; Push world rotation matrix.
+	move.w	$04BC.w,d0
+	sub.w	CSpikes.startTime,d0
+	lea	sine_tbl,a1
+	move.w	d0,d2
+	mulu.w	#7,d0
+	lsr.l	#4,d0
+	Do_SinModulo	d0
+	Get_Sin	a1,d0,d0
+	asr.w	#7,d0
+	addi.w	#1024,d0
+	clr.l	d1
+	mulu.w	#5,d2
+	lsr.w	#3,d2
+	Do_SinModulo	d2
+	Get_Cos	a1,d2,d2
+	asr.w	#5,d2
+	bsr.l	Matrix.generate
+	move.w	#0,d0
+	move.w	#0,d1
+	move.w	#2800,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+
+	moveq	#0,d0
+	rts
+
+.error:	moveq	#-1,d0
+	rts
+
+CSpikes.flushScreen:
+	move.w	monitormode,d2
+	cmpi.w	#vga100,d2
+	beq.s	.copy_done
+	move.w	#160,d0
+	moveq	#100,d1
+	movea.l	CSpikes.screenAdr,a1
+	movea.l	scr,a0
+	cmpi.w	#vga60,d2
+	beq.l	DOUBLE_BUFFERV
+	cmpi.w	#rgb50,d2
+	beq.l	.double_horizontally
+; Unknown monitormode..
+.copy_done:
+	rts
+
+.double_horizontally:
+	move.w	#160*100/16-1,d7
+.loop:	REPT	16
+	move.w	(a1),(a0)+
+	move.w	(a1)+,(a0)+
+	ENDR
+	dbra	d7,.loop
+	rts
+
+******** OBJECT DATA ********
+
+	DATA
+
+CSpikes.rectAddressTable:
+	DC.L	CSpikes.rectTable
+	DC.L	CSpikes.rectTable2
+	DC.L	CSpikes.rectTable3
+
+******** OBJECT RESERVES ********
+
+	BSS
+
+CSpikes.grid:
+	DS.W	CSpikes.GRIDSIZE
+
+CSpikes.rectTable:
+	DS.W	1+4*32
+CSpikes.rectTable2:
+	DS.W	1+4*32
+CSpikes.rectTable3:
+	DS.W	1+4*32
+
+CSpikes.distTable:
+	DS.W	CSpikes.VCOUNT*3
+
+CSpikes.screenAdr:
+	DS.L	1
+CSpikes.textureTable:
+	DS.L	2
+
+CSpikes.startTime:
+	DS.W	1
+
+CSpikes.resRout:
+	DS.L	1
+
+******** END OF DEMO-EFFECT OBJECT ********

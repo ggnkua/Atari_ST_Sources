@@ -1,0 +1,731 @@
+; Hhhmm cube.. Shameless ripping ;)
+; A screen for delta requiring ufly.
+
+;======= OBJECT EQUATES ====================================================
+
+HmmmCube.SILHOUETTE:	=	1
+
+;======= OBJECT TABLE ======================================================
+
+; Must be first in object!!
+HhhmCube.table:
+	DC.L	HhhmCube.mainLoop
+	DC.L	HhhmCube.init
+	DC.L	HhhmCube.setRes
+	DC.L	HhhmCube.setClose
+	DC.L	HhhmCube.setFar
+	DC.L	0
+
+	IFND	DEMO_SYSTEM
+	INCLUDE	SFLY_DSP.S				; Include the CPU-DSP engine.
+	TEXT
+	ENDC
+
+;======= RESOLUTION SETTING ROUTINE ========================================
+
+HhhmCube.setRes:
+	IFEQ	testmode
+	move.l	#rts,vbl_gfx
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+; Unknown monitormode..
+	rts
+.vga60:	bra.l	vga60_16bit_320_200
+.vga100:bra.l	vga100_16bit_320_200
+.rgb50:	bra.l	rgb50_16bit_320_200
+	ENDC
+	rts
+
+;======= INIT SUBROUTINE ===================================================
+
+; OUTPUT:
+; d0.l: =0: All clear, <0: Error! Not initialized!
+HhhmCube.init:
+	lea	sine_tbl,a1
+	bsr.l	Matrix.init
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= REALTIME INIT SUBROUTINE ==========================================
+
+HhhmCube.realtimeInit:
+	bsr.l	HumanFly.init
+
+	lea	Viewport.settingsTable,a0
+	move.w	#320,Viewport.XSCREEN(a0)
+	move.w	#200,Viewport.YSCREEN(a0)
+	move.w	#0,Viewport.XSTART(a0)
+	move.w	#0,Viewport.YSTART(a0)
+	move.w	#320,Viewport.XEND(a0)
+	move.w	#200,Viewport.YEND(a0)
+	move.w	#160,Viewport.XCENTER(a0)
+	move.w	#100,Viewport.YCENTER(a0)
+	move.w	#256+32,Viewport.ASPECT(a0)
+	move.w	#$100,Viewport.FOCAL(a0)
+	bsr.l	Viewport.update
+
+	lea	HmmmCube.textureTable,a0
+	bsr.l	Polygon.init
+
+	bsr.l	ObjectRegistry.clear
+
+	lea	HmmmCube.cube,a0
+	move.l	#HmmmCube.cubeEnd-HmmmCube.cube,d0
+	bsr.l	ObjectRegistry.set
+
+	lea	HmmmCube.blackCube,a0
+	move.l	#HmmmCube.blackCubeEnd-HmmmCube.blackCube,d0
+	bsr.l	ObjectRegistry.set
+
+	lea	HmmmCube.delta,a0
+	move.l	#HmmmCube.deltaEnd-HmmmCube.delta,d0
+	bsr.l	ObjectRegistry.set
+
+	bsr	HhhmCube.setFar
+	rts
+
+;======= SCREENINIT SUBROUTINE =============================================
+
+HhhmCube.initScreen:
+	movea.l	scr,a0
+	bsr.l	CLEAR_320200TSCR
+	rts
+
+;======= MAINLOOP SUBROUTINE ===============================================
+
+HhhmCube.mainLoop:
+	move.w	$0468.w,.old468
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr	HhhmCube.realtimeInit
+	move.l	(sp)+,d0
+.end_realtime_init:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr	HhhmCube.initScreen
+.end_screeninit:
+
+	IFNE	0
+; Turn write-alloc and datacache lameness off (better for random access).
+	movec	cacr,d0
+	move.l	d0,-(sp)
+	bclr	#13,d0				; Disable write-alloc.
+	bclr	#8,d0 				; Disable datacache.
+	bset	#11,d0				; Clear datacache.
+	bset	#0,d0				; Enable instruction-burst.
+	movec	d0,cacr
+	ENDC
+
+; foreground cube
+	move.w	$04BC.w,d0
+	move.w	d0,HmmmCube.timeTable
+	moveq	#0,d1
+	bsr	HmmmCube.paint
+
+	IFNE	0
+; Restore cache to original state.
+	move.l	(sp)+,d0
+	movec	d0,cacr
+	ENDC
+
+	lea	HmmmCube.timeTable,a0
+	move.w	(a0),d0
+	move.w	4(a0),(a0)
+	move.w	2(a0),4(a0)
+	move.w	d0,2(a0)
+
+	IFEQ	testmode
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	move.l	d0,d1
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+	ENDC
+
+	move.w	.old468(pc),d0
+	moveq	#1,d3
+	cmpi.w	#vga100,monitormode
+	bne.s	.wait
+	moveq	#2,d3
+.wait:	move.w	$0468.w,d2
+	sub.w	d0,d2
+	cmp.w	d3,d2
+	blt.s	.wait
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.res_done
+	bsr	HhhmCube.setRes
+.res_done:
+
+	rts
+
+.old468:DC.W	0
+
+;======= OBJECT SUBROUTINES ================================================
+
+HhhmCube.setClose:
+	move.w	#1000,HhhmCube.z
+	rts
+
+HhhmCube.setFar:
+	move.w	#3000,HhhmCube.z
+	rts
+
+; INPUT:
+; d0.w=time
+; d1.w=object handle
+HmmmCube.paint:
+	movem.w	d0-d1,-(sp)
+
+	movea.l	scr,a0
+	bsr.l	Primitive.setScreenbuffer
+
+	IFNE	HmmmCube.SILHOUETTE
+	movea.l	HmmmCube.shadowAdrAdr,a0	; a0: log table adrs
+	movea.l	(a0),a0				; a0: current log table
+	bsr.l	PrimitiveMesh.newShadowed
+	ELSE
+	bsr.l	PrimitiveMesh.new
+	ENDC
+
+	movem.w	(sp),d0-d1
+
+; the cube
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#3,d1
+	lsr.l	d1
+	mulu.w	#5,d2
+	lsr.l	d2
+	bsr.l	Matrix.generate
+	move.w	#0,d0
+	move.w	#0,d1
+	move.w	HhhmCube.z,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	movem.w	(sp),d0-d1
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	bsr.l	TransformObject.transform
+
+; delta symbol (inside the cube!)
+	movem.w	(sp),d0-d1
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#11,d0
+	lsr.l	#3,d0
+	mulu.w	#7,d1
+	lsr.l	d1
+;	clr.w	d0
+;	clr.w	d1
+	mulu.w	#13,d2
+	bsr.l	Matrix.generate
+	lea	sine_tbl,a1
+	movem.w	(sp),d3-d4
+	move.w	d3,d4
+	move.w	d3,d5
+	mulu.w	#13,d3
+	lsr.l	#2,d3
+	mulu.w	#17,d4
+	lsr.l	#3,d4
+	mulu.w	#19,d5
+	lsr.l	#3,d5
+	Do_SinModulo	d3
+	Do_SinModulo	d4
+	Do_SinModulo	d5
+	Get_Sin	a1,d3,d0
+	Get_Sin	a1,d4,d1
+	Get_Sin	a1,d5,d2
+	asr.w	#7,d0
+	asr.w	#7,d1
+	asr.w	#7,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#2,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+	bsr.l	Matrix.pop
+
+
+	movem.w	(sp)+,d0-d1
+	tst.w	d1
+	bne.s	.skip
+	bsr.l	PrimitiveMesh.sortZ
+.skip:
+	bsr.l	PrimitiveMesh.complete
+
+; parallel shit
+
+	IFEQ	HmmmCube.SILHOUETTE
+	movea.l	HmmmCube.rectAddressTable,a0
+	move.w	(a0)+,d7
+	beq.s	.end_restore
+	subq.w	#1,d7
+.restore_loop:
+	move.w	d7,-(sp)
+	movem.w	(a0)+,d1/d7
+	movem.w	(a0)+,d0/d6
+	move.l	a0,-(sp)
+	moveq	#$00000000,d4
+	bsr.l	Viewport.paintRectangle
+	movea.l	(sp)+,a0
+	move.w	(sp)+,d7
+	dbra	d7,.restore_loop
+.end_restore:
+	ELSE
+	movea.l	HmmmCube.shadowAdrAdr+4,a1	; a1: phys table adrs
+	movea.l	(a1),a1				; a1: current phys table
+	clr.l	d0
+	bsr.l	Polygon.clearShadows
+	ENDC
+
+; end of parallel shit
+
+	movea.l	HmmmCube.rectAddressTable,a0
+	bsr.l	PrimitiveMesh.paint
+
+	lea	HmmmCube.rectAddressTable,a0
+ 	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+
+;= shadow swapping =
+
+	movea.l	HmmmCube.shadowAdrAdr,a0
+ 	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+
+	movea.l	HmmmCube.shadowAdrAdr+4,a0
+ 	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+
+	move.w	.swapcount(pc),d0
+	addq.w	#1,d0
+	cmpi.w	#3,d0
+	blt.s	.end_swapcount
+
+; Clear count and swap phys/log shadow tables..
+	clr.w	d0
+	lea	HmmmCube.shadowAdrAdr,a0
+	move.l	(a0),d1
+	move.l	4(a0),(a0)+
+	move.l	d1,(a0)
+
+.end_swapcount:
+	move.w	d0,.swapcount
+
+;= end shadow swapping =
+
+	rts
+
+.swapcount:
+	DC.W	0
+
+;======= OBJECT DATA =======================================================
+
+	DATA
+
+HmmmCube.textureTable:
+	DC.L	FlareGen.chromeBuffer
+	DC.L	0
+
+HmmmCube.rectAddressTable:
+	DC.L	HmmmCube.rectTable
+	DC.L	HmmmCube.rectTable2
+	DC.L	HmmmCube.rectTable3
+
+HmmmCube.cube:
+	DC.W	.vn				; amount of vertices
+	DC.W	.n				; amount of normals
+.start:	DC.W	-800,-800,-800
+	DC.W	-800,+800,-800
+	DC.W	+800,+800,-800
+	DC.W	+800,-800,-800
+	DC.W	-680,-680,-800
+	DC.W	-680,+680,-800
+	DC.W	+680,+680,-800
+	DC.W	+680,-680,-800
+	DC.W	-680,-680,-680
+	DC.W	-680,+680,-680
+	DC.W	+680,+680,-680
+	DC.W	+680,-680,-680
+	DC.W	-800,-680,-680
+	DC.W	-800,+680,-680
+	DC.W	-680,-800,-680
+	DC.W	+680,-800,-680
+	DC.W	+800,-680,-680
+	DC.W	+800,+680,-680
+	DC.W	-680,+800,-680
+	DC.W	+680,+800,-680
+	DC.W	-800,-800,+800
+	DC.W	-800,+800,+800
+	DC.W	+800,+800,+800
+	DC.W	+800,-800,+800
+	DC.W	-680,-680,+800
+	DC.W	-680,+680,+800
+	DC.W	+680,+680,+800
+	DC.W	+680,-680,+800
+	DC.W	-680,-680,+680
+	DC.W	-680,+680,+680
+	DC.W	+680,+680,+680
+	DC.W	+680,-680,+680
+	DC.W	-800,-680,+680
+	DC.W	-800,+680,+680
+	DC.W	-680,-800,+680
+	DC.W	+680,-800,+680
+	DC.W	+800,-680,+680
+	DC.W	+800,+680,+680
+	DC.W	-680,+800,+680
+	DC.W	+680,+800,+680
+
+.normstart:
+	DC.W	-073,-073,-073
+	DC.W	-073,+073,-073
+	DC.W	+073,+073,-073
+	DC.W	+073,-073,-073
+	DC.W	+073,+073,-073
+	DC.W	+073,-073,-073
+	DC.W	-073,-073,-073
+	DC.W	-073,+073,-073
+	DC.W	+073,+073,+073
+	DC.W	+073,-073,+073
+	DC.W	-073,-073,+073
+	DC.W	-073,+073,+073
+	DC.W	-073,+073,+073
+	DC.W	-073,-073,+073
+	DC.W	+073,-073,+073
+	DC.W	-073,-073,+073
+	DC.W	+073,+073,+073
+	DC.W	+073,-073,+073
+	DC.W	+073,+073,+073
+	DC.W	-073,+073,+073
+	DC.W	-073,-073,+073
+	DC.W	-073,+073,+073
+	DC.W	+073,+073,+073
+	DC.W	+073,-073,+073
+	DC.W	+073,+073,+073
+	DC.W	+073,-073,+073
+	DC.W	-073,-073,+073
+	DC.W	-073,+073,+073
+	DC.W	+073,+073,-073
+	DC.W	+073,-073,-073
+	DC.W	-073,-073,-073
+	DC.W	-073,+073,-073
+	DC.W	-073,+073,-073
+	DC.W	-073,-073,-073
+	DC.W	+073,-073,-073
+	DC.W	-073,-073,-073
+	DC.W	+073,+073,-073
+	DC.W	+073,-073,-073
+	DC.W	+073,+073,-073
+	DC.W	-073,+073,-073
+
+
+.end:
+
+.vn:	=	(.end-.start)/Vertex.SIZE
+.n:	=	(.end-.normstart)/Vertex.SIZE
+.v:	=	.vn-.n
+
+	DC.W	0				; amount of 2d vertices
+
+
+	DC.W	48				; amount of primitives
+
+; top 'square'.
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,0,1,5,4,.v+0,.v+1,.v+5,.v+4
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,1,2,6,5,.v+1,.v+2,.v+6,.v+5
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,2,3,7,6,.v+2,.v+3,.v+7,.v+6
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,3,0,4,7,.v+3,.v+0,.v+4,.v+7
+
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,04,05,09,08,.v+04,.v+05,.v+09,.v+08
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,05,06,10,09,.v+05,.v+06,.v+10,.v+09
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,06,07,11,10,.v+06,.v+07,.v+11,.v+10
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,07,04,08,11,.v+07,.v+04,.v+08,.v+11
+
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,12,13,01,00,.v+12,.v+13,.v+01,.v+00
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,18,19,02,01,.v+18,.v+19,.v+02,.v+01
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,00,03,15,14,.v+00,.v+03,.v+15,.v+14
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,03,02,17,16,.v+03,.v+02,.v+17,.v+16
+
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,13,12,08,09,.v+13,.v+12,.v+08,.v+09
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,14,15,11,08,.v+14,.v+15,.v+11,.v+08
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,16,17,10,11,.v+16,.v+17,.v+10,.v+11
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,19,18,09,10,.v+19,.v+18,.v+09,.v+10
+
+; 'pillars'.
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,12,00,20,32,.v+12,.v+00,.v+20,.v+32
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,00,14,34,20,.v+00,.v+14,.v+34,.v+20
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,14,08,28,34,.v+14,.v+08,.v+28,.v+34
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,08,12,32,28,.v+08,.v+12,.v+32,.v+28
+
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,01,13,33,21,.v+01,.v+13,.v+33,.v+21
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,18,01,21,38,.v+18,.v+01,.v+21,.v+38
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,13,09,29,33,.v+13,.v+09,.v+29,.v+33
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,09,18,38,29,.v+09,.v+18,.v+38,.v+29
+
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,17,02,22,37,.v+17,.v+02,.v+22,.v+37
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,02,19,39,22,.v+02,.v+19,.v+39,.v+22
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,10,17,37,30,.v+10,.v+17,.v+37,.v+30
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,19,10,30,39,.v+19,.v+10,.v+30,.v+39
+
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,15,03,23,35,.v+15,.v+03,.v+23,.v+35
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,03,16,36,23,.v+03,.v+16,.v+36,.v+23
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,11,15,35,31,.v+11,.v+15,.v+35,.v+31
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,16,11,31,36,.v+16,.v+11,.v+31,.v+36
+
+; bottom 'square'.
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,21,20,24,25,.v+21,.v+20,.v+24,.v+25
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,22,21,25,26,.v+22,.v+21,.v+25,.v+26
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,23,22,26,27,.v+23,.v+22,.v+26,.v+27
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,20,23,27,24,.v+20,.v+23,.v+27,.v+24
+
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,25,24,28,29,.v+25,.v+24,.v+28,.v+29
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,26,25,29,30,.v+26,.v+25,.v+29,.v+30
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,27,26,30,31,.v+27,.v+26,.v+30,.v+31
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,24,27,31,28,.v+24,.v+27,.v+31,.v+28
+
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,33,32,20,21,.v+33,.v+32,.v+20,.v+21
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,39,38,21,22,.v+39,.v+38,.v+21,.v+22
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,23,20,34,35,.v+23,.v+20,.v+34,.v+35
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,22,23,36,37,.v+22,.v+23,.v+36,.v+37
+
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,32,33,29,28,.v+32,.v+33,.v+29,.v+28
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,35,34,28,31,.v+35,.v+34,.v+28,.v+31
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,37,36,31,30,.v+37,.v+36,.v+31,.v+30
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,38,39,30,29,.v+38,.v+39,.v+30,.v+29
+HmmmCube.cubeEnd:
+
+; flatshaded cube (silhouette)
+HmmmCube.blackCube:
+	DC.W	40				; amount of vertices
+	DC.W	0				; amount of normals
+.start:	DC.W	-800,-800,-800
+	DC.W	-800,+800,-800
+	DC.W	+800,+800,-800
+	DC.W	+800,-800,-800
+	DC.W	-680,-680,-800
+	DC.W	-680,+680,-800
+	DC.W	+680,+680,-800
+	DC.W	+680,-680,-800
+	DC.W	-680,-680,-680
+	DC.W	-680,+680,-680
+	DC.W	+680,+680,-680
+	DC.W	+680,-680,-680
+	DC.W	-800,-680,-680
+	DC.W	-800,+680,-680
+	DC.W	-680,-800,-680
+	DC.W	+680,-800,-680
+	DC.W	+800,-680,-680
+	DC.W	+800,+680,-680
+	DC.W	-680,+800,-680
+	DC.W	+680,+800,-680
+	DC.W	-800,-800,+800
+	DC.W	-800,+800,+800
+	DC.W	+800,+800,+800
+	DC.W	+800,-800,+800
+	DC.W	-680,-680,+800
+	DC.W	-680,+680,+800
+	DC.W	+680,+680,+800
+	DC.W	+680,-680,+800
+	DC.W	-680,-680,+680
+	DC.W	-680,+680,+680
+	DC.W	+680,+680,+680
+	DC.W	+680,-680,+680
+	DC.W	-800,-680,+680
+	DC.W	-800,+680,+680
+	DC.W	-680,-800,+680
+	DC.W	+680,-800,+680
+	DC.W	+800,-680,+680
+	DC.W	+800,+680,+680
+	DC.W	-680,+800,+680
+	DC.W	+680,+800,+680
+.normstart:
+.end:
+
+	DC.W	0				; amount of 2d vertices
+
+
+	DC.W	48				; amount of primitives
+
+; top 'square'.
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,00,01,05,04
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,01,02,06,05
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,02,03,07,06
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,03,00,04,07
+
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,04,05,09,08
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,05,06,10,09
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,06,07,11,10
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,07,04,08,11
+
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,12,13,01,00
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,18,19,02,01
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,00,03,15,14
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,03,02,17,16
+
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,13,12,08,09
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,14,15,11,08
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,16,17,10,11
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,19,18,09,10
+
+; 'pillars'.
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,12,00,20,32
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,00,14,34,20
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,14,08,28,34
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,08,12,32,28
+
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,01,13,33,21
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,18,01,21,38
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,13,09,29,33
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,09,18,38,29
+
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,17,02,22,37
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,02,19,39,22
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,10,17,37,30
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,19,10,30,39
+
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,15,03,23,35
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,03,16,36,23
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,11,15,35,31
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,16,11,31,36
+
+; bottom 'square'.
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,21,20,24,25
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,22,21,25,26
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,23,22,26,27
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,20,23,27,24
+
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,25,24,28,29
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,26,25,29,30
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,27,26,30,31
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,24,27,31,28
+
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,33,32,20,21
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,39,38,21,22
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,23,20,34,35
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,22,23,36,37
+
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,32,33,29,28
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,35,34,28,31
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,37,36,31,30
+	DC.W	Polygon.QUAD|Polygon.FLATSHADED|0,38,39,30,29
+HmmmCube.blackCubeEnd:
+
+HmmmCube.delta:
+	DC.W	(.end-.start)/Vertex.SIZE	* amount of vertices
+	DC.W	(.end-.normstart)/Vertex.SIZE	* amount of normals
+.start:	DC.W	+000,-400,+50
+	DC.W	-300,+250,+50
+	DC.W	+300,+250,+50
+	DC.W	+000,-200,+000
+	DC.W	-150,+150,+000
+	DC.W	+150,+150,+000
+	DC.W	+000,-400,-50
+	DC.W	-300,+250,-50
+	DC.W	+300,+250,-50
+.normstart:
+.end:
+
+	DC.W	(.end2d-.start2d)/Vertex2d.SIZE	* amount of 2d vertices
+.start2d:
+	DC.W	063,063
+	DC.W	063,191
+	DC.W	191,191
+	DC.W	191,063
+.end2d:
+
+	DC.W	15				; amount of primitives
+
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|0,+03,04,01,+0,1,2
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|0,+03,01,00,+0,2,3
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|0,+04,05,02,+0,1,2
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|0,+04,02,01,+0,2,3
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|0,+05,03,00,+0,1,2
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|0,+05,00,02,+0,2,3
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|0,+06,07,04,+0,1,2
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|0,+06,04,03,+0,2,3
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|0,+07,08,05,+0,1,2
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|0,+07,05,04,+0,2,3
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|0,+08,06,03,+0,1,2
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|0,+08,03,05,+0,2,3
+	DC.W	Polygon.QUAD|Polygon.TEXTUREMAPPED|0,+01,07,06,00,+1,2,3,0
+	DC.W	Polygon.QUAD|Polygon.TEXTUREMAPPED|0,+02,08,07,01,+1,2,3,0
+	DC.W	Polygon.QUAD|Polygon.TEXTUREMAPPED|0,+00,06,08,02,+1,2,3,0
+HmmmCube.deltaEnd:
+
+HhhmCube.z:
+	DC.W	3000
+
+HmmmCube.shadowAdrAdr:
+	DC.L	HmmmCube.shadowAdr
+	DC.L	HmmmCube.shadowAdr2
+
+HmmmCube.shadowAdr:
+	DC.L	HmmmCube.shadowTable
+	DC.L	HmmmCube.shadowTable2
+	DC.L	HmmmCube.shadowTable3
+
+HmmmCube.shadowAdr2:
+	DC.L	HmmmCube.shadowTable4
+	DC.L	HmmmCube.shadowTable5
+	DC.L	HmmmCube.shadowTable6
+
+;======= OBJECT RESERVES ===================================================
+
+	BSS
+
+HmmmCube.timeTable:
+	DS.W	3
+
+HmmmCube.rectTable:
+	DS.W	1+4*32
+HmmmCube.rectTable2:
+	DS.W	1+4*32
+HmmmCube.rectTable3:
+	DS.W	1+4*32
+
+HmmmCube.shadowTable:
+	DS.W	1+4*2*500
+HmmmCube.shadowTable2:
+	DS.W	1+4*2*500
+HmmmCube.shadowTable3:
+	DS.W	1+4*2*500
+
+HmmmCube.shadowTable4:
+	DS.W	1+4*2*500
+HmmmCube.shadowTable5:
+	DS.W	1+4*2*500
+HmmmCube.shadowTable6:
+	DS.W	1+4*2*500
+

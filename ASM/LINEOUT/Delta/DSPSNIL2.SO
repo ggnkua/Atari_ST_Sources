@@ -1,0 +1,693 @@
+; Textured pretzel. A delta screen. Made with u-fly.
+
+; You can change these, to your liking.
+Pretzel.IN:		=	600		; inner pretzel radius
+Pretzel.OUT:		=	1500		; outer pretzel radius
+Pretzel.NORMAL_DIV:	=	$100		; inverse normal scalar (8:8)
+Pretzel.RINGS:		=	10
+Pretzel.SLICES:		=	40
+
+; Do not change these!
+Pretzel.VERTICES:	=	Pretzel.RINGS*Pretzel.SLICES
+Pretzel.POLYS:		=	Pretzel.RINGS*Pretzel.SLICES
+
+			RSRESET
+Pretzel.object:		RS.W	8192
+Pretzel.BLOCK_SIZE:	RS.B	0
+
+******** OBJECT TABLE ********
+
+* Must be first in object!!
+Pretzel.table:
+	DC.L	Pretzel.mainLoop
+	DC.L	Pretzel.init
+	DC.L	rts
+	DC.L	Pretzel.invRot
+	DC.L	Pretzel.incXRot
+	DC.L	Pretzel.decXRot
+	DC.L	Pretzel.incYRot
+	DC.L	Pretzel.decYRot
+	DC.L	Pretzel.setZoomOut
+	DC.L	0
+
+	IFND	DEMO_SYSTEM
+	INCLUDE	HFLY_DSP.S				* Include the CPU-DSP engine.
+	TEXT
+	ENDC
+
+******** INIT SUBROUTINE ********
+
+* OUTPUT: d0.l: 0   = All clear.
+*               neg = Error! Not initialized!
+Pretzel.init:
+	move.l	#Pretzel.BLOCK_SIZE,d0
+	bsr.l	Mem.register
+
+	lea	sine_tbl,a1
+	bsr.l	Matrix.init
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+******** SCREENINIT SUBROUTINE ********
+
+Pretzel.initRealtime:
+	bsr.l	Mem.getBlock
+	move.l	d0,Pretzel.baseAdr
+
+; Init u fly..
+	bsr.l	HumanFly.init
+
+	lea	Viewport.settingsTable,a0
+	move.w	#320,Viewport.XSCREEN(a0)
+	move.w	#200,Viewport.YSCREEN(a0)
+	move.w	#0,Viewport.XSTART(a0)
+	move.w	#0,Viewport.YSTART(a0)
+	move.w	#320,Viewport.XEND(a0)
+	move.w	#200,Viewport.YEND(a0)
+	move.w	#160,Viewport.XCENTER(a0)
+	move.w	#100,Viewport.YCENTER(a0)
+	move.w	#256+32,Viewport.ASPECT(a0)
+	move.w	#$100,Viewport.FOCAL(a0)
+	bsr.l	Viewport.update
+
+	lea	textureTable,a0
+	bsr.l	Polygon.init
+
+	bsr.l	ObjectRegistry.clear
+
+	movea.l	Pretzel.baseAdr,a0
+	adda.l	#Pretzel.object,a0
+	bsr.w	Pretzel.generate
+; d0.l=size
+	movea.l	Pretzel.baseAdr,a0
+	adda.l	#Pretzel.object,a0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi.s	.error
+
+	move.w	#+1,Pretzel.rotDir
+	clr.w	Pretzel.oldRot
+	clr.w	Pretzel.zoomActive
+	clr.w	Pretzel.xDir
+	clr.w	Pretzel.yDir
+
+	clr.l	d0
+	move.w	monitormode,d1
+	cmpi.w	#vga60,d1
+	beq.s	.vga60
+	cmpi.w	#vga100,d1
+	beq.s	.vga100
+	cmpi.w	#rgb50,d1
+	beq.s	.rgb50
+* Unknown monitormode..
+	rts
+.vga60:	move.l	#vga60_16bit_320_200,Pretzel.resRout
+	rts
+.vga100:move.l	#vga100_16bit_320_200,Pretzel.resRout
+	rts
+.rgb50:	move.l	#rgb50_16bit_320_200,Pretzel.resRout
+	rts
+
+.error:	moveq	#-1,d0
+	rts
+
+Pretzel.initScreen:
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	moveq	#$00000000,d4
+	bsr.l	Viewport.paintRectangle
+	rts
+
+******** MAINLOOP SUBROUTINE ********
+
+Pretzel.mainLoop:
+	movea.l	scr,a0
+	bsr.l	Primitive.setScreenbuffer
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr.w	Pretzel.initRealtime
+	move.l	(sp)+,d0
+.end_realtime_init:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr.l	Pretzel.initScreen
+.end_screeninit:
+
+	bsr.w	Pretzel.zoom
+
+	move.w	Pretzel.xDir,d2
+	beq.s	.x_done
+	move.w	$04BC.w,d0
+	move.w	Pretzel.xRotTime,d1
+	sub.w	d1,d0
+	add.w	d0,d0
+	cmpi.w	#sintbllen/8,d0
+	blt.s	.x_ok
+	move.w	#sintbllen/8,d0
+	clr.w	Pretzel.xDir
+.x_ok:	muls.w	d2,d0
+	add.w	Pretzel.oldXRot,d0
+	move.w	d0,Pretzel.xRot
+.x_done:
+	move.w	Pretzel.yDir,d2
+	beq.s	.y_done
+	move.w	$04BC.w,d0
+	move.w	Pretzel.yRotTime,d1
+	sub.w	d1,d0
+	add.w	d0,d0
+	cmpi.w	#sintbllen/8,d0
+	blt.s	.y_ok
+	move.w	#sintbllen/8,d0
+	clr.w	Pretzel.yDir
+.y_ok:	muls.w	d2,d0
+	add.w	Pretzel.oldYRot,d0
+	move.w	d0,Pretzel.yRot
+.y_done:
+;	move.w	$04BC.w,Pretzel.xRot
+
+	bsr.w	Pretzel.paint
+	
+	lea	scr,a0
+ 	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+
+	movea.l	Pretzel.resRout,a0
+	suba.l	a1,a1
+	movea.l	d0,a2
+.again:	bsr.l	Screen.requestUpdate
+	tst.l	d0
+	bmi.s	.again
+	clr.l	Pretzel.resRout
+	rts
+
+;======= subroutines
+
+Pretzel.invRot:
+	neg.w	Pretzel.rotDir
+	move.w	$04BC.w,Pretzel.rotSwapTime
+	move.w	Pretzel.rot,Pretzel.oldRot
+	rts
+
+Pretzel.incXRot:
+	move.w	#+1,Pretzel.xDir
+	move.w	Pretzel.xRot,Pretzel.oldXRot
+	move.w	$04BC.w,Pretzel.xRotTime
+	rts
+
+Pretzel.decXRot:
+	move.w	#-1,Pretzel.xDir
+	move.w	Pretzel.xRot,Pretzel.oldXRot
+	move.w	$04BC.w,Pretzel.xRotTime
+	rts
+
+Pretzel.incYRot:
+	move.w	#+1,Pretzel.yDir
+	move.w	Pretzel.yRot,Pretzel.oldYRot
+	move.w	$04BC.w,Pretzel.yRotTime
+	rts
+
+Pretzel.decYRot:
+	move.w	#-1,Pretzel.yDir
+	move.w	Pretzel.yRot,Pretzel.oldYRot
+	move.w	$04BC.w,Pretzel.yRotTime
+	rts
+
+Pretzel.setZoomOut:
+	not.w	Pretzel.zoomActive
+	move.l	$04BA.w,Pretzel.zoomStart
+	rts
+
+Pretzel.zoom:
+	tst.w	Pretzel.zoomActive
+	beq.s	.no_zoom
+	move.l	$04BA.w,d0
+	sub.l	Pretzel.zoomStart,d0
+	move.w	d0,d1
+	lsl.l	#4,d0
+	addi.w	#11000,d0
+	move.w	d0,Pretzel.z
+	mulu.w	d1,d1
+	lsr.l	#8,d1
+	move.l	d1,d2
+	move.l	d1,d3
+	mulu.w	#5,d2
+	lsr.l	d2
+	mulu.w	#7,d3
+	lsr.l	d3
+	movem.w	d1-d3,Pretzel.rotTable
+	rts
+
+.no_zoom:
+	move.w	#11000,Pretzel.z
+	rts
+
+; 0<=phi<2pi, 0<=theta<2pi
+;
+; a.x=r(phi, theta)*cos(2*theta)
+; a.y=r(phi, theta)*sin(2*theta)
+; a.z=IN*sin(phi)+OUT*sin(theta)
+;
+; r(phi, theta)=OUT+IN*cos(phi)+OUT*cos(theta/2)^2
+;
+; INPUT:
+; d0.w=r
+; a0: objectbuffer
+; OUTPUT:
+; d0.l=size
+Pretzel.generate:
+	movea.l	a0,a6
+
+; Output vertices..
+	lea	sine_tbl,a1
+	move.w	d0,.radius
+	move.w	#2*Pretzel.VERTICES,(a0)+		; #vertices+#normals
+	move.w	#Pretzel.VERTICES,(a0)+			; #normals
+	movea.l	a0,a4					; a4: vertices
+	lea	Pretzel.VERTICES*Vertex.SIZE(a0),a0
+	moveq	#Pretzel.RINGS-1,d7
+
+.ring_loop:
+	moveq	#Pretzel.SLICES-1,d6
+	move.w	d7,d0
+	mulu.w	#sintbllen/Pretzel.RINGS,d0
+; d0.w=phi
+	Get_Cos	a1,d0,d2
+	muls.w	#Pretzel.IN*2,d2
+	swap	d2
+	addi.w	#Pretzel.OUT,d2
+; d2.w=OUT+IN*cos(phi)
+
+.point_loop:
+	move.w	d6,d0
+	mulu.w	#sintbllen/(Pretzel.SLICES*2),d0
+; d0.w=theta/2
+	Get_Cos	a1,d0,d0
+	move.w	d0,d1
+; d1.w=cos(theta/2)
+	muls.w	#Pretzel.OUT*2,d1
+	swap	d1
+; d1.w=OUT*cos(theta/2)
+	muls.w	d0,d1
+	add.l	d1,d1
+	swap	d1
+; d1.w=OUT*cos(theta/2)^2
+	move.w	d2,d3
+	add.w	d1,d3
+; d2.w=r(phi, theta)
+
+; z....
+	move.w	d7,d0
+	mulu.w	#sintbllen/Pretzel.RINGS,d0
+; d0.w=phi
+	Get_Sin	a1,d0,d0
+	muls.w	#Pretzel.IN*2,d0
+; d0.l=IN*sin(phi)
+	move.w	d6,d1
+	mulu.w	#sintbllen/Pretzel.SLICES,d1
+; d1.w=theta
+	Get_Sin	a1,d1,d1
+	muls.w	#Pretzel.OUT*2,d1
+; d1.l=OUT*sin(theta)
+	add.l	d0,d1
+	swap	d1
+	move.w	d1,-(a0)
+
+	move.w	d6,d0
+	mulu.w	#2*sintbllen/Pretzel.SLICES,d0
+	Do_SinModulo	d0
+; d0.w=theta*2
+	Get_SinCos	a1,d0,d0,d1
+	muls.w	d3,d0
+	muls.w	d3,d1
+	add.l	d0,d0
+	add.l	d1,d1
+	swap	d0
+	swap	d1
+; y
+	move.w	d1,-(a0)
+; x
+	move.w	d0,-(a0)
+
+	dbf	d6,.point_loop
+
+	dbf	d7,.ring_loop
+
+	lea	Pretzel.VERTICES*Vertex.SIZE*2(a0),a0
+
+; Calculate normals! Uses the output vertices for this.
+;
+; n = o/|o|, normal is outward vector normalized to unit-length.
+; -   -  -
+;
+; o = (u[i-1, j] + u[i, j]) X (v[i, j-1] + v[i, j])
+; -    -           -           -           -
+;
+; u[i, j] = a[i+1, j]-a[i, j], v[i, j] = a[i, j+1]-a[i, j]
+; -         -         -                  -         -
+;
+; o = (a[i+1, j]-a[i-1, j]) X (a[i, j+1]-a[i, j-1])
+; -    -         -             -         -
+;
+;             [l.z*r.y-l.y*r.z]
+; o = l X r = [l.x*r.z-l.z*r.x]
+; -   -   -   [l.y*r.x-l.x*r.y]
+;
+; i, j are discrete versions of phi, theta.
+;
+; u[I+i, j]=u[i, j], v[i, J+j]=v[i, j], where I, J are #steps of i, j.
+; -         -        -         -
+;
+; I.e. u and v wrap around.
+;      -     -
+;
+	moveq	#Pretzel.RINGS-1,d7
+
+.normal_rloop:
+	moveq	#Pretzel.SLICES-1,d6
+
+.normal_ploop:
+; First, we calc l..
+;                -
+	move.w	d7,d3
+	mulu.w	#Pretzel.SLICES,d3
+	clr.l	d4
+	move.w	d6,d4
+	addq.w	#1,d4
+	divu.w	#Pretzel.SLICES,d4
+	swap	d4					; d4.w=wrapped i+1
+	add.w	d4,d3					; d3.l=offset [i+1, j]
+	mulu.w	#Vertex.SIZE,d3
+	movem.w	(a4,d3.l),d0-d2
+; d0-d2=a[i+1,j]
+;       -
+	move.w	d7,d3
+	mulu.w	#Pretzel.SLICES,d3
+	clr.l	d4
+	move.w	d6,d4
+	subq.w	#1,d4
+	bpl.s	.i_pos
+	moveq	#Pretzel.SLICES-1,d4
+.i_pos:	add.w	d4,d3					; d3.l=offset [i-1, j]
+	mulu.w	#Vertex.SIZE,d3
+	sub.w	Vertex.X(a4,d3.l),d0
+	sub.w	Vertex.Y(a4,d3.l),d1
+	sub.w	Vertex.Z(a4,d3.l),d2
+; d0-d2=a[i+1,j]-a[i-1,j]=l
+;       -        -        -
+
+; Store l on stack.
+;       -
+	movem.w	d0-d2,-(sp)
+
+; Now, we calc r..
+;              -
+	clr.l	d3
+	move.w	d7,d3
+	addq.w	#1,d3
+	divu.w	#Pretzel.RINGS,d3
+	swap	d3
+	mulu.w	#Pretzel.SLICES,d3
+	add.w	d6,d3					; d3.l=offset [i, j+1]
+	mulu.w	#Vertex.SIZE,d3
+	movem.w	(a4,d3.l),d0-d2
+; d0-d2=a[i,j+1]
+;       -
+	move.w	d7,d3
+	subq.w	#1,d3
+	bpl.s	.j_pos
+	moveq	#Pretzel.RINGS-1,d3
+.j_pos:	mulu.w	#Pretzel.SLICES,d3
+	add.w	d6,d3					; d3.l=offset [i, j-1]
+	mulu.w	#Vertex.SIZE,d3
+	sub.w	Vertex.X(a4,d3.l),d0
+	sub.w	Vertex.Y(a4,d3.l),d1
+	sub.w	Vertex.Z(a4,d3.l),d2
+	
+; d0-d2=a[i,j+1]-a[i,j-1]=r
+;       -        -        -
+
+; Now we calculate the outward vector o.
+;                                     -
+;             [l.z*r.y-l.y*r.z]
+; o = l X r = [l.x*r.z-l.z*r.x]
+; -   -   -   [l.y*r.x-l.x*r.y]
+;
+	movem.w	(sp),d3-d5
+
+; d3-d5=l
+;       -
+	muls.w	d1,d5				; d5.l=l.z*r.y
+	muls.w	d2,d4				; d4.l=l.y*r.z
+	sub.l	d4,d5
+	movea.l	d5,a2				; a2=l.z*r.y-l.y*r.z
+	movem.w	(sp),d3-d5
+; d3-d5=l
+;       -
+	muls.w	d2,d3				; d3.l=l.x*r.z	
+	muls.w	d0,d5				; d5.l=l.z*r.x
+	sub.l	d5,d3				; d3.l=l.x*r.z-l.z*r.x
+	movea.l	d3,a3				; a3=l.x*r.z-l.z*r.x
+	movem.w	(sp)+,d3-d5
+; d3-d5=l
+;       -
+	muls.w	d0,d4				; d4.l=l.y*r.x
+	muls.w	d1,d3				; d3.l=l.x*r.y
+	sub.l	d3,d4				; d4.l=l.y*r.x-l.x*r.y
+; a2/a3/d4=o
+;          -
+
+	move.l	a2,d0
+	move.l	a3,d1
+	move.l	d4,d2
+	asr.l	#7,d0
+	asr.l	#7,d1
+	asr.l	#7,d2
+	muls.w	d0,d0
+	muls.w	d1,d1
+	muls.w	d2,d2
+	add.l	d0,d1
+	add.l	d2,d1
+	bsr.l	Math.sqrt
+; d0.l=|o|/128 (16:16)
+;       -
+	move.l	a2,d1
+	move.l	a3,d2
+	move.l	d4,d3
+	swap	d0
+	mulu.w	#Pretzel.NORMAL_DIV,d0
+	lsr.l	#8,d0
+	divs.w	d0,d1
+	divs.w	d0,d2
+	divs.w	d0,d3
+; d1-d3=n, store it..
+;       -
+	move.w	d3,-(a0)
+	move.w	d2,-(a0)
+	move.w	d1,-(a0)
+	dbf	d6,.normal_ploop
+
+	dbf	d7,.normal_rloop
+
+	lea	Pretzel.VERTICES*Vertex.SIZE(a0),a0
+
+	clr.w	(a0)+				; #texels
+
+	move.w	#Pretzel.POLYS,(a0)+		; #primitives
+	moveq	#Pretzel.RINGS-1,d7
+
+.prim_ring_loop:
+	move.w	d7,d2
+	mulu.w	#Pretzel.SLICES,d2
+	clr.l	d3
+	move.w	d7,d3
+	addq.w	#1,d3
+	divu.w	#Pretzel.RINGS,d3
+	swap	d3
+	mulu.w	#Pretzel.SLICES,d3
+	moveq	#Pretzel.SLICES-1,d6
+	
+.primloop:
+	move.w	#Polygon.QUAD|Polygon.ENVMAPPED|0,(a0)+
+
+	move.w	d6,d0
+	add.w	d3,d0
+	move.w	d0,(a0)+
+
+	clr.l	d0
+	move.w	d6,d0
+	addq.w	#1,d0
+	divu.w	#Pretzel.SLICES,d0
+	swap	d0
+	move.w	d0,d1
+	add.w	d3,d0
+	move.w	d0,(a0)+
+
+	add.w	d2,d1
+	move.w	d1,(a0)+
+
+	move.w	d6,d0
+	add.w	d2,d0
+	move.w	d0,(a0)+
+
+	REPT	4
+	move.w	-8(a0),d0
+	addi.w	#Pretzel.VERTICES,d0
+	move.w	d0,(a0)+
+	ENDR
+
+	dbra	d6,.primloop
+
+	dbra	d7,.prim_ring_loop
+
+.end:	suba.l	a6,a0
+	move.l	a0,d0
+	rts
+
+.radius:DC.W	0
+
+Pretzel.paint:
+	bsr.l	PrimitiveMesh.new
+
+	clr.w	d0
+	clr.w	d1
+	move.w	Pretzel.oldRot,d2
+	move.w	$04BC.w,d3
+	sub.w	Pretzel.rotSwapTime,d3
+	muls.w	Pretzel.rotDir,d3
+	add.w	d3,d2
+	move.w	d2,Pretzel.rot
+	mulu.w	#7,d2
+	lsr.l	#1,d2
+	bsr.l	Matrix.generate
+	move.w	#0,d0
+	move.w	#0,d1
+	move.w	Pretzel.z,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	move.w	Pretzel.xRot,d0
+	move.w	Pretzel.yRot,d1
+	move.w	Pretzel.zRot,d2
+	bsr.l	Matrix.generate
+	bsr.l	Matrix.push
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+	bsr.l	Matrix.pop
+
+	bsr.l	PrimitiveMesh.sortZ
+	bsr.l	PrimitiveMesh.complete
+
+	IFNE	0
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	moveq	#$00000000,d4
+	bsr.l	Viewport.paintRectangle
+	ELSE
+	movea.l	Pretzel.rectTableAdr,a0
+	move.w	(a0)+,d7
+	beq.s	.end_restore
+	subq.w	#1,d7
+.restore_loop:
+	move.w	d7,-(sp)
+	movem.w	(a0)+,d1/d7
+	movem.w	(a0)+,d0/d6
+	move.l	a0,-(sp)
+	moveq	#$00000000,d4
+	bsr.l	Viewport.paintRectangle
+	movea.l	(sp)+,a0
+	move.w	(sp)+,d7
+	dbra	d7,.restore_loop
+.end_restore:
+	ENDC
+
+	movea.l	Pretzel.rectTableAdr,a0
+	bsr.l	PrimitiveMesh.paint
+
+	lea	Pretzel.rectTableAdr,a0
+ 	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+	rts
+
+******** OBJECT DATA ********
+
+	DATA
+
+textureTable:
+	DC.L	FlareGen.chromeFogBuffer
+	DC.L	0
+
+Pretzel.rectTableAdr:
+	DC.L	Pretzel.rectangleTable
+	DC.L	Pretzel.rectangleTable2
+	DC.L	Pretzel.rectangleTable3
+
+******** OBJECT RESERVES ********
+
+	BSS
+
+Pretzel.resRout:
+	DS.L	1
+
+Pretzel.rectangleTable:
+	DS.W	1+4*32
+Pretzel.rectangleTable2:
+	DS.W	1+4*32
+Pretzel.rectangleTable3:
+	DS.W	1+4*32
+
+Pretzel.rotTable:
+Pretzel.xRot:
+	DS.W	1
+Pretzel.yRot:
+	DS.W	1
+Pretzel.zRot:
+	DS.W	1
+Pretzel.xRotTime:
+	DS.W	1
+Pretzel.yRotTime:
+	DS.W	1
+Pretzel.xDir:
+	DS.W	1
+Pretzel.yDir:
+	DS.W	1
+Pretzel.oldXRot:
+	DS.W	1
+Pretzel.oldYRot:
+	DS.W	1
+Pretzel.rotSwapTime:
+	DS.W	1
+Pretzel.oldRot:
+	DS.W	1
+Pretzel.rot:
+	DS.W	1
+Pretzel.rotDir:
+	DS.W	1
+
+Pretzel.zoomActive:
+	DS.W	1
+Pretzel.zoomStart:
+	DS.L	1
+Pretzel.z:
+	DS.W	1
+
+Pretzel.baseAdr:
+	DS.L	1

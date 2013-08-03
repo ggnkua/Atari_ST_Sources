@@ -1,0 +1,650 @@
+; Ditherblur screen for delta. Done with u-fly.
+; You might recognise some hmmm-ness..
+
+;======= OBJECT EQUATES ========
+
+InCube.2ND_TEXTURE:	=	0
+InCube.SKIP:		=	7
+
+InCube.RINGS:		=	8
+InCube.SLICES:		=	16
+InCube.VERTICES:	=	InCube.RINGS*InCube.SLICES
+InCube.POLYS:		=	InCube.RINGS*InCube.SLICES
+InCube.RING_R:		=	100
+
+			RSRESET
+InCube.screen1:		RS.W	160*100
+InCube.screen2:		RS.W	160*100
+InCube.screen3:		RS.W	160*100
+InCube.object:		RS.W	4096
+InCube.BLOCK_SIZE:	RS.B	0
+
+;======= OBJECT TABLE ========
+
+; Must be first in object!!
+InCube.table:
+	DC.L	InCube.mainLoop
+	DC.L	InCube.init
+	DC.L	InCube.setRes
+	DC.L	InCube.setTorus
+	DC.L	InCube.setSpikey
+	DC.L	InCube.setStillTraject
+	DC.L	InCube.setZoomTraject
+	DC.L	InCube.setPanLRTraject
+	DC.L	InCube.setPanRLTraject
+	DC.L	InCube.setWildTraject
+	DC.L	0
+
+	IFND	DEMO_SYSTEM
+; Include the Human Fly engine.
+	INCLUDE	SFLY_DSP.S				; Include the CPU-DSP engine.
+	TEXT
+	INCLUDE	OBJECT3D.I
+	TEXT
+	ENDC
+
+;======= RESOLUTION SETTING ROUTINE ========
+
+InCube.setRes:
+	IFEQ	testmode
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+; Unknown monitormode..
+	rts
+
+.vga60:	bra.l	vga60_16bit_320_200
+.vga100:bra.l	vga100_16bit_320_200
+.rgb50:	bra.l	rgb50_16bit_320_200
+	ENDC
+	rts
+
+;======= INIT SUBROUTINE ========
+
+* OUTPUT: d0.l: 0   = All clear.
+*               neg = Error! Not initialized!
+InCube.init:
+	move.l	#InCube.BLOCK_SIZE,d0
+	bsr.l	Mem.register
+
+	lea	sine_tbl,a1
+	bsr.l	Matrix.init
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= REALTIME INIT SUBROUTINE ========
+
+InCube.realtimeInit:
+	bsr.l	Mem.getBlock
+	move.l	d0,InCube.baseAdr
+
+	clr.w	InCube.readyToVblKick
+
+; Set logical screenaddys..
+	move.l	d0,d1
+	move.l	d0,d2
+	lea	InCube.screenAddys,a0
+	addi.l	#InCube.screen1,d0
+	move.l	d0,(a0)+
+	addi.l	#InCube.screen2,d1
+	move.l	d0,(a0)+
+	addi.l	#InCube.screen3,d2
+	move.l	d0,(a0)+
+
+	bsr.l	HumanFly.init
+
+	bsr	InCube.resetTime
+
+	lea	Viewport.settingsTable,a0
+	move.w	#160,Viewport.XSCREEN(a0)
+	move.w	#100,Viewport.YSCREEN(a0)
+	move.w	#0,Viewport.XSTART(a0)
+	move.w	#0,Viewport.YSTART(a0)
+	move.w	#160,Viewport.XEND(a0)
+	move.w	#100,Viewport.YEND(a0)
+	move.w	#80,Viewport.XCENTER(a0)
+	move.w	#50,Viewport.YCENTER(a0)
+	move.w	#256+32,Viewport.ASPECT(a0)
+	move.w	#$100,Viewport.FOCAL(a0)
+	bsr.l	Viewport.update
+
+	lea	InCube.textureTable,a0
+	lea	InCube.colorTable,a1
+	bsr.l	Polygon.init
+
+	bsr.l	ObjectRegistry.clear
+
+	movea.l	InCube.baseAdr,a0
+	adda.l	#InCube.object,a0
+	move.w	#1000,d0
+	bsr	InCube.generate
+; d0.l=size
+	movea.l	InCube.baseAdr,a0
+	adda.l	#InCube.object,a0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi.s	.error
+
+	lea	Object3d.spikey,a0
+	move.l	#Object3d.spikeyEnd-Object3d.spikey,d0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi.s	.error
+
+	clr.w	InCube.objectNum
+
+	cmpi.w	#vga100,monitormode
+	beq.s	.vga100
+	move.l	#InCube.paint,vbl_gfx
+	rts
+
+.vga100:move.l	#InCube.paintVga100,vbl_gfx
+.error:	rts
+
+;======= MAINLOOP SUBROUTINE ========
+
+InCube.mainLoop:
+	move.w	$0468.w,.old468
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr	InCube.realtimeInit
+	move.l	(sp)+,d0
+.end_realtime_init:
+
+	movea.l	InCube.screenAddys,a0
+	bsr.l	Primitive.setScreenbuffer
+
+	movea.l	InCube.trajectRout,a0
+	jsr	(a0)
+
+	bsr.l	PrimitiveMesh.new
+
+	bsr	InCube.addScene
+
+	bsr.l	PrimitiveMesh.complete
+
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	moveq	#$00000000,d4
+	bsr.l	Viewport.paintRectangle
+
+	movea.l	InCube.rectAddressTable,a0
+	bsr.l	PrimitiveMesh.paint
+
+	st	InCube.readyToVblKick
+
+	lea	InCube.screenAddys,a0
+	IFNE	1
+	move.l	(a0),d0
+	move.l	8(a0),(a0)
+	move.l	d0,8(a0)
+	ELSE
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+	ENDC
+
+;	move.w	.old468(pc),d0
+	move.w	$0468.w,d0
+
+.cmp:	cmp.w	$0468.w,d0
+	beq.s	.cmp
+
+; vbl just completed, do shit now! quick quick! hurry hurry!
+
+	IFEQ	testmode
+	move.l	scr+8,d0				; physical screen!
+	move.l	d0,d1
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+	ENDC
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.res_done
+	bra	InCube.setRes
+.res_done:
+
+.error:	rts
+
+.old468:DC.W	0
+
+;======= OBJECT SUBROUTINES ========
+
+InCube.setTorus:
+	clr.w	InCube.objectNum
+	rts
+
+InCube.setSpikey:
+	move.w	#1,InCube.objectNum
+	rts
+
+InCube.setStillTraject:
+	move.l	#InCube.standStill,InCube.trajectRout
+	rts
+
+InCube.setZoomTraject:
+	move.l	#InCube.zoomIn,InCube.trajectRout
+	bsr	InCube.resetTime
+	rts
+
+InCube.setPanLRTraject:
+	move.l	#InCube.panLR,InCube.trajectRout
+	bsr	InCube.resetTime
+	rts
+
+InCube.setPanRLTraject:
+	move.l	#InCube.panRL,InCube.trajectRout
+	bsr	InCube.resetTime
+	rts
+
+InCube.setWildTraject:
+	move.l	#InCube.moveWildly,InCube.trajectRout
+	bsr	InCube.resetTime
+	rts
+
+InCube.resetTime:
+	move.l	$04BA.w,InCube.time
+	rts
+
+; OUTPUT:
+; d0.l=time
+InCube.getTime:
+	move.l	$04BA.w,d0
+	sub.l	InCube.time,d0
+	rts
+
+InCube.standStill:
+	clr.w	InCube.x
+	clr.w	InCube.y
+	move.w	#3000,InCube.z
+	rts
+
+InCube.zoomIn:
+	bsr	InCube.getTime
+	cmpi.l	#$7FF,d0
+	bcs.s	.end_time
+	move.l	#$7FF,d0
+.end_time:
+	move.w	#$7FF0,d1
+	lsl.w	#4,d0
+	sub.w	d0,d1
+	clr.w	InCube.x
+	clr.w	InCube.y
+	move.w	d1,InCube.z
+	rts
+
+InCube.panLR:
+	bsr	InCube.getTime
+	cmpi.l	#2000,d0
+	bcs.s	.end_time
+	move.l	#2000,d0
+.end_time:
+	mulu.w	#2,d0
+	move.w	#-2000,d1
+	add.w	d0,d1
+	move.w	d1,InCube.x
+	clr.w	InCube.y
+	move.w	#3500,InCube.z
+	rts
+
+InCube.panRL:
+	bsr	InCube.getTime
+	cmpi.l	#2000,d0
+	bcs.s	.end_time
+	move.l	#2000,d0
+.end_time:
+	mulu.w	#2,d0
+	move.w	#+2000,d1
+	sub.w	d0,d1
+	move.w	d1,InCube.x
+	clr.w	InCube.y
+	move.w	#3500,InCube.z
+	rts
+
+InCube.moveWildly:
+	lea	sine_tbl,a0
+	bsr	InCube.getTime	
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#4,d0
+	lsr.l	#1,d0
+	mulu.w	#5,d1
+	lsr.l	#2,d1
+	mulu.w	#3,d2
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	Do_SinModulo	d2
+	Get_Sin	a0,d0,d0
+	Get_Sin	a0,d1,d1
+	Get_Sin	a0,d2,d2
+	asr.w	#6,d0
+	asr.w	#7,d1
+	asr.w	#5,d2
+	addi.w	#4096,d2
+	move.w	d0,InCube.x
+	move.w	d1,InCube.y
+	move.w	d2,InCube.z
+	rts
+
+; 0<=phi<2pi, 0<=theta<2pi
+;
+; x=r(phi)*sin(theta)
+; y=r(phi)*cos(theta)
+; z=RING_R*cos(phi)
+;
+; r(phi)=R+RING_R*sin(phi)
+;
+; INPUT:
+; d0.w=r
+; a0: objectbuffer
+; OUTPUT:
+; d0.l=size
+InCube.generate:
+	movea.l	a0,a6
+
+; Output vertices..
+	lea	sine_tbl,a1
+	move.w	d0,.radius
+	move.w	#2*InCube.VERTICES,(a0)+		; #vertices+#normals
+	move.w	#InCube.VERTICES,(a0)+			; #normals
+	lea	InCube.VERTICES*Vertex.SIZE(a0),a2
+	moveq	#InCube.RINGS-1,d7
+
+.ring_loop:
+	moveq	#InCube.SLICES-1,d6
+	move.w	d7,d0
+	mulu.w	#sintbllen/InCube.RINGS,d0
+; d0.w=phi
+	Get_Cos	a1,d0,d2
+	Get_Cos	a1,d0,d3
+; d2.w=sin(phi), d3.w=cos(phi)
+	muls.w	#InCube.RING_R*2,d2
+	swap	d2
+	add.w	.radius(pc),d2
+	asr.w	#7,d3
+; d2.w=r=R+RING_R*sin(phi), d3.w=sin(phi)*..
+	Get_Sin	a1,d0,d4
+	Get_Sin	a1,d0,d5
+	muls.w	#InCube.RING_R*2,d4
+	swap	d4
+; d4.w=RING_R*cos(phi)
+	asr.w	#8,d5
+
+.point_loop:
+	move.w	d6,d0
+	mulu.w	#sintbllen/InCube.SLICES,d0
+; d0.w=theta
+	Get_SinCos	a1,d0,d0,d1
+; d0.w=sin(theta), d1.w=cos(theta)
+	muls.w	d2,d0
+	muls.w	d2,d1
+	swap	d0
+	swap	d1
+	move.w	d0,(a0)+
+	move.w	d1,(a0)+
+	move.w	d4,(a0)+
+	move.w	d6,d0
+	mulu.w	#sintbllen/InCube.SLICES,d0
+	Get_SinCos	a1,d0,d0,d1
+	muls.w	d3,d0
+	muls.w	d3,d1
+	swap	d0
+	swap	d1
+	move.w	d0,(a2)+
+	move.w	d1,(a2)+
+	move.w	d5,(a2)+
+	dbra	d6,.point_loop
+
+	dbra	d7,.ring_loop
+
+	movea.l	a2,a0
+
+	clr.w	(a0)+				; #texels
+
+	move.w	#InCube.POLYS,(a0)+		; #primitives
+	moveq	#InCube.RINGS-1,d7
+
+.prim_ring_loop:
+	move.w	d7,d2
+	mulu.w	#InCube.SLICES,d2
+	clr.l	d3
+	move.w	d7,d3
+	addq.w	#1,d3
+	divu.w	#InCube.RINGS,d3
+	swap	d3
+	mulu.w	#InCube.SLICES,d3
+	moveq	#InCube.SLICES-1,d6
+	
+.primloop:
+	move.w	#Polygon.QUAD|Polygon.ENVMAPPED|0,(a0)+
+
+	move.w	d6,d0
+	add.w	d3,d0
+	move.w	d0,(a0)+
+
+	clr.l	d0
+	move.w	d6,d0
+	addq.w	#1,d0
+	divu.w	#InCube.SLICES,d0
+	swap	d0
+	move.w	d0,d1
+	add.w	d3,d0
+	move.w	d0,(a0)+
+
+	add.w	d2,d1
+	move.w	d1,(a0)+
+
+	move.w	d6,d0
+	add.w	d2,d0
+	move.w	d0,(a0)+
+
+	REPT	4
+	move.w	-8(a0),d0
+	addi.w	#InCube.VERTICES,d0
+	move.w	d0,(a0)+
+	ENDR
+
+	dbra	d6,.primloop
+
+	dbra	d7,.prim_ring_loop
+
+.end:	suba.l	a6,a0
+	move.l	a0,d0
+	rts
+
+.radius:DC.W	0
+
+	IFNE	0
+; Swaps some colors and shit...
+; Let's do g,b := b,g
+InCube.initTexture2:
+; Copy header...
+	lea	InCube.texture1,a1
+	movem.w	12(a1),d6/d7
+	lea	InCube.texture2,a0
+	moveq	#5-1,d0
+.copy_header_loop:
+	move.l	(a1)+,(a0)+
+	dbra	d0,.copy_header_loop
+
+; Do the pixels.
+	mulu.w	d6,d7
+	subq.l	#1,d7
+.loop:	move.w	(a1)+,d0
+	move.w	d0,d1
+	move.w	d0,d2
+	andi.w	#$F800,d0
+	andi.w	#$07C0,d1
+	lsr.w	#6,d1
+	andi.w	#$001F,d2
+	lsl.w	#6,d2
+	or.w	d2,d0
+	or.w	d1,d0
+	move.w	d0,(a0)+
+	dbra	d7,.loop
+	rts
+	ENDC
+
+InCube.addScene:
+	bsr	InCube.getTime
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#5,d0
+	lsr.w	#1,d0
+	mulu.w	#3,d1
+	lsr.w	#1,d1
+	lsl.w	#2,d2
+	bsr.l	Matrix.generate
+
+	move.w	InCube.x,d0
+	move.w	InCube.y,d1
+	move.w	InCube.z,d2
+	bsr.l	Matrix.translate
+
+	bsr.l	Matrix.push
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	move.w	InCube.objectNum,d1
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+
+	bsr.l	PrimitiveMesh.sortZ
+	rts
+
+InCube.paintVga100:
+	clr.l	d1
+	move.w	$0468.w,d1
+	lsr.l	d1
+	bcs.s	.proceed
+	rts
+.proceed:
+	bra.s	InCube.paintIt
+
+InCube.paint:
+	tst.w	InCube.readyToVblKick
+	bne.s	.go_on
+	rts
+.go_on:	clr.l	d1
+	move.w	$0468.w,d1
+
+InCube.paintIt:
+	movea.l	scr+8,a0				; physical screen please!
+	movea.l	InCube.screenAddys+8,a1			; physical viewport
+	movea.w	#InCube.SKIP*2,a6
+	movea.w	#InCube.SKIP*4,a5
+	move.l	d1,d2
+	divu.w	#InCube.SKIP,d2
+	swap	d2					; d2.w=dst lookupoffset
+	divu.w	#InCube.SKIP*4,d1
+	swap	d1					; d1.w=src lookupoffset
+	moveq	#100,d7
+	adda.w	.table(pc,d1.w*2),a0
+	move.w	.htable(pc,d2.w*2),d5			; d5.w=src offset
+	adda.w	d5,a1
+	lsr.w	d5
+
+.plot00:moveq	#2-1,d6
+
+.loop:
+	REPT	11
+	move.w	(a1),(a0)
+	adda.l	a6,a1
+	adda.l	a5,a0
+	ENDR
+	dbra	d6,.loop
+
+	subq.w	#1,d7
+	beq.s	.main_done
+	subq.w	#6,d5
+	bpl.s	.next
+	addq.w	#7,d5
+	move.w	(a1),(a0)
+	adda.l	a6,a1
+	adda.l	a5,a0
+.next:	adda.w	#320*2,a0
+	bra.s	.plot00
+
+.main_done:
+; Don't forget the final 6. 64000 mod 7 = 6 you know.
+	subq.w	#6,d5
+	beq.s	.end
+; 0<=d1.w<6 => 0<=#pix<64000
+	move.w	(a1),(a0)	
+.end:	rts
+
+; offset: 000,001,002,003,004,005,006 (wrap)
+; pixels: 023,023,023,023,023,023,022 (wrap)
+.htable:DC.W	000*2,003*2,005*2,002*2,006*2,001*2,004*2
+.table:	DC.W	000*2,006*2,010*2,004*2,012*2,002*2,008*2
+	DC.W	001*2,007*2,011*2,005*2,013*2,003*2,009*2
+	DC.W	320*2,326*2,330*2,324*2,332*2,322*2,328*2
+	DC.W	321*2,327*2,331*2,325*2,333*2,323*2,329*2
+
+;======= OBJECT DATA ========
+
+	DATA
+
+InCube.textureTable:
+	DC.L	FlareGen.chromeFogBuffer
+	DC.L	0
+
+InCube.rectAddressTable:
+	DC.L	InCube.rectangleTable
+	DC.L	InCube.rectangleTable2
+	DC.L	InCube.rectangleTable3
+
+InCube.trajectRout:
+	DC.L	InCube.standStill
+
+;======= OBJECT RESERVES ========
+
+	BSS
+
+InCube.time:
+	DS.L	1
+
+InCube.colorTable:
+
+InCube.rectangleTable:
+	DS.W	4*10
+InCube.rectangleTable2:
+	DS.W	4*10
+InCube.rectangleTable3:
+	DS.W	4*10
+
+InCube.x:
+	DS.W	1
+InCube.y:
+	DS.W	1
+InCube.z:
+	DS.W	1
+
+InCube.screenAddys:
+	DS.L	3
+
+InCube.baseAdr:
+	DS.L	1
+
+InCube.readyToVblKick:
+	DS.W	1
+InCube.objectNum:
+	DS.W	1
+
+;======= END OF DEMO-EFFECT OBJECT ========

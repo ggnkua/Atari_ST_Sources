@@ -1,0 +1,604 @@
+; Concentric squared rings: a delta screen requiring ufly..
+
+;======= OBJECT EQUATES ========
+
+Squares.STEPS:		=	4
+Squares.RING_R:		=	100
+
+			RSRESET
+Squares.ring1:		RS.W	2048
+Squares.ring2:		RS.W	2048
+Squares.ring3:		RS.W	2048
+Squares.ring4:		RS.W	2048
+Squares.BLOCK_SIZE:	RS.B	0
+
+;======= OBJECT TABLE ========
+
+; Must be first in object!!
+Squares.table:
+	DC.L	Squares.mainLoop
+	DC.L	Squares.init
+	DC.L	Squares.setRes
+	DC.L	Squares.incRot
+	DC.L	Squares.decRot
+	DC.L	Squares.setZoomOn
+	DC.L	Squares.setZoomOff
+	DC.L	Squares.setSpeedy
+	DC.L	Squares.setSlow
+	DC.L	0
+
+	IFND	DEMO_SYSTEM
+	INCLUDE	SFLY_DSP.S
+	TEXT
+	ENDC
+
+;======= RESOLUTION SETTING ROUTINE ========
+
+Squares.setRes:
+	IFEQ	testmode
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+; Unknown monitormode..
+	rts
+.vga60:	bra.l	vga60_16bit_320_200
+.vga100:bra.l	vga100_16bit_320_200
+.rgb50:	bra.l	rgb50_16bit_320_200
+	ENDC
+	rts
+
+;======= INIT SUBROUTINE ========
+
+; OUTPUT:
+; d0.l: =0 all clear, <0 error
+Squares.init:
+	move.l	#Squares.BLOCK_SIZE,d0
+	bsr.l	Mem.register
+
+	lea	sine_tbl,a1
+	bsr.l	Matrix.init
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= REALTIME INIT SUBROUTINE ========
+
+Squares.realtimeInit:
+	move.l	#rts,vbl_gfx
+
+	bsr.l	HumanFly.init
+
+	bsr.l	Mem.getBlock
+	move.l	d0,Squares.baseAdr
+
+	move.w	$04BC.w,Squares.startTime
+
+	lea	Viewport.settingsTable,a0
+	move.w	#320,Viewport.XSCREEN(a0)
+	move.w	#200,Viewport.YSCREEN(a0)
+	move.w	#0,Viewport.XSTART(a0)
+	move.w	#0,Viewport.YSTART(a0)
+	move.w	#320,Viewport.XEND(a0)
+	move.w	#200,Viewport.YEND(a0)
+	move.w	#160,Viewport.XCENTER(a0)
+	move.w	#100,Viewport.YCENTER(a0)
+	move.w	#256+32,Viewport.ASPECT(a0)
+	move.w	#$100,Viewport.FOCAL(a0)
+	bsr.l	Viewport.update
+
+	lea	Squares.textureTable,a0
+	bsr.l	Polygon.init
+
+	bsr.l	flushAndDisableICache
+	move.w	#Primitive.WORD|Primitive.MOVE,d0
+	moveq	#0,d1
+	bsr.l	Primitive.setPaintMode
+	move.w	d0,d1
+	bsr.l	restoreCache
+
+	tst.w	d1
+	bmi.s	.error
+
+	move.w	#$0100,d0
+	bsr	Squares.initObjhard
+
+	clr.w	Squares.oldRot
+	clr.w	Squares.rotDir
+	clr.w	Squares.newZoomOn
+	move.w	#1,Squares.newMultiplier
+	move.w	#1,Squares.multiplier
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= SCREENINIT SUBROUTINE ========
+
+Squares.initScreen:
+	rts
+
+;======= MAINLOOP SUBROUTINE ========
+
+Squares.mainLoop:
+	move.w	$0468.w,.old468
+
+	move.w	Squares.time,d1
+	move.w	$04BC.w,d0
+	sub.w	Squares.startTime,d0
+;	sub.w	#$100,d0
+	move.w	d0,Squares.time
+	moveq	#10,d2
+	lsr.w	d2,d0
+	lsr.w	d2,d1
+	sub.w	d1,d0
+	beq.s	.no_zoom_refresh
+	move.w	Squares.newZoomOn,Squares.zoomOn
+	move.w	Squares.newMultiplier,Squares.multiplier
+.no_zoom_refresh:
+
+	movea.l	scr,a0
+	bsr.l	Primitive.setScreenbuffer
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr	Squares.realtimeInit
+	tst.l	d0
+	bmi	.end
+	move.l	(sp)+,d0
+.end_realtime_init:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr	Squares.initScreen
+.end_screeninit:
+
+	bsr	Squares.initObjects
+
+	tst.w	Squares.rotDir
+	beq.s	.end_rot
+	move.w	$04BC.w,d0
+	sub.w	Squares.rotStart,d0
+	lsl.w	#2,d0
+	cmpi.w	#sintbllen/8,d0
+	blt.s	.oki
+	move.w	#sintbllen/8,d0
+	muls.w	Squares.rotDir,d0
+	add.w	Squares.oldRot,d0
+	move.w	d0,Squares.yRot
+	clr.w	Squares.rotDir
+	bra.s	.end_rot
+.oki:	muls.w	Squares.rotDir,d0
+	add.w	Squares.oldRot,d0
+	move.w	d0,Squares.yRot
+.end_rot:
+
+	bsr	Squares.paint
+
+	IFEQ	testmode
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	move.l	d0,d1
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+	ENDC
+
+	move.w	.old468(pc),d0
+.wait:	cmp.w	$0468.w,d0
+	beq.s	.wait
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.res_done
+	bsr	Squares.setRes
+.res_done:
+
+	clr.l	Squares.bgcol
+
+.end:	rts
+
+.old468:DC.W	0
+
+;======= OBJECT SUBROUTINES ========
+
+Squares.incRot:
+	move.w	$04BC.w,Squares.rotStart
+	move.w	Squares.yRot,Squares.oldRot
+	move.w	#+1,Squares.rotDir
+	move.l	#$FFFFFFFF,Squares.bgcol
+	rts
+
+Squares.decRot:
+	move.w	$04BC.w,Squares.rotStart
+	move.w	Squares.yRot,Squares.oldRot
+	move.w	#-1,Squares.rotDir
+	move.l	#$FFFFFFFF,Squares.bgcol
+	rts
+
+Squares.setZoomOn:
+	move.w	#1,Squares.newZoomOn
+	move.l	#$FFFFFFFF,Squares.bgcol
+	rts
+
+Squares.setZoomOff:
+	clr.w	Squares.newZoomOn
+	move.l	#$FFFFFFFF,Squares.bgcol
+	rts
+
+Squares.setSpeedy:
+	move.w	#2,Squares.newMultiplier
+	move.l	#$FFFFFFFF,Squares.bgcol
+	rts
+
+Squares.setSlow:
+	move.w	#1,Squares.newMultiplier
+	move.l	#$FFFFFFFF,Squares.bgcol
+	rts
+
+Squares.initObjects:
+	tst.w	Squares.zoomOn
+	beq.s	.end
+	move.w	Squares.time,d0
+	lsr.w	#2,d0
+	bra.s	.ok
+.end:	rts
+.ok:	andi.w	#$00FF,d0
+	addi.w	#$0100,d0
+
+Squares.initObjhard:
+	move.w	d0,.time
+	
+	bsr.l	ObjectRegistry.clear
+
+	movea.l	Squares.baseAdr,a0
+	adda.l	#Squares.ring1,a0
+	move.w	#2400*2,d0
+	mulu.w	.time(pc),d0
+	lsr.l	#8,d0
+	bsr	Squares.generate
+; d0.l=size of ring
+
+	movea.l	Squares.baseAdr,a0
+	adda.l	#Squares.ring1,a0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi	.error
+
+	movea.l	Squares.baseAdr,a0
+	adda.l	#Squares.ring2,a0
+	move.w	#1200*2,d0
+	mulu.w	.time(pc),d0
+	lsr.l	#8,d0
+	bsr	Squares.generate
+; d0.l=size of ring
+
+	movea.l	Squares.baseAdr,a0
+	adda.l	#Squares.ring2,a0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi.s	.error
+
+	movea.l	Squares.baseAdr,a0
+	adda.l	#Squares.ring3,a0
+	move.w	#600*2,d0
+	mulu.w	.time(pc),d0
+	lsr.l	#8,d0
+	bsr	Squares.generate
+; d0.l=size of ring
+
+	movea.l	Squares.baseAdr,a0
+	adda.l	#Squares.ring3,a0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi.s	.error
+
+	movea.l	Squares.baseAdr,a0
+	adda.l	#Squares.ring4,a0
+	move.w	#300*2,d0
+	mulu.w	.time(pc),d0
+	lsr.l	#8,d0
+	bsr	Squares.generate
+; d0.l=size of ring
+
+	movea.l	Squares.baseAdr,a0
+	adda.l	#Squares.ring4,a0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi.s	.error
+
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+.time:	DC.W	0
+
+; INPUT:
+; d0.w=r
+; a0: objectbuffer
+; OUTPUT:
+; d0.l=size
+Squares.generate:
+	movea.l	a0,a6
+
+; Output vertices..
+	lea	sine_tbl,a1
+	movea.w	d0,a3
+
+	move.w	#2*Squares.STEPS*4,(a0)+			; #vertices+#normals
+	move.w	#Squares.STEPS*4,(a0)+			; #normals
+
+	lea	Squares.STEPS*4*Vertex.SIZE(a0),a2
+
+	moveq	#4-1,d7
+
+.ring_loop:
+	moveq	#Squares.STEPS-1,d6
+	move.w	#Squares.RING_R,d4
+	move.w	#90,d5
+	move.w	#90*2,d3
+
+	cmpi.w	#3,d7
+	bne.s	.shit1
+	move.w	a3,d2
+	bra.s	.point_loop
+.shit1:	cmpi.w	#2,d7
+	bne.s	.shit2
+	neg.w	d4
+	neg.w	d5
+	move.w	a3,d2
+	bra.s	.point_loop
+.shit2:	cmpi.w	#1,d7
+	bne.s	.shit3
+	neg.w	d4
+	neg.w	d5
+	move.w	a3,d2
+	subi.w	#Squares.RING_R*4,d2
+	neg.w	d3
+	bra.s	.point_loop
+.shit3:	move.w	a3,d2
+	subi.w	#Squares.RING_R*4,d2
+	neg.w	d3
+
+.point_loop:
+	move.w	d6,d0
+	mulu.w	#sintbllen/Squares.STEPS,d0
+	Get_SinCos	a1,d0,d0,d1
+	muls.w	d2,d0
+	muls.w	d2,d1
+	swap	d0
+	swap	d1
+	move.w	d0,(a0)+
+	move.w	d1,(a0)+
+	move.w	d4,(a0)+
+	move.w	d6,d0
+	mulu.w	#sintbllen/Squares.STEPS,d0
+	Get_SinCos	a1,d0,d0,d1
+	muls.w	d3,d0
+	muls.w	d3,d1
+	swap	d0
+	swap	d1
+	move.w	d0,(a2)+
+	move.w	d1,(a2)+
+	move.w	d5,(a2)+
+	dbra	d6,.point_loop
+
+	dbra	d7,.ring_loop
+
+	movea.l	a2,a0
+
+	clr.w	(a0)+				; #texels
+
+	move.w	#Squares.STEPS*4,(a0)+		; #primitives
+	moveq	#4-1,d7
+
+.prim_ring_loop:
+	move.w	d7,d2
+	mulu.w	#Squares.STEPS,d2
+	move.w	d7,d3
+	addq.w	#1,d3
+	andi.w	#%11,d3
+	mulu.w	#Squares.STEPS,d3
+	moveq	#Squares.STEPS-1,d6
+	
+.primloop:
+;	move.w	d6,d0
+;	eor.w	d7,d0
+;	andi.w	#1,d0
+;	ori.w	#Polygon.QUAD|Polygon.ENVMAPPED|0,d0
+	move.w	#Polygon.QUAD|Polygon.ENVMAPPED|0,d0
+
+	move.w	d0,(a0)+
+
+	move.w	d6,d0
+	add.w	d3,d0
+	move.w	d0,(a0)+
+
+	clr.l	d0
+	move.w	d6,d0
+	addq.w	#1,d0
+	divu.w	#Squares.STEPS,d0
+	swap	d0
+	move.w	d0,d1
+	add.w	d3,d0
+	move.w	d0,(a0)+
+
+	add.w	d2,d1
+	move.w	d1,(a0)+
+
+	move.w	d6,d0
+	add.w	d2,d0
+	move.w	d0,(a0)+
+
+	REPT	4
+	move.w	-8(a0),d0
+	addi.w	#Squares.STEPS*4,d0
+	move.w	d0,(a0)+
+	ENDR
+
+	dbra	d6,.primloop
+
+	dbra	d7,.prim_ring_loop
+
+.end:	suba.l	a6,a0
+	move.l	a0,d0
+	rts
+
+Squares.paint:
+	bsr.l	PrimitiveMesh.new
+
+	clr.w	d0
+	move.w	Squares.yRot,d1
+	clr.w	d2
+	bsr.l	Matrix.generate
+	clr.w	d0
+	clr.w	d1
+	move.w	#3000,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+; Push sq1.
+	move.w	Squares.time,d0
+	mulu.w	Squares.multiplier,d0
+	mulu.w	#2,d0
+	addi.w	#sintbllen/4,d0
+	clr.w	d1
+	clr.w	d2
+	bsr.l	Matrix.generate
+	bsr.l	Matrix.push
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+
+; Push sq2.
+	move.w	Squares.time,d0
+	mulu.w	Squares.multiplier,d0
+	mulu.w	#3,d0
+	addi.w	#sintbllen/4,d0
+	clr.w	d1
+	clr.w	d2
+	bsr.l	Matrix.generate
+	bsr.l	Matrix.push
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#1,d1
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+
+; Push sq3.
+	move.w	Squares.time,d0
+	mulu.w	Squares.multiplier,d0
+	mulu.w	#4,d0
+	addi.w	#sintbllen/4,d0
+	clr.w	d1
+	clr.w	d2
+	bsr.l	Matrix.generate
+	bsr.l	Matrix.push
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#2,d1
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+
+; Push sq4.
+	move.w	Squares.time,d0
+	mulu.w	Squares.multiplier,d0
+	mulu.w	#5,d0
+	addi.w	#sintbllen/4,d0
+	clr.w	d1
+	clr.w	d2
+	bsr.l	Matrix.generate
+	bsr.l	Matrix.push
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#3,d1
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+
+	bsr.l	Matrix.pop
+
+	bsr.l	PrimitiveMesh.sortZ
+	bsr.l	PrimitiveMesh.complete
+
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	move.l	Squares.bgcol,d4
+	bsr.l	Viewport.paintRectangle
+
+	lea	Squares.rectTable,a0
+	bsr.l	PrimitiveMesh.paint
+
+	moveq	#0,d0
+	rts
+
+.error:	moveq	#-1,d0
+	rts
+
+;======= OBJECT DATA ========
+
+	DATA
+
+Squares.textureTable:
+	DC.L	FlareGen.goldBuffer
+	DC.L	0
+
+;======= OBJECT RESERVES ========
+
+	BSS
+
+Squares.rectTable:
+	DS.W	1+4*32
+
+Squares.startTime:
+	DS.W	1
+Squares.time:
+	DS.W	1
+
+Squares.yRot:
+	DS.W	1
+Squares.oldRot:
+	DS.W	1
+Squares.rotStart:
+	DS.W	1
+Squares.rotDir:
+	DS.W	1
+Squares.zoomOn:
+	DS.W	1
+Squares.newZoomOn:
+	DS.W	1
+Squares.oldTime:
+	DS.W	1
+
+Squares.bgcol:
+	DS.L	1
+
+Squares.baseAdr:
+	DS.L	1
+
+Squares.multiplier:
+	DS.W	1
+Squares.newMultiplier
+	DS.W	1
+
+;======= END OF DEMO-EFFECT OBJECT ========

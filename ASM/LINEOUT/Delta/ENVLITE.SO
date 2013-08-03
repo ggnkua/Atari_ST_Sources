@@ -1,0 +1,667 @@
+; Envmapped ball and portals screen. Version that incorporates lightning..
+; Requires u-fly. Made for the delta demo.
+
+;======= OBJECT EQUATES ========
+
+;======= OBJECT TABLE ========
+
+; Must be first in object!!
+EnvBall.table:
+	DC.L	EnvBall.mainLoop
+	DC.L	EnvBall.init
+	DC.L	EnvBall.setRes
+	DC.L	EnvBall.incTime				; 3
+	DC.L	EnvBall.decTime				; 4
+	DC.L	EnvBall.SwitchBall			; 5
+	DC.L	EnvBall.shock				; 6
+	DC.L	EnvBall.switchworldrot			; 7
+	DC.L	EnvBall.switchFastRot			; 8
+	DC.L	EnvBall.setNormalSpeed			; 9
+	DC.L	EnvBall.setFastSpeed			; A
+	DC.L	EnvBall.setSuperSpeed			; B
+	DC.L	EnvBall.switchLightning			; C
+	DC.L	Lightning.toggleMode			; D
+	DC.L	Lightning.pulseSlow			; E
+	DC.L	Lightning.pulseNormal			; F
+	DC.L	Lightning.pulseFast			; 10
+	IFNE	0
+	DC.L	Lightning.incInRadius
+	DC.L	Lightning.decInRadius
+	DC.L	Lightning.incSegLength
+	DC.L	Lightning.decSegLength
+	DC.L	Lightning.incSegRandom
+	DC.L	Lightning.decSegRandom
+	ENDC
+	DC.L	EnvBall.switchMorph			; 11
+	DC.L	0
+
+	IFND	DEMO_SYSTEM
+	INCLUDE	SFLY_DSP.S				; Include the CPU-DSP engine.
+	TEXT
+	INCLUDE	OBJECT3D.I
+	TEXT
+	ENDC
+
+	INCLUDE	LIGHTNI3.S
+	TEXT
+
+;======= RESOLUTION SETTING ROUTINE ========
+
+EnvBall.setRes:
+	IFEQ	testmode
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	beq.s	.end
+
+	move.l	#rts,vbl_gfx
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+; Unknown monitormode..
+.end:	rts
+.vga60:	bra.l	vga60_16bit_320_200
+.vga100:bra.l	vga100_16bit_320_200
+.rgb50:	bra.l	rgb50_16bit_320_200
+	ENDC
+
+;======= INIT SUBROUTINE ========
+
+* OUTPUT: d0.l: 0   = All clear.
+*               neg = Error! Not initialized!
+EnvBall.init:
+	lea	sine_tbl,a1
+	bsr.l	Matrix.init
+
+; Generate nice turbulence chrome texture..
+	lea	EnvBall.texture2,a0
+	move.l	#"Word",(a0)+
+	move.l	#"PerP",(a0)+
+	move.l	#"ixel",(a0)+
+	move.l	#$00400040,(a0)+
+	lea	FlareGen.chromePal,a1
+	moveq	#6,d0
+	moveq	#3,d1
+	move.l	#$00001000,d2
+	bsr.l	Texture.createWords2
+
+	bsr	Lightning.init
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= REALTIME INIT SUBROUTINE ========
+
+EnvBall.realtimeInit:
+	move.l	#EnvBall.setRes,vbl_gfx
+
+	move.w	$04BC.w,EnvBall.startTime
+	bsr	EnvBall.shock
+
+	bsr.l	HumanFly.init
+
+	lea	Viewport.settingsTable,a0
+	move.w	#320,Viewport.XSCREEN(a0)
+	move.w	#200,Viewport.YSCREEN(a0)
+	move.w	#0,Viewport.XSTART(a0)
+	move.w	#0,Viewport.YSTART(a0)
+	move.w	#320,Viewport.XEND(a0)
+	move.w	#200,Viewport.YEND(a0)
+	move.w	#160,Viewport.XCENTER(a0)
+	move.w	#100,Viewport.YCENTER(a0)
+	move.w	#256+32,Viewport.ASPECT(a0)
+	move.w	#$100,Viewport.FOCAL(a0)
+	bsr.l	Viewport.update
+
+	lea	EnvBall.textureTable,a0
+	lea	Lightning.pal,a1
+	bsr.l	Polygon.init
+
+	bsr.l	ObjectRegistry.clear
+
+	lea	Object3d.spikey,a1
+	move.l	#Object3d.spikeyEnd-Object3d.spikey,d0
+	lea	EnvBall.spikey,a0
+	bsr.l	Object3d.copy
+
+	lea	EnvBall.spikey,a0
+	moveq	#0,d0
+	moveq	#8,d1
+	move.w	#$200/5,d2
+	bsr.l	Object3d.scale
+	lea	EnvBall.spikey,a0
+	moveq	#8,d0
+	moveq	#6,d1
+	move.w	#$0040,d2
+	bsr.l	Object3d.scale
+
+	lea	EnvBall.spikey,a0
+	move.l	#Object3d.spikeyEnd-Object3d.spikey,d0
+	bsr.l	ObjectRegistry.set
+
+	lea	EnvBall.delta,a0
+	move.l	#EnvBall.deltaEnd-EnvBall.delta,d0
+	bsr.l	ObjectRegistry.set
+
+	clr.w	EnvBall.morphOn
+	move.w	#$FFFF,EnvBall.portalsOn
+	move.w	#2,EnvBall.portalSpeed
+	clr.w	EnvBall.lightningMode
+	clr.w	EnvBall.worldRot
+	clr.w	EnvBall.fastRot
+	clr.w	EnvBall.ballActive
+
+	bsr	Lightning.initRealtime
+	rts
+
+;======= MAINLOOP SUBROUTINE ========
+
+EnvBall.mainLoop:
+	move.w	$0468.w,.old468
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	bsr	EnvBall.realtimeInit
+.end_realtime_init:
+
+	move.w	$04BC.w,d0
+	sub.w	EnvBall.startTime,d0
+	move.w	d0,EnvBall.time
+
+	movea.l	scr,a0
+	bsr.l	Primitive.setScreenbuffer
+
+	bsr	EnvBall.morph
+
+; == background restore ==
+
+	move.w	$04BC.w,d0
+	sub.w	EnvBall.shockTime,d0
+	lsr.w	#1,d0
+	cmpi.w	#31,d0
+	bls.s	.time_set
+	moveq	#31,d0
+.time_set:
+	neg.w	d0
+	addi.w	#31,d0
+	mulu.w	#%0000100001000001,d0
+	move.w	d0,d4
+	swap	d4
+	move.w	d0,d4
+	move.l	d4,EnvBall.backColor
+
+	tst.w	EnvBall.lightningMode
+	beq.s	.end_light_restore
+
+; lightning active.. clear dirty screens..
+	move.w	EnvBall.newFrames,d0
+	beq.s	.end_light_restore
+	subq.w	#1,d0
+	move.w	d0,EnvBall.newFrames
+
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	move.l	EnvBall.backColor,d4
+	bsr.l	Viewport.paintRectangle
+	bra.s	.end_restore_ball
+.end_light_restore:
+
+; == end of background ==
+
+; == lightning ==
+
+	tst.w	EnvBall.lightningMode
+	beq.s	.end_lightning
+
+; Clear ball background..
+	movea.l	EnvBall.rectAddressTable,a0
+	tst.w	(a0)+
+	beq.s	.end_restore_ball
+	movem.w	(a0)+,d1/d7
+	movem.w	(a0)+,d0/d6
+	move.l	EnvBall.backColor,d4
+	bsr.l	Viewport.paintRectangle
+.end_restore_ball:
+
+; Paint lightning..
+	tst.w	Lightning.pulseMode
+	beq.s	.normal
+	bsr	Lightning.paintPulsed
+	bra.s	.end_paint
+.normal:bsr	Lightning.paintNormal
+.end_paint:
+
+	lea	Lightning.boltAddys,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+.end_lightning:
+
+; == end of lightning ==
+
+	bsr.l	PrimitiveMesh.new
+
+	bsr	EnvBall.addScene
+
+	bsr.l	PrimitiveMesh.complete
+
+; == parallel shit ==
+
+	tst.w	EnvBall.lightningMode
+	bne.s	.end_par_restore		; lightning on?
+
+.restore_all:
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	move.l	EnvBall.backColor,d4
+	bsr.l	Viewport.paintRectangle
+.end_par_restore:
+
+; == end of parallel shit ==
+
+	movea.l	EnvBall.rectAddressTable,a0
+	bsr.l	PrimitiveMesh.paint
+
+	lea	EnvBall.rectAddressTable,a0
+ 	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+
+	IFEQ	testmode
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+	move.l	d0,d1
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+	ENDC
+
+	move.w	.old468(pc),d0
+	moveq	#1,d3
+	cmpi.w	#vga100,monitormode
+	bne.s	.wait
+	moveq	#2,d3
+.wait:	move.w	$0468.w,d2
+	sub.w	d0,d2
+	cmp.w	d3,d2
+	blt.s	.wait
+
+	clr.l	EnvBall.backColor
+
+.error:	rts
+
+.old468:DC.W	0
+
+;======= OBJECT SUBROUTINES ========
+
+EnvBall.incTime:
+	addq.w	#1,EnvBall.time
+	rts
+
+EnvBall.decTime:
+	subq.w	#1,EnvBall.time
+	rts
+
+EnvBall.SwitchBall:
+	move.w	$04BC.w,EnvBall.ballStartTime
+	tst.w	EnvBall.ballActive
+	beq.s	.go_on
+	clr.w	EnvBall.ballActive
+	rts
+.go_on:	move.w	#1,EnvBall.ballActive
+	rts
+
+EnvBall.shock:
+	move.w	$04BC.w,EnvBall.shockTime
+	move.l	#$FFFFFFFF,EnvBall.backColor
+	rts
+
+EnvBall.switchworldrot:
+	not.w	EnvBall.worldRot
+	move.l	$04BA.w,EnvBall.worldRotTime
+	rts
+
+EnvBall.switchFastRot:
+	not.w	EnvBall.fastRot
+	move.l	$04BA.w,EnvBall.fastRotTime
+	move.w	EnvBall.time,d0
+	Do_SinModulo	d0
+	Get_Sin	sine_tbl,d0,d0
+	asr.w	#5,d0
+	addi.w	#2100,d0
+	move.w	d0,EnvBall.startDist
+	rts
+
+EnvBall.switchPortals:
+	not.w	EnvBall.portalsOn
+	rts
+
+EnvBall.setNormalSpeed:
+	move.w	#1,EnvBall.portalSpeed
+	rts
+
+EnvBall.setFastSpeed:
+	move.w	#2,EnvBall.portalSpeed
+	rts
+
+EnvBall.setSuperSpeed:
+	move.w	#4,EnvBall.portalSpeed
+	rts
+
+EnvBall.switchLightning:
+	not.w	EnvBall.lightningMode
+	beq.s	EnvBall.switchPortals
+	move.w	#3,EnvBall.newFrames
+	bra.s	EnvBall.switchPortals
+
+EnvBall.switchMorph:
+	move.l	$04BA.w,EnvBall.morphStartTime
+	not.w	EnvBall.morphOn
+	rts
+
+EnvBall.morph:
+	tst.w	EnvBall.morphOn
+	beq.s	.end
+	
+; Edit objectvertices (morph).
+	move.l	$04BA.w,d0
+	sub.l	EnvBall.morphStartTime,d0
+	mulu.w	#3,d0
+	lsr.l	#2,d0
+	subi.w	#sintbllen/4,d0
+	Do_SinModulo	d0
+	move.w	(sine_tbl,d0.w*4),d0
+	addi.w	#$8000,d0
+	lsr.w	#8,d0
+	neg.w	d0
+	addi.w	#$0200,d0
+	andi.l	#$0000FFFF,d0
+	divu.w	#5,d0
+	lea	Object3d.spikey+4,a1
+	lea	EnvBall.spikey+4,a0
+	moveq	#8*3-1,d7
+.loop:	move.w	(a1)+,d1
+	muls.w	d0,d1
+	asr.l	#8,d1
+	move.w	d1,(a0)+
+	dbf	d7,.loop
+
+; Replace object.
+	lea	EnvBall.spikey,a0
+	moveq	#0,d0
+	moveq	#%0001,d1
+	bsr.l	ObjectRegistry.replace
+
+.end:	rts
+
+EnvBall.addScene:
+; Calc point of ball..
+	tst.w	EnvBall.ballActive
+	bne.s	.active
+	move.w	#2812,d0
+	bra.s	.store_ball_pos
+.active:
+	cmpi.w	#2,EnvBall.ballActive
+	beq.s	.ball_centered
+	move.w	$04BC.w,d0
+	sub.w	EnvBall.ballStartTime,d0
+	subi.w	#300,d0
+	bmi.s	.okay
+	move.w	#2,EnvBall.ballActive
+.ball_centered:
+	clr.l	d0
+	bra.s	.store_ball_pos
+.okay:	muls.w	d0,d0
+	lsr.l	#5,d0
+	neg.l	d0
+.store_ball_pos:
+	move.w	d0,EnvBall.ballDist
+
+; world rotation and translation..
+	tst.w	EnvBall.worldRot
+	clr.w	d1
+	tst.w	EnvBall.worldRot
+	beq.s	.no_rot
+
+; Calc some y axis shit. Needs to be continuous in 0th and 1st grade.
+; (1) at^2=bt+c
+; (2) (d/dt)at^2=(d/dt)(bt+c), 2at=b
+;
+; when t=$100, b=1/2
+; =>
+; (2) $200a=1/2, a=1/$400
+; (1) $10000a=$80+c, $10000/$400=$80+c, c=-$40
+;
+	move.l	$04BA.w,d1
+	sub.l	EnvBall.worldRotTime,d1
+	cmpi.l	#$100,d1
+	bhs.s	.linear_speed
+	mulu.w	d1,d1
+	lsr.l	#8,d1
+	lsr.l	#2,d1
+	bra.s	.end_speed
+.linear_speed:
+	lsr.l	#1,d1
+	subi.l	#$40,d1
+.end_speed:
+	
+.no_rot:
+
+; Do x axis rotation.
+	clr.w	d0
+	tst.w	EnvBall.fastRot
+	beq.s	.no_rot2
+	move.l	$04BA.w,d0
+	sub.l	EnvBall.fastRotTime,d0
+	add.l	d0,d0
+.no_rot2:
+
+	clr.w	d2
+	bsr.l	Matrix.generate
+	clr.l	d0
+	clr.l	d1
+	move.w	EnvBall.time,d2
+	Do_SinModulo	d2
+	Get_Sin	sine_tbl,d2,d2
+;	tst.w	EnvBall.fastRot
+;	beq.s	.normal_distance
+;	move.l	$04BA.w,d2
+;	sub.l	EnvBall.fastRotTime,d2
+;	add.w	d2,d2
+;	add.w	EnvBall.startDist,d2
+;	bra.s	.end_calc_distance
+.normal_distance:
+	asr.w	#5,d2
+	addi.w	#2100,d2
+.end_calc_distance:
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+; Kick in da ball.
+	move.w	EnvBall.time,d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#5,d0
+	lsr.w	#2,d0
+	mulu.w	#3,d1
+	lsr.w	#1,d1
+	lsl.w	#2,d2
+	bsr.l	Matrix.generate
+	clr.w	d0
+	move.w	EnvBall.ballDist,d1
+	clr.w	d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+	tst.w	EnvBall.portalsOn
+	beq.s	.end_portals
+
+; Kick in da delta portalz.
+	clr.w	-(sp)
+
+.loop:	clr.w	d0
+	clr.w	d1
+	move.w	(sp),d2
+	lsr.w	#5,d2
+	neg.w	d2
+	add.w	EnvBall.time,d2
+	bsr.l	Matrix.generate
+	clr.w	d0
+	clr.w	d1
+	move.w	EnvBall.time,d2
+	mulu.w	EnvBall.portalSpeed,d2
+	neg.l	d2
+	lsl.l	#5,d2
+	add.w	(sp),d2
+	addi.w	#2000,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#1,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+	addi.w	#$2000,(sp)
+	bne.s	.loop
+	addq	#2,sp
+.end_portals:
+
+	bsr.l	Matrix.pop
+	bsr.l	PrimitiveMesh.sortZ
+	rts
+
+;======= OBJECT DATA ========
+
+	DATA
+
+EnvBall.textureTable:
+	DC.L	FlareGen.goldBuffer
+	DC.L	EnvBall.texture2
+	DC.L	0
+
+EnvBall.delta:
+	DC.W	(.end-.start)/Vertex.SIZE	* amount of vertices
+	DC.W	(.end-.normstart)/Vertex.SIZE	* amount of normals
+.start:	DC.W	+000,-800,+100
+	DC.W	-600,+500,+100
+	DC.W	+600,+500,+100
+	DC.W	+000,-400,+000
+	DC.W	-300,+300,+000
+	DC.W	+300,+300,+000
+	DC.W	+000,-800,-100
+	DC.W	-600,+500,-100
+	DC.W	+600,+500,-100
+.normstart:
+.end:
+
+	DC.W	(.end2d-.start2d)/Vertex2d.SIZE	* amount of 2d vertices
+.start2d:
+	DC.W	063,063
+	DC.W	063,191
+	DC.W	191,191
+	DC.W	191,063
+.end2d:
+
+	DC.W	15				; amount of primitives
+
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|1,+03,04,01,+0,1,2
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|1,+03,01,00,+0,2,3
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|1,+04,05,02,+0,1,2
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|1,+04,02,01,+0,2,3
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|1,+05,03,00,+0,1,2
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|1,+05,00,02,+0,2,3
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|1,+06,07,04,+0,1,2
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|1,+06,04,03,+0,2,3
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|1,+07,08,05,+0,1,2
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|1,+07,05,04,+0,2,3
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|1,+08,06,03,+0,1,2
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|1,+08,03,05,+0,2,3
+	DC.W	Polygon.QUAD|Polygon.TEXTUREMAPPED|1,+01,07,06,00,+1,2,3,0
+	DC.W	Polygon.QUAD|Polygon.TEXTUREMAPPED|1,+02,08,07,01,+1,2,3,0
+	DC.W	Polygon.QUAD|Polygon.TEXTUREMAPPED|1,+00,06,08,02,+1,2,3,0
+EnvBall.deltaEnd:
+
+EnvBall.rectAddressTable:
+	DC.L	EnvBall.rectangleTable
+	DC.L	EnvBall.rectangleTable2
+	DC.L	EnvBall.rectangleTable3
+
+;======= OBJECT RESERVES ========
+
+	BSS
+
+EnvBall.rectangleTable:
+	DS.W	4*10
+EnvBall.rectangleTable2:
+	DS.W	4*10
+EnvBall.rectangleTable3:
+	DS.W	4*10
+
+EnvBall.time:
+	DS.W	1
+EnvBall.startTime:
+	DS.W	1
+EnvBall.ballDist:
+	DS.W	1
+EnvBall.ballStartTime:
+	DS.W	1
+EnvBall.ballActive:
+	DS.W	1
+EnvBall.shockTime:
+	DS.W	1
+EnvBall.backColor:
+	DS.L	1
+EnvBall.worldRotTime:
+	DS.L	1
+EnvBall.worldRot:
+	DS.W	1
+EnvBall.fastRot:
+	DS.W	1
+EnvBall.fastRotTime:
+	DS.L	1
+EnvBall.startDist:
+	DS.W	1
+
+EnvBall.portalSpeed:
+	DS.W	1
+EnvBall.portalsOn:
+	DS.W	1
+
+EnvBall.texture2:
+	DS.W	10+64*64
+
+EnvBall.spikey:
+	DS.W	1000
+
+EnvBall.lightningMode:
+	DS.W	1
+EnvBall.newFrames:
+	DS.W	1
+
+EnvBall.morphOn:
+	DS.W	1
+EnvBall.morphStartTime:
+	DS.L	1
+
+;======= END OF DEMO-EFFECT OBJECT ========

@@ -1,0 +1,630 @@
+; Field of spikes. A screen for delta. Now running with 338 envmapped tris.
+
+******** OBJECT TABLE ********
+
+* Must be first in object!!
+Spikes.table:
+	DC.L	Spikes.mainLoop
+	DC.L	Spikes.init
+	DC.L	rts
+	DC.L	Spikes.setLineWaves
+	DC.L	Spikes.setCircleWaves
+	DC.L	0
+
+	IFND	DEMO_SYSTEM
+	INCLUDE	SFLY_DSP.S			; Include the CPU-DSP engine.
+	TEXT
+	ENDC
+
+******** OBJECT EQUATES ********
+
+Spikes.DISTANCE:	=	1000
+Spikes.NZ:		=	250		; For normal-shading..
+
+Spikes.WIDTH:		=	135
+Spikes.HEIGHT:		=	135
+
+Spikes.XPOINTS:		=	14			; >1 !!
+Spikes.YPOINTS:		=	14			; >1 !!
+
+Spikes.VCOUNT:		=	Spikes.XPOINTS*Spikes.YPOINTS
+Spikes.TRICOUNT:	=	(Spikes.XPOINTS-1)*(Spikes.YPOINTS-1)*2
+
+Spikes.POINTTABLE_SIZE:	=	2+Vertex.SIZE*Spikes.VCOUNT
+Spikes.TXTTABLE_SIZE:	=	1+Vertex2d.SIZE*Spikes.VCOUNT
+Spikes.PRIMLIST_SIZE:	=	1+Spikes.TRICOUNT*7
+
+Spikes.GRIDSIZE:	=	Spikes.POINTTABLE_SIZE+Spikes.TXTTABLE_SIZE+Spikes.PRIMLIST_SIZE	; in words!
+
+Spikes.BLOCK_SIZE:	=	160*100*2
+
+******** INIT SUBROUTINE ********
+
+* OUTPUT: d0.l: 0   = All clear.
+*               neg = Error! Not initialized!
+Spikes.init:
+	move.l	#Spikes.BLOCK_SIZE,d0
+	bsr.l	Mem.register
+
+	lea	sine_tbl,a1
+	bsr.l	Matrix.init
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+******** REALTIME INIT SUBROUTINE ********
+
+Spikes.realtimeInit:
+	bsr.l	Mem.getBlock
+	move.l	d0,Spikes.screenAdr
+
+	move.l	#rts,vbl_gfx
+
+	bsr.l	HumanFly.init
+
+	lea	Viewport.settingsTable,a0
+	move.w	#160,Viewport.XSCREEN(a0)
+	move.w	#100,Viewport.YSCREEN(a0)
+	move.w	#0,Viewport.XSTART(a0)
+	move.w	#0,Viewport.YSTART(a0)
+	move.w	#160,Viewport.XEND(a0)
+	move.w	#100,Viewport.YEND(a0)
+	move.w	#80,Viewport.XCENTER(a0)
+	move.w	#50,Viewport.YCENTER(a0)
+	move.w	#256+32,Viewport.ASPECT(a0)
+	move.w	#$100,Viewport.FOCAL(a0)
+	bsr.l	Viewport.update
+
+	lea	Spikes.textureTable,a0
+	bsr.l	Polygon.init
+
+	bsr.l	ObjectRegistry.clear
+
+	moveq	#0,d0
+	lea	Spikes.grid,a0
+	movea.l	Spikes.genAddy,a1
+	jsr	(a1)
+; d0.l=size of generated grid
+
+	lea	Spikes.grid,a0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi.s	.error
+
+	move.w	$04BC.w,Spikes.startTime
+	moveq	#0,d0
+	move.w	monitormode,d1
+	cmpi.w	#vga60,d1
+	beq.s	.vga60
+	cmpi.w	#vga100,d1
+	beq.s	.vga100
+	cmpi.w	#rgb50,d1
+	beq.s	.rgb50
+* Unknown monitormode..
+	rts
+.vga60:	move.l	#vga60_16bit_160_200,Spikes.resRout
+	rts
+.vga100:move.l	#vga100_16bit_160_100,Spikes.resRout
+	rts
+.rgb50:	move.l	#rgb50_16bit_320_100,Spikes.resRout
+	rts
+
+.error:	moveq	#-1,d0
+	rts
+
+******** MAINLOOP SUBROUTINE ********
+
+Spikes.mainLoop:
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	bsr	Spikes.realtimeInit
+	tst.w	d0
+	bmi	.end
+.end_realtime_init:
+
+	bsr	Spikes.setScreenAddy
+
+	bsr.l	PrimitiveMesh.new
+
+	bsr.w	Spikes.addGrid
+	tst.l	d0
+	bmi	.end
+
+	bsr.l	PrimitiveMesh.sortZ
+	bsr.l	PrimitiveMesh.complete
+
+; with dsp h_fly this is in parallel!
+	bsr.w	Spikes.flushScreen	
+
+	movea.l	Spikes.rectAddressTable,a0
+	bsr.l	PrimitiveMesh.paint
+
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	movea.l	Spikes.resRout,a0
+	suba.l	a1,a1
+	movea.l	d0,a2
+	move.l	frmcnt,d0
+	cmp.l	lastframecount,d0
+	beq.s	.no_refresh			; don't show screen when its still crap!
+	bsr.l	Screen.requestUpdate
+	clr.l	Spikes.resRout
+.no_refresh:
+.end:	rts
+
+******** OBJECT SUBROUTINES ********
+
+Spikes.setLineWaves:
+	move.l	#Spikes.generate,Spikes.genAddy
+	rts
+
+Spikes.setCircleWaves:
+	move.l	#Spikes.generate2env,Spikes.genAddy
+	rts
+
+Spikes.setScreenAddy:
+	move.w	monitormode,d0
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	movea.l	Spikes.screenAdr,a0
+	bra.l	Primitive.setScreenbuffer
+.vga100:movea.l	scr,a0
+	bra.l	Primitive.setScreenbuffer
+
+; INPUT:
+; d0.l=genflags (0:total, 1:only points)
+; a0=output buffer
+; OUTPUT:
+; d0.l=size of object
+Spikes.generate:
+	moveq	#0,d0				; needed now text<->env differences exist
+	movea.l	a0,a6
+	move.w	d0,-(sp)
+
+; Generate 3d vertices.
+	lea	sine_tbl,a2
+	move.w	#Spikes.VCOUNT,(a0)+
+	clr.w	(a0)+
+	move.w	$04BC.w,d2
+	sub.w	Spikes.startTime,d2
+	IFNE	0
+	lsr.w	#1,d2
+	andi.w	#$03FF,d2
+	cmpi.w	#$0200,d2
+	blt.s	.oki
+	not.w	d2
+.oki:	andi.w	#$01FF,d2
+	ELSE
+	lsl.w	#2,d2
+	ENDC
+	clr.w	d7
+
+.vyloop:
+; Generate row.
+	move.w	d2,d3
+	clr.w	d6
+.vxloop:
+	move.w	#Spikes.WIDTH,d0
+	mulu.w	d6,d0
+	subi.w	#(Spikes.XPOINTS-1)*Spikes.WIDTH/2,d0
+	move.w	#Spikes.HEIGHT,d1
+	mulu.w	d7,d1
+	subi.w	#(Spikes.YPOINTS-1)*Spikes.HEIGHT/2,d1
+	move.w	d0,(a0)+
+	move.w	d1,(a0)+
+	addi.w	#400,d3
+	Do_SinModulo	d3
+	Get_Sin	a2,d3,d0
+	asr.w	#7,d0
+;	move.w	d0,d1
+;	asr.w	#1,d1
+;	add.w	d1,d0
+	move.w	d0,(a0)+
+	addq.w	#1,d6
+	cmpi.w	#Spikes.XPOINTS,d6
+	blt.s	.vxloop
+
+;	addi.w	#150,d2
+	addq.w	#1,d7
+	cmpi.w	#Spikes.YPOINTS,d7
+	blt.s	.vyloop
+
+	tst.w	(sp)+
+	bne	.end
+
+; Generate texture vertices.
+	move.w	#Spikes.VCOUNT,(a0)+
+	clr.w	d7
+
+.vloop:	clr.w	d6
+
+.uloop:	move.w	#511/(Spikes.XPOINTS-1),d0
+	mulu.w	d6,d0
+	andi.w	#$00FF,d0
+	move.w	d0,(a0)+
+	move.w	#511/(Spikes.YPOINTS-1),d0
+	mulu.w	d7,d0
+	andi.w	#$00FF,d0
+	move.w	d0,(a0)+
+	addq.w	#1,d6
+	cmpi.w	#Spikes.XPOINTS,d6
+	blt.s	.uloop
+
+	addq.w	#1,d7
+	cmpi.w	#Spikes.YPOINTS,d7
+	blt.s	.vloop
+
+; Generate primitives.
+	moveq	#Spikes.XPOINTS,d6
+	moveq	#Spikes.YPOINTS,d7
+	move.w	#Spikes.TRICOUNT,(a0)+
+	subq.w	#2,d6
+	subq.w	#2,d7
+	move.w	d6,d5
+
+.yloop:	
+
+.xloop:	move.w	#Polygon.TRI|Polygon.TEXTUREMAPPED|0,(a0)+
+
+	move.w	d7,d0
+	mulu.w	#Spikes.XPOINTS,d0
+	add.w	d6,d0
+	move.w	d0,(a0)+				; p0=y*w+x
+
+	move.w	d7,d0
+	mulu.w	#Spikes.XPOINTS,d0
+	add.w	d6,d0
+	addq.w	#1,d0
+	move.w	d0,(a0)+				; p0=y*w+x+1
+
+	move.w	d7,d0
+	addq.w	#1,d0
+	mulu.w	#Spikes.XPOINTS,d0
+	add.w	d6,d0
+	addq.w	#1,d0
+	move.w	d0,(a0)+				; p0=(y+1)*w+x+1
+
+	REPT	3
+	move.w	-6(a0),(a0)+
+	ENDR
+
+	move.w	#Polygon.TRI|Polygon.TEXTUREMAPPED|0,(a0)+
+
+	move.w	d7,d0
+	mulu.w	#Spikes.XPOINTS,d0
+	add.w	d6,d0
+	move.w	d0,(a0)+				; p0=y*w+x
+
+	move.w	d7,d0
+	addq.w	#1,d0
+	mulu.w	#Spikes.XPOINTS,d0
+	add.w	d6,d0
+	addq.w	#1,d0
+	move.w	d0,(a0)+				; p0=(y+1)*w+x+1
+
+	move.w	d7,d0
+	addq.w	#1,d0
+	mulu.w	#Spikes.XPOINTS,d0
+	add.w	d6,d0
+	move.w	d0,(a0)+				; p0=(y+1)*w+x
+
+	REPT	3
+	move.w	-6(a0),(a0)+
+	ENDR
+
+	dbra	d6,.xloop	
+
+	move.w	d5,d6
+	dbra	d7,.yloop
+
+.end:	move.l	a0,d0
+	sub.l	a6,d0
+	rts
+
+; INPUT:
+; d0.l=genflags (0:total, 1:only points)
+; a0=output buffer
+; OUTPUT:
+; d0.l=size of object
+Spikes.generate2env:
+	movea.l	a0,a6
+	move.w	d0,-(sp)
+
+; Generate 3d vertices.
+	lea	sine_tbl,a2
+	move.w	#Spikes.VCOUNT*2,(a0)+
+	move.w	#Spikes.VCOUNT,(a0)+
+	lea	Spikes.VCOUNT*Vertex.SIZE(a0),a1
+	move.w	$04BC.w,d4
+	sub.w	Spikes.startTime,d4
+	move.w	d4,d5
+	mulu.w	#5,d4
+	mulu.w	#6,d5
+	clr.w	d7
+
+.vyloop:
+; Generate row.
+	clr.w	d6
+
+.vxloop:move.w	d6,d0
+	mulu.w	#Spikes.WIDTH,d0
+	subi.w	#Spikes.WIDTH*Spikes.XPOINTS/2,d0
+	move.w	d0,(a0)+			; Store x.
+	move.w	d7,d0
+	mulu.w	#Spikes.HEIGHT,d0
+	subi.w	#Spikes.HEIGHT*Spikes.YPOINTS/2,d0
+	move.w	d0,(a0)+			; Store y.
+
+	move.w	d6,d0
+	lsl.w	#8,d0
+	add.w	d5,d0
+	Do_SinModulo	d0			; d0.w=c<<8+t
+	Get_SinCos	a2,d0,d0,d2		; d0.w=sin(c<<8+t1), d2.w=cos(c<<8+t1)
+	asr.w	#1,d0
+
+	move.w	d7,d1
+	lsl.w	#8,d1
+	sub.w	d4,d1
+	Do_SinModulo	d1
+	Get_SinCos	a2,d1,d1,d3		; d1.w=sin(r<<8+t2), d3.w=cos(r<<8+t2)
+	asr.w	#1,d1
+
+	add.w	d1,d0				; d0.w=[sin(c<<8+t1)+sin(r<<8+t2)]/2
+	asr.w	#6,d0				; Store z.
+	move.w	d0,(a0)+
+
+;
+;                           1                     [a*cos(a*c+t1)]
+; n = ------------------------------------------- [b*cos(b*r+t2)]
+; -   sqrt[(a*cos(a*c+t1))^2+(b*cos(b*r+t2))^2+4] [     -2      ]
+;
+
+	asr.w	#8,d2
+	asr.w	#8,d3
+
+	move.w	d2,d1
+	muls.w	d1,d1
+	add.l	d1,d1				; frac sillyness
+	move.w	d3,d0
+	muls.w	d0,d0
+	add.l	d0,d0				; frac sillyness
+	add.l	d0,d1
+	addi.l	#Spikes.NZ*Spikes.NZ*2,d1	; n.z^2 (frac sillyness)
+; d1.l= nx^2+ny^2+nz^2
+	movem.w	d2-d3,-(sp)
+	bsr.l	Math.sqrt
+	movem.w	(sp)+,d2-d3
+	clr.w	d0
+	swap	d0
+	addq.w	#1,d0
+	lsl.l	#8,d2
+	lsl.l	#8,d3
+	divs.w	d0,d2
+	divs.w	d0,d3
+	move.l	#Spikes.NZ<<7,d1
+	divs.w	d0,d1
+
+	move.w	d3,(a1)+			; Store n.x.
+	move.w	d2,(a1)+			; Store n.y.
+	move.w	d1,(a1)+			; Store n.z.
+
+	addq.w	#1,d6
+	cmpi.w	#Spikes.XPOINTS,d6
+	blt	.vxloop
+
+	addq.w	#1,d7
+	cmpi.w	#Spikes.YPOINTS,d7
+	blt	.vyloop
+
+	movea.l	a1,a0				; a0: dst texeltable
+
+	tst.w	(sp)+
+	bne	.end
+
+	clr.w	(a0)+				; 0 texels
+
+; Generate primitives.
+	moveq	#Spikes.XPOINTS,d6
+	moveq	#Spikes.YPOINTS,d7
+	move.w	#Spikes.TRICOUNT,(a0)+
+	subq.w	#2,d6
+	subq.w	#2,d7
+	move.w	d6,d5
+
+.yloop:	
+
+.xloop:	move.w	#Polygon.TRI|Polygon.ENVMAPPED|0,(a0)+
+
+	move.w	d7,d0
+	mulu.w	#Spikes.XPOINTS,d0
+	add.w	d6,d0
+	move.w	d0,(a0)+				; p0=y*w+x
+
+	move.w	d7,d0
+	mulu.w	#Spikes.XPOINTS,d0
+	add.w	d6,d0
+	addq.w	#1,d0
+	move.w	d0,(a0)+				; p0=y*w+x+1
+
+	move.w	d7,d0
+	addq.w	#1,d0
+	mulu.w	#Spikes.XPOINTS,d0
+	add.w	d6,d0
+	addq.w	#1,d0
+	move.w	d0,(a0)+				; p0=(y+1)*w+x+1
+
+	REPT	3
+	move.w	-6(a0),d0
+	addi.w	#Spikes.VCOUNT,d0
+	move.w	d0,(a0)+
+	ENDR
+
+	move.w	#Polygon.TRI|Polygon.ENVMAPPED|0,(a0)+
+
+	move.w	d7,d0
+	mulu.w	#Spikes.XPOINTS,d0
+	add.w	d6,d0
+	move.w	d0,(a0)+				; p0=y*w+x
+
+	move.w	d7,d0
+	addq.w	#1,d0
+	mulu.w	#Spikes.XPOINTS,d0
+	add.w	d6,d0
+	addq.w	#1,d0
+	move.w	d0,(a0)+				; p0=(y+1)*w+x+1
+
+	move.w	d7,d0
+	addq.w	#1,d0
+	mulu.w	#Spikes.XPOINTS,d0
+	add.w	d6,d0
+	move.w	d0,(a0)+				; p0=(y+1)*w+x
+
+	REPT	3
+	move.w	-6(a0),d0
+	addi.w	#Spikes.VCOUNT,d0
+	move.w	d0,(a0)+
+	ENDR
+
+	dbf	d6,.xloop	
+
+	move.w	d5,d6
+	dbf	d7,.yloop
+
+.end:	move.l	a0,d0
+	sub.l	a6,d0
+	rts
+
+Spikes.addGrid:
+	moveq	#1,d0
+	lea	Spikes.grid,a0
+	movea.l	Spikes.genAddy,a1
+	jsr	(a1)
+; d0.l=size of generated grid
+
+	IFNE	1
+
+	move.l	d0,-(sp)
+	bsr.l	ObjectRegistry.clear
+	move.l	(sp)+,d0
+
+	lea	Spikes.grid,a0
+	bsr.l	ObjectRegistry.set
+
+	ELSE
+
+	lea	Spikes.grid,a0
+	moveq	#0,d0				; handle
+	moveq	#%0001,d1			; Replace only 3d vertices.
+	move.l	#Spikes.GRIDSIZE*2,d2		; objsize
+	bsr.l	ObjectRegistry.replace
+
+	ENDC
+
+; Push world rotation matrix.
+	move.w	$04BC.w,d0
+	sub.w	Spikes.startTime,d0
+	lea	sine_tbl,a1
+	move.w	d0,d2
+	mulu.w	#7,d0
+	lsr.l	#4,d0
+	Do_SinModulo	d0
+	Get_Sin	a1,d0,d0
+	muls.w	#$E0*2,d0			; x-rot amp
+	swap	d0
+	addi.w	#1024,d0
+	clr.l	d1
+	mulu.w	#5,d2
+	lsr.w	#3,d2
+	Do_SinModulo	d2
+	Get_Cos	a1,d2,d2
+	asr.w	#5,d2
+	bsr.l	Matrix.generate
+	move.w	#0,d0
+	move.w	#0,d1
+	move.w	#Spikes.DISTANCE,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+
+	moveq	#0,d0
+	rts
+
+.error:	moveq	#-1,d0
+	rts
+
+Spikes.flushScreen:
+	move.w	monitormode,d2
+	cmpi.w	#vga100,d2
+	beq.s	.copy_done
+	move.w	#160,d0
+	moveq	#100,d1
+	movea.l	Spikes.screenAdr,a1
+	movea.l	scr,a0
+	cmpi.w	#vga60,d2
+	beq.l	DOUBLE_BUFFERV
+	cmpi.w	#rgb50,d2
+	beq.l	.double_horizontally
+; Unknown monitormode..
+.copy_done:
+	rts
+
+.double_horizontally:
+	move.w	#160*100/16-1,d7
+.loop:	REPT	16
+	move.w	(a1),(a0)+
+	move.w	(a1)+,(a0)+
+	ENDR
+	dbf	d7,.loop
+	rts
+
+******** OBJECT DATA ********
+
+	DATA
+
+Spikes.textureTable:
+	DC.L	Texture.spaceTexture
+	DC.L	0
+
+Spikes.rectAddressTable:
+	DC.L	Spikes.rectTable
+	DC.L	Spikes.rectTable2
+	DC.L	Spikes.rectTable3
+
+Spikes.genAddy:
+	DC.L	Spikes.generate2env
+
+******** OBJECT RESERVES ********
+
+	BSS
+
+Spikes.grid:
+	DS.W	Spikes.GRIDSIZE
+
+Spikes.rectTable:
+	DS.W	1+4*32
+Spikes.rectTable2:
+	DS.W	1+4*32
+Spikes.rectTable3:
+	DS.W	1+4*32
+
+Spikes.startTime:
+	DS.W	1
+Spikes.resRout:	
+	DS.L	1
+Spikes.screenAdr:
+	DS.L	1
+
+******** END OF DEMO-EFFECT OBJECT ********

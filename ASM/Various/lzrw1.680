@@ -1,0 +1,680 @@
+THE LZRW1 ALGORITHM
+===================
+Author : Ross N. Williams.
+Date   : 03-Apr-1991.
+
+1. This is  my implementation in 68000 assembly language  of the LZRW1
+algorithm. I  have done my  best to create the  fastest implementation
+possible without  making the code overcomplicated  (e.g. by over-using
+unrolling).
+
+2. This file has been copied into a test harness and works.
+
+3. This  code is public  domain.
+
+4. Warning:  This code  is non-deterministic insofar  as it  may yield
+different  compressed representations  of the  same file  on different
+runs. (However, it will always decompress correctly to the original).
+
+5. If you use this code in anger (e.g. in a product) drop me a note at
+ross@spam.ua.oz.au and I will put you  on a mailing list which will be
+invoked if anyone finds a bug in this code.
+
+6.   The  internet   newsgroup  comp.compression   might  also   carry
+information on this algorithm from time to time.
+
+7. I also have a 68000 implementation of the fast_copy routine which I
+will make public  if I find the  time. It uses unrolled  loops to copy
+four bytes per instruction (if the two blocks are longword aligned).
+
+/******************************************************************************/
+/*                                                                            */
+/*                               ALG_LZRW1.68000                              */
+/*                                                                            */
+/******************************************************************************/
+/*                                                                            */
+/* Author : Ross Williams.                                                    */
+/* Date   : 27 August 1990.                                                   */
+/*                                                                            */
+/******************************************************************************/
+/*                                                                            */
+/* This file contains an implementation of the LZRW1 data compression         */
+/* algorithm in 68000 assembly language.                                      */
+/*                                                                            */
+/* The algorithm is a general purpose compression algorithm that runs fast    */
+/* and gives reasonable compression. The algorithm is a member of the Lempel  */
+/* Ziv family of algorithms and bases its compression on the presence in the  */
+/* data of repeated substrings.                                               */
+/*                                                                            */
+/* For more information see the following documents:                          */
+/*    Interface      : The C header file "compress.h".                        */
+/*    Design         : LZRW1 Design         Document.                         */
+/*    Implementation : LZRW1 Implementation Document.                         */
+/*    Verification   : LZRW1 Verification   Document.                         */
+/*                                                                            */
+/* WARNING: This algorithm is non-deterministic. Its compression performance  */
+/* may vary slightly from run to run.                                         */
+/*                                                                            */
+/******************************************************************************/
+/* Assembly language portions of this file use the following layout template. */
+/*;23456 12345678, 1234567890 ;0123456789012345678901234567890123456789012345 */
+/******************************************************************************/
+
+                            /* INCLUDE FILES                                  */
+                            /* =============                                  */
+#include "port.h"           /* Defines symbols for the non portable stuff.    */
+#include "compress.h"       /* Defines single exported function "compress".   */
+#include "fast_copy.h"      /* Fast memory copy routine.                      */
+
+/******************************************************************************/
+
+/* The following simplifies some of the expressions that require 32 bits.     */
+#define U(X) ((ULONG) X)
+
+/* The following structure is returned by the "compress" function below when  */
+/* the user asks the function to return identifying information.              */
+/* The most important field in the record is the working memory field which   */
+/* tells the calling program how much working memory should be passed to      */
+/* "compress" when it is called to perform a compression or decompression.    */
+/* For more information on this structure see "compress.h".                   */
+
+static struct compress_identity identity =
+{
+ U(0x060D3BE2),                           /* Algorithm identification number. */
+ U(U(4)*U(4096)+U(3)),                    /* Working memory (bytes) to alg.   */
+ "LZRW1",                                 /* Name of algorithm.               */
+ "1.0",                                   /* Version number of algorithm.     */
+ "27-Aug-1990",                           /* Date of algorithm.               */
+ "Public Domain",                         /* Copyright notice.                */
+ "Ross N. Williams",                      /* Author of algorithm.             */
+ "Renaissance Software",                  /* Affiliation of author.           */
+ "Public Domain"                          /* Vendor of algorithm.             */
+};
+
+void compress_compress  (UBYTE *,UBYTE *,ULONG,UBYTE *,ULONG *);
+void compress_decompress(UBYTE *,UBYTE *,ULONG,UBYTE *,ULONG *);
+
+/******************************************************************************/
+
+/* This function is the only function exported by this module.                */
+/* Depending on its first parameter, the function can be requested to         */
+/* compress a block of memory, decompress a block of memory, or to identify   */
+/* itself. For more information, see the specification file "compress.h".     */
+
+EXPORT void compress(action,wrk_mem,src_adr,src_len,dst_adr,p_dst_len)
+UWORD     action;      /* Action to be performed.                             */
+UBYTE   *wrk_mem;      /* Address of working memory we can use.               */
+UBYTE   *src_adr;      /* Address of input data.                              */
+ULONG    src_len;      /* Length  of input data.                              */
+UBYTE   *dst_adr;      /* Address to put output data.                         */
+ULONG *p_dst_len;      /* Address of longword for length of output data.      */
+                       /* Also used to return address of identity struct.     */
+{
+ switch (action)
+   {
+    case COMPRESS_ACTION_IDENTITY:
+       *p_dst_len=U(&identity);
+       break;
+    case COMPRESS_ACTION_COMPRESS:
+       compress_compress(wrk_mem,src_adr,src_len,dst_adr,p_dst_len);
+       break;
+    case COMPRESS_ACTION_DECOMPRESS:
+       compress_decompress(wrk_mem,src_adr,src_len,dst_adr,p_dst_len);
+       break;
+   }
+}
+
+/******************************************************************************/
+/*                                                                            */
+/* The remainder of this file contains some definitions and two more          */
+/* functions, one for compression and one for decompression. This section     */
+/* contains information and definitions common to both functions.             */
+/*                                                                            */
+/******************************************************************************/
+/*                                                                            */
+/*                     DEFINITION OF COMPRESSED FILE FORMAT                   */
+/*                     ====================================                   */
+/*  * A compressed file consists of a COPY FLAG followed by a REMAINDER.      */
+/*  * The copy flag CF uses up four bytes with the first byte being the       */
+/*    least significant.                                                      */
+/*  * If CF=1, then the compressed file represents the remainder of the file  */
+/*    exactly. Otherwise CF=0 and the remainder of the file consists of zero  */
+/*    or more GROUPS, each of which represents one or more bytes.             */
+/*  * Each group consists of two bytes of CONTROL information followed by     */
+/*    sixteen ITEMs except for the last group which can contain from one      */
+/*    to sixteen items.                                                       */
+/*  * An item can be either a LITERAL item or a COPY item.                    */
+/*  * Each item corresponds to a bit in the control bytes.                    */
+/*  * The first control byte corresponds to the first 8 items in the group    */
+/*    with bit 0 corresponding to the first item in the group and bit 7 to    */
+/*    the eighth item in the group.                                           */
+/*  * The second control byte corresponds to the second 8 items in the group  */
+/*    with bit 0 corresponding to the ninth item in the group and bit 7 to    */
+/*    the sixteenth item in the group.                                        */
+/*  * A zero bit in a control word means that the corresponding item is a     */
+/*    literal item. A one bit corresponds to a copy item.                     */
+/*  * A literal item consists of a single byte which represents itself.       */
+/*  * A copy item consists of two bytes that represent from 3 to 16 bytes.    */
+/*  * The first byte in a copy item will be denoted C1.                       */
+/*  * The second byte in a copy item will be denoted C2.                      */
+/*  * Bits will be selected using square brackets.                            */
+/*    For example: C1[0..3] is the low nibble of the first control byte.      */
+/*    of copy item C1.                                                        */
+/*  * The LENGTH of a copy item is defined to be C1[0..3]+1 which is a number */
+/*    in the range [3,16] (the values 1 to 2 are never used).                 */
+/*  * The OFFSET of a copy item is defined to be C1[4..7]*256+C2[0..8] which  */
+/*    is a number in the range [1,4095] (the value 0 is never used).          */
+/*  * A copy item represents the sequence of bytes                            */
+/*       text[POS-OFFSET..POS-OFFSET+LENGTH-1] where "text" is the entire     */
+/*    text of the uncompressed string, and POS is the index in the text of    */
+/*    the character following the string represented by all the items         */
+/*    preceeding the item being defined.                                      */
+/*                                                                            */
+/******************************************************************************/
+
+/* The following define defines the length of the copy flag that appears at   */
+/* the start of the compressed file. I have decided on four bytes so as to    */
+/* make the source and destination longword aligned in the case where a copy  */
+/* operation must be performed.                                               */
+/* The actual flag data appears in the first byte. The rest are zero.         */
+#define FLAG_BYTES    4     /* How many bytes does the flag use up?           */
+
+/* The following defines define the meaning of the values of the copy         */
+/* flag at the start of the compressed file.                                  */
+#define FLAG_COMPRESS 0     /* Signals that output was result of compression. */
+#define FLAG_COPY     1     /* Signals that output was simply copied over.    */
+
+/* The following constant defines the maximum length of a compressed group.   */
+/* This number was calculated as follows:                                     */
+/*   2 bytes for the leading control word.                                    */
+/*  32 bytes for the worst case of 16 copy items at 2 bytes each.             */
+#define GROUP_CMP 34
+
+/* The following constant defines the maximum len of an uncompressed group.   */
+/* The longest number of bytes that can be represented in a single item is    */
+/* 16 bytes for the longest possible copy item. Multipled by the number of    */
+/* items in a group yields 16x16=256.                                         */
+#define GROUP_RAW 256
+
+/* The following constants are hardwired into the algorithm and CANNOT BE     */
+/* CHANGED. However, their inclusion enhances the readability of the program. */
+
+/* ZIVLEN is the length of the Ziv. This is the maximum number of bytes that  */
+/* the algorithm can code into a single item and hence the lookahead.         */
+#define ZIVLEN 16
+
+/* CONTROL_INIT is a value that is used to initialize the control word buffer */
+/* at the beginning of the processing of each group.                          */
+/* During the processing of each group, the control word under                */
+/* construction is shifted into the lower word of D_CONTROL by inserting bits */
+/* into the top of the word and rotating right. To insert a 0 bit, an lsr.w   */
+/* instruction is used. Inserting a 1 is more difficult because there is no   */
+/* instruction that does so directly. However, by initializing the top word   */
+/* of the longword to all ones (FFFF), insertion of a 1 into the top of the   */
+/* lower word can be accomplished by using an lsr.l instruction.              */
+/* The lower word of CONTROL_INIT is set to 8000 to make it easy to detect    */
+/* when the word is full. Whenever the rotate is performed, the carry tells   */
+/* whether the lower word has been filled with 16 control bits.               */
+#define CONTROL_INIT #0xFFFF8000
+
+/******************************************************************************/
+
+LOCAL void compress_compress(wrk_mem,src_adr,src_len,dst_adr,p_dst_len)
+/* This function implements the compression component of LZRW1.               */
+UBYTE   *wrk_mem;      /* Address of working memory we can use.               */
+UBYTE   *src_adr;      /* Address of input data.                              */
+ULONG    src_len;      /* Length  of input data.                              */
+UBYTE   *dst_adr;      /* Address to put output data.                         */
+ULONG *p_dst_len;      /* Address of longword for length of output data.      */
+{
+ asm 68000
+   {
+    ;---------------------------------------------------------------------------
+                                ;REGISTER MAP
+                                ;============
+    #define A_T1          a0    ;Temporary.
+    #define A_T2          a1    ;Temporary.
+    #define A_SRC         a2    ;Points to the next input  byte.
+    #define A_DST         a3    ;Points to the next output byte.
+    #define A_SRC_POST    a4    ;Points to the first byte after the input block.
+    #define A_PCONTROL    a5    ;Points to place to put control word in output.
+    #define A_TABLE       a6    ;Points to the hash table.
+    #define A_LINKAGE     a6 ;<--a6 is also the linkage register. Careful!!!
+    #define A_STACK       a7    ;Stack pointer. Don't touch!
+
+    #define D_T1          d0    ;Temporary
+    #define D_T2          d1    ;Temporary
+    #define D_UNROLL      d2    ;Counts pseudo unrolled loop.
+    #define D_SRC_HORIZON d3    ;Points GROUP_RAW from end of input block.
+    #define D_CONTROL     d4    ;Buffers the current control word.
+    #define D_DST_OVERRUN d5    ;Point in output block at which overrun occurs.
+    #define D_SRC_FIRST   d6    ;Points to the first byte of input block.
+                                ;WARNING: This register is set to FFFFFFFF
+                                ;near the end of the processing.
+    #define D_DST_FIRST   d7    ;Points to the first byte of output block.
+
+    ;Lightspeed C doesn't mind us using a0-a1 and d0-d2.
+    ;Note: D_T1 must NOT be saved as it is used to transmit the destination
+    ;length at the end of the code.
+    #define REGISTERS_TO_SAVE a2-a6/d3-d7
+
+    ;---------------------------------------------------------------------------
+                                   ;INITIALIZATION
+                                   ;==============
+    movem.l REGISTERS_TO_SAVE,-(A_STACK)
+
+    move.l src_adr,  A_SRC         ;A_SRC       := src_adr
+    move.l dst_adr,  A_DST         ;A_DST       := dst_adr
+    move.l src_adr,  D_SRC_FIRST   ;D_SRC_FIRST := src_adr
+    move.l dst_adr,  D_DST_FIRST   ;D_DST_FIRST := dst_adr
+
+    move.l src_adr,  A_SRC_POST    ;A_SRC_POST=src_adr+src_len
+    add.l  src_len,  A_SRC_POST
+
+    move.l src_adr,  D_SRC_HORIZON ;D_SRC_HORIZON=src_adr+src_len-GROUPRAW
+    add.l  src_len,  D_SRC_HORIZON
+    sub.l #GROUP_RAW,D_SRC_HORIZON
+
+    move.l dst_adr,  D_DST_OVERRUN ;D_DST_OVERRUN=dst_adr+src_len
+    add.l  src_len,  D_DST_OVERRUN
+
+    move.l wrk_mem,  D_T1          ;A_TABLE points to the start of hash table.
+    add.l  #3,       D_T1          ;The table needs to be longword aligned. The
+    and.l  #0xFFFFFFFC,D_T1        ;identity structure earlier asks for 3 bytes
+    move.l D_T1,     A_TABLE       ;of extra memory so that we can do this.
+                                   ;WARNING: A_TABLE=a6=linkage register.
+                                   ;Thus C variables are now inaccessible.
+
+    move.b #FLAG_COMPRESS,(A_DST)+ ;Set the flag to compression.
+    move.b #0,            (A_DST)+ ;Later, if overrun occurs, it can be set
+    move.b #0,            (A_DST)+ ;   to FLAG_COPY.
+    move.b #0,            (A_DST)+ ;Flag is a longword to allow fast copy.
+
+    move.l A_DST,    A_PCONTROL    ;Point A_P_CONTROL somewhere usless.
+                                   ;This is necessary to get the loop going.
+
+    ;The hash table itself does not need to be initialized!
+    ;The contents of the hash table are treated as advisory only.
+
+    ;---------------------------------------------------------------------------
+                                      ;MAIN COMPRESSION WHILE LOOP
+                                      ;===========================
+    @compress_loop_16:
+       ;Jump here every 16 iterations to set up a new control word.
+       move.b D_CONTROL,(A_PCONTROL)+ ;Write first control byte.
+       lsr.l  #8,       D_CONTROL     ;Write second control byte.
+       move.b D_CONTROL,(A_PCONTROL)
+       move.l A_DST,    A_PCONTROL    ;Next two output bytes are control bytes.
+       add.l  #2,       A_DST
+       move.l CONTROL_INIT,D_CONTROL  ;Reinitialize control register.
+
+    @compress_loop_1:
+       ;Jump here every iteration when we are near the end of the source
+       ;buffer and want to check every iteration so we don't miss the end.
+       ;Ass: A_PCONTROL points to where to put next control word.
+       ;Ass: D_CONTROL contains 0 to 15 bits of control.
+       cmp.l  A_DST, D_DST_OVERRUN ;Overrun if A_DST > D_DST_OVERRUN.
+       blo    @overrun
+
+       move.l #15,      D_UNROLL   ;Unrolled loop goes 16 times between checks.
+       cmp.l  A_SRC, D_SRC_HORIZON ;Do 16 times if A_SRC<=D_SRC_HORIZON
+       bhs    @compress_loop_unrolled
+
+       ;Ass: There are less than GROUP_RAW bytes of input left to process.
+       clr.l  D_UNROLL             ;Set up for one iteration (if any).
+       move.l A_SRC_POST,D_T1      ;D_T1=Input bytes left=A_SRC_POST-A_SRC
+       sub.l  A_SRC,     D_T1
+       beq    @end_compress_loop   ;Loop ends if no more input bytes.
+       cmp.l  #16,       D_T1      ;Safe to go on if >=16 more input bytes.
+       bhs    @compress_loop_unrolled
+
+       ;Ass: There are [1,15] input bytes left to process.
+       ;We now nobble A_SRC_FIRST so as to prevent copy items from now on.
+       ;Copy items are dangerous with less than ZIVLEN bytes left.
+       move.l #0xFFFFFFFF,D_SRC_FIRST
+
+    @compress_loop_unrolled:
+       ;Jump here when we know that we are a long way from the end of the
+       ;source buffer and we don't need to set up a new control word.
+                                   ;--------------------------------------------
+                                   ;CALCULATE HASH TABLE ENTRY FOR KEY IN ZIV
+                                   ;-----------------------------------------
+                                   ;The hash function formula is:
+                                   ;X=(Z[0] << 8)^(Z[1] << 4)^Z[2]
+                                   ;hashindex=(40543*X).w >> 4
+
+       move.l A_SRC,    A_T1       ;A_T1 points to the Ziv.
+       move.b (A_T1)+,  D_T1       ;D_T1.b=Z[0]
+       lsl.l  #4,       D_T1       ;D_T1.w=?000 or (Z[0] << 4)
+       move.b (A_T1)+,  D_T2       ;D_T2.b=Z[1]
+       eor.b  D_T2,     D_T1       ;D_T1.w=(?000 or (Z[0] << 4)) xor Z[1]
+       lsl.l  #4,       D_T1       ;D_T1.w=(Z[0] << 8) xor (Z[1] << 4)
+       move.b (A_T1),   D_T2       ;D_T2.b=Z[2]
+       eor.b  D_T2,     D_T1       ;D_T1.w=X=(Z[0]<<8) xor (Z[1]<<4) xor Z[2]
+       mulu.w #40543,   D_T1       ;D_T1.w=(40543*X).w
+       and.l  #0xFFF0,  D_T1       ;D_T1.l=(40543*X).w bitand FFF0
+       lsr.l  #2,       D_T1       ;D_T1=hashindex*4 (for longword table).
+       add.l  A_TABLE,  D_T1       ;D_T1=&hash[hashindex];
+       move.l D_T1,     A_T2       ;A_T2=&hash[hashindex].
+
+                                   ;Ass: A_T2 points to Ziv key's table entry.
+                                   ;--------------------------------------------
+                                   ;DECIDE IF THE HASH TABLE ENTRY IS VALID
+                                   ;---------------------------------------
+       move.l (A_T2),   A_T1       ;Place the hash table entry into A_T1.
+       move.l A_SRC,    (A_T2)     ;Replace the entry by current source address.
+
+       cmp.l  A_T1,     D_SRC_FIRST;Reject the entry if it points to an address
+       bhi    @do_literal          ;  before the start of the input block.
+                                   ;Note: D_SRC_FIRST may be nobbled. See above.
+
+       move.l A_SRC,    D_T1       ;Calculate the entry's offset from src pos.
+       sub.l  A_T1,     D_T1       ;D1=A_SRC-entry
+       beq    @do_literal          ;Reject the entry if offset not in [1,4095].
+       cmp.l  #4095,    D_T1
+       bhi    @do_literal
+                                   ;--------------------------------------------
+                                   ;COMPARE LEMPEL[POS...] TO ZIV[0...]
+                                   ;-----------------------------------
+                                   ;A_T1 points to the Lempel.
+       move.l A_SRC,    A_T2       ;A_T2 points to the Ziv.
+
+       #define COMPARE_BYTE(FAILPT) \
+       cmpm.b (A_T1)+,  (A_T2)+     \
+       bne    FAILPT
+
+       COMPARE_BYTE(@do_literal) ; 1
+       COMPARE_BYTE(@do_literal) ; 2
+       COMPARE_BYTE(@do_literal) ; 3
+       COMPARE_BYTE(@do_copy3)   ; 4
+       COMPARE_BYTE(@do_copy4)   ; 5
+       COMPARE_BYTE(@do_copy5)   ; 6
+       COMPARE_BYTE(@do_copy6)   ; 7
+       COMPARE_BYTE(@do_copy7)   ; 8
+       COMPARE_BYTE(@do_copy8)   ; 9
+       COMPARE_BYTE(@do_copy9)   ;10
+       COMPARE_BYTE(@do_copy10)  ;11
+       COMPARE_BYTE(@do_copy11)  ;12
+       COMPARE_BYTE(@do_copy12)  ;13
+       COMPARE_BYTE(@do_copy13)  ;14
+       COMPARE_BYTE(@do_copy14)  ;15
+       COMPARE_BYTE(@do_copy15)  ;16
+       bra @do_copy16
+                                   ;--------------------------------------------
+                                   ;OUTPUT A LITERAL ITEM
+                                   ;---------------------
+    @do_literal:
+       move.b (A_SRC)+, (A_DST)+   ;Copy the literal byte to the output.
+       lsr.w  #1,       D_CONTROL  ;Inject a 0 (literal) into control buffer.
+       dbra   D_UNROLL, @compress_loop_unrolled ;End of the unrolled loop.
+       bcs    @compress_loop_16    ;Carry flag set if control word is full.
+       bra    @compress_loop_1
+                                   ;--------------------------------------------
+                                   ;OUTPUT A COPY ITEM
+                                   ;------------------
+       #define DO_COPY(NAME,LENMO,LEN)                                         \
+          ;This macro writes a specified copy item and finishes the loop.      \
+          ;Pre: D_T1 contains the offset of a matched copy.                    \
+          ;Pre: LEN is the length of the match. LENMO=LEN-1.                   \
+          ;Pre: A_DST points to place to write the coded copy item.            \
+          NAME:                                                                \
+          move.l D_T1,     D_T2                                                \
+          move.b LENMO*16, D_T2       ;First byte contains:                    \
+          lsr.l  #4,       D_T2       ;   Bottom nibble: Length of item-1.     \
+          move.b D_T2,     (A_DST)+   ;   Top    nibble: Top nibble of offset. \
+          move.b D_T1,     (A_DST)+   ;Second byte holds low byte of offset.   \
+          add.l  LEN,      A_SRC      ;Point source register past coded item.  \
+          lsr.l  #1,       D_CONTROL  ;Inject a 1 (copy) into control buffer.  \
+          dbra   D_UNROLL, @compress_loop_unrolled  ;End of the unrolled loop. \
+          bcs    @compress_loop_16    ;Carry bit set if control word is full.  \
+          bra    @compress_loop_1     ;No backslash on the last line of macro->
+       /* End DO_COPY macro. */
+
+       DO_COPY(@do_copy3,#2,#3)
+       DO_COPY(@do_copy4,#3,#4)
+       DO_COPY(@do_copy5,#4,#5)
+       DO_COPY(@do_copy6,#5,#6)
+
+       DO_COPY(@do_copy7,#6,#7)
+       DO_COPY(@do_copy8,#7,#8)
+       DO_COPY(@do_copy9,#8,#9)
+       DO_COPY(@do_copy10,#9,#10)
+
+       DO_COPY(@do_copy11,#10,#11)
+       DO_COPY(@do_copy12,#11,#12)
+       DO_COPY(@do_copy13,#12,#13)
+       DO_COPY(@do_copy14,#13,#14)
+       DO_COPY(@do_copy15,#14,#15)
+       DO_COPY(@do_copy16,#15,#16)
+
+    ;The main loop ends here.
+    ;---------------------------------------------------------------------------
+                                   ;OVERRUN PROCESSING
+                                   ;==================
+    ;This is the place to jump when an overrun occurs.
+    ;This fragment of code was placed here so that control won't run into it.
+    ;When an overrun occurs we can drop everything we are doing as very little
+    ;of the information being maintained is necessary to perform the copyover.
+    @overrun:
+       move.l D_DST_FIRST,A_T1     ;Set the copy flag for later detection
+       move.b #FLAG_COPY,(A_T1)    ;  by the C code after this assembly section.
+       bra    @finish              ;Exit so as to let the C section do the work.
+    ;---------------------------------------------------------------------------
+                                ;FINALIZATION
+                                ;============
+    @end_compress_loop:
+
+    @rotate_control_buffer:     ;Fill the control buffer with zeros until it
+       lsr.w  #1,    D_CONTROL  ;is full. If this is not done then we end
+    bcc @rotate_control_buffer  ;up writing a skewed buffer.
+
+    move.b D_CONTROL,(A_PCONTROL)+ ;Write the current control word to its
+    lsr.l  #8,       D_CONTROL     ;output position.
+    move.b D_CONTROL,(A_PCONTROL)+
+
+    cmp.l  A_PCONTROL,A_DST     ;Eliminate the control word if it is dangling.
+    bne    @skip_dec
+       sub.l  #2,        A_DST
+    @skip_dec:
+
+    move.l A_DST,      D_T1     ;D_T1:=FInal output length (=A_DST-D_DST_FIRST)
+    sub.l  D_DST_FIRST,D_T1
+                                ;-----------------------------------------------
+    @finish:                    ;Jump here from overrun code to finish off.
+    movem.l (A_STACK)+,REGISTERS_TO_SAVE
+    move.l p_dst_len,A_T1       ;Write output length in D_T1 to parameter.
+    move.l D_T1,     (A_T1)     ;Overrun case: Will be overwritten anyway.
+    ;---------------------------------------------------------------------------
+   } /* End of assembly language section. */
+
+ /* Perform a copy over if the assembly section has set the copy flag. */
+ if (*dst_adr == FLAG_COPY)
+   {
+    fast_copy(src_adr,dst_adr+FLAG_BYTES,src_len);
+    *p_dst_len=src_len+FLAG_BYTES;
+   }
+}
+
+/******************************************************************************/
+
+/* Erase all the definitions made for the compression algorithm.              */
+/* This ensures that they will not foul up the decompression algorithm.       */
+#undef A_T1
+#undef A_T2
+#undef A_SRC
+#undef A_DST
+#undef A_SRC_POST
+#undef A_PCONTROL
+#undef A_TABLE
+#undef A_LINKAGE
+#undef A_STACK
+#undef D_T1
+#undef D_T2
+#undef D_UNROLL
+#undef D_SRC_HORIZON
+#undef D_CONTROL
+#undef D_DST_OVERRUN
+#undef D_SRC_FIRST
+#undef D_DST_FIRST
+#undef REGISTERS_TO_SAVE
+
+/******************************************************************************/
+
+LOCAL void compress_decompress(wrk_mem,src_adr,src_len,dst_adr,p_dst_len)
+/* This function implements the decompression component of LZRW1.             */
+UBYTE   *wrk_mem;      /* Address of working memory we can use.               */
+UBYTE   *src_adr;      /* Address of input data.                              */
+ULONG    src_len;      /* Length  of input data.                              */
+UBYTE   *dst_adr;      /* Address to put output data.                         */
+ULONG *p_dst_len;      /* Address of longword for length of output data.      */
+{
+
+ /* Decompression consists simply of a copy operation if the compressed */
+ /* file's copy flag is set.                                            */
+ if (*src_adr == FLAG_COPY)
+   {
+    fast_copy(src_adr+FLAG_BYTES,dst_adr,src_len-FLAG_BYTES);
+    *p_dst_len=src_len-FLAG_BYTES;
+    return;
+   }
+
+ asm 68000
+   {
+    ;---------------------------------------------------------------------------
+                                ;Register Map
+                                ;============
+    #define A_T1          a0    ;Temporary.
+    #define A_UNUSED1     a1    ;Unused.
+    #define A_SRC         a2    ;Points to next source      byte.
+    #define A_DST         a3    ;Points to next destination byte.
+    #define A_SRC_POST    a4    ;Points to byte after the last source byte.
+    #define A_SRC_HORIZON a5    ;Points to last safe place to exec unrold loop.
+    #define A_LINKAGE     a6    ;Macintosh linkage register. Don't touch!
+    #define A_STACK       a7    ;Stack pointer.
+
+    #define D_UNUSED0     d0    ;Unused.
+    #define D_UNUSED1     d1    ;Unused.
+    #define D_CONTROL1    d2    ;First  control byte.
+    #define D_CONTROL2    d3    ;Second control byte.
+    #define D_COPLEN      d4    ;Temporary used to calculate copy item length.
+    #define D_COPOFF      d5    ;Temporary used to calculate copy item offset.
+    #define D_UNUSED6     d6    ;Unused.
+    #define D_UNUSED7     d7    ;Unused.
+
+    ;Note: Lightspeed C doesn't mind us using a0-a1 and d0-d2.
+    #define REGISTERS_TO_SAVE a2-a5/d3-d5
+
+    ;---------------------------------------------------------------------------
+
+    movem.l REGISTERS_TO_SAVE,-(A_STACK)
+    move.l src_adr,    A_SRC         ;A_SRC:=Start of compressed input.
+    add.l  #FLAG_BYTES,A_SRC         ;   (skip over lit/cop flag byte).
+    move.l dst_adr,    A_DST         ;A_DST:=Start of output block.
+    move.l src_adr,    A_SRC_POST    ;A_SRC_POST:=Byte after the end of the
+    add.l  src_len,    A_SRC_POST    ;   input block.
+    move.l A_SRC_POST, A_SRC_HORIZON ;A_SRC_HORIZON=A_SRC_POST-GROUP_CMP
+    sub.l  #GROUP_CMP, A_SRC_HORIZON
+
+    ;---------------------------------------------------------------------------
+
+    #define DECOMPRESS_ITEM(LITERAL,COPY,COPYLOOP,ENDITEM,CONTROLREG)         \
+          ;Pre: CONTROLREG is not empty. Its bottom bit controls next item.   \
+          ;Pre: A_SRC points to the next item in the input  stream.           \
+          ;Pre: A_DST points to the next byte in the output stream.           \
+          lsr.l  #1,       CONTROLREG ;Is this a copy or a literal item?      \
+          bcc    LITERAL              ;0=Literal item, 1=Copy item.           \
+       COPY:                                                                  \
+          clr.l  D_COPOFF             ;We need top nibbles to be zero.        \
+          move.b (A_SRC)+, D_COPOFF   ;Grab the first copy item byte.         \
+          move.l D_COPOFF, D_COPLEN   ;Copy into the length register.         \
+          andi.l #0xF,     D_COPLEN   ;Bottom nibble contains the length-1.   \
+          lsl.l  #4,       D_COPOFF   ;Top nibble is bits 8..11 of offset.    \
+          move.b (A_SRC)+, D_COPOFF   ;Bits 0..7 come from the second byte.   \
+          move.l A_DST,    A_T1       ;Subtract the offset yielding the       \
+          suba.l D_COPOFF, A_T1       ;   address from which we copy.         \
+          COPYLOOP:                                                           \
+             move.b (A_T1)+,  (A_DST)+   ;Perform the copy operation.         \
+             dbra   D_COPLEN, COPYLOOP                                        \
+          bra    ENDITEM              ;Skip over code for literal item.       \
+       LITERAL:                                                               \
+          move.b (A_SRC)+, (A_DST)+   ;Literal item means copy a byte.        \
+       ENDITEM:                                                               \
+          ;Post: CONTROLREG, A_SRC, A_DST are advanced by one item.           \
+          ;Post: A_T1, D_COPOFF, D_COPLEN are corrupted. Note: No backslash ->
+    /* End of DECOMPRESS_ITEM macro definition. */
+
+
+    ;This loop processes one 16-item item group per iteration.
+    ;This loop performs the bulk of the processing at high speed.
+    ;This loop terminates when it becomes possible for there to be
+    ;less than 16 items left in the input buffer.
+    ;This occurs when there are less than GROUP_CMP bytes left.
+    ;This occurs when A_SRC>A_SRC_HORIZON.
+    @decompress_16_item_loop:
+       cmp.l A_SRC_HORIZON, A_SRC  ;Terminate if A_SRC>A_SRC_HORIZON
+       bhi   @end_decompress_16_item_loop
+
+       move.b (A_SRC)+, D_CONTROL1 ;Pick up the two leading control bytes.
+       move.b (A_SRC)+, D_CONTROL2
+
+       DECOMPRESS_ITEM(@LIT_0,@COPY_0,@COP_0,@END_0,D_CONTROL1)
+       DECOMPRESS_ITEM(@LIT_1,@COPY_1,@COP_1,@END_1,D_CONTROL1)
+       DECOMPRESS_ITEM(@LIT_2,@COPY_2,@COP_2,@END_2,D_CONTROL1)
+       DECOMPRESS_ITEM(@LIT_3,@COPY_3,@COP_3,@END_3,D_CONTROL1)
+       DECOMPRESS_ITEM(@LIT_4,@COPY_4,@COP_4,@END_4,D_CONTROL1)
+       DECOMPRESS_ITEM(@LIT_5,@COPY_5,@COP_5,@END_5,D_CONTROL1)
+       DECOMPRESS_ITEM(@LIT_6,@COPY_6,@COP_6,@END_6,D_CONTROL1)
+       DECOMPRESS_ITEM(@LIT_7,@COPY_7,@COP_7,@END_7,D_CONTROL1)
+
+       DECOMPRESS_ITEM(@LIT_8,@COPY_8,@COP_8,@END_8,D_CONTROL2)
+       DECOMPRESS_ITEM(@LIT_9,@COPY_9,@COP_9,@END_9,D_CONTROL2)
+       DECOMPRESS_ITEM(@LIT_A,@COPY_A,@COP_A,@END_A,D_CONTROL2)
+       DECOMPRESS_ITEM(@LIT_B,@COPY_B,@COP_B,@END_B,D_CONTROL2)
+       DECOMPRESS_ITEM(@LIT_C,@COPY_C,@COP_C,@END_C,D_CONTROL2)
+       DECOMPRESS_ITEM(@LIT_D,@COPY_D,@COP_D,@END_D,D_CONTROL2)
+       DECOMPRESS_ITEM(@LIT_E,@COPY_E,@COP_E,@END_E,D_CONTROL2)
+       DECOMPRESS_ITEM(@LIT_F,@COPY_F,@COP_F,@END_F,D_CONTROL2)
+
+       bra @decompress_16_item_loop
+    @end_decompress_16_item_loop:
+
+    ;---------------------------------------------------------------------------
+
+    ;This loop processes exactly one item per iteration.
+    ;This loop terminates when it reaches the end of the input.
+    ;Ass: A_SRC points to a control word or A_SRC_POST.
+    clr.l  D_CONTROL2           ;D_CONTROL2 counts control bits in D_CONTROL1.
+    @decompress_item_loop:
+       cmp.l  A_SRC,    A_SRC_POST ;Stop when there is no more input.
+       beq    @end_decompress_item_loop
+
+       ;Ass: D_CONTROL2 is in the range [0,15] and is num bits in D_CONTROL1.
+       dbra   D_CONTROL2,@not_empty;Time to pick up another control word?
+          move.b 1(A_SRC), D_CONTROL1 ;Put control word into D_CONTROL1
+          lsl.l  #8,       D_CONTROL1
+          move.b (A_SRC),  D_CONTROL1
+          add.l  #2,       A_SRC      ;Point A_SRC past the control word.
+          move.l #15,      D_CONTROL2 ;Put number of bits-1 into D_CONTROL2
+       @not_empty:
+       ;Ass: D_CONTROL2 is in the range [0,15] and is num bits in D_CONTROL1-1.
+       ;Note: We can now decode an item with confidence because the
+       ;      compression format forbids dangling control words.
+
+       DECOMPRESS_ITEM(@LIT_X,@COPY_X,@COP_X,@END_X,D_CONTROL1)
+       bra    @decompress_item_loop
+    @end_decompress_item_loop:
+
+    ;---------------------------------------------------------------------------
+
+    sub.l  dst_adr,  A_DST      ;(*p_dst_len)=(dst_adr-initial_dst_adr)
+    move.l p_dst_len,A_T1
+    move.l A_DST,    (A_T1)
+
+    movem.l (A_STACK)+,REGISTERS_TO_SAVE
+
+   }; /* End of asm section. */
+} /* End of function compress_decompress. */
+
+/******************************************************************************/
+/*                           End of ALG_LZRW1.68000                           */
+/******************************************************************************/

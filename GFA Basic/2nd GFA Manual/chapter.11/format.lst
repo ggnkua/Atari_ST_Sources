@@ -1,0 +1,100 @@
+' *** FORMAT.LST ***                                 2nd GFA-Manual, page 11-20
+> PROCEDURE disk_format(drive$,nsides,tracks,spt,ndirs,spf,name$,VAR free%)
+  '
+  ' *** Format disk in drive A or B (drive$ = "A" or "B")
+  ' *** Single- or double-sided disk (nsides& = 1 or 2)
+  ' *** Number of tracks (tracks&) usually 80, but 81 or 82 also possible
+  ' *** Sectors per track (spt&): 9 (standard) or 10
+  ' *** Number of entries in main directory (ndirs&): 80 or 112 (standard)
+  ' *** Sectors per FAT (spf&): 3 (that's enough!) or 5 (standard)
+  ' *** Diskname name$ must have format of filename, e.g. "GAMES" or "DISK.002"
+  ' *** Procedure doesn't check if above parameters are correct!
+  ' *** Procedure returns free bytes on disk (free%); 0 bytes if format aborted
+  '
+  ' *** Standard:  x.max&  y.max&  char.height&  line.max&  col.max&
+  '
+  LOCAL nsects,drive,interleave,magic%,virg,disktype
+  LOCAL buffer%,track,side,m$,k,e,i,sum%,check,mess$
+  INLINE buffer%,10000
+  drive=ASC(UPPER$(drive$))-65    ! 0 = drive A, 1 = drive B
+  IF nsides=1
+    disktype=2                    ! standard single-sided disk
+  ELSE
+    disktype=3                    ! standard double-sided disk
+  ENDIF
+  nsects=nsides*tracks*spt        ! total number of sectors on disk
+  interleave=1                    ! sectors on tracks numbered same (1,...,9/10)
+  magic%=&H87654321               ! secret password
+  virg=&H0                        ! bit-muster for sectors
+  '
+  m$="       *** WARNING ***| |Formatting the disk in drive "+CHR$(65+drive)
+  m$=m$+"|destroys all data on the disk!"
+  ALERT 1,m$,0,"Format|Abort",k   ! last chance to abort
+  IF k=1
+    ok!=TRUE
+    ' *** Format the disk
+    CLS
+    text$=" Formatting disk, please wait... "
+    GET 0,MUL(PRED(line.max),char.height),x.max,PRED(MUL(line.max,char.height)),mess$
+    LOCATE 1,line.max                      ! last line
+    PRINT CHR$(27);"K";                    ! clear line
+    PRINT SPACE$((col.max-LEN(text$))/2)+CHR$(27)+"p"+text$+CHR$(27)+"q";
+    FOR track=0 TO PRED(tracks)
+      FOR side=0 TO PRED(nsides)
+        e=XBIOS(10,L:buffer%,L:0,drive,spt,track,side,interleave,L:magic%,virg)
+        IF e
+          OUT 2,7                          ! bell
+          m$="     *** ERROR ***| |Format-error occurred at|side "+STR$(side)
+          m$=m$+", track "+STR$(track)+", sector "+STR$(WORD{buffer%})
+          ALERT 1,m$,1,"Sorry",k
+        ENDIF
+      NEXT side
+    NEXT track
+    ' *** Create standard boot-sector
+    FOR i=0 TO 511
+      BYTE{buffer%+i}=0                    ! clear buffer
+    NEXT i
+    ~XBIOS(18,L:buffer%,L:&H1000000,disktype,0)
+    ' *** Adapt: directory-entries, total sectors, sectors/FAT, sectors/track
+    BYTE{buffer%+17}=BYTE(ndirs)           ! low byte first (Intel-format)
+    BYTE{buffer%+18}=BYTE{V:ndirs}         ! high byte next
+    BYTE{buffer%+19}=BYTE(nsects)
+    BYTE{buffer%+20}=BYTE{V:nsects}
+    BYTE{buffer%+22}=BYTE(spf)
+    BYTE{buffer%+23}=BYTE{V:spf}
+    BYTE{buffer%+24}=BYTE(spt)
+    BYTE{buffer%+25}=BYTE{V:spt}
+    sum%=0
+    FOR i=0 TO 255
+      ADD sum%,CARD{ADD(buffer%,MUL(i,2))}  ! calculate checksum
+    NEXT i
+    sum%=sum% AND &HFFFF
+    IF sum%=&H1234                          ! oops, executable bootsector
+      check=BYTE{buffer%+511}               ! low byte of CHKSUM
+      IF check>0
+        DEC check
+      ELSE
+        INC check                           ! just in case check=0
+      ENDIF
+      BYTE{buffer%+511}=check               ! not executable anymore
+    ENDIF
+    ' *** Write adapted bootsector to disk
+    ~XBIOS(9,L:buffer%,L:0,drive,1,0,0,1)
+    ' *** Write diskname to disk
+    IF name$<>"" AND LEN(name$)<=12 ! no check for correct format
+      name$=CHR$(drive+65)+":\"+UPPER$(name$)+CHR$(0)
+      ~GEMDOS(60,L:V:name$,8)
+      ~GEMDOS(62,L:V:name$)
+    ENDIF
+    ' *** Force media-change
+    ~FSFIRST(drive$+":\@@$$%%&&",17)
+    ' *** Free bytes on disk
+    free%=DFREE(drive+1)
+    ' *** Ready
+    PUT 0,MUL(PRED(line),char.height),mess$,3 ! restore screen
+  ELSE
+    free%=0
+  ENDIF
+RETURN
+' *******
+'

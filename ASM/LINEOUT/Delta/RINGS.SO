@@ -1,0 +1,656 @@
+; Concentric rings.. A screen for delta.
+; Uses Ufly ofcourse.
+
+;======= OBJECT EQUATES ========
+
+Rings.STEPS:		=	10
+Rings.RING_R:		=	100
+Rings.DELTA_ENV:	=	0
+
+Rings.DIST:		=	500			; distance between zooming rings
+Rings.Z_POS:		=	3500			; z center of rings
+Rings.BUMPSIZE:		=	64
+
+			RSRESET
+Rings.ring1:		RS.W	10000
+Rings.ring2:		RS.W	10000
+Rings.ring3:		RS.W	10000
+Rings.BLOCK_SIZE:	RS.B	0
+
+;======= OBJECT TABLE ========
+
+; Must be first in object!!
+Rings.table:
+	DC.L	Rings.mainLoop
+	DC.L	Rings.init
+	DC.L	Rings.setRes
+	DC.L	Rings.zoomIn
+	DC.L	Rings.triggerBump
+	DC.L	0
+
+	IFND	DEMO_SYSTEM
+	INCLUDE	HFLY_DSP.S
+	TEXT
+	ENDC
+
+;======= RESOLUTION SETTING ROUTINE ========
+
+Rings.setRes:
+	IFEQ	testmode
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+; Unknown monitormode..
+	rts
+.vga60:	bra.l	vga60_16bit_320_200
+.vga100:bra.l	vga100_16bit_320_200
+.rgb50:	bra.l	rgb50_16bit_320_200
+	ENDC
+	rts
+
+;======= INIT SUBROUTINE ========
+
+; OUTPUT:
+; d0.l: =0 all clear, <0 error
+Rings.init:
+	move.l	#Rings.BLOCK_SIZE,d0
+	bsr.l	Mem.register
+
+	lea	sine_tbl,a1
+	bsr.l	Matrix.init
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= REALTIME INIT SUBROUTINE ========
+
+Rings.realtimeInit:
+	move.l	#rts,vbl_gfx
+
+	bsr.l	Mem.getBlock
+	move.l	d0,Rings.baseAdr
+
+	bsr.l	HumanFly.init
+
+	lea	Viewport.settingsTable,a0
+	move.w	#320,Viewport.XSCREEN(a0)
+	move.w	#200,Viewport.YSCREEN(a0)
+	move.w	#0,Viewport.XSTART(a0)
+	move.w	#0,Viewport.YSTART(a0)
+	move.w	#320,Viewport.XEND(a0)
+	move.w	#200,Viewport.YEND(a0)
+	move.w	#160,Viewport.XCENTER(a0)
+	move.w	#100,Viewport.YCENTER(a0)
+	move.w	#256+32,Viewport.ASPECT(a0)
+	move.w	#$100,Viewport.FOCAL(a0)
+	bsr.l	Viewport.update
+
+	lea	Rings.textureTable,a0
+	bsr.l	Polygon.init
+
+	bsr.l	ObjectRegistry.clear
+
+	movea.l	Rings.baseAdr,a0
+	adda.l	#Rings.ring1,a0
+	move.w	#1400*2,d0
+	bsr.l	Rings.generate
+; d0.l=size of ring
+
+	movea.l	Rings.baseAdr,a0
+	adda.l	#Rings.ring1,a0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi	.error
+
+	movea.l	Rings.baseAdr,a0
+	adda.l	#Rings.ring2,a0
+	move.w	#1100*2,d0
+	bsr	Rings.generate
+; d0.l=size of ring
+
+	movea.l	Rings.baseAdr,a0
+	adda.l	#Rings.ring2,a0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi.s	.error
+
+	movea.l	Rings.baseAdr,a0
+	adda.l	#Rings.ring3,a0
+	move.w	#800*2,d0
+	bsr	Rings.generate
+; d0.l=size of ring
+
+	movea.l	Rings.baseAdr,a0
+	adda.l	#Rings.ring3,a0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi.s	.error
+
+	movea.l	Rings.baseAdr,a0
+	adda.l	#Rings.ring3,a0
+	move.w	#500*2,d0
+	bsr	Rings.generate
+; d0.l=size of ring
+
+	movea.l	Rings.baseAdr,a0
+	adda.l	#Rings.ring3,a0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi.s	.error
+
+	bsr	Rings.zoomIn
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= SCREENINIT SUBROUTINE ========
+
+Rings.initScreen:
+	moveq	#0,d0
+	moveq	#56,d6
+	moveq	#0,d1
+	move.l	#200,d7
+	move.l	#$00000000,d4
+	bsr.l	Viewport.paintRectangle
+
+	move.l	#320-56,d0
+	move.l	#320,d6
+	moveq	#0,d1
+	move.l	#200,d7
+	move.l	#$00000000,d4
+	bsr.l	Viewport.paintRectangle
+	rts
+
+;======= MAINLOOP SUBROUTINE ========
+
+Rings.mainLoop:
+	move.w	$0468.w,.old468
+
+	movea.l	scr,a0
+	bsr.l	Primitive.setScreenbuffer
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr.l	Rings.realtimeInit
+	tst.l	d0
+	bmi	.end
+	move.l	(sp)+,d0
+.end_realtime_init:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr	Rings.initScreen
+.end_screeninit:
+
+; zoom shit..
+	tst.w	Rings.zoomOn
+	beq	.end_zoom
+	bsr	Rings.zoom
+.end_zoom:
+
+; bump shit..
+	tst.w	Rings.bumpOn
+	beq.s	.end_bump
+	bsr	Rings.bump
+.end_bump:
+
+	tst.w	Rings.zoomOn
+	beq.s	.normal_speed
+	pea	Rings.nullSpeedTable		; Push speedtable on stack.
+	bra.s	.paint
+.normal_speed:
+	pea	Rings.speedTable		; Push speedtable on stack.
+.paint	bsr	Rings.paint
+	addq	#4,sp				; Pop speedtable off stack.
+	
+	IFEQ	testmode
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	move.l	d0,d1
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+	ENDC
+
+	move.w	.old468(pc),d0
+.wait:	cmp.w	$0468.w,d0
+	beq.s	.wait
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.res_done
+	bsr	Rings.setRes
+.res_done:
+
+	tst.w	Rings.zoomOn
+	bne.s	.end_cleartime
+	tst.w	Rings.clearTime
+	beq.s	.end_cleartime
+	subq.w	#1,Rings.clearTime
+.end_cleartime
+
+.end:	rts
+
+.old468:DC.W	0
+
+;======= OBJECT SUBROUTINES ========
+
+Rings.zoomIn:
+	move.l	$04BA.w,Rings.zoomStart
+	move.w	#1,Rings.zoomOn
+	move.w	#1,Rings.clearTime
+	rts
+
+Rings.triggerBump:
+	move.w	#1,Rings.bumpOn
+	move.l	$04BA.w,Rings.bumpStart
+	rts
+
+; INPUT:
+; d0.w=r
+; a0: objectbuffer
+; OUTPUT:
+; d0.l=size
+Rings.generate:
+	movea.l	a0,a6
+
+; Output vertices..
+	lea	sine_tbl,a1
+	movea.w	d0,a3
+
+	move.w	#2*Rings.STEPS*4,(a0)+			; #vertices+#normals
+	move.w	#Rings.STEPS*4,(a0)+			; #normals
+
+	lea	Rings.STEPS*4*Vertex.SIZE(a0),a2
+
+	moveq	#4-1,d7
+
+.ring_loop:
+	moveq	#Rings.STEPS-1,d6
+	move.w	#Rings.RING_R,d4
+	move.w	#90,d5
+	move.w	#90*2,d3
+
+	cmpi.w	#3,d7
+	bne.s	.shit1
+	move.w	a3,d2
+	bra.s	.point_loop
+.shit1:	cmpi.w	#2,d7
+	bne.s	.shit2
+	neg.w	d4
+	neg.w	d5
+	move.w	a3,d2
+	bra.s	.point_loop
+.shit2:	cmpi.w	#1,d7
+	bne.s	.shit3
+	neg.w	d4
+	neg.w	d5
+	move.w	a3,d2
+	subi.w	#Rings.RING_R*4,d2
+	neg.w	d3
+	bra.s	.point_loop
+.shit3:	move.w	a3,d2
+	subi.w	#Rings.RING_R*4,d2
+	neg.w	d3
+
+.point_loop:
+	move.w	d6,d0
+	mulu.w	#sintbllen/Rings.STEPS,d0
+	Get_SinCos	a1,d0,d0,d1
+	muls.w	d2,d0
+	muls.w	d2,d1
+	swap	d0
+	swap	d1
+	move.w	d0,(a0)+
+	move.w	d1,(a0)+
+	move.w	d4,(a0)+
+	move.w	d6,d0
+	mulu.w	#sintbllen/Rings.STEPS,d0
+	Get_SinCos	a1,d0,d0,d1
+	muls.w	d3,d0
+	muls.w	d3,d1
+	swap	d0
+	swap	d1
+	move.w	d0,(a2)+
+	move.w	d1,(a2)+
+	move.w	d5,(a2)+
+	dbra	d6,.point_loop
+
+	dbra	d7,.ring_loop
+
+	movea.l	a2,a0
+
+	clr.w	(a0)+				; #texels
+
+	move.w	#Rings.STEPS*4,(a0)+		; #primitives
+	moveq	#4-1,d7
+
+.prim_ring_loop:
+	move.w	d7,d2
+	mulu.w	#Rings.STEPS,d2
+	move.w	d7,d3
+	addq.w	#1,d3
+	andi.w	#%11,d3
+	mulu.w	#Rings.STEPS,d3
+	moveq	#Rings.STEPS-1,d6
+	
+.primloop:
+;	move.w	d6,d0
+;	eor.w	d7,d0
+;	andi.w	#1,d0
+;	ori.w	#Polygon.QUAD|Polygon.ENVMAPPED|0,d0
+	move.w	#Polygon.QUAD|Polygon.ENVMAPPED|0,d0
+
+	move.w	d0,(a0)+
+
+	move.w	d6,d0
+	add.w	d3,d0
+	move.w	d0,(a0)+
+
+	clr.l	d0
+	move.w	d6,d0
+	addq.w	#1,d0
+	divu.w	#Rings.STEPS,d0
+	swap	d0
+	move.w	d0,d1
+	add.w	d3,d0
+	move.w	d0,(a0)+
+
+	add.w	d2,d1
+	move.w	d1,(a0)+
+
+	move.w	d6,d0
+	add.w	d2,d0
+	move.w	d0,(a0)+
+
+	REPT	4
+	move.w	-8(a0),d0
+	addi.w	#Rings.STEPS*4,d0
+	move.w	d0,(a0)+
+	ENDR
+
+	dbra	d6,.primloop
+
+	dbra	d7,.prim_ring_loop
+
+.end:	suba.l	a6,a0
+	move.l	a0,d0
+	rts
+
+Rings.zoom:
+	move.w	#-1000,d0
+	move.l	$04BA.w,d1
+	sub.l	Rings.zoomStart,d1
+	lsl.l	#5,d1
+	add.l	d1,d0
+	move.l	d0,d1
+
+	cmpi.w	#Rings.Z_POS,d0
+	blt.s	.clip_done1
+	move.w	#Rings.Z_POS,d0
+	clr.w	Rings.zoomOn
+	move.w	#3,Rings.clearTime
+	move.l	$04BA.w,Rings.rotStart
+.clip_done1:
+	move.w	d0,Rings.z
+
+	addi.l	#Rings.DIST,d1
+	move.l	d1,d0
+	cmpi.w	#Rings.Z_POS,d0
+	blt.s	.clip_done2
+	move.w	#Rings.Z_POS,d0
+.clip_done2:
+	move.w	d0,Rings.z1
+
+	addi.l	#Rings.DIST,d1
+	move.l	d1,d0
+	cmpi.w	#Rings.Z_POS,d0
+	blt.s	.clip_done3
+	move.w	#Rings.Z_POS,d0
+.clip_done3:
+	move.w	d0,Rings.z2
+
+	addi.l	#Rings.DIST,d1
+	move.l	d1,d0
+	cmpi.w	#Rings.Z_POS,d0
+	blt.s	.clip_done4
+	move.w	#Rings.Z_POS,d0
+.clip_done4:
+	move.w	d0,Rings.z3
+	rts
+
+Rings.bump:
+	move.l	$04BA.w,d0
+	sub.l	Rings.bumpStart,d0
+	cmpi.w	#Rings.BUMPSIZE,d0
+	blt.s	.ok
+	clr.w	Rings.bumpOn
+	move.w	#Rings.Z_POS,d0
+	move.w	d0,Rings.z
+	move.w	d0,Rings.z1
+	move.w	d0,Rings.z2
+	move.w	d0,Rings.z3
+	rts
+.ok:	subi.w	#Rings.BUMPSIZE/2,d0
+	muls.w	d0,d0
+	neg.l	d0
+	addi.l	#(Rings.BUMPSIZE/2)*(Rings.BUMPSIZE/2),d0
+	addi.w	#Rings.Z_POS,d0
+	move.w	d0,Rings.z
+	move.w	d0,Rings.z1
+	move.w	d0,Rings.z2
+	move.w	d0,Rings.z3
+	rts
+
+; INPUT:
+; 4(sp).l: speedtable
+Rings.paint:
+	move.l	$04BA.w,d0
+	sub.l	Rings.rotStart,d0
+	move.l	d0,.time
+	bsr.l	PrimitiveMesh.new
+	move.w	#4-1,.count
+
+.loop:	movea.l	4(sp),a0
+	move.l	.time(pc),d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	(a0)+,d0
+	mulu.w	(a0)+,d1
+	mulu.w	(a0)+,d2
+	lsr.l	#8,d0
+	lsr.l	#8,d1
+	lsr.l	#8,d2
+	move.l	a0,4(sp)
+	bsr.l	Matrix.generate
+	clr.w	d0
+	clr.w	d1
+	move.w	.count(pc),d2
+	move.w	(Rings.z,d2.w*2),d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	move.w	.count(pc),d1
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+
+	subq.w	#1,.count
+	bpl.s	.loop
+
+	bsr.l	PrimitiveMesh.sortZ
+	bsr.l	PrimitiveMesh.complete
+
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	tst.w	Rings.clearTime
+	bne.s	.size_calced
+	addi.w	#56,d0
+	subi.w	#56,d6
+.size_calced:
+	moveq	#$00000000,d4
+	bsr.l	Viewport.paintRectangle
+
+	movea.l	Rings.rectAddressTable,a0
+	bsr.l	PrimitiveMesh.paint
+
+	moveq	#0,d0
+	rts
+
+.error:	moveq	#-1,d0
+	rts
+
+.count:	DC.W	0
+.time:	DC.L	0
+
+;======= OBJECT DATA ========
+
+	DATA
+
+Rings.textureTable:
+	DC.L	FlareGen.goldBuffer
+	DC.L	0
+
+Rings.rectAddressTable:
+	DC.L	Rings.rectTable
+	DC.L	Rings.rectTable2
+	DC.L	Rings.rectTable3
+
+Rings.speedTable:
+	DC.W	$0350,$03D0,$0210
+	DC.W	$01E0,$01E0,$02F0
+	DC.W	$0430,$0390,$01D0
+	DC.W	$0240,$0270,$03A0
+
+	IFNE	0
+
+Rings.delta:
+	DC.W	(.end-.start)/Vertex.SIZE	* amount of vertices
+	DC.W	(.end-.normstart)/Vertex.SIZE	* amount of normals
+.start:	DC.W	+000,-800,+100
+	DC.W	-600,+500,+100
+	DC.W	+600,+500,+100
+	DC.W	+000,-400,+000
+	DC.W	-300,+300,+000
+	DC.W	+300,+300,+000
+	DC.W	+000,-800,-100
+	DC.W	-600,+500,-100
+	DC.W	+600,+500,-100
+.normstart:
+	IFNE	Rings.DELTA_ENV
+	DC.W	+000,-030,+050	;9
+	DC.W	-030,+030,+050	;11
+	DC.W	+030,+030,+050	;12
+	DC.W	+000,+127,+000	;13
+	DC.W	-089,+089,+000	;14
+	DC.W	+089,-089,+000	;15
+	DC.W	+000,-030,-050	;16
+	DC.W	-030,+030,-050	;17
+	DC.W	+030,+030,-050	;18
+	ENDC
+.end:
+
+	DC.W	(.end2d-.start2d)/Vertex2d.SIZE	* amount of 2d vertices
+.start2d:
+	DC.W	000,000
+	DC.W	000,255
+	DC.W	063,255
+	DC.W	063,000
+.end2d:
+
+	DC.W	15				; amount of primitives
+
+	IFEQ	Rings.DELTA_ENV
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|1,+03,04,01,+0,1,2
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|1,+03,01,00,+0,2,3
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|1,+04,05,02,+0,1,2
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|1,+04,02,01,+0,2,3
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|1,+05,03,00,+0,1,2
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|1,+05,00,02,+0,2,3
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|1,+06,07,04,+0,1,2
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|1,+06,04,03,+0,2,3
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|1,+07,08,05,+0,1,2
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|1,+07,05,04,+0,2,3
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|1,+08,06,03,+0,1,2
+	DC.W	Polygon.TRI|Polygon.TEXTUREMAPPED|1,+08,03,05,+0,2,3
+	DC.W	Polygon.QUAD|Polygon.TEXTUREMAPPED|1,+01,07,06,00,+1,2,3,0
+	DC.W	Polygon.QUAD|Polygon.TEXTUREMAPPED|1,+02,08,07,01,+1,2,3,0
+	DC.W	Polygon.QUAD|Polygon.TEXTUREMAPPED|1,+00,06,08,02,+1,2,3,0
+	ELSE
+	DC.W	Polygon.TRI|Polygon.ENVMAPPED|1,+03,04,01,+12,13,10
+	DC.W	Polygon.TRI|Polygon.ENVMAPPED|1,+03,01,00,+12,10,09
+	DC.W	Polygon.TRI|Polygon.ENVMAPPED|1,+04,05,02,+13,14,11
+	DC.W	Polygon.TRI|Polygon.ENVMAPPED|1,+04,02,01,+13,11,10
+	DC.W	Polygon.TRI|Polygon.ENVMAPPED|1,+05,03,00,+14,12,09
+	DC.W	Polygon.TRI|Polygon.ENVMAPPED|1,+05,00,02,+14,09,11
+	DC.W	Polygon.TRI|Polygon.ENVMAPPED|1,+06,07,04,+15,16,13
+	DC.W	Polygon.TRI|Polygon.ENVMAPPED|1,+06,04,03,+15,13,12
+	DC.W	Polygon.TRI|Polygon.ENVMAPPED|1,+07,08,05,+16,17,14
+	DC.W	Polygon.TRI|Polygon.ENVMAPPED|1,+07,05,04,+16,14,13
+	DC.W	Polygon.TRI|Polygon.ENVMAPPED|1,+08,06,03,+17,15,12
+	DC.W	Polygon.TRI|Polygon.ENVMAPPED|1,+08,03,05,+17,12,14
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|1,+01,07,06,00,+10,16,15,09
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|1,+02,08,07,01,+11,17,16,10
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|1,+00,06,08,02,+09,15,17,11
+	ENDC
+Rings.deltaEnd:
+
+	ENDC
+
+Rings.z:
+	DC.W	3500
+Rings.z1:
+	DC.W	3500
+Rings.z2:
+	DC.W	3500
+Rings.z3:
+	DC.W	3500
+
+Rings.clearTime:
+	DC.W	1
+
+;======= OBJECT RESERVES ========
+
+	BSS
+
+Rings.rectTable:
+	DS.W	1+4*32
+Rings.rectTable2:
+	DS.W	1+4*32
+Rings.rectTable3:
+	DS.W	1+4*32
+
+Rings.zoomStart:
+	DS.L	1
+Rings.zoomOn:
+	DS.W	1
+Rings.nullSpeedTable:
+	DS.W	4*3
+Rings.rotStart:
+	DS.L	1
+Rings.bumpOn:
+	DS.W	1
+Rings.bumpStart:
+	DS.L	1
+
+Rings.baseAdr:
+	DS.L	1
+
+;======= END OF DEMO-EFFECT OBJECT ========

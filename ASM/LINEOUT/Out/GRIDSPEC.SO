@@ -1,0 +1,2635 @@
+; Grid idea.. lines..
+;
+; Specialised version: special dsp core does almost everything.
+; The cpu side only send the object, rotation, translation and paints the
+; edges.
+;
+; seems divs optimisation can only be done with dsp, which is a damn
+; fine idea i might add! this could save 50 cycles per line.
+;
+; div now done on dsp, so yes, it's faster
+; also depthculling added which _greatly_ improves performance.
+;
+
+;======= OBJECT TABLE ======================================================
+
+	IFND	DEMO_SYSTEM
+testmode:	=	0
+	move.l	#Grid.table,fxAdr
+	INCLUDE	TESTER.S
+	TEXT
+	INCLUDE	DSP.I
+	TEXT
+	ENDC	
+
+; Must be first in object!!
+Grid.table:
+	DC.L	Grid.mainLoop
+	DC.L	Grid.init
+	DC.L	Grid.initRT
+	DC.L	Grid.deinitRT
+	DC.L	Grid.setFadeIn
+	DC.L	Grid.setFadeOut
+	DC.L	Grid.setStill
+	DC.L	Grid.setSwing
+	DC.L	Grid.setDrill
+	DC.L	Grid.setDiagFly1
+	DC.L	Grid.setDiagFly2
+	DC.L	Grid.setDiagFly3
+	DC.L	Grid.setDiagFly4
+	DC.L	Grid.takeOff
+	DC.L	Grid.setStill1
+	DC.L	Grid.setStill2
+	DC.L	Grid.setStill3
+	DC.L	Grid.setStill4
+	DC.L	Grid.setStill5
+	DC.L	Grid.setStill6
+	DC.L	0
+
+;======= OBJECT EQUATES ====================================================
+
+Grid.COLORS:	=	0	 1&(testmode^1)
+Grid.NUM_GREPS:	=	7
+Grid.NUM_REPS:	=	10
+
+;======= INIT SUBROUTINE ===================================================
+
+; OUTPUT:
+; d0.l: 0   = All clear, neg = Error! Not initialized!
+Grid.init:
+	lea	Grid.pal,a0
+;	move.l	#$FFFFFFFF,-4(a0)
+	move.w	#64-1,d7
+.loop:	move.w	d7,d0				; d0.w=%0000000rrrrrrrrr
+	lsl.w	#8,d0				; d0.w=%rrrrrrrrr0000000
+	lsl.w	#2,d0
+	andi.w	#%1111100000000000,d0		; d0.w=%rrrrr00000000000
+	move.w	d7,d1
+	lsl.w	#5,d1				; d1.w=%00000ggggggggg00
+	or.w	d1,d0
+	andi.w	#%1111111111100000,d0		; d0.w=%rrrrrgggggg00000
+	move.w	d7,d1
+	lsr.w	#1,d1
+	or.w	d1,d0
+	move.w	d0,(a0)+
+	dbf	d7,.loop
+
+	move.w	#2048-1,d7
+.loop2:	move.w	d0,(a0)+
+	dbf	d7,.loop2
+
+	lea	Grid.unrollTable,a0
+	clr.l	d7
+.unroll_loop:
+	move.l	d7,d5
+	divu.w	#Grid.NUM_REPS,d5
+	move.l	d5,d4
+	swap	d4
+	mulu.w	#12,d4				; Multiply by looplength.
+	neg.l	d4
+	move.w	d4,(a0)+			; Store jumpoffset.
+	move.w	d5,(a0)+			; Store #loops.
+	addq.w	#1,d7
+	cmpi.w	#320,d7
+	blt.s	.unroll_loop
+
+	lea	Grid.gUnrollTable,a0
+	clr.l	d7
+.gunroll_loop:
+	move.l	d7,d5
+	divu.w	#Grid.NUM_GREPS,d5
+	move.l	d5,d4
+	swap	d4
+	neg.w	d4
+	addi.w	#Grid.NUM_GREPS,d4
+	mulu.w	#18,d4				; Multiply by looplength.
+	move.w	d4,(a0)+			; Store jumpoffset.
+	move.w	d5,(a0)+			; Store #loops.
+	addq.w	#1,d7
+	cmpi.w	#320,d7
+	blt.s	.gunroll_loop
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= REALTIME INIT SUBROUTINE ==========================================
+
+Grid.initRT:
+	tst.w	detail
+	bne.s	.heavy_perspect
+	lea	Grid.p56,a0
+	move.l	#(Grid.p56End-Grid.p56)/3,d0
+	bsr	Dsp.loadProgram
+	bra.s	.end_load_dsp
+.heavy_perspect:
+	lea	Grid.p56h,a0
+	move.l	#(Grid.p56hEnd-Grid.p56h)/3,d0
+	bsr	Dsp.loadProgram
+.end_load_dsp:
+
+	bsr	Grid.setStill
+
+;	lea	Grid.object2,a1
+	lea	Grid.city,a1
+	bsr	Grid.sendObject
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+; Unknown monitormode..
+.end:	rts
+.vga60:	move.l	#vga60_16bit_320_200,resRout
+	rts
+.vga100:move.l	#vga100_16bit_320_200,resRout
+	rts
+.rgb50:	move.l	#rgb50_16bit_320_200,resRout
+	rts
+
+;======= DEINITIALISATION ROUTINE ==========================================
+
+Grid.deinitRT:
+	rts
+
+;======= SCREENINIT SUBROUTINE =============================================
+
+Grid.initScreen:
+	movea.l	scr,a0
+	bsr.l	CLEAR_320200TSCR
+	rts
+
+;======= MAINLOOP SUBROUTINE ===============================================
+
+Grid.mainLoop:
+	move.w	$0468.w,old468
+
+	IFNE	Grid.COLORS
+	move.l	#$FF000000,$FFFF9800.w
+	ENDC
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr	Grid.initScreen
+.end_screeninit:
+
+	movea.l	Grid.trajRout,a0
+	jsr	(a0)
+
+; parallel with dsp..
+	movea.l	Grid.edgeAdrTable,a4
+	bsr	Grid.restore
+
+	movea.l	Grid.fadeRout,a0
+	jsr	(a0)
+; end of parallel shite..
+
+	movea.l	Grid.edgeAdrTable,a4
+	bsr	Grid.paint
+
+	lea	Grid.edgeAdrTable,a4
+	move.l	(a4)+,d0
+	move.l	(a4)+,d1
+	move.l	(a4),-4(a4)
+	move.l	d0,(a4)
+	move.l	d1,-8(a4)
+
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	movea.l	resRout,a0
+	suba.l	a1,a1
+	movea.l	d0,a2
+	bsr.l	Screen.requestUpdate
+	clr.l	resRout
+
+	move.w	$0468.w,d0	;old468,d0
+.wait:	cmp.w	$0468.w,d0
+	beq.s	.wait
+
+	rts
+
+;======= OBJECT SUBROUTINES ================================================
+
+Grid.setStill1:
+	move.l	#Grid.stayStill1,Grid.trajRout
+	rts
+
+Grid.setStill2:
+	move.l	#Grid.stayStill2,Grid.trajRout
+	rts
+
+Grid.setStill3:
+	move.l	#Grid.stayStill3,Grid.trajRout
+	rts
+
+Grid.setStill4:
+	move.l	#Grid.stayStill4,Grid.trajRout
+	rts
+
+Grid.setStill5:
+	move.l	#Grid.stayStill5,Grid.trajRout
+	rts
+
+Grid.setStill6:
+	move.l	#Grid.stayStill6,Grid.trajRout
+	rts
+
+Grid.setFadeIn:
+	move.w	$04BC.w,Grid.fadeStart
+	move.l	#Grid.fadeIn,Grid.fadeRout
+	rts
+
+Grid.setFadeOut:
+	move.w	$04BC.w,Grid.fadeStart
+	move.l	#Grid.fadeOut,Grid.fadeRout
+	rts
+
+Grid.setStill:
+	move.l	#Grid.stayPut,Grid.trajRout
+	rts
+
+Grid.setSwing:
+	move.l	#Grid.swing,Grid.trajRout
+	move.l	$04BA.w,Grid.trajStart
+	rts
+
+Grid.setDrill:
+	move.l	#Grid.drill,Grid.trajRout
+	move.l	$04BA.w,Grid.trajStart
+	rts
+
+Grid.setDiagFly1:
+	move.l	#Grid.diagFlyBy1,Grid.trajRout
+	move.l	$04BA.w,Grid.trajStart
+	rts
+
+Grid.setDiagFly2:
+	move.l	#Grid.diagFlyBy2,Grid.trajRout
+	move.l	$04BA.w,Grid.trajStart
+	clr.w	Grid.launched
+	rts
+
+Grid.setDiagFly3:
+	move.l	#Grid.diagFlyBy3,Grid.trajRout
+	move.l	$04BA.w,Grid.trajStart
+	clr.w	Grid.launched
+	rts
+
+Grid.setDiagFly4:
+	move.l	#Grid.diagFlyBy4,Grid.trajRout
+	move.l	$04BA.w,Grid.trajStart
+	rts
+
+Grid.takeOff:
+	move.l	$04BA.w,Grid.takeOffStart
+	st	Grid.launched
+	rts
+
+Grid.stayStill1:
+	move.l	#600,d0
+	move.l	#700,d1
+	move.l	#900,d2
+	bsr	Grid.translate
+
+	move.l	#200,d0
+	move.l	#-200,d1
+	move.l	#100,d2
+	bsr	Grid.rotate
+	rts
+
+Grid.stayStill2:
+	clr.l	d0
+	move.l	#200,d1
+	move.w	#$7FFF,d2
+	asr.w	#4,d2
+;	addi.w	#$300,d2
+	ext.l	d2
+	move.l	#1100,d2
+	bsr	Grid.translate
+
+	move.l	#800,d0
+	move.l	#1200,d1
+	move.l	#700,d2
+	bsr	Grid.rotate
+	rts
+
+Grid.stayStill3:
+	clr.l	d0
+	move.l	#500,d1
+	move.w	#$7FFF,d2
+	asr.w	#4,d2
+	subi.w	#$400,d2
+	ext.l	d2
+	bsr	Grid.translate
+
+	move.l	#200,d0
+	move.l	#300,d1
+	move.l	#300,d2
+	bsr	Grid.rotate
+	rts
+
+Grid.stayStill4:
+	clr.l	d0
+	move.l	#500,d1
+	move.w	#$7FFF,d2
+	asr.w	#4,d2
+	subi.w	#$300,d2
+	ext.l	d2
+	bsr	Grid.translate
+
+	clr.l	d0
+	move.l	#300,d1
+	move.l	#200,d2
+	bsr	Grid.rotate
+	rts
+
+Grid.stayStill5:
+	move.l	#-500,d0
+	move.l	#200,d1
+	move.l	#250,d2
+	bsr	Grid.translate
+
+	move.l	#-300,d0
+	move.l	#300,d1
+	move.l	#200,d2
+	bsr	Grid.rotate
+	rts
+
+Grid.stayStill6:
+	move.l	#500,d0
+	move.l	#200,d1
+	move.l	#250,d2
+	bsr	Grid.translate
+
+	move.l	#-300,d0
+	move.l	#-300,d1
+	move.l	#-200,d2
+	bsr	Grid.rotate
+	rts
+
+Grid.stayPut:
+	clr.l	d0
+	move.l	#300,d1
+	move.w	#$7FFF,d2
+	asr.w	#4,d2
+	addi.w	#$300,d2
+	ext.l	d2
+	bsr	Grid.translate
+
+	clr.l	d0
+	clr.l	d1
+	clr.l	d2
+	bsr	Grid.rotate
+	rts
+
+Grid.swing:
+	move.l	$04BA.w,d2
+	sub.l	Grid.trajStart,d2
+	move.w	d2,d7
+	clr.l	d6
+	clr.l	d0
+	clr.l	d1
+	mulu.w	#3,d2
+	lsr.l	d2
+	cmpi.l	#sintbllen/2,d2
+	blt.s	.oki
+	move.l	d2,d6
+	subi.l	#sintbllen/2,d6
+	move.l	#sintbllen/2,d2
+	move.w	d6,d5
+	cmpi.w	#512,d5
+	blt.s	.oki2
+	move.w	#512,d5
+.oki2:	mulu.w	#5,d6
+	lsr.l	#2,d6
+	Do_SinModulo	d6
+	Get_Sin	sine_tbl,d6,d6
+	muls.w	d5,d6
+	asr.l	#2,d6
+	swap	d6
+	ext.l	d6
+.oki:	Do_SinModulo	d2
+	Get_Sin	sine_tbl+2,d2,d2
+
+;	asr.w	#4,d2
+;	andi.w	#$1FF,d2
+;	addi.w	#$E0,d2
+
+;	asr.w	#7,d2
+	asr.w	#4,d2
+
+	addi.w	#$300,d2
+	ext.l	d2
+
+	move.l	#300,d1
+	bsr	Grid.translate
+
+	move.w	d7,d1
+	move.w	d7,d2
+	mulu.w	#3,d1
+	mulu.w	#7,d2
+	lsr.l	d1
+	lsr.l	#2,d2
+	Do_SinModulo	d2
+	Get_Sin	sine_tbl,d2,d2
+	asr.w	#8,d2
+	clr.l	d0
+	move.l	d6,d1
+;	clr.l	d2
+	bsr	Grid.rotate
+	rts
+
+Grid.drill:
+	clr.l	d0
+	clr.l	d1
+	move.l	$04BA.w,d2
+	sub.l	Grid.trajStart,d2
+	move.w	d2,d7
+	mulu.w	#3,d2
+	lsr.l	d2
+	Do_SinModulo	d2
+	Get_Sin	sine_tbl+2,d2,d2
+
+;	asr.w	#4,d2
+;	andi.w	#$1FF,d2
+;	addi.w	#$E0,d2
+
+	asr.w	#6,d2
+
+	addi.w	#$300,d2
+	ext.l	d2
+
+	clr.l	d1
+
+	bsr	Grid.translate
+
+	move.w	d7,d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#3,d1
+	mulu.w	#5,d2
+	lsr.l	d1
+	lsr.l	#1,d2
+	move.l	#sintbllen/4,d0
+	move.l	d2,d1
+	clr.l	d2
+	bsr	Grid.rotate
+	rts
+
+Grid.diagFlyBy1:
+	move.l	$04BA.w,d2
+	sub.l	Grid.trajStart,d2
+	lsr.l	d2
+	move.w	d2,d7
+	clr.l	d0
+	clr.l	d1
+	mulu.w	#3,d2
+	lsr.l	d2
+	Do_SinModulo	d2
+	Get_Sin	sine_tbl+2,d2,d2
+	asr.w	#4,d2
+	addi.w	#$500,d2
+	ext.l	d2
+	move.l	#400,d1
+	bsr	Grid.translate
+
+	clr.l	d0
+	move.l	d7,d1
+	add.l	d1,d1
+	clr.l	d2
+	bsr	Grid.rotate
+	rts
+
+Grid.diagFlyBy2:
+	move.l	$04BA.w,d2
+	sub.l	Grid.trajStart,d2
+	lsr.l	d2
+	move.w	d2,d7
+	clr.l	d0
+	clr.l	d1
+	clr.l	d2
+	move.l	#400,d1
+	move.l	d7,d3
+	mulu.w	#7,d3
+	lsr.l	#3,d3
+	Do_SinModulo	d3
+	Get_Sin	sine_tbl+2,d3,d3
+	ext.l	d3
+	asr.l	#7,d3
+	add.l	d3,d1
+	tst.w	Grid.launched
+	beq.s	.ok
+	move.l	$04BA.w,d3
+	sub.l	Grid.takeOffStart,d3
+	mulu.w	d3,d3
+	lsr.l	#7,d3
+	add.l	d3,d1
+.ok:	bsr	Grid.translate
+
+	clr.l	d0
+	move.l	d7,d1
+	add.l	d1,d1
+	neg.l	d1
+	clr.l	d2
+	bsr	Grid.rotate
+	rts
+
+Grid.diagFlyBy3:
+	move.l	$04BA.w,d2
+	sub.l	Grid.trajStart,d2
+	lsr.l	d2
+	move.w	d2,d7
+	move.l	#$300,d2
+	move.l	#500,d1
+	move.l	d7,d3
+	mulu.w	#7,d3
+	lsr.l	#3,d3
+	Do_SinModulo	d3
+	Get_Sin	sine_tbl+2,d3,d3
+	ext.l	d3
+	asr.l	#7,d3
+;	add.l	d3,d1
+	tst.w	Grid.launched
+	beq.s	.ok
+	move.l	$04BA.w,d3
+	sub.l	Grid.takeOffStart,d3
+	mulu.w	d3,d3
+	lsr.l	#7,d3
+	add.l	d3,d1
+.ok:	clr.l	d0
+	bsr	Grid.translate
+
+	move.l	d7,d0
+	add.l	d0,d0
+	Do_SinModulo	d0
+	Get_Sin	sine_tbl,d0,d0
+	addi.w	#$8000,d0
+	mulu.w	#sintbllen*3/16,d0
+	swap	d0
+	ext.l	d0
+	addi.w	#sintbllen/16,d0
+	move.l	d7,d1
+	add.l	d1,d1
+	clr.l	d2
+	bsr	Grid.rotate
+	rts
+
+Grid.diagFlyBy4:
+	move.l	$04BA.w,d2
+	sub.l	Grid.trajStart,d2
+	move.l	#-100,d0
+	mulu.w	#3,d2
+	lsr.l	d2
+.oki:	Do_SinModulo	d2
+	Get_Sin	sine_tbl+2,d2,d2
+	asr.w	#5,d2
+	addi.w	#$100,d2
+	ext.l	d2
+	move.l	#300,d1
+	bsr	Grid.translate
+
+	clr.l	d0
+	move.l	#400,d1
+	clr.l	d2
+	bsr	Grid.rotate
+	rts
+
+Grid.fadeIn:
+	move.w	$04BC.w,d0
+	sub.w	Grid.fadeStart,d0
+	cmpi.w	#256,d0
+	blt.s	.ok
+	move.l	#rts,Grid.fadeRout
+.ok:	lea	Grid.pal,a1
+	lea	Grid.pal2,a0
+	moveq	#64-1,d7
+.loop:	move.w	(a1)+,d1
+	move.w	d1,d2
+	move.w	d1,d3
+	andi.w	#$F800,d1
+	andi.w	#$07E0,d2
+	andi.w	#$001F,d3
+	mulu.w	d0,d1
+	mulu.w	d0,d2
+	mulu.w	d0,d3
+	lsr.l	#8,d1
+	lsr.l	#8,d2
+	lsr.l	#8,d3
+	andi.w	#$F800,d1
+	andi.w	#$07E0,d2
+	or.w	d2,d1
+	or.w	d3,d1
+	move.w	d1,(a0)+
+	dbf	d7,.loop
+	rts
+
+Grid.fadeOut:
+	move.w	$04BC.w,d0
+	sub.w	Grid.fadeStart,d0
+	subi.w	#255,d0
+	ble.s	.ok
+	clr.w	d0
+	move.l	#rts,Grid.fadeRout
+.ok:	neg.w	d0
+	lea	Grid.pal,a1
+	lea	Grid.pal2,a0
+	moveq	#64-1,d7
+.loop:	move.w	(a1)+,d1
+	move.w	d1,d2
+	move.w	d1,d3
+	andi.w	#$F800,d1
+	andi.w	#$07E0,d2
+	andi.w	#$001F,d3
+	mulu.w	d0,d1
+	mulu.w	d0,d2
+	mulu.w	d0,d3
+	lsr.l	#8,d1
+	lsr.l	#8,d2
+	lsr.l	#8,d3
+	andi.w	#$F800,d1
+	andi.w	#$07E0,d2
+	or.w	d2,d1
+	or.w	d3,d1
+	move.w	d1,(a0)+
+	dbf	d7,.loop
+	rts
+
+; INPUT:
+; a1: object
+Grid.sendObject:
+; Send vertices..
+	clr.l	d7
+	clr.l	d0
+	move.w	(a1)+,d7
+	sendLongToDsp	d7
+	mulu.w	#3,d7
+	subq.w	#1,d7
+.vloop:	move.w	(a1)+,d0
+	ext.l	d0
+	sendLongToDsp	d0
+	dbf	d7,.vloop
+
+; Send edges..
+	clr.l	d0
+	clr.l	d7
+	move.w	(a1)+,d7
+	sendLongToDsp	d7
+	add.l	d7,d7
+	subq.w	#1,d7
+.lloop:	move.w	(a1)+,d0
+	sendLongToDsp	d0
+	dbf	d7,.lloop
+	rts
+
+; INPUT:
+; d0.l=x
+; d1.l=y
+; d2.l=z
+Grid.translate:
+	sendLongToDsp	d0
+	sendLongToDsp	d1
+	sendLongToDsp	d2
+	rts
+
+; INPUT:
+; d0.l=xangle
+; d1.l=yangle
+; d2.l=zangle
+Grid.rotate:
+	move.w	#sintbllen-1,d3
+	and.w	d3,d0
+	and.w	d3,d1
+	and.w	d3,d2
+	lea	sine_tbl,a2
+	Get_SinCos	a2,d2,d4,d5
+	Get_SinCos	a2,d1,d2,d3
+	Get_SinCos	a2,d0,d0,d1
+	lsl.l	#8,d0
+	lsl.l	#8,d1
+	lsl.l	#8,d2
+	lsl.l	#8,d3
+	lsl.l	#8,d4
+	lsl.l	#8,d5
+	sendLongToDsp	d0
+	sendLongToDsp	d1
+	sendLongToDsp	d2
+	sendLongToDsp	d3
+	sendLongToDsp	d4
+	sendLongToDsp	d5
+	rts
+
+; a4: edgetable to save to
+Grid.paint:
+	move.l	scr,Grid.scr
+
+	IFNE	Grid.COLORS
+	move.l	#$FFFF0000,$FFFF9800.w
+	ENDC
+
+	lea	Grid.pal2,a1
+	lea	$FFFFA206.w,a5
+	lea	Grid.gUnrollTable,a6
+	receiveWordFromDsp	d7
+
+	IFNE	Grid.COLORS
+	move.l	#$00FF0000,$FFFF9800.w
+	ENDC
+
+	tst.w	d7
+	beq.w	.end
+	subq.w	#1,d7
+	move.w	d7,(a4)+
+	clr.l	d0
+	clr.l	d2
+
+.loop:	move.w	d7,-(sp)
+
+	move.w	(a5),d0
+;	cmpi.w	#320,d0
+;	bcs.s	.x1ok
+;	illegal
+.x1ok:	move.w	(a5),d1
+;	cmpi.w	#200,d1
+;	bcs.s	.y1ok
+;	illegal
+.y1ok:	move.w	(a5),d2
+;	cmpi.w	#320,d2
+;	bcs.s	.x2ok
+;	illegal
+.x2ok:	move.w	(a5),d3
+;	cmpi.w	#200,d3
+;	bcs.s	.y2ok
+;	illegal
+.y2ok:	clr.l	d6
+	move.w	(a5),d6
+	move.w	(a5),d7
+	movem.w	d0-d3,(a4)
+	addq	#8,a4
+
+	movea.l	Grid.scr(pc),a0
+	move.l	#320*2,d5
+
+; d0.w=x0, d1.w=y0, d2.w=x1, d3.w=y1, d6.w=g0 d7.w=g1, a0: screen, a1: pal
+	ext.l	d7
+
+; Calculate |dx|, |dy| and calculate x step, y step.
+	moveq	#2,d4
+	sub.w	d0,d2			; d2.w=dx
+	bpl.s	.dx_positive
+	neg.l	d4
+	neg.w	d2
+.dx_positive:
+	movea.l	d4,a2			; a2= x step
+	move.l	d5,d4
+	sub.w	d1,d3			; d3.w=dy
+	bpl.s	.dy_positive
+	neg.l	d4
+	neg.w	d3
+.dy_positive:
+	movea.l	d4,a3			; a3= y step
+; d2.w = |dx|, d3.w = |dy|
+
+; Calculate the startaddress on screen.
+	add.l	d0,d0
+	adda.l	d0,a0
+	mulu.w	d5,d1
+	adda.l	d1,a0
+
+; Branch to appropriate routine, depending on |dx| < |dy|.
+	cmp.w	d2,d3
+	blt.s	.dy
+	exg.l	d2,d3
+	exg.l	a2,a3
+
+.dy:	move.l	d7,d1
+	asr.l	#8,d1
+	move.w	d2,d0
+	movem.w	(a6,d2.l*4),d4/d5
+	jmp	.blokloop(pc,d4.l)
+
+.blokloop:
+	REPT	Grid.NUM_GREPS
+	move.w	(a1,d6.l*2),(a0)
+	add.b	d7,d4
+	addx.l	d1,d6
+	sub.w	d3,d0
+	bgt.s	*+6
+	add.w	d2,d0
+	adda.l	a3,a0
+	adda.l	a2,a0
+	ENDR
+	dbf	d5,.blokloop
+
+	move.w	(sp)+,d7
+	dbf	d7,.loop
+
+.end:	
+	IFNE	Grid.COLORS
+	clr.l	$FFFF9800.w
+	ENDC
+
+	rts
+
+Grid.scr:
+	DC.L	0
+
+; a4: edgetable to restore..
+Grid.restore:
+	lea	Grid.jump,a1
+	lea	Grid.unrollTable,a5
+	move.l	#320*2,d5
+	movea.l	scr,a6
+	move.w	(a4)+,d7
+	bpl.s	Grid.restoreLoop
+	rts
+	
+Grid.restoreLoop:
+	movem.w	(a4)+,d0-d3
+	movea.l	a6,a0
+; d0.l=x0, d1.l=y0, d2.l=x1, d3.l=y1 a0: screen
+; Calculate |dx|, |dy| and calculate x step, y step.
+	moveq	#2,d4
+	sub.l	d0,d2			; d2.l=dx
+	bpl.s	.dx_positive
+	neg.l	d4
+	neg.l	d2
+.dx_positive:
+	movea.l	d4,a2			; a2= x step
+	move.l	d5,d4
+	sub.l	d1,d3			; d3.l=dy
+	bpl.s	.dy_positive
+	neg.l	d4
+	neg.l	d3
+.dy_positive:
+	movea.l	d4,a3			; a3= y step
+; d2.w = |dx|, d3.w = |dy|
+
+; Calculate the startaddress on screen.
+	add.l	d0,d0
+	mulu.w	d5,d1
+	add.l	d0,d1
+	adda.l	d1,a0
+
+	clr.w	d1
+	cmp.l	d2,d3
+	bge.s	.dx
+	exg.l	d2,d3
+	exg.l	a2,a3
+.dx:	move.w	d3,d0
+	movem.w	(a5,d3.l*4),d4/d6
+	jmp	(a1,d4.l)
+
+Grid.paintBlackLoop:
+	REPT	Grid.NUM_REPS
+	move.w	d1,(a0)
+	sub.w	d2,d0
+	bgt.s	*+6
+	add.w	d3,d0
+	adda.l	a2,a0
+	adda.l	a3,a0
+	ENDR
+Grid.jump:
+	dbf	d6,Grid.paintBlackLoop
+
+	dbf	d7,Grid.restoreLoop
+	rts
+
+;======= OBJECT DATA =======================================================
+
+	DATA
+
+Grid.textureTable:
+	DC.L	0
+
+Grid.WI:	=	256
+
+	IFNE	0
+Grid.object2:
+	DC.W	6*6*6					; evil? very!
+	DC.W	-5*Grid.WI,-5*Grid.WI,-5*Grid.WI
+	DC.W	-5*Grid.WI,-5*Grid.WI,-3*Grid.WI
+	DC.W	-5*Grid.WI,-5*Grid.WI,-1*Grid.WI
+	DC.W	-5*Grid.WI,-5*Grid.WI,+1*Grid.WI
+	DC.W	-5*Grid.WI,-5*Grid.WI,+3*Grid.WI
+	DC.W	-5*Grid.WI,-5*Grid.WI,+5*Grid.WI
+	DC.W	-5*Grid.WI,-3*Grid.WI,-5*Grid.WI
+	DC.W	-5*Grid.WI,-3*Grid.WI,-3*Grid.WI
+	DC.W	-5*Grid.WI,-3*Grid.WI,-1*Grid.WI
+	DC.W	-5*Grid.WI,-3*Grid.WI,+1*Grid.WI
+	DC.W	-5*Grid.WI,-3*Grid.WI,+3*Grid.WI
+	DC.W	-5*Grid.WI,-3*Grid.WI,+5*Grid.WI
+	DC.W	-5*Grid.WI,-1*Grid.WI,-5*Grid.WI
+	DC.W	-5*Grid.WI,-1*Grid.WI,-3*Grid.WI
+	DC.W	-5*Grid.WI,-1*Grid.WI,-1*Grid.WI
+	DC.W	-5*Grid.WI,-1*Grid.WI,+1*Grid.WI
+	DC.W	-5*Grid.WI,-1*Grid.WI,+3*Grid.WI
+	DC.W	-5*Grid.WI,-1*Grid.WI,+5*Grid.WI
+	DC.W	-5*Grid.WI,+1*Grid.WI,-5*Grid.WI
+	DC.W	-5*Grid.WI,+1*Grid.WI,-3*Grid.WI
+	DC.W	-5*Grid.WI,+1*Grid.WI,-1*Grid.WI
+	DC.W	-5*Grid.WI,+1*Grid.WI,+1*Grid.WI
+	DC.W	-5*Grid.WI,+1*Grid.WI,+3*Grid.WI
+	DC.W	-5*Grid.WI,+1*Grid.WI,+5*Grid.WI
+	DC.W	-5*Grid.WI,+3*Grid.WI,-5*Grid.WI
+	DC.W	-5*Grid.WI,+3*Grid.WI,-3*Grid.WI
+	DC.W	-5*Grid.WI,+3*Grid.WI,-1*Grid.WI
+	DC.W	-5*Grid.WI,+3*Grid.WI,+1*Grid.WI
+	DC.W	-5*Grid.WI,+3*Grid.WI,+3*Grid.WI
+	DC.W	-5*Grid.WI,+3*Grid.WI,+5*Grid.WI
+	DC.W	-5*Grid.WI,+5*Grid.WI,-5*Grid.WI
+	DC.W	-5*Grid.WI,+5*Grid.WI,-3*Grid.WI
+	DC.W	-5*Grid.WI,+5*Grid.WI,-1*Grid.WI
+	DC.W	-5*Grid.WI,+5*Grid.WI,+1*Grid.WI
+	DC.W	-5*Grid.WI,+5*Grid.WI,+3*Grid.WI
+	DC.W	-5*Grid.WI,+5*Grid.WI,+5*Grid.WI
+	DC.W	-3*Grid.WI,-5*Grid.WI,-5*Grid.WI
+	DC.W	-3*Grid.WI,-5*Grid.WI,-3*Grid.WI
+	DC.W	-3*Grid.WI,-5*Grid.WI,-1*Grid.WI
+	DC.W	-3*Grid.WI,-5*Grid.WI,+1*Grid.WI
+	DC.W	-3*Grid.WI,-5*Grid.WI,+3*Grid.WI
+	DC.W	-3*Grid.WI,-5*Grid.WI,+5*Grid.WI
+	DC.W	-3*Grid.WI,-3*Grid.WI,-5*Grid.WI
+	DC.W	-3*Grid.WI,-3*Grid.WI,-3*Grid.WI
+	DC.W	-3*Grid.WI,-3*Grid.WI,-1*Grid.WI
+	DC.W	-3*Grid.WI,-3*Grid.WI,+1*Grid.WI
+	DC.W	-3*Grid.WI,-3*Grid.WI,+3*Grid.WI
+	DC.W	-3*Grid.WI,-3*Grid.WI,+5*Grid.WI
+	DC.W	-3*Grid.WI,-1*Grid.WI,-5*Grid.WI
+	DC.W	-3*Grid.WI,-1*Grid.WI,-3*Grid.WI
+	DC.W	-3*Grid.WI,-1*Grid.WI,-1*Grid.WI
+	DC.W	-3*Grid.WI,-1*Grid.WI,+1*Grid.WI
+	DC.W	-3*Grid.WI,-1*Grid.WI,+3*Grid.WI
+	DC.W	-3*Grid.WI,-1*Grid.WI,+5*Grid.WI
+	DC.W	-3*Grid.WI,+1*Grid.WI,-5*Grid.WI
+	DC.W	-3*Grid.WI,+1*Grid.WI,-3*Grid.WI
+	DC.W	-3*Grid.WI,+1*Grid.WI,-1*Grid.WI
+	DC.W	-3*Grid.WI,+1*Grid.WI,+1*Grid.WI
+	DC.W	-3*Grid.WI,+1*Grid.WI,+3*Grid.WI
+	DC.W	-3*Grid.WI,+1*Grid.WI,+5*Grid.WI
+	DC.W	-3*Grid.WI,+3*Grid.WI,-5*Grid.WI
+	DC.W	-3*Grid.WI,+3*Grid.WI,-3*Grid.WI
+	DC.W	-3*Grid.WI,+3*Grid.WI,-1*Grid.WI
+	DC.W	-3*Grid.WI,+3*Grid.WI,+1*Grid.WI
+	DC.W	-3*Grid.WI,+3*Grid.WI,+3*Grid.WI
+	DC.W	-3*Grid.WI,+3*Grid.WI,+5*Grid.WI
+	DC.W	-3*Grid.WI,+5*Grid.WI,-5*Grid.WI
+	DC.W	-3*Grid.WI,+5*Grid.WI,-3*Grid.WI
+	DC.W	-3*Grid.WI,+5*Grid.WI,-1*Grid.WI
+	DC.W	-3*Grid.WI,+5*Grid.WI,+1*Grid.WI
+	DC.W	-3*Grid.WI,+5*Grid.WI,+3*Grid.WI
+	DC.W	-3*Grid.WI,+5*Grid.WI,+5*Grid.WI
+	DC.W	-1*Grid.WI,-5*Grid.WI,-5*Grid.WI
+	DC.W	-1*Grid.WI,-5*Grid.WI,-3*Grid.WI
+	DC.W	-1*Grid.WI,-5*Grid.WI,-1*Grid.WI
+	DC.W	-1*Grid.WI,-5*Grid.WI,+1*Grid.WI
+	DC.W	-1*Grid.WI,-5*Grid.WI,+3*Grid.WI
+	DC.W	-1*Grid.WI,-5*Grid.WI,+5*Grid.WI
+	DC.W	-1*Grid.WI,-3*Grid.WI,-5*Grid.WI
+	DC.W	-1*Grid.WI,-3*Grid.WI,-3*Grid.WI
+	DC.W	-1*Grid.WI,-3*Grid.WI,-1*Grid.WI
+	DC.W	-1*Grid.WI,-3*Grid.WI,+1*Grid.WI
+	DC.W	-1*Grid.WI,-3*Grid.WI,+3*Grid.WI
+	DC.W	-1*Grid.WI,-3*Grid.WI,+5*Grid.WI
+	DC.W	-1*Grid.WI,-1*Grid.WI,-5*Grid.WI
+	DC.W	-1*Grid.WI,-1*Grid.WI,-3*Grid.WI
+	DC.W	-1*Grid.WI,-1*Grid.WI,-1*Grid.WI
+	DC.W	-1*Grid.WI,-1*Grid.WI,+1*Grid.WI
+	DC.W	-1*Grid.WI,-1*Grid.WI,+3*Grid.WI
+	DC.W	-1*Grid.WI,-1*Grid.WI,+5*Grid.WI
+	DC.W	-1*Grid.WI,+1*Grid.WI,-5*Grid.WI
+	DC.W	-1*Grid.WI,+1*Grid.WI,-3*Grid.WI
+	DC.W	-1*Grid.WI,+1*Grid.WI,-1*Grid.WI
+	DC.W	-1*Grid.WI,+1*Grid.WI,+1*Grid.WI
+	DC.W	-1*Grid.WI,+1*Grid.WI,+3*Grid.WI
+	DC.W	-1*Grid.WI,+1*Grid.WI,+5*Grid.WI
+	DC.W	-1*Grid.WI,+3*Grid.WI,-5*Grid.WI
+	DC.W	-1*Grid.WI,+3*Grid.WI,-3*Grid.WI
+	DC.W	-1*Grid.WI,+3*Grid.WI,-1*Grid.WI
+	DC.W	-1*Grid.WI,+3*Grid.WI,+1*Grid.WI
+	DC.W	-1*Grid.WI,+3*Grid.WI,+3*Grid.WI
+	DC.W	-1*Grid.WI,+3*Grid.WI,+5*Grid.WI
+	DC.W	-1*Grid.WI,+5*Grid.WI,-5*Grid.WI
+	DC.W	-1*Grid.WI,+5*Grid.WI,-3*Grid.WI
+	DC.W	-1*Grid.WI,+5*Grid.WI,-1*Grid.WI
+	DC.W	-1*Grid.WI,+5*Grid.WI,+1*Grid.WI
+	DC.W	-1*Grid.WI,+5*Grid.WI,+3*Grid.WI
+	DC.W	-1*Grid.WI,+5*Grid.WI,+5*Grid.WI
+	DC.W	+1*Grid.WI,-5*Grid.WI,-5*Grid.WI
+	DC.W	+1*Grid.WI,-5*Grid.WI,-3*Grid.WI
+	DC.W	+1*Grid.WI,-5*Grid.WI,-1*Grid.WI
+	DC.W	+1*Grid.WI,-5*Grid.WI,+1*Grid.WI
+	DC.W	+1*Grid.WI,-5*Grid.WI,+3*Grid.WI
+	DC.W	+1*Grid.WI,-5*Grid.WI,+5*Grid.WI
+	DC.W	+1*Grid.WI,-3*Grid.WI,-5*Grid.WI
+	DC.W	+1*Grid.WI,-3*Grid.WI,-3*Grid.WI
+	DC.W	+1*Grid.WI,-3*Grid.WI,-1*Grid.WI
+	DC.W	+1*Grid.WI,-3*Grid.WI,+1*Grid.WI
+	DC.W	+1*Grid.WI,-3*Grid.WI,+3*Grid.WI
+	DC.W	+1*Grid.WI,-3*Grid.WI,+5*Grid.WI
+	DC.W	+1*Grid.WI,-1*Grid.WI,-5*Grid.WI
+	DC.W	+1*Grid.WI,-1*Grid.WI,-3*Grid.WI
+	DC.W	+1*Grid.WI,-1*Grid.WI,-1*Grid.WI
+	DC.W	+1*Grid.WI,-1*Grid.WI,+1*Grid.WI
+	DC.W	+1*Grid.WI,-1*Grid.WI,+3*Grid.WI
+	DC.W	+1*Grid.WI,-1*Grid.WI,+5*Grid.WI
+	DC.W	+1*Grid.WI,+1*Grid.WI,-5*Grid.WI
+	DC.W	+1*Grid.WI,+1*Grid.WI,-3*Grid.WI
+	DC.W	+1*Grid.WI,+1*Grid.WI,-1*Grid.WI
+	DC.W	+1*Grid.WI,+1*Grid.WI,+1*Grid.WI
+	DC.W	+1*Grid.WI,+1*Grid.WI,+3*Grid.WI
+	DC.W	+1*Grid.WI,+1*Grid.WI,+5*Grid.WI
+	DC.W	+1*Grid.WI,+3*Grid.WI,-5*Grid.WI
+	DC.W	+1*Grid.WI,+3*Grid.WI,-3*Grid.WI
+	DC.W	+1*Grid.WI,+3*Grid.WI,-1*Grid.WI
+	DC.W	+1*Grid.WI,+3*Grid.WI,+1*Grid.WI
+	DC.W	+1*Grid.WI,+3*Grid.WI,+3*Grid.WI
+	DC.W	+1*Grid.WI,+3*Grid.WI,+5*Grid.WI
+	DC.W	+1*Grid.WI,+5*Grid.WI,-5*Grid.WI
+	DC.W	+1*Grid.WI,+5*Grid.WI,-3*Grid.WI
+	DC.W	+1*Grid.WI,+5*Grid.WI,-1*Grid.WI
+	DC.W	+1*Grid.WI,+5*Grid.WI,+1*Grid.WI
+	DC.W	+1*Grid.WI,+5*Grid.WI,+3*Grid.WI
+	DC.W	+1*Grid.WI,+5*Grid.WI,+5*Grid.WI
+	DC.W	+3*Grid.WI,-5*Grid.WI,-5*Grid.WI
+	DC.W	+3*Grid.WI,-5*Grid.WI,-3*Grid.WI
+	DC.W	+3*Grid.WI,-5*Grid.WI,-1*Grid.WI
+	DC.W	+3*Grid.WI,-5*Grid.WI,+1*Grid.WI
+	DC.W	+3*Grid.WI,-5*Grid.WI,+3*Grid.WI
+	DC.W	+3*Grid.WI,-5*Grid.WI,+5*Grid.WI
+	DC.W	+3*Grid.WI,-3*Grid.WI,-5*Grid.WI
+	DC.W	+3*Grid.WI,-3*Grid.WI,-3*Grid.WI
+	DC.W	+3*Grid.WI,-3*Grid.WI,-1*Grid.WI
+	DC.W	+3*Grid.WI,-3*Grid.WI,+1*Grid.WI
+	DC.W	+3*Grid.WI,-3*Grid.WI,+3*Grid.WI
+	DC.W	+3*Grid.WI,-3*Grid.WI,+5*Grid.WI
+	DC.W	+3*Grid.WI,-1*Grid.WI,-5*Grid.WI
+	DC.W	+3*Grid.WI,-1*Grid.WI,-3*Grid.WI
+	DC.W	+3*Grid.WI,-1*Grid.WI,-1*Grid.WI
+	DC.W	+3*Grid.WI,-1*Grid.WI,+1*Grid.WI
+	DC.W	+3*Grid.WI,-1*Grid.WI,+3*Grid.WI
+	DC.W	+3*Grid.WI,-1*Grid.WI,+5*Grid.WI
+	DC.W	+3*Grid.WI,+1*Grid.WI,-5*Grid.WI
+	DC.W	+3*Grid.WI,+1*Grid.WI,-3*Grid.WI
+	DC.W	+3*Grid.WI,+1*Grid.WI,-1*Grid.WI
+	DC.W	+3*Grid.WI,+1*Grid.WI,+1*Grid.WI
+	DC.W	+3*Grid.WI,+1*Grid.WI,+3*Grid.WI
+	DC.W	+3*Grid.WI,+1*Grid.WI,+5*Grid.WI
+	DC.W	+3*Grid.WI,+3*Grid.WI,-5*Grid.WI
+	DC.W	+3*Grid.WI,+3*Grid.WI,-3*Grid.WI
+	DC.W	+3*Grid.WI,+3*Grid.WI,-1*Grid.WI
+	DC.W	+3*Grid.WI,+3*Grid.WI,+1*Grid.WI
+	DC.W	+3*Grid.WI,+3*Grid.WI,+3*Grid.WI
+	DC.W	+3*Grid.WI,+3*Grid.WI,+5*Grid.WI
+	DC.W	+3*Grid.WI,+5*Grid.WI,-5*Grid.WI
+	DC.W	+3*Grid.WI,+5*Grid.WI,-3*Grid.WI
+	DC.W	+3*Grid.WI,+5*Grid.WI,-1*Grid.WI
+	DC.W	+3*Grid.WI,+5*Grid.WI,+1*Grid.WI
+	DC.W	+3*Grid.WI,+5*Grid.WI,+3*Grid.WI
+	DC.W	+3*Grid.WI,+5*Grid.WI,+5*Grid.WI
+	DC.W	+5*Grid.WI,-5*Grid.WI,-5*Grid.WI
+	DC.W	+5*Grid.WI,-5*Grid.WI,-3*Grid.WI
+	DC.W	+5*Grid.WI,-5*Grid.WI,-1*Grid.WI
+	DC.W	+5*Grid.WI,-5*Grid.WI,+1*Grid.WI
+	DC.W	+5*Grid.WI,-5*Grid.WI,+3*Grid.WI
+	DC.W	+5*Grid.WI,-5*Grid.WI,+5*Grid.WI
+	DC.W	+5*Grid.WI,-3*Grid.WI,-5*Grid.WI
+	DC.W	+5*Grid.WI,-3*Grid.WI,-3*Grid.WI
+	DC.W	+5*Grid.WI,-3*Grid.WI,-1*Grid.WI
+	DC.W	+5*Grid.WI,-3*Grid.WI,+1*Grid.WI
+	DC.W	+5*Grid.WI,-3*Grid.WI,+3*Grid.WI
+	DC.W	+5*Grid.WI,-3*Grid.WI,+5*Grid.WI
+	DC.W	+5*Grid.WI,-1*Grid.WI,-5*Grid.WI
+	DC.W	+5*Grid.WI,-1*Grid.WI,-3*Grid.WI
+	DC.W	+5*Grid.WI,-1*Grid.WI,-1*Grid.WI
+	DC.W	+5*Grid.WI,-1*Grid.WI,+1*Grid.WI
+	DC.W	+5*Grid.WI,-1*Grid.WI,+3*Grid.WI
+	DC.W	+5*Grid.WI,-1*Grid.WI,+5*Grid.WI
+	DC.W	+5*Grid.WI,+1*Grid.WI,-5*Grid.WI
+	DC.W	+5*Grid.WI,+1*Grid.WI,-3*Grid.WI
+	DC.W	+5*Grid.WI,+1*Grid.WI,-1*Grid.WI
+	DC.W	+5*Grid.WI,+1*Grid.WI,+1*Grid.WI
+	DC.W	+5*Grid.WI,+1*Grid.WI,+3*Grid.WI
+	DC.W	+5*Grid.WI,+1*Grid.WI,+5*Grid.WI
+	DC.W	+5*Grid.WI,+3*Grid.WI,-5*Grid.WI
+	DC.W	+5*Grid.WI,+3*Grid.WI,-3*Grid.WI
+	DC.W	+5*Grid.WI,+3*Grid.WI,-1*Grid.WI
+	DC.W	+5*Grid.WI,+3*Grid.WI,+1*Grid.WI
+	DC.W	+5*Grid.WI,+3*Grid.WI,+3*Grid.WI
+	DC.W	+5*Grid.WI,+3*Grid.WI,+5*Grid.WI
+	DC.W	+5*Grid.WI,+5*Grid.WI,-5*Grid.WI
+	DC.W	+5*Grid.WI,+5*Grid.WI,-3*Grid.WI
+	DC.W	+5*Grid.WI,+5*Grid.WI,-1*Grid.WI
+	DC.W	+5*Grid.WI,+5*Grid.WI,+1*Grid.WI
+	DC.W	+5*Grid.WI,+5*Grid.WI,+3*Grid.WI
+	DC.W	+5*Grid.WI,+5*Grid.WI,+5*Grid.WI
+
+	DC.W	6*30+6*30+6*30
+
+	DC.W	000,001
+	DC.W	001,002
+	DC.W	002,003
+	DC.W	003,004
+	DC.W	004,005
+	DC.W	006,007
+	DC.W	007,008
+	DC.W	008,009
+	DC.W	009,010
+	DC.W	010,011
+	DC.W	012,013
+	DC.W	013,014
+	DC.W	014,015
+	DC.W	015,016
+	DC.W	016,017
+	DC.W	018,019
+	DC.W	019,020
+	DC.W	020,021
+	DC.W	021,022
+	DC.W	022,023
+	DC.W	024,025
+	DC.W	025,026
+	DC.W	026,027
+	DC.W	027,028
+	DC.W	028,029
+	DC.W	030,031
+	DC.W	031,032
+	DC.W	032,033
+	DC.W	033,034
+	DC.W	034,035
+
+	DC.W	036,037
+	DC.W	037,038
+	DC.W	038,039
+	DC.W	039,040
+	DC.W	040,041
+	DC.W	042,043
+	DC.W	043,044
+	DC.W	044,045
+	DC.W	045,046
+	DC.W	046,047
+	DC.W	048,049
+	DC.W	049,050
+	DC.W	050,051
+	DC.W	051,052
+	DC.W	052,053
+	DC.W	054,055
+	DC.W	055,056
+	DC.W	056,057
+	DC.W	057,058
+	DC.W	058,059
+	DC.W	060,061
+	DC.W	061,062
+	DC.W	062,063
+	DC.W	063,064
+	DC.W	064,065
+	DC.W	066,067
+	DC.W	067,068
+	DC.W	068,069
+	DC.W	069,070
+	DC.W	070,071
+
+	DC.W	072,073
+	DC.W	073,074
+	DC.W	074,075
+	DC.W	075,076
+	DC.W	076,077
+	DC.W	078,079
+	DC.W	079,080
+	DC.W	080,081
+	DC.W	081,082
+	DC.W	082,083
+	DC.W	084,085
+	DC.W	085,086
+	DC.W	086,087
+	DC.W	087,088
+	DC.W	088,089
+	DC.W	090,091
+	DC.W	091,092
+	DC.W	092,093
+	DC.W	093,094
+	DC.W	094,095
+	DC.W	096,097
+	DC.W	097,098
+	DC.W	098,099
+	DC.W	099,100
+	DC.W	100,101
+	DC.W	102,103
+	DC.W	103,104
+	DC.W	104,105
+	DC.W	105,106
+	DC.W	106,107
+
+	DC.W	108,109
+	DC.W	109,110
+	DC.W	110,111
+	DC.W	111,112
+	DC.W	112,113
+	DC.W	114,115
+	DC.W	115,116
+	DC.W	116,117
+	DC.W	117,118
+	DC.W	118,119
+	DC.W	120,121
+	DC.W	121,122
+	DC.W	122,123
+	DC.W	123,124
+	DC.W	124,125
+	DC.W	126,127
+	DC.W	127,128
+	DC.W	128,129
+	DC.W	129,130
+	DC.W	130,131
+	DC.W	132,133
+	DC.W	133,134
+	DC.W	134,135
+	DC.W	135,136
+	DC.W	136,137
+	DC.W	138,139
+	DC.W	139,140
+	DC.W	140,141
+	DC.W	141,142
+	DC.W	142,143
+
+	DC.W	144,145
+	DC.W	145,146
+	DC.W	146,147
+	DC.W	147,148
+	DC.W	148,149
+	DC.W	150,151
+	DC.W	151,152
+	DC.W	152,153
+	DC.W	153,154
+	DC.W	154,155
+	DC.W	156,157
+	DC.W	157,158
+	DC.W	158,159
+	DC.W	159,160
+	DC.W	160,161
+	DC.W	162,163
+	DC.W	163,164
+	DC.W	164,165
+	DC.W	165,166
+	DC.W	166,167
+	DC.W	168,169
+	DC.W	169,170
+	DC.W	170,171
+	DC.W	171,172
+	DC.W	172,173
+	DC.W	174,175
+	DC.W	175,176
+	DC.W	176,177
+	DC.W	177,178
+	DC.W	178,179
+
+	DC.W	180,181
+	DC.W	181,182
+	DC.W	182,183
+	DC.W	183,184
+	DC.W	184,185
+	DC.W	186,187
+	DC.W	187,188
+	DC.W	188,189
+	DC.W	189,190
+	DC.W	190,191
+	DC.W	192,193
+	DC.W	193,194
+	DC.W	194,195
+	DC.W	195,196
+	DC.W	196,197
+	DC.W	198,199
+	DC.W	199,200
+	DC.W	200,201
+	DC.W	201,202
+	DC.W	202,203
+	DC.W	204,205
+	DC.W	205,206
+	DC.W	206,207
+	DC.W	207,208
+	DC.W	208,209
+	DC.W	210,211
+	DC.W	211,212
+	DC.W	212,213
+	DC.W	213,214
+	DC.W	214,215
+
+
+	DC.W	000,006
+	DC.W	006,012
+	DC.W	012,018
+	DC.W	018,024
+	DC.W	024,030
+	DC.W	000+1,006+1
+	DC.W	006+1,012+1
+	DC.W	012+1,018+1
+	DC.W	018+1,024+1
+	DC.W	024+1,030+1
+	DC.W	000+2,006+2
+	DC.W	006+2,012+2
+	DC.W	012+2,018+2
+	DC.W	018+2,024+2
+	DC.W	024+2,030+2
+	DC.W	000+3,006+3
+	DC.W	006+3,012+3
+	DC.W	012+3,018+3
+	DC.W	018+3,024+3
+	DC.W	024+3,030+3
+	DC.W	000+4,006+4
+	DC.W	006+4,012+4
+	DC.W	012+4,018+4
+	DC.W	018+4,024+4
+	DC.W	024+4,030+4
+	DC.W	000+5,006+5
+	DC.W	006+5,012+5
+	DC.W	012+5,018+5
+	DC.W	018+5,024+5
+	DC.W	024+5,030+5
+	DC.W	036,042
+	DC.W	042,048
+	DC.W	048,054
+	DC.W	054,060
+	DC.W	060,066
+	DC.W	036+1,042+1
+	DC.W	042+1,048+1
+	DC.W	048+1,054+1
+	DC.W	054+1,060+1
+	DC.W	060+1,066+1
+	DC.W	036+2,042+2
+	DC.W	042+2,048+2
+	DC.W	048+2,054+2
+	DC.W	054+2,060+2
+	DC.W	060+2,066+2
+	DC.W	036+3,042+3
+	DC.W	042+3,048+3
+	DC.W	048+3,054+3
+	DC.W	054+3,060+3
+	DC.W	060+3,066+3
+	DC.W	036+4,042+4
+	DC.W	042+4,048+4
+	DC.W	048+4,054+4
+	DC.W	054+4,060+4
+	DC.W	060+4,066+4
+	DC.W	036+5,042+5
+	DC.W	042+5,048+5
+	DC.W	048+5,054+5
+	DC.W	054+5,060+5
+	DC.W	060+5,066+5
+	DC.W	072,078
+	DC.W	078,084
+	DC.W	084,090
+	DC.W	090,096
+	DC.W	096,102
+	DC.W	072+1,078+1
+	DC.W	078+1,084+1
+	DC.W	084+1,090+1
+	DC.W	090+1,096+1
+	DC.W	096+1,102+1
+	DC.W	072+2,078+2
+	DC.W	078+2,084+2
+	DC.W	084+2,090+2
+	DC.W	090+2,096+2
+	DC.W	096+2,102+2
+	DC.W	072+3,078+3
+	DC.W	078+3,084+3
+	DC.W	084+3,090+3
+	DC.W	090+3,096+3
+	DC.W	096+3,102+3
+	DC.W	072+4,078+4
+	DC.W	078+4,084+4
+	DC.W	084+4,090+4
+	DC.W	090+4,096+4
+	DC.W	096+4,102+4
+	DC.W	072+5,078+5
+	DC.W	078+5,084+5
+	DC.W	084+5,090+5
+	DC.W	090+5,096+5
+	DC.W	096+5,102+5
+	DC.W	108,114
+	DC.W	114,120
+	DC.W	120,126
+	DC.W	126,132
+	DC.W	132,138
+	DC.W	108+1,114+1
+	DC.W	114+1,120+1
+	DC.W	120+1,126+1
+	DC.W	126+1,132+1
+	DC.W	132+1,138+1
+	DC.W	108+2,114+2
+	DC.W	114+2,120+2
+	DC.W	120+2,126+2
+	DC.W	126+2,132+2
+	DC.W	132+2,138+2
+	DC.W	108+3,114+3
+	DC.W	114+3,120+3
+	DC.W	120+3,126+3
+	DC.W	126+3,132+3
+	DC.W	132+3,138+3
+	DC.W	108+4,114+4
+	DC.W	114+4,120+4
+	DC.W	120+4,126+4
+	DC.W	126+4,132+4
+	DC.W	132+4,138+4
+	DC.W	108+5,114+5
+	DC.W	114+5,120+5
+	DC.W	120+5,126+5
+	DC.W	126+5,132+5
+	DC.W	132+5,138+5
+	DC.W	144,150
+	DC.W	150,156
+	DC.W	156,162
+	DC.W	162,168
+	DC.W	168,174
+	DC.W	144+1,150+1
+	DC.W	150+1,156+1
+	DC.W	156+1,162+1
+	DC.W	162+1,168+1
+	DC.W	168+1,174+1
+	DC.W	144+2,150+2
+	DC.W	150+2,156+2
+	DC.W	156+2,162+2
+	DC.W	162+2,168+2
+	DC.W	168+2,174+2
+	DC.W	144+3,150+3
+	DC.W	150+3,156+3
+	DC.W	156+3,162+3
+	DC.W	162+3,168+3
+	DC.W	168+3,174+3
+	DC.W	144+4,150+4
+	DC.W	150+4,156+4
+	DC.W	156+4,162+4
+	DC.W	162+4,168+4
+	DC.W	168+4,174+4
+	DC.W	144+5,150+5
+	DC.W	150+5,156+5
+	DC.W	156+5,162+5
+	DC.W	162+5,168+5
+	DC.W	168+5,174+5
+	DC.W	180,186
+	DC.W	186,192
+	DC.W	192,198
+	DC.W	198,204
+	DC.W	204,210
+	DC.W	180+1,186+1
+	DC.W	186+1,192+1
+	DC.W	192+1,198+1
+	DC.W	198+1,204+1
+	DC.W	204+1,210+1
+	DC.W	180+2,186+2
+	DC.W	186+2,192+2
+	DC.W	192+2,198+2
+	DC.W	198+2,204+2
+	DC.W	204+2,210+2
+	DC.W	180+3,186+3
+	DC.W	186+3,192+3
+	DC.W	192+3,198+3
+	DC.W	198+3,204+3
+	DC.W	204+3,210+3
+	DC.W	180+4,186+4
+	DC.W	186+4,192+4
+	DC.W	192+4,198+4
+	DC.W	198+4,204+4
+	DC.W	204+4,210+4
+	DC.W	180+5,186+5
+	DC.W	186+5,192+5
+	DC.W	192+5,198+5
+	DC.W	198+5,204+5
+	DC.W	204+5,210+5
+
+	DC.W	000,036
+	DC.W	036,072
+	DC.W	072,108
+	DC.W	108,144
+	DC.W	144,180
+	DC.W	000+1,036+1
+	DC.W	036+1,072+1
+	DC.W	072+1,108+1
+	DC.W	108+1,144+1
+	DC.W	144+1,180+1
+	DC.W	000+2,036+2
+	DC.W	036+2,072+2
+	DC.W	072+2,108+2
+	DC.W	108+2,144+2
+	DC.W	144+2,180+2
+	DC.W	000+3,036+3
+	DC.W	036+3,072+3
+	DC.W	072+3,108+3
+	DC.W	108+3,144+3
+	DC.W	144+3,180+3
+	DC.W	000+4,036+4
+	DC.W	036+4,072+4
+	DC.W	072+4,108+4
+	DC.W	108+4,144+4
+	DC.W	144+4,180+4
+	DC.W	000+5,036+5
+	DC.W	036+5,072+5
+	DC.W	072+5,108+5
+	DC.W	108+5,144+5
+	DC.W	144+5,180+5
+	DC.W	000+6,036+6
+	DC.W	036+6,072+6
+	DC.W	072+6,108+6
+	DC.W	108+6,144+6
+	DC.W	144+6,180+6
+
+	DC.W	000+7,036+7
+	DC.W	036+7,072+7
+	DC.W	072+7,108+7
+	DC.W	108+7,144+7
+	DC.W	144+7,180+7
+	DC.W	000+8,036+8
+	DC.W	036+8,072+8
+	DC.W	072+8,108+8
+	DC.W	108+8,144+8
+	DC.W	144+8,180+8
+	DC.W	000+9,036+9
+	DC.W	036+9,072+9
+	DC.W	072+9,108+9
+	DC.W	108+9,144+9
+	DC.W	144+9,180+9
+	DC.W	000+10,036+10
+	DC.W	036+10,072+10
+	DC.W	072+10,108+10
+	DC.W	108+10,144+10
+	DC.W	144+10,180+10
+	DC.W	000+11,036+11
+	DC.W	036+11,072+11
+	DC.W	072+11,108+11
+	DC.W	108+11,144+11
+	DC.W	144+11,180+11
+	DC.W	000+12,036+12
+	DC.W	036+12,072+12
+	DC.W	072+12,108+12
+	DC.W	108+12,144+12
+	DC.W	144+12,180+12
+	DC.W	000+13,036+13
+	DC.W	036+13,072+13
+	DC.W	072+13,108+13
+	DC.W	108+13,144+13
+	DC.W	144+13,180+13
+	DC.W	000+14,036+14
+	DC.W	036+14,072+14
+	DC.W	072+14,108+14
+	DC.W	108+14,144+14
+	DC.W	144+14,180+14
+	DC.W	000+15,036+15
+	DC.W	036+15,072+15
+	DC.W	072+15,108+15
+	DC.W	108+15,144+15
+	DC.W	144+15,180+15
+	DC.W	000+16,036+16
+	DC.W	036+16,072+16
+	DC.W	072+16,108+16
+	DC.W	108+16,144+16
+	DC.W	144+16,180+16
+	DC.W	000+17,036+17
+	DC.W	036+17,072+17
+	DC.W	072+17,108+17
+	DC.W	108+17,144+17
+	DC.W	144+17,180+17
+	DC.W	000+18,036+18
+	DC.W	036+18,072+18
+	DC.W	072+18,108+18
+	DC.W	108+18,144+18
+	DC.W	144+18,180+18
+	DC.W	000+19,036+19
+	DC.W	036+19,072+19
+	DC.W	072+19,108+19
+	DC.W	108+19,144+19
+	DC.W	144+19,180+19
+	DC.W	000+20,036+20
+	DC.W	036+20,072+20
+	DC.W	072+20,108+20
+	DC.W	108+20,144+20
+	DC.W	144+20,180+20
+	DC.W	000+21,036+21
+	DC.W	036+21,072+21
+	DC.W	072+21,108+21
+	DC.W	108+21,144+21
+	DC.W	144+21,180+21
+	DC.W	000+22,036+22
+	DC.W	036+22,072+22
+	DC.W	072+22,108+22
+	DC.W	108+22,144+22
+	DC.W	144+22,180+22
+	DC.W	000+23,036+23
+	DC.W	036+23,072+23
+	DC.W	072+23,108+23
+	DC.W	108+23,144+23
+	DC.W	144+23,180+23
+	DC.W	000+24,036+24
+	DC.W	036+24,072+24
+	DC.W	072+24,108+24
+	DC.W	108+24,144+24
+	DC.W	144+24,180+24
+	DC.W	000+25,036+25
+	DC.W	036+25,072+25
+	DC.W	072+25,108+25
+	DC.W	108+25,144+25
+	DC.W	144+25,180+25
+	DC.W	000+26,036+26
+	DC.W	036+26,072+26
+	DC.W	072+26,108+26
+	DC.W	108+26,144+26
+	DC.W	144+26,180+26
+	DC.W	000+27,036+27
+	DC.W	036+27,072+27
+	DC.W	072+27,108+27
+	DC.W	108+27,144+27
+	DC.W	144+27,180+27
+	DC.W	000+28,036+28
+	DC.W	036+28,072+28
+	DC.W	072+28,108+28
+	DC.W	108+28,144+28
+	DC.W	144+28,180+28
+	DC.W	000+29,036+29
+	DC.W	036+29,072+29
+	DC.W	072+29,108+29
+	DC.W	108+29,144+29
+	DC.W	144+29,180+29
+	DC.W	000+30,036+30
+	DC.W	036+30,072+30
+	DC.W	072+30,108+30
+	DC.W	108+30,144+30
+	DC.W	144+30,180+30
+	DC.W	000+31,036+31
+	DC.W	036+31,072+31
+	DC.W	072+31,108+31
+	DC.W	108+31,144+31
+	DC.W	144+31,180+31
+	DC.W	000+32,036+32
+	DC.W	036+32,072+32
+	DC.W	072+32,108+32
+	DC.W	108+32,144+32
+	DC.W	144+32,180+32
+	DC.W	000+33,036+33
+	DC.W	036+33,072+33
+	DC.W	072+33,108+33
+	DC.W	108+33,144+33
+	DC.W	144+33,180+33
+	DC.W	000+34,036+34
+	DC.W	036+34,072+34
+	DC.W	072+34,108+34
+	DC.W	108+34,144+34
+	DC.W	144+34,180+34
+	DC.W	000+35,036+35
+	DC.W	036+35,072+35
+	DC.W	072+35,108+35
+	DC.W	108+35,144+35
+	DC.W	144+35,180+35
+Grid.object2End:
+	ENDC
+
+; City used for the intro part of 'out'.
+Grid.city:
+; vertices
+	DC.W	(.endv-.startv)/6
+
+.startv:DC.W	-050-250,-650,-050
+	DC.W	-050-250,-650,+050
+	DC.W	+050-250,-650,+050
+	DC.W	+050-250,-650,-050
+	DC.W	-050-250,+000,-050
+	DC.W	-050-250,+000,+050
+	DC.W	+050-250,+000,+050
+	DC.W	+050-250,+000,-050
+
+	DC.W	-050+250,-500,-050-100
+	DC.W	-050+250,-500,+050-100
+	DC.W	+050+250,-500,+050-100
+	DC.W	+050+250,-500,-050-100
+	DC.W	-050+250,+000,-050-100
+	DC.W	-050+250,+000,+050-100
+	DC.W	+050+250,+000,+050-100
+	DC.W	+050+250,+000,-050-100
+
+	DC.W	-100+250,-600,-100-700
+	DC.W	-100+250,-600,+100-700
+	DC.W	+100+250,-600,+100-700
+	DC.W	+100+250,-600,-100-700
+	DC.W	-100+250,+000,-100-700
+	DC.W	-100+250,+000,+100-700
+	DC.W	+100+250,+000,+100-700
+	DC.W	+100+250,+000,-100-700
+	DC.W	-050+250,-700,-050-700
+	DC.W	-050+250,-700,+050-700
+	DC.W	+050+250,-700,+050-700
+	DC.W	+050+250,-700,-050-700
+	DC.W	-050+250,-800,-050-700
+	DC.W	-050+250,-800,+050-700
+	DC.W	+050+250,-800,+050-700
+	DC.W	+050+250,-800,-050-700
+
+	DC.W	-050-200,-600,-150-600
+	DC.W	-050-200,-600,+150-600
+	DC.W	+050-200,-600,+150-600
+	DC.W	+050-200,-600,-150-600
+	DC.W	-050-200,+000,-150-600
+	DC.W	-050-200,+000,+150-600
+	DC.W	+050-200,+000,+150-600
+	DC.W	+050-200,+000,-150-600
+
+	DC.W	-050-300,-600,-050+400
+	DC.W	-050-300,-600,+050+400
+	DC.W	+050-300,-600,+050+400
+	DC.W	+050-300,-600,-050+400
+	DC.W	-050-300,+000,-050+400
+	DC.W	-050-300,+000,+050+400
+	DC.W	+050-300,+000,+050+400
+	DC.W	+050-300,+000,-050+400
+
+	DC.W	-100+250,-550,-100+200
+	DC.W	-100+250,-550,+100+200
+	DC.W	+100+250,-550,+100+200
+	DC.W	+100+250,-550,-100+200
+	DC.W	-100+250,+000,-100+200
+	DC.W	-100+250,+000,+100+200
+	DC.W	+100+250,+000,+100+200
+	DC.W	+100+250,+000,-100+200
+	DC.W	0+250,-750,0+200
+	DC.W	0+250,-850,0+200
+
+	DC.W	-050+250,-700,-050+750
+	DC.W	-050+250,-700,+050+750
+	DC.W	+050+250,-700,+050+750
+	DC.W	+050+250,-700,-050+750
+	DC.W	-050+250,+000,-050+750
+	DC.W	-050+250,+000,+050+750
+	DC.W	+050+250,+000,+050+750
+	DC.W	+050+250,+000,-050+750
+
+	DC.W	-090-300,-400,-090+900
+	DC.W	-090-300,-400,+090+900
+	DC.W	+090-300,-400,+090+900
+	DC.W	+090-300,-400,-090+900
+	DC.W	-090-300,+000,-090+900
+	DC.W	-090-300,+000,+090+900
+	DC.W	+090-300,+000,+090+900
+	DC.W	+090-300,+000,-090+900
+	DC.W	-070-300,-450,-070+900
+	DC.W	-070-300,-450,+070+900
+	DC.W	+070-300,-450,+070+900
+	DC.W	+070-300,-450,-070+900
+	DC.W	-070-300,-700,-070+900
+	DC.W	-070-300,-700,+070+900
+	DC.W	+070-300,-700,+070+900
+	DC.W	+070-300,-700,-070+900
+
+; side stuff
+	DC.W	-050-550,-200,-120+100
+	DC.W	-050-550,-200,+120+100
+	DC.W	+050-550,-200,+120+100
+	DC.W	+050-550,-200,-120+100
+	DC.W	-050-550,+000,-120+100
+	DC.W	-050-550,+000,+120+100
+	DC.W	+050-550,+000,+120+100
+	DC.W	+050-550,+000,-120+100
+
+	DC.W	-050-550,-150,-120+500
+	DC.W	-050-550,-150,+120+500
+	DC.W	+050-550,-150,+120+500
+	DC.W	+050-550,-150,-120+500
+	DC.W	-050-550,+000,-120+500
+	DC.W	-050-550,+000,+120+500
+	DC.W	+050-550,+000,+120+500
+	DC.W	+050-550,+000,-120+500
+
+	DC.W	-050-550,-210,-120+1000
+	DC.W	-050-550,-210,+120+1000
+	DC.W	+050-550,-210,+120+1000
+	DC.W	+050-550,-210,-120+1000
+	DC.W	-050-550,+000,-120+1000
+	DC.W	-050-550,+000,+120+1000
+	DC.W	+050-550,+000,+120+1000
+	DC.W	+050-550,+000,-120+1000
+
+	DC.W	-050-550,-140,-120-300
+	DC.W	-050-550,-140,+120-300
+	DC.W	+050-550,-140,+120-300
+	DC.W	+050-550,-140,-120-300
+	DC.W	-050-550,+000,-120-300
+	DC.W	-050-550,+000,+120-300
+	DC.W	+050-550,+000,+120-300
+	DC.W	+050-550,+000,-120-300
+
+	DC.W	-050-550,-170,-120-750
+	DC.W	-050-550,-170,+120-750
+	DC.W	+050-550,-170,+120-750
+	DC.W	+050-550,-170,-120-750
+	DC.W	-050-550,+000,-120-750
+	DC.W	-050-550,+000,+120-750
+	DC.W	+050-550,+000,+120-750
+	DC.W	+050-550,+000,-120-750
+
+; other side stuff
+	DC.W	-050+550,-200,-120+100
+	DC.W	-050+550,-200,+120+100
+	DC.W	+050+550,-200,+120+100
+	DC.W	+050+550,-200,-120+100
+	DC.W	-050+550,+000,-120+100
+	DC.W	-050+550,+000,+120+100
+	DC.W	+050+550,+000,+120+100
+	DC.W	+050+550,+000,-120+100
+
+	DC.W	-050+550,-150,-120+500
+	DC.W	-050+550,-150,+120+500
+	DC.W	+050+550,-150,+120+500
+	DC.W	+050+550,-150,-120+500
+	DC.W	-050+550,+000,-120+500
+	DC.W	-050+550,+000,+120+500
+	DC.W	+050+550,+000,+120+500
+	DC.W	+050+550,+000,-120+500
+
+	DC.W	-050+550,-210,-120+900
+	DC.W	-050+550,-210,+120+900
+	DC.W	+050+550,-210,+120+900
+	DC.W	+050+550,-210,-120+900
+	DC.W	-050+550,+000,-120+900
+	DC.W	-050+550,+000,+120+900
+	DC.W	+050+550,+000,+120+900
+	DC.W	+050+550,+000,-120+900
+
+	DC.W	-050+550,-140,-120-350
+	DC.W	-050+550,-140,+120-350
+	DC.W	+050+550,-140,+120-350
+	DC.W	+050+550,-140,-120-350
+	DC.W	-050+550,+000,-120-350
+	DC.W	-050+550,+000,+120-350
+	DC.W	+050+550,+000,+120-350
+	DC.W	+050+550,+000,-120-350
+
+	DC.W	-050+550,-170,-120-750
+	DC.W	-050+550,-170,+120-750
+	DC.W	+050+550,-170,+120-750
+	DC.W	+050+550,-170,-120-750
+	DC.W	-050+550,+000,-120-750
+	DC.W	-050+550,+000,+120-750
+	DC.W	+050+550,+000,+120-750
+	DC.W	+050+550,+000,-120-750
+
+	DC.W	-050+550,-130,-120+1500
+	DC.W	-050+550,-130,+120+1500
+	DC.W	+050+550,-130,+120+1500
+	DC.W	+050+550,-130,-120+1500
+	DC.W	-050+550,+000,-120+1500
+	DC.W	-050+550,+000,+120+1500
+	DC.W	+050+550,+000,+120+1500
+	DC.W	+050+550,+000,-120+1500
+
+	DC.W	-050-550,-130,-120+1500
+	DC.W	-050-550,-130,+120+1500
+	DC.W	+050-550,-130,+120+1500
+	DC.W	+050-550,-130,-120+1500
+	DC.W	-050-550,+000,-120+1500
+	DC.W	-050-550,+000,+120+1500
+	DC.W	+050-550,+000,+120+1500
+	DC.W	+050-550,+000,-120+1500
+
+	DC.W	-050+550,-130,-120-1200
+	DC.W	-050+550,-130,+120-1200
+	DC.W	+050+550,-130,+120-1200
+	DC.W	+050+550,-130,-120-1200
+	DC.W	-050+550,+000,-120-1200
+	DC.W	-050+550,+000,+120-1200
+	DC.W	+050+550,+000,+120-1200
+	DC.W	+050+550,+000,-120-1200
+
+	DC.W	-050-550,-150,-120-1250
+	DC.W	-050-550,-150,+120-1250
+	DC.W	+050-550,-150,+120-1250
+	DC.W	+050-550,-150,-120-1250
+	DC.W	-050-550,+000,-120-1250
+	DC.W	-050-550,+000,+120-1250
+	DC.W	+050-550,+000,+120-1250
+	DC.W	+050-550,+000,-120-1250
+
+	DC.W	-050+550,-180,-120-1700
+	DC.W	-050+550,-180,+120-1700
+	DC.W	+050+550,-180,+120-1700
+	DC.W	+050+550,-180,-120-1700
+	DC.W	-050+550,+000,-120-1700
+	DC.W	-050+550,+000,+120-1700
+	DC.W	+050+550,+000,+120-1700
+	DC.W	+050+550,+000,-120-1700
+
+	DC.W	-050-550,-120,-120-1650
+	DC.W	-050-550,-120,+120-1650
+	DC.W	+050-550,-120,+120-1650
+	DC.W	+050-550,-120,-120-1650
+	DC.W	-050-550,+000,-120-1650
+	DC.W	-050-550,+000,+120-1650
+	DC.W	+050-550,+000,+120-1650
+	DC.W	+050-550,+000,-120-1650
+
+	DC.W	-050+550,-190,-120-2200
+	DC.W	-050+550,-190,+120-2200
+	DC.W	+050+550,-190,+120-2200
+	DC.W	+050+550,-190,-120-2200
+	DC.W	-050+550,+000,-120-2200
+	DC.W	-050+550,+000,+120-2200
+	DC.W	+050+550,+000,+120-2200
+	DC.W	+050+550,+000,-120-2200
+
+	DC.W	-050-550,-150,-120-2200
+	DC.W	-050-550,-150,+120-2200
+	DC.W	+050-550,-150,+120-2200
+	DC.W	+050-550,-150,-120-2200
+	DC.W	-050-550,+000,-120-2200
+	DC.W	-050-550,+000,+120-2200
+	DC.W	+050-550,+000,+120-2200
+	DC.W	+050-550,+000,-120-2200
+
+	DC.W	-090-300,-500,-090-1100
+	DC.W	-090-300,-500,+090-1100
+	DC.W	+090-300,-500,+090-1100
+	DC.W	+090-300,-500,-090-1100
+	DC.W	-090-300,+000,-090-1100
+	DC.W	-090-300,+000,+090-1100
+	DC.W	+090-300,+000,+090-1100
+	DC.W	+090-300,+000,-090-1100
+	DC.W	-070-300,-550,-070-1100
+	DC.W	-070-300,-550,+070-1100
+	DC.W	+070-300,-550,+070-1100
+	DC.W	+070-300,-550,-070-1100
+	DC.W	-070-300,-650,-070-1100
+	DC.W	-070-300,-650,+070-1100
+	DC.W	+070-300,-650,+070-1100
+	DC.W	+070-300,-650,-070-1100
+
+	DC.W	-050+250,-650,-050-1050
+	DC.W	-050+250,-650,+050-1050
+	DC.W	+050+250,-600,+050-1050
+	DC.W	+050+250,-600,-050-1050
+	DC.W	-050+250,+000,-050-1050
+	DC.W	-050+250,+000,+050-1050
+	DC.W	+050+250,+000,+050-1050
+	DC.W	+050+250,+000,-050-1050
+
+; 'O'
+	DC.W	-50-200,-60-300,+1500
+	DC.W	+50-200,-60-300,+1500
+	DC.W	+30-200,+60-300,+1500
+	DC.W	-70-200,+60-300,+1500
+	DC.W	-70-200,-80-300,+1500
+	DC.W	+75-200,-80-300,+1500
+	DC.W	+50-200,+80-300,+1500
+	DC.W	-95-200,+80-300,+1500
+	DC.W	-50-200,-60-300,+1525
+	DC.W	+50-200,-60-300,+1525
+	DC.W	+30-200,+60-300,+1525
+	DC.W	-70-200,+60-300,+1525
+	DC.W	-70-200,-80-300,+1525
+	DC.W	+75-200,-80-300,+1525
+	DC.W	+50-200,+80-300,+1525
+	DC.W	-95-200,+80-300,+1525
+
+; 'U'
+	DC.W	-50+20,-80-300,+1500
+	DC.W	-70+20,+60-300,+1500
+	DC.W	+30+20,+60-300,+1500
+	DC.W	+50+20,-80-300,+1500
+	DC.W	+70+20,-80-300,+1500
+	DC.W	+50+20,+80-300,+1500
+	DC.W	-90+20,+80-300,+1500
+	DC.W	-70+20,-80-300,+1500
+	DC.W	-50+20,-80-300,+1525
+	DC.W	-70+20,+60-300,+1525
+	DC.W	+30+20,+60-300,+1525
+	DC.W	+50+20,-80-300,+1525
+	DC.W	+70+20,-80-300,+1525
+	DC.W	+50+20,+80-300,+1525
+	DC.W	-90+20,+80-300,+1525
+	DC.W	-70+20,-80-300,+1525
+
+; 'T'
+	DC.W	-10+200,-80-300,+1500
+	DC.W	+10+200,-80-300,+1500
+	DC.W	+6+200,-60-300,+1500
+	DC.W	+26+200,-60-300,+1500
+	DC.W	+22+200,-40-300,+1500
+	DC.W	+0+200,-40-300,+1500
+	DC.W	-16+200,+80-300,+1500
+	DC.W	-36+200,+80-300,+1500
+	DC.W	-20+200,-40-300,+1500
+	DC.W	-40+200,-40-300,+1500
+	DC.W	-35+200,-60-300,+1500
+	DC.W	-14+200,-60-300,+1500
+	DC.W	-10+200,-80-300,+1525
+	DC.W	+10+200,-80-300,+1525
+	DC.W	+6+200,-60-300,+1525
+	DC.W	+26+200,-60-300,+1525
+	DC.W	+22+200,-40-300,+1525
+	DC.W	+0+200,-40-300,+1525
+	DC.W	-16+200,+80-300,+1525
+	DC.W	-36+200,+80-300,+1525
+	DC.W	-20+200,-40-300,+1525
+	DC.W	-40+200,-40-300,+1525
+	DC.W	-35+200,-60-300,+1525
+	DC.W	-14+200,-60-300,+1525
+
+; outside crap..
+	DC.W	-50+900,0,-50-1000
+	DC.W	-50+900,0,+50-1000
+	DC.W	+50+900,0,+50-1000
+	DC.W	+50+900,0,-50-1000
+	DC.W	0+900,-50,0-1000
+
+	DC.W	-50+800,0,-50
+	DC.W	-50+800,0,+50
+	DC.W	+50+800,0,+50
+	DC.W	+50+800,0,-50
+	DC.W	0+800,-50,0
+
+	DC.W	-50-800,0,-50+500
+	DC.W	-50-800,0,+50+500
+	DC.W	+50-800,0,+50+500
+	DC.W	+50-800,0,-50+500
+	DC.W	0-800,-50,0+500
+
+	DC.W	-50-1000,0,-50-1400
+	DC.W	-50-1000,0,+50-1400
+	DC.W	+50-1000,0,+50-1400
+	DC.W	+50-1000,0,-50-1400
+	DC.W	0-1000,-50,0-1400
+
+	DC.W	-50+1000,0,-50-1200
+	DC.W	-50+1000,0,+50-1200
+	DC.W	+50+1000,0,+50-1200
+	DC.W	+50+1000,0,-50-1200
+	DC.W	0+1000,-50,0-1200
+
+	DC.W	-50+900,0,-50+700
+	DC.W	-50+900,0,+50+700
+	DC.W	+50+900,0,+50+700
+	DC.W	+50+900,0,-50+700
+	DC.W	0+900,-50,0+700
+
+	DC.W	-50-800,0,-50+900
+	DC.W	-50-800,0,+50+900
+	DC.W	+50-800,0,+50+900
+	DC.W	+50-800,0,-50+900
+	DC.W	0-800,-50,0+900
+
+	DC.W	-50-800,0,-50-1200
+	DC.W	-50-800,0,+50-1200
+	DC.W	+50-800,0,+50-1200
+	DC.W	+50-800,0,-50-1200
+	DC.W	0-800,-50,0-1200
+
+	DC.W	-50+800,0,-50+300
+	DC.W	-50+800,0,+50+300
+	DC.W	+50+800,0,+50+300
+	DC.W	+50+800,0,-50+300
+	DC.W	0+800,-50,0+300
+
+	DC.W	-50-800,0,-50-300
+	DC.W	-50-800,0,+50-300
+	DC.W	+50-800,0,+50-300
+	DC.W	+50-800,0,-50-300
+	DC.W	0-800,-50,0-300
+
+.endv:
+; edges
+	DC.W	(.endl-.startl)/4
+
+.startl:DC.W	0,1
+	DC.W	1,2
+	DC.W	2,3
+	DC.W	3,0
+	DC.W	0,4
+	DC.W	1,5
+	DC.W	2,6
+	DC.W	3,7
+
+	DC.W	0+8,1+8
+	DC.W	1+8,2+8
+	DC.W	2+8,3+8
+	DC.W	3+8,0+8
+	DC.W	0+8,4+8
+	DC.W	1+8,5+8
+	DC.W	2+8,6+8
+	DC.W	3+8,7+8
+
+	DC.W	0+16,1+16
+	DC.W	1+16,2+16
+	DC.W	2+16,3+16
+	DC.W	3+16,0+16
+	DC.W	0+16,4+16
+	DC.W	1+16,5+16
+	DC.W	2+16,6+16
+	DC.W	3+16,7+16
+	DC.W	0+24,1+24
+	DC.W	1+24,2+24
+	DC.W	2+24,3+24
+	DC.W	3+24,0+24
+	DC.W	0+24,0+16
+	DC.W	1+24,1+16
+	DC.W	2+24,2+16
+	DC.W	3+24,3+16
+
+	DC.W	0+32,1+32
+	DC.W	1+32,2+32
+	DC.W	2+32,3+32
+	DC.W	3+32,0+32
+	DC.W	0+32,4+32
+	DC.W	1+32,5+32
+	DC.W	2+32,6+32
+	DC.W	3+32,7+32
+
+	DC.W	0+40,1+40
+	DC.W	1+40,2+40
+	DC.W	2+40,3+40
+	DC.W	3+40,0+40
+	DC.W	0+40,4+40
+	DC.W	1+40,5+40
+	DC.W	2+40,6+40
+	DC.W	3+40,7+40
+
+	DC.W	0+48,4+48
+	DC.W	1+48,5+48
+	DC.W	2+48,6+48
+	DC.W	3+48,7+48
+	DC.W	0+48,1+48
+	DC.W	1+48,2+48
+	DC.W	2+48,3+48
+	DC.W	3+48,0+48
+	DC.W	0+48,8+48
+	DC.W	1+48,8+48
+	DC.W	2+48,8+48
+	DC.W	3+48,8+48
+	DC.W	8+48,9+48
+
+	DC.W	0+58,1+58
+	DC.W	1+58,2+58
+	DC.W	2+58,3+58
+	DC.W	3+58,0+58
+	DC.W	0+58,4+58
+	DC.W	1+58,5+58
+	DC.W	2+58,6+58
+	DC.W	3+58,7+58
+
+	DC.W	0+66,1+66
+	DC.W	1+66,2+66
+	DC.W	2+66,3+66
+	DC.W	3+66,0+66
+	DC.W	0+66,4+66
+	DC.W	1+66,5+66
+	DC.W	2+66,6+66
+	DC.W	3+66,7+66
+	DC.W	0+74,1+74
+	DC.W	1+74,2+74
+	DC.W	2+74,3+74
+	DC.W	3+74,0+74
+	DC.W	0+74,0+66
+	DC.W	1+74,1+66
+	DC.W	2+74,2+66
+	DC.W	3+74,3+66
+	DC.W	4+74,5+74
+	DC.W	5+74,6+74
+	DC.W	6+74,7+74
+	DC.W	7+74,4+74
+	DC.W	4+74,0+74
+	DC.W	5+74,1+74
+	DC.W	6+74,2+74
+	DC.W	7+74,3+74
+
+; sidestuff
+	DC.W	0+82,1+82
+	DC.W	1+82,2+82
+	DC.W	2+82,3+82
+	DC.W	3+82,0+82
+	DC.W	0+82,4+82
+	DC.W	1+82,5+82
+	DC.W	2+82,6+82
+	DC.W	3+82,7+82
+
+	DC.W	0+90,1+90
+	DC.W	1+90,2+90
+	DC.W	2+90,3+90
+	DC.W	3+90,0+90
+	DC.W	0+90,4+90
+	DC.W	1+90,5+90
+	DC.W	2+90,6+90
+	DC.W	3+90,7+90
+
+	DC.W	0+98,1+98
+	DC.W	1+98,2+98
+	DC.W	2+98,3+98
+	DC.W	3+98,0+98
+	DC.W	0+98,4+98
+	DC.W	1+98,5+98
+	DC.W	2+98,6+98
+	DC.W	3+98,7+98
+
+	DC.W	0+106,1+106
+	DC.W	1+106,2+106
+	DC.W	2+106,3+106
+	DC.W	3+106,0+106
+	DC.W	0+106,4+106
+	DC.W	1+106,5+106
+	DC.W	2+106,6+106
+	DC.W	3+106,7+106
+
+	DC.W	0+114,1+114
+	DC.W	1+114,2+114
+	DC.W	2+114,3+114
+	DC.W	3+114,0+114
+	DC.W	0+114,4+114
+	DC.W	1+114,5+114
+	DC.W	2+114,6+114
+	DC.W	3+114,7+114
+
+	DC.W	0+122,1+122
+	DC.W	1+122,2+122
+	DC.W	2+122,3+122
+	DC.W	3+122,0+122
+	DC.W	0+122,4+122
+	DC.W	1+122,5+122
+	DC.W	2+122,6+122
+	DC.W	3+122,7+122
+
+	DC.W	0+130,1+130
+	DC.W	1+130,2+130
+	DC.W	2+130,3+130
+	DC.W	3+130,0+130
+	DC.W	0+130,4+130
+	DC.W	1+130,5+130
+	DC.W	2+130,6+130
+	DC.W	3+130,7+130
+
+	DC.W	0+138,1+138
+	DC.W	1+138,2+138
+	DC.W	2+138,3+138
+	DC.W	3+138,0+138
+	DC.W	0+138,4+138
+	DC.W	1+138,5+138
+	DC.W	2+138,6+138
+	DC.W	3+138,7+138
+
+	DC.W	0+146,1+146
+	DC.W	1+146,2+146
+	DC.W	2+146,3+146
+	DC.W	3+146,0+146
+	DC.W	0+146,4+146
+	DC.W	1+146,5+146
+	DC.W	2+146,6+146
+	DC.W	3+146,7+146
+
+	DC.W	0+154,1+154
+	DC.W	1+154,2+154
+	DC.W	2+154,3+154
+	DC.W	3+154,0+154
+	DC.W	0+154,4+154
+	DC.W	1+154,5+154
+	DC.W	2+154,6+154
+	DC.W	3+154,7+154
+
+	DC.W	0+162,1+162
+	DC.W	1+162,2+162
+	DC.W	2+162,3+162
+	DC.W	3+162,0+162
+	DC.W	0+162,4+162
+	DC.W	1+162,5+162
+	DC.W	2+162,6+162
+	DC.W	3+162,7+162
+
+	DC.W	0+170,1+170
+	DC.W	1+170,2+170
+	DC.W	2+170,3+170
+	DC.W	3+170,0+170
+	DC.W	0+170,4+170
+	DC.W	1+170,5+170
+	DC.W	2+170,6+170
+	DC.W	3+170,7+170
+
+	DC.W	0+178,1+178
+	DC.W	1+178,2+178
+	DC.W	2+178,3+178
+	DC.W	3+178,0+178
+	DC.W	0+178,4+178
+	DC.W	1+178,5+178
+	DC.W	2+178,6+178
+	DC.W	3+178,7+178
+
+	DC.W	0+186,1+186
+	DC.W	1+186,2+186
+	DC.W	2+186,3+186
+	DC.W	3+186,0+186
+	DC.W	0+186,4+186
+	DC.W	1+186,5+186
+	DC.W	2+186,6+186
+	DC.W	3+186,7+186
+
+	DC.W	0+194,1+194
+	DC.W	1+194,2+194
+	DC.W	2+194,3+194
+	DC.W	3+194,0+194
+	DC.W	0+194,4+194
+	DC.W	1+194,5+194
+	DC.W	2+194,6+194
+	DC.W	3+194,7+194
+
+	DC.W	0+202,1+202
+	DC.W	1+202,2+202
+	DC.W	2+202,3+202
+	DC.W	3+202,0+202
+	DC.W	0+202,4+202
+	DC.W	1+202,5+202
+	DC.W	2+202,6+202
+	DC.W	3+202,7+202
+
+	DC.W	0+210,1+210
+	DC.W	1+210,2+210
+	DC.W	2+210,3+210
+	DC.W	3+210,0+210
+	DC.W	0+210,4+210
+	DC.W	1+210,5+210
+	DC.W	2+210,6+210
+	DC.W	3+210,7+210
+
+	DC.W	0+218,1+218
+	DC.W	1+218,2+218
+	DC.W	2+218,3+218
+	DC.W	3+218,0+218
+	DC.W	0+218,4+218
+	DC.W	1+218,5+218
+	DC.W	2+218,6+218
+	DC.W	3+218,7+218
+
+	DC.W	0+226,1+226
+	DC.W	1+226,2+226
+	DC.W	2+226,3+226
+	DC.W	3+226,0+226
+	DC.W	0+226,4+226
+	DC.W	1+226,5+226
+	DC.W	2+226,6+226
+	DC.W	3+226,7+226
+	DC.W	0+234,1+234
+	DC.W	1+234,2+234
+	DC.W	2+234,3+234
+	DC.W	3+234,0+234
+	DC.W	0+234,0+226
+	DC.W	1+234,1+226
+	DC.W	2+234,2+226
+	DC.W	3+234,3+226
+	DC.W	4+234,5+234
+	DC.W	5+234,6+234
+	DC.W	6+234,7+234
+	DC.W	7+234,4+234
+	DC.W	4+234,0+234
+	DC.W	5+234,1+234
+	DC.W	6+234,2+234
+	DC.W	7+234,3+234
+
+	DC.W	0+242,1+242
+	DC.W	1+242,2+242
+	DC.W	2+242,3+242
+	DC.W	3+242,0+242
+	DC.W	0+242,4+242
+	DC.W	1+242,5+242
+	DC.W	2+242,6+242
+	DC.W	3+242,7+242
+
+; 'O'
+	DC.W	250,251
+	DC.W	251,252
+	DC.W	252,253
+	DC.W	253,250
+	DC.W	254,255
+	DC.W	255,256
+	DC.W	256,257
+	DC.W	257,254
+	DC.W	250+8,251+8
+	DC.W	251+8,252+8
+	DC.W	252+8,253+8
+	DC.W	253+8,250+8
+	DC.W	254+8,255+8
+	DC.W	255+8,256+8
+	DC.W	256+8,257+8
+	DC.W	257+8,254+8
+	DC.W	250,258
+	DC.W	251,259
+	DC.W	252,260
+	DC.W	253,261
+	DC.W	254,262
+	DC.W	255,263
+	DC.W	256,264
+	DC.W	257,265
+
+; 'U'
+	DC.W	266,267
+	DC.W	267,268
+	DC.W	268,269
+	DC.W	269,270
+	DC.W	270,271
+	DC.W	271,272
+	DC.W	272,273
+	DC.W	273,266
+	DC.W	266+8,267+8
+	DC.W	267+8,268+8
+	DC.W	268+8,269+8
+	DC.W	269+8,270+8
+	DC.W	270+8,271+8
+	DC.W	271+8,272+8
+	DC.W	272+8,273+8
+	DC.W	273+8,266+8
+	DC.W	266,266+8
+	DC.W	267,267+8
+	DC.W	268,268+8
+	DC.W	269,269+8
+	DC.W	270,270+8
+	DC.W	271,271+8
+	DC.W	272,272+8
+	DC.W	273,273+8
+
+; 'T'
+	DC.W	282,283
+	DC.W	283,284
+	DC.W	284,285
+	DC.W	285,286
+	DC.W	286,287
+	DC.W	287,288
+	DC.W	288,289
+	DC.W	289,290
+	DC.W	290,291
+	DC.W	291,292
+	DC.W	292,293
+	DC.W	293,282
+	DC.W	282+12,283+12
+	DC.W	283+12,284+12
+	DC.W	284+12,285+12
+	DC.W	285+12,286+12
+	DC.W	286+12,287+12
+	DC.W	287+12,288+12
+	DC.W	288+12,289+12
+	DC.W	289+12,290+12
+	DC.W	290+12,291+12
+	DC.W	291+12,292+12
+	DC.W	292+12,293+12
+	DC.W	293+12,282+12
+	DC.W	282,282+12
+	DC.W	283,283+12
+	DC.W	284,284+12
+	DC.W	285,285+12
+	DC.W	286,286+12
+	DC.W	287,287+12
+	DC.W	288,288+12
+	DC.W	289,289+12
+	DC.W	290,290+12
+	DC.W	291,291+12
+	DC.W	292,292+12
+	DC.W	293,293+12
+
+; outside stuffs
+	DC.W	306,307
+	DC.W	307,308
+	DC.W	308,309
+	DC.W	309,306
+	DC.W	310,306
+	DC.W	310,307
+	DC.W	310,308
+	DC.W	310,309
+
+	DC.W	306+5,307+5
+	DC.W	307+5,308+5
+	DC.W	308+5,309+5
+	DC.W	309+5,306+5
+	DC.W	310+5,306+5
+	DC.W	310+5,307+5
+	DC.W	310+5,308+5
+	DC.W	310+5,309+5
+
+	DC.W	306+10,307+10
+	DC.W	307+10,308+10
+	DC.W	308+10,309+10
+	DC.W	309+10,306+10
+	DC.W	310+10,306+10
+	DC.W	310+10,307+10
+	DC.W	310+10,308+10
+	DC.W	310+10,309+10
+
+	DC.W	306+15,307+15
+	DC.W	307+15,308+15
+	DC.W	308+15,309+15
+	DC.W	309+15,306+15
+	DC.W	310+15,306+15
+	DC.W	310+15,307+15
+	DC.W	310+15,308+15
+	DC.W	310+15,309+15
+
+	DC.W	306+20,307+20
+	DC.W	307+20,308+20
+	DC.W	308+20,309+20
+	DC.W	309+20,306+20
+	DC.W	310+20,306+20
+	DC.W	310+20,307+20
+	DC.W	310+20,308+20
+	DC.W	310+20,309+20
+
+	DC.W	306+25,307+25
+	DC.W	307+25,308+25
+	DC.W	308+25,309+25
+	DC.W	309+25,306+25
+	DC.W	310+25,306+25
+	DC.W	310+25,307+25
+	DC.W	310+25,308+25
+	DC.W	310+25,309+25
+
+	DC.W	306+30,307+30
+	DC.W	307+30,308+30
+	DC.W	308+30,309+30
+	DC.W	309+30,306+30
+	DC.W	310+30,306+30
+	DC.W	310+30,307+30
+	DC.W	310+30,308+30
+	DC.W	310+30,309+30
+
+	DC.W	306+35,307+35
+	DC.W	307+35,308+35
+	DC.W	308+35,309+35
+	DC.W	309+35,306+35
+	DC.W	310+35,306+35
+	DC.W	310+35,307+35
+	DC.W	310+35,308+35
+	DC.W	310+35,309+35
+
+	DC.W	306+40,307+40
+	DC.W	307+40,308+40
+	DC.W	308+40,309+40
+	DC.W	309+40,306+40
+	DC.W	310+40,306+40
+	DC.W	310+40,307+40
+	DC.W	310+40,308+40
+	DC.W	310+40,309+40
+
+	DC.W	306+45,307+45
+	DC.W	307+45,308+45
+	DC.W	308+45,309+45
+	DC.W	309+45,306+45
+	DC.W	310+45,306+45
+	DC.W	310+45,307+45
+	DC.W	310+45,308+45
+	DC.W	310+45,309+45
+
+.endl:
+Grid.cityEnd:
+
+Grid.p56:
+	INCBIN	GRID.P56
+Grid.p56End:
+	EVEN
+Grid.p56h:
+	INCBIN	GRIDH.P56
+Grid.p56hEnd:
+	EVEN
+
+Grid.edgeAdrTable:
+	DC.L	Grid.edgeTable1
+	DC.L	Grid.edgeTable2
+	DC.L	Grid.edgeTable3
+
+Grid.fadeRout:
+	DC.L	rts
+
+Grid.trajRout:
+	DC.L	Grid.swing
+
+;======= OBJECT RESERVES ===================================================
+
+	BSS
+
+Grid.rectTable:
+	DS.L	10
+
+Grid.pal:
+	DS.W	64+2048
+Grid.pal2:
+	DS.W	64+2048
+Grid.edgeTable1:
+	DS.W	4*500
+Grid.edgeTable2:
+	DS.W	4*500
+Grid.edgeTable3
+	DS.W	4*500
+
+Grid.unrollTable:
+	DS.L	320
+Grid.gUnrollTable:
+	DS.L	320
+
+Grid.fadeStart:
+	DS.W	1
+Grid.trajStart:
+	DS.L	1
+Grid.launched:
+	DS.W	1
+Grid.takeOffStart:
+	DS.L	1

@@ -1,0 +1,127 @@
+                 Human Fly 2.1 - DSP implementation schematics
+============================================================================
+
+Functional specifics:
+
+This implementation is meant mostly for speed, not for flexibility. Hence
+when the implementation is not upto the task it will return errorcodes
+as specified in the interface. There are however some pending limitations
+described in the section further on.
+
+The rendering pipeline has the following functions:
+- X/Y culling: removes all out of the viewcone
+- Z culling: removes all behind camera
+- Painters algorithm sorting
+- Parallel processing stages (see pipeline specs.)
+- Bitmap cacheing (see limitations)
+
+Pipeline specifics:
+
+This is built up by two parallel pipelines: the cpu and dsp ones. The main
+purpose of the cpu line is handling both I/O and housekeeping tasks. The dsp
+takes care of almost everything related to 3d arithmetic.
+
+Both lines operate in parallel most of the time, but ofcourse need a sync
+each rendering cycle. This is done in two places:
+1) when the commands are passed from cpu to dsp
+2) when the dsp passes rendered data back to the cpu for it to output
+
+Parallel execution is the main reason for the speed of this implementation. 
+
+ CPU                                | DSP
+------------------------------------+---------------------------------------
+ 0a sending objects, tables (synced)| 0b receiving objects, tables (synced)
+....................................|....................................... 
+ 1a command sending (synced)        | 1b command storage (synced)
+ 2a restoring screenarea            | 2b 3d object transformation
+                                    | 3b painters algorithm sorting
+ 3a output of primitives (synced)   | 4b sending primitives to cpu (synced)
+
+Pipeline stages explained:
+
+0a: Sends 3d objects and bitmaps to the cpu. Note that the dsp might return
+    an errorcode. This indicates the dsp has not got enough room. The
+    application should send less big objects or textures. Using the rest of
+    the pipeline after an error might result in unpredictable results.
+
+0b: Receives objects and textures from the cpu. There is no parsing of
+    objects. Passing invalid objects might result in unpredicatable
+    behaviour. Take note that the dsp has limited space.
+
+1a: Sending rendering commands to the dsp. This ranges from rotation and
+    translation to depthsorting.
+
+1b: Receives rendering commands and stores them. It is possible to overflow
+    the command-buffer. Beware!
+
+2a: This is ofcourse application-specific. This may use the bounding areas
+    calculated in a previous cycle (see 3a).
+
+2b: Executes stored commands in consecutive order. All vertex/vector
+    transformations are done and also various forms of culling. Take note
+    this stage might overflow dsp buffers!
+
+3a: Receives primitive data from dsp and outputs it to the viewport. Also
+    bounding rectangles are sent and are required to be read by the cpu(!).
+    The whole primitive reception is synchronized.
+
+3b: Sorts the primitive-index-table with a combsorting algorithm. This means
+    less than linear performance! This is in-place and hence does not
+    overflow anything.
+
+4b: This sends primitives and bounding rectangles to the cpu. Polygon-
+    clipping is done on dsp, line- and sprite-clipping on cpu. This stage
+    is synchronized.
+
+Limitations:
+
+There are numerous. The dsp has little memory, so object and scene
+complexity are limited. Let's start with the biggest drawbacks:
+
+- Viewport width = [1..384] (*)
+- Viewport height = [1..256] (*)
+- amount of scene (transformed) objects =< 32
+- total size stored untransformed objects =< 8192 words
+- amount of transformed vertices =< 700 (*)
+- amount of transformed primitives =< 1000
+- total commandlist size (per cycle) =< 512 words
+
+Quite some limitations. That is the tradeoff for parallel processing. Make
+sure neither the commandlist nor the vertex/primitive buffering limits of
+the dsp are exceeded or this may cause unpredictable results!
+
+Since the dsp is responsible for texturing it can cache some small bitmaps
+for faster rendering. It can also be set to send offsets when it is
+initialized in stage 0. This way bitmaps are kept on the cpu side. The
+dsp bitmap storage space:
+
+- 2 64*64 highcolor bitmaps
+- 2 64*64 7bpp bitmaps
+
+All may be present in the dsp ram at the same moment.
+
+* : You may alter these to finetune the viewportsize<->scene complexity
+    tradeoff.
+
+Rendering specifics:
+
+Perspectivation uses a multipass inverse-table algorithm. This is not as
+accurate as a normal division, but is over twice as fast. The error is below
+1%. Renderings might appear upto 1% smaller than they should be.
+
+Primitives are painted in two manners:
+a) cpu paints primitive with vertices given by the dsp
+b) cpu paints a polygon given entirely by the dsp
+
+(a) is used for lines, sprites and flat polygons
+(b) is used for shaded polygons
+
+The use of (b) is the speedgain using the dsp for interpolation algorithms.
+This mode draws n-polys without splitting them into triangles. Hence the
+texturing-slopes are recalculated with every scanline.
+
+Special:
+
+Enough (only barely) dsp ram is left to allow a small dsp-loader and
+interrupt-routine to be present along with audio-mixage functions. I used it
+with the exa-mixer and it worked fine.

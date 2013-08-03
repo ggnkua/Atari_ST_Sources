@@ -1,0 +1,600 @@
+; note: dsp activated, radical jumps in framerate may occur ;)
+;
+; attempt at decent 2^n radialblur.
+; thanx for the info chaos/farbrausch!
+;
+; b = a + 1.5*a
+; c = b + 1.25*b
+;   = a + 1.5*a + 1.25*a + 1.875*a
+; d = c + 1.125*c
+;   = a + 1.5*a + 1.25*a + 1.875*a + 1.125*a + 1.6875*a + 1.40625*a + 2.109*a
+; e = d + 1.0625*d
+;   = a + 1.5*a + 1.25*a + 1.875*a + 1.125*a + 1.6875*a + 1.40625*a + 2.109*a
+;   + 1.0625a + 1.594a + 1.328a + 1.992a + 1.195a + 1.793a + 1.494a + 2.241a
+; f = e + 1.03125*e
+;   = a + 1.5*a + 1.25*a + 1.875*a + 1.125*a + 1.6875*a + 1.40625*a + 2.109*a
+;   + 1.0625a + 1.594a + 1.328a + 1.992a + 1.195a + 1.793a + 1.494a + 2.241a
+;   + 1.03125a + ....
+;
+; we see that the smaller scalefactors only introduce some 'blur',
+; whereas the bigger ones create only some 'discrete copies'.
+;
+; we also notice that the average scale approaches 1.57.
+;
+; for decent blurring trails we would need interpolative scaling...
+; ofcourse that would be slower than snails.
+;
+; dsp stuff is ready. avg 18.6fps on std falcon rgb50. probably a bit
+; faster on vga100. vga100 measured now at 21.3fps (std falc).
+
+;======= OBJECT EQUATES ====================================================
+
+; accuracy:
+; 1: accurate: use fully fledged over the top method
+; 0: fast: use 2^n layers way (feedback, fast but accumulation of artifacts)
+Radial.ACCURATE:	=	0
+
+; stuff for accurate version
+Radial.NUMLAYERS:	=	40			; #layers in accurate version
+Radial.ZOOMSTEP:	=	1			; initial zoomstep between layers in accurate version
+
+; stuff for fast version
+Radial.CHOP:		=	0			; use optimised scalingcases in fast version
+Radial.DETAIL:		=	1			; use extra layer in fast mode
+
+;======= OBJECT TABLE ======================================================
+
+	IFND	DEMO_SYSTEM
+testmode:	=	0
+	move.l	#Radial.table,fxAdr
+	INCLUDE	TESTER.S
+	TEXT
+	INCLUDE	DSP.I
+	ENDC	
+
+; Must be first in object!!
+Radial.table:
+	DC.L	Radial.mainLoop
+	DC.L	Radial.init
+	DC.L	Radial.initRT
+	DC.L	Radial.deinitRT
+	DC.L	Radial.killDetail
+	DC.L	Radial.addDetail
+	DC.L	Radial.incZoomStep
+	DC.L	Radial.setFadeOut
+	DC.L	Radial.setNormalTraject
+	DC.L	Radial.setSwingTraject
+	DC.L	0
+
+;======= INIT SUBROUTINE ===================================================
+
+; OUTPUT:
+; d0.l: 0   = All clear, neg = Error! Not initialized!
+Radial.init:
+	lea	Radial.pal,a0
+	lea	Radial.flowTable,a1
+	bsr	Pal.makeGradientHc
+
+	lea	Radial.palr,a0
+	lea	Radial.pal,a1
+	clr.w	d7
+.rloop:	move.w	(a1),(a0)+
+	move.w	(a1)+,(a0)+
+	addq.b	#1,d7
+	bne.s	.rloop
+
+	lea	Radial.pal,a1
+	lea	Radial.pald,a0
+	movea.l	a1,a3
+	clr.w	d1
+
+.oloop:	clr.w	d0
+	move.w	(a3)+,d2
+	movea.l	a1,a2
+
+.iloop:	move.w	d2,(a0)+
+	move.w	(a2)+,(a0)+
+	addq.b	#1,d0
+	bne.s	.iloop
+
+	addq.b	#1,d1
+	bne.s	.oloop
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= REALTIME INIT SUBROUTINE ==========================================
+
+Radial.initRT:
+;	move.l	#Radial.fuckup,vbl_gfx
+	move.l	#rts,vbl_gfx
+
+	move.l	#(Radial.p56End-Radial.p56)/3,d0
+	lea	Radial.p56,a0
+	bsr	Dsp.loadProgram
+
+	bsr	Radial.sendPic
+
+	move.w	#Radial.NUMLAYERS,Radial.numLayers
+	move.w	#Radial.ZOOMSTEP,Radial.zoomStep
+
+	bsr.w	Radial.addDetail
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+; Unknown monitormode..
+.end:	rts
+.vga60:	move.l	#vga60_16bit_160_200,resRout
+	rts
+.vga100:move.l	#vga100_16bit_160_100,resRout
+	rts
+.rgb50:	move.l	#rgb50_16bit_320_100,resRout
+	rts
+
+;======= DEINITIALISATION ROUTINE ==========================================
+
+Radial.deinitRT:
+	rts
+
+;======= SCREENINIT SUBROUTINE =============================================
+
+Radial.initScreen:
+	rts
+
+;======= MAINLOOP SUBROUTINE ===============================================
+
+Radial.mainLoop:
+	move.w	$0468.w,old468
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr	Radial.initScreen
+.end_screeninit:
+
+	tst.w	Radial.fading
+	beq.s	.done_fading
+	move.w	$04BC.w,d0
+	sub.w	Radial.fadeStart,d0
+	cmpi.w	#$200,d0
+	bls.s	.fade_ok
+	move.w	#$200,d0
+	clr.w	Radial.fading
+.fade_ok:
+	lsr.w	d0
+	move.w	d0,Radial.fadePos
+.done_fading:
+	sendWordToDsp	Radial.fadePos
+
+	movea.l	Radial.trajRout,a0
+	jsr	(a0)
+	ext.l	d0
+	ext.l	d1
+	sendLongToDsp	d0
+	sendLongToDsp	d1
+	bsr	Radial.blurDsp
+
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	movea.l	resRout,a0
+	suba.l	a1,a1
+	movea.l	d0,a2
+	bsr.l	Screen.requestUpdate
+	clr.l	resRout
+
+	move.w	old468,d0
+.wait:	cmp.w	$0468.w,d0
+	beq.s	.wait
+
+	rts
+
+;======= OBJECT SUBROUTINES ================================================
+
+
+Radial.killDetail:
+	clr.w	Radial.detail
+	bsr	Radial.convPic
+	rts
+
+Radial.addDetail:
+	move.w	#1,Radial.detail
+	bsr	Radial.convPic
+	rts
+
+ Radial.incZoomStep:
+	addq.w	#1,Radial.zoomStep
+	rts
+
+Radial.setFadeOut:
+	move.w	$04BC.w,Radial.fadeStart
+	st	Radial.fading
+	clr.w	Radial.fadePos
+	rts
+
+Radial.setSwingTraject:
+	move.l	#Radial.swingTraject,Radial.trajRout
+	move.l	$04BA.w,Radial.swingStart
+	rts
+
+Radial.swingStart:
+	DS.L	1
+
+Radial.setNormalTraject:
+	move.l	#Radial.normalTraject,Radial.trajRout
+	rts
+
+Radial.BSPEED1:=	2700
+Radial.ESPEED1:=	5
+Radial.BSPEED2:=	2300
+Radial.ESPEED2:=	3
+Radial.SW_TIMELOG:=	8
+Radial.SW_TIME:=	1<<Radial.SW_TIMELOG
+
+Radial.swingTraject:
+	lea	sine_tbl,a0
+	move.l	$04BA.w,d2
+	sub.l	Radial.swingStart,d2
+	lsr.l	#1,d2
+; d2.l=t
+
+	move.l	d2,d0
+	move.l	d2,d1
+	cmpi.l	#Radial.SW_TIME,d2
+	blt.s	.ok
+
+	move.w	#Radial.SW_TIME,d2
+	subi.w	#Radial.SW_TIME,d0
+	mulu.w	#Radial.ESPEED1,d0
+	move.l	d0,d1
+	add.l	#((Radial.BSPEED1+Radial.ESPEED1)*Radial.SW_TIME)>>5,d0
+	add.l	#((Radial.BSPEED2+Radial.ESPEED2)*Radial.SW_TIME)>>5,d1
+	bra.s	.oki
+
+.ok:
+	move.l	d2,d3
+	mulu.l	#(sintbllen<<7)/Radial.SW_TIME,d3	; d3.l='t*pi'<<8
+	lsr.l	#8,d3					; d3.l='t*pi'
+	Get_Sin	a0,d3,d3				; d3.w=sin(t*pi) (16b signed)
+	move.w	d3,d4
+	muls.w	#Radial.BSPEED1-Radial.ESPEED1,d3	; x_speed 'difference'
+	divs.l	#450,d3
+	mulu.w	#Radial.BSPEED1+Radial.ESPEED1,d0	; avg x_speed *2
+	add.l	d3,d0
+	lsr.l	#5,d0
+
+	muls.w	#Radial.BSPEED2-Radial.ESPEED2,d4	; y_speed 'difference'
+	divs.l	#450,d4
+	mulu.w	#Radial.BSPEED2+Radial.ESPEED2,d1	; avg y_speed *2
+	add.l	d4,d1
+	lsr.l	#5,d1
+
+	
+.oki:
+	IFNE	1
+; smooth amplitude increase..
+	mulu.l	#(sintbllen<<6)/Radial.SW_TIME,d2	; d2.l='t*pi/2'<<8
+	lsr.l	#8,d2					; d2.l='t*pi/2'
+	Get_Cos	a0,d2,d2
+	neg.w	d2
+	addi.w	#$8000,d2
+	lsr.w	#7,d2
+	ENDC
+
+; get wave position and amp it.
+; d2.w=amp [0..SW_TIME]
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	Get_Sin	a0,d0,d0
+	Get_Sin	a0,d1,d1
+	muls.w	d2,d0
+	muls.w	d2,d1
+	moveq	#Radial.SW_TIMELOG,d3
+	asr.l	d3,d0
+	asr.l	d3,d1
+
+; convert center to screen coordinates
+	muls.w	#120,d0				; 36
+	swap	d0
+	addi.w	#18,d0				; 18
+	muls.w	#70,d1				; 40
+	swap	d1
+	addi.w	#20,d1				; 20
+	rts
+
+Radial.normalTraject:
+	bsr	getTime
+	move.w	d0,d1
+	mulu.w	#11,d0
+	mulu.w	#5,d1
+	lsr.l	#2,d0
+	lsr.l	d1
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	lea	sine_tbl,a0
+	Get_Sin	a0,d0,d0
+	Get_Sin	a0,d1,d1
+	muls.w	#120,d0				; 36
+	swap	d0
+	addi.w	#18,d0				; 18
+	muls.w	#70,d1				; 40
+	swap	d1
+	addi.w	#20,d1				; 20
+	rts
+
+; Only send center of pic.
+Radial.sendPic:
+	clr.l	d0
+
+; send pal.
+	clr.b	d7
+	lea	Radial.pal,a0
+.loop:	sendWordToDsp	(a0)+
+	addq.b	#1,d7
+	bne.s	.loop
+
+; send pic.
+	clr.l	d0
+	lea	Radial.pic+788,a0
+	adda.w	#320*71,a0
+	moveq	#59-1,d7
+
+.yloop:	moveq	#124-1,d6
+	adda.w	#98,a0
+
+.xloop:	move.b	(a0)+,d0
+	sendLongToDsp	d0
+	dbf	d6,.xloop
+
+	adda.w	#98,a0
+	dbf	d7,.yloop
+	rts
+
+Radial.fuckup:
+	lea	sine_tbl,a1
+
+	lea	Radial.wpic+(320*100+160)*2,a0
+	move.w	$04BC.w,d0
+	move.w	d0,d1
+	mulu.w	#7,d0
+	mulu.w	#11,d1
+	lsr.l	#2,d0
+	lsr.l	#3,d1
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	Get_Sin	a1,d0,d0
+	Get_Sin	a1,d1,d1
+	muls.w	#90*2,d0
+	muls.w	#60*2,d1
+	swap	d0
+	swap	d1
+	muls.w	#320*2,d1
+	add.w	d0,d0
+	adda.w	d0,a0
+	adda.l	d1,a0
+	addq	#1,a0
+	addq.b	#8,-320*2-2(a0)
+	addi.b	#16,-320*2(a0)
+	addq.b	#8,-320*2+2(a0)
+	addi.b	#16,-2(a0)
+	addi.b	#32,(a0)
+	addq.b	#8,+320*2-2(a0)
+	addi.b	#16,+2(a0)
+	addi.b	#16,320*2(a0)
+	addq.b	#8,+320*2+2(a0)
+
+	lea	Radial.wpic+(320*100+160)*2,a0
+	move.w	$04BC.w,d0
+	move.w	d0,d1
+	mulu.w	#13,d0
+	mulu.w	#17,d1
+	lsr.l	#3,d0
+	lsr.l	#4,d1
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	Get_Sin	a1,d0,d0
+	Get_Sin	a1,d1,d1
+	muls.w	#90*2,d0
+	muls.w	#60*2,d1
+	swap	d0
+	swap	d1
+	muls.w	#320*2,d1
+	add.w	d0,d0
+	adda.w	d0,a0
+	adda.l	d1,a0
+	addq	#1,a0
+	addq.b	#8,-320*2-2(a0)
+	addi.b	#16,-320*2(a0)
+	addq.b	#8,-320*2+2(a0)
+	addi.b	#16,-2(a0)
+	addi.b	#32,(a0)
+	addq.b	#8,+320*2-2(a0)
+	addi.b	#16,+2(a0)
+	addi.b	#16,320*2(a0)
+	addq.b	#8,+320*2+2(a0)
+
+	rts
+
+Radial.convPic:
+	lea	Radial.wpic,a0
+	lea	Radial.pic+788,a1
+	lea	Radial.wpic2,a2
+	move.w	#320*200-1,d7
+	moveq	#Radial.NUMLAYERS+4,d2
+	move.w	Radial.detail,d1
+	andi.w	#1,d1
+	neg.w	d1
+	addq.w	#2,d1
+	divu.w	d1,d2
+.loop:	clr.l	d0
+	move.b	(a1)+,d0
+	move.l	d0,d1
+	lsl.w	#8,d0
+	divu.w	d2,d0
+	lsl.l	#5,d1
+	move.w	d0,(a0)+
+	move.w	d1,(a2)+
+	dbf	d7,.loop
+	rts
+
+; Single buffer version.. Just trying out to see if suited for dsp.
+Radial.blurDsp:
+.wait:	btst	#0,$FFFFA202.w
+	beq.s	.wait
+	lea	$FFFFA206.w,a1
+	lea	$FFFFA207.w,a3
+	movea.l	scr,a0
+	clr.l	d0
+	clr.l	d1
+	lea	Radial.pal,a2
+	move.w	monitormode,d2
+	cmpi.w	#vga100,d2
+	beq.s	Radial.paintVga100
+	cmpi.w	#vga60,d2
+	beq.w	Radial.paintVga60
+	lea	Radial.palr,a2
+	cmpi.w	#rgb50,d2
+	beq.w	Radial.paintRgb50
+; Unknown monitormode..
+
+Radial.paintVga100:
+	move.w	#160*100/100-1,d7
+.loop:
+	REPT	100
+	move.w	(a1),(a0)+
+	ENDR
+	dbf	d7,.loop
+	rts
+
+Radial.paintVga60:
+	lea	160*2(a0),a2
+	movea.w	#160*2,a6
+	moveq	#100-1,d7
+
+.yloop:	moveq	#2-1,d6
+
+.xloop:
+	REPT	80
+	move.w	(a1),d0
+	move.w	d0,(a0)+
+	move.w	d0,(a2)+
+	ENDR
+	dbf	d6,.xloop
+
+	adda.l	a6,a0
+	adda.l	a6,a2
+	dbf	d7,.yloop
+	rts
+
+Radial.paintRgb50:
+	move.w	#160*100/40-1,d7
+.loop:
+	REPT	40
+	move.w	(a1),d0				; h,t = 1,1
+	move.l	d0,(a0)+			; h,t = 0,1
+	swap	d0				; h,t = 4,0
+	ENDR
+	dbf	d7,.loop
+	rts
+
+;======= OBJECT DATA =======================================================
+
+	DATA
+
+Radial.pic:
+	INCBIN	RAD.APX
+
+Radial.flowTable:
+	DC.W	(.end-.start)/4
+	DC.W	4
+.start:	DC.L	$1f1f001f
+	DC.L	$1f1f003f
+	DC.L	$1f3f007f
+	DC.L	$005f00df
+	DC.L	$007f00ff
+	DC.L	$009f00ff
+	DC.L	$00bf00ff
+	DC.L	$2fdf00ff
+	DC.L	$5fff00ff
+	DC.L	$8fff00ff
+	DC.L	$bfff00ff
+	DC.L	$efff00ff
+	DC.L	$ffff00ff
+	DC.L	$ffff00ff
+	DC.L	$ffff00ff
+	DC.L	$ffff00ff
+	DC.L	$ffff00ff
+	DC.L	$ffff00ff
+	DC.L	$ffff00ff
+.end:
+
+Radial.p56:
+	INCBIN	RADIAL2.P56
+Radial.p56End:
+	EVEN
+
+Radial.trajRout:
+	DC.L	Radial.normalTraject
+
+;======= OBJECT RESERVES ===================================================
+
+	BSS
+
+;	DS.W	1
+
+Radial.buf1:
+	DS.W	320*200
+Radial.buf2:
+	DS.W	320*200
+Radial.pal:
+	DS.W	256
+Radial.palr:
+	DS.L	256
+Radial.pald:
+	DS.L	256*256
+
+Radial.xoff:
+	DS.W	1
+Radial.yoff:
+	DS.W	1
+Radial.xoffl:
+	DS.L	1
+Radial.yoffl:
+	DS.L	1
+
+Radial.wpic:
+	DS.W	320*200
+Radial.wpic2:
+	DS.W	320*200
+
+Radial.zoomStep:
+	DS.W	1
+Radial.numLayers:
+	DS.W	1
+
+Radial.paintRout:
+	DS.L	1
+Radial.detail:
+	DS.W	1
+stepTable:
+	DS.W	160
+stepTableY:
+	DS.L	100
+Radial.fading:
+	DS.W	1
+Radial.fadeStart:
+	DS.W	1
+Radial.fadePos:
+	DS.W	1

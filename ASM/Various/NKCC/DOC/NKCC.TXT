@@ -1,0 +1,830 @@
+
+Documentation of: package\source\nkcc.s
+Date of creation: Friday  21.08.1998  17.36
+
+********************************************************************************
+*
+*  Project name : NORMALIZED KEY CODE CONVERTER (NKCC)
+*  Module name  : Main module
+*  Symbol prefix: nkc
+*
+*  Author       : Harald Siegmund (HS)
+*  Co-Authors   : -
+*  Write access : HS
+*
+*  Notes        : The symbol NKCGEM will have to be defined on the assembler's
+*                 command line when translating the source of NKCC. Set its
+*                 value to 1 if you like to create the complete version. A value
+*                 of 0 will supress inclusion of the GEM part, making NKCC a few
+*                 KBytes smaller. Some functions and the GEM parameter arrays
+*                 are not available then.
+*
+*                 Translate this source with the Pure assembler:
+*                 pasm [-B] -DNKCGEM=1 -Onkcc.o nkcc.s
+*                 pasm [-B] -DNKCGEM=0 -Onkcc_tos.o nkcc.s
+*
+*                 WARNING: Old versions of the Pure assemblers have serious
+*                          bugs! Version Jun 21 1993 works fine.
+*
+*-------------------------------------------------------------------------------
+
+
+****************************************************************************
+*                         ASSEMBLER CONTROL SECTION                        *
+****************************************************************************
+
+*KEY &NKCGEM
+*     define this symbol on the assembler's command line
+*     =0    create TOS-version of NKCC (without GEM part)
+*     =1    create GEM-version of NKCC
+
+               .include "nkcc.i"             ; NKCC definitions
+
+
+****************************************************************************
+*                                  EXPORT                                  *
+****************************************************************************
+
+                                             ; functions
+               .globl   nkc_init             ; init NKCC
+               .globl   nkc_exit             ; exit NKCC
+               .globl   nkc_set              ; set special key flags
+               .globl   nkc_conin            ; NKCC key input via GEMDOS
+               .globl   nkc_cstat            ; console input status via GEMDOS
+               .globl   nkc_tconv            ; TOS key code converter
+               .globl   nkc_gconv            ; GEM key code converter
+               .globl   nkc_n2tos            ; NKC to TOS key code converter
+               .globl   nkc_n2gem            ; NKC to GEM key code converter
+               .globl   nkc_kstate           ; return shift key state
+               .globl   nkc_timer            ; return 200 Hz system clock
+               .globl   nkc_cmp              ; compare two key codes
+               .globl   nkc_vlink            ; link function to XBRA vector list
+               .globl   nkc_vunlink          ; unlink function from XBRA list
+               .globl   nkc_toupper          ; convert character to upper case
+               .globl   nkc_tolower          ; convert character to lower case
+               .globl   nkc_class            ; get character classification
+
+               .if      NKCGEM=1
+
+                .globl  nkc_multi            ; NKCC multi event handler
+                .globl  nkc_amulti           ; multi event, assembler binding
+                .globl  nkc_contrl           ; GEM parameter arrays
+                .globl  nkc_intin
+                .globl  nkc_intout
+                .globl  nkc_adrin
+                .globl  nkc_adrout
+                .globl  nkc_ptsin
+                .globl  nkc_ptsout
+
+               .endif   ; .if NKCGEM=1
+
+
+****************************************************************************
+*                            GLOBAL TEXT SECTION                           *
+****************************************************************************
+
+
+****************************************************************************
+*
+*  nkc_init: initialize NKCC
+*  # G U
+*
+*  C prototype: int nkc_init(unsigned long flags,int vdihnd,int *pglobal);
+*---------------------------------------------------------------------------
+*  This function initializes NKCC. It must be called once before any other
+*  NKCC routine. It performs some tasks that may be important for you to
+*  know:
+*
+*  - bit 3 of the system variable <conterm> ($484.B) is set
+*  - a 200 Hz clock interrupt is installed, using the XBRA method (ID is
+*    "NKCC")
+*
+*  nkc_init() gets some flags which configure NKCC and enable some special
+*  functions:
+*
+*  NKI?_BUTHND       install NKCC's button event handler (see documentation
+*                    NKCC.DOC for details)
+*  NKI?_BHTOS        additional flag: install only, if TOS has mouse click bug
+*  NKI?_NO200HZ      don't install the 200 Hz timer interrupt
+*
+*  Notes:
+*
+*  - if NKCC is assembled as TOS-only version (symbol NKCGEM set to 0),
+*    both NKI?_BUTHND and NKI?_BHTOS flags are ignored.
+*
+*  - if the button event handler is installed, the NKI?_NO200HZ flag is
+*    ignored (because the 200 Hz clock is needed by the handler). Besides,
+*    the initialization continues:
+*
+*    - an own GEM trap handler (trap #2) is installed, using the XBRA method
+*      (to be up to date when a new double click time is set via the AES
+*      function evnt_dclick())
+*
+*    - a vex_butv() call (VDI) is made to install a mouse button exchange
+*      handler
+*
+*  In:   D0.L           miscellaneous flags (NKI?_...); see above
+*        D1.W           handle of an open VDI workstation
+*                       (must only be valid if the button handler is
+*                       installed)
+*        A0.L           ^applications GLOBAL array (from GEM parameter block)
+*                       not used in the TOS version of NKCC
+*
+*  Out:  D0.W           NKCC's version number as 4 digit BCD
+*                       (main # in high byte, sub # in low byte)
+*
+*  Reg:  D:01234567   A:01234567   CCR
+*          U**.....     **......    *
+*
+****************************************************************************
+
+
+****************************************************************************
+*
+*  nkc_exit: exit NKCC
+*  # G U
+*
+*  C prototype: int nkc_exit(void);
+*---------------------------------------------------------------------------
+*  nkc_exit() must be called before the program is quit. It removes all
+*  handlers installed in the system.
+*
+*  In:   -
+*
+*  Out:  D0.W           status flag:
+*                       0     OK
+*                       -1    can't remove 200 Hz clock interrupt
+*                       -2    can't remove trap #2 handler
+*                       -3    can't remove both handlers
+*                       An error can happen if somebody corrupted the
+*                       XBRA vector list. This is fatal!
+*
+*  Reg:  D:01234567   A:01234567   CCR
+*          ***.....     **......   =D0.W
+*
+****************************************************************************
+
+
+****************************************************************************
+*
+*  nkc_set: set special key flags
+*  # G
+*
+*  C prototype: void nkc_set(unsigned long flags);
+*---------------------------------------------------------------------------
+*  This function is used to enable/disable special key handling procedures.
+*  The features which can be set are:
+*
+*  - direct input of ASCII codes; when switched on, pressing the Alternate
+*    key plus one of the numbers on the numeric keypad will start the input
+*    of a decimal ASCII number. The input is finished either when 3 digits
+*    are typed in or the Alternate key is released. NKCC will return the
+*    corresponding character with the entered ASCII code. This feature makes
+*    it possible to use the whole range of the character set (from 0 ... 255).
+*
+*  - deadkey management; when switched on, NKCC will combine some combi-
+*    nations of two key strokes to one character. This is used to generate
+*    characters with accents which are not on the keyboard. The supported
+*    deadkeys are:
+*
+*    ^   +   aeiou      =  Éàåìñ       (NKS?_D_CIRCUM)
+*    ~   +   nNaoAo     =  §•∞±∑∏      (NKS?_D_TILDE)
+*    '   +   eEaiou     =  Çê†°¢£      (NKS?_D_AGUI)
+*    `   +   aeiouA     =  Öäçïó∂      (NKS?_D_GRAVE)
+*    π   +   aeiouyAOU  =  ÑâãîÅòéôö   (NKS?_D_UMLAUT)
+*    "   +   aeiouyAOU  =  ÑâãîÅòéôö   (NKS?_D_QUOTE)
+*    ¯   +   aA         =  Üè          (NKS?_D_SMOERE)
+*    ,   +   cC         =  áÄ          (NKS?_D_CEDIL)
+*    /   +   oO24       =  ≥≤´¨        (NKS?_D_SLASH)
+*
+*    The quote character as synonym for umlaut is e.g. needed on the Dutch
+*    keyboard, where neither umlaut characters nor the umlaut itself are
+*    available.
+*
+*    Each deadkey can be enabled/disabled separately.
+*
+*  - Control key emulation: Control plus an ASCII code in the range of
+*    $40...$5F (characters @, A...Z, [, \, ], ^ and _) is converted
+*    to an ASCII code of $00...$1F.
+*
+*
+*  In:   D0.L           new key flags (bit set = feature on):
+*                       NKS?_ALTNUM       ASCII input
+*                       NKS?_D_...        deadkey ...
+*                                         (NKSf_DEADKEY: all deadkeys)
+*                       NKS?_CTRL         control key emulation
+*
+*  Out:  -
+*
+*  Reg:  D:01234567   A:01234567   CCR
+*          ***.....     **......    *
+*
+****************************************************************************
+
+
+****************************************************************************
+*
+*  nkc_conin: raw console character input
+*  # G
+*
+*  C prototype: int nkc_conin(void);
+*---------------------------------------------------------------------------
+*  This routine replaces the Gemdos function Crawcin. However, it returns
+*  a WORD with the key code in normalized format rather than a LONG with
+*  the key code in the language dependend TOS format.
+*
+*  In:   -
+*
+*  Out:  D0.W           key code in normalized format
+*                       for details see nkc_tconv()
+*        CCR            set according content of D0.W
+*
+*  Reg:  D:01234567   A:01234567   CCR
+*          W**.....     **......   =D0.W
+*
+****************************************************************************
+
+
+****************************************************************************
+*
+*  nkc_cstat: return console character input status
+*  # G
+*
+*  C prototype: int nkc_cstat(void);
+*---------------------------------------------------------------------------
+*  This function checks, if a key is in the key input buffer or not.
+*
+*  In:   -
+*
+*  Out:  D0.W           flag:
+*                       0     no key in buffer
+*                       -1    at least one key in buffer
+*        CCR            set according content of D0.W
+*
+*  Reg:  D:01234567   A:01234567   CCR
+*          W**.....     **......   =D0.W
+*
+****************************************************************************
+
+
+****************************************************************************
+*
+*  nkc_multi: NKCC multi event
+*  # G U
+*
+*  C prototype: int cdecl nkc_multi(
+*                  int mflags,
+*                  int mbclicks,int mbmask,int mbstate,
+*                  int mm1flags,int mm1x,int mm1y,int mm1width,int mm1height,
+*                  int mm2flags,int mm2x,int mm2y,int mm2width,int mm2height,
+*                  int *mmgpbuff,
+*                  int mtlocount,int mthicount,
+*                  int *mmox,int *mmoy,int *mmbutton,int *mmokstate,
+*                  int *mkreturn,int *mbreturn);
+*---------------------------------------------------------------------------
+*  nkc_multi() is a binding function to the AES multi event handler. The
+*  only differences are the keyboard events and the shift key state: the key
+*  codes are returned in normalized format (see nkc_tconv()), the shift key
+*  state is compatible to the NKF?_... flags. For a detailed description of
+*  the whole mass of parameters consult your AES manual or compiler handbook!
+*
+*  In:    4(SP).w       event mask (MU_...)
+*         6(SP).w       MU_BUTTON: max # of clicks to wait for
+*         8(SP).w       MU_BUTTON: mask of buttons to check
+*        10(SP).w       MU_BUTTON: button states to wait for
+*        12(SP).w       MU_M1: area enter/leave flag
+*        14(SP).w       MU_M1: x position of area
+*        16(SP).w       MU_M1: y position of area
+*        18(SP).w       MU_M1: width of area
+*        20(SP).w       MU_M1: height of area
+*        22(SP).w       MU_M2: area enter/leave flag
+*        24(SP).w       MU_M2: x position of area
+*        26(SP).w       MU_M2: y position of area
+*        28(SP).w       MU_M2: width of area
+*        30(SP).w       MU_M2: height of area
+*        32(SP).L       MU_MESAG: ^8 words of message buffer
+*        36(SP).w       MU_TIMER: low word of time to wait
+*        38(SP).w       MU_TIMER: high word of time to wait
+*        40(SP).L       MU_BUTTON/M1/M2: ^word for mouse x
+*        44(SP).L       MU_BUTTON/M1/M2: ^word for mouse y
+*        48(SP).L       MU_BUTTON/M1/M2: ^word for button state
+*        52(SP).L       MU_BUTTON/M1/M2: ^word for shift state
+*        56(SP).L       MU_KEYBD: ^word for key code in normalized format
+*        60(SP).L       MU_BUTTON: ^word for # of mouse clicks
+*
+*  Out:  D0.W           mask of occured events (MU_...)
+*
+*  Reg:  D:01234567   A:01234567   CCR
+*          W**.....     **......    *
+*
+****************************************************************************
+
+
+****************************************************************************
+*
+*  nkc_amulti: NKCC multi event called by Assembler  *** added by Gerd Knops
+*  # G U
+*
+*  See description of nkc_multi()!
+*
+*  usage: instead of    move.l   #aespb,d1
+*                       move  #$c8,d0
+*                       trap  #2
+*
+*         do            jsr   nkc_amulti
+*
+*  In:   all parameters for evnt_multi in the AES parameter arrays
+*
+*  Out:  values in intout and message buffer
+*
+*  Reg:  D:01234567   A:01234567   CCR
+*          ***.....     **......    *
+*
+****************************************************************************
+
+
+****************************************************************************
+*
+*  nkc_tconv: TOS key code converter
+*  # G R
+*
+*  C prototype: int nkc_tconv(long toskey);
+*---------------------------------------------------------------------------
+*  This is the most important function within NKCC: it takes a key code
+*  returned by TOS and converts it to the sophisticated normalized format.
+*
+*  Note: the raw converter does no deadkey handling, ASCII input or
+*        Control key emulation.
+*
+*  In:   D0.L           key code in TOS format:
+*                                   0                    1
+*                       bit 31:     ignored              ignored
+*                       bit 30:     ignored              ignored
+*                       bit 29:     ignored              ignored
+*                       bit 28:     no CapsLock          CapsLock
+*                       bit 27:     no Alternate         Alternate pressed
+*                       bit 26:     no Control           Control pressed
+*                       bit 25:     no left Shift key    left Shift pressed
+*                       bit 24:     no right Shift key   right Shift pressed
+*
+*                       bits 23...16: scan code
+*                       bits 15...08: ignored
+*                       bits 07...00: ASCII code (or rubbish in most cases
+*                          when Control or Alternate is pressed ...)
+*
+*  Out:  D0.W           normalized key code:
+*                       bits 15...08: flags:
+*                                   0                    1
+*                       NKF?_FUNC   printable char       "function key"
+*                       NKF?_RESVD  ignore it            ignore it
+*                       NKF?_NUM    main keypad          numeric keypad
+*                       NKF?_CAPS   no CapsLock          CapsLock
+*                       NKF?_ALT    no Alternate         Alternate pressed
+*                       NKF?_CTRL   no Control           Control pressed
+*                       NKF?_LSH    no left Shift key    left Shift pressed
+*                       NKF?_RSH    no right Shift key   right Shift pressed
+*
+*                       bits 07...00: key code
+*                       function (NKF?_FUNC set):
+*                          < 32: special key (NK_...)
+*                          >=32: printable char + Control and/or Alternate
+*                       no function (NKF?_FUNC not set):
+*                          printable character (0...255!!!)
+*
+*        CCR            set according content of D0.W
+*
+*  Reg:  D:01234567   A:01234567   CCR
+*          U**.....     **......   =D0.W
+*
+****************************************************************************
+
+
+****************************************************************************
+*
+*  nkc_gconv: GEM key code converter
+*  # G R
+*
+*  C prototype: int nkc_gconv(int gemkey);
+*---------------------------------------------------------------------------
+*  Why a second key code converter, you ask? Well, in some cases it might
+*  happen that the key status byte of the original key code (with states
+*  of both Shift keys, Control, Alternate and CapsLock) is lost. Then
+*  this converter function must be called, which uses another algorithm
+*  to construct the normalized key code.
+*
+*  Notes:
+*  -  the raw converter does no deadkey handling, ASCII input or Control
+*     key emulation.
+*  -  NKCC does not use this function at all for its own purposes!
+*  -  some key combinations cannot be distinguished without the flag byte!
+*     For example, "Alternate A" and "Shift Alternate A" produce the same
+*     result. Whenever possible, use nkc_tconv()!
+*
+*  In:   D0.W           key code in GEM format:
+*                       bits 15...08: scan code
+*                       bits 07...00: ASCII code
+*
+*  Out:  D0.W           normalized key code (see nkc_tconv() for details)
+*        CCR            set according content of D0.W
+*
+*  Reg:  D:01234567   A:01234567   CCR
+*          U**.....     **......   =D0.W
+*
+****************************************************************************
+
+
+****************************************************************************
+*
+*  nkc_n2tos: convert normalized key codes back to TOS format
+*  # G R
+*
+*  C prototype: long nkc_n2tos(int nkcode);
+*---------------------------------------------------------------------------
+*  In some cases you might have to have key codes in the original TOS format
+*  again, as returned by the GEMDOS functions Cconin(), Crawcin() or the BIOS
+*  function Bconin(). Use nkc_n2tos() to convert them. For a detailed
+*  description of the returned format consult the header of the function
+*  nkc_tconv().
+*
+*  In:   D0.W           key code in normalized format
+*
+*  Out:  D0.L           key code in TOS format:
+*                       bits 24...31: shift key flags
+*                       bits 23...16: scan code
+*                       bits 08...15: reserved (0)
+*                       bits 00...07: ASCII code
+*        CCR            set according content of D0.L
+*
+*  Reg:  D:01234567   A:01234567   CCR
+*          U**.....     **......   =D0.L
+*
+****************************************************************************
+
+
+****************************************************************************
+*
+*  nkc_n2gem: convert normalized key codes back to GEM format
+*  # G R
+*
+*  C prototype: int nkc_n2gem(int nkcode);
+*---------------------------------------------------------------------------
+*  Similar to nkc_n2tos(), this function converts normalized key codes back
+*  to the operating system's format. The result is a key code as returned
+*  by the AES functions evnt_keybd() respectively evnt_multi().
+*
+*  In:   D0.W           key code in normalized format
+*
+*  Out:  D0.W           key code in GEM format:
+*                       bits 08...15: scan code
+*                       bits 00...07: ASCII code
+*        CCR            set according content of D0.W
+*
+*  Reg:  D:01234567   A:01234567   CCR
+*          U**.....     **......   =D0.W
+*
+****************************************************************************
+
+
+****************************************************************************
+*
+*  nkc_kstate: return state of Shift/Control/Alternate/CapsLock in
+*              normalized format
+*  # G R
+*
+*  C prototype: int nkc_kstate(void);
+*---------------------------------------------------------------------------
+*  This is a very *FAST* function which returns the state of the Shift/
+*  Control/Alternate and CapsLock keys in normalized format.
+*
+*  In:   -
+*
+*  Out:  D0.W           normalized key flags:
+*                                   0                    1
+*                       NKF?_CAPS   no CapsLock          CapsLock
+*                       NKF?_ALT    no Alternate         Alternate pressed
+*                       NKF?_CTRL   no Control           Control pressed
+*                       NKF?_LSH    no left Shift key    left Shift pressed
+*                       NKF?_RSH    no right Shift key   right Shift pressed
+*
+*        CCR            set according content of D0.W
+*
+*  Reg:  D:01234567   A:01234567   CCR
+*          w**.....     **......   =D0.W
+*
+****************************************************************************
+
+
+****************************************************************************
+*
+*  nkc_timer: return current value of 200 Hz system clock
+*  # G R
+*
+*  C prototype: unsigned long nkc_timer(void);
+*---------------------------------------------------------------------------
+*  This is a very *FAST* function which returns the content of the 200 Hz
+*  system clock.
+*
+*  In:   -
+*
+*  Out:  D0.L           current 200 HZ system clock value
+*
+*  Reg:  D:01234567   A:01234567   CCR
+*          w**.....     **......    *
+*
+****************************************************************************
+
+
+****************************************************************************
+*
+*  nkc_cmp: compare two key codes
+*  # G R
+*
+*  C prototype: int nkc_cmp(int refkey,int kcode);
+*---------------------------------------------------------------------------
+*  nkc_cmp() compares key codes. What for, you ask? A simple "if key_code1
+*  = key_code2" would also do it? No! This function follows some specific
+*  rules, which improve the flexibility of key code comparism.
+*
+*  One of the key codes passed to nkc_cmp() is called the "reference key
+*  code". The other is the "test key code", which is got from nkc_conin()
+*  or nkc_multi(). Some flags of the reference code are treated a special
+*  way:
+*
+*  NKF?_IGNUM (same as NKF?_RESVD)
+*     if set, the numeric keypad flag doesn't matter
+*
+*  NKF?_CAPS (CapsLock)
+*     if set, the case of the ASCII code doesn't matter
+*
+*  NKFf_SHIFT (both Shift key flags)
+*     if BOTH shift flags are set, the combination of shift key flags in
+*     the test key code doesn't matter: only one shift flag has to be set,
+*     no matter which one.
+*
+*  In:   D0.W           reference key code
+*        D1.W           key code to test
+*
+*  Out:  D0.W           flag: 1 = key codes match
+*                             0 = key codes don't match
+*        CCR            set according content of D0.W
+*
+*  Reg:  D:01234567   A:01234567   CCR
+*          u**.....     **......   =D0.W
+*
+****************************************************************************
+
+
+****************************************************************************
+*
+*  nkc_vlink: link function to XBRA vector list
+*  # G U
+*
+*  C prototype: void nkc_vlink(long vector,int mode,void *pfnc);
+*---------------------------------------------------------------------------
+*  This function can be used to change system vectors and let them point
+*  to own functions, using a standard method. The vector, which should be
+*  changed, is described by the contents of D0.L and D1.W. It can be
+*  either a standard vector number, e.g. 2 for the bus error exception
+*  vector, or the absolute address of the vector, e.g. $502 for the screen
+*  dump vector. The function to install must have the following header:
+*
+*  .dc.b    "XBRA"         magic longword
+*  .dc.b    "myID"         four ASCII character ID of the function
+*                          (NKCC uses "NKCC", for example)
+*  .dc.l    0              buffer for the old vector content
+*  function: ...           start of the function code
+*
+*  The function should end with:
+*
+*  move.l   function-4(pc),-(sp)
+*  rts
+*
+*
+*  Note: in NKXM_ADR mode, this function automatically switches (temporary)
+*        to Supervisor mode to prevent bus errors
+*
+*
+*  In:   D0.L           vector descriptor
+*        D1.W           mode:
+*                       NKXM_NUM = D0.L contains a vector number
+*                       NKXM_ADR = D0.L contains a vector address
+*        A0.L           ^function to install (NOT ^XBRA header!)
+*
+*  Out:  -4(A0.L).L     old content of vector
+*
+*  Reg:  D:01234567   A:01234567   CCR
+*          ***.....     **......    *
+*
+****************************************************************************
+
+
+****************************************************************************
+*
+*  nkc_vunlink: unlink function from XBRA vector list
+*  # G U
+*
+*  C prototype: int nkc_vunlink(long vector,int mode,void *pfnc);
+*---------------------------------------------------------------------------
+*  nkc_vunlink() removes a function which was installed using the XBRA method.
+*  For details see nkc_link(). If the XBRA list was corrupted, the function
+*  aborts with an error code. This happens, when a non-XBRA routine is
+*  installed on the same vector after the nkc_vlink() call of the function
+*  to remove.
+*
+*  Note: the function automatically switches (temporary) to Supervisor mode
+*        to prevent bus errors
+*
+*  In:   D0.L           vector descriptor
+*        D1.W           mode:
+*                       NKXM_NUM = D0.L contains a vector number
+*                       NKXM_ADR = D0.L contains a vector address
+*        A0.L           ^function to remove (NOT ^XBRA header!)
+*
+*  Out:  D0.W           status:
+*                       0 = OK
+*                       -1 = can't remove (XBRA list corrupted)
+*        CCR            set according content of D0.W
+*
+*  Reg:  D:01234567   A:01234567   CCR
+*          U**.....     **......   =D0.W
+*
+****************************************************************************
+
+
+****************************************************************************
+*
+*  nkc_toupper: convert character to upper case
+*  # G
+*
+*  C prototype: unsigned char nkc_toupper(unsigned char chr);
+*---------------------------------------------------------------------------
+*  A character is converted to upper case. Examples:
+*
+*  'a'   ->   'A'          (converted)
+*  '/'   ->   '/'          (unchanged; there's no upper case version for this)
+*  'A'   ->   'A'          (unchanged; already converted)
+*
+*
+*  In:   D0.B           any character
+*
+*  Out:  D0.B           character converted to upper case
+*
+*  Reg:  D:01234567   A:01234567   CCR
+*          U**.....     **......    *
+*
+****************************************************************************
+
+
+****************************************************************************
+*
+*  nkc_tolower: convert character to lower case
+*  # G
+*
+*  C prototype: unsigned char nkc_tolower(unsigned char chr);
+*---------------------------------------------------------------------------
+*  The counterpart of nkc_toupper(). A character is converted to lower case.
+*
+*  In:   D0.B           any character
+*
+*  Out:  D0.B           character converted to lower case
+*
+*  Reg:  D:01234567   A:01234567   CCR
+*          U**.....     **......    *
+*
+****************************************************************************
+
+
+****************************************************************************
+*
+*  nkc_class: get character classification
+*  # G
+*
+*  C prototype: unsigned long nkc_class(unsigned char chr);
+*---------------------------------------------------------------------------
+*  A bitfield is returned indication the class(es) a character belongs to:
+*
+*  NKC?_UPPER        upper case character
+*                    'A'...'Z' and the upper case characters beyond $7f
+*
+*  NKC?_LOWER        lower case character
+*                    'a'...'b' and the lower case characters beyond $7f
+*
+*  NKC?_DIGIT        decimal digit
+*                    '0'...'9'
+*
+*  NKC?_ODIGIT       otcal digit
+*                    '0'...'7'
+*
+*  NKC?_XDIGIT       hexadecimal digit
+*                    '0'...'9', 'a'...'f', 'A'...'F'
+*
+*  NKC?_BDIGIT       binary digit
+*                    '0'...'1'
+*
+*  NKC?_SPACE        space character
+*                    spaces, tabs and line feeds: $09...$0d, $20
+*
+*  NKC?_DASH         dash character
+*                    '-' (an extension of this class is used in Calamus)
+*
+*  NKC?_PUNCT        punctuation character
+*                    one of these: !,.:;?®≠
+*
+*  NKC?_ASCII        ASCII character
+*                    $00...$7f
+*
+*  NKC?_CNTRL        control character
+*                    $00...$1f, $7f
+*
+*  NKC?_GRAPH        graphics character
+*                    all except control characters and space
+*
+*  NKC?_PRINT        printable character
+*                    all except control characters
+*
+*  NKCf_ALPHA        alpha character
+*                    all letters (NKCf_UPPER | NKCf_LOWER)
+*
+*  NKCf_ALNUM        alphanumeric character
+*                    all letters and decimal digits (NKCf_ALPHA | NKCf_DIGIT)
+*
+*
+*  In:   D0.B           any character
+*
+*  Out:  D0.L           classification bitfield (NKC?_...)
+*
+*  Reg:  D:01234567   A:01234567   CCR
+*          U**.....     **......    *
+*
+****************************************************************************
+
+
+****************************************************************************
+*
+*  nkc_strcmp: string comparism
+*  # G
+*
+*  C prototype: int nkc_strcmp(unsigned char *s1,unsigned char *s2,long length,
+*                              unsigned long options);
+*---------------------------------------------------------------------------
+*  Two strings are compared byte-by-byte. There are some option flags that
+*  control the string comparism:
+*
+*  NKM?_HUMAN           use human character order
+*                       Usually the ASCII codes of the strings' characters are
+*                       compared to each other. Settings this option flag
+*                       tells the function to use a different character order
+*                       that gets closer to the way a human being would sort
+*                       text strings. For example, all variants of each
+*                       letter are placed together in one chunk, like this one:
+*                       'E', 'ê', 'e', 'â', 'Ç', 'ä', 'à'
+*
+*                       The precise character order is documented in the file
+*                       CMPORDER.TXT.
+*
+*  NKM?_IGNCASE         ignore case
+*                       Upper case characters and lower case characters are
+*                       treated the same.
+*
+*  Note: Empty strings (with a length of zero) are equal.
+*
+*
+*  In:   D0.L           string length (-1 = strings are terminated with NUL)
+*        D1.L           option flags (NKM?_...)
+*        A0.L           ^first string
+*        A1.L           ^second string
+*
+*  Out:  D0.W           result of comparism:
+*                       <0    first string is "less than" second string
+*                       =0    strings are equal
+*                       >0    first string is "greather than" second string
+*
+*  Reg:  D:01234567   A:01234567   CCR
+*          U**.....     **......    *
+*
+****************************************************************************
+
+
+****************************************************************************
+*                            GLOBAL BSS SECTION                            *
+****************************************************************************
+
+
+*  GEM parameter arrays
+*  (needed if using nkc_amulti())
+
+               .if      NKCGEM=1
+
+nkc_contrl:     .ds.w   32                   ; control array
+nkc_intin:      .ds.w   32                   ; integer input array
+nkc_intout:     .ds.w   32                   ; integer output array
+nkc_adrin:      .ds.l   32                   ; address input array
+nkc_adrout:     .ds.l   32                   ; address output array
+nkc_ptsin:      .ds.l   32                   ; pointers input array
+nkc_ptsout:     .ds.l   32                   ; pointers output array
+
+               .endif   ; .if NKCGEM=1
+
+
+* End Of File
+

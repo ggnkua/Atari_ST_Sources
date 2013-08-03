@@ -1,0 +1,488 @@
+; Picture interpolator.. A screen for the delta demo.
+
+;======= OBJECT EQUATES ====================================================
+
+Interpol.NUMSPARKS:	=	6
+Interpol.NUMSPLATS:	=	20
+
+;======= OBJECT TABLE ======================================================
+
+; Must be first in object!!
+Interpol.table:
+	DC.L	Interpol.mainLoop
+	DC.L	Interpol.init
+	DC.L	rts
+	DC.L	Interpol.setSpots
+	DC.L	Interpol.setStreaks
+	DC.L	Interpol.initGoldRows
+	DC.L	Interpol.initGrayRows
+	DC.L	Interpol.setSplatter
+	DC.L	Interpol.setFadePal
+	DC.L	0
+
+;======= INIT SUBROUTINE ===================================================
+
+; OUTPUT:
+; d0.l: 0   = All clear, neg = Error! Not initialized!
+Interpol.init:
+	lea	Interpol.goldInstTable,a1
+	lea	Interpol.goldPal,a0
+	bsr.l	Pal.makeGradientTc
+
+	lea	Interpol.grayInstTable,a1
+	lea	Interpol.grayPal,a0
+	bsr.l	Pal.makeGradientTc
+
+	bsr	Interpol.genRowTable
+
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= REALTIME INIT SUBROUTINE ==========================================
+
+Interpol.realtimeInit:
+	bsr	Interpol.initGoldRows
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+; Unknown monitormode..
+	rts
+.vga60:	move.l	#vga60_8bit_320_200,Interpol.resRout
+	rts
+.vga100:move.l	#vga100_8bit_320_200,Interpol.resRout
+	rts
+.rgb50:	move.l	#rgb50_8bit_320_200,Interpol.resRout
+	rts
+
+;======= SCREENINIT SUBROUTINE =============================================
+
+Interpol.initScreen:
+	movea.l	scr,a0
+	bsr.l	CLEAR_320100TSCR
+	rts
+
+;======= MAINLOOP SUBROUTINE ===============================================
+
+Interpol.mainLoop:
+	move.w	$0468.w,.old468
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr	Interpol.realtimeInit
+	move.l	(sp)+,d0
+.end_realtime_init:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr	Interpol.initScreen
+.end_screeninit:
+
+	bsr	Interpol.fadeBuffer
+
+	move.l	Interpol.bufFillRout,a0
+	jsr	(a0)
+
+	lea	Interpol.wireBuffer,a2
+	bsr	Interpol.paint
+
+	move.w	.old468(pc),d0
+	moveq	#1,d3
+	cmpi.w	#vga100,monitormode
+	bne.s	.wait
+	moveq	#2,d3
+.wait:	move.w	$0468.w,d2
+	sub.w	d0,d2
+	cmp.w	d3,d2
+	blt.s	.wait
+
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+
+	movea.l	Interpol.resRout,a0
+	movea.l	Interpol.palAdr,a1
+	move.l	d0,a2
+.again:	bsr.l	Screen.requestUpdate
+	tst.l	d0
+	bmi.s	.again
+	clr.l	Interpol.palAdr
+	clr.l	Interpol.resRout
+
+	rts
+
+.old468:DC.W	0
+
+;======= OBJECT SUBROUTINES ================================================
+
+Interpol.setSpots:
+	move.l	#Interpol.drawSpots,Interpol.bufFillRout
+	rts
+
+Interpol.setStreaks:
+	move.l	#Interpol.drawStreaks,Interpol.bufFillRout
+	rts
+
+Interpol.setSplatter:
+	move.l	#Interpol.drawSplatter,Interpol.bufFillRout
+	clr.w	Interpol.splattered
+	rts
+
+Interpol.initGoldRows:
+	move.l	#Interpol.goldPal,Interpol.palAdr
+	rts
+
+Interpol.initGrayRows:
+	move.l	#Interpol.grayPal,Interpol.palAdr
+	rts
+
+Interpol.setFadePal:
+	move.l	#Interpol.fadePal,vbl_gfx
+	rts
+
+Interpol.fadePal:
+	cmpi.w	#vga100,monitormode
+	bne.s	.do_it
+	move.w	$0468.w,d0
+	lsr.w	d0
+	bcc.s	.end
+.do_it:	lea	$FFFF9800.w,a0
+	moveq	#16-1,d7
+.loop:	move.l	(a0),d0
+	move.l	d0,d1
+	swap	d1
+	move.l	d1,d2
+	lsr.w	#8,d2
+	andi.w	#$FF,d1
+	subq.w	#1,d0
+	bpl.s	.b_ok
+	clr.w	d0
+.b_ok:	subq.w	#1,d1
+	bpl.s	.g_ok
+	clr.w	d1
+.g_ok:	subq.w	#1,d2
+	bpl.s	.r_ok
+	clr.w	d2
+.r_ok:	lsl.w	#8,d2
+	add.w	d1,d2
+	swap	d2
+	move.w	d0,d2
+	move.l	d2,(a0)+
+	dbf	d7,.loop
+.end:	rts
+
+; Fade it one step..
+Interpol.fadeBuffer:
+	lea	Interpol.wireBuffer,a0
+	move.w	#21*13-1,d7
+.fadeloop:
+	move.b	(a0),d0
+	subq.b	#1,d0
+	bcc.s	.okay
+	clr.b	d0
+.okay:	move.b	d0,(a0)+
+	dbf	d7,.fadeloop
+	rts
+
+; Draw streaks (v or h).
+Interpol.drawStreaks:
+
+; Update spark position and state.
+	lea	.sparkTable,a1
+	moveq	#Interpol.NUMSPARKS-1,d7
+
+; todo: add random bending (very low chance!)
+.update_loop:	
+	tst.b	(a1)
+	bne.s	.update_pos
+.give_birth:
+	move.b	#1,(a1)+				; Birth.
+	Calc_NextRandom
+	clr.l	d1
+	move.w	d0,d1
+	divu.w	#68,d1
+	swap	d1
+	subi.w	#21,d1
+	bpl.s	.not_q1
+	addi.w	#21,d1
+	move.b	d1,(a1)+
+	move.b	#0,(a1)+
+	move.b	#%0001,(a1)+				; down
+	bra.s	.q_found
+.not_q1:subi.w	#21,d1
+	bpl.s	.not_q2
+	addi.w	#21,d1
+	move.b	d1,(a1)+
+	move.b	#12,(a1)+
+	move.b	#%0011,(a1)+				; up
+	bra.s	.q_found
+.not_q2:subi.w	#13,d1
+	bpl.s	.not_q3
+	addi.w	#13,d1
+	move.b	#0,(a1)+
+	move.b	d1,(a1)+
+	move.b	#%0100,(a1)+				; right
+	bra.s	.q_found
+.not_q3:move.b	#20,(a1)+
+	move.b	d1,(a1)+
+	move.b	#%1100,(a1)+				; left
+;	bra.s	.q_found
+.q_found:
+	bra.s	.next_update
+
+.update_pos:
+	move.b	3(a1),d0
+	move.b	d0,d1
+	lsr.b	#2,d1
+	lsl.b	#6,d0
+	lsl.b	#6,d1
+	asr.b	#6,d0
+	asr.b	#6,d1
+	add.b	d1,1(a1)
+	bmi	.give_birth
+	add.b	d0,2(a1)
+	bmi	.give_birth
+	cmpi.b	#21,1(a1)
+	beq	.give_birth
+	cmpi.b	#13,2(a1)
+	beq	.give_birth
+	addq	#4,a1
+.next_update:
+	dbf	d7,.update_loop
+
+; Paint sparks to buffer.
+	lea	Interpol.wireBuffer,a0
+	lea	.sparkTable,a1
+	moveq	#Interpol.NUMSPARKS-1,d7
+
+.paint_loop:
+	addq	#1,a1
+	clr.l	d0
+	clr.l	d1
+	move.b	(a1)+,d0
+	move.b	(a1)+,d1
+	addq	#1,a1
+	mulu.w	#21,d1
+	add.l	d0,d1
+	move.b	#$F,(a0,d1.l)
+	dbf	d7,.paint_loop
+
+	rts
+
+; active,x,y,dir (%hhvv) hh and vv are element of {11,00,01}
+.sparkTable:
+	DS.B	4*Interpol.NUMSPARKS
+
+; Draw spots.
+Interpol.drawSpots:
+; Paint sparks to buffer.
+	lea	Interpol.wireBuffer,a0
+	moveq	#Interpol.NUMSPARKS-1,d7
+
+.loop:	Calc_NextRandom
+	move.l	d0,d1
+	andi.l	#$FFFF,d0
+	clr.w	d1
+	swap	d1
+	divu.w	#21,d0
+	divu.w	#13,d1
+	swap	d0
+	swap	d1
+	mulu.w	#21,d1
+	add.w	d0,d1
+	move.b	#$F,(a0,d1.w)
+	dbf	d7,.loop
+	rts
+
+; Draw splatter.
+Interpol.drawSplatter:
+	tst.w	Interpol.splattered
+	bne.s	.end
+
+; Paint splats to buffer.
+	lea	Interpol.wireBuffer,a0
+	moveq	#Interpol.NUMSPLATS-1,d7
+
+.loop:	Calc_NextRandom
+	move.l	d0,d1
+	andi.l	#$FFFF,d0
+	clr.w	d1
+	swap	d1
+	divu.w	#21,d0
+	divu.w	#13,d1
+	swap	d0
+	swap	d1
+	mulu.w	#21,d1
+	add.w	d0,d1
+	move.b	#$F,(a0,d1.w)
+	dbf	d7,.loop
+
+	move.w	#1,Interpol.splattered
+.end:	rts
+
+; Generates rowtables.
+; INPUT:
+Interpol.genRowTable:
+	lea	Interpol.rowTable,a0
+	clr.b	d0
+
+.row_loop:
+	clr.l	d1
+	clr.l	d2
+	move.b	d0,d1
+	move.b	d0,d2
+	lsr.b	#4,d1
+	andi.b	#$0F,d2
+	swap	d1
+	swap	d2
+	sub.l	d1,d2					; d2.l=dx (16:16)
+	asr.l	#4,d2					; d2.l=d_step=dx/16 (16:16)
+	move.w	#$8000,d4
+	moveq	#16-1,d7
+
+.pixloop:
+	move.l	d1,d3
+	tst.w	d3
+	swap	d3
+	bpl.s	.round_done
+	addq.w	#1,d3
+.round_done:
+; 4 bitplane shit!
+	REPT	4
+	lsr.w	d3
+	bcc.s	*+4
+	or.w	d4,(a0)
+	addq	#2,a0
+	ENDR	
+; a0: next chunk
+	subq	#4*2,a0				; a0: current chunk
+	add.l	d2,d1
+	lsr.w	d4
+	dbf	d7,.pixloop
+
+	addq	#4*2,a0
+	addq.b	#1,d0
+	bne.s	.row_loop
+	rts
+
+; INPUT:
+; a2: byte buffer (21*13)
+Interpol.paint:
+	movea.l	scr,a0
+	adda.w	#320*4,a0
+	lea	Interpol.rowTable,a1
+	moveq	#12-1,d7
+
+.row_loop:
+	moveq	#20-1,d6
+
+.block_loop:
+	swap	d6
+	clr.l	d1
+	clr.l	d2
+	clr.l	d3
+	clr.l	d4
+	move.b	21(a2),d1			; d3.b=btm lx
+	move.b	22(a2),d2			; d4.b=btm rx
+	swap	d1
+	swap	d2
+	move.b	(a2)+,d3			; d1.b=(top) lx
+	move.b	(a2),d4				; d2.b=(top) rx
+	swap	d3
+	swap	d4
+	sub.l	d3,d1				; d1.b=blx-tlx=dlx
+	sub.l	d4,d2				; d2.b=trx-trx=drx
+	asr.l	#4,d1				; d1.l=lx_step
+	asr.l	#4,d2				; d2.l=rx_step
+	move.w	#16-1,d6
+
+.span_loop:
+	move.l	d3,d0
+	andi.l	#$000F0000,d0
+	lsl.l	#4,d0
+	move.l	d4,d5
+	andi.l	#$000F0000,d5
+	or.l	d5,d0
+	swap	d0
+	lea	(a1,d0.w*8),a3
+	move.l	(a3)+,(a0)+
+	move.l	(a3)+,(a0)+
+	add.l	d1,d3
+	add.l	d2,d4
+	adda.w	#320-8,a0
+	dbf	d6,.span_loop
+
+	adda.w	#16-320*16,a0
+	swap	d6
+	dbf	d6,.block_loop
+
+	adda.w	#320*15,a0
+	addq	#1,a2
+	dbf	d7,.row_loop
+	rts
+
+;======= OBJECT DATA =======================================================
+
+	DATA
+
+Interpol.goldInstTable:
+	DC.W	(.end-.start)/4-1
+	DC.W	1
+.start:	DC.L	$00000000
+	DC.L	$5F1F0000
+	DC.L	$9F5F0000
+	DC.L	$CF9F0000
+	DC.L	$FFFF0000
+	DC.L	$FFFF00FF
+	DC.L	$FFFF00FF
+	DC.L	$FFFF00FF
+	DC.L	$FFFF00FF
+.end:
+
+Interpol.grayInstTable:
+	DC.W	(.end-.start)/4-1
+	DC.W	1
+.start:	DC.L	$00000000
+	DC.L	$3f44003f
+	DC.L	$887f007f
+	DC.L	$bfb800bf
+	DC.L	$fFf800f8
+	DC.L	$FFFF00FF
+	DC.L	$FFFF00FF
+	DC.L	$FFFF00FF
+	DC.L	$FFFF00FF
+.end:
+
+Interpol.bufFillRout:
+	DC.L	Interpol.drawSpots
+
+;======= OBJECT RESERVES ===================================================
+
+	BSS
+
+Interpol.palAdr:
+	DS.L	1
+Interpol.resRout:
+	DS.L	1
+
+Interpol.goldPal:
+	DS.L	16
+Interpol.grayPal:
+	DS.L	16
+Interpol.rowTable:
+	DS.L	2*256
+Interpol.wireBuffer:
+	DS.B	21*13
+	DS.B	1				; make it even!
+Interpol.splattered:
+	DS.W	1

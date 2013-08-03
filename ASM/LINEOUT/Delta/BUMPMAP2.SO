@@ -1,0 +1,757 @@
+; Alphablended bumpmapper, damn slow. Best use vga100 on this one.
+; A screen for delta. 160*100 physical, 320*200 logical.
+
+;======= OBJECT EQUATES ========
+
+			RSRESET
+Bumpmap.offsetMap:	RS.W	320*200
+Bumpmap.shiftedLightMap:RS.W	256*256
+Bumpmap.mixTable:	RS.W	512*256
+Bumpmap.fadePalTable:	RS.L	256*4*2
+Bumpmap.picture:	RS.B	320*200				; 8bpp picture
+Bumpmap.colorBucket:	RS.B	65536				; 16bpp->8bpp lookuptable
+Bumpmap.lumPic:		RS.B	320*200
+Bumpmap.BLOCK_SIZE:	RS.B	0
+
+;======= OBJECT TABLE ========
+
+* Must be first in object!!
+Bumpmap.table:
+	DC.L	BumpmapMAINLOOP
+	DC.L	INIT_Bumpmap
+	DC.L	rts
+	DC.L	Bumpmap.setTraject1
+	DC.L	Bumpmap.setTraject2
+	DC.L	Bumpmap.setFadeIn
+	DC.L	Bumpmap.setFadeOut
+	DC.L	Bumpmap.stopFade
+* Add more addresses here..
+	DC.L	0
+
+;======= INIT SUBROUTINE ========
+
+; OUTPUT:
+; d0.l: 0   = All clear.
+;       <0  = Error! Not initialized!
+INIT_Bumpmap:
+	move.l	#Bumpmap.BLOCK_SIZE,d0
+	bsr.l	Mem.register
+
+	move.w	#320,Bumpmap.picWidth
+	move.w	#200,Bumpmap.picHeight
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= SCREENINIT SUBROUTINE ========
+
+INIT_BumpmapSCREEN:
+; Insert screenarea initialising, etc. in here!
+	rts
+
+Bumpmap.initRealtime:
+	bsr.l	Mem.getBlock
+	move.l	d0,Bumpmap.baseAdr
+
+	movea.l	Bumpmap.baseAdr,a1
+
+	movea.l	a1,a0
+	adda.l	#Bumpmap.offsetMap,a0
+	move.l	a0,Bumpmap.offsetMapAdr
+	movea.l	a1,a0
+	adda.l	#Bumpmap.shiftedLightMap,a0
+	move.l	a0,Bumpmap.lightMapAdr
+	movea.l	a1,a0
+	adda.l	#Bumpmap.mixTable,a0
+	move.l	a0,Bumpmap.mixTableAdr
+	movea.l	a1,a0
+	adda.l	#Bumpmap.fadePalTable,a0
+	move.l	a0,Bumpmap.palAdr
+	movea.l	a1,a0
+	adda.l	#Bumpmap.picture,a0
+	move.l	a0,Bumpmap.pictureAdr
+	movea.l	a1,a0
+	adda.l	#Bumpmap.colorBucket,a0
+	move.l	a0,Bumpmap.bucketAdr
+	movea.l	a1,a0
+	adda.l	#Bumpmap.lumPic,a0
+	move.l	a0,Bumpmap.lumPicAdr
+
+; Get highcolor palette from source picture..
+	IFNE	1
+
+	lea	Texture.sandPal,a1
+	lea	Bumpmap.picPal,a0
+	lea	Bumpmap.picHcPal,a2
+	moveq	#128-1,d7
+.copy_sandpal_loop:
+	move.w	(a1)+,d0
+	move.w	d0,(a2)+
+	move.w	d0,d1
+	move.w	d0,d2
+	andi.w	#$F800,d0
+	andi.w	#$07E0,d1
+	andi.w	#$001F,d2
+	lsr.w	#3,d1
+	or.w	d1,d0
+	swap	d2
+	lsl.w	#3,d2
+	move.w	d0,(a0)+
+	move.w	d2,(a0)+
+	dbf	d7,.copy_sandpal_loop
+
+	lea	Texture.redPal,a1
+	moveq	#128-1,d7
+.copy_starfishpal_loop:
+	move.w	(a1),d0
+	move.w	d0,(a2)+
+	move.w	d0,d1
+	move.w	d0,d2
+	andi.w	#$F800,d0
+	andi.w	#$07E0,d1
+	andi.w	#$001F,d2
+	lsr.w	#3,d1
+	or.w	d1,d0
+	swap	d2
+	lsl.w	#3,d2
+	move.w	d0,(a0)+
+	move.w	d2,(a0)+
+	addq	#4,a1
+	dbf	d7,.copy_starfishpal_loop
+
+	ELSE
+
+	lea	Bumpmap.sandFlowTable,a1
+	lea	Bumpmap.picPal,a0
+	bsr.l	Pal.makeGradientHc
+	lea	Bumpmap.blueFlowTable,a1
+	lea	Bumpmap.picPal+128*2,a0
+	bsr.l	Pal.makeGradientHc
+
+	ENDC
+
+	bsr.w	Bumpmap.initPicture
+	bsr.w	Bumpmap.initOffsetMap
+	bsr.w	Bumpmap.calcAlphaPic
+
+	movea.l	Bumpmap.palAdr,a0
+	lea	Bumpmap.fadeFlowTable,a1
+	bsr.l	Pal.makeGradientTc
+
+	movea.l	Bumpmap.mixTableAdr,a0
+	movea.l	Bumpmap.palAdr,a1
+	lea	Bumpmap.picPal,a2
+	movea.w	#512,a5
+	move.w	#0,d7
+	bsr.w	Bumpmap.calcMixTable
+
+	move.w	$04BC.w,Bumpmap.trajStart
+
+	clr.w	Bumpmap.alphaIntensity
+	clr.w	Bumpmap.oldAlphaIntensity
+	bsr	Bumpmap.stopFade
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+* Unknown monitormode..
+	rts
+.vga60:	move.l	#vga60_16bit_160_200,Bumpmap.resRout
+	rts
+.vga100:move.l	#vga100_16bit_160_100,Bumpmap.resRout
+	rts
+.rgb50:	move.l	#rgb50_16bit_320_100,Bumpmap.resRout
+	rts
+
+;======= MAINLOOP SUBROUTINE ========
+
+BumpmapMAINLOOP:
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.realtime_init_done
+	move.l	d0,-(sp)
+	bsr.w	Bumpmap.initRealtime
+	move.l	(sp)+,d0
+.realtime_init_done:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr.w	INIT_BumpmapSCREEN
+.end_screeninit:
+
+	move.l	Bumpmap.trajectRoutine,a0
+	jsr	(a0)
+
+	bsr.w	Bumpmap.performFade
+
+	moveq	#0,d2
+	move.w	Bumpmap.alphaIntensity,d2
+
+	bsr.w	Bumpmap.paint
+
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+
+	movea.l	Bumpmap.resRout,a0
+	suba.l	a1,a1
+	movea.l	d0,a2
+.again:	bsr.l	Screen.requestUpdate
+	tst.l	d0
+	bmi.s	.again
+	clr.l	Bumpmap.resRout
+
+	rts
+
+;======= OBJECT SUBROUTINES ========
+
+Bumpmap.setTraject1:
+	move.l	#Bumpmap.calcTraject1,Bumpmap.trajectRoutine
+	rts
+
+Bumpmap.setTraject2:
+	move.l	#Bumpmap.calcTraject2,Bumpmap.trajectRoutine
+	rts
+
+Bumpmap.setFadeIn:
+	move.w	$4bc.w,Bumpmap.startTime
+	move.w	#+1,Bumpmap.fadeDirection
+	move.w	Bumpmap.alphaIntensity,Bumpmap.oldAlphaIntensity
+	rts
+
+Bumpmap.setFadeOut:
+	move.w	$4bc.w,Bumpmap.startTime
+	move.w	#-1,Bumpmap.fadeDirection
+	move.w	Bumpmap.alphaIntensity,Bumpmap.oldAlphaIntensity
+	rts
+
+Bumpmap.stopFade:
+	clr.w	Bumpmap.fadeDirection
+	rts
+
+; Calculates a bump, used for the alpha layer..
+Bumpmap.calcAlphaPic:
+	movea.l	Bumpmap.lightMapAdr,a0
+	lea	256*2(a0),a1
+	lea	(256*255*2.l,a0),a2
+	lea	256*2(a2),a3
+	move.w	#255,d7
+
+.yloop:	move.w	#255,d6
+
+.xloop:	move.w	d6,d0
+	mulu.w	d0,d0
+	move.w	d7,d1
+	mulu.w	d1,d1
+	add.l	d0,d1
+	bsr.l	Math.sqrt
+	swap	d0
+	lsr.w	#1,d0
+	not.b	d0
+	lsl.w	#7,d0
+	move.w	d0,(a0)+
+	move.w	d0,-(a1)
+	move.w	d0,(a2)+
+	move.w	d0,-(a3)
+	subq.w	#2,d6
+	bpl.s	.xloop
+
+	adda.w	#128*2,a0
+	adda.w	#384*2,a1
+	suba.w	#384*2,a2
+	suba.w	#128*2,a3
+	subq.w	#2,d7
+	bpl.s	.yloop
+
+	rts
+
+; Converts a 320*200 highcolor screen to a 8bpp pal-based screen.
+; PRE: 320*200 hc source must only use 256 different colors as specified
+; in the given picture-palette!
+Bumpmap.initPicture:
+; First, calculate luminance pal and 16bpp->8bpp conversion table.
+	movea.l	Bumpmap.bucketAdr,a2
+	lea	Bumpmap.picHcPal,a1
+	lea	Bumpmap.lumPal,a0
+	clr.w	d7
+
+.loop:	clr.l	d0
+	move.w	(a1)+,d0
+	move.b	d7,(a2,d0.l)			; Store colorindex.
+	move.w	d0,d1
+	move.w	d0,d2
+	lsr.w	#5,d0
+	lsr.w	#6,d0
+	andi.w	#$07E0,d1
+	lsr.w	#6,d1
+	andi.w	#$001F,d2
+	mulu.w	#19595,d0			; r*0.299
+	mulu.w	#38469,d1			; g*0.578
+	mulu.w	#07448,d2			; b*0.114
+	add.l	d2,d0
+	add.l	d1,d0
+; d0.l=luminance [0..$1FFFFF]
+	lsl.l	#3,d0
+; d0.l=luminance [0..$FFFFF8]
+	swap	d0
+	move.b	d0,(a0)+			; Store luminance.
+	addq.b	#1,d7
+	bne.s	.loop
+
+; Generate the luminance image and 8bpp color image..
+	movea.l	Bumpmap.bucketAdr,a2
+
+;	movea.l	scr+8,a1
+	movea.l	Starfish.backAdr,a1
+
+	lea	Bumpmap.lumPal,a3
+	movea.l	Bumpmap.lumPicAdr,a4
+	movea.l	Bumpmap.pictureAdr,a0
+	move.w	#320*200-1,d7
+	clr.l	d0
+	clr.l	d1
+
+.lum_loop:
+	move.w	(a1)+,d0
+	move.b	(a2,d0.l),d1
+	move.b	d1,(a0)+			; Store color-index.
+	move.b	(a3,d1.l),(a4)+			; Store luminance.
+	dbf	d7,.lum_loop
+	rts
+
+; Calculates a 64K highcolor-word lookup table from two truecolor palettes.
+; INPUT:
+; d7.w: start intensity of palette1
+; a0: highcolor lookuptable
+; a1: truecolor palette1
+; a2: truecolor palette2
+; a5: number of entries in palette1
+Bumpmap.calcMixTable:
+	lea	Bumpmap.tempBuffer,a3
+	clr.l	d6
+
+.preloop:
+	clr.l	d3
+	clr.l	d4
+	move.b	(a2)+,d3
+	move.b	(a2)+,d4
+	move.w	(a2)+,d5
+	mulu.w	d6,d3
+	mulu.w	d6,d4
+	mulu.w	d6,d5
+	move.l	d3,(a3)+
+	move.l	d4,(a3)+
+	move.l	d5,(a3)+
+	addq.b	#1,d6
+	bne.s	.preloop
+
+	movea.l	#$0000ffff,a6
+
+.palloop:
+	lea	Bumpmap.tempBuffer,a3
+	clr.l	d0
+	clr.l	d1
+	move.b	(a1)+,d0
+	move.b	(a1)+,d1
+	move.w	(a1)+,d2
+	muls.w	d7,d0
+	muls.w	d7,d1
+	muls.w	d7,d2
+	add.l	d0,d0
+	add.l	d1,d1
+	add.l	d2,d2
+	moveq	#0,d6
+
+.colorloop:
+	movem.l	(a3)+,d3-d5
+	add.l	d0,d3
+	bpl.s	.red1_ok
+	clr.l	d3
+	bra.s	.red_ok
+.red1_ok:
+	cmp.l	a6,d3
+	blt.s	.red_ok
+	move.l	a6,d3
+.red_ok:
+	add.l	d1,d4
+	bpl.s	.green1_ok
+	clr.l	d4
+	bra.s	.green_ok
+.green1_ok:
+	cmp.l	a6,d4
+	blt.s	.green_ok
+	move.l	a6,d4
+.green_ok:
+	add.l	d2,d5
+	bpl.s	.blue1_ok
+	clr.l	d5
+	bra.s	.blue_ok
+.blue1_ok:
+	cmp.l	a6,d5
+	blt.s	.blue_ok
+	move.l	a6,d5
+.blue_ok:
+	andi.w	#%1111100000000000,d3
+	lsr.w	#5,d4
+	andi.w	#%0000011111100000,d4
+	lsr.w	#8,d5
+	lsr.w	#3,d5
+	or.w	d4,d3
+	or.w	d5,d3
+	move.w	d3,(a0)+
+	;move.w	d3,(a0)+
+	addq.b	#1,d6
+	bne.s	.colorloop
+
+	addq.w	#1,d7
+	cmp.w	a5,d7
+	blt.s	.palloop
+
+	rts
+
+; OUTPUT:
+; d0.l: bumpmap offset
+; d1.l: lightmap offset
+Bumpmap.calcTraject1:
+	lea	sine_tbl,a0
+	move.w	$04BC.w,d0
+	sub.w	Bumpmap.trajStart,d0
+	move.w	d0,d2
+	move.w	d0,d3
+	move.w	d0,d4
+	move.w	d0,d5
+	mulu.w	#7,d2
+	lsr.l	#3,d2
+	mulu.w	#17,d4
+	lsr.l	#3,d4
+	mulu.w	#19,d5
+	lsr.l	#3,d5
+	Do_SinModulo	d0
+	Do_SinModulo	d2
+	Do_SinModulo	d4
+	Do_SinModulo	d5
+	Get_Cos	a0,d2,d1			; d1.w=cos(t1) (sfrac)
+	Get_Sin	a0,d0,d2			; d2.w=sin(t2) (sfrac)
+	Get_Cos	a0,d4,d4			; d5.w=cos(t3) (sfrac)
+	Get_Sin	a0,d5,d5			; d5.w=sin(t4) (sfrac)
+	cmpi.w	#$0200,d3
+	bcs.s	.clipped
+	move.w	#$0200,d3
+.clipped:
+	muls.w	d3,d1
+	muls.w	d3,d2
+	asr.l	#8,d1
+	asr.l	#8,d2
+	asr.l	d1
+	asr.l	d2
+
+; Calculate bumpmap offset.
+	move.w	Bumpmap.picWidth,d0
+	mulu.w	#50,d0				; d0.l=w*50 (int)
+	addi.l	#80,d0				; d0.l=w*50+80 (int)
+	muls.w	#49*2,d1
+	swap	d1
+	muls.w	#80*2,d2
+	swap	d2
+	muls.w	Bumpmap.picWidth,d1		; d1.l=y_offset
+	ext.l	d2				; d2.l=x_offset
+	add.l	d1,d0				; Add y_offset.
+	add.l	d2,d0				; Add x_offset.
+
+; Calculate lightmap offset.
+	move.l	#256*78+48,d1
+	muls.w	#(256-100)/2,d5
+	swap	d5
+	ext.l	d5				; -39<=d3.l<+39
+	lsl.l	#8,d5				; d3.l=y_offset
+	muls.w	#256-160,d4
+	swap	d4
+	ext.l	d4				; -48<=d1.l<+48, d1.l=x_offset
+	add.l	d5,d1				; Add y_offset.
+	add.l	d4,d1				; Add x_offset.
+	rts
+
+; OUTPUT:
+; d0.l: bumpmap offset
+; d1.l: lightmap offset
+Bumpmap.calcTraject2:
+	lea	sine_tbl,a0
+	move.w	$4bc.w,d0
+	move.w	d0,d2
+	mulu.w	#7,d2
+	lsr.w	#3,d2
+	Do_SinModulo	d0
+	Do_SinModulo	d2
+	Get_Cos	a0,d2,d1
+	Get_Sin	a0,d0,d2
+
+; Calculate bumpmap offset.
+	move.w	Bumpmap.picWidth,d0
+	mulu.w	#50,d0				; d0.l=w*50 (int)
+	addi.l	#80,d0				; d0.l=w*50+80 (int)
+	move.w	d1,d3				; d3.w=cos(t1) (sfrac)
+	move.w	d2,d4				; d4.w=sin(t2) (sfrac)
+	muls.w	#50*2,d3
+	swap	d3
+	muls.w	#80*2,d4
+	swap	d4
+	muls.w	Bumpmap.picWidth,d3		; d3.l=y_offset
+	ext.l	d4				; d4.l=x_offset
+	add.l	d3,d0				; Add y_offset.
+	add.l	d4,d0				; Add x_offset.
+
+; Calculate lightmap offset (nice and weird).
+	move.l	#256*60+32,d4
+	move.w	d2,d3
+	ext.l	d3
+	asr.l	#2,d3
+	ext.l	d1
+	asr.l	#8,d1
+	asr.l	#1,d1
+	add.l	d1,d3
+	add.l	d4,d3
+	move.l	d3,d1
+	rts
+
+; PRE: luminance picture is initialized.
+Bumpmap.initOffsetMap:
+	movea.l	Bumpmap.lumPicAdr,a1
+	move.b	#128,d3
+	move.w	Bumpmap.picWidth,d5		; d5.w = x size
+	move.w	d5,d4
+	move.w	Bumpmap.picHeight,d7		; d7.w = y size
+	subq.w	#1,d5
+	subq.w	#1,d7
+	movea.l	Bumpmap.offsetMapAdr,a0
+
+.yloop:	move.w	d5,d6
+
+.xloop:	move.b	-1(a1),d0
+	sub.b	1(a1),d0
+	asr.b	d0
+	add.b	d3,d0
+	move.b	d0,(a0)+
+	neg.w	d4
+	move.b	(a1,d4.w),d0
+	neg.w	d4
+	sub.b	(a1,d4.w),d0
+	asr.b	d0
+	add.b	d3,d0
+	move.b	d0,(a0)+
+	addq	#1,a1
+	dbra	d6,.xloop
+
+	dbra	d7,.yloop
+	rts
+
+Bumpmap.performFade:
+	move.w	Bumpmap.fadeDirection,d3
+	beq.s	.end
+	move.w	$4bc.w,d4
+	sub.w	Bumpmap.startTime,d4
+	lsr.w	#2,d4
+	muls.w	d3,d4
+	add.w	Bumpmap.oldAlphaIntensity,d4
+	cmpi.w	#256,d4
+	blo.s	.end_clipping
+	clr.w	Bumpmap.fadeDirection
+	tst.w	d4
+	bpl.s	.clip_top
+	moveq	#0,d4
+	bra.s	.end_clipping
+.clip_top:
+	move.w	#255,d4
+.end_clipping:
+	move.w	d4,Bumpmap.alphaIntensity
+
+.end:	rts
+
+; INPUT:
+; d0.l: map offset
+; d1.l: lightmap offset
+; d2.l: alpha intensity
+Bumpmap.paint:
+	movea.l	scr,a0
+	movea.l	Bumpmap.pictureAdr,a3
+	lea	(a3,d0.l),a3
+	movea.l	Bumpmap.lightMapAdr,a4
+	lea	(a4,d1.l*2),a4
+	suba.l	#(128*256+128)*2,a4
+	movea.l	Bumpmap.offsetMapAdr,a2
+	lea	(a2,d0.l*2),a2
+	lsl.l	#8,d2
+	movea.l	Bumpmap.mixTableAdr,a1
+	lea	(a1,d2.l*2),a1
+	moveq	#0,d0
+	moveq	#0,d1
+	moveq	#0,d4
+	move.w	Bumpmap.picWidth,d4
+	subi.w	#160,d4
+	move.l	d4,d5
+	add.l	d4,d4
+	moveq	#100-1,d7
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq	Bumpmap.paintVga60
+	cmpi.w	#vga100,d0
+	beq	Bumpmap.paintVga100
+	cmpi.w	#rgb50,d0
+	beq	Bumpmap.paintRgb50
+* Unknown monitormode..
+	rts
+
+Bumpmap.paintVga100:
+.yloop:	moveq	#160/8-1,d6
+
+.xloop:
+	REPT	8
+	move.w	(a2)+,d0
+	move.w	(a4,d0.l*2),d1
+	move.b	(a3)+,d1
+	move.w	(a1,d1.l*2),(a0)+
+	addq	#2,a4
+	ENDR
+	dbra	d6,.xloop
+
+	adda.l	d4,a2
+	adda.l	d5,a3
+	lea	(256-160)*2(a4),a4
+	dbra	d7,.yloop
+	rts
+
+Bumpmap.paintVga60:
+	lea	160*2(a0),a6
+
+.yloop:	moveq	#160/8-1,d6
+
+.xloop:
+	REPT	8
+	move.w	(a2)+,d0
+	move.w	(a4,d0.l*2),d1
+	move.b	(a3)+,d1
+	move.w	(a1,d1.l*2),(a0)+
+	move.w	(a1,d1.l*2),(a6)+
+	addq	#2,a4
+	ENDR
+	dbra	d6,.xloop
+
+	adda.l	d4,a2
+	adda.l	d5,a3
+	lea	(256-160)*2(a4),a4
+	lea	160*2(a0),a0
+	lea	160*2(a6),a6
+	dbra	d7,.yloop
+	rts
+
+Bumpmap.paintRgb50:
+.yloop:	moveq	#160/8-1,d6
+
+.xloop:
+	REPT	8
+	move.w	(a2)+,d0
+	move.w	(a4,d0.l*2),d1
+	move.b	(a3)+,d1
+	move.w	(a1,d1.l*2),(a0)+
+	move.w	(a1,d1.l*2),(a0)+
+	addq	#2,a4
+	ENDR
+	dbra	d6,.xloop
+
+	adda.l	d4,a2
+	adda.l	d5,a3
+	lea	(256-160)*2(a4),a4
+	dbra	d7,.yloop
+	rts
+
+;======= OBJECT DATA ========
+
+	DATA
+
+Bumpmap.trajectRoutine:
+	DC.L	Bumpmap.calcTraject1
+
+Bumpmap.fadeFlowTable:
+	DC.W	(.end-.start)/4-1
+	DC.W	7
+.start:	DC.L	$00000000
+	DC.L	$00000000
+	DC.L	$00000000
+	DC.L	$ffff00ff
+	DC.L	$ffff00ff
+.end:
+
+Bumpmap.sandFlowTable:
+	DC.W	(.end-.start)/4-1
+	DC.W	6
+.start:	DC.L	$00000000
+	DC.L	$7f7f0000
+	DC.L	$7fdf0000
+	DC.L	$dfff0000
+	DC.L	$ffff0000
+.end:
+
+Bumpmap.blueFlowTable:
+	DC.W	(.end-.start)/4-1
+	DC.W	6
+.start:	DC.L	$0000001f
+	DC.L	$0000003f
+	DC.L	$3f3f007d
+	DC.L	$7f7f00ff
+	DC.L	$ffff00ff
+.end:
+
+;======= OBJECT RESERVES ========
+
+	BSS
+
+Bumpmap.resRout:
+	DS.L	1
+Bumpmap.baseAdr:
+	DS.L	1
+Bumpmap.alphaIntensity:
+	DS.W	1
+Bumpmap.oldAlphaIntensity:
+	DS.W	1
+Bumpmap.fadeDirection:
+	DS.W	1
+Bumpmap.startTime:
+	DS.W	1
+Bumpmap.trajStart:
+	DS.W	1
+Bumpmap.picWidth:
+	DS.W	1
+Bumpmap.picHeight:
+	DS.W	1
+
+Bumpmap.lumPal:
+	DS.B	256
+Bumpmap.picPal:
+	DS.L	256
+Bumpmap.picHcPal:
+	DS.W	256
+Bumpmap.tempBuffer:
+	DS.L	256*3
+
+Bumpmap.offsetMapAdr:
+	DS.L	1
+Bumpmap.lightMapAdr:
+	DS.L	1
+Bumpmap.mixTableAdr:
+	DS.L	1
+Bumpmap.palAdr:
+	DS.L	1
+Bumpmap.pictureAdr:
+	DS.L	1
+Bumpmap.bucketAdr:
+	DS.L	1
+Bumpmap.lumPicAdr:
+	DS.L	1

@@ -1,0 +1,508 @@
+; Final version of metaballs using dsp. code: 2002 by earx
+;
+; Dsp:
+; - generates field and normals
+; - polygonizes using marching cubes
+; - maps
+; Cpu:
+; - calcs ball trajectories
+; - copies texturepixels
+
+;======= OBJECT EQUATES ====================================================
+
+MCubes.SHOW_TRIS:	=	0				; Shows #tris.
+MCubes.GEN_TEXTURE:	=	0				; Generate envtexture or use from disk?
+
+MCubes.DEST_ISOLEVEL:	=	512
+
+;======= OBJECT TABLE ======================================================
+
+; Must be first in object!!
+MCubes.table:
+	DC.L	MCubes.mainLoop
+	DC.L	MCubes.init
+	DC.L	MCubes.setRes
+	DC.L	MCubes.setIncLevel
+	DC.L	MCubes.setDecLevel
+	DC.L	MCubes.keepLevel
+	DC.L	0
+
+;======= RESOLUTION SETTING ROUTINE ========================================
+
+MCubes.setRes:
+	IFEQ	testmode
+	move.l	#rts,vbl_gfx
+
+	move.w	$0468.w,d0
+.ck468:	cmp.w	$0468.w,d0
+	beq.s	.ck468
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+; Unknown monitormode..
+	rts
+.vga60:	bra.l	vga60_16bit_320_200
+.vga100:bra.l	vga100_16bit_320_200
+.rgb50:	bra.l	rgb50_16bit_320_200
+	ENDC
+	rts
+
+;======= INIT SUBROUTINE ===================================================
+
+; OUTPUT:
+; d0.l: 0: All clear, <0: Error! Not initialized!
+MCubes.init:
+
+	IFNE	MCubes.GEN_TEXTURE
+	lea	MCubes.texture+20,a0
+	lea	FlareGen.fogPal,a1
+	moveq	#6,d0
+	moveq	#3,d1
+	move.l	#$00027001,d2
+	bsr.l	Texture.createWords2
+	bsr	MCubes.fadeTexture
+	ENDC
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= REALTIME INIT SUBROUTINE ==========================================
+
+MCubes.realtimeInit:
+; Kicks in P56 DSP-program..
+	move.l	#(MCubes.p56End-MCubes.p56)/3,d0
+	lea	MCubes.p56,a0
+	bsr.l	Dsp.loadProgram
+
+; Send tables over, keep these in exact order!
+	receiveWordFromDsp	MCubes.numBalls
+	bsr.w	MCubes.sendTexture
+	bsr.w	MCubes.sendEdges
+	bsr.w	MCubes.sendTriTable
+
+	clr.w	MCubes.isolevel
+	bsr.w	MCubes.setIncLevel
+
+	move.w	$04BC.w,MCubes.startTime
+	rts
+
+;======= SCREENINIT SUBROUTINE =============================================
+
+MCubes.initScreen:
+	movea.l	scr,a0
+	bsr.l	CLEAR_320200TSCR
+	rts
+
+;======= MAINLOOP SUBROUTINE ===============================================
+
+MCubes.mainLoop:
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr.w	MCubes.realtimeInit
+	move.l	(sp)+,d0
+.end_realtime_init:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr.w	MCubes.initScreen
+.end_screeninit:
+
+	bsr.w	MCubes.calcLevel
+	bsr.w	MCubes.sendBallPos			; Send current grid to dsp.
+
+;- parallel ----------------------------------------------------------------
+
+	bsr.w	MCubes.clearRectangle			; Clear screenarea.
+	bsr.w	MCubes.showTriangles			; Show stats from last frame.
+
+;- back to serial ----------------------------------------------------------
+
+	bsr.w	MCubes.paint				; Paint triangles.
+
+	IFEQ	testmode
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	move.l	d0,d1
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+	ENDC
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.res_done
+	bsr.w	MCubes.setRes
+.res_done:
+
+	rts
+
+;======= OBJECT SUBROUTINES ================================================
+
+MCubes.setIncLevel:
+	move.w	#+1,MCubes.levelDir
+	move.w	$04BC.w,MCubes.incStart
+	move.w	MCubes.isolevel,MCubes.oldLevel
+	rts
+
+MCubes.setDecLevel:
+	move.w	#-1,MCubes.levelDir
+	move.w	$04BC.w,MCubes.incStart
+	move.w	MCubes.isolevel,MCubes.oldLevel
+	rts
+
+MCubes.keepLevel:
+	clr.w	MCubes.levelDir
+	move.w	MCubes.isolevel,MCubes.oldLevel
+	rts
+
+	IFNE	MCubes.GEN_TEXTURE
+MCubes.fadeTexture:
+	lea	MCubes.texture+20,a0
+	moveq	#64,d0
+; d0.w=width=height, a0: dst buffer
+	move.w	d0,d5
+	move.w	d0,d7
+	subq.w	#1,d7
+
+.yloop:	move.w	d5,d6
+	subq.w	#1,d6
+
+.xloop:	move.w	d6,d0
+	muls.w	d0,d0
+	move.w	d7,d1
+	muls.w	d1,d1
+	add.l	d1,d0
+	clr.l	d1
+	move.w	(a0),d1
+
+	IFNE	1
+
+	move.l	d1,d4
+	move.l	d0,d1
+	bsr.l	Math.sqrt
+	swap	d0
+	mulu.w	#11314,d0
+	divu.w	#850,d0
+	cmpi.w	#sintbllen/2,d0
+	blt.s	.d_ok
+	move.w	#sintbllen/2,d0
+.d_ok:	move.l	d4,d1
+
+	Get_Sin	sine_tbl+2,d0,d0
+	move.w	d0,d2
+	REPT	2
+	muls.w	d0,d0
+	add.l	d0,d0
+	swap	d0
+	ENDR
+	muls.w	d2,d0
+	add.l	d0,d0
+	swap	d0
+	ext.l	d0
+
+; scale up.
+	lsl.l	#2,d0
+; add 1.
+	addi.l	#$8000,d0
+; no negatives allowed..
+	bpl.s	.ok
+	clr.l	d0
+; scale down to 8:8..
+.ok:	lsr.l	#7,d0
+
+	move.l	d1,d2
+	move.l	d1,d3
+	andi.w	#$F800,d1
+	andi.w	#$07E0,d2
+	andi.w	#$001F,d3
+	mulu.w	d0,d1
+	mulu.w	d0,d2
+	mulu.w	d0,d3
+	lsr.l	#8,d1
+	lsr.l	#8,d2
+	lsr.l	#8,d3
+	cmpi.l	#$F800,d1
+	blo.s	.r_ok
+	move.w	#$F800,d1
+.r_ok:	cmpi.l	#$07E0,d2
+	blt.s	.g_ok
+	move.w	#$07E0,d2
+.g_ok:	cmpi.l	#$001F,d3
+	blt.s	.b_ok
+	move.w	#$001F,d3
+.b_ok:
+
+	ELSE
+
+	lsr.l	#3,d0
+	bne.s	.okay
+	moveq	#$FFFFFFFF,d1
+	bra.s	.store
+.okay:	move.l	d1,d2
+	move.l	d1,d3
+	andi.w	#$F800,d1
+	andi.w	#$07E0,d2
+	andi.w	#$001F,d3
+	lsl.l	#5,d1
+	lsl.l	#5,d2
+	lsl.l	#5,d3
+	divu.w	d0,d1
+	bvc.s	.r_ok
+	moveq	#$FFFFFFFF,d1
+.r_ok:	divu.w	d0,d2
+	cmpi.w	#$07E0,d2
+	bls.s	.g_ok
+	moveq	#$FFFFFFFF,d2
+.g_ok:	divu.w	d0,d3
+	cmpi.w	#$001F,d3
+	bls.s	.b_ok
+	moveq	#$FFFFFFFF,d3
+.b_ok:
+
+	ENDC
+
+	andi.w	#$F800,d1
+	andi.w	#$07E0,d2
+	andi.w	#$001F,d3
+	or.w	d2,d1
+	or.w	d3,d1
+.store:	move.w	d1,(a0)+
+	subq.w	#2,d6
+	cmpi.w	#-63,d6
+	bge	.xloop
+
+	subq.w	#2,d7
+	cmpi.w	#-63,d7
+	bge	.yloop
+
+	rts
+	ENDC
+
+MCubes.calcLevel:
+	move.w	$04BC.w,d0
+	sub.w	MCubes.incStart,d0
+	muls.w	MCubes.levelDir,d0
+	add.w	MCubes.oldLevel,d0
+	move.w	d0,MCubes.isolevel
+	rts
+
+MCubes.sendTexture:
+	lea	MCubes.texture+20,a0
+	clr.l	d0
+	move.w	#4096-1,d7
+.loop:	move.w	(a0)+,d0
+	sendLongToDsp	d0
+	dbf	d7,.loop
+	rts
+
+MCubes.sendEdges:
+	lea	MCubes.edgeTable,a0
+	clr.l	d0
+	move.w	#256-1,d7
+.loop:	move.w	(a0)+,d0
+	sendLongToDsp	d0
+	dbf	d7,.loop
+	rts
+
+MCubes.sendTriTable:
+	lea	MCubes.triTable,a0
+	move.w	#4096-1,d7
+.loop:	move.w	(a0)+,d0
+	ext.l	d0
+	sendLongToDsp	d0
+	dbf	d7,.loop
+	rts
+
+; Calc ballpositions and send to dsp..
+MCubes.sendBallPos:
+; Send isolevel to dsp..
+	clr.l	d0
+	move.w	MCubes.isolevel,d0
+	sendLongToDsp	d0
+
+; Send ballpositions.
+	move.w	MCubes.numBalls,d7			; d7.w=#balls >0 !!
+	mulu.w	#3,d7					; d7.w=#coords
+	subq.w	#1,d7					; d7.w=#coords-1
+	lea	MCubes.mulTable,a2
+	lea	sine_tbl,a1
+	move.w	$04BC.w,d0
+	sub.w	MCubes.startTime,d0
+	clr.l	d2
+
+.calc_coord_loop:
+	move.w	d0,d1
+	mulu.w	(a2)+,d1
+	lsr.l	#7,d1
+	Do_SinModulo	d1
+	Get_Sin	a1,d1,d2
+	lsl.l	#8,d2
+	sendLongToDsp	d2
+	dbf	d7,.calc_coord_loop
+	rts
+
+MCubes.showTriangles:
+	IFNE	MCubes.SHOW_TRIS
+; Paint #triangles (culled & unculled)..
+	movea.l	scr,a0
+	move.w	MCubes.tris,d7
+	beq.s	.end
+	subq.w	#1,d7
+	moveq	#$FFFFFFFF,d0
+.paint_line_loop:
+	move.w	d0,(a0)+
+	dbf	d7,.paint_line_loop
+
+	clr.w	MCubes.tris				; #tris painted = 0
+	ENDC
+.end:	rts
+
+; Paints polys provided by dsp.
+MCubes.paint:
+.loop:	receiveWordFromDsp	d1
+	bmi.s	.end
+	bsr.s	paintPoly
+	IFNE	MCubes.SHOW_TRIS
+	addq.w	#1,MCubes.tris
+	ENDC
+	bra.s	.loop
+
+.end:	rts
+
+; Receives incoming scanline data and paints it to the screen.
+; This works for all shadetypes.
+; INPUT:
+; d1.w= top
+paintPoly:
+	lea	$FFFFA206.w,a1
+
+	receiveWordFromDsp	d7			; Get height.
+	;move.w	(a1),d7
+
+	subq.w	#1,d7
+	bpl.s	.go_on
+	rts
+
+; d1.w=top y, d7.w=height-1
+.go_on:	movea.l	scr,a0
+	move.l	#320*2,d5
+	mulu.w	d5,d1
+	adda.l	d1,a0
+	movea.l	a0,a6
+; a0=a6=screen pos, d7.w=height-1
+
+; This is fast on a plain falcon. In fact, it kicks every other rout I've
+; seen square in the nuts!!! =)) Speeds of 1.100.000 texels/s including
+; overhead are no exception! Though this unrolled jumptree sucks on ct2.
+	moveq	#1<<4-1,d4
+	lea	.jmpend(pc),a2
+	clr.l	d1
+	clr.l	d6
+
+.yloop:	move.w	(a1),d1					; Get left x.
+	lea	(a6,d1.l*2),a0
+	move.w	(a1),d6					; Get width.
+	bgt.s	.go
+	adda.l	d5,a6
+	dbf	d7,.yloop
+	rts
+.go:	move.l	d6,d3
+	lsr.l	#4,d6
+	and.l	d4,d3
+	neg.l	d3
+	jmp	(a2,d3.l*2)
+
+	IFNE	*&2					; Put it longeven!
+	nop
+	ENDC
+
+.xloop:	REPT	1<<4
+	move.w	(a1),(a0)+
+	ENDR
+.jmpend:dbf	d6,.xloop
+
+	adda.l	d5,a6
+	dbf	d7,.yloop
+	rts
+
+MCubes.clearRectangle:
+	movea.l	scr,a0
+	adda.w	#60*2,a0
+	move.w	#120*2,a6
+	clr.l	d0
+	move.w	#200-1,d7
+
+.yloop:	moveq	#200/40-1,d6
+
+.xloop:	REPT	20
+	move.l	d0,(a0)+
+	ENDR
+	dbf	d6,.xloop
+
+	adda.l	a6,a0
+	dbf	d7,.yloop
+	rts
+
+;======= OBJECT DATA =======================================================
+
+	DATA
+
+MCubes.mulTable:
+	DC.W	$0100,$0180,$00CC
+	DC.W	$0078,$0113,$0096
+	DC.W	$00A8,$01A0,$0150
+	DC.W	$0107,$009A,$0114
+	DC.W	$005F,$0173,$00FE
+	DC.W	$0143,$00E2,$0123
+
+MCubes.edgeTable:
+	INCBIN	EDGES.DAT			; moronic..
+MCubes.triTable:
+	INCBIN	TRIS.DAT			; ..and idiotic, but it works.
+
+MCubes.p56:
+	INCBIN	MARCHING.P56
+MCubes.p56End:
+	EVEN
+
+	IFEQ	MCubes.GEN_TEXTURE
+MCubes.texture:
+	INCBIN	64.APX	;ENV64.APX
+	ENDC
+
+;======= OBJECT RESERVES ===================================================
+
+	BSS
+
+MCubes.tris:
+	DS.W	1					; #tris painted
+MCubes.startTime:
+	DS.W	1
+MCubes.numBalls:
+	DS.W	1
+
+	IFNE	MCubes.GEN_TEXTURE
+MCubes.texture:
+	DS.W	10+64*64
+	ENDC
+
+MCubes.isolevel:
+	DS.W	1
+MCubes.incStart:
+	DS.W	1
+MCubes.oldLevel:
+	DS.W	1
+MCubes.levelDir:
+	DS.W	1

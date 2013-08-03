@@ -1,0 +1,1110 @@
+; Worm screen for delta. todo: possible memsaving as a last resort.
+
+******** OBJECT EQUATES ********
+
+Worm.BACKGROUND:=	1
+Worm.DISTANCE:	=	3100				; Maybe increase when module is playing!
+
+Worm.SEGMENTS:	=	8				; DO NOT CHANGE!
+Worm.MIN_DEPTH:	=	-(1+Worm.SEGMENTS)<<8/2
+
+Worm.NUMSTARS:	=	250				; number of background stars
+Worm.STARRADIUS:=	300				; radius of skysphere
+
+		RSRESET
+Worm.object:	RS.W	8192
+Worm.texture:	RS.W	10+64*64
+Worm.BLOCK_SIZE:RS.B	0
+
+******** OBJECT TABLE ********
+
+* Must be first in object!!
+Worm.table:
+	DC.L	Worm.mainLoop
+	DC.L	Worm.init
+	DC.L	rts
+	DC.L	Worm.setZoomOut
+	DC.L	0
+
+	IFND	DEMO_SYSTEM
+	INCLUDE	SFLY_DSP.S				; Include the CPU-DSP engine.
+	TEXT
+	ENDC
+
+******** INIT SUBROUTINE ********
+
+* OUTPUT: d0.l: 0   = All clear.
+*               neg = Error! Not initialized!
+Worm.init:
+	move.l	#Worm.BLOCK_SIZE,d0
+	bsr.l	Mem.register
+
+	lea	sine_tbl,a1
+	bsr.l	Matrix.init
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+******** REALTIME INIT SUBROUTINE ********
+
+Worm.realtimeInit:
+	move.l	#rts,vbl_gfx
+
+	bsr.l	Mem.getBlock
+	move.l	d0,d1
+	addi.l	#Worm.object,d1
+	move.l	d1,Worm.objAdr
+	move.l	d0,d1
+	addi.l	#Worm.texture,d1
+	move.l	d1,Worm.textureTable
+
+	movea.l	d1,a0
+	clr.w	d0
+	move.w	#10+64*64-1,d7
+.clearloop:
+	move.w	d0,(a0)+
+	dbf	d7,.clearloop
+
+	bsr.l	HumanFly.init
+
+; Generate nice turbulence chrome texture..
+	movea.l	Worm.textureTable,a0
+	move.l	#"Word",(a0)+
+	move.l	#"PerP",(a0)+
+	move.l	#"ixel",(a0)+
+	move.l	#$00400040,(a0)+
+	lea	FlareGen.icePal,a1
+	moveq	#6,d0
+	moveq	#3,d1
+	move.l	#$00010001,d2
+	bsr.l	Texture.createWords2
+
+	lea	Viewport.settingsTable,a0
+	move.w	#320,Viewport.XSCREEN(a0)
+	move.w	#200,Viewport.YSCREEN(a0)
+	move.w	#0,Viewport.XSTART(a0)
+	move.w	#0,Viewport.YSTART(a0)
+	move.w	#320,Viewport.XEND(a0)
+	move.w	#200,Viewport.YEND(a0)
+	move.w	#160,Viewport.XCENTER(a0)
+	move.w	#100,Viewport.YCENTER(a0)
+	move.w	#256+32,Viewport.ASPECT(a0)
+	move.w	#$100,Viewport.FOCAL(a0)
+	bsr.l	Viewport.update
+
+	lea	Worm.textureTable,a0
+	bsr.l	Polygon.init
+
+	lea	Worm.starTable,a0
+	move.w	#Worm.NUMSTARS,d0
+	move.w	#Worm.STARRADIUS,d1
+	bsr.w	Worm.calcSphere
+
+	bsr.l	ObjectRegistry.clear
+
+	moveq	#1,d0
+	movea.l	Worm.objAdr,a0
+	bsr.w	Worm.generate
+; d0.l=size of generated worm
+	movea.l	Worm.objAdr,a0
+	bsr.l	ObjectRegistry.set
+
+	bsr.l	flushAndDisableICache
+	move.w	#Primitive.WORD|Primitive.MOVE,d0
+	moveq	#0,d1
+	bsr.l	Primitive.setPaintMode
+	bsr.l	restoreCache
+
+	bsr	Worm.setZoomIn
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+* Unknown monitormode..
+	rts
+.vga60:	move.l	#vga60_16bit_320_200,Worm.resRout
+	rts
+.vga100:move.l	#vga100_16bit_320_200,Worm.resRout
+	rts
+.rgb50:	move.l	#rgb50_16bit_320_200,Worm.resRout
+	rts
+
+******** SCREENINIT SUBROUTINE ********
+
+Worm.initScreen:
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	moveq	#$00000000,d4
+	bsr.l	Viewport.paintRectangle
+	rts
+
+******** MAINLOOP SUBROUTINE ********
+
+Worm.mainLoop:
+	move.w	$0468.w,.old468
+
+	movea.l	scr,a0
+	bsr.l	Primitive.setScreenbuffer
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr.w	Worm.realtimeInit
+	move.l	(sp)+,d0
+.end_realtime_init:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr.w	Worm.initScreen
+.end_screeninit:
+
+; Control starcolor..
+	move.w	Worm.zoomDir,d0
+	bne.s	.calc_grey
+	moveq	#$FFFFFFFF,d1
+	bra.s	.store_color
+.calc_grey:
+	move.w	$04BC.w,d1
+	sub.w	Worm.zoomStart,d1
+	lsr.w	#3,d1
+	cmpi.w	#63,d1
+	blt.s	.grey_ok
+	moveq	#63,d1
+.grey_ok:
+	tst.w	d0
+	bmi.s	.grey_up
+	neg.w	d1
+	addi.w	#63,d1
+.grey_up:
+	move.w	d1,d2
+	move.w	d1,d3
+	lsr.w	d2				; b
+	lsr.w	d3
+	lsl.w	#5,d1				; g
+	lsl.w	#5,d3
+	lsl.w	#6,d3				; r
+	or.w	d2,d1
+	or.w	d3,d1
+.store_color:
+	move.w	d1,Worm.starColor
+
+; Control rotation.
+	move.w	$04BC.w,d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#7,d0
+	lsr.l	#3,d0
+	mulu.w	#3,d1
+	lsr.l	d1
+	mulu.w	#5,d2
+	lsr.l	#2,d2
+	movem.w	d0-d2,Worm.rotTable
+
+; Paint foreground (worm).
+	bsr.w	Worm.paint
+
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	movea.l	Worm.resRout,a0
+	suba.l	a1,a1
+	movea.l	d0,a2
+	bsr.l	Screen.requestUpdate
+	clr.l	Worm.resRout
+
+	move.w	.old468(pc),d0
+.wait:	cmp.w	$0468.w,d0
+	beq.s	.wait
+
+	rts
+
+.old468:DC.W	0
+
+******** OBJECT SUBROUTINES ********
+
+Worm.setZoomOut:
+	move.w	#Worm.DISTANCE,Worm.startZ
+	move.w	$04BC.w,Worm.zoomStart
+	move.w	#+1,Worm.zoomDir
+	rts
+
+Worm.setZoomIn:
+	move.w	#8000,Worm.startZ
+	move.w	$04BC.w,Worm.zoomStart
+	move.w	#-1,Worm.zoomDir
+	rts
+
+; Seems to work ok, since there has been some patching on the overflow
+; errors (caused by combination of finite accuracy and use of maximum range).
+; INPUT:
+; d0.w= X rotation (a)
+; d1.w= Y rotation (b)
+; d2.w= Z rotation (c)
+Worm.generateMatrix:
+	lea	Worm.matrix,a0
+* 1> rotate 3 axis.
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	Do_SinModulo	d2
+	movea.w	d0,a3
+	movea.w	d1,a4
+	movea.w	d2,a5
+	lea	Matrix.sineTable,a2
+
+* X := + x*cos(b)*cos(c)
+*      - y*cos(b)*sin(c)
+*      + z*sin(b)
+	Get_SinCos	a2,d1,d3,d4
+	Get_SinCos	a2,d2,d5,d6
+	muls.w	d4,d6				* / cos(b)*sin(c)
+	add.l	d6,d6				* |
+;	bvc.s	.skipxd6
+;	subq.l	#1,d6
+;.skipxd6:
+	swap	d6				* \
+	muls.w	d4,d5				* / -cos(b)*sin(c)
+	add.l	d5,d5				* |
+;	bvc.s	.skipxd5
+;	subq.l	#1,d5
+;.skipxd5:
+	swap	d5				* |
+	neg.w	d5				* \
+	move.w	d6,(a0)+
+	move.w	d5,(a0)+
+	move.w	d3,(a0)+
+	
+* Y := + x*(sin(a)*sin(b)*cos(c)+cos(a)*sin(c))
+*      + y*(cos(a)*cos(c)-sin(a)*sin(b)*sin(c))
+*      - z*sin(a)*cos(b)
+	Get_SinCos	a2,a3,d0,d1
+	Get_Sin		a2,a4,d2
+	Get_SinCos	a2,a5,d4,d5
+	muls.w	d0,d2
+	add.l	d2,d2
+;	bvc.s	.skipyd2
+;	subq.l	#1,d2
+;.skipyd2:
+	swap	d2
+	muls.w	d2,d5
+	add.l	d5,d5
+;	bvc.s	.skipyd5
+;	subq.l	#1,d5
+;.skipyd5:
+	swap	d5
+	muls.w	d1,d4
+	add.l	d4,d4
+;	bvc.s	.skipyd4
+;	subq.l	#1,d4
+;.skipyd4:
+	swap	d4
+	add.w	d4,d5
+	bvc.s	.skipyvd5
+	addq.w	#1,d5
+	neg.w	d5
+.skipyvd5:
+	move.w	d5,d3
+	;Get_SinCos	a2,a3,d0,d1
+	Get_Sin		a2,a4,d2
+	Get_SinCos	a2,a5,d4,d5
+	muls.w	d1,d5
+	add.l	d5,d5
+;	bvc.s	.skipy2d5
+;	subq.l	#1,d5
+;.skipy2d5:
+	swap	d5
+	muls.w	d0,d2
+	add.l	d2,d2
+;	bvc.s	.skipy2d2
+;	subq.l	#1,d2
+;.skipy2d2:
+	swap	d2
+	muls.w	d2,d4
+	add.l	d4,d4
+	swap	d4
+	sub.w	d4,d5
+	bvc.s	.skipyv2d5
+	addq.w	#1,d5
+	neg.w	d5
+.skipyv2d5:
+	Get_Cos		a2,a4,d4
+	muls.w	d0,d4
+	add.l	d4,d4
+;	bvc.s	.skipy2d4
+;	subq.l	#1,d4
+;.skipy2d4:
+	swap	d4
+	neg.w	d4
+	move.w	d3,(a0)+
+	move.w	d5,(a0)+
+	move.w	d4,(a0)+
+
+* Z := + x*(sin(a)*sin(c)-cos(a)*sin(b)*cos(c))
+*      + y*(cos(a)*sin(b)*sin(c)+sin(a)*cos(c))
+*      + z*cos(a)*cos(b)
+	Get_SinCos	a2,a3,d0,d1
+	Get_Sin		a2,a4,d2
+	Get_SinCos	a2,a5,d4,d5
+	muls.w	d0,d4
+	add.l	d4,d4
+;	bvc.s	.skipzd4
+;	subq.l	#1,d4
+;.skipzd4:
+	swap	d4
+	muls.w	d1,d2
+	add.l	d2,d2
+;	bvc.s	.skipzd2
+;	subq.l	#1,d2
+;.skipzd2:
+	swap	d2
+	muls.w	d2,d5
+	add.l	d5,d5
+	swap	d5
+	sub.w	d5,d4
+	bvc.s	.skipzvd4
+	addq.w	#1,d4
+	neg.w	d4
+.skipzvd4:
+	move.w	d4,d3
+	;Get_SinCos	a2,a3,d0,d1
+	Get_Sin		a2,a4,d2
+	Get_SinCos	a2,a5,d4,d5
+	muls.w	d1,d2
+	add.l	d2,d2
+;	bvc.s	.skipz2d2
+;	subq.l	#1,d2
+;.skipz2d2:
+	swap	d2
+	muls.w	d2,d4
+	add.l	d4,d4
+	swap	d4
+	muls.w	d0,d5
+	add.l	d5,d5
+;	bvc.s	.skipzd5
+;	subq.l	#1,d5
+;.skipzd5:
+	swap	d5
+	add.w	d4,d5
+	bvc.s	.skipzvd5
+	addq.w	#1,d5
+	neg.w	d5
+.skipzvd5:
+	Get_Cos		a2,a4,d4
+	muls.w	d1,d4
+	add.l	d4,d4
+;	bvc.s	.skipz2d4
+;	subq.l	#1,d4
+;.skipz2d4:
+	swap	d4
+	move.w	d3,(a0)+
+	move.w	d5,(a0)+
+	move.w	d4,(a0)+
+
+	rts
+
+Worm.rotateStars:
+	lea	Worm.matrix,a1
+	lea	Worm.starTable,a2
+	movea.l	Worm.starAdrTable,a4
+	lea	2(a4),a0
+	move.w	#Worm.NUMSTARS-1,d7
+	lea	6*2(a1),a3
+	suba.l	a5,a5
+
+.loop:	movem.w	(a2)+,d0-d2			; d0-d2.w: source vertex
+	move.w	d0,d3
+	move.w	d1,d4
+	move.w	d2,d5
+	muls.w	(a3)+,d3
+	muls.w	(a3)+,d4
+	muls.w	(a3)+,d5
+	subq	#6,a3
+	add.l	d3,d5
+	add.l	d4,d5
+	add.l	d5,d5
+	swap	d5
+	tst.w	d5				* Test z coordinate.
+	bmi.s	.next
+
+	REPT	2
+	move.w	d0,d3
+	move.w	d1,d4
+	move.w	d2,d5
+	muls.w	(a1)+,d3
+	muls.w	(a1)+,d4
+	muls.w	(a1)+,d5
+	add.l	d3,d5
+	add.l	d4,d5
+	add.l	d5,d5
+	swap	d5
+	move.w	d5,(a0)+			* Store coordinate.
+	ENDR
+
+	addq	#1,a5
+	lea	-2*3*2(a1),a1
+
+.next:	dbf	d7,.loop
+	move.w	a5,(a4)				; Store # of output stars.
+	rts
+
+; Paints the stars in front of the camera. Also x/y clipping implemented.
+Worm.paintStars:
+	movea.l	Worm.starAdrTable,a1
+	movea.l	Worm.restoreAdrTable,a2
+	lea	2(a2),a4
+	suba.l	a3,a3				; a3: plotcount
+	move.w	(a1)+,d7
+	beq.s	.end
+	movea.l	scr,a0
+	subq.w	#1,d7
+	move.w	#160,d2
+	move.w	#100,d3
+	move.w	#320,d4
+	move.w	#200,d5
+	move.w	Worm.starColor,d6
+
+.loop:	movem.w	(a1)+,d0-d1
+	add.w	d2,d0
+	cmp.w	d4,d0
+	bcc.s	.next
+	add.w	d3,d1
+	cmp.w	d5,d1
+	bcc.s	.next
+	mulu.w	d4,d1
+	ext.l	d0
+	add.l	d1,d0
+	move.w	d0,(a4)+			; Store screenoffset.
+	addq	#1,a3
+	move.w	d6,(a0,d0.l*2)			; Plot.
+.next:	dbf	d7,.loop
+.end:	move.w	a3,(a2)				; Store #plots.
+	rts
+
+; Clears stars from previous frame.
+Worm.restoreStars:
+	movea.l	Worm.restoreAdrTable,a1
+	move.w	(a1)+,d7
+	beq.s	.end
+	subq.w	#1,d7
+	clr.l	d0
+	movea.l	scr,a0
+	clr.l	d1
+.loop:	move.w	(a1)+,d0
+	move.w	d1,(a0,d0.l*2)
+	dbf	d7,.loop
+.end	rts
+
+; Generates a sphere of 3d points.
+; INPUT:
+; d0.w=amount of points
+; d1.w=radius [0..32767]
+; a0: dest buffer
+Worm.calcSphere:
+	move.w	d0,d7			; d7.w=points to do
+	move.l	random,d0
+
+.loop:
+; Calculate next random value.
+	move.l	d0,d2
+	mulu.w	d0,d0
+	eor.l	d2,d0
+	addq.l	#7,d0
+	move.w	d0,d3
+	move.l	d0,d4
+	swap	d4
+	rol.l	#8,d0
+; Calculate next random value.
+	move.l	d0,d2
+	mulu.w	d0,d0
+	eor.l	d2,d0
+	addq.l	#7,d0
+	move.w	d0,d5
+	rol.l	#8,d0
+	movea.l	d3,a3
+	movea.l	d4,a4
+	movea.l	d5,a5
+	muls.w	d3,d3
+	muls.w	d4,d4
+	muls.w	d5,d5
+	add.l	d3,d5
+	add.l	d4,d5
+	cmpi.l	#32767*32767,d5
+	bhs.s	.loop
+
+	movem.l	d0/d1,-(sp)
+	move.l	d5,d1
+	bsr.l	Math.sqrt
+	move.l	d0,d6
+	clr.w	d6
+	swap	d6
+	movem.l	(sp)+,d0/d1
+
+	move.l	a3,d3
+	move.l	a4,d4
+	move.l	a5,d5
+	muls.w	d1,d3
+	muls.w	d1,d4
+	muls.w	d1,d5
+	divs.l	d6,d3
+	divs.l	d6,d4
+	divs.l	d6,d5
+
+	move.w	d3,(a0)+
+	move.w	d4,(a0)+
+	move.w	d5,(a0)+
+	subq.w	#1,d7
+	bne	.loop
+
+	move.l	d0,random
+	rts
+
+Worm.paint:
+	bsr.l	PrimitiveMesh.new
+
+	moveq	#0,d0
+	movea.l	Worm.objAdr,a0
+	bsr.w	Worm.generate
+; d0.l=size of generated worm
+
+	IFNE	0
+	move.l	d0,-(sp)
+	bsr	ObjectRegistry.clear
+	move.l	(sp)+,d0
+; d0.l=size of generated worm
+	movea.l	Worm.objAdr,a0
+	bsr.l	ObjectRegistry.set
+	ELSE
+; Damn, seems to fail with texels! But why the hell???
+	movea.l	Worm.objAdr,a0
+	moveq	#0,d0
+	moveq	#%0001,d1
+	bsr.l	ObjectRegistry.replace
+	ENDC
+
+	movem.w	Worm.rotTable,d0-d2
+	bsr.l	Matrix.generate
+	clr.w	d0
+	clr.w	d1
+	move.w	Worm.startZ,d2
+	move.w	$04BC.w,d3
+	sub.w	Worm.zoomStart,d3
+	lsl.w	#3,d3
+	muls.w	Worm.zoomDir,d3
+	add.w	d3,d2
+	cmpi.w	#Worm.DISTANCE,d2
+	bge.s	.zoom_done				; Zoomed in?
+	clr.w	Worm.zoomDir				; then stop zooming..
+	move.w	#Worm.DISTANCE,d2
+	move.w	d2,Worm.startZ
+.zoom_done:
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+	bsr.l	PrimitiveMesh.sortZ
+
+	bsr.l	PrimitiveMesh.complete
+
+	IFNE	0
+
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	moveq	#$00000000,d4
+	bsr.l	Viewport.paintRectangle
+
+	ELSE
+
+	movea.l	Worm.rectAddressTable,a0
+	tst.w	(a0)+
+	beq.s	.end_restore
+	movem.w	(a0)+,d1/d7
+	movem.w	(a0)+,d0/d6
+	move.l	a0,-(sp)
+	moveq	#$00000000,d4
+	bsr.l	Viewport.paintRectangle
+	movea.l	(sp)+,a0
+.end_restore:
+
+	IFNE	Worm.BACKGROUND
+	bsr.w	Worm.restoreStars
+
+	movem.w	Worm.rotTable,d0-d2
+	bsr.w	Worm.generateMatrix
+	bsr.w	Worm.rotateStars
+	bsr.w	Worm.paintStars
+
+	lea	Worm.starAdrTable,a3
+	move.l	(a3)+,d0
+	move.l	(a3)+,d1
+	move.l	(a3),-4(a3)
+	move.l	d0,(a3)
+	move.l	d1,-8(a3)
+	lea	Worm.restoreAdrTable,a3
+	move.l	(a3)+,d0
+	move.l	(a3)+,d1
+	move.l	(a3),-4(a3)
+	move.l	d0,(a3)
+	move.l	d1,-8(a3)
+	ENDC
+
+	ENDC
+
+	movea.l	Worm.rectAddressTable,a0
+	bsr.l	PrimitiveMesh.paint
+
+	lea	Worm.rectAddressTable,a0
+ 	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+
+	rts
+
+; INPUT:
+; d0.w= 0:only vertices, 1:faces also
+; a0: destination buffer
+; OUTPUT:
+; d0.l=size of output object
+Worm.generate:
+	move.w	d0,-(sp)
+	movea.l	a0,a6
+
+	move.w	#(Worm.SEGMENTS+1)*8+2,(a0)+		; Store total #vertices.
+	clr.w	(a0)+					; Store #normals.
+
+; Output worm nose.
+	move.w	#0,(a0)+
+	move.w	#0,(a0)+
+	move.w	#Worm.MIN_DEPTH,(a0)+
+	
+; Output segments.
+	move.w	$04BC.w,d2
+	lsl.w	#3,d2
+	clr.w	d3
+	clr.w	d7
+	lea	sine_tbl,a2
+
+.segment_loop:
+	Do_SinModulo	d2
+	Get_Sin	sine_tbl,d2,d1
+	move.w	d2,d0
+	addi.w	#sintbllen/2,d0
+	Do_SinModulo	d0
+	Get_Sin	sine_tbl,d0,d4
+	addi.w	#$8000,d1
+	lsr.w	#8,d1
+	addi.w	#$8000,d4
+	lsr.w	#8,d4
+	lsr.w	#2,d4
+	addi.w	#$40,d1
+	addi.w	#$80,d4
+	moveq	#8-1,d6
+	lea	Worm.segmentTable,a1
+	add.w	d1,d3
+
+.corner_loop:
+	REPT	2
+	move.w	(a1)+,d0
+	muls.w	(a2),d0
+	add.l	d0,d0
+	swap	d0
+	muls.w	d4,d0
+	asr.l	#8,d0				; d0.w=radius of segment
+	move.w	d0,(a0)+
+	ENDR
+	move.w	d3,d0
+	addi.w	#Worm.MIN_DEPTH,d0
+	add.w	(a1)+,d0
+	move.w	d0,(a0)+
+	dbra	d6,.corner_loop
+
+	adda.w	#128*4,a2
+	addi.w	#$140,d2
+	addq.w	#1,d7
+	cmpi.w	#Worm.SEGMENTS+1,d7
+	blt	.segment_loop
+
+; Output worm tail.
+	Do_SinModulo	d2
+	Get_Sin	sine_tbl,d2,d1
+	addi.w	#$8000,d1
+	lsr.w	#8,d1
+	addi.w	#$40,d1
+	move.w	#0,(a0)+
+	move.w	#0,(a0)+
+	add.w	d1,d3
+	move.w	d3,d0
+	addi.w	#Worm.MIN_DEPTH,d0
+	move.w	d0,(a0)+
+
+; Textureshit..
+	move.w	#(Worm.SEGMENTS+1)*9+2,(a0)+	; Store #texturevertices.
+	move.w	#Worm.SEGMENTS,d7
+
+; Head texturevertex.
+	move.w	#$00FF,(a0)+
+	move.w	#$007F,(a0)+
+
+; 9 texturevertices (including 1 for wrap)
+.texture_vertex_loop:
+	move.w	d7,d0
+	mulu.w	#$FF/(Worm.SEGMENTS+1),d0
+	move.w	d0,(a0)+
+	move.w	#$0000,(a0)+
+	move.w	d0,(a0)+
+	move.w	#$0020,(a0)+
+	move.w	d0,(a0)+
+	move.w	#$0040,(a0)+
+	move.w	d0,(a0)+
+	move.w	#$0060,(a0)+
+	move.w	d0,(a0)+
+	move.w	#$0080,(a0)+
+	move.w	d0,(a0)+
+	move.w	#$00A0,(a0)+
+	move.w	d0,(a0)+
+	move.w	#$00C0,(a0)+
+	move.w	d0,(a0)+
+	move.w	#$00E0,(a0)+
+	move.w	d0,(a0)+
+	move.w	#$00FF,(a0)+
+	dbra	d7,.texture_vertex_loop
+
+; Tail texturevertex.
+	move.w	#$0000,(a0)+
+	move.w	#$007F,(a0)+
+
+	move.w	(sp)+,d0
+	beq	.end
+
+; Now we output the worm faces.
+;	move.w	#16+Worm.SEGMENTS*16,(a0)+		; Store #faces.
+	move.w	#16+Worm.SEGMENTS*8,(a0)+		; Store #faces.
+
+; Do the head (8 faces).
+	moveq	#1,d6
+.head_loop:
+	move.w	#Polygon.TRI|Polygon.TEXTUREMAPPED,(a0)+
+	move.w	d6,d0
+	andi.w	#7,d0
+	addq.w	#1,d0
+	clr.w	(a0)+
+	move.w	d0,(a0)+
+	move.w	d6,(a0)+
+	clr.w	(a0)+
+	move.w	d6,d0
+	addq.w	#1,d0
+	move.w	d0,(a0)+
+	move.w	d6,(a0)+
+	addq.w	#1,d6
+	cmpi.w	#8+1,d6
+	blt.s	.head_loop
+
+; Do segment faces (16 per segment).
+	moveq	#Worm.SEGMENTS-1,d7
+	bmi	.end
+	moveq	#1,d6
+	
+.segment_face_loop:
+	clr.w	d5
+
+.face_loop:
+
+	IFNE	1
+; Let's try a quadrangle..
+	move.w	#Polygon.QUAD|Polygon.TEXTUREMAPPED|0,(a0)+
+
+	move.w	d6,d0
+	add.w	d5,d0
+	move.w	d0,(a0)+			; d0.w=i+1
+	move.w	d5,d2
+	andi.w	#7,d2
+	addq.w	#8,d2
+	add.w	d6,d2				; d2.w=i mod 8 +9
+	move.w	d2,(a0)+
+	move.w	d5,d1
+	addq.w	#1,d1
+	andi.w	#7,d1
+	addq.w	#8,d1
+	add.w	d6,d1				; d1.w=(i+1) mod 8 +9
+	move.w	d1,(a0)+
+	move.w	d5,d2
+	addq.w	#1,d2
+	andi.w	#7,d2
+	add.w	d6,d2				; d2.w=(i+1) mod 8 +1
+	move.w	d2,(a0)+
+
+; texture..
+	move.w	d6,d3
+	subq.w	#1,d3
+	lsr.w	#3,d3
+	mulu.w	#9,d3
+	add.w	d5,d3
+	addq.w	#1,d3
+	move.w	d3,(a0)+			; 1+r*9+c
+	addi.w	#9,d3
+	move.w	d3,(a0)+			; 1+(r+1)*9+c
+	addq.w	#1,d3
+	move.w	d3,(a0)+			; 1+(r+1)*9+c+1
+	subi.w	#9,d3
+	move.w	d3,(a0)+			; 1+r*9+c+1
+
+	ELSE
+; Arrogance, the first face.
+	move.w	#Polygon.TRI|Polygon.TEXTUREMAPPED|0,(a0)+
+	move.w	d6,d0
+	add.w	d5,d0
+	move.w	d0,(a0)+			; d0.w=i+1
+	move.w	d5,d1
+	addq.w	#1,d1
+	andi.w	#7,d1
+	addq.w	#8,d1
+	add.w	d6,d1				; d1.w=(i+1) mod 8 +9
+	move.w	d1,(a0)+
+	move.w	d5,d2
+	andi.w	#7,d2
+	addq.w	#8,d2
+	add.w	d6,d2				; d2.w=i mod 8 +9
+	move.w	d2,(a0)+
+; Repeat indices for texels..
+	move.w	d6,d3
+	subq.w	#1,d3
+	lsr.w	#3,d3
+	mulu.w	#9,d3
+	add.w	d5,d3
+	addq.w	#1,d3
+	move.w	d3,(a0)+
+	addi.w	#9+1,d3
+	move.w	d3,(a0)+
+	subq.w	#1,d3
+	move.w	d3,(a0)+
+; Ignorance, the second..
+	move.w	#Polygon.TRI|Polygon.TEXTUREMAPPED|0,(a0)+
+	move.w	d0,(a0)+
+	move.w	d5,d2
+	addq.w	#1,d2
+	andi.w	#7,d2
+	add.w	d6,d2				; d2.w=(i+1) mod 8 +1
+	move.w	d2,(a0)+
+	move.w	d1,(a0)+
+; Repeat indices for texels..
+	move.w	d6,d3
+	subq.w	#1,d3
+	lsr.w	#3,d3
+	mulu.w	#9,d3
+	add.w	d5,d3
+	addq.w	#1,d3
+	move.w	d3,(a0)+
+	addq.w	#1,d3
+	move.w	d3,(a0)+
+	addi.w	#9,d3
+	move.w	d3,(a0)+
+; Ignarrogance.
+	ENDC
+
+	addq.w	#1,d5
+	cmpi.w	#8,d5
+	blt.s	.face_loop
+	
+	addq.w	#8,d6
+	dbra	d7,.segment_face_loop
+
+; Do the tail (8 faces).
+	clr.w	d6
+.tail_loop:
+	move.w	#Polygon.TRI|Polygon.TEXTUREMAPPED,(a0)+
+	move.w	d6,d0
+	move.w	d6,d1
+	addq.w	#1,d0
+	andi.w	#7,d0
+	addi.w	#1+Worm.SEGMENTS*8,d0
+	addi.w	#1+Worm.SEGMENTS*8,d1
+; vertices
+	move.w	#(Worm.SEGMENTS+1)*8+1,(a0)+
+	move.w	d1,(a0)+
+	move.w	d0,(a0)+
+; texels
+	move.w	#(Worm.SEGMENTS+1)*9+1,(a0)+
+	move.w	d6,d0
+	move.w	d6,d1
+	addi.w	#2+Worm.SEGMENTS*9,d0
+	addi.w	#1+Worm.SEGMENTS*9,d1
+	move.w	d1,(a0)+
+	move.w	d0,(a0)+
+
+	addq.w	#1,d6
+	cmpi.w	#8,d6
+	blt.s	.tail_loop
+
+.end:	move.l	a0,d0
+	sub.l	a6,d0
+	rts
+
+; meant for more flexible type of worm.. a bit shitty tho..
+; Calculates the intersection point between a line and a plane in 3d space.
+;
+; Plane equation: ax+by+cz = 0, po = (po.x, po.y, po.z)
+; Line equation:  o, v = (o.x, o.y, o.z), (v.x, v.y, v.z)
+;
+; Substitution of line into plane yields:
+;
+; a(lo.x+l*v.x)+b(lo.y+l*v.y)+c(lo.z+l*v.z) = 0, (l is a scalar)         (1)
+; Where lo = o - po
+;
+; a*l*v.x+b*l*v.y+c*l*v.z = -a*lo.x-b*lo.y-c*lo.z
+; l(a*v.x+b*v.y+c*v.z) = -a*lo.x-b*lo.y-c*lo.z
+;
+;      -a*lo.x-b*lo.y-c*lo.z    n
+; l = ----------------------- = -                                        (2)
+;       a*v.x+b*v.y+c*v.z       m
+;
+; Now we got (2), we use it in (1) and hey, there you have the solution:
+;
+; o' = (o'.x, o'.y, o'.z) = (lo.x+l*v.x, lo.y+l*v.y, lo.z+l*v.z)
+;
+; Ofcourse we rather output with untranslated origin:
+;
+; o' = (o'.x, o'.y, o'.z) = (o.x+l*v.x, o.y+l*v.y, o.z+l*v.z)
+;
+; INPUT:
+; a0: destination vertex (o')
+; a1: origin vertex (o)
+; a2: vector (v)
+; a3: plane coefficients (a,b,c,po.x,po.y,po.z)
+Worm.intersectPlane:
+; 1] First calculate l...
+
+; 1a Calculate -a*lo.x-b*lo.y-c*lo.z
+	movem.w	(a1),d0-d2
+	sub.w	6(a3),d0
+	sub.w	8(a3),d1
+	sub.w	10(a3),d2
+	muls.w	(a3),d0
+	muls.w	2(a3),d1
+	muls.w	4(a3),d2
+	neg.l	d0
+	sub.l	d1,d0
+	sub.l	d2,d0
+; d0.l=n=-a*lo.x-b*lo.y-c*lo.z
+
+; 1b Calculate a*v.x+b*v.y+c*v.z
+	movem.w	(a2),d1-d3
+	muls.w	(a3)+,d1
+	muls.w	(a3)+,d2
+	muls.w	(a3)+,d3
+	add.l	d3,d1
+	add.l	d2,d1
+; d1.l=m=a*v.x+b*v.y+c*v.z
+
+; Calculate o' = (o.x+l*v.x, o.y+l*v.y, o.z+l*v.z)
+	movem.w	(a2),d2-d4
+	muls.w	d0,d2
+	muls.w	d0,d3
+	muls.w	d0,d4
+	divs.w	d1,d2
+	divs.w	d1,d3
+	divs.w	d1,d4
+	add.w	Vertex.X(a1),d2
+	add.w	Vertex.Y(a1),d3
+	add.w	Vertex.Z(a1),d4
+
+	movem.w	d2-d4,(a0)
+	rts
+
+******** OBJECT DATA ********
+
+	DATA
+
+;   a-b
+;  /   \
+; h     c
+; |     |
+; g     d
+;  \   /
+;   f-e
+Worm.segmentTable:
+	DC.W	-100,-200,0			; a
+	DC.W	+100,-200,0			; b
+	DC.W	+200,-100,0			; c
+	DC.W	+200,+100,0			; d
+	DC.W	+100,+200,0			; e
+	DC.W	-100,+200,0			; f
+	DC.W	-200,+100,0			; g
+	DC.W	-200,-100,0			; h
+
+Worm.rectAddressTable:
+	DC.L	Worm.rectangleTable
+	DC.L	Worm.rectangleTable2
+	DC.L	Worm.rectangleTable3
+
+Worm.starAdrTable:
+	DC.L	Worm.destStarTable
+	DC.L	Worm.destStarTable2
+	DC.L	Worm.destStarTable3
+
+Worm.restoreAdrTable:
+	DC.L	Worm.restoreTable
+	DC.L	Worm.restoreTable2
+	DC.L	Worm.restoreTable3
+
+******** OBJECT RESERVES ********
+
+	BSS
+
+Worm.rectangleTable:
+	DS.W	4*10
+Worm.rectangleTable2:
+	DS.W	4*10
+Worm.rectangleTable3:
+	DS.W	4*10
+
+Worm.matrix:
+	DS.W	9
+Worm.rotTable:
+	DS.W	3
+Worm.zoomStart:
+	DS.W	1
+Worm.zoomDir:
+	DS.W	1
+Worm.startZ:
+	DS.W	1
+Worm.starColor:
+	DS.W	1
+
+Worm.objAdr:
+	DS.L	1
+Worm.textureTable:
+	DS.L	2
+
+Worm.starTable:
+	DS.W	Worm.NUMSTARS*3
+Worm.destStarTable:
+	DS.W	Worm.NUMSTARS*2+1
+Worm.destStarTable2:
+	DS.W	Worm.NUMSTARS*2+1
+Worm.destStarTable3:
+	DS.W	Worm.NUMSTARS*2+1
+Worm.restoreTable:
+	DS.W	Worm.NUMSTARS+1
+Worm.restoreTable2:
+	DS.W	Worm.NUMSTARS+1
+Worm.restoreTable3:
+	DS.W	Worm.NUMSTARS+1
+
+Worm.resRout:
+	DS.L	1
+
+******** END OF DEMO-EFFECT OBJECT ********

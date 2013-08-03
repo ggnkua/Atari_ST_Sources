@@ -1,0 +1,1291 @@
+; Dying starfish. A screen for delta. Uses the ufly engine.
+
+;======= OBJECT EQUATES ====================================================
+
+; Change these to suit your needs.
+Starfish.DEPTH:		=	60
+Starfish.TOPDEPTH:	=	3*Starfish.DEPTH/2
+Starfish.ARMLENGTH:	=	1200
+Starfish.LE:		=	Starfish.ARMLENGTH/10
+Starfish.MAX_BEND:	=	2500
+Starfish.ARMS:		=	5			; >=3
+Starfish.RINGPOINTS:	=	6			; even and >=4
+Starfish.RINGS:		=	5			; >=1
+
+; Do not change..
+Starfish.ARMPOINTS:	=	Starfish.RINGS*Starfish.RINGPOINTS+1
+Starfish.BINDPOINT1:	=	Starfish.ARMPOINTS*Starfish.ARMS
+Starfish.BINDPOINT2:	=	Starfish.ARMPOINTS*Starfish.ARMS+1
+Starfish.POINTS:	=	2+Starfish.ARMPOINTS*Starfish.ARMS
+Starfish.ARMPOLYS:	=	Starfish.RINGS*Starfish.RINGPOINTS
+Starfish.OUTPOLYS:	=	Starfish.ARMPOLYS*Starfish.ARMS
+Starfish.BINDPOLYS:	=	Starfish.RINGPOINTS*Starfish.ARMS	; tris only
+Starfish.POLYS:		=	Starfish.BINDPOLYS+Starfish.OUTPOLYS
+
+			RSRESET
+Starfish.object:	RS.W	8192
+Starfish.armAngleTable:	RS.W	Starfish.ARMS*(Starfish.RINGS+1)
+Starfish.background:	RS.W	320*200
+Starfish.shadowTable:	RS.W	1+4*2*500
+Starfish.shadowTable2:	RS.W	1+4*2*500
+Starfish.shadowTable3:	RS.W	1+4*2*500
+Starfish.shadowTable4:	RS.W	1+4*2*500
+Starfish.shadowTable5:	RS.W	1+4*2*500
+Starfish.shadowTable6:	RS.W	1+4*2*500
+Starfish.BLOCK_SIZE:	RS.B	0
+
+
+;======= OBJECT TABLE ======================================================
+
+; Must be first in object!!
+Starfish.table:
+	DC.L	Starfish.mainLoop
+	DC.L	Starfish.init
+	DC.L	rts
+	DC.L	Starfish.incField
+	DC.L	Starfish.decField
+	DC.L	Starfish.invField
+	DC.L	Starfish.drop
+	DC.L	Starfish.setZoom
+	DC.L	0
+
+	IFND	DEMO_SYSTEM
+	INCLUDE	SFLY_DSP.S
+	TEXT
+	ENDC
+
+;======= INIT SUBROUTINE ===================================================
+
+; OUTPUT:
+; d0.l: 0   = All clear, neg = Error! Not initialized!
+Starfish.init:
+	move.l	#Starfish.BLOCK_SIZE,d0
+	bsr.l	Mem.register
+
+	lea	sine_tbl,a1
+	bsr.l	Matrix.init
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= REALTIME INIT SUBROUTINE ==========================================
+
+Starfish.realtimeInit:
+	move.l	#rts,vbl_gfx
+
+	bsr.l	Mem.getBlock
+
+	move.l	d0,d1
+	addi.l	#Starfish.object,d1
+	move.l	d1,Starfish.objAdr
+	move.l	d0,d1
+	addi.l	#Starfish.armAngleTable,d1
+	move.l	d1,Starfish.angleTableAdr
+	move.l	d0,d1
+	addi.l	#Starfish.background,d1
+	move.l	d1,Starfish.backAdr
+
+	lea	Starfish.shadowAdr,a0
+	move.l	d0,a1
+	adda.l	#Starfish.shadowTable,a1
+	clr.l	(a1)
+	move.l	a1,(a0)+
+	move.l	d0,a1
+	adda.l	#Starfish.shadowTable2,a1
+	clr.l	(a1)
+	move.l	a1,(a0)+
+	move.l	d0,a1
+	adda.l	#Starfish.shadowTable3,a1
+	clr.l	(a1)
+	move.l	a1,(a0)+
+
+	lea	Starfish.shadowAdr2,a0
+	move.l	d0,a1
+	adda.l	#Starfish.shadowTable4,a1
+	clr.l	(a1)
+	move.l	a1,(a0)+
+	move.l	d0,a1
+	adda.l	#Starfish.shadowTable5,a1
+	clr.l	(a1)
+	move.l	a1,(a0)+
+	move.l	d0,a1
+	adda.l	#Starfish.shadowTable6,a1
+	clr.l	(a1)
+	move.l	a1,(a0)+
+
+	bsr.l	HumanFly.init
+
+	lea	Viewport.settingsTable,a0
+	move.w	#320,Viewport.XSCREEN(a0)
+	move.w	#200,Viewport.YSCREEN(a0)
+	move.w	#0,Viewport.XSTART(a0)
+	move.w	#0,Viewport.YSTART(a0)
+	move.w	#320,Viewport.XEND(a0)
+	move.w	#200,Viewport.YEND(a0)
+	move.w	#160,Viewport.XCENTER(a0)
+	move.w	#100,Viewport.YCENTER(a0)
+	move.w	#256+32,Viewport.ASPECT(a0)
+	move.w	#$100,Viewport.FOCAL(a0)
+	bsr.l	Viewport.update
+
+	lea	Starfish.textureTable,a0
+	bsr.l	Polygon.init
+
+	movea.l	Starfish.backAdr,a0
+	bsr.l	Primitive.setScreenbuffer
+
+	move.w	#320,d6
+	move.w	#200,d7
+	movea.l	Starfish.backAdr,a0
+	bsr.w	Starfish.genMarble
+
+	movea.l	Starfish.backAdr,a0
+	lea	Texture.sandPal,a1
+	move.w	#320*200-1,d7
+	clr.l	d0
+.convloop:
+	move.w	(a0),d0
+	move.w	(a1,d0.l*4),(a0)+
+	dbf	d7,.convloop
+
+	bsr.l	ObjectRegistry.clear
+
+	lea	Starfish.fixArmAngleTable,a1
+	movea.l	Starfish.objAdr,a0
+	bsr.w	Starfish.calcBendedObject
+
+; d0.l=size of generated object
+	movea.l	Starfish.objAdr,a0
+	bsr.l	ObjectRegistry.set
+
+	move.w	#-1000,d0
+	move.w	#-0500,d1
+	move.w	#+3000,d2
+	clr.w	d3
+	clr.w	d4
+	clr.w	d5
+	bsr.w	Starfish.paint
+
+	movea.l	Starfish.rectAddressTable,a0
+	bsr.l	PrimitiveMesh.paint
+
+	move.w	$4BC.w,Starfish.startTime
+	bsr.w	Starfish.drop
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+.vga60:	move.l	#vga60_16bit_320_200,Starfish.resRout
+	rts
+.vga100:move.l	#vga100_16bit_320_200,Starfish.resRout
+	rts
+.rgb50:	move.l	#rgb50_16bit_320_200,Starfish.resRout
+	rts
+
+;======= SCREENINIT SUBROUTINE =============================================
+
+Starfish.initScreen:
+	movea.l	scr,a0
+	movea.l	Starfish.backAdr,a1
+	bsr.l	COPY_PIC32020016
+	rts
+
+;======= MAINLOOP SUBROUTINE ===============================================
+
+Starfish.mainLoop:
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr.w	Starfish.realtimeInit
+	move.l	(sp)+,d0
+.end_realtime_init:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr.w	Starfish.initScreen
+.end_screeninit:
+
+	tst.w	Starfish.zooming
+	bne.s	.zoom_it
+	bsr.w	Starfish.paintScene
+	bra.s	.end_paint
+.zoom_it:
+	bsr.w	Starfish.zoom
+.end_paint:
+
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+
+	movea.l	Starfish.resRout,a0
+	suba.l	a1,a1
+	movea.l	d0,a2
+.again:	bsr.l	Screen.requestUpdate
+	tst.l	d0
+	bmi.s	.again
+	clr.l	Starfish.resRout
+
+	rts
+
+;======= OBJECT SUBROUTINES ================================================
+
+Starfish.incField:
+	addi.w	#$0020,Starfish.fieldStrength
+	rts
+
+Starfish.decField:
+	subi.w	#$0020,Starfish.fieldStrength
+	rts
+
+Starfish.invField:
+	neg.w	Starfish.fieldStrength
+	rts
+
+Starfish.drop:
+	st	Starfish.falling
+	clr.w	Starfish.zooming
+	rts
+
+Starfish.setZoom:
+; Copy current screen to background-buffer.
+	movea.l	scr+8,a1
+	movea.l	Starfish.backAdr,a0
+	bsr.l	COPY_PIC32020016
+
+	st	Starfish.zooming
+	move.w	$04BC.w,Starfish.zoomStart
+	rts
+
+; Very small and nice 'marble' texture generator.
+; Ripped from lost 4ktro by lucky/inter.
+; INPUT:
+; d6.w=width (w)
+; d7.w=height (w)
+; a0: dst buffer (w*h words)
+Starfish.genMarble:
+; Make a row of noise...
+	move.w      D6,D0
+	bra.s       .marmor_w6
+.marmor_l0:
+	move.w      D1,(A0)+
+.marmor_w6:
+	rol.l       #5,D5
+	eori.l      #$3551462F,D5
+	addq.l      #1,D5
+	move.w      D5,D2
+	and.w       #7,D2
+	cmp.w       #7,D2
+	bne.s       .marmor_w4
+	moveq       #6,D2
+.marmor_w4:
+	add.w       D2,D1
+	subq.w      #3,D1
+	bpl.s       .marmor_w0
+	moveq       #0,D1
+.marmor_w0:
+	cmp.w       #$27,D1
+	ble.s       .marmor_w1
+	moveq       #$27,D1
+.marmor_w1:
+	dbra        D0,.marmor_l0
+
+; Back to rowstart...
+	move.w      D6,D0
+	neg.w       D0
+	lsl.w       #1,D0
+	lea         0(A0,D0.w),A1
+
+; Average and add a pass of noise to the whole texture (?).
+; a1,a2,a3 lag behind a0, so output hights are 'recycled' for averaging.
+; Nice trick. Very fast.
+	lea         2(A1),A2
+	lea         4(A2),A3
+	move.w      D7,D0
+	subq.w      #1,D0
+	mulu.w      D6,D0				; d0.w=w*(h-1)
+	subq.w      #1,D0
+.marmor_l1:
+	move.w      (A2)+,D1
+	add.w       D1,D1
+	add.w       (A1)+,D1
+	add.w       (A3)+,D1
+	lsr.w       #2,D1
+	move.l	d5,d2
+	rol.l       #5,D5
+	eori.l      #-$3A5E8A3B,D5
+	addq.l      #7,D5
+	move.w      D5,D2
+	and.w       #7,D2
+	cmp.w       #7,D2
+	bne.s       .marmor_w5
+	moveq       #6,D2
+.marmor_w5:
+	add.w       D2,D1
+	subq.w      #3,D1
+	bpl.s       .marmor_w2
+	moveq       #0,D1
+.marmor_w2:
+	cmp.w       #39,D1
+	ble.s       .marmor_w3
+	moveq       #39,D1
+.marmor_w3:
+	move.w      D1,(A0)+
+	dbf	D0,.marmor_l1
+
+	rts         
+
+; Update all arms of starfish according to a stream (a simple field).
+; INPUT:
+; d0.w=rot-offset
+; a0: armtable
+Starfish.update:
+	moveq	#Starfish.ARMS-1,d7
+	move.w	d0,.rot
+
+.loop:	move.w	Starfish.fieldStrength,d1
+	move.w	d7,d0
+	mulu.w	#sintbllen/Starfish.ARMS,d0
+	add.w	.rot(pc),d0
+	Do_SinModulo	d0
+	move.w	d0,(a0)				; Store baseangle.
+	move.w	d7,-(sp)
+	bsr	Starfish.updateArm
+	move.w	(sp)+,d7
+; a0: next armtable	
+	dbf	d7,.loop	
+	rts
+
+.rot:	DC.W	0
+
+; Updates bent arm. Modelled as a string of massless nodes with some
+; elastic properties..
+;
+; Seems to work, even if it neglect mass, friction of several kinds, etc..
+; Abstraction (cheating) rules! =:-)
+;
+; theta[k, t+1] = theta[k, t] + d_theta[k, t]
+;
+;                             p
+; d_theta[k+1]=(1-theta[k]/pi) *cos(sumtheta[k])*F
+;
+; sumtheta[k]=theta[0]+theta[1]+...+theta[k] (angle from armaxis)
+;
+; F=applied force
+; p=power term used to limit big angle changes
+;
+; btw. p=32 gives reasonably stable results. (quite sick i know!)
+; 
+; INPUT:
+; d1.w=force in pos y direction (F) (8:8)
+; a0: arm angletable
+; OUTPUT:
+; a0: end of angletable
+Starfish.updateArm:
+	lea	sine_tbl,a1
+	moveq	#Starfish.RINGS-1,d7
+	move.w	(a0)+,d2			; d2.w=startangle
+
+.loop:	move.w	(a0),d0
+	lsr.w	#5,d0
+
+	Do_SinModulo	d0			; d0.w=theta[k, t]
+	add.w	d0,d2
+	Do_SinModulo	d2			; d2.w=sumtheta[k, t]
+	Get_Cos	a1,d2,d3			; d3.w=cos(sumtheta[k, t])
+	move.w	#sintbllen/2-1,d4
+	sub.w	d0,d4
+	Do_SinModulo	d4
+	mulu.w	#$10000/sintbllen,d4		; d4.w=1-theta[k, t]/pi (sgn frac)
+	REPT	5
+	muls.w	d4,d4
+	add.l	d4,d4
+	swap	d4
+	ENDR
+	muls.w	d4,d3
+	add.l	d3,d3
+	swap	d3				; d3.w=(1-theta[k, t]/pi)*cos(sumtheta[k, t])
+	muls.w	d1,d3
+
+	tst.w	d3
+	swap	d3
+	bpl.s	.end_round
+	addq.w	#1,d3
+.end_round:
+
+; Neglect minute angle differences..
+	move.w	d3,d4
+	bpl.s	.pos1
+	neg.w	d4
+.pos1:	cmpi.w	#5,d4
+	bgt.s	.diff_ok
+	clr.w	d3
+.diff_ok:
+
+; Update angle..
+; d3.w=F*(1-theta[k, t]/pi)*cos(sumtheta[k, t])
+; d3.w=theta[k, t+1]
+	add.w	(a0),d3
+	move.w	d3,d4
+	bpl.s	.pos
+	neg.w	d3
+.pos:	cmpi.w	#Starfish.MAX_BEND,d3
+	blt.s	.value_in_range
+	move.w	#Starfish.MAX_BEND,d3
+.value_in_range:
+	tst.w	d4
+	bpl.s	.ok
+	neg.w	d3
+.ok:	move.w	d3,(a0)+			; Store new theta[k].
+	dbf	d7,.loop	
+	rts
+
+	IFNE	0
+; Paints a wireframe respresentation of the massless string model starfish.
+; 
+;               [cos(sumtheta[k])]
+; p[k+1]=p[k]+L*[                ] 
+;               [sin(sumtheta[k])]
+;
+Starfish.paintWF:
+	movea.l	Starfish.angleTableAdr,a0
+	moveq	#Starfish.ARMS-1,d7
+
+.arm_loop:
+	moveq	#Starfish.RINGS-1,d6
+	movea.w	#160,a1
+	movea.w	#100,a2
+	move.w	(a0)+,d0			; d0.w=startangle
+
+.point_loop:
+	move.w	(a0)+,d1
+	lsr.w	#5,d1
+	add.w	d1,d0
+	Do_SinModulo	d0
+	move.w	d0,-(sp)
+	Get_SinCos	sine_tbl,d0,d1,d2
+	muls.w	#20*2,d1
+	muls.w	#20*2,d2
+	swap	d1
+	swap	d2
+	move.l	a1,d0
+	adda.w	d1,a1
+	move.l	a2,d1
+	adda.w	d2,a2
+	move.l	a1,d2
+	move.l	a2,d3
+	movem.l	d6-a2,-(sp)
+	bsr.l	Line.paintFlatshaded
+	movem.l	(sp)+,d6-a2
+	move.w	(sp)+,d0
+	dbf	d6,.point_loop
+
+	dbf	d7,.arm_loop
+	rts
+	ENDC
+
+; Generates a starfish that can have bended arms.
+; Not the best possible model for normal-based shading. It needs patching.
+; todo: skewed normals on arms.. patched normals close to binder!
+;
+; parametrisation:
+;
+; 0<=alpha<2pi,         0<=beta<2pi,    0<=t<=1, l=AL*t
+; controls pos in ring, controls armnr, controls pos in arm (ringnumber)
+;
+; AL=*armlength*
+;
+;      A
+;  _________
+;  \b  |  c/
+;   \ L|  /
+;  B \ | / B
+;     \|/
+;      a
+;
+; L=AL/(#rings+1), a=2pi/#arms
+;
+; tan(a/2)=tan(pi/#arms)=(A/2)/C=A/2L
+;
+; =>
+;
+;                         2*AL*tan(pi/#arms)
+; A = 2L*tan(pi/#arms) = -------------------- = *armwidth*
+;                            (#rings+1)
+; 
+;---------------------------------------------------------------------------
+;
+; Parametrisation of bended arms:
+;
+; su=cos(alpha)(1-t)A/2, sv=sin(alpha)(1-t)A/2 (scalars of u, v)
+;                                                          -  -
+; d is direction vector of arm, |d| = 1, d.z=0
+; -                              -
+; c is center vector. c[t+1]=c[t]+sd[t], c[0]=0
+; -                   -      -    --     -    -
+;
+;                      [cos(sumtheta[t]+beta)]
+; sd[t] = ll*d[t] = ll*[sin(sumtheta[t]+beta)]
+; --                   [        0            ]
+;
+; a = c + su*u+sv*v
+; -   -      -    -
+;
+; a.x   c.x -su*d.y
+; a.y = c.y +su*d.x
+; a.z   c.z +sv
+;
+; u . d = v . d = u . v = 0 & |d| = 1 & d.z = 0
+; -   -   -   -   -   -        -
+;
+; =>
+;
+;     [-d.y]       [ 0 ]
+; u = [+d.x] , v = [ 0 ]
+; -   [ 0  ]   -   [ 1 ]
+;
+;---------------------------------------------------------------------------
+;
+; normals given by biasing (0,0,1),
+; rotation around x-axis alpha degrees,
+; rotation around z-axis beta degrees.
+;
+; n.x          1       [+A*cos(beta)+AL*sin(alpha)*cin(beta)]
+; n.y = -------------- [-A*sin(beta)+AL*sin(alpha)*cos(beta)]
+; n.z   sqrt(A^2+AL^2) [+AL*cos(alpha)                      ]
+;
+;       [+A'*cos(beta)+AL'*sin(alpha)*sin(beta)]
+;     = [-A'*sin(beta)+AL'*sin(alpha)*cos(beta)]
+;       [+AL'*cos(alpha)                       ]
+;
+; A' =A/sqrt(A^2+AL^2)
+; AL'=AL/sqrt(A^2+AL^2)
+;
+;---------------------------------------------------------------------------
+;
+; INPUT:
+; a0: dst object
+; a1: arm angletables
+; OUTPUT:
+; d0.l=size of object
+Starfish.calcBendedObject:
+	movea.l	a0,a6				; a6: dst object
+	movea.l	a1,a2				; a2: armangle tables
+
+; Output vertices..
+	move.w	#2*Starfish.POINTS,(a0)+	; Store #vertices+#normals.
+	move.w	#Starfish.POINTS,(a0)+		; Store #normals.
+	lea	Starfish.POINTS*Vertex.SIZE(a0),a3
+	lea	sine_tbl,a1
+	moveq	#Starfish.ARMS-1,d7
+
+; Calc A/2..
+	move.w	#sintbllen/(2*Starfish.ARMS),d0
+	Get_SinCos	a1,d0,d0,d1
+; 0<=bla<=pi/4  =>  0<=sin(bla)<=1
+	subq.w	#1,d0
+	swap	d0
+	clr.w	d0
+	divu.w	d1,d0
+; d0.w=tan(pi/#arms) (frac)
+	mulu.w	#Starfish.LE,d0
+	move.l	d0,d1
+	tst.w	d0
+	swap	d0
+	bpl.s	.end_round_a
+	addq.w	#1,d0
+.end_round_a:
+	move.w	d0,.a_div_2
+; .a_div_2.w=A/2=L*tan(pi/#arms) (int)
+
+; calc A', AL'
+	move.w	#Starfish.ARMLENGTH,d0
+	mulu.w	d0,d0					; d0.l=AL*AL
+	add.l	d1,d1
+	move.l	d1,d4
+	swap	d1
+	mulu.w	d1,d1					; d1.l=A*A
+	add.l	d0,d1					; d1.l=AL^2+A^2
+	bsr.l	Math.sqrt				; d0.l=sqrt(A^2+AL^2) (16:16)
+	swap	d0					; d0.w=sqrt(A^2+AL^2) (int)
+	clr.l	d3
+	move.w	#Starfish.ARMLENGTH,d3
+	swap	d3
+	lsr.l	d3					; for signed crap
+	divu.w	d0,d3
+	move.w	d3,.al_t
+	lsr.l	d4
+	divu.w	d0,d4					; for signed crap
+	move.w	d4,.a_t
+
+.arm_pointloop:
+	swap	d7
+	move.w	#Starfish.RINGS,d7
+
+	move.w	(a2)+,d0
+	move.w	d0,.sum_theta
+; d0.w=beta
+
+; Reset c, calc d[0].
+;       -       -
+	Do_SinModulo	d0
+	Get_SinCos	a1,d0,d0,d1
+; d0.w=d.x, d1.w=d.y
+	move.w	d0,.dx
+	move.w	d1,.dy
+	muls.w	#49*Starfish.LE*2/50,d0
+	muls.w	#49*Starfish.LE*2/50,d1
+	swap	d0
+	swap	d1
+	move.w	d0,.cx
+	move.w	d1,.cy
+
+.ring_pointloop:
+	moveq	#Starfish.RINGPOINTS-1,d6
+
+; Calc 1-t.
+	move.w	d7,d0
+	mulu.w	#$7FFF/Starfish.RINGS,d0
+	move.w	d0,.one_min_t
+; .one_min_t.w=1-t (sgn frac)
+
+; Calc points in ring...
+.pointloop:
+	move.w	d6,d0
+	mulu.w	#sintbllen/Starfish.RINGPOINTS,d0	; d0.w=alpha
+	Get_SinCos	a1,d0,d0,d1
+; d0.w=sin(alpha), d1.w=cos(alpha) (sgn frac)
+	exg.l	d0,d1
+	movem.w	d0-d1,.sin_alpha
+
+; Calc su, sv.
+	move.w	.a_div_2(pc),d2			; d2.w=A/2
+	mulu.w	.one_min_t(pc),d2
+	add.l	d2,d2
+	tst.w	d2
+	swap	d2
+	bpl.s	.end_round_ta
+	addq.w	#1,d2
+.end_round_ta:
+	move.w	d2,d3
+; d2.w=d3.w=(1-t)A/2 (sgn frac)
+	
+	muls.w	d0,d2
+	add.l	d2,d2
+	tst.w	d2
+	swap	d2
+	bpl.s	.end_round_su
+	addq.w	#1,d2
+.end_round_su:
+	move.w	d2,.su
+
+	move.w	d0,d4				; d4.w=cos(alpha)
+	move.w	d1,d5				; d5.w=sin(alpha)
+
+; Todo: apply scale to this!
+	muls.w	d1,d3
+	add.l	d3,d3
+	tst.w	d3
+	swap	d3
+	bpl.s	.end_round_sv
+	addq.w	#1,d3
+.end_round_sv:
+	move.w	d3,.sv
+
+; a.x = c.x -su*d.y
+	move.w	.su(pc),d0
+	muls.w	.dy(pc),d0
+	add.l	d0,d0
+	swap	d0
+	move.w	.cx(pc),d1
+	sub.w	d0,d1
+	move.w	d1,(a0)+			; Store x.
+
+; y negated for backface elend
+; a.y = c.y +su*d.x
+	move.w	.su(pc),d0
+	muls.w	.dx(pc),d0
+	add.l	d0,d0
+	swap	d0
+	add.w	.cy(pc),d0
+	neg.w	d0
+	move.w	d0,(a0)+			; Store y.
+
+; a.z = +sv
+	move.w	.sv(pc),(a0)+			; Store z.
+
+;     [+A'*cos(beta)+AL'*sin(alpha)*sin(beta)]
+; n = [-A'*sin(beta)+AL'*sin(alpha)*cos(beta)]
+; -   [+AL'*cos(alpha)                       ]
+	IFNE	0
+	move.w	.dx(pc),d0			; d0.w=cos(beta)
+	move.w	.dy(pc),d1			; d1.w=sin(beta)
+	move.w	d0,d2				; d2.w=cos(beta)
+	move.w	d1,d3				; d3.w=sin(beta)
+
+; Calculate n.x.
+	muls.w	.a_t(pc),d0			; d0.l=A'*cos(beta)/2
+	muls.w	.al_t(pc),d1			; d1.l=AL'*sin(beta)/2
+	add.l	d1,d1
+	swap	d1
+	muls.w	.sin_alpha(pc),d1		; d1.l=AL'*sin(alpha)*sin(beta)/2
+	add.l	d1,d0
+	add.l	d0,d0				; d0.l=n.x (16:16)
+	swap	d0
+	muls.w	#$E0,d0
+	swap	d0
+	move.w	d0,Vertex.X(a3)			; Store n.x.
+	
+; Calculate n.y.
+	muls.w	.a_t(pc),d3			; d3.l=A'*sin(beta)/2
+	muls.w	.al_t(pc),d2			; d2.l=AL'*cos(beta)/2	
+	add.l	d2,d2
+	swap	d2
+	muls.w	.sin_alpha(pc),d2		; d2.l=AL'*sin(alpha)*cos(beta)/2
+	sub.l	d3,d2
+	add.l	d2,d2				; d2.l=n.y (16:16)
+	swap	d2
+	muls.w	#$E0,d2
+	swap	d2
+	move.w	d2,Vertex.Y(a3)			; Store n.y.
+
+; Calculate n.z.
+	move.w	.al_t(pc),d0			; d0.w=AL'
+	muls.w	.cos_alpha(pc),d0		; d0.l=AL'*cos(alpha)/2
+	add.l	d0,d0				; d0.l=AL'*cos(alpha)
+	swap	d0				; d0.w=AL'*cos(alpha)=n.z
+	muls.w	#$E0,d0
+	swap	d0
+	move.w	d0,Vertex.Z(a3)			; Store n.z.
+
+	addq	#Vertex.SIZE,a3
+
+	ELSE
+; old, unbiased normal..
+	move.w	d4,d2
+	muls.w	.dy(pc),d2
+	add.l	d2,d2
+	swap	d2
+	neg.w	d2
+	asr.w	#8,d2
+	move.w	d2,(a3)+			; Store n.x.
+	move.w	d4,d2
+	muls.w	.dx(pc),d2
+	add.l	d2,d2
+	swap	d2
+	neg.w	d2
+	asr.w	#8,d2
+	move.w	d2,(a3)+			; Store n.y
+	asr.w	#8,d5
+	move.w	d5,(a3)+			; Store n.z.
+	ENDC
+
+	dbf	d6,.pointloop
+
+
+	move.w	(a2)+,d0			; d0.w=theta[t+1]<<5
+	lsr.w	#5,d0				; d0.w=theta[t+1]
+	add.w	d0,.sum_theta			; d0.w=sumtheta[t+1]
+
+; Calc c[t+1] = c[t] + d[t]
+;      -        -      -
+	move.w	.sum_theta(pc),d0
+	Do_SinModulo	d0
+	Get_SinCos	a1,d0,d0,d1
+; d0.w=d.x, d1.w=d.y
+	move.w	d0,.dx
+	move.w	d1,.dy
+	muls.w	#Starfish.ARMLENGTH*2/Starfish.RINGS,d0
+	muls.w	#Starfish.ARMLENGTH*2/Starfish.RINGS,d1
+	swap	d0
+	swap	d1
+; d0.w=sd.x, d1.w=sd.y
+	add.w	d0,.cx
+	add.w	d1,.cy
+
+	subq.w	#1,d7
+	bgt	.ring_pointloop
+
+	move.w	.cx(pc),(a0)+			; Store x.
+	move.w	.cy(pc),d0
+	neg.w	d0
+	move.w	d0,(a0)+			; Store y.
+	clr.w	(a0)+				; Store z.
+
+	move.w	.dx(pc),d0
+	asr.w	#8,d0
+	cmpi.w	#$FF80,d0
+	bgt.s	.ok
+	move.w	#$FF81,d0
+.ok:	move.w	d0,(a3)+			; Store n.x.
+	move.w	.dy(pc),d0
+	asr.w	#8,d0
+	neg.w	d0
+	cmpi.w	#$FF80,d0
+	bgt.s	.ok2
+	move.w	#$FF81,d0
+.ok2:	move.w	d0,(a3)+			; Store n.y.
+	clr.w	(a3)+				; Store n.z.
+
+	swap	d7
+	dbf	d7,.arm_pointloop
+
+; Store binder vertices..
+	clr.l	(a0)+				; Store (x,y)
+	move.w	#+Starfish.TOPDEPTH,(a0)+
+	clr.l	(a0)+				; Store (x,y)
+	move.w	#-Starfish.TOPDEPTH,(a0)+
+	clr.l	(a3)+
+	move.w	#+127,(a3)+
+	clr.l	(a3)+
+	move.w	#-127,(a3)+
+
+	movea.l	a3,a0				; a0: end of vertices/normals
+
+; texels
+	clr.w	(a0)+
+
+; polys
+; arm polys
+; todo: fuck this around cos of changed spikepoint position!
+	move.w	#Starfish.POLYS,(a0)+
+	clr.w	d2
+	moveq	#Starfish.ARMS-1,d7
+
+.poly_armloop:
+
+; Output spike triangles in arm..
+	moveq	#Starfish.RINGPOINTS-1,d5
+
+.spike_polyloop:
+; Output polyhead.
+	move.w	#Polygon.TRI|Polygon.ENVMAPPED|0,(a0)+
+
+	clr.l	d0
+	move.w	d5,d0
+	addq.w	#1,d0
+	divu.w	#Starfish.RINGPOINTS,d0
+	swap	d0
+	addi.w	#Starfish.ARMPOINTS-1-Starfish.RINGPOINTS,d0
+	add.w	d2,d0
+	move.w	d0,(a0)+
+
+	move.w	#Starfish.ARMPOINTS-1,d0
+	add.w	d2,d0
+	move.w	d0,(a0)+			; Store spikeref.
+
+	move.w	d5,d0
+	addi.w	#Starfish.ARMPOINTS-1-Starfish.RINGPOINTS,d0
+	add.w	d2,d0
+	move.w	d0,(a0)+
+
+; Store normal-refs..
+	REPT	3
+	move.w	-6(a0),d0
+	addi.w	#Starfish.POINTS,d0
+	move.w	d0,(a0)+
+	ENDR
+
+	dbf	d5,.spike_polyloop
+
+	moveq	#Starfish.RINGS-2,d6
+.poly_ringloop:
+
+	moveq	#Starfish.RINGPOINTS-1,d5
+.polyloop:
+; Output polyhead.
+	move.w	#Polygon.QUAD|Polygon.ENVMAPPED|0,(a0)+
+
+	move.w	d6,d0
+	mulu.w	#Starfish.RINGPOINTS,d0
+	add.w	d2,d0
+; row*n + i
+	move.w	d0,d1
+	add.w	d5,d1
+	move.w	d1,(a0)+
+; row*n + [(i+1) mod n]
+	clr.l	d1
+	move.w	d5,d1
+	addq.w	#1,d1
+	divu.w	#Starfish.RINGPOINTS,d1
+	swap	d1
+	add.w	d0,d1
+	move.w	d1,(a0)+
+; row*(n+1) + [(i+1) mod n]
+	addi.w	#Starfish.RINGPOINTS,d1
+	move.w	d1,(a0)+
+; row*(n+1) + i
+	move.w	d0,d1
+	add.w	d5,d1
+	addi.w	#Starfish.RINGPOINTS,d1
+	move.w	d1,(a0)+
+
+; Store normal-refs..
+	REPT	4
+	move.w	-8(a0),d0
+	addi.w	#Starfish.POINTS,d0
+	move.w	d0,(a0)+
+	ENDR
+	
+	dbf	d5,.polyloop
+
+	dbf	d6,.poly_ringloop
+
+	addi.w	#Starfish.ARMPOINTS,d2
+	dbf	d7,.poly_armloop
+
+; binder polys
+	clr.w	d2
+	moveq	#Starfish.ARMS-1,d7
+
+.bindpoly_armloop:
+	moveq	#Starfish.RINGPOINTS-1,d6
+
+.bindpoly_ringloop:
+; Output polyhead.
+	move.w	#Polygon.TRI|Polygon.ENVMAPPED|0,(a0)+
+
+	move.w	#Starfish.RINGPOINTS-2,d0
+	cmpi.w	#Starfish.RINGPOINTS-1,d6
+	bne.s	.no_adj
+	move.w	#Starfish.RINGPOINTS-1,d0
+	bra.s	.end_adj
+.no_adj:sub.w	d6,d0
+.end_adj:
+	add.w	d2,d0
+	move.w	d0,(a0)+
+
+	cmpi.w	#Starfish.RINGPOINTS/2,d6
+	bhs.s	.oki
+	move.w	#Starfish.BINDPOINT1,(a0)+
+	bra.s	.end_store_bindpoint
+.oki:	move.w	#Starfish.BINDPOINT2,(a0)+
+.end_store_bindpoint:
+
+	move.w	#Starfish.RINGPOINTS-1,d0
+	sub.w	d6,d0
+	add.w	d2,d0
+	move.w	d0,(a0)+
+
+; Store normal-refs..
+	REPT	3
+	move.w	-6(a0),d0
+	addi.w	#Starfish.POINTS,d0
+	move.w	d0,(a0)+
+	ENDR
+
+	dbf	d6,.bindpoly_ringloop
+
+	addi.w	#Starfish.ARMPOINTS,d2
+	dbf	d7,.bindpoly_armloop
+
+; Calc size of object..
+	move.l	a0,d0
+	sub.l	a6,d0
+	rts
+
+.cx:	DC.W	0
+.cy:	DC.W	0
+.dx:	DC.W	0
+.dy:	DC.W	0
+.sin_alpha:
+	DC.W	0
+.cos_alpha:
+	DC.W	0
+.a_t:	DC.W	0
+.al_t:	DC.W	0
+.a_div_2:
+	DC.W	0
+.one_min_t:
+	DC.W	0
+.su:	DC.W	0
+.sv:	DC.W	0
+.sum_theta:
+	DC.W	0
+
+; INPUT:
+; d0.w=x offset
+; d1.w=y offset
+; d2.w=z offset
+; d3.w=xrot
+; d4.w=yrot
+; d5.w=zrot
+Starfish.paint:
+	movem.w	d0-d2,-(sp)
+	movem.w	d3-d5,-(sp)
+
+	movea.l	Starfish.shadowAdrAdr,a0	; a0: log table adrs
+	movea.l	(a0),a0				; a0: current log table
+	bsr.l	PrimitiveMesh.newShadowed
+
+	movem.w	(sp)+,d0-d2
+	bsr.l	Matrix.generate
+
+	movem.w	(sp)+,d0-d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+	bsr.l	PrimitiveMesh.sortZ
+
+	bsr.l	PrimitiveMesh.complete
+
+	rts
+
+Starfish.paintScene:
+	movea.l	scr,a0
+	bsr.l	Primitive.setScreenbuffer
+
+	bsr.l	ObjectRegistry.clear
+
+	movea.l	Starfish.angleTableAdr,a1
+	movea.l	Starfish.objAdr,a0
+	bsr.w	Starfish.calcBendedObject
+
+; d0.l=size of generated object
+	movea.l	Starfish.objAdr,a0
+	bsr.l	ObjectRegistry.set
+
+	move.w	#+0600,d0
+	move.w	#+0100,d1
+	move.w	#+3000,d2
+	tst.w	Starfish.falling
+	beq.s	.not_falling
+	move.w	$04BC.w,d2
+	sub.w	Starfish.startTime,d2
+	add.w	d2,d2
+
+; Use a squareroot for the movement.
+	movem.w	d0-d1,-(sp)
+	clr.l	d1
+	move.w	d2,d1
+	lsl.l	#8,d1
+	lsl.l	#3,d1
+	bsr.l	Math.sqrt
+	move.l	d0,d2
+	swap	d2
+	movem.w	(sp)+,d0-d1
+
+	cmpi.w	#+3000,d2
+	blt.s	.depth_ok
+	move.w	#+3000,d2
+	clr.w	Starfish.falling
+.not_falling:
+	clr.w	d3
+	clr.w	d4
+	clr.w	d5
+;	bra.s	.paint
+.depth_ok:
+	clr.w	d3
+	move.w	$04BC.w,d4
+	sub.w	Starfish.startTime,d4
+	lsl.w	#2,d4
+	Do_SinModulo	d4
+	Get_Sin	sine_tbl,d4,d4
+
+; Recycle the squareroot movement for the 'swing' amplitude.
+	move.w	#3000,d6
+	sub.w	d2,d6
+	muls.w	d6,d4
+	swap	d4
+	asr.w	#2,d4
+
+	clr.w	d5
+.paint:	bsr.w	Starfish.paint
+
+;- parallel shit -----------------------------------------------------------
+	movea.l	Starfish.angleTableAdr,a0
+	
+	move.w	Starfish.oldRot,d0
+	tst.w	Starfish.falling
+	beq.s	.rot_calced
+	move.w	$04BC.w,d0
+	sub.w	Starfish.startTime,d0
+	lsr.w	#2,d0
+	addi.w	#$200,d0
+	move.w	d0,Starfish.oldRot
+.rot_calced:
+	bsr.w	Starfish.update
+
+	IFNE	1
+; Restore shadow..
+	movea.l	Starfish.backAdr,a0
+	movea.l	Starfish.shadowAdrAdr+4,a1	; a1: phys table adrs
+	movea.l	(a1),a1				; a1: current phys table
+	bsr.l	Polygon.restoreShadows
+	ELSE
+	movea.l	scr,a0
+	movea.l	Starfish.backAdr,a1
+	bsr.l	COPY_PIC32020016
+	ENDC
+
+;- end of parallel shit ----------------------------------------------------
+
+	movea.l	Starfish.rectAddressTable,a0
+	bsr.l	PrimitiveMesh.paint
+
+	lea	Starfish.rectAddressTable,a0
+ 	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+
+;= shadow swapping =
+
+	movea.l	Starfish.shadowAdrAdr,a0
+ 	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+
+	movea.l	Starfish.shadowAdrAdr+4,a0
+ 	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+
+	move.w	.swapcount(pc),d0
+	addq.w	#1,d0
+	cmpi.w	#3,d0
+	blt.s	.end_swapcount
+
+; Clear count and swap phys/log shadow tables..
+	clr.w	d0
+	lea	Starfish.shadowAdrAdr,a0
+	move.l	(a0),d1
+	move.l	4(a0),(a0)+
+	move.l	d1,(a0)
+
+.end_swapcount:
+	move.w	d0,.swapcount
+
+;= end shadow swapping =
+
+	rts
+
+.swapcount:
+	DC.W	0
+
+Starfish.zoom:
+	movea.l	scr,a0
+	move.w	$04BC.w,d0
+	sub.w	Starfish.zoomStart,d0
+	cmpi.w	#$0100,d0
+	bcs.s	.clipped
+	move.w	#$0100,d0
+.clipped:
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#80,d1				; d1.l=x_offset<<8
+	mulu.w	#50,d2				; d2.l=y_offset<<8
+	lsr.l	#8,d1				; d1.l=x_offset
+	lsr.l	#8,d2				; d2.l=y_offset
+	mulu.w	#320,d2
+	add.l	d1,d2
+	movea.l	Starfish.backAdr,a1
+	lea	(a1,d2.l*2),a1
+	movea.l	a1,a2				; a2: src backup
+	lsr.w	#1,d0
+	move.w	#$0100,d1
+	sub.w	d0,d1				; d1.w=step (8:8)
+	ext.l	d1
+	lsl.l	#8,d1				; d1.l=step (16:16)
+	move.l	d1,d2				; d2.l=step (16:16)
+	clr.l	d3				; d3.l=y_pos (16:16)
+	swap	d1				; d1.l=ssSS (16:16)
+	move.w	#200-1,d7
+
+.yloop:	moveq	#320/16-1,d6
+	sub.l	d0,d0				; Clear count and clear carry.
+
+.xloop:
+	REPT	16
+	move.w	(a1,d0.w*2),(a0)+
+	addx.l	d1,d0
+	ENDR
+	dbf	d6,.xloop
+
+	add.l	d2,d3				; d3.l=next y_pos (16:16)
+	move.l	d3,d4
+	swap	d4				; d4.w=next y_pos (int)
+	mulu.w	#320,d4				; d4.l=next y_offset (int)
+	lea	(a2,d4.l*2),a1			; a1: next src line
+	dbf	d7,.yloop
+	
+	rts
+
+;======= OBJECT DATA =======================================================
+
+	DATA
+
+Starfish.textureTable:
+	DC.L	FlareGen.redBuffer
+	DC.L	0
+
+Starfish.rectAddressTable:
+	DC.L	Starfish.rectangleTable
+	DC.L	Starfish.rectangleTable2
+	DC.L	Starfish.rectangleTable3
+
+Starfish.fieldStrength:
+	DC.W	$0080
+
+; Only works with 5 arms, 5 rings..
+Starfish.fixArmAngleTable:
+	INCBIN	ARMS.DAT			; idiocy, but it works
+
+Starfish.shadowAdrAdr:
+	DC.L	Starfish.shadowAdr
+	DC.L	Starfish.shadowAdr2
+
+;======= OBJECT RESERVES ===================================================
+
+	BSS
+
+Starfish.resRout:
+	DS.L	1
+
+Starfish.rectangleTable:
+	DS.W	4*10
+Starfish.rectangleTable2:
+	DS.W	4*10
+Starfish.rectangleTable3:
+	DS.W	4*10
+
+Starfish.startTime:
+	DS.W	1
+Starfish.falling:
+	DS.W	1
+Starfish.oldRot:
+	DS.W	1
+Starfish.zooming:
+	DS.W	1
+Starfish.zoomStart:
+	DS.W	1
+
+Starfish.objAdr:
+	DS.L	1
+Starfish.angleTableAdr:
+	DS.L	1
+Starfish.backAdr:
+	DS.L	1
+
+Starfish.shadowAdr:
+	DS.L	3
+Starfish.shadowAdr2:
+	DS.L	3

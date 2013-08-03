@@ -1,0 +1,921 @@
+; Envmapped ball-oid. Demonstration of polar parametrisation.
+; A screen for delta. Requires ufly.
+
+;======= OBJECT EQUATES ========
+
+Balloid.R:		=	200
+Balloid.STEPS:		=	20			; even, u-fly dsp requires this <=20 !
+Balloid.WIBBLESPEED:	=	5
+Balloid.NORMAL_DIV:	=	$100
+
+Balloid.NUM_V:		=	Balloid.STEPS*Balloid.STEPS+2
+
+			RSRESET
+Balloid.object:		RS.W	8192
+Balloid.BLOCK_SIZE:	RS.B	0
+
+;======= OBJECT TABLE ========
+
+; Must be first in object!!
+Balloid.table:
+	DC.L	Balloid.mainLoop
+	DC.L	Balloid.init
+	DC.L	Balloid.setRes
+	DC.L	Balloid.setStutter
+	DC.L	Balloid.setStill
+	DC.L	Balloid.setZoom
+	DC.L	Balloid.setLeftTurn
+	DC.L	Balloid.setrightTurn
+	DC.L	0
+
+	IFND	DEMO_SYSTEM
+	INCLUDE	SFLY_DSP.S				; Include the CPU-DSP engine.
+	TEXT
+	ENDC
+
+;======= RESOLUTION SETTING ROUTINE ========
+
+Balloid.setRes:
+	IFEQ	testmode
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+; Unknown monitormode..
+	rts
+.vga60:	bra.l	vga60_16bit_320_200
+.vga100:bra.l	vga100_16bit_320_200
+.rgb50:	bra.l	rgb50_16bit_320_200
+	ENDC
+	rts
+
+;======= INIT SUBROUTINE ========
+
+; OUTPUT:
+; d0.l: =0 all clear, <0 error
+Balloid.init:
+	move.l	#Balloid.BLOCK_SIZE,d0
+	bsr.l	Mem.register
+
+	bsr.l	HumanFly.init
+
+	lea	sine_tbl,a1
+	bsr.l	Matrix.init
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= REALTIME INIT SUBROUTINE ========
+
+Balloid.realtimeInit:
+	move.l	#rts,vbl_gfx
+
+	bsr.l	Mem.getBlock
+	move.l	d0,Balloid.baseAdr
+
+	move.w	$04BC.w,Balloid.startTime
+
+	lea	Viewport.settingsTable,a0
+	move.w	#320,Viewport.XSCREEN(a0)
+	move.w	#200,Viewport.YSCREEN(a0)
+	move.w	#0,Viewport.XSTART(a0)
+	move.w	#0,Viewport.YSTART(a0)
+	move.w	#320,Viewport.XEND(a0)
+	move.w	#200,Viewport.YEND(a0)
+	move.w	#160,Viewport.XCENTER(a0)
+	move.w	#100,Viewport.YCENTER(a0)
+	move.w	#256+32,Viewport.ASPECT(a0)
+	move.w	#$100,Viewport.FOCAL(a0)
+	bsr.l	Viewport.update
+
+	lea	Balloid.textureTable,a0
+	bsr.l	Polygon.init
+
+	bsr.l	ObjectRegistry.clear
+	movea.l	Balloid.baseAdr,a0
+	adda.l	#Balloid.object,a0
+	bsr	Balloid.generate
+; d0.l=size of generated object
+	movea.l	Balloid.baseAdr,a0
+	adda.l	#Balloid.object,a0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi	.end
+
+	clr.w	Balloid.rotDir
+	clr.w	Balloid.worldRot
+	clr.w	Balloid.oldWorldRot
+	bsr	Balloid.setZoom
+
+;	move.w	#Primitive.WORD|Primitive.MOVE,d0
+;	moveq	#0,d1
+;	bsr.l	Primitive.setPaintMode
+;;	tst.w	d0
+;;	bmi.s	.error
+
+.end:	rts
+
+;======= SCREENINIT SUBROUTINE ========
+
+Balloid.initScreen:
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	move.l	#$00000000,d4
+	bsr.l	Viewport.paintRectangle
+	rts
+
+;======= MAINLOOP SUBROUTINE ========
+
+Balloid.mainLoop:
+	move.w	$0468.w,.old468
+
+	movea.l	scr,a0
+	bsr.l	Primitive.setScreenbuffer
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr	Balloid.realtimeInit
+	tst.w	d0
+	bmi	.end
+	move.l	(sp)+,d0
+.end_realtime_init:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr	Balloid.initScreen
+.end_screeninit:
+
+	move.w	$04BC.w,d0
+	sub.w	Balloid.startTime,d0
+	move.w	d0,Balloid.time
+
+	movea.l	Balloid.moveRout,a0
+	jsr	(a0)
+
+	bsr	Balloid.paint
+
+	IFEQ	testmode
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	move.l	d0,d1
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+	ENDC
+
+	move.w	.old468(pc),d0
+.wait:	cmp.w	$0468.w,d0
+	beq.s	.wait
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.res_done
+	bsr	Balloid.setRes
+.res_done:
+
+.end:	rts
+
+.old468:DC.W	0
+
+;======= OBJECT SUBROUTINES ========
+
+Balloid.setStutter:
+	move.w	$04BC.w,Balloid.moveStart
+	move.l	#Balloid.stutter,Balloid.moveRout
+	rts
+
+Balloid.setStill:
+	move.w	$04BC.w,Balloid.moveStart
+	move.l	#Balloid.dummy,Balloid.moveRout
+	rts
+
+Balloid.setZoom:
+	move.w	$04BC.w,Balloid.moveStart
+	move.l	#Balloid.zoom,Balloid.moveRout
+	st	Balloid.zoomOn
+	rts
+
+Balloid.zoom:
+	tst.w	Balloid.zoomOn
+	beq.s	.end
+	move.w	$04BC.w,d0
+	sub.w	Balloid.moveStart,d0
+	neg.w	d0
+	add.w	d0,d0
+	addi.w	#1500,d0
+	cmpi.w	#700,d0
+	bgt.s	.ok
+	move.w	#700,Balloid.z
+	clr.w	Balloid.zoomOn
+	rts
+.ok:	move.w	d0,Balloid.z
+.end:	rts
+
+Balloid.setLeftTurn:
+	move.w	$04BC.w,Balloid.moveStart
+	move.w	#-1,Balloid.rotDir
+	move.l	#Balloid.turn,Balloid.moveRout
+	move.w	Balloid.worldRot,Balloid.oldWorldRot
+	rts
+
+Balloid.setrightTurn:
+	move.w	$04BC.w,Balloid.moveStart
+	move.w	#+1,Balloid.rotDir
+	move.l	#Balloid.turn,Balloid.moveRout
+	move.w	Balloid.worldRot,Balloid.oldWorldRot
+	rts
+
+Balloid.turn:
+	tst.w	Balloid.rotDir
+	beq.s	.end
+	move.w	$04BC.w,d0
+	sub.w	Balloid.moveStart,d0
+	lsl.w	#2,d0
+	cmpi.w	#sintbllen/4,d0
+	blt.s	.ok
+	move.w	#sintbllen/4,d0
+	muls.w	Balloid.rotDir,d0
+	add.w	Balloid.oldWorldRot,d0
+	move.w	d0,Balloid.worldRot
+	clr.w	Balloid.rotDir
+	rts
+.ok:	muls.w	Balloid.rotDir,d0
+	add.w	Balloid.oldWorldRot,d0
+	move.w	d0,Balloid.worldRot
+.end:	rts
+
+Balloid.stutter:
+	move.w	Balloid.time,d0
+	andi.w	#$001F,d0
+	subi.w	#$10,d0
+	move.w	d0,Balloid.x
+	move.w	$04BC.w,d0
+	sub.w	Balloid.moveStart,d0
+	mulu.w	d0,d0
+	lsr.l	#8,d0
+	addi.w	#700,d0
+	move.w	d0,Balloid.z
+	rts
+
+Balloid.dummy:
+	clr.w	Balloid.x
+	move.w	#1500,Balloid.z
+	rts
+
+Balloid.paint:
+	bsr.l	PrimitiveMesh.new
+
+; world rotation.
+	move.w	Balloid.worldRot,d0
+	clr.w	d1
+	clr.w	d2
+	bsr.l	Matrix.generate
+
+	move.w	Balloid.x,d0
+	clr.w	d1
+	move.w	Balloid.z,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	clr.w	d0
+	move.w	Balloid.time,d1
+	lsl.w	#3,d1
+	clr.w	d2
+	bsr.l	Matrix.generate
+
+	clr.w	d0
+	clr.w	d1
+	clr.w	d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+	bsr.l	Matrix.pop
+
+	bsr.l	Matrix.pop			; pop world rotation
+
+	bsr.l	PrimitiveMesh.sortZ
+
+	bsr.l	PrimitiveMesh.complete
+
+	IFNE	0
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	move.l	#$000F000F,d4
+	bsr	Viewport.paintRectangle
+	ELSE
+	movea.l	Balloid.rectAddressTable,a0
+	move.w	(a0)+,d7
+	beq.s	.end_restore
+	subq.w	#1,d7
+.restore_loop:
+	move.w	d7,-(sp)
+	movem.w	(a0)+,d1/d7
+	movem.w	(a0)+,d0/d6
+	move.l	a0,-(sp)
+	move.l	#$00000000,d4
+	bsr.l	Viewport.paintRectangle
+	movea.l	(sp)+,a0
+	move.w	(sp)+,d7
+	dbra	d7,.restore_loop
+.end_restore:
+	ENDC
+
+	movea.l	Balloid.rectAddressTable,a0
+	bsr.l	PrimitiveMesh.paint
+
+	lea	Balloid.rectAddressTable,a0
+ 	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+.end:	rts
+
+; 1 + 8 + 1, 10 points on curve, 9 lines on curve
+; INPUT:
+; a0: destination object
+; OUTPUT:
+; d0.l=size
+Balloid.generate:
+	movea.l	a0,a6
+
+	move.w	#2*(Balloid.STEPS*Balloid.STEPS+2),(a0)+	;#vertices+#normals
+	move.w	#Balloid.STEPS*Balloid.STEPS+2,(a0)+		;#normals
+	movea.l	a0,a4
+
+	move.w	$0468.w,.time
+	lea	sine_tbl,a1
+
+	move.w	$04BC.w,d5
+	clr.w	d5
+	lsl.w	#Balloid.WIBBLESPEED,d5
+	Do_SinModulo	d5
+	Get_Sin	a1,d5,d5
+	asr.w	#8,d5
+	asr.w	#1,d5
+	addi.w	#$100,d5
+	muls.w	#Balloid.R,d5
+	asr.l	#8,d5
+
+; Output top vertex..
+	clr.w	(a0)+
+	clr.w	(a0)+
+	clr.w	(a0)+
+
+	moveq	#1,d7
+
+; 0.1/9.2/9.3/9.4/9.5/9.6/9.7/9.8/9.1, 10 points, 9 lines
+; 1 top, 1 bottom, 8 inbetween points.. 
+
+; Outer loop (180 degrees)
+
+.r1_loop:
+	move.w	d7,d0
+	mulu.w	#(sintbllen/(Balloid.STEPS+1))/2,d0
+	Get_SinCos	a1,d0,d0,d3
+	muls.w	#Balloid.R,d0
+	muls.w	d5,d3
+	add.l	d0,d0
+	add.l	d3,d3
+	swap	d0					; d0.w=r2
+	swap	d3					; d3.w=r*cos(t1)
+
+	clr.w	d6
+
+; Inner loop (360 degrees)
+.r2_loop:
+
+; Vibrate r.
+	move.w	d6,d4
+	mulu.w	#sintbllen*3/Balloid.STEPS,d4
+	move.w	d7,d1
+	mulu.w	#sintbllen/Balloid.STEPS,d1
+	add.w	d1,d4
+	Do_SinModulo	d4
+	Get_Cos	a1,d4,d4
+	asr.w	#2,d4
+	muls.w	d0,d4
+	add.l	d4,d4
+	swap	d4
+
+	add.w	d0,d4
+
+	move.w	d6,d1
+	mulu.w	#sintbllen/Balloid.STEPS,d1
+	Get_SinCos	a1,d1,d1,d2
+
+	muls.w	d4,d1
+	muls.w	d4,d2
+	add.l	d1,d1
+	add.l	d2,d2
+	swap	d1
+	swap	d2
+	move.w	d1,(a0)+				; Output r2*cos(t2).
+	muls.w	d3,d4
+	divs.w	#Balloid.R,d4
+	move.w	d4,(a0)+				; Output r*cos(t1).
+	move.w	d2,(a0)+				; Output r2*sin(t2).
+	addq.w	#1,d6
+	cmpi.w	#Balloid.STEPS,d6
+	blt.s	.r2_loop
+
+	addq.w	#1,d7
+	cmpi.w	#Balloid.STEPS+1,d7
+	blt	.r1_loop
+
+; Output bottom vertex..
+	clr.w	(a0)+
+	clr.w	(a0)+
+	clr.w	(a0)+
+
+;----------------
+; Normal vectors.
+
+	move.w	$04BC.w,d5
+	lsl.w	#Balloid.WIBBLESPEED,d5
+	Do_SinModulo	d5
+	Get_Sin	a1,d5,d5
+	asr.w	#8,d5
+	asr.w	#3,d5
+	addi.w	#$60,d5
+	move.w	#127,d5
+	move.w	d5,-(sp)
+
+; Output top vertex..
+	clr.w	(a0)+
+	move.w	d5,(a0)+
+	clr.w	(a0)+
+
+; Calculate normals! Uses the output vertices for this.
+;
+; n = o/|o|, normal is outward vector normalized to unit-length.
+; -   -  -
+;
+; o = (u[i-1, j] + u[i, j]) X (v[i, j-1] + v[i, j])
+; -    -           -           -           -
+;
+; u[i, j] = a[i+1, j]-a[i, j], v[i, j] = a[i, j+1]-a[i, j]
+; -         -         -                  -         -
+;
+; o = (a[i+1, j]-a[i-1, j]) X (a[i, j+1]-a[i, j-1])
+; -    -         -             -         -
+;
+;             [l.z*r.y-l.y*r.z]
+; o = l X r = [l.x*r.z-l.z*r.x]
+; -   -   -   [l.y*r.x-l.x*r.y]
+;
+; i, j are discrete versions of phi, theta.
+;
+; a[I+i, j]=a[i, j], a[i, 0]=N, a[i, J]=S, where I is #steps of i.
+; -         -        -       -          -
+;
+; I.e. 'i' wraps, 'j' has special polar cases.
+;
+	moveq	#1,d7
+
+.normal_rloop:
+	clr.w	d6
+
+.normal_ploop:
+; First, we calc l..
+;                -
+	move.w	d7,d3
+	subq.w	#1,d3
+	mulu.w	#Balloid.STEPS,d3
+	clr.l	d4
+	move.w	d6,d4
+	addq.w	#1,d4					; i+1 !
+	divu.w	#Balloid.STEPS,d4
+	swap	d4					; d4.w=wrapped i+1
+	add.w	d4,d3					; d3.l=offset [i+1, j]
+	addq.w	#1,d3
+	mulu.w	#Vertex.SIZE,d3
+	movem.w	(a4,d3.l),d0-d2
+; d0-d2=a[i+1,j]
+;       -
+	move.w	d7,d3
+	subq.w	#1,d3
+	mulu.w	#Balloid.STEPS,d3
+	clr.l	d4
+	move.w	d6,d4
+	subq.w	#1,d4					; i-1 !
+	bpl.s	.i_pos
+	moveq	#Balloid.STEPS-1,d4
+.i_pos:	add.w	d4,d3					; d3.l=offset [i-1, j]
+	addq.w	#1,d3
+	mulu.w	#Vertex.SIZE,d3
+	sub.w	Vertex.X(a4,d3.l),d0
+	sub.w	Vertex.Y(a4,d3.l),d1
+	sub.w	Vertex.Z(a4,d3.l),d2
+; d0-d2=a[i+1,j]-a[i-1,j]=l
+;       -        -        -
+
+; Store l on stack.
+;       -
+	movem.w	d0-d2,-(sp)
+
+; Now, we calc r..
+;              -
+	move.w	d7,d3
+	cmpi.w	#Balloid.STEPS,d3
+	bne.s	.offset_ok3
+	move.w	#1+Balloid.STEPS*Balloid.STEPS,d3
+	bra.s	.offset_calced3
+.offset_ok3:
+	addq.w	#1,d3
+	mulu.w	#Balloid.STEPS,d3
+	add.w	d6,d3					; d3.l=offset [i, j+1]
+	addq.w	#1,d3
+.offset_calced3:
+	mulu.w	#Vertex.SIZE,d3
+	movem.w	(a4,d3.l),d0-d2
+; d0-d2=a[i,j+1]
+;       -
+	move.w	d7,d3
+	subq.w	#1,d3					; j-1 !
+	beq.s	.offset_calced4
+	subq.w	#1,d3
+	mulu.w	#Balloid.STEPS,d3
+	add.w	d6,d3					; d3.l=offset [i, j-1]
+	addq.w	#1,d3
+.offset_calced4:
+	mulu.w	#Vertex.SIZE,d3
+	sub.w	Vertex.X(a4,d3.l),d0
+	sub.w	Vertex.Y(a4,d3.l),d1
+	sub.w	Vertex.Z(a4,d3.l),d2
+	
+; d0-d2=a[i,j+1]-a[i,j-1]=r
+;       -        -        -
+
+; Now we calculate the outward vector o.
+;                                     -
+;             [l.z*r.y-l.y*r.z]
+; o = l X r = [l.x*r.z-l.z*r.x]
+; -   -   -   [l.y*r.x-l.x*r.y]
+;
+	movem.w	(sp),d3-d5
+
+; d3-d5=l
+;       -
+	muls.w	d1,d5				; d5.l=l.z*r.y
+	muls.w	d2,d4				; d4.l=l.y*r.z
+	sub.l	d4,d5
+	movea.l	d5,a2				; a2=l.z*r.y-l.y*r.z
+	movem.w	(sp),d3-d5
+; d3-d5=l
+;       -
+	muls.w	d2,d3				; d3.l=l.x*r.z	
+	muls.w	d0,d5				; d5.l=l.z*r.x
+	sub.l	d5,d3				; d3.l=l.x*r.z-l.z*r.x
+	movea.l	d3,a3				; a3=l.x*r.z-l.z*r.x
+	movem.w	(sp)+,d3-d5
+; d3-d5=l
+;       -
+	muls.w	d0,d4				; d4.l=l.y*r.x
+	muls.w	d1,d3				; d3.l=l.x*r.y
+	sub.l	d3,d4				; d4.l=l.y*r.x-l.x*r.y
+; a2/a3/d4=o
+;          -
+
+	move.l	a2,d0
+	move.l	a3,d1
+	move.l	d4,d2
+	asr.l	#7,d0
+	asr.l	#7,d1
+	asr.l	#7,d2
+	muls.w	d0,d0
+	muls.w	d1,d1
+	muls.w	d2,d2
+	add.l	d0,d1
+	add.l	d2,d1
+	bsr.l	Math.sqrt
+; d0.l=|o|/128 (16:16)
+;       -
+	move.l	a2,d1
+	move.l	a3,d2
+	move.l	d4,d3
+	swap	d0
+	mulu.w	#Balloid.NORMAL_DIV,d0
+	lsr.l	#8,d0
+	divs.w	d0,d1
+	divs.w	d0,d2
+	divs.w	d0,d3
+; d1-d3=n, store it..
+;       -
+	move.w	d1,(a0)+
+	move.w	d2,(a0)+
+	move.w	d3,(a0)+
+	addq.w	#1,d6
+	cmpi.w	#Balloid.STEPS,d6
+	blt	.normal_ploop
+
+	addq.w	#1,d7
+	cmpi.w	#Balloid.STEPS+1,d7
+	blt	.normal_rloop
+
+; Output bottom vertex..
+	move.w	(sp)+,d5
+	clr.w	(a0)+
+	neg.w	d5
+	move.w	d5,(a0)+
+	clr.w	(a0)+
+
+	clr.w	(a0)+					; Output #texels (0).
+
+;------------
+; Primitives
+
+; 1 top line, 1 bottom line, 7 inbetween lines
+; Filled version. Head=n tris, tail=n tris, body=n*(n-1) quads
+; total=2n+2n*(n-1)=2n(1+n-1)=2n(n)=2n*n primitives.
+
+; Output primitives..
+	move.w	#2*Balloid.STEPS*Balloid.STEPS,(a0)+
+
+; Output head.
+; 0-1-2, 0-2-3, 0-3-4,... 0, (i+1), (i+1) mod n +1
+	moveq	#Balloid.STEPS-1,d7
+.head_loop:
+	move.w	#Polygon.TRI|Polygon.ENVMAPPED|0,(a0)+
+	clr.w	(a0)+
+	moveq	#1,d0
+	add.w	d7,d0
+	move.w	d0,(a0)+
+	move.w	d7,d0
+	addq.w	#1,d0
+	divu.w	#Balloid.STEPS,d0
+	swap	d0
+	addq.w	#1,d0
+	move.w	d0,(a0)+
+
+; Normal refs..
+	move.w	#Balloid.STEPS*Balloid.STEPS+2,(a0)+
+	move.w	#Balloid.STEPS*Balloid.STEPS+3,d0
+	add.w	d7,d0
+	move.w	d0,(a0)+
+	clr.l	d0
+	move.w	d7,d0
+	addq.w	#1,d0
+	divu.w	#Balloid.STEPS,d0
+	swap	d0
+	addi.w	#Balloid.STEPS*Balloid.STEPS+3,d0
+	move.w	d0,(a0)+
+	
+	dbra	d7,.head_loop
+
+; Output body.
+	moveq	#Balloid.STEPS-1-1,d7
+
+.segment_loop:
+	moveq	#Balloid.STEPS-1,d6
+
+; i, i+1, i+1+n, i+n -> i+n, i+1+n, i+1, i
+; 0, 1, 2, 3 -> 3, 2, 1, 0
+.quad_loop:
+
+; First triangle (4,3,1).
+	move.w	#Polygon.TRI|Polygon.ENVMAPPED|0,(a0)+
+
+	move.w	d7,d1
+	addq.w	#1,d1
+	mulu.w	#Balloid.STEPS,d1
+
+; v4
+	move.w	d6,d0
+	add.w	d1,d0	
+	addq.w	#1,d0
+	move.w	d0,(a0)+
+
+; v3
+	clr.l	d0
+	move.w	d6,d0
+	addq.w	#1,d0
+	divu.w	#Balloid.STEPS,d0
+	swap	d0
+	add.w	d1,d0	
+	addq.w	#1,d0
+	move.w	d0,(a0)+
+
+	move.w	d7,d1
+	mulu.w	#Balloid.STEPS,d1
+
+; v1
+	move.w	d6,d0
+	add.w	d1,d0
+	addq.w	#1,d0
+	move.w	d0,(a0)+
+
+; Normal refs..
+	move.w	d7,d1
+	addq.w	#1,d1
+	mulu.w	#Balloid.STEPS,d1
+
+; v4
+	move.w	d6,d0
+	add.w	d1,d0	
+	addi.w	#Balloid.NUM_V+1,d0
+	move.w	d0,(a0)+
+
+; v3
+	clr.l	d0
+	move.w	d6,d0
+	addq.w	#1,d0
+	divu.w	#Balloid.STEPS,d0
+	swap	d0
+	add.w	d1,d0	
+	addi.w	#Balloid.NUM_V+1,d0
+	move.w	d0,(a0)+
+
+	move.w	d7,d1
+	mulu.w	#Balloid.STEPS,d1
+
+; v1
+	move.w	d6,d0
+	add.w	d1,d0
+	addi.w	#Balloid.NUM_V+1,d0
+	move.w	d0,(a0)+
+
+; Second triangle.. (3,2,1).
+	IFNE	1
+
+	move.w	#Polygon.TRI|Polygon.ENVMAPPED|0,(a0)+
+
+	move.w	d7,d1
+	addq.w	#1,d1
+	mulu.w	#Balloid.STEPS,d1
+
+; v3
+	clr.l	d0
+	move.w	d6,d0
+	addq.w	#1,d0
+	divu.w	#Balloid.STEPS,d0
+	swap	d0
+	add.w	d1,d0
+	addq.w	#1,d0
+	move.w	d0,(a0)+
+
+	move.w	d7,d1
+	mulu.w	#Balloid.STEPS,d1
+
+; v2
+	clr.l	d0
+	move.w	d6,d0
+	addq.w	#1,d0
+	divu.w	#Balloid.STEPS,d0
+	swap	d0
+	add.w	d1,d0	
+	addq.w	#1,d0
+	move.w	d0,(a0)+
+
+; v1
+	move.w	d6,d0
+	add.w	d1,d0
+	addq.w	#1,d0
+	move.w	d0,(a0)+
+
+; Normal refs..
+
+	move.w	d7,d1
+	addq.w	#1,d1
+	mulu.w	#Balloid.STEPS,d1
+
+; v3
+	clr.l	d0
+	move.w	d6,d0
+	addq.w	#1,d0
+	divu.w	#Balloid.STEPS,d0
+	swap	d0
+	add.w	d1,d0	
+	addi.w	#Balloid.NUM_V+1,d0
+	move.w	d0,(a0)+
+
+	move.w	d7,d1
+	mulu.w	#Balloid.STEPS,d1
+
+; v2
+	clr.l	d0
+	move.w	d6,d0
+	addq.w	#1,d0
+	divu.w	#Balloid.STEPS,d0
+	swap	d0
+	add.w	d1,d0	
+	addi.w	#Balloid.NUM_V+1,d0
+	move.w	d0,(a0)+
+
+; v1
+	move.w	d6,d0
+	add.w	d1,d0
+	addi.w	#Balloid.NUM_V+1,d0
+	move.w	d0,(a0)+
+
+	ENDC
+
+	dbra	d6,.quad_loop
+
+	dbra	d7,.segment_loop
+
+; Output tail.
+; t, t-n+[(i+1) mod n], t-n+i
+; t=n*n+1
+	moveq	#Balloid.STEPS-1,d7
+
+.tail_loop:
+	move.w	#Polygon.TRI|Polygon.ENVMAPPED|0,(a0)+
+	move.w	#Balloid.STEPS*Balloid.STEPS+1,(a0)+
+	clr.l	d0
+	move.w	d7,d0
+	addq.w	#1,d0
+	divu.w	#Balloid.STEPS,d0
+	swap	d0
+	addi.w	#1+Balloid.STEPS*(Balloid.STEPS-1),d0
+	move.w	d0,(a0)+
+	move.w	#1+Balloid.STEPS*(Balloid.STEPS-1),d0
+	add.w	d7,d0
+	move.w	d0,(a0)+
+
+; Normal refs.
+	move.w	#Balloid.NUM_V+Balloid.STEPS*Balloid.STEPS+1,(a0)+
+	clr.l	d0
+	move.w	d7,d0
+	addq.w	#1,d0
+	divu.w	#Balloid.STEPS,d0
+	swap	d0
+	addi.w	#Balloid.NUM_V+1+Balloid.STEPS*(Balloid.STEPS-1),d0
+	move.w	d0,(a0)+
+	move.w	#Balloid.NUM_V+1+Balloid.STEPS*(Balloid.STEPS-1),d0
+	add.w	d7,d0
+	move.w	d0,(a0)+
+
+	dbra	d7,.tail_loop
+
+	move.l	a0,d0
+	sub.l	a6,d0
+	rts
+
+.time:	DC.W	0
+
+;======= OBJECT DATA ========
+
+	DATA
+
+Balloid.textureTable:
+	DC.L	FlareGen.goldBuffer
+	DC.L	0
+
+Balloid.rectAddressTable:
+	DC.L	Balloid.rectangleTable
+	DC.L	Balloid.rectangleTable2
+	DC.L	Balloid.rectangleTable3
+
+;======= OBJECT RESERVES ========
+
+	BSS
+
+Balloid.rectangleTable:
+	DS.W	4*10
+Balloid.rectangleTable2:
+	DS.W	4*10
+Balloid.rectangleTable3:
+	DS.W	4*10
+
+Balloid.x:
+	DS.W	1
+Balloid.z:
+	DS.W	1
+Balloid.time:
+	DS.W	1
+Balloid.startTime:
+	DS.W	1
+Balloid.moveStart:
+	DS.W	1
+Balloid.rotDir:
+	DS.W	1
+Balloid.worldRot:
+	DS.W	1
+Balloid.oldWorldRot:
+	DS.W	1
+Balloid.zoomOn:
+	DS.W	1
+
+Balloid.baseAdr:
+	DS.L	1
+
+Balloid.moveRout:
+	DS.L	1
+
+;======= END OF DEMO-EFFECT OBJECT ========

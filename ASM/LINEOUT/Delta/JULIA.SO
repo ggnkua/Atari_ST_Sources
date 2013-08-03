@@ -1,0 +1,484 @@
+; Morphing julia fractal.. For delta.
+
+******** OBJECT EQUATES ********
+
+Julia.ITER_LOG:		=	5
+Julia.ITERATIONS:	=	1<<Julia.ITER_LOG
+Julia.INTERVAL:		=	1<<7
+
+******** OBJECT TABLE ********
+
+* Must be first in object!!
+Julia.table:
+	DC.L	Julia.mainLoop
+	DC.L	Julia.init
+	DC.L	Julia.setRes
+	DC.L	0
+
+******** RESOLUTION SETTING ROUTINE ********
+
+Julia.setRes:
+	IFEQ	testmode
+	move.l	#rts,vbl_gfx
+
+	move.w	$0468.w,d0
+.ck468:	cmp.w	$0468.w,d0
+	beq.s	.ck468
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+* Unknown monitormode..
+	rts
+.vga60:	bra.l	vga60_16bit_160_200
+.vga100:bra.l	vga100_16bit_160_100
+.rgb50:	bra.l	rgb50_16bit_320_100
+	ENDC
+	rts
+
+******** INIT SUBROUTINE ********
+
+* OUTPUT: d0.l: 0   = All clear.
+*               neg = Error! Not initialized!
+Julia.init:
+	lea	Julia.palette,a0
+	lea	Julia.flowPal,a1
+	bsr.w	Julia.makeColorFlow
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+******** REALTIME INIT SUBROUTINE ********
+
+Julia.realtimeInit:
+* Kicks in P56 DSP-program..
+	move.l	#(Julia.p56End-Julia.p56)/3,d0
+	lea	Julia.p56,a0
+	bsr.l	Dsp.loadProgram
+
+	move.l	$04BA.w,Julia.startTime
+	rts
+
+******** SCREENINIT SUBROUTINE ********
+
+Julia.initScreen:
+* Insert screenarea initialising, etc. in here!
+	rts
+
+******** MAINLOOP SUBROUTINE ********
+
+Julia.mainLoop:
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr.w	Julia.realtimeInit
+	move.l	(sp)+,d0
+.end_realtime_init:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr.w	Julia.initScreen
+.end_screeninit:
+
+; Control mechanism.. Just a lame PI one..
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	move.l	$04BA.w,d1
+	sub.l	Julia.startTime,d1
+	addi.l	#$00000800,d1
+	move.l	d1,d4
+
+	lea	Julia.timeTable,a0
+	move.l	d0,d2
+	andi.w	#Julia.INTERVAL-1,d2
+	move.l	(a0,d2.l*4),d3				; d3.l=last frame's time 
+	sub.l	d3,d4					; d4.l=current-last frame's time
+; d4.l=current interval over Julia.INTERVAL frames
+
+	move.l	d1,(a0,d2.l*4)				; Store current time.
+; d3.l=previous interval
+
+	mulu.w	#$1800/Julia.INTERVAL,d4
+
+	move.w	$04BC.w,d0
+	sub.w	Julia.startTime+2,d0
+	addi.w	#$0800,d0
+	move.w	d0,d2
+	mulu.w	#5,d0
+	lsr.w	#4,d0
+	lsr.w	#3,d2
+	lea	sine_tbl,a0
+	Do_SinModulo	d0
+	Do_SinModulo	d2
+	Get_SinCos	a0,d0,d0,d1
+	Get_Sin	a0,d2,d2
+	asr.w	#3,d2
+	addi.w	#$6000,d2
+	move.w	#$6000,d2
+;	move.w	d4,d2
+	muls.w	d2,d0
+	muls.w	d2,d1
+	add.l	d0,d0
+	add.l	d1,d1
+	swap	d0
+	swap	d1
+	move.w	d0,Julia.x
+	move.w	d1,Julia.y
+	bsr.w	Julia.paintZoomed
+
+	IFEQ	testmode
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	move.l	d0,d1
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+	ENDC
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.res_done
+	bsr.w	Julia.setRes
+.res_done:
+
+	rts
+
+******** OBJECT SUBROUTINES ********
+
+* INPUT:
+* a0: highcolor buffer to write to
+* a1: instruction table 
+Julia.makeColorFlow:
+	move.l	a0,-(sp)
+
+	move.w	(a1)+,d7
+	moveq	#0,d0
+	move.w	(a1)+,d0
+	moveq	#1,d6
+	lsl.w	d0,d6
+	move.w	d7,d5
+	mulu.w	d6,d5
+	subq.w	#1,d6
+	movea.w	d6,a5
+	subq.w	#1,d7
+
+.loop:	move.l	(a1)+,d1
+	move.l	(a1),d2
+	move.l	d1,d3
+	move.l	d2,d4
+	lsr.l	#8,d3
+	lsr.l	#8,d4
+	clr.w	d3
+	clr.w	d4
+	sub.l	d3,d4
+	asr.l	d0,d4
+	move.l	a0,a6
+
+.red_loop:
+	swap	d3
+	move.w	d3,d5
+	lsl.w	#8,d5
+	andi.w	#$f800,d5
+	move.w	d5,(a0)+
+	swap	d3
+	add.l	d4,d3
+	dbra	d6,.red_loop
+
+	move.w	a5,d6
+	move.l	a6,a0
+	move.l	d1,d3
+	move.l	d2,d4
+	andi.l	#$00ff0000,d3
+	andi.l	#$00ff0000,d4
+	sub.l	d3,d4
+	asr.l	d0,d4
+
+.green_loop:
+	swap	d3
+	move.w	d3,d5
+	lsl.w	#3,d5
+	andi.w	#$07e0,d5
+	or.w	d5,(a0)+
+	swap	d3
+	add.l	d4,d3
+	dbra	d6,.green_loop
+
+	move.l	a6,a0
+	move.w	a5,d6
+	moveq	#0,d3
+	moveq	#0,d4
+	move.b	d1,d3
+	move.b	d2,d4
+	swap	d3
+	swap	d4
+	sub.l	d3,d4
+	asr.l	d0,d4
+
+.blue_loop:
+	swap	d3
+	move.w	d3,d5
+	lsr.w	#3,d5
+	andi.w	#$001f,d5
+	or.w	d5,(a0)+
+	swap	d3
+	add.l	d4,d3
+	dbra	d6,.blue_loop
+
+	move.w	a5,d6
+	dbra	d7,.loop
+
+	movea.l	(sp)+,a1
+	rts
+
+Julia.paintZoomed:
+	move.w	#$7FFF,d4
+	move.w	d4,d0
+	move.w	d4,d1
+	move.w	d4,d2
+	move.w	d4,d5
+	muls.w	#-80,d0
+	muls.w	#-50,d1
+	muls.w	#+160,d2
+	clr.l	d3
+	clr.l	d4
+	muls.w	#+100,d5
+	bsr.s	Julia.paintDsp
+	rts
+
+; Mandelbrot zoomer, 160*100 highcolor, DSP assisted.
+; INPUT:
+; d0.w: topleft x (2:14)
+; d1.w: topleft y (2:14)
+; d2.w: topright width (2:14)
+; d3.w: topright height (2:14)
+; d4.w: bottomleft width (2:14)
+; d5.w: bottomleft height (2:14)
+Julia.paintDsp:
+	movem.w	Julia.x,d6/d7
+	lsl.l	#8,d6
+	lsl.l	#7,d7
+	sendLongToDsp	d6			; Send jx.
+	sendLongToDsp	d7			; Send jy.
+	muls.l	#3,d0
+	muls.l	#3,d1
+	sendLongToDsp	d0			; Send lx.
+	sendLongToDsp	d1			; Send ty.
+	divs.l	#160/3,d2
+	divs.l	#160/3,d3
+	divs.l	#100/3,d4
+	divs.l	#100/3,d5
+	sendLongToDsp d2			; Send hdx.
+	sendLongToDsp d3			; Send hdy.
+	sendLongToDsp d4			; Send vdx.
+	sendLongToDsp d5			; Send vdy.
+	clr.l	d6
+	moveq	#50-1,d7
+	movea.l	scr,a0
+	lea	Julia.palette,a1
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	Julia.paintDspVga60
+	cmpi.w	#vga100,d0
+	beq.s	Julia.paintDspVga100
+	cmpi.w	#rgb50,d0
+	beq.s	Julia.paintDspRgb50
+
+Julia.paintDspVga100:
+	lea	(160*100)*2(a0),a6
+	lea	$ffffa206.w,a2
+	lea	$ffffa202.w,a3
+
+.yloop:	swap	d7
+	move.w	#160-1,d7
+
+.xloop:	btst.b	#0,(a3)
+	beq.s	.xloop
+	move.w	(a2),d6
+	move.w	(a1,d6.l*2),(a0)+
+	move.w	(a1,d6.l*2),-(a6)
+	dbra	d7,.xloop
+
+	swap	d7
+	dbra	d7,.yloop
+	rts
+
+Julia.paintDspVga60:
+	lea	(160*200*2.l,a0),a4
+	lea	-160*2(a4),a5
+	lea	160*2(a0),a6
+	movea.w	#160*2,a3
+	lea	$ffffa206.w,a2
+
+.yloop:	swap	d7
+	move.w	#160-1,d7
+
+.xloop:	btst.b	#0,$ffffa202.w
+	beq.s	*-6
+	move.w	(a2),d6
+	move.w	(a1,d6.l*2),d0
+	move.w	d0,(a0)+
+	move.w	d0,(a6)+
+	move.w	d0,-(a4)
+	move.w	d0,-(a5)
+	dbra	d7,.xloop
+
+	swap	d7
+	adda.l	a3,a0
+	adda.l	a3,a6
+	suba.l	a3,a4
+	suba.l	a3,a5
+	dbra	d7,.yloop
+	rts
+
+Julia.paintDspRgb50:
+	lea	(160*100*4.l,a0),a6
+	lea	$ffffa206.w,a2
+	lea	$ffffa202.w,a3
+
+.yloop:	swap	d7
+	move.w	#160-1,d7
+
+.xloop:	btst.b	#0,(a3)
+	beq.s	.xloop
+	move.w	(a2),d6
+	move.w	(a1,d6.l*2),d0
+	move.w	d0,(a0)+
+	move.w	d0,(a0)+
+	move.w	d0,-(a6)
+	move.w	d0,-(a6)
+	dbra	d7,.xloop
+
+	swap	d7
+	dbra	d7,.yloop
+	rts
+
+; Julia zoomer, 160*100 highcolor.
+; INPUT:
+; d0.w: left x (2:14)
+; d1.w: top y (2:14)
+; d2.w: width (2:14)
+; d3.w: height (2:14)
+;--------------------
+;             
+; f(c,n) = f(c,n-1)^2 + j, f(c,0) = c
+; c : complex number: x, y denote Re{c}, Im{c}
+Julia.paint:
+	lea	Julia.palette,a1
+	andi.l	#$FFFF,d2
+	andi.l	#$FFFF,d3
+	move.l	d2,d4
+	move.l	d3,d5
+	divu.w	#160,d4
+	divu.w	#100,d5
+	move.w	d0,.x				; d4.w = lx (2:14)
+	movea.l	d0,a3
+	move.w	d1,.y				; d5.w = ty (2:14)
+	movea.l	scr,a0
+	moveq	#100-1,d7
+	movea.l	#80<<22,a6
+	moveq	#7*2,d3
+	move.w	Julia.x,a4
+	move.w	Julia.y,a5
+
+.yloop:	swap	d7
+	move.w	#160-1,d7
+
+.xloop:	moveq	#Julia.ITERATIONS-1,d6
+	movem.w	.x(pc),d0/d1
+
+.iteration_loop:
+; Calculate f(c)^2 = x*x-y*y + i(x*y+x*y)
+	move.w	d1,d2				; d2.w=y
+	muls.w	d0,d1				; d1.l=x*y/2
+	lsl.l	#2,d1				; d1.l=x*y+x*y=Y
+	muls.w	d0,d0				; d0.l=x*x/2
+	muls.w	d2,d2				; d2.l=y*y/2
+; Now check if it is within the circle.
+; |C| = |X + i*Y| = sqrt(X*X+Y*Y) < 2.0
+; faster: |C|^2/2 = (X*X+Y*Y)/2 < 2.0
+	movea.l	d2,a2
+	adda.l	d0,a2
+	cmpa.l	a6,a2
+	bge.s	.end_iterator
+	sub.l	d2,d0				; d0.l=(x*x-y*y)/2
+	add.l	d0,d0				; d0.l=x*x-y*y=X
+	asr.l	d3,d0
+	asr.l	d3,d1
+	add.w	a4,d0				; d0.w=X+j.x
+	add.w	a5,d1				; d1.w=Y+j.y
+	dbra	d6,.iteration_loop
+
+.end_iterator:
+	move.w	2(a1,d6.w*2),(a0)+
+
+	add.w	d4,.x				; x := x + dx
+	dbra	d7,.xloop
+
+	move.w	a3,.x
+	add.w	d5,.y				; y := y + dy
+	swap	d7
+	dbra	d7,.yloop
+	rts
+
+.x:	DC.W	0
+.y:	DC.W	0
+
+******** OBJECT DATA ********
+
+	DATA
+
+Julia.p56:
+	INCBIN	JULIA.P56
+Julia.p56End:
+	EVEN
+
+Julia.flowPal:
+	DC.W	4
+	DC.W	Julia.ITER_LOG-2
+.start:	;DC.L	$00000000
+	;DC.L	$7F0000FF
+	;DC.L	$FF0000FF
+	;DC.L	$FF00007F
+	;DC.L	$FF000000
+	DC.L	$9F0000FF
+	DC.L	$7F0000FF
+	DC.L	$5F0000BF
+	DC.L	$3F00007F
+	DC.L	$0000003F
+
+.end:	
+
+Julia.radius:
+	DC.W	$6000
+
+******** OBJECT RESERVES ********
+
+	BSS
+
+Julia.palette:
+	DS.W	Julia.ITERATIONS
+	DS.L	1
+
+Julia.x:DS.W	1
+Julia.y:DS.W	1
+
+Julia.recentFrames:
+	DS.L	1
+Julia.startTime:
+	DS.L	1
+
+Julia.timeTable:
+	DS.L	Julia.INTERVAL
+
+******** END OF DEMO-EFFECT OBJECT ********

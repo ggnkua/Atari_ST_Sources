@@ -1,0 +1,401 @@
+; Explo-shadeclusters-motion blur (explo3.p56)
+; bit faster DSP render, WizTom of Aggression
+; screen 192*140 (70 lines x - 70 lines y)
+; prescaled sizes
+; split dsp screen
+; sub motion blur
+
+PBC	equ	$ffe0
+HSR	equ	$ffe9
+HTX	equ	$ffeb
+
+v1	equ	0
+v2	equ	0
+v3	equ	0
+v4	equ	0
+
+	org	p:$0
+	jmp	start
+
+	dc	0,0,0,0,0,0,0,0,0,0
+	dc	0,0,0,0,0,0,0,0,0,0
+	dc	0,0,0,0,0,0,0,0,0,0
+	dc	0,0,0,0,0,0,0,0,0,0
+	dc	0,0,0,0,0,0,0,0,0,0
+	dc	0,0,0,0,0,0,0,0,0,0
+	dc	0,0,0,0
+
+start	
+	jsr	fix_vakiot
+	move	#>$ffff,m0
+	nop
+	move	m0,m1
+	move	m0,m2
+	move	m0,m3
+	move	m0,m4
+	move	m0,m5
+	move	m0,m6
+	move	m0,m7
+
+	movep	#0,x:$fffe		;fix read
+	move	#>$babe,x0
+x_ready	jclr	#1,X:HSR,x_ready
+	move	x0,X:HTX		
+
+kasky	movep	#1,X:PBC		
+	jclr	#0,x:HSR,kasky
+	move	x:HTX,a
+	tst	a	#>1,x0
+	jeq	key0			;feed gfx to cpu
+	sub	x0,a
+	jeq	key1			;draw shades of list
+	sub	x0,a
+	jeq	key2			;precalced shadegfx from cpu,
+	sub	x0,a			;prescales (x-y 32*32)
+					;n, n*colshades (0-255)
+	jeq	key3			;motion blur
+	
+	jmp	start
+
+;-------------------------------
+; motion + 24bit to 16bit conv -> CPU
+;----------------------------------
+
+key0
+	move	#screen,r0		;motion buf
+	move	#vakio,r7
+	move	#3,n7
+	move	#HTX,r6
+
+	move	x:(r0),x0
+	move	y:(r7+n7),a		;prefeed first pixel
+
+	move	#>192*70,n6
+	move	#>$200000,y1		;2^20+1
+
+	do	n6,m_loop		;X ram part
+;----------
+v1b	equ	$007c00
+v2b	equ	$010000			;2^15+1
+v3b	equ	$080000			;2^18+1
+v4b	equ	$7c007c
+
+	and	x0,a	y:(r7)+,b		;R_B
+	and	x0,b	a,x1	y:(r7)+,y0	;_G_
+	mpy	y0,x1,a	x:(r0)+,x0		;R
+	mac	y1,x1,a	b,x1	y:(r7)+,y0	;B
+	mac	y0,x1,a	y:(r7)-n7,b		;G
+
+csync	jclr	#1,X:HSR,csync
+	tfr	b,a	a1,x:(r6)
+;-------
+m_loop
+
+	move	#screen,r0		;
+	do	n6,m_loop2		;Y ram part
+;----------
+	and	x0,a	y:(r7)+,b		;R_B
+	and	x0,b	a,x1	y:(r7)+,y0	;_G_
+	mpy	y0,x1,a	y:(r0)+,x0		;R
+	mac	y1,x1,a	b,x1	y:(r7)+,y0	;B
+	mac	y0,x1,a	y:(r7)-n7,b		;G
+
+csync2	jclr	#1,X:HSR,csync2
+	tfr	b,a	a1,x:(r6)
+;-------
+m_loop2
+
+	jmp	start
+
+;------------------------------------
+; render shadeparticles from list to virtual screen
+;---------------------------------------------
+
+key1
+	jsr	readparticles
+	jsr	renderparticles
+	jmp	start
+
+;-----------------------------------------------------------
+; Hae particle-list prosulta
+;-----------------------------------------------------------
+
+readparticles
+ra	movep	#1,X:PBC
+	jclr	#0,x:HSR,ra		
+	move	x:HTX,a
+	move	a1,x:amount
+
+	move	#shadelist,r0
+	lsl	a	a1,x1
+	lsl	a
+	add	x1,a		
+	do	a1,getx			;amount*5
+;----
+rc	movep	#1,X:PBC
+	jclr	#0,x:HSR,rc		;get list from cpu
+	move	x:HTX,x0
+	move	x0,y:(r0)+		;x,y,size,heat,col
+getx					
+;----
+	rts
+
+;------------------------------------
+; kaikki rendaus rutiinit alkaa 
+;---------------------------------------
+
+renderparticles
+	move	#shadelist,r3
+	move	x:amount,x0
+	move	#vakio+4,r2		;pointaa v5
+	move	#1,n2
+	do	x0,drawone
+;--------------------------- ONE PARTICLE 
+
+	move	y:(r3)+,a0		;get X
+	move	y:(r3)+,x0		;get y
+	move	#>192/2,x1
+	mac	x1,x0,a	#>screen,x0
+	move	a0,a
+	add	x0,a	
+	move	a1,r7			;screen position (vasen ylakulma)
+
+	move	y:(r3)+,x0		;size
+
+	clr	a
+	move	y:(r3)+,y1		;heat (shadeval base) = Y1
+	move	y:(r3)+,y0		;col*128
+	move	#>128/2,x1
+	mpy	y0,x1,a	
+	move	a0,y0
+	move	#>colslide,a
+	add	y0,a	
+	move	a1,r1			
+
+	move	#>32/2,x1
+	move	#>scalerx,a0		;x0 - size
+	mac	x0,x1,a			;32 wide table
+	move	a0,n5	
+	move	#>scalery,a0
+	mac	x0,x1,a	x0,n6		;n6 = size
+	move	a0,r6	
+	move	#>192,n7			;virtual screen wide
+	move	#>192*70,n4
+	
+	move	n5,r5
+	move	l:(r2+n2),x
+	move	#>$007f,n3
+	
+	do	n6,drawline
+;------------------------------ DRAW SCANLINE OF PARTICLE
+; r0/n0 y/x pos on shadegfx
+; r1/n0 colbase/gfx-index (heat val)
+; r2 vakio
+; r5,r6 x/y prescale tables
+; r7 screen pos, r4 linepos
+v5	equ	$7f7f7f
+v5b	equ	$7f7f7f
+v6	equ	$7f0000
+v6b	equ	$007f00
+
+	move	y:(r6)+,r0		;get shadegfx line
+	move	y:(r5)+,n0		;prefeed eka step
+; zekkaa kumpi rammi (x:0-69/y:70-139)
+	move	r7,a
+	move	#>screen+70*192,y0
+	cmp	y0,a	r7,r4
+	jge	select
+	
+	do	n6,drawpixelx
+;------------------------------ DRAW PIXEL OF SCANLINE to X-RAM
+	move	x:(r0+n0),y0				;hae kirkkausarvo
+	mpy	y0,y1,a	x:(r4),b			;old gfx
+	move	a1,n1
+	move	y:(r2),y0
+	and	y0,b	x:(r1+n1),y0			;get new col	
+	add	y0,b	y:(r5)+,n0			;shade RGB (x7,x7,x7)
+
+	jclr	#23,b1,no_R_overx
+	or	x1,b
+no_R_overx	
+	jclr	#15,b1,no_G_overx
+	or	x0,b
+no_G_overx
+	jclr	#7,b1,no_B_overx
+	move	n3,y0
+	or	y0,b
+no_B_overx
+	move	b1,x:(r4)+			;write gfx
+drawpixelx
+	jmp	selectover
+
+;------------------------------------
+select
+	move	(r4)-n4
+	do	n6,drawpixely
+;------------------------------ DRAW PIXEL OF SCANLINE to Y-RAM
+	move	x:(r0+n0),y0				;hae kirkkausarvo
+	mpy	y0,y1,a	y:(r4),b			;old gfx
+	move	a1,n1
+	move	y:(r2),y0
+	and	y0,b	x:(r1+n1),y0			;get new col	
+	add	y0,b	y:(r5)+,n0			;shade RGB (x7,x7,x7)
+
+	jclr	#23,b1,no_R_overy
+	or	x1,b
+no_R_overy	
+	jclr	#15,b1,no_G_overy
+	or	x0,b
+no_G_overy
+	jclr	#7,b1,no_B_overy
+	move	n3,y0
+	or	y0,b
+no_B_overy
+	move	b1,y:(r4)+			;write gfx
+drawpixely
+;--------
+selectover
+	move	(r7)+n7
+	move	n5,r5
+drawline
+;--------
+	nop
+	nop
+drawone
+	rts
+
+;------------------------------------
+; get shadegfx 
+;---------------------------------
+
+key2
+	move	#shadegfx,r0
+	do	#32*32,filler2
+getpix2	movep	#1,X:PBC		
+	jclr	#0,x:HSR,getpix2		;get shadegfx
+	move	x:HTX,x0
+	move	x0,x:(r0)+
+filler2
+
+	move	#scalerx,r0
+	do	#32*32,getscalex
+getpix3	movep	#1,X:PBC		
+	jclr	#0,x:HSR,getpix3		;prescaled X
+	move	x:HTX,x0,
+	move	x0,y:(r0)+
+getscalex
+
+	move	#scalery,r0
+	move	#>shadegfx,x0
+	do	#32*32,getscaley
+getpix4	movep	#1,X:PBC		
+	jclr	#0,x:HSR,getpix4		;prescaled Y
+	move	x:HTX,a
+	add	x0,a
+	move	a1,y:(r0)+
+getscaley
+
+getpix5	movep	#1,X:PBC		
+	jclr	#0,x:HSR,getpix5		;number of slides
+	move	x:HTX,x0
+	move	#colslide,r0
+
+	do	x0,getcolhi
+	do	#128,getcollo
+
+getpix6	movep	#1,X:PBC		
+	jclr	#0,x:HSR,getpix6		;colslides
+	move	x:HTX,x0
+	move	x0,x:(r0)+
+getcollo
+	nop
+	nop
+getcolhi			
+	jmp	start
+;------------------------------------
+; motion blur
+;----------------------------------
+
+key3			
+	move	#screen,r0
+	move	#screen,r1
+	move	#>$1f1f1f,y1
+	move	#>$100000,x1		;2^20	(1/8)
+	move	x:(r0),a		;for dummy write
+	move	y:(r1),b
+	move	x:(r0),x0
+	move	#>192*70,n0
+	nop
+	do	n0,blur1
+;----
+	mpy	x1,x0,a		a1,y:(r1)+
+	and	y1,a
+	neg	a
+	add	x0,a		y:(r1),x0
+
+	mpy	x1,x0,a		a1,x:(r0)+
+	and	y1,a
+	neg	a
+	add	x0,a		x:(r0),x0
+	
+blur1	
+;----
+	move	a1,x:(r0)
+	jmp	start
+
+;------------------------------------
+;------------------------------------
+fix_vakiot
+	move	#vakio,r0
+	move	#>v1,x1
+	move	#>v1b,x0
+	move	x,l:(r0)+
+	move	#>v2,x1
+	move	#>v2b,x0
+	move	x,l:(r0)+
+	move	#>v3,x1
+	move	#>v3b,x0
+	move	x,l:(r0)+
+	move	#>v4,x1
+	move	#>v4b,x0
+	move	x,l:(r0)+
+	move	#>v5,x1
+	move	#>v5b,x0
+	move	x,l:(r0)+
+	move	#>v6,x1
+	move	#>v6b,x0
+	move	x,l:(r0)+
+	
+	rts
+;------------------------------------
+;read_one
+;	movep	#1,X:PBC		
+;	jclr	#0,x:HSR,read_one
+;	move	x:HTX,a1
+;
+;write_one
+;	jclr	#1,X:HSR,write_one
+;	move	a1,X:HTX		
+;---------------------------------
+
+	org	x:$0
+vakio
+	ds	6	;v1
+amount	ds	1
+shadegfx
+	ds	32*32
+colslide
+	ds	128*5		;max 7 scales?
+	org	x:$b80
+	ds	1		;ennen screeneja vapaata 2.9k
+screen				;virtual screen (192*70 x, 192*70 y ,2*13.44k)
+
+	org	y:$0
+vakio2	ds	6
+shadelist	
+	ds	5*160	;x,y,heat,col,size
+scalerx
+	ds	32*32
+scalery
+	ds	32*32
+	end

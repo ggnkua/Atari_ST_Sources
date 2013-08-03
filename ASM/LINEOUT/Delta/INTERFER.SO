@@ -1,0 +1,521 @@
+; Interfering waves. Modern equivalent of ancient 'mad circles'.
+; A screen for delta.
+
+;======= OBJECT EQUATES ========
+
+				RSRESET
+Interferance.pallette:		RS.W	4096*2
+Interferance.circleTable:	RS.B	256*256
+Interferance.circleTable2:	RS.B	256*256
+Interferance.squareTable:	RS.L	128
+Interferance.BLOCK_SIZE:	RS.B	0
+
+;======= OBJECT TABLE ========
+
+* Must be first in object!!
+Interfer.table:
+	DC.L	Interfer.mainLoop
+	DC.L	INIT_Interferance
+	DC.L	Interfer.setRes
+	DC.L	Interferance.togglePalletteCycle
+* Add more addresses here..
+	DC.L	0
+
+;======= RESOLUTION SETTING ROUTINE ========
+
+Interfer.setRes:
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	beq.s	.end
+
+	move.l	#rts,vbl_gfx
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+* Unknown monitormode..
+	rts
+.vga60:	bra.l	vga60_16bit_160_200
+.vga100:bra.l	vga100_16bit_160_100
+.rgb50:	bra.l	rgb50_16bit_320_100
+.end:	rts
+
+;======= INIT SUBROUTINE ========
+
+* OUTPUT: d0.l: 0   = All clear.
+*               neg = Error! Not initialized!
+INIT_Interferance:
+	move.l	#Interferance.BLOCK_SIZE,d0
+	bsr.l	Mem.register
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+Interfer.realtimeInit:
+	move.l	#Interfer.setRes,vbl_gfx
+
+	bsr.l	Mem.getBlock
+	move.l	d0,Interferance.baseAdr
+
+	lea	Interferance.flowTable,a1
+	movea.l	Interferance.baseAdr,a0
+	adda.l	#Interferance.pallette,a0
+	bsr	Interferance.makeColorFlow
+
+	bsr	Interferance.initCircular
+
+	clr.w	Interferance.cycling
+	clr.w	Interferance.cyclePhase
+	rts
+
+;======= MAINLOOP SUBROUTINE ========
+
+Interfer.mainLoop:
+	move.w	$0468.w,.old468
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	bsr	Interfer.realtimeInit
+.end_realtime_init:
+
+	bsr	Interferance.paintCircular
+
+	IFEQ	testmode
+	move.w	.old468(pc),d0
+	moveq	#1,d3
+	cmpi.w	#vga100,monitormode
+	bne.s	.wait
+	moveq	#2,d3
+.wait:	move.w	$0468.w,d2
+	sub.w	d0,d2
+	cmp.w	d3,d2
+	blt.s	.wait
+
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	move.l	d0,d1
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+	ENDC
+
+	rts
+
+.old468:DC.W	0
+
+;======= OBJECT SUBROUTINES ========
+
+Interferance.togglePalletteCycle:
+	not.w	Interferance.cycling
+	beq.s	.end
+	move.w	Interferance.cyclePhase,Interferance.oldCyclePhase
+	move.w	$4bc.w,Interferance.startTime
+.end:	rts
+
+* Calculates circular wavetable for circular plasma.
+Interferance.initCircular:	
+	movea.l	Interferance.baseAdr,a0
+	adda.l	#Interferance.squareTable,a0
+	move.w	#-255,d0
+
+.calc_sqr_loop:
+	move.w	d0,d1
+	muls.w	d1,d1
+	move.l	d1,(a0)+
+	addq.w	#2,d0
+	bmi.s	.calc_sqr_loop
+
+	movea.l	Interferance.baseAdr,a0
+	movea.l	a0,a2
+	movea.l	a0,a3
+	adda.l	#Interferance.circleTable,a0
+	adda.l	#Interferance.circleTable2,a2
+	adda.l	#Interferance.squareTable,a3
+	lea	sine_tbl,a1
+	moveq	#128-1,d7
+	clr.l	d4
+
+.yloop:	moveq	#128-1,d6
+	movea.l	Interferance.baseAdr,a4
+	adda.l	#Interferance.squareTable,a4
+	move.l	(a3)+,d5
+	clr.b	d4
+
+.xloop:	move.l	d5,d1
+	add.l	(a4)+,d1
+	bsr.l	Math.sqrt
+	lsr.l	#8,d0
+	lsr.l	#3,d0
+	move.l	d0,d1
+	lsr.l	#1,d0
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	Get_Cos	a1,d0,d0
+	Get_Cos	a1,d1,d1
+	addi.w	#$8000,d0
+	lsr.w	#8,d0
+	lsr.w	#1,d0
+	addi.w	#$8000,d1
+	lsr.w	#8,d1
+	lsr.w	#1,d1
+
+; Output cells..
+	move.w	d4,d2
+	move.b	d0,(a0,d2.l)
+	move.b	d1,(a2,d2.l)
+	not.b	d2
+	move.b	d0,(a0,d2.l)
+	move.b	d1,(a2,d2.l)
+	not.w	d2
+	move.b	d0,(a0,d2.l)
+	move.b	d1,(a2,d2.l)
+	not.b	d2
+	move.b	d0,(a0,d2.l)
+	move.b	d1,(a2,d2.l)
+
+	addq.b	#1,d4
+	dbf	d6,.xloop
+
+	addi.w	#$0100,d4
+	dbf	d7,.yloop
+
+	rts
+
+* Generates a highcolor pallette from a (truecolor) flowtable.
+* INPUT:
+* a0: highcolor buffer to write to
+* a1: instruction table 
+Interferance.makeColorFlow:
+	move.l	a0,-(sp)
+
+	move.w	(a1)+,d7
+	moveq	#0,d0
+	move.w	(a1)+,d0
+	moveq	#1,d6
+	lsl.w	d0,d6
+	move.w	d7,d5
+	mulu.w	d6,d5
+	subq.w	#1,d6
+	movea.w	d6,a5
+	subq.w	#1,d7
+
+.loop:	move.l	(a1)+,d1
+	move.l	(a1),d2
+	move.l	d1,d3
+	move.l	d2,d4
+	lsr.l	#8,d3
+	lsr.l	#8,d4
+	clr.w	d3
+	clr.w	d4
+	sub.l	d3,d4
+	asr.l	d0,d4
+	move.l	a0,a6
+
+.red_loop:
+	swap	d3
+	move.w	d3,d5
+	lsl.w	#8,d5
+	andi.w	#$f800,d5
+	move.w	d5,(a0)+
+	swap	d3
+	add.l	d4,d3
+	dbra	d6,.red_loop
+
+	move.w	a5,d6
+	move.l	a6,a0
+	move.l	d1,d3
+	move.l	d2,d4
+	andi.l	#$00ff0000,d3
+	andi.l	#$00ff0000,d4
+	sub.l	d3,d4
+	asr.l	d0,d4
+
+.green_loop:
+	swap	d3
+	move.w	d3,d5
+	lsl.w	#3,d5
+	andi.w	#$07e0,d5
+	or.w	d5,(a0)+
+	swap	d3
+	add.l	d4,d3
+	dbra	d6,.green_loop
+
+	move.l	a6,a0
+	move.w	a5,d6
+	moveq	#0,d3
+	moveq	#0,d4
+	move.b	d1,d3
+	move.b	d2,d4
+	swap	d3
+	swap	d4
+	sub.l	d3,d4
+	asr.l	d0,d4
+
+.blue_loop:
+	swap	d3
+	move.w	d3,d5
+	lsr.w	#3,d5
+	andi.w	#$001f,d5
+	or.w	d5,(a0)+
+	swap	d3
+	add.l	d4,d3
+	dbra	d6,.blue_loop
+
+	move.w	a5,d6
+	dbra	d7,.loop
+
+	movea.l	(sp)+,a1
+
+* Now copy this babe for wrapping..
+	move.w	(a1)+,d7
+	subq.w	#1,d7
+.copyloop:
+	move.w	(a1)+,(a0)+
+	dbra	d7,.copyloop
+	rts
+
+* Paints a pallette based sinoid plasma on screen.
+Interferance.paintCircular:
+	movea.l	scr,a0
+.handle_cycling:
+	move.w	Interferance.cyclePhase,d0
+	tst.w	Interferance.cycling
+	beq.s	.end_handle_cycling
+	move.w	$4bc.w,d0
+	sub.w	Interferance.startTime,d0
+	lsr.w	#2,d0
+	add.w	Interferance.oldCyclePhase,d0
+	andi.w	#2048-1,d0
+	move.w	d0,Interferance.cyclePhase
+.end_handle_cycling:
+	movea.l	Interferance.baseAdr,a1
+	adda.l	#Interferance.pallette,a1
+	lea	(a1,d0.w*2),a1
+	moveq	#100-1,d7
+
+	move.w	$4bc.w,d0
+	move.w	d0,d2
+	move.w	d0,d1
+	mulu.w	#5,d1
+	lsr.l	#2,d1
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	lea	sine_tbl,a3
+	Get_Sin	a3,d0,d0
+	Get_Cos	a3,d1,d1
+	addi.w	#$8000,d0
+	addi.w	#$8000,d1
+	andi.l	#$ffff,d0
+	andi.l	#$ffff,d1
+	lsr.l	#1,d0
+	andi.w	#$ff00,d0
+	lsr.l	#8,d1
+	lsr.l	#2,d1
+	add.l	d0,d1
+	andi.l	#$ffff,d1
+	movea.l	Interferance.baseAdr,a4
+	adda.l	#Interferance.circleTable,a4
+	lea	(a4,d1.l),a4
+* a4: displaced address of second circle table
+
+	move.w	d2,d0
+	mulu.w	#3,d0
+	lsr.w	#1,d0
+	move.w	d2,d1
+	mulu.w	#7,d1
+	lsr.w	#2,d1
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	lea	sine_tbl,a3
+	Get_Sin	a3,d0,d0
+	Get_Cos	a3,d1,d1
+	addi.w	#$8000,d0
+	addi.w	#$8000,d1
+	andi.l	#$ffff,d0
+	andi.l	#$ffff,d1
+	lsr.l	#1,d0
+	andi.w	#$ff00,d0
+	lsr.l	#8,d1
+	lsr.l	#2,d1
+	add.l	d0,d1
+	andi.l	#$ffff,d1
+	movea.l	Interferance.baseAdr,a3
+	adda.l	#Interferance.circleTable2,a3
+	lea	(a3,d1.l),a3
+* a3: displaced address of first circle table
+
+	moveq	#0,d2
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq	Interferance.paintCircularVga60
+	cmpi.w	#vga100,d0
+	beq	Interferance.paintCircularVga100
+	cmpi.w	#rgb50,d0
+	beq	Interferance.paintCircularRgb50
+* Unknown monitormode..
+	rts
+
+Interferance.paintCircularVga60:
+	lea	160*2(a0),a5
+	clr.l	d3
+
+.yloop:	swap	d7
+	move.w	#160/8-1,d7
+
+.xloop:	REPT	8
+	move.b	(a4)+,d2
+	add.b	(a3)+,d2
+	move.w	(a1,d2.l*2),d3
+	move.w	d3,(a0)+
+	move.w	d3,(a5)+
+	ENDR
+	dbra	d7,.xloop
+
+	lea	256-160(a4),a4
+	lea	256-160(a3),a3
+	lea	160*2(a0),a0
+	lea	160*2(a5),a5
+	swap	d7
+	dbra	d7,.yloop
+
+.end:	rts
+
+Interferance.paintCircularVga100:
+.yloop:	swap	d7
+	move.w	#160/8-1,d7
+
+.xloop:	REPT	8
+	move.b	(a4)+,d2
+	add.b	(a3)+,d2
+	move.w	(a1,d2.l*2),(a0)+
+	ENDR
+	dbra	d7,.xloop
+
+	lea	256-160(a4),a4
+	lea	256-160(a3),a3
+	swap	d7
+	dbra	d7,.yloop
+
+.end:	rts
+
+Interferance.paintCircularRgb50:
+.yloop:	swap	d7
+	move.w	#160/8-1,d7
+
+.xloop:	REPT	8
+	move.b	(a4)+,d2
+	add.b	(a3)+,d2
+	move.l	(a1,d2.l*2),(a0)+
+	ENDR
+	dbra	d7,.xloop
+
+	lea	256-160(a4),a4
+	lea	256-160(a3),a3
+	swap	d7
+	dbra	d7,.yloop
+
+.end:	rts
+
+;======= OBJECT DATA ========
+
+	DATA
+
+Interferance.flowTable:
+	DC.W	64	(.end-.start)/4
+	DC.W	5
+.start:	DC.L	$ff000000
+	DC.L	$df000000
+	DC.L	$bf000000
+	DC.L	$9f000000
+	DC.L	$7f000000
+	DC.L	$5f000000
+	DC.L	$3f000000
+	DC.L	$1f000000
+	DC.L	$00000000
+	DC.L	$0000001f
+	DC.L	$0000003f
+	DC.L	$0000005f
+	DC.L	$0000007f
+	DC.L	$0000009f
+	DC.L	$000000bf
+	DC.L	$000000df
+	DC.L	$000000ff
+	DC.L	$000000df
+	DC.L	$000000bf
+	DC.L	$0000009f
+	DC.L	$0000007f
+	DC.L	$0000005f
+	DC.L	$0000003f
+	DC.L	$0000001f
+	DC.L	$001f0000
+	DC.L	$003f0000
+	DC.L	$005f0000
+	DC.L	$007f0000
+	DC.L	$009f0000
+	DC.L	$00bf0000
+	DC.L	$00df0000
+	DC.L	$00ff0000
+	DC.L	$1fff0000
+	DC.L	$3fff0000
+	DC.L	$5fff0000
+	DC.L	$7fff0000
+	DC.L	$9fff0000
+	DC.L	$bfff0000
+	DC.L	$dfff0000
+	DC.L	$ffdf0000
+	DC.L	$dfbf0000
+	DC.L	$bf9f0000
+	DC.L	$9f7f0000
+	DC.L	$7f5f0000
+	DC.L	$5f3f0000
+	DC.L	$3f1f0000
+	DC.L	$1f000000
+	DC.L	$00000000
+	DC.L	$00000000
+	DC.L	$1f000000
+	DC.L	$3f000000
+	DC.L	$5f000000
+	DC.L	$7f000000
+	DC.L	$9f000000
+	DC.L	$bf000000
+	DC.L	$df000000
+	DC.L	$ff000000
+	DC.L	$ff000000
+	DC.L	$ff000000
+	DC.L	$ff000000
+	DC.L	$ff000000
+	DC.L	$ff000000
+	DC.L	$ff000000
+	DC.L	$ff000000
+	DC.L	$ff000000
+.end:
+
+;======= OBJECT RESERVES ========
+
+	BSS
+
+Interferance.cyclePhase:
+	DS.W	1
+Interferance.oldCyclePhase:
+	DS.W	1
+Interferance.startTime:
+	DS.W	1
+Interferance.cycling:
+	DS.W	1
+Interferance.baseAdr:
+	DS.L	1
+
+;======= END OF DEMO-EFFECT OBJECT ========

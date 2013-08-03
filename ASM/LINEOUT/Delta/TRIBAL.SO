@@ -1,0 +1,1975 @@
+; Tribal tridi stuffings.
+; Filled shrunken headz.
+;
+; originally intended as tribal stuff but now more industrial, how lame..
+; A screen for delta, using ufly.
+
+;======= OBJECT EQUATES ========
+
+; Change these to your likings..
+Tribal.WHEELSTEPS:	=	24			; must be even!
+Tribal.WHEELDEPTH:	=	60
+Tribal.WHEELRIN:	=	300
+Tribal.WHEELROUT:	=	400			; > RIN
+Tribal.WHEELRT:		=	60			; >=0
+
+; Do not change these!
+Tribal.WHEELPOINTS:	=	Tribal.WHEELSTEPS*6
+Tribal.WHEELPOLYS:	=	Tribal.WHEELSTEPS*5
+
+; Change these to your likings..
+Tribal.SWHEELSTEPS:	=	12			; must be even!
+Tribal.SWHEELDEPTH:	=	60
+Tribal.SWHEELRIN:	=	150
+Tribal.SWHEELROUT:	=	250			; > RIN
+Tribal.SWHEELRT:	=	60			; >=0
+
+Tribal.AXIS_SEGMENTS:	=	2
+Tribal.AXIS_SEGLEN:	=	2000/Tribal.AXIS_SEGMENTS
+
+Tribal.ANCHORROUT:	=	Tribal.SWHEELRIN
+Tribal.ANCHORRIN:	=	40
+
+Tribal.AXIS_POINTS:	=	24+Tribal.AXIS_SEGMENTS*4
+Tribal.AXIS_POLYS:	=	1+4*4+Tribal.AXIS_SEGMENTS*4
+
+			RSRESET
+Tribal.wheel:		RS.W	4096
+Tribal.smallWheel:	RS.W	2048
+Tribal.axis:		RS.W	2048
+Tribal.BLOCK_SIZE:	RS.B	0
+
+;======= OBJECT TABLE ========
+
+; Must be first in object!!
+Tribal.table:
+	DC.L	Tribal.mainLoop
+	DC.L	Tribal.init
+	DC.L	Tribal.setRes
+	DC.L	Tribal.trigger2Circles
+	DC.L	Tribal.introBigWheel
+	DC.L	Tribal.introSmallWheel
+	DC.L	Tribal.switchWheelRot
+	DC.L	Tribal.setTopWheels
+	DC.L	Tribal.setFrontFocus
+	DC.L	Tribal.setMidFocus
+	DC.L	Tribal.triggerHalfCircle
+	DC.L	Tribal.triggerShiftLeft
+	DC.L	Tribal.setZoomAccel
+	DC.L	0
+
+	IFND	DEMO_SYSTEM
+	INCLUDE	SFLY_DSP.S
+	TEXT
+	ENDC
+
+;======= RESOLUTION SETTING ROUTINE ========
+
+Tribal.setRes:
+	IFEQ	testmode
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+; Unknown monitormode..
+	rts
+.vga60:	bra.l	vga60_16bit_320_200
+.vga100:bra.l	vga100_16bit_320_200
+.rgb50:	bra.l	rgb50_16bit_320_200
+	ENDC
+	rts
+
+;======= INIT SUBROUTINE ========
+
+; OUTPUT:
+; d0.l: =0 all clear, <0 error
+Tribal.init:
+	move.l	#Tribal.BLOCK_SIZE,d0
+	bsr.l	Mem.register
+
+	lea	sine_tbl,a1
+	bsr.l	Matrix.init
+
+; Generate nice turbulence chrome texture..
+	lea	Tribal.texture,a0
+	move.l	#"Word",(a0)+
+	move.l	#"PerP",(a0)+
+	move.l	#"ixel",(a0)+
+	move.l	#$00400040,(a0)+
+	lea	FlareGen.chromePal,a1
+	moveq	#6,d0
+	moveq	#3,d1
+	move.l	#$00010001,d2
+	bsr.l	Texture.createWords2
+
+	bsr	Tribal.calcGreyPal
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= REALTIME INIT SUBROUTINE ========
+
+Tribal.realtimeInit:
+	move.l	#rts,vbl_gfx
+
+	bsr.l	Mem.getBlock
+	move.l	d0,Tribal.baseAdr
+
+	bsr.l	HumanFly.init
+
+	lea	Viewport.settingsTable,a0
+	move.w	#320,Viewport.XSCREEN(a0)
+	move.w	#200,Viewport.YSCREEN(a0)
+	move.w	#0,Viewport.XSTART(a0)
+	move.w	#0,Viewport.YSTART(a0)
+	move.w	#320,Viewport.XEND(a0)
+	move.w	#200,Viewport.YEND(a0)
+	move.w	#160,Viewport.XCENTER(a0)
+	move.w	#100,Viewport.YCENTER(a0)
+	move.w	#256+32,Viewport.ASPECT(a0)
+	move.w	#$100,Viewport.FOCAL(a0)
+	bsr.l	Viewport.update
+
+	lea	Tribal.textureTable,a0
+	lea	Tribal.pal,a1
+	bsr.l	Polygon.init
+
+	bsr.l	ObjectRegistry.clear
+
+	lea	Tribal.delta,a0
+	move.l	#Tribal.deltaEnd-Tribal.delta,d0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi	.error
+
+	move.w	#Tribal.WHEELSTEPS,Tribal.wheelSteps
+	move.w	#Tribal.WHEELDEPTH,Tribal.wheelDepth
+	move.w	#Tribal.WHEELRIN,Tribal.wheelRIn
+	move.w	#Tribal.WHEELROUT,Tribal.wheelROut
+	move.w	#Tribal.WHEELRT,Tribal.wheelRT
+
+	movea.l	Tribal.baseAdr,a0
+	adda.l	#Tribal.wheel,a0
+	bsr	Tribal.genWheel
+; d0.l=obj size
+	movea.l	Tribal.baseAdr,a0
+	adda.l	#Tribal.wheel,a0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi	.error
+
+	move.w	#Tribal.SWHEELSTEPS,Tribal.wheelSteps
+	move.w	#Tribal.SWHEELDEPTH,Tribal.wheelDepth
+	move.w	#Tribal.SWHEELRIN,Tribal.wheelRIn
+	move.w	#Tribal.SWHEELROUT,Tribal.wheelROut
+	move.w	#Tribal.SWHEELRT,Tribal.wheelRT
+
+	movea.l	Tribal.baseAdr,a0
+	adda.l	#Tribal.smallWheel,a0
+	bsr	Tribal.genWheel
+; d0.l=obj size
+	movea.l	Tribal.baseAdr,a0
+	adda.l	#Tribal.smallWheel,a0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi	.error
+
+	movea.l	Tribal.baseAdr,a0
+	adda.l	#Tribal.axis,a0
+	bsr	Tribal.genAxis
+; d0.l=obj size
+	movea.l	Tribal.baseAdr,a0
+	adda.l	#Tribal.axis,a0
+	bsr.l	ObjectRegistry.set
+	tst.w	d0
+	bmi.s	.error
+
+	move.w	#-2000,Tribal.bigWheelX
+	move.w	#+2000,Tribal.smallWheelX
+	clr.l	Tribal.worldRotTime
+	clr.w	Tribal.worldRotOn
+	clr.w	Tribal.bigWheelMoveOn
+	clr.w	Tribal.wheelRotOn
+	clr.w	Tribal.topWheelsOn
+	clr.w	Tribal.axisMoveOn
+	clr.w	Tribal.axisOn
+	clr.w	Tribal.rotAccelOn
+	clr.w	Tribal.worldX
+	clr.w	Tribal.worldZ
+	move.l	#Tribal.paint,Tribal.paintRout
+	move.l	#Tribal.dummy,Tribal.worldRout
+	move.w	#32,Tribal.wRotSpeed
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;======= SCREENINIT SUBROUTINE ========
+
+Tribal.initScreen:
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	move.l	#$00000000,d4
+	bsr.l	Viewport.paintRectangle
+	rts
+
+;======= MAINLOOP SUBROUTINE ========
+
+Tribal.mainLoop:
+	move.w	$0468.w,.old468
+
+	movea.l	scr,a0
+	bsr.l	Primitive.setScreenbuffer
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr	Tribal.realtimeInit
+	tst.l	d0
+	bmi	.end
+	move.l	(sp)+,d0
+.end_realtime_init:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr	Tribal.initScreen
+.end_screeninit:
+
+; big wheel movement
+	tst.w	Tribal.bigWheelMoveOn
+	beq.s	.bigwheel_done
+	move.l	$04BA.w,d0
+	sub.l	Tribal.bigWheelStart,d0
+	lsl.l	#3,d0
+	subi.w	#2000,d0
+	cmpi.w	#-430,d0
+	blt.s	.big_ok
+	move.w	#-430,d0
+	clr.w	Tribal.bigWheelMoveOn
+.big_ok:move.w	d0,Tribal.bigWheelX
+.bigwheel_done:
+
+; small wheel movement
+	tst.w	Tribal.smallWheelMoveOn
+	beq.s	.smallwheel_done
+	move.l	$04BA.w,d0
+	sub.l	Tribal.smallWheelStart,d0
+	lsl.l	#3,d0
+	neg.l	d0
+	addi.w	#2000,d0
+	cmpi.w	#+280,d0
+	bgt.s	.s_ok
+	move.w	#+280,d0
+	clr.w	Tribal.smallWheelMoveOn
+.s_ok:	move.w	d0,Tribal.smallWheelX
+.smallwheel_done:
+
+; wheel axial rotation
+	clr.l	d0
+	tst.w	Tribal.wheelRotOn
+	beq.s	.wheelrot_done
+	move.l	$04BA.w,d0
+	sub.l	Tribal.wheelRotStart,d0
+	tst.w	Tribal.rotAccelOn
+	beq.s	.wheelrot_done
+	sub.w	Tribal.oldWRotTime,d0
+	move.w	d0,d1
+	move.w	d0,Tribal.wRotSpeed
+	mulu.w	d0,d0
+	lsr.l	#8,d0
+	lsr.l	#2,d0
+	add.w	Tribal.oldWRotTime,d0
+	add.w	d1,d0
+	move.w	d0,Tribal.wheelRotTime
+	bra.s	.end_wrot
+.wheelrot_done:
+	mulu.w	Tribal.wRotSpeed,d0
+	lsr.l	#5,d0
+	move.w	d0,Tribal.wheelRotTime
+.end_wrot:
+
+; axis z position
+	tst.w	Tribal.axisMoveOn
+	beq.s	.end_axis
+	move.l	$04BA.w,d0
+	sub.l	Tribal.axisStart,d0
+	lsl.l	#3,d0
+	neg.w	d0
+	addi.w	#4000,d0
+	bpl.s	.oki_axis
+	clr.w	d0
+	clr.w	Tribal.axisMoveOn
+.oki_axis:
+	move.w	d0,Tribal.axisZ
+.end_axis:
+
+	movea.l	Tribal.worldRout,a0
+	jsr	(a0)
+
+	movea.l	Tribal.paintRout,a0
+	jsr	(a0)
+
+	IFEQ	testmode
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	move.l	d0,d1
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+	ENDC
+
+	move.w	.old468(pc),d0
+.wait:	cmp.w	$0468.w,d0
+	beq.s	.wait
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.res_done
+	bsr	Tribal.setRes
+.res_done:
+
+.end:	rts
+
+.old468:DC.W	0
+
+;======= OBJECT SUBROUTINES ========
+
+Tribal.introBigWheel:
+	move.w	#1,Tribal.bigWheelMoveOn
+	move.l	$04BA.w,Tribal.bigWheelStart
+	rts
+
+Tribal.introSmallWheel:
+	move.w	#1,Tribal.smallWheelMoveOn
+	move.l	$04BA.w,Tribal.smallWheelStart
+	rts
+
+Tribal.switchWheelRot:
+	not.w	Tribal.wheelRotOn
+	move.l	$04BA.w,Tribal.wheelRotStart
+	rts
+
+Tribal.setTopWheels:
+	move.w	#1,Tribal.topWheelsOn
+	bra.s	Tribal.setAxis
+
+Tribal.setFrontFocus:
+	move.l	#Tribal.paint,Tribal.paintRout
+	rts
+
+Tribal.setMidFocus:
+	move.l	#Tribal.paintMid,Tribal.paintRout
+	rts
+
+Tribal.trigger2Circles:
+	move.l	#Tribal.turnTwice,Tribal.worldRout
+	move.l	$04BA.w,Tribal.worldRotStart
+	rts
+
+Tribal.triggerHalfCircle:
+	move.l	#Tribal.turnHalf,Tribal.worldRout
+	move.l	$04BA.w,Tribal.worldRotStart
+	rts
+
+Tribal.setAxis:
+	move.l	$04BA.w,Tribal.axisStart
+	move.w	#1,Tribal.axisOn
+	move.w	#1,Tribal.axisMoveOn
+	rts
+
+Tribal.triggerShiftLeft:
+	move.l	#Tribal.shiftLeft,Tribal.worldRout
+	move.l	$04BA.w,Tribal.worldRotStart
+	rts
+
+Tribal.setZoomAccel:
+	move.l	#Tribal.zoomIn,Tribal.worldRout
+	move.l	$04BA.w,Tribal.worldRotStart
+	move.w	Tribal.wheelRotTime,Tribal.oldWRotTime
+	move.w	#32,Tribal.wRotSpeed
+	move.w	#1,Tribal.rotAccelOn
+	rts
+
+Tribal.zoomIn:
+	move.l	$04BA.w,d0
+	sub.l	Tribal.worldRotStart,d0
+	add.l	d0,d0
+	cmpi.w	#1950,d0
+	blt.s	.ok
+	move.w	#1950,d0
+	move.l	#Tribal.dummy,Tribal.worldRout
+	clr.w	Tribal.rotAccelOn
+	move.w	Tribal.wheelRotTime,Tribal.oldWRotTime
+.ok:	neg.w	d0
+	move.w	d0,Tribal.worldZ
+	rts
+
+Tribal.turnTwice:
+; rot wereld!
+	move.l	$04BA.w,d0
+	sub.l	Tribal.worldRotStart,d0
+	add.l	d0,d0
+	cmpi.w	#sintbllen*2,d0
+	blt.s	.ok
+	move.w	#sintbllen*2,d0
+	move.l	#Tribal.dummy,Tribal.worldRout
+.ok:	move.l	d0,Tribal.worldRotTime
+	rts
+
+Tribal.turnHalf:
+; rot wereld!
+	move.l	$04BA.w,d0
+	sub.l	Tribal.worldRotStart,d0
+	add.l	d0,d0
+	cmpi.w	#sintbllen/2,d0
+	blt.s	.ok
+	move.w	#sintbllen/2,d0
+	move.l	#Tribal.dummy,Tribal.worldRout
+.ok:	move.l	d0,Tribal.worldRotTime
+	rts
+
+Tribal.shiftLeft:
+	move.l	$04BA.w,d0
+	sub.l	Tribal.worldRotStart,d0
+	lsl.l	#2,d0
+	cmpi.w	#Tribal.SWHEELROUT*3+Tribal.SWHEELRT*2,d0
+	blt.s	.ok
+	move.w	#Tribal.SWHEELROUT*3+Tribal.SWHEELRT*2,d0
+	move.l	#Tribal.dummy,Tribal.worldRout
+.ok:	move.w	d0,Tribal.worldX
+	rts
+
+Tribal.calcGreyPal:
+	lea	Tribal.pal,a0
+	clr.w	d0
+	move.w	#%0000100000100001,d1
+	move.w	#%0000000000100000,d2
+
+.loop:	move.w	d0,(a0)+
+	move.w	d0,(a0)+
+	add.w	d2,d0
+	move.w	d0,(a0)+
+	move.w	d0,(a0)+
+	add.w	d1,d0
+	bcc.s	.loop
+	rts
+
+; Generates a cogwheel. Very industrial, yes, yes.
+;
+; Parametrisation (2d, we extrude very easily later on):
+;
+; phi controls rotation. 0<=phi<2pi, phi=step*(2pi/steps), 0<=step<steps
+;
+; in(phi) = R_in*[cos(phi), sin(phi)]
+; --
+; out(phi) = R_out*[cos(phi), sin(phi)]
+; ---
+; t(phi) = out(phi) + n(phi) (tooth)
+; -        ---        -
+;
+;          { R_n*[cos(phi+a), sin(phi+a)], step even
+; n(phi) = { or...
+; -        { R_n*[cos(phi-a), sin(phi-a)], step odd
+;
+; a = 2pi/(2*steps)=pi/steps
+;
+; INPUT:
+; a0: dst object
+; OUTPUT:
+; d0.l=size of obj
+Tribal.genWheel:
+	movea.l	a0,a6
+
+	move.w	Tribal.wheelSteps,d0
+	move.w	d0,d1
+	mulu.w	#6,d0
+	mulu.w	#5,d1
+	move.w	d0,Tribal.wheelPoints
+	move.w	d1,Tribal.wheelPolys
+
+	move.w	Tribal.wheelPoints,d0
+	add.w	d0,d0
+	move.w	d0,(a0)+
+	move.w	Tribal.wheelPoints,(a0)+
+	move.w	Tribal.wheelPoints,d0
+	mulu.w	#Vertex.SIZE,d0
+	lea	(a0,d0.l),a2
+	lea	sine_tbl,a1
+	move.w	Tribal.wheelSteps,d7
+	subq.w	#1,d7
+
+.pointloop:
+; calc 6 points inner, outer, tooth and both in front and back versions..
+	move.w	d7,d0
+	mulu.w	#sintbllen,d0
+	divu.w	Tribal.wheelSteps,d0
+	Get_SinCos	a1,d0,d0,d1
+	move.w	d0,d2
+	move.w	d1,d3
+	muls.w	Tribal.wheelRIn,d2
+	muls.w	Tribal.wheelRIn,d3
+	add.l	d2,d2
+	add.l	d3,d3
+	swap	d2
+	swap	d3
+; Store in, front..
+	move.w	d2,(a0)+
+	move.w	d3,(a0)+
+	move.w	Tribal.wheelDepth,(a0)+
+; Store in, back..
+	move.w	d2,(a0)+
+	move.w	d3,(a0)+
+	move.w	Tribal.wheelDepth,d3
+	neg.w	d3
+	move.w	d3,(a0)+
+
+; Store normal in, f.
+	move.w	d0,d2
+	move.w	d1,d3
+	muls.w	#-209,d2
+	muls.w	#-209,d3
+	swap	d2
+	swap	d3
+	move.w	d2,(a2)+
+	move.w	d3,(a2)+
+	move.w	#+73,(a2)+
+; Store normal in, b.
+	move.w	d2,(a2)+
+	move.w	d3,(a2)+
+	move.w	#-73,(a2)+
+
+	move.w	d0,d2
+	move.w	d1,d3
+	muls.w	Tribal.wheelROut,d2
+	muls.w	Tribal.wheelROut,d3
+	add.l	d2,d2
+	add.l	d3,d3
+	swap	d2
+	swap	d3
+; Store out, front..
+	move.w	d2,(a0)+
+	move.w	d3,(a0)+
+	move.w	Tribal.wheelDepth,(a0)+
+; Store out, back..
+	move.w	d2,(a0)+
+	move.w	d3,(a0)+
+	move.w	Tribal.wheelDepth,d4
+	neg.w	d4
+	move.w	d4,(a0)+
+
+; Store normal out, f.
+	move.w	d7,d4
+	mulu.w	#sintbllen,d4
+	divu.w	Tribal.wheelSteps,d4
+	move.w	#sintbllen/16,d6
+	btst	#0,d7				; step even?
+	beq.s	.r_calced
+	neg.w	d6
+.r_calced:
+;	add.w	d6,d4				; Rotate +-45 deg.
+	Get_SinCos	a1,d4,d4,d5
+	muls.w	#209,d4
+	muls.w	#209,d5
+	swap	d4
+	swap	d5
+	move.w	d4,(a2)+
+	move.w	d5,(a2)+
+	move.w	#+73,(a2)+
+; Store normal out, b.
+	move.w	d4,(a2)+
+	move.w	d5,(a2)+
+	move.w	#-73,(a2)+
+
+; Store normal tooth, f.
+	move.w	d7,d4
+	mulu.w	#sintbllen,d4
+	divu.w	Tribal.wheelSteps,d4
+	move.w	#sintbllen/16,d6
+	btst	#0,d7				; step even?
+	beq.s	.r1_calced
+	neg.w	d6
+.r1_calced:
+;	add.w	d6,d4				; Rotate +-45 deg.
+	Get_SinCos	a1,d4,d4,d5
+	muls.w	#209,d4
+	muls.w	#209,d5
+	swap	d4
+	swap	d5
+	move.w	d4,(a2)+
+	move.w	d5,(a2)+
+	move.w	#+73,(a2)+
+; Store normal tooth, b.
+	move.w	d4,(a2)+
+	move.w	d5,(a2)+
+	move.w	#-73,(a2)+
+
+; Calc n vector.
+;      -
+	move.l	#sintbllen/2,d4
+	divu.w	Tribal.wheelSteps,d4
+	btst	#0,d7				; step even?
+	beq.s	.a_calced
+	neg.w	d4
+.a_calced:
+	move.w	d7,d0
+	mulu.w	#sintbllen,d0
+	divu.w	Tribal.wheelSteps,d0
+	add.w	d4,d0
+	Get_SinCos	a1,d0,d0,d1
+	muls.w	Tribal.wheelRT,d0
+	muls.w	Tribal.wheelRT,d1
+	add.l	d0,d0
+	add.l	d1,d1
+	swap	d0
+	swap	d1
+; d0.w=R_n*sin(phi+/-a), d1.w=R_n*cos(phi+/-a)
+	add.w	d2,d0
+	add.w	d3,d1
+; d0.w=R_out*sin(phi)+R_n*sin(phi+/-a), d1.w=R_out*cos(phi)+R_n*cos(phi+/-a)
+; Store tooth, front..
+	move.w	d0,(a0)+
+	move.w	d1,(a0)+
+	move.w	Tribal.wheelDepth,(a0)+
+; Store tooth, back..
+	move.w	d0,(a0)+
+	move.w	d1,(a0)+
+	move.w	Tribal.wheelDepth,d3
+	neg.w	d3
+	move.w	d3,(a0)+
+
+; Next step..
+	dbf	d7,.pointloop
+
+	movea.l	a2,a0
+
+	clr.w	(a0)+				; texels
+
+; polys..
+	move.w	Tribal.wheelPolys,(a0)+
+	move.w	Tribal.wheelSteps,d7
+	subq.w	#1,d7
+
+.polyloop:
+; face 1.. (in)
+	move.w	#Polygon.QUAD|Polygon.ENVMAPPED,(a0)+
+
+	move.w	d7,d0
+	mulu.w	#6,d0				; d0.w=1st,front,i
+	clr.l	d1
+	move.w	d7,d1
+	addq.w	#1,d1
+	divu.w	Tribal.wheelSteps,d1
+	swap	d1
+	mulu.w	#6,d1				; d1.w=2nd,front,i
+	move.w	d0,d2
+	addq.w	#1,d2				; d2.w=1st,back,i
+	move.w	d1,d3
+	addq.w	#1,d3				; d3.w=2nd,back,i
+	move.w	d0,(a0)+
+	move.w	d1,(a0)+
+	move.w	d3,(a0)+
+	move.w	d2,(a0)+
+	
+	move.w	Tribal.wheelPoints,a2
+	move.w	Tribal.wheelPoints,a3
+	move.w	Tribal.wheelPoints,a4
+	move.w	Tribal.wheelPoints,a5
+	adda.l	d0,a2
+	adda.l	d1,a3
+	adda.l	d2,a4
+	adda.l	d3,a5
+	move.w	a2,(a0)+
+	move.w	a3,(a0)+
+	move.w	a5,(a0)+
+	move.w	a4,(a0)+
+
+	btst	#0,d7
+	bne	.low
+
+; High poly (tooth included).
+.high:
+; face 2.. (top of tooth)
+	move.w	#Polygon.QUAD|Polygon.ENVMAPPED|0,(a0)+
+
+	addq.w	#4,d0				; d0.w=1st,front,tooth
+	addq.w	#4,d1				; d1.w=2nd,front,tooth
+	addq.w	#4,d2				; d2.w=1st,back,tooth
+	addq.w	#4,d3				; d3.w=2nd,back,tooth
+	move.w	d2,(a0)+
+	move.w	d3,(a0)+
+	move.w	d1,(a0)+
+	move.w	d0,(a0)+
+	addq	#4,a2
+	addq	#4,a3
+	addq	#4,a4
+	addq	#4,a5
+	move.w	a4,(a0)+
+	move.w	a5,(a0)+
+	move.w	a3,(a0)+
+	move.w	a2,(a0)+
+
+; face 3.. (front)
+	move.w	#Polygon.HEX|Polygon.ENVMAPPED|0,(a0)+
+
+; d0.w=1st,front,tooth
+; d1.w=2nd,front,tooth
+	move.w	d0,(a0)+
+	move.w	d1,(a0)+
+	subq.w	#2,d1				; d1.w=2nd,f,o
+	move.w	d1,(a0)+
+	subq.w	#2,d1				; d1.w=2nd,f,i
+	move.w	d1,(a0)+
+	subq.w	#4,d0				; d0.w=1st,f,i
+	move.w	d0,(a0)+
+	addq.w	#2,d0				; d0.w=1st,f,o
+	move.w	d0,(a0)+
+
+	move.w	a2,(a0)+
+	move.w	a3,(a0)+
+	subq	#2,a3
+	move.w	a3,(a0)+
+	subq	#2,a3
+	move.w	a3,(a0)+
+	subq	#4,a2
+	move.w	a2,(a0)+
+	addq	#2,a2
+	move.w	a2,(a0)+
+
+; face 4.. (back)
+	lea	-6*4(a0),a1
+	move.w	#Polygon.HEX|Polygon.ENVMAPPED|0,(a0)+
+
+	adda.w	#6*2,a0
+	moveq	#6-1,d6
+.front_to_back_loop:
+	move.w	6*2(a1),d1
+	move.w	(a1)+,d0
+	addq.w	#1,d0
+	addq.w	#1,d1
+	move.w	d0,-(a0)
+	move.w	d1,6*2(a0)
+	dbf	d6,.front_to_back_loop
+
+	adda.w	#6*4,a0
+	bra	.next_poly_step
+
+; Low poly (no tooth included)
+.low:
+; face 2.. (top of out)
+	move.w	#Polygon.QUAD|Polygon.ENVMAPPED|0,(a0)+
+
+	addq.w	#2,d0				; d0.w=1st,front,out
+	addq.w	#2,d1				; d1.w=2nd,front,out
+	addq.w	#2,d2				; d2.w=1st,back,out
+	addq.w	#2,d3				; d3.w=2nd,back,out
+	move.w	d2,(a0)+
+	move.w	d3,(a0)+
+	move.w	d1,(a0)+
+	move.w	d0,(a0)+
+	addq	#2,a2				; d0.w=1st,front,out
+	addq	#2,a3				; d1.w=2nd,front,out
+	addq	#2,a4				; d2.w=1st,back,out
+	addq	#2,a5				; d3.w=2nd,back,out
+	move.w	a4,(a0)+
+	move.w	a5,(a0)+
+	move.w	a3,(a0)+
+	move.w	a2,(a0)+
+
+; face 3 (front)
+	move.w	#Polygon.QUAD|Polygon.ENVMAPPED|0,(a0)+
+
+	move.w	d0,(a0)+
+	move.w	d1,(a0)+
+	subq.w	#2,d0				; d0.w=1st,front,in
+	subq.w	#2,d1				; d1.w=2nd,front,in
+	move.w	d1,(a0)+
+	move.w	d0,(a0)+
+	move.w	a2,(a0)+
+	move.w	a3,(a0)+
+	subq	#2,a2				; d0.w=1st,front,in
+	subq	#2,a3				; d1.w=2nd,front,in
+	move.w	a3,(a0)+
+	move.w	a2,(a0)+
+
+; face 4 (back)
+	move.w	#Polygon.QUAD|Polygon.ENVMAPPED|0,(a0)+
+
+	addq.w	#1,d0				; d0.w=1st,back,in
+	addq.w	#1,d1				; d1.w=2nd,back,in
+	move.w	d0,(a0)+
+	move.w	d1,(a0)+
+	addq.w	#2,d0				; d0.w=1st,back,out
+	addq.w	#2,d1				; d1.w=2nd,back,out
+	move.w	d1,(a0)+
+	move.w	d0,(a0)+
+	addq	#1,a2				; d0.w=1st,back,in
+	addq	#1,a3				; d1.w=2nd,back,in
+	move.w	a2,(a0)+
+	move.w	a3,(a0)+
+	addq	#2,a2				; d0.w=1st,back,out
+	addq	#2,a3				; d1.w=2nd,back,out
+	move.w	a3,(a0)+
+	move.w	a2,(a0)+
+
+.next_poly_step:
+
+; face 5 (tooth->out)
+	move.w	#Polygon.QUAD|Polygon.ENVMAPPED|0,(a0)+
+	move.w	d7,d0
+	mulu.w	#6,d0				; d0.w=1st,front,i
+	move.w	d0,a2
+	adda.w	Tribal.wheelPoints,a2
+
+	btst	#0,d7
+	bne.s	.poly_order
+
+	addq.w	#2,d0				; d0.w=1,f,o
+	move.w	d0,(a0)+
+	addq.w	#1,d0				; d0.w=1,b,o
+	move.w	d0,(a0)+
+	addq.w	#2,d0				; d0.w=1,b,t
+	move.w	d0,(a0)+
+	subq.w	#1,d0				; d0.w=1,f,t
+	move.w	d0,(a0)+
+	addq	#2,a2				; d0.w=1,f,o
+	move.w	a2,(a0)+
+	addq	#1,a2				; d0.w=1,b,o
+	move.w	a2,(a0)+
+	addq	#2,a2				; d0.w=1,b,t
+	move.w	a2,(a0)+
+	subq	#1,a2				; d0.w=1,f,t
+	move.w	a2,(a0)+
+	bra.s	.nextplease
+
+.poly_order:
+	addq.w	#3,d0				; d0.w=1,b,o
+	move.w	d0,(a0)+
+	subq.w	#1,d0				; d0.w=1,f,o
+	move.w	d0,(a0)+
+	addq.w	#2,d0				; d0.w=1,f,t
+	move.w	d0,(a0)+
+	addq.w	#1,d0				; d0.w=1,b,t
+	move.w	d0,(a0)+
+	addq	#3,a2				; d0.w=1,b,o
+	move.w	a2,(a0)+
+	subq	#1,a2				; d0.w=1,f,o
+	move.w	a2,(a0)+
+	addq	#2,a2				; d0.w=1,f,t
+	move.w	a2,(a0)+
+	addq	#1,a2				; d0.w=1,b,t
+	move.w	a2,(a0)+
+
+.nextplease:
+	dbf	d7,.polyloop
+
+; calc size..
+	move.l	a0,d0
+	sub.l	a6,d0
+	rts
+
+; Generates a cogwheel axis.
+; INPUT:
+; a0: dst object
+; OUTPUT:
+; d0.l=size of obj
+Tribal.genAxis:
+	movea.l	a0,a6
+	lea	Tribal.anchor,a1
+	move.w	#Tribal.AXIS_POINTS*2,(a0)+
+	move.w	#Tribal.AXIS_POINTS,(a0)+
+
+; Copy 'anchor' vertices.
+	move.w	#24*3-1,d7
+	addq	#4,a1
+.copy_v_loop:
+	move.w	(a1)+,(a0)+
+	dbf	d7,.copy_v_loop
+
+; Generate segment vertices.
+	moveq	#Tribal.AXIS_SEGMENTS-1,d7
+	move.w	#+Tribal.ANCHORRIN,d0
+
+.segpoint_loop:
+	addi.w	#Tribal.AXIS_SEGLEN,d0
+	move.w	#-Tribal.ANCHORRIN,(a0)+
+	move.w	#-Tribal.ANCHORRIN,(a0)+
+	move.w	d0,(a0)+
+	move.w	#+Tribal.ANCHORRIN,(a0)+
+	move.w	#-Tribal.ANCHORRIN,(a0)+
+	move.w	d0,(a0)+
+	move.w	#+Tribal.ANCHORRIN,(a0)+
+	move.w	#+Tribal.ANCHORRIN,(a0)+
+	move.w	d0,(a0)+
+	move.w	#-Tribal.ANCHORRIN,(a0)+
+	move.w	#+Tribal.ANCHORRIN,(a0)+
+	move.w	d0,(a0)+
+	dbf	d7,.segpoint_loop
+
+; Copy 'anchor' normals.
+	move.w	#24*3-1,d7
+.copy_n_loop:
+	move.w	(a1)+,(a0)+
+	dbf	d7,.copy_n_loop
+
+; Generate segment normals.
+	moveq	#Tribal.AXIS_SEGMENTS-1,d7
+
+.segnorm_loop:
+	move.w	#-90,(a0)+
+	move.w	#-90,(a0)+
+	clr.w	(a0)+
+	move.w	#+90,(a0)+
+	move.w	#-90,(a0)+
+	clr.w	(a0)+
+	move.w	#+90,(a0)+
+	move.w	#+90,(a0)+
+	clr.w	(a0)+
+	move.w	#-90,(a0)+
+	move.w	#+90,(a0)+
+	clr.w	(a0)+
+	dbf	d7,.segnorm_loop
+
+	clr.w	(a0)+				; texels
+
+; polys..
+	addq	#2,a1				; Skip anchor texel shit.
+
+	move.w	#Tribal.AXIS_POLYS,(a0)+
+
+; Copy 'anchor' polys.
+	move.w	(a1)+,d7
+	subq.w	#1,d7
+.copy_poly_loop:
+; Assume each poly is 9 words size!!
+	REPT	9
+	move.w	(a1)+,(a0)+	
+	ENDR
+	dbf	d7,.copy_poly_loop
+
+; Generate segment polys.
+
+; First segment, a special one..
+	move.w	#Polygon.QUAD|Polygon.ENVMAPPED|0,(a0)+
+	move.w	#5,(a0)+
+	move.w	#24+1,(a0)+
+	move.w	#24+0,(a0)+
+	move.w	#1,(a0)+
+	move.w	#Tribal.AXIS_POINTS+5,(a0)+
+	move.w	#Tribal.AXIS_POINTS+24+1,(a0)+
+	move.w	#Tribal.AXIS_POINTS+24+0,(a0)+
+	move.w	#Tribal.AXIS_POINTS+1,(a0)+
+	move.w	#Polygon.QUAD|Polygon.ENVMAPPED|0,(a0)+
+	move.w	#7,(a0)+
+	move.w	#24+2,(a0)+
+	move.w	#24+1,(a0)+
+	move.w	#5,(a0)+
+	move.w	#Tribal.AXIS_POINTS+7,(a0)+
+	move.w	#Tribal.AXIS_POINTS+24+2,(a0)+
+	move.w	#Tribal.AXIS_POINTS+24+1,(a0)+
+	move.w	#Tribal.AXIS_POINTS+5,(a0)+
+	move.w	#Polygon.QUAD|Polygon.ENVMAPPED|0,(a0)+
+	move.w	#3,(a0)+
+	move.w	#24+3,(a0)+
+	move.w	#24+2,(a0)+
+	move.w	#7,(a0)+
+	move.w	#Tribal.AXIS_POINTS+3,(a0)+
+	move.w	#Tribal.AXIS_POINTS+24+3,(a0)+
+	move.w	#Tribal.AXIS_POINTS+24+2,(a0)+
+	move.w	#Tribal.AXIS_POINTS+7,(a0)+
+	move.w	#Polygon.QUAD|Polygon.ENVMAPPED|0,(a0)+
+	move.w	#1,(a0)+
+	move.w	#24+0,(a0)+
+	move.w	#24+3,(a0)+
+	move.w	#3,(a0)+
+	move.w	#Tribal.AXIS_POINTS+1,(a0)+
+	move.w	#Tribal.AXIS_POINTS+24+0,(a0)+
+	move.w	#Tribal.AXIS_POINTS+24+3,(a0)+
+	move.w	#Tribal.AXIS_POINTS+3,(a0)+
+
+	moveq	#0,d7
+
+.segpoly_loop:
+	move.w	d7,d0
+	move.w	d7,d1
+	lsl.w	#2,d0
+	addq.w	#1,d1
+	lsl.w	#2,d1
+	addi.w	#24,d0
+	addi.w	#24,d1
+	move.w	d0,d2
+	move.w	d1,d3
+	addi.w	#Tribal.AXIS_POINTS,d2
+	addi.w	#Tribal.AXIS_POINTS,d3
+	REPT	3
+	move.w	#Polygon.QUAD|Polygon.ENVMAPPED|0,(a0)+
+	move.w	d1,(a0)+
+	move.w	d0,(a0)+
+	addq.w	#1,d0
+	addq.w	#1,d1
+	move.w	d0,(a0)+
+	move.w	d1,(a0)+
+	move.w	d2,(a0)+
+	move.w	d3,(a0)+
+	addq.w	#1,d2
+	addq.w	#1,d3
+	move.w	d2,(a0)+
+	move.w	d3,(a0)+
+	ENDR
+	move.w	#Polygon.QUAD|Polygon.ENVMAPPED|0,(a0)+
+	move.w	d1,(a0)+
+	move.w	d0,(a0)+
+	subq.w	#3,d0
+	subq.w	#3,d1
+	move.w	d0,(a0)+
+	move.w	d1,(a0)+
+	move.w	d3,(a0)+
+	move.w	d2,(a0)+
+	subq.w	#3,d2
+	subq.w	#3,d3
+	move.w	d2,(a0)+
+	move.w	d3,(a0)+
+
+	addq.w	#1,d7
+	cmpi.w	#Tribal.AXIS_SEGMENTS-1,d7
+	blt	.segpoly_loop
+
+; calc size..
+	move.l	a0,d0
+	sub.l	a6,d0
+	rts
+
+	IFNE	0
+
+; Generates a side cogwheel. Very industrial, yes, yes.
+;
+; Parametrisation (2d, we extrude very easily later on):
+;
+; phi controls rotation. 0<=phi<2pi, phi=step*(2pi/steps), 0<=step<steps
+;
+; in(phi) = R_in*[cos(phi), sin(phi), d]
+; --
+; out(phi) = R_out*[cos(phi), sin(phi), d]
+; --
+; t(phi) = n(phi) + (0,0,d)
+; --       -
+;
+;          { in(phi), if in
+; n(phi) = { --
+; -        { out(phi), if out
+;            --
+;
+; INPUT:
+; a0: dst object
+; OUTPUT:
+; d0.l=size of obj
+Tribal.genSideWheel:
+	movea.l	a0,a6
+
+	move.w	#Tribal.WHEELPOINTS,(a0)+
+	clr.w	(a0)+
+	lea	sine_tbl,a1
+	moveq	#Tribal.WHEELSTEPS-1,d7
+
+.pointloop:
+; calc 6 points inner, outer, tooth and both in front and back versions..
+	move.w	d7,d0
+	mulu.w	#sintbllen/Tribal.WHEELSTEPS,d0
+	Get_SinCos	a1,d0,d0,d1
+	move.w	d0,d2
+	move.w	d1,d3
+	move.w	d0,d4
+	move.w	d1,d5
+	muls.w	#Tribal.WHEELRIN*2,d2
+	muls.w	#Tribal.WHEELRIN*2,d3
+	muls.w	#Tribal.WHEELROUT*2,d4
+	muls.w	#Tribal.WHEELROUT*2,d5
+	swap	d2
+	swap	d3
+	swap	d4
+	swap	d5
+
+; (i,f),(i,b),(o,f),(o,b),(t,f),(t,b)
+; ->
+; (i,b),(o,b),(i,f),(o,f),(t,i),(t,o)
+
+; Store in, back..
+	move.w	d2,(a0)+
+	move.w	d3,(a0)+
+	move.w	#-Tribal.WHEELDEPTH,(a0)+
+; Store out, back..
+	move.w	d4,(a0)+
+	move.w	d5,(a0)+
+	move.w	#-Tribal.WHEELDEPTH,(a0)+
+; Store in, front..
+	move.w	d2,(a0)+
+	move.w	d3,(a0)+
+	move.w	#+Tribal.WHEELDEPTH,(a0)+
+; Store out, front..
+	move.w	d4,(a0)+
+	move.w	d5,(a0)+
+	move.w	#+Tribal.WHEELDEPTH,(a0)+
+; Store tooth, in..
+	move.w	d2,(a0)+
+	move.w	d3,(a0)+
+	move.w	#+Tribal.WHEELDEPTH+Tribal.WHEELRT,(a0)+
+; Store tooth, out..
+	move.w	d4,(a0)+
+	move.w	d5,(a0)+
+	move.w	#+Tribal.WHEELDEPTH+Tribal.WHEELRT,(a0)+
+
+; Next step..
+	dbf	d7,.pointloop
+
+	clr.w	(a0)+				; texels
+
+; polys..
+	move.w	#Tribal.WHEELPOLYS,(a0)+
+	moveq	#Tribal.WHEELSTEPS-1,d7
+
+.polyloop:
+; face 1.. (in)
+	move.w	#Polygon.QUAD|Polygon.FLATSHADED,d0
+	move.w	d7,d1
+	andi.w	#1,d1
+	add.w	d1,d1
+	or.w	d1,d0
+	move.w	d0,(a0)+
+
+	move.w	d7,d0
+	mulu.w	#6,d0				; d0.w=1st,front,i
+	clr.l	d1
+	move.w	d7,d1
+	addq.w	#1,d1
+	divu.w	#Tribal.WHEELSTEPS,d1
+	swap	d1
+	mulu.w	#6,d1				; d1.w=2nd,front,i
+	move.w	d0,d2
+	addq.w	#1,d2				; d2.w=1st,back,i
+	move.w	d1,d3
+	addq.w	#1,d3				; d3.w=2nd,back,i
+	move.w	d0,(a0)+
+	move.w	d1,(a0)+
+	move.w	d3,(a0)+
+	move.w	d2,(a0)+
+
+	btst	#0,d7
+	bne	.low
+
+; High poly (tooth included).
+.high:
+; face 2.. (top of tooth)
+	move.w	#Polygon.QUAD|Polygon.FLATSHADED|0,(a0)+
+
+	addq.w	#4,d0				; d0.w=1st,front,tooth
+	addq.w	#4,d1				; d1.w=2nd,front,tooth
+	addq.w	#4,d2				; d2.w=1st,back,tooth
+	addq.w	#4,d3				; d3.w=2nd,back,tooth
+	move.w	d2,(a0)+
+	move.w	d3,(a0)+
+	move.w	d1,(a0)+
+	move.w	d0,(a0)+
+
+; face 3.. (front)
+	move.w	#Polygon.HEX|Polygon.FLATSHADED|2,(a0)+
+
+; d0.w=1st,front,tooth
+; d1.w=2nd,front,tooth
+	move.w	d0,(a0)+
+	move.w	d1,(a0)+
+	subq.w	#2,d1				; d1.w=2nd,f,o
+	move.w	d1,(a0)+
+	subq.w	#2,d1				; d1.w=2nd,f,i
+	move.w	d1,(a0)+
+	subq.w	#4,d0				; d0.w=1st,f,i
+	move.w	d0,(a0)+
+	addq.w	#2,d0				; d0.w=1st,f,o
+	move.w	d0,(a0)+
+
+; face 4.. (back)
+	lea	-6*2(a0),a1
+	move.w	#Polygon.HEX|Polygon.FLATSHADED|2,(a0)+
+
+	adda.w	#6*2,a0
+	moveq	#6-1,d6
+.front_to_back_loop:
+	move.w	(a1)+,d0
+	addq.w	#1,d0
+	move.w	d0,-(a0)
+	dbf	d6,.front_to_back_loop
+
+	adda.w	#6*2,a0
+	bra	.next_poly_step
+
+; Low poly (no tooth included)
+.low:
+; face 2.. (top of out)
+	move.w	#Polygon.QUAD|Polygon.FLATSHADED|0,(a0)+
+
+	addq.w	#2,d0				; d0.w=1st,front,out
+	addq.w	#2,d1				; d1.w=2nd,front,out
+	addq.w	#2,d2				; d2.w=1st,back,out
+	addq.w	#2,d3				; d3.w=2nd,back,out
+	move.w	d2,(a0)+
+	move.w	d3,(a0)+
+	move.w	d1,(a0)+
+	move.w	d0,(a0)+
+
+; face 3 (front)
+	move.w	#Polygon.QUAD|Polygon.FLATSHADED|2,(a0)+
+
+	move.w	d0,(a0)+
+	move.w	d1,(a0)+
+	subq.w	#2,d0				; d0.w=1st,front,in
+	subq.w	#2,d1				; d1.w=2nd,front,in
+	move.w	d1,(a0)+
+	move.w	d0,(a0)+
+
+; face 4 (back)
+	move.w	#Polygon.QUAD|Polygon.FLATSHADED|2,(a0)+
+
+	addq.w	#1,d0				; d0.w=1st,back,in
+	addq.w	#1,d1				; d1.w=2nd,back,in
+	move.w	d0,(a0)+
+	move.w	d1,(a0)+
+	addq.w	#2,d0				; d0.w=1st,back,out
+	addq.w	#2,d1				; d1.w=2nd,back,out
+	move.w	d1,(a0)+
+	move.w	d0,(a0)+
+
+.next_poly_step:
+
+; face 5 (tooth->out)
+	move.w	#Polygon.QUAD|Polygon.FLATSHADED|1,(a0)+
+	move.w	d7,d0
+	mulu.w	#6,d0				; d0.w=1st,front,i
+
+	btst	#0,d7
+	bne.s	.poly_order
+
+	addq.w	#2,d0				; d0.w=1,f,o
+	move.w	d0,(a0)+
+	addq.w	#1,d0				; d0.w=1,b,o
+	move.w	d0,(a0)+
+	addq.w	#2,d0				; d0.w=1,b,t
+	move.w	d0,(a0)+
+	subq.w	#1,d0				; d0.w=1,f,t
+	move.w	d0,(a0)+
+	bra.s	.nextplease
+
+.poly_order:
+	addq.w	#3,d0				; d0.w=1,b,o
+	move.w	d0,(a0)+
+	subq.w	#1,d0				; d0.w=1,f,o
+	move.w	d0,(a0)+
+	addq.w	#2,d0				; d0.w=1,f,t
+	move.w	d0,(a0)+
+	addq.w	#1,d0				; d0.w=1,b,t
+	move.w	d0,(a0)+
+
+.nextplease:
+	dbf	d7,.polyloop
+
+; calc size..
+	move.l	a0,d0
+	sub.l	a6,d0
+	rts
+
+	ENDC
+
+; todo: 2 painters can be brought back to 1 by using variable z!
+
+Tribal.paintMid:
+	bsr.l	PrimitiveMesh.new
+
+	clr.w	d0
+	move.l	Tribal.worldRotTime,d1
+	clr.w	d2
+	bsr.l	Matrix.generate
+	move.w	Tribal.worldX,d0
+	clr.w	d1
+	move.w	#+4000,d2
+	add.w	Tribal.worldZ,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+; wheel big.
+	clr.w	d0
+	clr.w	d1
+	move.w	Tribal.wheelRotTime,d2
+	mulu.w	#4,d2
+	addi.w	#sintbllen/Tribal.WHEELSTEPS,d2
+	bsr.l	Matrix.generate
+	move.w	Tribal.bigWheelX,d0
+	move.w	#0,d1
+	move.w	#-2000,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#1,d1
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+
+; wheel small
+	clr.w	d0
+	clr.w	d1
+	clr.l	d2
+	move.w	Tribal.wheelRotTime,d2
+	andi.w	#$3FFF,d2
+	mulu.w	#2,d2
+; *2 (24:12)
+	mulu.w	#4,d2
+	neg.w	d2
+	bsr.l	Matrix.generate
+	move.w	Tribal.smallWheelX,d0
+	move.w	#0,d1
+	move.w	#-2000,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#2,d1
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+
+; Bring axis into scene if required
+	tst.w	Tribal.axisOn
+	beq	.end_axis
+
+; small cogwheel axis!
+	clr.w	d0
+	clr.w	d1
+	clr.l	d2
+	move.w	Tribal.wheelRotTime,d2
+	andi.w	#$3FFF,d2
+	mulu.w	#2,d2
+; *2 (24:12)
+	mulu.w	#4,d2
+	neg.w	d2
+	bsr.l	Matrix.generate
+	move.w	Tribal.smallWheelX,d0
+	move.w	#0,d1
+	move.w	#-2000,d2
+	add.w	Tribal.axisZ,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#3,d1
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+
+; small cogwheel axis! mirrored
+	move.w	#sintbllen/2,d0
+	clr.w	d1
+	clr.l	d2
+	move.w	Tribal.wheelRotTime,d2
+	andi.w	#$3FFF,d2
+	mulu.w	#2,d2
+; *2 (24:16)
+	mulu.w	#4,d2
+	bsr.l	Matrix.generate
+	move.w	Tribal.smallWheelX,d0
+	move.w	#0,d1
+	move.w	#+2000,d2
+	add.w	Tribal.axisZ,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#3,d1
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+.end_axis:
+
+; Bring top wheels into the scene (if required).
+	tst.w	Tribal.topWheelsOn
+	beq	.end_top_wheels
+
+; top wheel 1
+	clr.w	d0
+	clr.w	d1
+	clr.l	d2
+	move.w	Tribal.wheelRotTime,d2
+	andi.w	#$3FFF,d2
+	mulu.w	#2,d2
+; *2 (24:16)
+	mulu.w	#4,d2
+	neg.w	d2
+	bsr.l	Matrix.generate
+	move.w	Tribal.smallWheelX,d0
+	move.w	#0,d1
+	move.w	#2000,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#2,d1
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+
+; top wheel 2
+	clr.w	d0
+	clr.w	d1
+	clr.l	d2
+	move.w	Tribal.wheelRotTime,d2
+	mulu.w	#2,d2
+; *2 (24:12)
+	mulu.w	#4,d2
+	bsr.l	Matrix.generate
+	move.w	Tribal.smallWheelX,d0
+	addi.w	#Tribal.SWHEELROUT*2+Tribal.SWHEELRT,d0
+	move.w	#0,d1
+	move.w	#2000,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#2,d1
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+
+; delta symbol inside top wheel 2
+	clr.w	d0
+	clr.w	d1
+	clr.l	d2
+	move.w	Tribal.wheelRotTime,d2
+	andi.w	#$3FFF,d2
+	mulu.w	#2,d2
+; *2 (24:12)
+	mulu.w	#4,d2
+	bsr.l	Matrix.generate
+	move.w	Tribal.smallWheelX,d0
+	addi.w	#Tribal.SWHEELROUT*2+Tribal.SWHEELRT,d0
+	move.w	#0,d1
+	move.w	#2000,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+.end_top_wheels:
+
+	bsr.l	Matrix.pop
+
+	bsr.l	PrimitiveMesh.sortZ
+
+	bsr.l	PrimitiveMesh.complete
+
+	IFNE	1
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	moveq	#$00000000,d4
+	bsr.l	Viewport.paintRectangle
+	ELSE
+	movea.l	Tribal.rectAddressTable,a0
+	move.w	(a0)+,d7
+	beq.s	.end_restore
+	subq.w	#1,d7
+.restore_loop:
+	move.w	d7,-(sp)
+	movem.w	(a0)+,d1/d7
+	movem.w	(a0)+,d0/d6
+	move.l	a0,-(sp)
+	move.l	#$00000000,d4
+	bsr.l	Viewport.paintRectangle
+	movea.l	(sp)+,a0
+	move.w	(sp)+,d7
+	dbra	d7,.restore_loop
+.end_restore:
+	ENDC
+
+	movea.l	Tribal.rectAddressTable,a0
+	bsr.l	PrimitiveMesh.paint
+
+	lea	Tribal.rectAddressTable,a0
+ 	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+
+	moveq	#0,d0
+	rts
+
+.error:	moveq	#-1,d0
+	rts
+
+Tribal.paint:
+	bsr.l	PrimitiveMesh.new
+
+	clr.w	d0
+	move.l	Tribal.worldRotTime,d1
+	clr.w	d2
+	bsr.l	Matrix.generate
+	move.w	Tribal.worldX,d0
+	clr.w	d1
+	move.w	#+2000,d2
+	add.w	Tribal.worldZ,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+; wheel big.
+	clr.w	d0
+	clr.w	d1
+	move.w	Tribal.wheelRotTime,d2
+	mulu.w	#4,d2
+	addi.w	#sintbllen/Tribal.WHEELSTEPS,d2
+	bsr.l	Matrix.generate
+	move.w	Tribal.bigWheelX,d0
+	move.w	#0,d1
+	move.w	#0,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#1,d1
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+
+; wheel small
+	clr.w	d0
+	clr.w	d1
+	clr.l	d2
+	move.w	Tribal.wheelRotTime,d2
+	andi.w	#$3FFF,d2
+	mulu.w	#2,d2
+; *2 (24:12)
+	mulu.w	#4,d2
+	neg.w	d2
+	bsr.l	Matrix.generate
+	move.w	Tribal.smallWheelX,d0
+	move.w	#0,d1
+	move.w	#0,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#2,d1
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+
+; Bring axis into scene if required
+	tst.w	Tribal.axisOn
+	beq	.end_axis
+
+; small cogwheel axis!
+	clr.w	d0
+	clr.w	d1
+	clr.l	d2
+	move.w	Tribal.wheelRotTime,d2
+	andi.w	#$3FFF,d2
+	mulu.w	#2,d2
+; *2 (24:12)
+	mulu.w	#4,d2
+	neg.w	d2
+	bsr.l	Matrix.generate
+	move.w	Tribal.smallWheelX,d0
+	move.w	#0,d1
+	move.w	#0,d2
+	add.w	Tribal.axisZ,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#3,d1
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+
+; small cogwheel axis! mirrored
+	move.w	#sintbllen/2,d0
+	clr.w	d1
+	clr.l	d2
+	move.w	Tribal.wheelRotTime,d2
+	andi.w	#$3FFF,d2
+	mulu.w	#2,d2
+; *2 (24:12)
+	mulu.w	#4,d2
+	bsr.l	Matrix.generate
+	move.w	Tribal.smallWheelX,d0
+	move.w	#0,d1
+	move.w	#+4000,d2
+	add.w	Tribal.axisZ,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#3,d1
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+.end_axis:
+
+; Bring top wheels into the scene (if required).
+	tst.w	Tribal.topWheelsOn
+	beq	.end_top_wheels
+
+; top wheel 1
+	clr.w	d0
+	clr.w	d1
+	clr.l	d2
+	move.w	Tribal.wheelRotTime,d2
+	andi.w	#$3FFF,d2
+	mulu.w	#2,d2
+; *2 (24:12)
+	mulu.w	#4,d2
+	neg.w	d2
+	bsr.l	Matrix.generate
+	move.w	Tribal.smallWheelX,d0
+	move.w	#0,d1
+	move.w	#4000,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#2,d1
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+
+; top wheel 2
+	clr.w	d0
+	clr.w	d1
+	clr.l	d2
+	move.w	Tribal.wheelRotTime,d2
+	andi.w	#$3FFF,d2
+	mulu.w	#2,d2
+; *2 (24:12)
+	mulu.w	#4,d2
+	bsr.l	Matrix.generate
+	move.w	Tribal.smallWheelX,d0
+	addi.w	#Tribal.SWHEELROUT*2+Tribal.SWHEELRT,d0
+	move.w	#0,d1
+	move.w	#4000,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#2,d1
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+
+; delta symbol inside top wheel 2
+	clr.w	d0
+	clr.w	d1
+	clr.l	d2
+	move.w	Tribal.wheelRotTime,d2
+	andi.w	#$3FFF,d2
+	mulu.w	#2,d2
+; *2 (24:12)
+	mulu.w	#4,d2
+	bsr.l	Matrix.generate
+	move.w	Tribal.smallWheelX,d0
+	addi.w	#Tribal.SWHEELROUT*2+Tribal.SWHEELRT,d0
+	move.w	#0,d1
+	move.w	#4000,d2
+	bsr.l	Matrix.translate
+	bsr.l	Matrix.push
+
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr.l	TransformObject.transform
+
+	bsr.l	Matrix.pop
+.end_top_wheels:
+
+	bsr.l	Matrix.pop
+
+	bsr.l	PrimitiveMesh.sortZ
+
+	bsr.l	PrimitiveMesh.complete
+
+	IFNE	1
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	moveq	#$00000000,d4
+	bsr.l	Viewport.paintRectangle
+	ELSE
+	movea.l	Tribal.rectAddressTable,a0
+	move.w	(a0)+,d7
+	beq.s	.end_restore
+	subq.w	#1,d7
+.restore_loop:
+	move.w	d7,-(sp)
+	movem.w	(a0)+,d1/d7
+	movem.w	(a0)+,d0/d6
+	move.l	a0,-(sp)
+	move.l	#$00000000,d4
+	bsr.l	Viewport.paintRectangle
+	movea.l	(sp)+,a0
+	move.w	(sp)+,d7
+	dbra	d7,.restore_loop
+.end_restore:
+	ENDC
+
+	movea.l	Tribal.rectAddressTable,a0
+	bsr.l	PrimitiveMesh.paint
+
+	lea	Tribal.rectAddressTable,a0
+ 	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+
+	moveq	#0,d0
+	rts
+
+.error:	moveq	#-1,d0
+	rts
+
+Tribal.dummy:
+	rts
+
+;======= OBJECT DATA ========
+
+	DATA
+
+Tribal.anchor:
+	DC.W	24*2
+	DC.W	24
+	DC.W	-Tribal.ANCHORRIN,-Tribal.ANCHORRIN,-Tribal.ANCHORRIN
+	DC.W	-Tribal.ANCHORRIN,-Tribal.ANCHORRIN,+Tribal.ANCHORRIN
+	DC.W	-Tribal.ANCHORRIN,+Tribal.ANCHORRIN,-Tribal.ANCHORRIN
+	DC.W	-Tribal.ANCHORRIN,+Tribal.ANCHORRIN,+Tribal.ANCHORRIN
+	DC.W	+Tribal.ANCHORRIN,-Tribal.ANCHORRIN,-Tribal.ANCHORRIN
+	DC.W	+Tribal.ANCHORRIN,-Tribal.ANCHORRIN,+Tribal.ANCHORRIN
+	DC.W	+Tribal.ANCHORRIN,+Tribal.ANCHORRIN,-Tribal.ANCHORRIN
+	DC.W	+Tribal.ANCHORRIN,+Tribal.ANCHORRIN,+Tribal.ANCHORRIN
+;
+	DC.W	-Tribal.ANCHORRIN,-Tribal.ANCHORROUT,-Tribal.ANCHORRIN
+	DC.W	+Tribal.ANCHORRIN,-Tribal.ANCHORROUT,-Tribal.ANCHORRIN
+	DC.W	-Tribal.ANCHORRIN,-Tribal.ANCHORROUT,+Tribal.ANCHORRIN
+	DC.W	+Tribal.ANCHORRIN,-Tribal.ANCHORROUT,+Tribal.ANCHORRIN
+	DC.W	-Tribal.ANCHORRIN,+Tribal.ANCHORROUT,-Tribal.ANCHORRIN
+	DC.W	+Tribal.ANCHORRIN,+Tribal.ANCHORROUT,-Tribal.ANCHORRIN
+	DC.W	-Tribal.ANCHORRIN,+Tribal.ANCHORROUT,+Tribal.ANCHORRIN
+	DC.W	+Tribal.ANCHORRIN,+Tribal.ANCHORROUT,+Tribal.ANCHORRIN
+	DC.W	-Tribal.ANCHORROUT,-Tribal.ANCHORRIN,-Tribal.ANCHORRIN
+	DC.W	-Tribal.ANCHORROUT,+Tribal.ANCHORRIN,-Tribal.ANCHORRIN
+	DC.W	-Tribal.ANCHORROUT,-Tribal.ANCHORRIN,+Tribal.ANCHORRIN
+	DC.W	-Tribal.ANCHORROUT,+Tribal.ANCHORRIN,+Tribal.ANCHORRIN
+	DC.W	+Tribal.ANCHORROUT,-Tribal.ANCHORRIN,-Tribal.ANCHORRIN
+	DC.W	+Tribal.ANCHORROUT,+Tribal.ANCHORRIN,-Tribal.ANCHORRIN
+	DC.W	+Tribal.ANCHORROUT,-Tribal.ANCHORRIN,+Tribal.ANCHORRIN
+	DC.W	+Tribal.ANCHORROUT,+Tribal.ANCHORRIN,+Tribal.ANCHORRIN
+
+	DC.W	-73,-73,-73
+	DC.W	-73,-73,+73
+	DC.W	-73,+73,-73
+	DC.W	-73,+73,+73
+	DC.W	+73,-73,-73
+	DC.W	+73,-73,+73
+	DC.W	+73,+73,-73
+	DC.W	+73,+73,+73
+;
+	IFNE	1
+	DC.W	-73,+73,-73
+	DC.W	+73,+73,-73
+	DC.W	-73,+73,+73
+	DC.W	+73,+73,+73
+	DC.W	-73,-73,-73
+	DC.W	+73,-73,-73
+	DC.W	-73,-73,+73
+	DC.W	+73,-73,+73
+	DC.W	+73,-73,-73
+	DC.W	+73,+73,-73
+	DC.W	+73,-73,+73
+	DC.W	+73,+73,+73
+	DC.W	-73,-73,-73
+	DC.W	-73,+73,-73
+	DC.W	-73,-73,+73
+	DC.W	-73,+73,+73
+	ELSE
+	DC.W	-73,-73,-73
+	DC.W	+73,-73,-73
+	DC.W	-73,-73,+73
+	DC.W	+73,-73,+73
+	DC.W	-73,+73,-73
+	DC.W	+73,+73,-73
+	DC.W	-73,+73,+73
+	DC.W	-73,-73,-73
+	DC.W	-73,+73,-73
+	DC.W	-73,-73,+73
+	DC.W	-73,+73,+73
+	DC.W	+73,+73,+73
+	DC.W	+73,-73,-73
+	DC.W	+73,+73,-73
+	DC.W	+73,-73,+73
+	DC.W	+73,+73,+73
+	ENDC
+
+	DC.W	0
+
+	DC.W	4*4+1
+
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,+02,06,04,00,+26,30,28,24	; 'cover'
+
+;	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,+08,10,11,09
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,+00,08,10,01,+24,32,34,25
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,+01,10,11,05,+25,34,35,29
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,+05,11,09,04,+29,35,33,28
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,+04,09,08,00,+28,33,32,24
+
+;	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,+12,14,15,13
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,+03,14,12,02,+27,38,36,26
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,+07,15,14,03,+31,39,38,27
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,+06,13,15,07,+30,37,39,31
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,+02,12,13,06,+26,36,37,30
+
+;	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,+16,18,19,17
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,+01,18,16,00,+25,42,40,24
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,+03,19,18,01,+27,43,42,25
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,+02,17,19,03,+26,41,43,27
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,+00,16,17,02,+24,40,41,26
+
+;	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,+20,22,23,21
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,+04,20,22,05,+28,44,46,29
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,+05,22,23,07,+29,46,47,31
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,+07,23,21,06,+31,47,45,30
+	DC.W	Polygon.QUAD|Polygon.ENVMAPPED|0,+06,21,20,04,+30,45,44,28
+Tribal.anchorEnd:
+
+Tribal.delta:
+	DC.W	6
+	DC.W	0
+	DC.W	+000,+150,+000			; 0
+	DC.W	+130,-075,+000			; 1
+	DC.W	-130,-075,+000			; 2
+	DC.W	+000,+100,+000			; 3
+	DC.W	+087,-040,+000			; 4
+	DC.W	-087,-040,+000			; 5
+	DC.W	0
+	DC.W	6
+	DC.W	Polygon.QUAD|Polygon.GOURAUDSHADED|0,0,1,4,3,00,00,127,127
+	DC.W	Polygon.QUAD|Polygon.GOURAUDSHADED|0,1,2,5,4,00,00,127,127
+	DC.W	Polygon.QUAD|Polygon.GOURAUDSHADED|0,2,0,3,5,00,00,127,127
+	DC.W	Polygon.QUAD|Polygon.GOURAUDSHADED|0,3,4,1,0,127,127,00,00
+	DC.W	Polygon.QUAD|Polygon.GOURAUDSHADED|0,4,5,2,1,127,127,00,00
+	DC.W	Polygon.QUAD|Polygon.GOURAUDSHADED|0,5,3,0,2,127,127,00,00
+Tribal.deltaEnd:
+
+Tribal.textureTable:
+	DC.L	Tribal.texture
+;	DC.L	FlareGen.goldBuffer
+	DC.L	0
+
+Tribal.rectAddressTable:
+	DC.L	Tribal.rectTable
+	DC.L	Tribal.rectTable2
+	DC.L	Tribal.rectTable3
+
+;======= OBJECT RESERVES ========
+
+	BSS
+
+Tribal.rectTable:
+	DS.W	1+4*32
+Tribal.rectTable2:
+	DS.W	1+4*32
+Tribal.rectTable3:
+	DS.W	1+4*32
+
+Tribal.pal:
+	DS.W	128
+
+Tribal.wheelSteps
+	DS.W	1
+Tribal.wheelDepth
+	DS.W	1
+Tribal.wheelRIn
+	DS.W	1
+Tribal.wheelROut
+	DS.W	1
+Tribal.wheelRT:
+	DS.W	1
+Tribal.wheelPoints:
+	DS.W	1
+Tribal.wheelPolys:
+	DS.W	1
+Tribal.worldRotOn:
+	DS.W	1
+Tribal.worldRotStart:
+	DS.L	1
+Tribal.worldRotTime:
+	DS.L	1
+Tribal.smallWheelMoveOn:
+	DS.W	1
+Tribal.smallWheelStart:
+	DS.L	1
+Tribal.bigWheelMoveOn:
+	DS.W	1
+Tribal.bigWheelStart:
+	DS.L	1
+Tribal.wheelRotOn:
+	DS.W	1
+Tribal.wheelRotStart:
+	DS.L	1
+Tribal.wheelRotTime:
+	DS.W	1
+Tribal.topWheelsOn:
+	DS.W	1
+Tribal.worldX:
+	DS.W	1
+Tribal.worldZ:
+	DS.W	1
+Tribal.axisOn:
+	DS.W	1
+Tribal.axisZ:
+	DS.W	1
+Tribal.axisStart:
+	DS.L	1
+Tribal.axisMoveOn:
+	DS.W	1
+Tribal.rotAccelOn:
+	DS.W	1
+Tribal.oldWRotTime:
+	DS.W	1
+
+Tribal.texture:
+	DS.W	10+64*64
+
+Tribal.baseAdr:
+	DS.L	1
+
+Tribal.bigWheelX:
+	DS.W	1
+Tribal.smallWheelX:
+	DS.W	1
+
+Tribal.paintRout:
+	DS.L	1
+Tribal.worldRout:
+	DS.L	1
+Tribal.wRotSpeed:
+	DS.W	1
+
+;======= END OF DEMO-EFFECT OBJECT ========

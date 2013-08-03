@@ -1,0 +1,417 @@
+     opt  nomd,mex 
+     page 132,60,1,1 
+;*******************************************
+;Motorola Austin DSP Operation  June 30,1988
+;*******************************************
+;DSP96002
+;Peripheral to Memory FFT - 256 point
+;File name: E-96.
+;**************************************************************************
+;    Maximum sample rate:  213.2 us at 27.0 MHz
+;    Memory Size: Prog:  317 words ; Data:  1538 words
+;    Number of clock cycles: 5756 (2878 instruction cycles)
+;    Clock Frequency:    27.0MHz
+;    Instruction cycle time:  74.1ns
+;**************************************************************************
+
+fftreal2  macro     points,data,odata,coef,ptr1,ptr2,ad 
+fftreal2  ident     1,2 
+; 
+; Radix 2 Decimation in Time In-Place Fast Fourier Transform Routine 
+; 
+;    Real input data - normally ordered 
+;        Real data in Y memory 
+;    Complex output data - normally ordered 
+;        Real data in X memory 
+;        Imaginary data in Y memory 
+;    Coefficient lookup table 
+;        -Cosine value in X memory 
+;        -Sine value in Y memory 
+; 
+; Macro Call - fftreal2   points,data,outdata,coef,ptr1,ptr2,ad
+; 
+;    points     number of points (2-32768, power of 2) 
+;    data       start of data buffer 
+;    outdata    output data buffer 
+;    coef    start of sine/cosine table 
+;    ptr1  address of pointer to input data block 1
+;    ptr2  address of pointer to input data block 2
+;    ad    address of memory-mapped a/d
+;
+;    dma set-up
+;
+     move #data,x:ptr1             ;set up buffer pointers
+     move #data+points,x:ptr2      ;
+     move #ad,x:$ffffffde          ;a/d memory location into dma source reg.
+     move #0,x:$ffffffdd           ;no offset for source reg.
+     move #2*points-1,x:$ffffffdb  ;modulo 2*points for input data collection
+     move #1,x:$ffffffd9           ;offset = 1 for data storage
+     move #data,x:$ffffffda        ;input data base address
+     move #points,x:$ffffffdc      ;dma counter = 1024
+     move #$80008036,x:$ffffffd8   ;start dma in block mode
+;
+;    test if dma ready, if so switch buffer pointers
+;
+strt jclr #28,x:$ffffffd8,strt     ;wait until dma is done
+     move #points,x:$ffffffdc      ;if so, reinitialize dma counter
+     move #$80008036,x:$ffffffd8   ;restart dma,
+     move ptr1,d1.l                ;and swap buffer pointers
+     move ptr2,d1.m                ;
+     move d1.l,ptr2                ;
+     move d1.m,ptr1                ;
+;
+
+;    do fft
+     move ptr2,r0                  ;point to data 
+     move #points/4,n0             ;offset between input points 
+     move #points-1,m0             ;mod on input pointer 
+     move r0,r4                    ;ar' pointer 
+     move (r0)+n0                  ;point to br' 
+     move r0,r5                    ;br' pointer 
+     move (r0)+n0                  ;point to c' 
+     move r0,r6                    ;cr', ci' pointer 
+     move r4,r0                    ;point r0 back to ar 
+; 
+; Do first and second Radix 2 FFT passes 
+; 
+;    y:ar' = x:ar + x:cr + x:br + x:dr 
+;    y:br' = x:ar + x:cr - x:br - x:dr 
+;    x:cr' = y:ar - x:cr 
+;    y:cr' = x:dr - x:br 
+; 
+     move                          y:(r0)+n0,d0.s      ;get ar 
+     move                          y:(r0)+n0,d1.s      ;get br 
+     move                          y:(r0)+n0,d2.s      ;get cr 
+     faddsub d0,d2                 y:(r0)+n0,d3.s      ;cr'=ar-cr,ar+cr,get dr 
+     do n0,_first2                                     ;do first 2 passes 
+     fsubr d1,d3    d0.s,x:(r6)    d3.s,d4.s           ;dr-br, save cr', copy dr 
+     fadd d1,d4     x:(r0)+,d7.s   d3.s,y:(r6)+        ;dr+br, update r0, save ci' 
+     faddsub d2,d4                 y:(r0)+n0,d0.s      ;(ar+cr)(-+)(dr+br) 
+     move           d2.s,x:(r5)+   y:(r0)+n0,d1.s      ;save br', get br 
+     move                          d4.s,y:(r4)+        ;save ar' 
+     move                          y:(r0)+n0,d2.s      ;get cr 
+     faddsub   d0,d2               y:(r0)+n0,d3.s      ;ar-cr,ar+cr,get dr 
+_first2 
+; 
+; Do next passes 
+; 
+     move #points/8,n5                            ;spacing, for 1024 spacing=128 
+     move ptr2,r2                                 ;pointer to data      
+
+     do   #@cvi(@log(points)/@log(2)-2.5),_next   ;7 passes for 1024 pts 
+     move r2,r5                                   ;reset pointer to data  
+     move n5,n0                                   ;same offset 
+     move r5,r0                                   ;ar pointer 
+     move (r5)+n5                                 ;+1/4 
+     move r5,r4                                   ;br pointer 
+     move (r5)+n5                                 ;+1/2 
+     move r5,r1                                   ;ci pointer 
+     move (r5)+n5                                 ;+3/4 
+ 
+     move           x:(r5)+,d0.s   y:(r0)+n0,d4.s ;get dr, get ar 
+     do n0,_inner 
+     fneg d0                       y:(r0)-n0,d1.s ;ci'=-dr, get br 
+     faddsubr  d4,d1               d0.s,y:(r1)+   ;br'=ar-br,ar'=ar+br, save ci' 
+     move           d4.s,x:(r4)+   d1.s,y:(r0)+   ;save br', save ar' 
+     move           x:(r5)+,d0.s   y:(r0)+n0,d4.s ;get dr, get ar 
+_inner 
+     move n5,a                                    ;get bflys/pass 
+     lsr  a                                       ;/2 
+     move a1,n5                                   ;put back 
+_next 
+ 
+; 
+;    special pass: real input (4-point), output in normal order. The 4-th 
+;    output point is stored as the complex conjugate of the 3 rd.
+;
+     move #data,r0                                ;input pointer 
+     move #odata,r4                               ;output pointer 
+     move #points/2,n4   
+     move #0,m4                                   ;bit reverse output 
+ 
+     move                          y:(r0)+,d0.s   ;get ar 
+     move                          y:(r0)+,d4.s   ;get br 
+     faddsubr d0,d4 x:(r0)+,d1.s                  ;get cr 
+     move                          d4.s,y:(r4)+n4 ;save ar'
+     move           x:(r0)+,d2.s                  ;get dr
+     fneg d2        d2.s,d5.s      d0.s,x:(r4)+n4 ;copy dr, save br' 
+     move           d1.s,x:(r4)                   ;save cr' 
+     move                          d2.s,y:(r4)+n4 ;save ci' 
+     move           d1.s,x:(r4)                   ;save cr' 
+     move                          d5.s,y:(r4)+n4 ;save ci'* 
+
+
+;
+;Do first (2-point) complex fft (this has one "last pass" only) with normally ordered
+;output data and conjugate reverse storage of the next two points
+;
+     move      #4,n2               ;offset for input data pointer
+     move      r4,n7               ;initialize output data pointer
+     move      (r2)+n2             ;adjust input data pointer
+     move      #0,m6               ;bit-reversed addressing for r6
+     move      #coefsize/2,n6
+     
+; last pass
+;
+      move      r2,r0                   ;Point to input data block
+      move      n7,r4                   ;r4 points to A output
+      move      #2*odata+points,r3      ;initialization of conjugate reverse pointer
+      move      #-1,m3                  ;r3 (conjugate reverse pointer) decrements linearly in initialization
+      move      r4,n3                   ;offset for conjugate pointer initialization
+      lea       (r0)+,r1                ;r1 points to B input
+      move      (r3)-n3                 ;r3 now has end of next output data block
+      move      #0,m3                   ;r3 will decrement bit-reversed in output storage
+      move      #points/2,n3            ;correct offset for reverse counter
+      move      #2,n0                   ;offset is 2 for A input pointer
+      lea       (r3)+n3,r6              ;r6 now contains the next output pointer a starting address
+      move      r6,n7                   ;n7 contains next output data block starting address
+      move      #coef+coefsize/4,r6     ;r6 points to twiddle factors  
+      move      n0,n1                   ;offset is 2 for B input pointer
+      move      #points/4,n4            ;offset is #points/4 for A output pointer
+      move      n4,n5                   ;offset is #points/4 for B output pointer
+      move      #0,m4                   ;bit reversed addressing for A output pointer
+      lea      (r4)+n4,r5               ;r5 points to B output by adding points/4 once----|
+      move      m4,m5                   ;bit reversed addressing for B output pointer     |
+      move     (r5)+n5                  ;and once more to odata                     <-----|
+      fmove                             x:(r6)+n6,d9.s y:(),d8.s      ;
+      fmove                                            y:(r1),d7.s    ;
+      fmpy d8,d7,d3                     x:(r1)+n1,d6.s                ;
+      fmpy d9,d6,d0                                                   ;
+      fmpy d9,d7,d1                                    y:(r1),d7.s    ;
+      fmpy d8,d6,d2  fadd d3,d0         x:(r0),d4.s                   ; Last groups are implemented as
+      fmove                             x:(r6)+n6,d9.s y:(),d8.s      ; single butterflies with storage to 
+      fmpy d8,d7,d3  faddsubr d4,d0     x:(r1)+n1,d6.s                ; the output data buffer. Data is stored 
+                                                                      ; in normal order, and the complex conjugate is
+                                                                      ; stored in the next output block using the 
+      fmpy d9,d6,d0  fsub d1,d2         d0.s,x:(r4)                   ; conjugate reverse counter r3
+      fmove                             d0.s,x:(r3)-n3 y:(r0)+n0,d5.s ;
+      fmpy d9,d7,d1  faddsubr d5,d2     d4.s,x:(r5)    y:(r1),d7.s    ;
+      fmove                             d4.s,x:(r3)+n3 y:(r6),d8.s    ;                                   
+      fadd d3,d0                        x:(r0),d4.s    d5.s,y:(r4)+n4 ;
+      fneg d5                                          d2.s,y:(r5)+n5 ;
+      fneg d2                           x:(r6)+n6,d9.s d5.s,y:(r3)-n3 ;
+      fmpy d8,d6,d2                                    d2.s,y:(r3)-n3 ;
+      fmpy d8,d7,d3  faddsubr d4,d0     x:(r1)+n1,d6.s                ;
+_end_last
+
+;
+;Do second (four-point) complex fft (this has a "next to last" and "last pass"
+;only with normal output storage and conjugate reverse storage of the next four
+;points)
+;
+           move (r2)+n2                      ;initialize input data pointer
+;
+; next to last pass
+;
+      move #1,n2                        ;initialize number of groups
+      move r2,r0                        ;point to input data block
+      move r0,r4                        ;initialize pointers and offsets
+      lea (r0)+2,r1                     ;
+      move r1,r5                        ;
+      move #coef+coefsize/4,r6          ;
+      move #3,n0                        ;
+      move n0,n1                        ;
+      move n0,n4                        ;
+      move n0,n5                        ;
+      fmove                        x:(r6)+n6,d9.s  y:(),d8.s     ;
+      fmove                                        y:(r1),d7.s   ;
+      fmpy d8,d7,d3                x:(r1)+,d6.s                  ;
+      fmpy d9,d6,d0                                              ;
+      fmpy d9,d7,d1                                y:(r1),d7.s   ;
+      fmpy d8,d6,d2 fadd d3,d0     x:(r0),d4.s                   ;
+      fmpy d8,d7,d3 faddsubr d4,d0 x:(r1)+n1,d6.s                ;                             
+      fmpy d9,d6,d0 fsub d1,d2     d0.s,x:(r4)     y:(r0)+,d5.s  ;
+      fmpy d9,d7,d1 faddsubr d5,d2 d4.s,x:(r5)     y:(r1),d7.s   ;each group implemented as one 
+      fmpy d8,d6,d2 fadd d3,d0     x:(r0),d4.s     d2.s,y:(r5)+  ;four-point butterfly
+      fmove                        x:(r6)+n6,d9.s  y:(),d8.s     ;
+      fmpy d8,d7,d3 faddsubr d4,d0 x:(r1)+,d6.s    d5.s,y:(r4)+  ;
+      fmpy d9,d6,d0 fsub     d1,d2 d0.s,x:(r4)     y:(r0)+n0,d5.s
+      fmpy d9,d7,d1 faddsubr d5,d2 d4.s,x:(r5)     y:(r1),d7.s   ;
+      fmpy d8,d6,d2 fadd     d3,d0 x:(r0),d4.s     d2.s,y:(r5)+n5
+      fmpy d8,d7,d3 faddsubr d4,d0 x:(r1)+n1,d6.s  d5.s,y:(r4)+n4
+_end_next
+;
+; last pass
+;
+      move n2,d0.l                 ;number of groups in last pass=
+      lsl d0   r2,r0               ;2*number of groups in previous pass. Point to input data block.
+      move d0.l,n2                 ;number of stages in this group -->n2
+      move n7,r4                   ;r4 points to A output
+      move #2*odata+points,r3      ;initialization of conjugate reverse pointer
+      move #-1,m3                  ;r3 (conjugate reverse pointer) decrements linearly in initialization
+      move r4,n3                   ;offset for conjugate pointer initialization
+      lea (r0)+,r1                 ;r1 points to B input
+      move (r3)-n3                 ;r3 now has end of next output data block
+      move #0,m3                   ;r3 will decrement bit-reversed in output storage
+      move #points/2,n3            ;correct offset for reverse counter
+      move #2,n0                   ;offset is 2 for A input pointer
+      lea (r3)+n3,r6               ;r6 now contains the next output pointer a starting address
+      move r6,n7                   ;n7 contains next output data block starting address
+      move #coef+coefsize/4,r6     ;r6 points to twiddle factors  
+      move n0,n1                   ;offset is 2 for B input pointer
+      move #points/4,n4            ;offset is #points/4 for A output pointer
+      move n4,n5                   ;offset is #points/4 for B output pointer
+      move #0,m4                   ;bit reversed addressing for A output pointer
+      lea (r4)+n4,r5               ;r5 points to B output by adding points/4 once----|
+      move m4,m5                   ;bit reversed addressing for B output pointer     |
+      move (r5)+n5                 ;and once more to odata                     <-----|
+      fmove                        x:(r6)+n6,d9.s  y:(),d8.s          ;
+      fmove                                       y:(r1),d7.s         ;
+      fmpy d8,d7,d3                x:(r1)+n1,d6.s                     ;
+      fmpy d9,d6,d0                                                   ;
+      fmpy d9,d7,d1                               y:(r1),d7.s         ;
+      fmpy d8,d6,d2 fadd d3,d0     x:(r0),d4.s                        ; Last groups are implemented as
+      fmove                        x:(r6)+n6,d9.s y:(),d8.s           ; single butterflies with storage to 
+      fmpy d8,d7,d3 faddsubr d4,d0 x:(r1)+n1,d6.s                     ; the output data buffer. Data is stored 
+                                                                      ; in normal order, and the complex conjugate is
+      do n2,_end_last                                                 ; stored in the next output block using the 
+      fmpy d9,d6,d0 fsub d1,d2     d0.s,x:(r4)                        ; conjugate reverse counter r3
+      fmove                        d0.s,x:(r3)-n3  y:(r0)+n0,d5.s     ;
+      fmpy d9,d7,d1 faddsubr d5,d2 d4.s,x:(r5)     y:(r1),d7.s        ;
+      fmove                        d4.s,x:(r3)+n3  y:(r6),d8.s        ;                                   
+      fadd d3,d0                   x:(r0),d4.s     d5.s,y:(r4)+n4     ;
+      fneg d5                                      d2.s,y:(r5)+n5     ;
+      fneg d2                      x:(r6)+n6,d9.s  d5.s,y:(r3)-n3     ;
+      fmpy d8,d6,d2                                d2.s,y:(r3)-n3     ;
+      fmpy d8,d7,d3 faddsubr d4,d0 x:(r1)+n1,d6.s                     ;
+_end_last
+;
+;Do all remaining complex fft's (starting with 8-point) with normally ordered
+;output storage and conjugate reverse storage of the next output block
+;
+      clr d9                                      ;initialize the # passes      
+      move #-1,m2                                 ;linear addressing for input data block pointer
+      move #8,n2                                  ;offset=8 for input data ptr.
+      move #4,d8                                  ;initialize number of FFT points
+      move (r2)+n2                                ;initialize r2  
+      do #@cvi(@log(points)/@log(2)-3.5),_endfft  ;do for all fft's. Ex.: 6 for 1024-pt.
+      
+      lsl d8                            ;new number of FFT pts = number of FFT points * 2
+      inc d9                            ;increment # passes
+      clr d2         d8.l,d1.l          ;number of FFT points -->d1
+      move d2.l,m6                      ;bit-reversed addr. for coef. ptr
+      move #1,d0.l                      ;initialize # groups          
+      move d8.l,n2                      ;offset for computing new input data block ptr.
+      move (r2)+n2                      ;point to next input data block
+
+      do d9.l,_end_pass                 ;do for all passes
+      move d0.l,n2                      ;load number of groups
+      move r2,r0                        ;point to data
+      lsr  d1       #coef+coefsize/4,r6 ;# butterflies per group/2,r6 points to first coeff.
+      dec  d1      d1.l,n0              ;decrement number of butterflies twice
+      dec  d1      d1.l,n1              ;(first two butterflies are done separately)
+      move d1.l,n3                      ;number of butterflies per group-->n3
+      move n0,n4                        ;initialize pointers and pointer offsets
+      move n0,n5                        ;
+      lea (r0)+n0,r1                    ;
+      move r0,r4                        ;
+      move r1,r5                        ;
+      fmove                        x:(r6)+n6,d9.s y:(),d8.s      ;first two
+      fmove                                       y:(r1),d7.s    ;butterflies in this
+      fmpy d8,d7,d3                x:(r1)+,d6.s                  ;pass
+      fmpy d9,d6,d0                                              ;
+      fmpy d9,d7,d1                                 y:(r1),d7.s  ;
+      fmpy d8,d6,d2 fadd d3,d0     x:(r0),d4.s                   ;
+      fmpy d8,d7,d3 faddsubr d4,d0 x:(r1)+,d6.s                  ;
+
+      do n2,_end_grp          ;do for all groups in this pass
+
+      do n3,_end_bfy          ;do for all butterflies in this group
+      fmpy d9,d6,d0 fsub d1,d2     d0.s,x:(r4)    y:(r0)+,d5.s   ;4-instruction butterfly with
+      fmpy d9,d7,d1 faddsubr d5,d2 d4.s,x:(r5)    y:(r1),d7.s    ;constant twiddle
+      fmpy d8,d6,d2 fadd d3,d0     x:(r0),d4.s    d2.s,y:(r5)+   ;factor
+      fmpy d8,d7,d3 faddsubr d4,d0 x:(r1)+,d6.s   d5.s,y:(r4)+   ;
+_end_bfy
+      move (r1)+n1                                               ;first two
+      fmpy d9,d6,d0 fsub d1,d2     d0.s,x:(r4)    y:(r0)+,d5.s   ;butterflies in next
+      fmpy d9,d7,d1 faddsubr d5,d2 d4.s,x:(r5)    y:(r1),d7.s    ;pass
+      fmpy d8,d6,d2 fadd d3,d0     x:(r0),d4.s    d2.s,y:(r5)+   ;
+      fmove                        x:(r6)+n6,d9.s y:(),d8.s      ;
+      fmpy d8,d7,d3 faddsubr d4,d0 x:(r1)+,d6.s   d5.s,y:(r4)+   ;
+      fmpy d9,d6,d0 fsub     d1,d2 d0.s,x:(r4)    y:(r0)+n0,d5.s ;
+      fmpy d9,d7,d1 faddsubr d5,d2 d4.s,x:(r5)    y:(r1),d7.s    ;
+      fmpy d8,d6,d2 fadd     d3,d0 x:(r0),d4.s    d2.s,y:(r5)+n5 ;
+      fmpy d8,d7,d3 faddsubr d4,d0 x:(r1)+,d6.s   d5.s,y:(r4)+n4 ;
+_end_grp
+      move n2,d0.l                      ;number of groups for next pass=
+      lsl d0        n0,d1.l             ;2*number of groups for this pass
+_end_pass
+;
+; next to last pass
+;
+      move      d0.l,n2            ;initialize number of groups
+      move      r2,r0              ;point to input data block
+      move      r0,r4              ;initialize pointers and offsets
+      lea      (r0)+2,r1           ;
+      move      r1,r5              ;
+      move      #coef+points/4,r6  ;
+      move      #3,n0              ;
+      move      n0,n1              ;
+      move      n0,n4              ;
+      move      n0,n5              ;
+      fmove                        x:(r6)+n6,d9.s y:(),d8.s      ;
+      fmove                                       y:(r1),d7.s    ;
+      fmpy d8,d7,d3                x:(r1)+,d6.s                  ;
+      fmpy d9,d6,d0                                              ;
+      fmpy d9,d7,d1                               y:(r1),d7.s    ;
+      fmpy d8,d6,d2 fadd d3,d0     x:(r0),d4.s                   ;
+      fmpy d8,d7,d3 faddsubr d4,d0 x:(r1)+n1,d6.s                ;
+                              
+      do n2,_end_next                                            ;do for all groups
+      fmpy d9,d6,d0 fsub d1,d2     d0.s,x:(r4)    y:(r0)+,d5.s   ;
+      fmpy d9,d7,d1 faddsubr d5,d2 d4.s,x:(r5)    y:(r1),d7.s    ;each group implemented as one 
+      fmpy d8,d6,d2 fadd d3,d0     x:(r0),d4.s    d2.s,y:(r5)+   ;four-point butterfly
+      fmove                        x:(r6)+n6,d9.s y:(),d8.s      ;
+      fmpy d8,d7,d3 faddsubr d4,d0 x:(r1)+,d6.s   d5.s,y:(r4)+   ;
+      fmpy d9,d6,d0 fsub d1,d2     d0.s,x:(r4)    y:(r0)+n0,d5.s
+      fmpy d9,d7,d1 faddsubr d5,d2 d4.s,x:(r5)    y:(r1),d7.s    ;
+      fmpy d8,d6,d2 fadd d3,d0     x:(r0),d4.s    d2.s,y:(r5)+n5
+      fmpy d8,d7,d3 faddsubr d4,d0 x:(r1)+n1,d6.s d5.s,y:(r4)+n4
+_end_next
+;
+; last pass
+;
+      move n2,d0.l            ;number of groups in last pass=
+      lsl d0        r2,r0     ;2*number of groups in previous pass. Point to input data block.
+      move d0.l,n2            ;number of stages in this group -->n2
+      move n7,r4              ;r4 points to A output
+      move #2*odata+points,r3 ;initialization of conjugate reverse pointer
+      move #-1,m3             ;r3 (conjugate reverse pointer) decrements linearly in initialization
+      move r4,n3              ;offset for conjugate pointer initialization
+      lea (r0)+,r1            ;r1 points to B input
+      move (r3)-n3            ;r3 now has end of next output data block
+      move #0,m3              ;r3 will decrement bit-reversed in output storage
+      move #points/2,n3       ;correct offset for reverse counter
+      move #2,n0              ;offset is 2 for A input pointer
+      lea (r3)+n3,r6          ;r6 now contains the next output pointer a starting address
+      move r6,n7              ;n7 contains next output data block starting address
+      move #coef+points/4,r6  ;r6 points to twiddle factors  
+      move n0,n1              ;offset is 2 for B input pointer
+      move #points/4,n4       ;offset is #points/4 for A output pointer
+      move n4,n5              ;offset is #points/4 for B output pointer
+      move #0,m4              ;bit reversed addressing for A output pointer
+      lea (r4)+n4,r5          ;r5 points to B output by adding points/4 once----|
+      move m4,m5              ;bit reversed addressing for B output pointer     |
+      move (r5)+n5            ;and once more to odata                     <-----|
+      fmove                        x:(r6)+n6,d9.s y:(),d8.s           ;
+      fmove                                       y:(r1),d7.s         ;
+      fmpy d8,d7,d3                x:(r1)+n1,d6.s                     ;
+      fmpy d9,d6,d0                                                   ;
+      fmpy d9,d7,d1                                y:(r1),d7.s        ;
+      fmpy d8,d6,d2 fadd d3,d0     x:(r0),d4.s                        ; Last groups are implemented as
+      fmove                        x:(r6)+n6,d9.s  y:(),d8.s          ; single butterflies with storage to 
+      fmpy d8,d7,d3 faddsubr d4,d0 x:(r1)+n1,d6.s                     ; the output data buffer. Data is stored 
+                                                                      ; in normal order, and the complex conjugate is
+      do n2,_end_last                                                 ; stored in the next output block using the 
+      fmpy d9,d6,d0 fsub d1,d2     d0.s,x:(r4)                        ; conjugate reverse counter r3
+      fmove                        d0.s,x:(r3)-n3  y:(r0)+n0,d5.s     ;
+      fmpy d9,d7,d1 faddsubr d5,d2 d4.s,x:(r5)     y:(r1),d7.s        ;
+      fmove                        d4.s,x:(r3)+n3  y:(r6),d8.s        ;                                   
+      fadd d3,d0                   x:(r0),d4.s     d5.s,y:(r4)+n4     ;
+      fneg d5                                      d2.s,y:(r5)+n5     ;
+      fneg d2                      x:(r6)+n6,d9.s  d5.s,y:(r3)-n3     ;
+      fmpy d8,d6,d2                                d2.s,y:(r3)-n3     ;
+      fmpy d8,d7,d3 faddsubr d4,d0 x:(r1)+n1,d6.s                     ;
+_end_last
+_endfft
+     jmp  strt           ;go back and start new fft

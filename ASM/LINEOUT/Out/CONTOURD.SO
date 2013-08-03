@@ -1,0 +1,698 @@
+; yipyipee! motionblurred deep rotozoomer.. hopefully motionblur will hide
+; the transitions. Also negative exponentional scaling is used to give the
+; exact movement of zooming.
+;
+; highcolor version!
+;
+; attempt at ditherblur + motionblur (50% pixelfeedback)
+
+;======= OBJECT EQUATES ====================================================
+
+XFade.MAX_FRAMES:=	16
+XFade.NUMFRAMES:=	4
+XFade.MBLUR:=		0			; logical motionblur (160x100)
+XFade.DBLUR:=		1			; physical motionblur (320x200)
+XFade.LOADFILES:=	0
+
+			RSRESET
+XFade.screen1:		RS.W	160*100
+XFade.screen2:		RS.W	160*100
+XFade.screen3:		RS.W	160*100
+XFade.BLOCK_SIZE:	RS.B	0
+
+;======= OBJECT TABLE ======================================================
+
+	IFND	DEMO_SYSTEM
+testmode:	=	0
+	move.l	#XFade.table,fxAdr
+	INCLUDE	TESTER.S
+	TEXT
+	ENDC	
+
+XFade.table:
+	DC.L	XFade.mainLoop
+	DC.L	XFade.init
+	DC.L	XFade.initRT
+	DC.L	XFade.deinitRT
+	DC.L	rts
+	DC.L	rts
+	DC.L	rts
+	DC.L	rts
+	DC.L	rts
+	DC.L	rts
+	DC.L	rts				; '9'
+	DC.L	XFade.decreaseSpeed		; '-'
+	DC.L	rts				; '4'
+	DC.L	rts				; '5'
+	DC.L	rts				; '6'
+	DC.L	XFade.increaseSpeed		; '+'
+	DC.L	0
+
+;======= INIT SUBROUTINE ===================================================
+
+; OUTPUT:
+; d0.l: 0   = All clear, neg = Error! Not initialized!
+XFade.init:
+	move.l	#XFade.BLOCK_SIZE,d0
+	bsr.l	Mem.register
+
+	IFNE	XFade.LOADFILES
+; Pull all textures from disk.
+	clr.w	XFade.numFrames
+; Setup file data structure.
+	pea	.fdata(pc)
+	move.w	#$1A,-(sp)
+	trap	#1
+	addq	#6,sp
+; Initialize search using searchpattern.
+	clr.w	-(sp)				; only writable files
+	pea	.fspec(pc)			; Push file-info table.
+	move.w	#$4E,-(sp)
+	trap	#1
+	addq	#8,sp
+	tst.l	d0
+	bmi.s	.error
+
+	lea	XFade.picTable2,a6
+
+.loop:	cmpi.w	#XFade.MAX_FRAMES,XFade.numFrames
+	bhs.s	.end
+	addq.w	#1,XFade.numFrames
+	lea	.fdata+26(pc),a0
+	move.l	(a0)+,d0			; d0.l=size, a0: filename
+	bsr	XFade.load
+	addi.l	#20,d1				; Skip apx header.
+	move.l	d1,(a6)+
+; Look for next file that satisfies searchpattern.
+	move.w	#$4F,-(sp)
+	trap	#1
+	addq	#2,sp
+	tst.l	d0
+	bpl.s	.loop
+
+; Reverse frames, for zoom order..
+.end:	move.w	XFade.numFrames,d7
+	lea	XFade.picTable,a0
+	subq.w	#1,d7
+.revloop:
+	move.l	-(a6),(a0)+
+	dbf	d7,.revloop
+
+	ELSE
+
+	move.w	#XFade.NUMFRAMES,XFade.numFrames
+	ENDC
+
+	IFNE	XFade.MBLUR|XFade.DBLUR
+; Half all frames...
+	lea	XFade.picTable,a1
+	moveq	#XFade.NUMFRAMES-1,d6
+
+.frameloop:
+	movea.l	(a1)+,a0
+	move.l	#%01111011111011110111101111101111,d1
+	clr.w	d7
+
+.loop:	move.l	(a0),d0
+	lsr.l	d0
+	and.l	d1,d0
+	move.l	d0,(a0)+
+	addq.w	#1,d7
+	bpl.s	.loop
+
+	dbf	d6,.frameloop
+	ENDC
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+.fspec:	dc.b	"COG*.APX",0
+	EVEN
+.fdata:	ds.b	44
+
+;======= REALTIME INIT SUBROUTINE ==========================================
+
+XFade.initRT:
+	bsr.l	Mem.getBlock
+; d0.l:block
+; Set logical screenaddys..
+	move.l	d0,d1
+	move.l	d0,d2
+	lea	XFade.screenAddys,a0
+	addi.l	#XFade.screen1,d0
+	move.l	d0,(a0)+
+	addi.l	#XFade.screen2,d1
+	move.l	d1,(a0)+
+	addi.l	#XFade.screen3,d2
+	move.l	d2,(a0)+
+
+	bsr	XFade.setPaintRout
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+; Unknown monitormode..
+.end:	rts
+.vga60:	move.l	#vga60_16bit_320_200,resRout
+	rts
+.vga100:move.l	#vga100_16bit_320_200,resRout
+	rts
+.rgb50:	move.l	#rgb50_16bit_320_200,resRout
+	rts
+
+XFade.setPaintRout:
+	cmpi.w	#vga100,monitormode
+	beq.s	.vga100
+	move.l	#XFade.paintVBL,vbl_gfx
+	rts
+.vga100:move.l	#XFade.paintVga100VBL,vbl_gfx
+	rts
+
+;======= DEINITIALISATION ROUTINE ==========================================
+
+XFade.deinitRT:
+	rts
+
+;======= SCREENINIT SUBROUTINE =============================================
+
+XFade.initScreen:
+	rts
+
+;======= MAINLOOP SUBROUTINE ===============================================
+
+XFade.mainLoop:
+	move.w	$0468.w,old468
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr	XFade.initScreen
+.end_screeninit:
+
+	bsr	XFade.calcPosition
+	movea.l	XFade.screenAddys,a0
+	movea.l	XFade.screenAddys+8,a3
+	bsr	XFade.paint
+
+	lea	XFade.screenAddys,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+
+	movea.l	resRout,a0
+	suba.l	a1,a1
+	movea.l	scr,a2
+	bsr.l	Screen.requestUpdate
+	clr.l	resRout
+
+	move.w	old468,d0
+.wait:	cmp.w	$0468.w,d0
+	beq.s	.wait
+	rts
+
+;======= OBJECT SUBROUTINES ================================================
+
+XFade.decreaseSpeed:
+	bsr	getTime
+	move.w	d0,XFade.speedTime
+	move.w	XFade.pos,XFade.oldPos
+	subq.w	#8,XFade.speed
+	rts
+
+XFade.increaseSpeed:
+	bsr	getTime
+	move.w	d0,XFade.speedTime
+	move.w	XFade.pos,XFade.oldPos
+	addq.w	#8,XFade.speed
+	rts
+
+; INPUT:
+; d0.l=size
+; a0: filename
+; OUTPUT:
+; d0.l: =0:ok, <0:bad
+; d1.l: buffer loaded into
+XFade.load:
+; fopen
+	move.l	d0,-(sp)
+	clr.w	-(sp)				; mode? ro?
+	pea	(a0)
+	move.w	#$3D,-(sp)
+	trap	#1
+	addq	#8,sp
+	move.l	(sp)+,d1
+	tst.l	d0
+	bmi.s	.end
+
+; malloc
+	move.w	d0,d6				; d6.w=handle
+	move.l	d1,-(sp)
+	move.w	#$48,-(sp)
+	trap	#1
+	addq	#6,sp
+	tst.l	d0
+	bmi.s	.end
+	move.l	d0,d7
+	
+; fread
+	move.l	d0,-(sp)
+	move.l	d1,-(sp)
+	move.w	d6,-(sp)
+	move.w	#$3F,-(sp)
+	trap	#1
+	move.w	2(sp),d1			; d1.w=handle
+	lea	12(sp),sp
+	tst.l	d0
+	bmi.s	.end
+
+; fclose
+	move.w	d1,-(sp)
+	move.w	#$3E,-(sp)
+	trap	#1
+	addq	#4,sp
+
+.end:	move.l	d7,d1				; d1.l: bufferaddy
+	rts
+
+XFade.calcPosition:
+* First we calculate the current time.
+	bsr	getTime
+;	move.l	$4ba.w,d0
+;	sub.l	XFade.startTime,d0
+
+	move.l	d0,d1
+	move.l	d0,d6
+	lea	sine_tbl,a0
+
+* Now we calculate our center position.
+	mulu.w	#5,d1
+	lsr.l	#4,d1
+	Do_SinModulo	d1
+	Get_SinCos	a0,d1,d2,d3
+	add.l	d2,d2
+	add.l	d3,d3
+	move.w	#$8000,d2
+	move.w	#$8000,d3
+	movem.w	d2/d3,XFade.center
+
+* And now we calculate the current position in the trajectory.
+	mulu.w	XFade.rotSpeed,d0
+	lsr.l	#8,d0
+	Do_SinModulo	d0
+	Get_SinCos	a0,d0,d0,d1
+* d0.w: +sin(fi)
+* d1.w: +cos(fi)
+
+* a'.x = +cos(fi)*a.x +sin(fi)*a.y
+* a'.y = -sin(fi)*a.x +cos(fi)*a.y
+	move.w	d1,d2
+	move.w	d0,d3
+	neg.w	d3
+* d2.w: a'.x, d3.w: a'.y
+* b'.x = +cos(fi)*b.x +sin(fi)*b.y
+* b'.y = -sin(fi)*b.x +cos(fi)*b.y
+	move.w	d0,d4
+	move.w	d1,d5
+* d4.w: b'.x, d5.w: b'.y
+
+* And we calculate the amount of zoom...
+;	move.w	$04BC.w,d6
+	sub.w	XFade.speedTime,d6
+	mulu.w	XFade.speed,d6
+	lsr.l	#8,d6
+	add.w	XFade.oldPos,d6
+
+	move.w	d6,XFade.pos
+	clr.l	d0
+	move.w	d6,d0
+	lsr.w	#8,d0
+	divu.w	XFade.numFrames,d0
+	swap	d0
+	move.w	d0,XFade.picnum
+	move.w	d6,d0
+	andi.w	#$00FF,d0
+	move.w	(XFade.negexpTable,d0.w*2),d0
+	move.w	d0,d6
+	lsr.w	#2,d0
+;	move.w	d0,XFade.slider
+
+	lsl.w	#8,d6
+	mulu.w	#128,d6
+	swap	d6
+	addi.w	#128,d6
+* And zoom the damn thing!
+	muls.w	d6,d2
+	muls.w	d6,d3
+	muls.w	d6,d4
+	muls.w	d6,d5
+	IFNE	1
+	swap	d2
+	swap	d3
+	swap	d4
+	swap	d5
+	ENDC
+	IFNE	1
+	muls.w	#$170,d2
+	muls.w	#$170,d3
+	muls.w	#$170,d4
+	muls.w	#$170,d5
+	asr.l	#7,d2
+	asr.l	#7,d3
+	asr.l	#7,d4
+	asr.l	#7,d5
+	ENDC
+	IFNE	0
+	moveq	#15,d0
+	asr.l	d0,d2
+	asr.l	d0,d3
+	asr.l	d0,d4
+	asr.l	d0,d5
+	ENDC
+	movem.w	d2-d5,XFade.scaledVectorTable
+
+	rts
+
+; input:
+; a0: screen (current)
+; a3: screen (previous)
+XFade.paint:
+	move.w	XFade.picnum,d2
+	movea.l	(XFade.picTable,d2.w*4),a1
+;	adda.l	#2*(256*128+128),a1
+
+	movem.w	XFade.scaledVectorTable,d0-d3
+; d0.w: a.x, d1.w: a.y, d2.w: b.x, d3.w: b.y
+	movem.w	XFade.center,d6/d7
+	move.w	d0,d4
+	move.w	d1,d5
+	muls.w	#80,d4
+	muls.w	#80,d5
+	sub.w	d4,d6
+	sub.w	d5,d7
+	move.w	d2,d4
+	move.w	d3,d5
+	muls.w	#50,d4
+	muls.w	#50,d5
+	sub.w	d4,d6
+	sub.w	d5,d7
+; a
+	ror.l	#8,d1
+	move.w	d1,d4				; d4.b=UU x_step
+	move.w	d0,d1
+	movea.l	d1,a5				; a5.l=uu00VVvv x_step
+; b
+	ror.l	#8,d3
+	move.w	d3,XFade.u_ystep
+	move.w	d2,d3
+	move.l	d3,XFade.uv_ystep
+; top-left
+	ror.l	#8,d7
+	move.w	d7,XFade.u_start
+	move.w	d6,d7
+	move.l	d7,XFade.uv_start
+	move.l	XFade.uv_start(pc),d0
+	move.w	XFade.u_start(pc),d1
+
+	move.w	#%0111101111101111,d5
+	clr.l	d2				; clear upper word of offset
+	clr.l	d6				; clear upper part of paloffset
+	moveq	#100-1,d7
+
+XFade.paintVga100:
+; a1: texture1, a2: hc pal1[0..255], a3: texture2, a4: hc pal2[0..255]
+
+.yloop:	swap	d7
+	move.w	#20-1,d7
+	
+; d0.l=uu00VVvv (fast)
+; d1.b=UU (fast)
+; d2.w=offset
+; d4.b=UU (x_step)
+; d6.w=hc pixel
+; a0: screen
+; a1: 8b texture (fast)
+; a5=uu00VVvv (x_step)
+
+.chunkloop:
+	REPT	8
+	move.w	d0,d2
+	move.b	d1,d2
+	IFNE	XFade.MBLUR
+	move.w	(a3)+,d3
+	lsr.w	d3
+	and.w	d5,d3
+	add.w	(a1,d2.l*2),d3
+	move.w	d3,(a0)+
+	ELSE
+	move.w	(a1,d2.l*2),(a0)+
+	ENDC
+	add.l	a5,d0
+	addx.b	d4,d1
+	ENDR
+	dbf	d7,.chunkloop
+
+	move.l	XFade.uv_start(pc),d0
+	move.w	XFade.u_start(pc),d1
+	move.w	XFade.u_ystep(pc),d2
+	add.l	XFade.uv_ystep(pc),d0
+	addx.w	d2,d1
+	move.l	d0,XFade.uv_start
+	move.w	d1,XFade.u_start
+
+	swap	d7
+	dbf	d7,.yloop
+	rts
+
+XFade.uv_ystep:
+	DC.L	0
+XFade.u_ystep:
+	DC.W	0
+XFade.uv_start:
+	DC.L	0
+XFade.u_start:
+	DC.W	0
+
+XFade.paintVga100VBL:
+	clr.l	d1
+	move.w	$0468.w,d1
+	lsr.l	d1
+	bcs.s	.proceed
+	rts
+.proceed:
+	bra.s	XFade.paintIt
+
+XFade.paintVBL:
+;	tst.w	XFade.readyToVblKick
+;	bne.s	.go_on
+;	rts
+.go_on:	clr.l	d1
+	move.w	$0468.w,d1
+
+XFade.paintIt:
+
+	IFNE	0
+
+;evl esque blur, too 'jerky'?
+XFade.SKIP:	=	5
+
+	movea.l	scr,a0					; physical screen please!
+	movea.l	XFade.screenAddys+8,a1			; physical viewport
+	movea.w	#XFade.SKIP*2,a6
+	movea.w	#XFade.SKIP*4,a5
+	move.l	d1,d2
+	divu.w	#XFade.SKIP,d2
+	swap	d2					; d2.w=dst lookupoffset
+	divu.w	#XFade.SKIP*4,d1
+	swap	d1					; d1.w=src lookupoffset
+	moveq	#100,d7
+	adda.w	(.table.w,pc,d1.w*2),a0
+	move.w	(.htable.w,pc,d2.w*2),d5			; d5.w=src offset
+	adda.w	d5,a1
+	lsr.w	d5
+	move.w	#%0111101111101111,d2
+
+.yloop:
+	REPT	32
+	IFNE	XFade.DBLUR
+	move.w	(a0),d1
+	lsr.w	d1
+	and.w	d2,d1
+	add.w	(a1),d1
+	move.w	d1,(a0)
+	ELSE
+	move.w	(a1),(a0)
+	ENDC
+	adda.l	a6,a1
+	adda.l	a5,a0
+	ENDR
+	adda.w	#320*2,a0
+	dbf	d7,.yloop
+
+.end:	rts
+
+; offset: 000,001,002,003,004 (wrap)
+; pixels: 023,023,023,023,023 (wrap)
+.htable:DC.W	004*2,003*2,001*2,002*2,000*2
+.table:	DC.W	008*2,006*2,002*2,004*2,000*2
+	DC.W	009*2,007*2,003*2,005*2,001*2
+	DC.W	328*2,326*2,322*2,324*2,320*2
+	DC.W	329*2,327*2,323*2,325*2,321*2
+
+	ELSE
+
+;no esque blur...
+XFade.SKIP:	=	7
+
+	movea.l	scr,a0					; physical screen please!
+	movea.l	XFade.screenAddys+8,a1			; physical viewport
+	movea.w	#XFade.SKIP*2,a6
+	movea.w	#XFade.SKIP*4,a5
+	move.l	d1,d2
+	divu.w	#XFade.SKIP,d2
+	swap	d2					; d2.w=dst lookupoffset
+	divu.w	#XFade.SKIP*4,d1
+	swap	d1					; d1.w=src lookupoffset
+	moveq	#100,d7
+	adda.w	(.table.w,pc,d1.w*2),a0
+	move.w	(.htable.w,pc,d2.w*2),d5			; d5.w=src offset
+	adda.w	d5,a1
+	lsr.w	d5
+	move.w	#%0111101111101111,d2
+
+.plot00:moveq	#2-1,d6
+
+.loop:
+	REPT	11
+	IFNE	XFade.DBLUR
+	move.w	(a0),d1
+	lsr.w	d1
+	and.w	d2,d1
+	add.w	(a1),d1
+	move.w	d1,(a0)
+	ELSE
+	move.w	(a1),(a0)
+	ENDC
+	adda.l	a6,a1
+	adda.l	a5,a0
+	ENDR
+	dbra	d6,.loop
+
+	subq.w	#1,d7
+	beq.s	.main_done
+	subq.w	#6,d5
+	bpl.s	.next
+	addq.w	#7,d5
+	IFNE	XFade.DBLUR
+	move.w	(a0),d1
+	lsr.w	d1
+	and.w	d2,d1
+	add.w	(a1),d1
+	move.w	d1,(a0)
+	ELSE
+	move.w	(a1),(a0)
+	ENDC
+	adda.l	a6,a1
+	adda.l	a5,a0
+.next:	adda.w	#320*2,a0
+	bra.w	.plot00
+
+.main_done:
+; Don't forget the final 6. 64000 mod 7 = 6 you know.
+	subq.w	#6,d5
+	beq.s	.end
+; 0<=d1.w<6 => 0<=#pix<64000
+	IFNE	XFade.DBLUR
+	move.w	(a0),d1
+	lsr.w	d1
+	and.w	d2,d1
+	add.w	(a1),d1
+	move.w	d1,(a0)
+	ELSE
+	move.w	(a1),(a0)	
+	ENDC
+.end:	rts
+
+; offset: 000,001,002,003,004,005,006 (wrap)
+; pixels: 023,023,023,023,023,023,022 (wrap)
+.htable:DC.W	000*2,003*2,005*2,002*2,006*2,001*2,004*2
+.table:	DC.W	000*2,006*2,010*2,004*2,012*2,002*2,008*2
+	DC.W	001*2,007*2,011*2,005*2,013*2,003*2,009*2
+	DC.W	320*2,326*2,330*2,324*2,332*2,322*2,328*2
+	DC.W	321*2,327*2,331*2,325*2,333*2,323*2,329*2
+
+	ENDC
+
+;======= OBJECT DATA =======================================================
+
+	DATA
+
+	IFEQ	XFade.LOADFILES
+XFade.picTable:
+	DC.L	XFade.texture1+20
+	DC.L	XFade.texture2+20
+	DC.L	XFade.texture3+20
+	DC.L	XFade.texture4+20
+XFade.texture1:
+	INCBIN	COG4.APX
+XFade.texture2:
+	INCBIN	COG3.APX
+XFade.texture3:
+	INCBIN	COG2.APX
+XFade.texture4:
+	INCBIN	COG1.APX
+	ENDC
+
+XFade.negexpTable
+	INCBIN	NEGEXP.DAT
+
+XFade.speed:
+	DC.W	$0054 $00A0
+XFade.rotSpeed:
+	DC.W	$0040
+
+;======= OBJECT RESERVES ===================================================
+
+	BSS
+
+	IFNE	XFade.LOADFILES
+XFade.picTable:
+	DS.L	XFade.MAX_FRAMES+1
+XFade.picTable2:
+	DS.L	XFade.MAX_FRAMES+1
+	ENDC
+
+XFade.slider:
+	DS.W	1				; [0..63]
+XFade.picnum:
+	DS.W	1
+XFade.startTime:
+	DS.L	1
+XFade.scaledVectorTable:
+	DS.B	XFade.MAX_FRAMES
+	EVEN
+XFade.center:
+	DS.W	2
+XFade.distoStrength:
+	DS.W	1
+XFade.pos:
+	DS.W	1
+XFade.oldPos:
+	DS.W	1
+XFade.speedTime:
+	DS.W	1
+XFade.numFrames:
+	DS.W	1
+
+XFade.screenAddys:
+	DS.L	3
+

@@ -1,0 +1,515 @@
+; 3d brownian noise. A screen for delta.
+
+******** OBJECT EQUATES ********
+
+Twirl.MAX_POINTS:	=	4082
+
+******** OBJECT TABLE ********
+
+* Must be first in object!!
+Twirl.table:
+	DC.L	Twirl.mainLoop
+	DC.L	Twirl.init
+	DC.L	Twirl.setRes
+	DC.L	Twirl.start
+	DC.L	0
+
+			RSRESET
+Twirl.pointTable:	RS.W	3*Twirl.MAX_POINTS
+Twirl.restoreTable1:	RS.L	Twirl.MAX_POINTS+1
+Twirl.restoreTable2:	RS.L	Twirl.MAX_POINTS+1
+Twirl.restoreTable3:	RS.L	Twirl.MAX_POINTS+1
+Twirl.BLOCK_SIZE:	RS.B	0
+
+******** RESOLUTION SETTING ROUTINE ********
+
+Twirl.setRes:
+	IFEQ	testmode
+	move.l	#rts,vbl_gfx
+
+	move.w	$0468.w,d0
+.ck468:	cmp.w	$0468.w,d0
+	beq.s	.ck468
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+* Unknown monitormode..
+	rts
+.vga60:	bra.l	vga60_16bit_320_200
+.vga100:bra.l	vga100_16bit_320_200
+.rgb50:	bra.l	rgb50_16bit_320_200
+	ENDC
+	rts
+
+******** INIT SUBROUTINE ********
+
+* OUTPUT: d0.l: 0   = All clear.
+*               neg = Error! Not initialized!
+Twirl.init:
+	move.l	#Twirl.BLOCK_SIZE,d0
+	bsr.l	Mem.register
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+******** REALTIME INIT SUBROUTINE ********
+
+Twirl.realtimeInit:
+	bsr.l	Mem.getBlock
+
+	lea	Twirl.restoreAddress,a1
+	movea.l	d0,a0
+	move.l	a0,Twirl.pointTableAdr
+	adda.l	#Twirl.restoreTable1,a0
+	clr.l	(a0)
+	move.l	a0,(a1)+
+	REPT	2
+	adda.l	#(Twirl.MAX_POINTS+1)*4,a0
+	clr.l	(a0)
+	move.l	a0,(a1)+
+	ENDR
+
+; Kicks in P56 DSP-program..
+	move.l	#(Twirl.p56End-Twirl.p56)/3,d0
+	lea	Twirl.p56,a0
+	bsr.l	Dsp.loadProgram
+
+	move.l	#$5114fd32,d0
+	bsr.w	Twirl.initPointsDsp
+	rts
+
+******** SCREENINIT SUBROUTINE ********
+
+Twirl.initScreen:
+	IFEQ	testmode
+	movea.l	scr,a0
+	bsr.l	CLEAR_320200TSCR
+	ENDC
+	rts
+
+******** MAINLOOP SUBROUTINE ********
+
+Twirl.mainLoop:
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr.w	Twirl.realtimeInit
+	move.l	(sp)+,d0
+.end_realtime_init:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr.w	Twirl.initScreen
+.end_screeninit:
+
+	move.w	$468.w,.lastvbl
+
+	bsr.w	Twirl.paint3d
+
+	IFEQ	testmode
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	move.l	d0,d1
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+	ENDC
+
+	move.w	.lastvbl(pc),d0
+.wait:	cmp.w	$468.w,d0
+	beq.s	.wait
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.res_done
+	bsr.w	Twirl.setRes
+.res_done:
+
+	rts
+
+.lastvbl:
+	DC.W	0
+
+******** OBJECT SUBROUTINES ********
+
+Twirl.start:
+	move.w	$4bc.w,Twirl.startTime
+	move.w	#1,Twirl.inc
+	rts
+
+; INPUT:
+; d0.l=random seed
+Twirl.initPointsDsp:
+	sendLongToDsp	#(Twirl.MAX_POINTS/6)*6
+
+	move.w	#Twirl.MAX_POINTS/6-1,d7
+	clr.l	d2				; x = 0
+	clr.l	d3				; y = 0
+	clr.l	d4				; z = 0
+
+.loop:	clr.l	d1
+	move.w	d0,d1
+	moveq	#3-1,d6
+
+.pointloop1:
+	ext.l	d2
+	sendLongToDsp	d2
+	divu.w	#3,d1
+	swap	d1
+	subq.w	#1,d1
+	add.w	d1,d2
+	clr.w	d1
+	swap	d1
+
+	ext.l	d3
+	sendLongToDsp	d3
+	divu.w	#3,d1
+	swap	d1
+	subq.w	#1,d1
+	add.w	d1,d3
+	clr.w	d1
+	swap	d1
+
+	ext.l	d4
+	sendLongToDsp	d4
+	divu.w	#3,d1
+	swap	d1
+	subq.w	#1,d1
+	add.w	d1,d4
+	clr.w	d1
+	swap	d1
+	dbra	d6,.pointloop1
+
+	move.l	d0,d1
+	clr.w	d1
+	swap	d1
+	moveq	#3-1,d6
+
+.pointloop2:
+	ext.l	d2
+	sendLongToDsp	d2
+	divu.w	#3,d1
+	swap	d1
+	subq.w	#1,d1
+	add.w	d1,d2
+	clr.w	d1
+	swap	d1
+
+	ext.l	d3
+	sendLongToDsp	d3
+	divu.w	#3,d1
+	swap	d1
+	subq.w	#1,d1
+	add.w	d1,d3
+	clr.w	d1
+	swap	d1
+
+	ext.l	d4
+	sendLongToDsp	d4
+	divu.w	#3,d1
+	swap	d1
+	subq.w	#1,d1
+	add.w	d1,d4
+	clr.w	d1
+	swap	d1
+	dbra	d6,.pointloop2
+
+; Calculate next random value.
+	move.l	d0,d1
+	mulu.w	d0,d0
+	eor.l	d1,d0
+	addq.l	#7,d0
+	rol.l	d1,d0
+
+	dbra	d7,.loop
+	rts
+
+	IFNE	0
+
+; INPUT:
+; d0.l=random seed
+Twirl.initPoints:
+	movea.l	Twirl.pointTableAdr,a0
+	move.w	#Twirl.MAX_POINTS/6-1,d7
+	clr.w	d2				; x = 0
+	clr.w	d3				; y = 0
+	clr.w	d4				; z = 0
+
+.loop:	clr.l	d1
+	move.w	d0,d1
+	moveq	#3-1,d6
+
+.pointloop1:
+	move.w	d2,(a0)+
+	divu.w	#3,d1
+	swap	d1
+	subq.w	#1,d1
+	add.w	d1,d2
+	clr.w	d1
+	swap	d1
+
+	move.w	d3,(a0)+
+	divu.w	#3,d1
+	swap	d1
+	subq.w	#1,d1
+	add.w	d1,d3
+	clr.w	d1
+	swap	d1
+
+	move.w	d4,(a0)+
+	divu.w	#3,d1
+	swap	d1
+	subq.w	#1,d1
+	add.w	d1,d4
+	clr.w	d1
+	swap	d1
+	dbra	d6,.pointloop1
+
+	move.l	d0,d1
+	clr.w	d1
+	swap	d1
+	moveq	#3-1,d6
+
+.pointloop2:
+	move.w	d2,(a0)+
+	divu.w	#3,d1
+	swap	d1
+	subq.w	#1,d1
+	add.w	d1,d2
+	clr.w	d1
+	swap	d1
+
+	move.w	d3,(a0)+
+	divu.w	#3,d1
+	swap	d1
+	subq.w	#1,d1
+	add.w	d1,d3
+	clr.w	d1
+	swap	d1
+
+	move.w	d4,(a0)+
+	divu.w	#3,d1
+	swap	d1
+	subq.w	#1,d1
+	add.w	d1,d4
+	clr.w	d1
+	swap	d1
+	dbra	d6,.pointloop2
+
+; Calculate next random value.
+	move.l	d0,d1
+	mulu.w	d0,d0
+	eor.l	d1,d0
+	addq.l	#7,d0
+	rol.l	d1,d0
+
+	dbra	d7,.loop
+	rts
+
+Twirl.initPointsStupidly:
+	movea.l	Twirl.pointTableAdr,a0
+	move.w	#Twirl.MAX_POINTS/5-1,d7
+	clr.w	d2				; x = 0
+	clr.w	d3				; y = 0
+	clr.w	d4				; z = 0
+
+.loop:	move.l	d0,d1
+	moveq	#5-1,d6
+
+.pointloop:
+	move.w	d2,(a0)+
+	ror.l	d1
+	move.l	d1,d5
+	rol.l	d5
+	andi.w	#1,d5
+	lsr.l	d1
+	bcc.s	.x_done
+	neg.w	d5
+.x_done:
+	add.w	d5,d2
+
+	move.w	d3,(a0)+
+	ror.l	d1
+	move.l	d1,d5
+	rol.l	d5
+	andi.w	#1,d5
+	lsr.l	d1
+	bcc.s	.y_done
+	neg.w	d5
+.y_done:
+	add.w	d5,d3
+
+	move.w	d4,(a0)+
+	ror.l	d1
+	move.l	d1,d5
+	rol.l	d5
+	andi.w	#1,d5
+	lsr.l	d1
+	bcc.s	.z_done
+	neg.w	d5
+.z_done:
+	add.w	d5,d4
+	dbra	d6,.pointloop
+
+; Calculate next random value.
+	move.l	d0,d1
+	mulu.w	d0,d0
+	eor.l	d1,d0
+	addq.l	#7,d0
+	rol.l	d1,d0
+
+	dbra	d7,.loop
+	rts
+
+Twirl.paint2d:
+	movea.l	scr,a0
+	movea.l	Twirl.pointTableAdr,a1
+	move.w	#Twirl.MAX_POINTS-1,d7
+	move.w	#160,d2
+	move.w	#100,d3
+	move.w	#320,d4
+	move.w	#200,d5
+	moveq	#$ffffffff,d6
+
+.loop:	move.w	(a1)+,d0
+	move.w	(a1)+,d1
+	addq	#2,a1
+	add.w	d2,d0
+	add.w	d3,d1
+	cmp.w	d4,d0
+	bhs.s	.next
+	cmp.w	d5,d1
+	bhs.s	.next
+	mulu.w	d4,d1
+	add.w	d0,d1
+	move.w	d6,(a0,d1.l*2)
+.next:	dbra	d7,.loop
+	rts
+
+	ENDC
+
+Twirl.paint3d:
+	move.l	#(Twirl.MAX_POINTS/6)*6,d0
+	tst.w	Twirl.inc
+	beq.s	.transmit_amount
+	move.w	$4bc.w,d0
+	sub.w	Twirl.startTime,d0
+	cmpi.w	#(Twirl.MAX_POINTS/6)*6,d0
+	blo.s	.transmit_amount
+	move.w	#(Twirl.MAX_POINTS/6)*6,d0
+	clr.w	Twirl.inc
+
+; Send over the amount of points to render.
+.transmit_amount:
+	tst.w	d0
+	bne.s	.amount_not_zero
+	addq.w	#1,d0
+.amount_not_zero:
+	sendLongToDsp	d0	;#(Twirl.MAX_POINTS/6)*6
+
+; First send rotation parameters to dsp..
+	move.w	$4bc.w,d0
+	move.w	d0,d2
+	move.w	d0,d4
+	mulu.w	#3,d2
+	lsr.w	#1,d2
+	mulu.w	#5,d4
+	lsr.w	#2,d4
+	Do_SinModulo	d0
+	Do_SinModulo	d2
+	Do_SinModulo	d4
+	lea	sine_tbl,a0
+	Get_SinCos	a0,d0,d0,d1
+	Get_SinCos	a0,d2,d2,d3
+	Get_SinCos	a0,d4,d4,d5
+	lsl.l	#8,d0
+	lsl.l	#8,d1
+	lsl.l	#8,d2
+	lsl.l	#8,d3
+	lsl.l	#8,d4
+	lsl.l	#8,d5
+	sendLongToDsp	d0
+	sendLongToDsp	d1
+	sendLongToDsp	d2
+	sendLongToDsp	d3
+	sendLongToDsp	d4
+	sendLongToDsp	d5
+
+; Send the screencenter...
+	movea.l	scr,a0
+	adda.l	#(320*100+160)*2,a0
+	sendLongToDsp	a0
+
+; Restore background..
+	movea.l	Twirl.restoreAddress,a3
+	move.w	(a3)+,d7
+	beq.s	.end_restore
+	subq.w	#1,d7
+	clr.w	d0
+.restore_loop:
+	movea.l	(a3)+,a0
+	move.w	d0,(a0)
+	dbra	d7,.restore_loop
+.end_restore:
+
+; Receive and paint! NOTE: can only be painted to STRAM!
+	movea.l	Twirl.restoreAddress,a3
+	moveq	#$ffffffff,d4
+	move.l	#$00ffffff,d5
+	move.w	#%0011100111000111,d6
+	lea	$ffffa204.w,a1
+	receiveWordFromDsp	d7
+	move.w	d7,(a3)+
+	beq.s	.end_plot
+	subq.w	#1,d7
+
+.loop:	movea.l	(a1),a0
+	move.l	a0,(a3)+
+	add.w	d6,(a0)
+	bcc.s	.next
+	move.w	d4,(a0)
+.next:	dbra	d7,.loop
+.end_plot:
+
+; Swap restore table addresses.
+	lea	Twirl.restoreAddress,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	rts
+
+******** OBJECT DATA ********
+
+	DATA
+
+Twirl.p56:
+	INCBIN	TWIRL.P56
+Twirl.p56End:
+	EVEN
+
+Twirl.inc:
+	DC.W	0
+
+******** OBJECT RESERVES ********
+
+	BSS
+
+Twirl.startTime:
+	DS.W	1
+Twirl.restoreAddress:
+	DS.L	3
+Twirl.pointTableAdr:
+	DS.L	1
