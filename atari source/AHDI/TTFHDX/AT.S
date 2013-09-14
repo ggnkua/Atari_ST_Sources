@@ -1,0 +1,696 @@
+;+
+; Edit History
+;
+; Sep-05-90	ml.	Created this for drives on the AT bus.
+;
+; Mar-28-91	ml.	Do not use the IDE Sector Count Register 
+;			to count down mulitiple sectors read or
+;			write.  Some vendors (e.g. Conner and 
+;			Seagate) seem to update this register 
+;			too early, and every now and then, the
+;			last sector of data would remain in the
+;			internal sector buffer.  
+;			
+;			Code in atread() and atwrite() are modified
+;			not to use the IDE Sector Count Register.
+;-
+
+.include	"defs.h"
+.include	"sysvar.h"
+.include	"mfp.h"
+.include	"at.h"
+.include	"blitter.h"
+
+.extern	_blitxst
+
+;+
+; Wait for status to come back
+;-
+w4int:	move.l	#D_WORST,d0	; d0 = timeout limit
+	add.l	_hz_200,d0	; d0 = expiration time
+.0:	btst.b	#5,GPIP		; interrupt?
+	beq.s	.1		; if so, out of the loop
+	cmp.l	_hz_200,d0	; timeout?
+	bhi.s	.0		; if not, wait some more
+	moveq	#$ff,d0		; else, return timeout
+	bra.s	.3
+.1:	moveq	#0,d0		; clear d0
+	move.b	ATSR,d0		; d0.b = status returned
+	btst	#ERR,d0		; any error?
+	bne.s	.2		; if yes, return error code
+	btst	#DRQ,d0		; else DRQ?
+	bne.s	.3		; if so, just return
+	moveq	#0,d0		; else return OK
+	bra.s	.3
+.2:	move.b	ATER,d0		; else d0.b = error bits
+.3:	rts			; return status or error code
+
+
+
+;+
+; atread() - reads from 1 to 256 sectors as specified in the Task File,
+;		beginning at the specified sector.
+;	   - sector count equal to 0 requests 256 sectors.
+;
+; Comments:
+;	The unit is assumed to be in native mode when conversion from
+; logical block address to physical address is done.
+;
+; atread(nhd, nspt, sectnum, count, buf, pdev)
+; WORD	nhd;		4(sp).w		; # of data heads on pdev
+; WORD	nspt;		6(sp).w		; # of physical sectors per track
+; LONG	sectnum;	8(sp).l		; logical block address
+; WORD	count;		$c(sp).w	; # of sectors to read
+; BYTE	*buf;		$e(sp).l	; $f(sp)=high $10(sp)=mid $11(sp)=low
+; WORD	pdev;		$12(sp).w	; physical device number
+;-
+	.globl	_atread
+_atread:
+	bsr	set_dhcs	; set physical address
+	move.l	$e(sp),a0	; a0 -> buffer to read into
+	move.b	$d(sp),ATSC	; set sector count
+
+	move.w	$c(sp),d1	; d1.w = # of sectors to read
+	subq	#1,d1		; dbra likes one less
+
+	tst.b	_blitxst	; BLiTTER exists?
+	beq.s	.0		; if not, don't use it
+	moveq	#0,d0		; else it's a read
+	bsr	initblit	; initialize the BLiTTER
+
+.0:	move.b	#0,ATDOR	; enable interrupt
+	move.b	#READ,ATCR	; set command code
+.1:	bsr	w4int		; wait for interrupt
+	tst.w	d0		; successful?
+	bmi.s	.2		; if timed-out, return
+	btst	#DRQ,d0		; DRQ?
+	beq.s	.2		; if not, return
+				; else
+	bsr	readbuf		; transfer data
+	dbra	d1,.1		; go wait for next interrupt
+	moveq	#0,d0		; no error
+.2:	rts
+
+
+;+
+; atwrite() - writes from 1 to 256 sectors as specified in the Task File,
+;		beginning at the specified sector.
+;	    - sector count equal to 0 requests 256 sectors.
+;
+; Comments:
+;	The unit is assumed to be in native mode when conversion from
+; logical block address to physical address is done.
+;
+; atwrite(nhd, nspt, sectnum, count, buf, pdev)
+; WORD	nhd;		4(sp).w		; # of data heads on pdev
+; WORD	nspt;		6(sp).w		; # of physical sectors per track
+; LONG	sectnum;	8(sp).l		; logical block address
+; WORD	count;		$c(sp).w	; # sectors to read
+; BYTE	*buf;		$e(sp).l	; $f(sp)=high $10(sp)=mid $11(sp)=low
+; WORD	pdev;		$12(sp).w	; physical device number
+;-
+	.globl	_atwrite
+_atwrite:	
+	bsr	set_dhcs	; set physical address
+	move.l	$e(sp),a0	; a0 -> buffer to write from
+	move.b	$d(sp),ATSC	; set sector count
+
+	move.w	$c(sp),d1	; d1.w = # of sectors to read
+	subq	#1,d1		; dbra likes one less
+
+	tst.b	_blitxst	; BLiTTER exists?
+	beq.s	.0		; if not, don't use it
+	moveq	#1,d0		; it's a write
+	bsr	initblit	; initialize the BLiTTER
+
+.0:	move.b	#0,ATDOR	; enable interrupt
+	move.b	#WRITE,ATCR	; set command code
+.1:	btst.b	#DRQ,ATASR	; DRQ?
+	beq.s	.1		; if not, wait longer
+
+.2:	bsr	wrtbuf		; transfer data
+	bsr	w4int		; wait for interrupt
+	tst.w	d0		; successful?
+	bmi.s	.3		; if timed-out, return
+	btst	#DRQ,d0		; DRQ?
+	beq.s	.3		; if not, return
+	dbra	d1,.2		; else go transfer data
+	moveq	#0,d0		; everything's fine
+
+.3:	rts
+
+
+;+
+; set_dhcs() - convert a logical block address into a physical address.
+;	     - set drive #, head #, cylinder # and sector # in task file.
+;
+; Passed:
+;	8(sp).w = nhd = # of data heads
+;	$a(sp).w = nspt = # of physical sectors per track
+;	$c(sp).l = logical block address
+;	$16(sp).w = physical unit #
+;-
+set_dhcs:
+	move.l	$c(sp),d1	; d1.l = logical block address
+	move.w	8(sp),d2	; d2.w = # of data heads
+	move.w	$a(sp),d0	; d0.w = # of physical sectors per track
+	mulu	d0,d2		; d2.l = # of sectors per cylinder
+				;      = # heads * # of sectors per track
+	divu.w	d2,d1		; d1.w = cylinder #
+				;      = log block addr / #spc
+	move.b	d1,ATCL		; set cylinder low
+	lsr.l	#8,d1		; d1.b = cylinder high
+	move.b	d1,ATCH		; set cylinder high
+	lsr.l	#8,d1		; d1.l = sector # within the cyl
+	divu.w	d0,d1		; d1.w = head #
+				;      = sector # within cyl / #spt
+	move.w	$16(sp),d0	; d0.w = physical unit #
+	andi.b	#7,d0		; mask off flags from physical unit #
+	lsl.b	#4,d0		; shift unit # to place
+	or.b	d0,d1		; or in drive #
+	move.b	d1,ATSDH	; set drive and head #
+	swap	d1		; d1.w = sector # (base 0)
+	addq.w	#1,d1		;      = sector # + 1 (base 1)
+	move.b	d1,ATSN		; set sector #
+	rts
+
+;+
+; initparm() - enables the host to set the head switch and cylinder
+;	       increment points for multiple sector operations.
+;
+; initparm(pdev, head, spt)
+; WORD 	pdev;	4(sp).w
+; WORD	head;	6(sp).w
+; WORD	spt;	8(sp).w
+;-
+	.globl	_initparm
+_initparm:
+	move.w	4(sp),d0	; d0 = physical unit #
+	andi.b	#7,d0		; mask off flags
+	lsl.w	#4,d0		; shift it into place
+	move.b	d0,ATSDH	; set physical unit #
+	move.w	6(sp),d0	; d0 = # of heads
+	subq.b	#1,d0		; maximum head #
+	or.b	d0,ATSDH	; set head #
+	move.b	9(sp),ATSC	; set sectors per track
+	move.b	#0,ATDOR	; enable interrupt
+	move.b	#INITPARM,ATCR	; set command code
+	bra	w4int		; go wait for interrupt
+
+
+;+
+; identify() - allows the Host to receive parameter information from
+;	       the drive.
+;
+; identify(pdev, buf)
+; WORD	pdev;	4(sp).w		; physical unit #
+; BYTE	*buf;	6(sp).l		; buffer to put data
+;-
+	.globl	_identify
+_identify:
+	move.w	4(sp),d0	; d0 = physical unit #
+	andi.b	#7,d0		; mask off flags (if any)
+	lsl.b	#4,d0		; shift unit # to place
+	move.b	d0,ATSDH	; set drive #
+	move.l	6(sp),a0	; a0 -> buffer
+
+	tst.b	_blitxst	; BLiTTER exists?
+	beq.s	.0		; if not, no need to init it
+	moveq	#0,d0		; it's a read
+	bsr	initblit	; initialize the BLiTTER
+
+.0:	move.b	#0,ATDOR	; enable interrupt
+	move.b	#IDENTIFY,ATCR	; set command code
+	bsr	w4int		; wait for interrupt
+	tst.w	d0		; successful?
+	bmi.s	.1		; if timed-out, return
+	btst	#DRQ,d0		; DRQ?
+	beq.s	.1		; if not, return with error
+
+	bsr	readbuf		; read data
+	moveq	#0,d0		; return successful
+.1:	rts 
+
+
+;+
+; awto() - set drive to Active mode with timeout counter (in 5s increments)
+;
+; awto(pdev, timeout)
+; WORD	pdev;		4(sp).w		; physical unit #
+; WORD	timeout;	6(sp).w
+;-
+	.globl	_awto
+_awto:	
+	move.w	4(sp),d0	; d0 = physical unit #
+	andi.b	#7,d0		; mask off flags (if any)
+	lsl.b	#4,d0		; shift unit # to place
+	move.b	d0,ATSDH	; set drive #
+	move.b	7(sp),ATSC	; set timeout counter
+	move.b	#AWTO,ATCR	; set command code
+	bra	w4int		; go wait for interrupt
+
+
+;+
+; slave() - test if the slave drive exists
+;
+; Returns: 0 - if slave does not exist
+;	   1 - if slave exists
+;-
+	.globl	_slave
+_slave:	moveq	#0,d0		; assume slave does NOT exist
+	bset.b	#4,ATSDH	; set drive bit to 1 (slave)
+	btst.b	#DRDY,ATSR	; is slave ready?
+	beq.s	.0		; if not, no slave
+	moveq	#1,d0		; else, slave exists
+.0:	rts
+
+
+;+
+; readbuf() - reads 512 bytes (128 longs) of data from the sector
+;		buffer.
+;
+; Passed:
+;	a0.l = buffer to store data read from sector buffer
+;
+;	if BLiTTER code
+;	a1.l = base address of BLiTTER
+;-
+readbuf:
+	tst.b	_blitxst	; BLiTTER exists?
+	beq.s	.0		; if not, do programmed IO
+	move.w	#1,YCNT(a1)	; one destination line
+	move.b	#$80,BUSY(a1)	; start the BLiTTER
+	bsr	restart
+	addq.l	#2,DESTADDR(a1)	; advance to next word of destination
+	rts
+				; Programmed IO
+.0:	moveq	#127,d0		; d0 = # of longs to read - 1
+;.0:	move.l	#255,d0		; d0 = # of words to read - 1
+	lea	ATDR,a1		; a1 -> data bus
+.1:	move.l	(a1),(a0)+	; read data from bus
+;.1:	move.w	(a1),(a0)+	; read data from bus
+	dbra	d0,.1		; repeat until all done
+	rts
+
+
+;+
+; wrtbuf() - writes 512 bytes (128 longs) of data to sector buffer.
+;
+; Passed:
+;	d0.w = number of words of data to write
+;	a0.l = buffer with data to write to sector buffer
+;-
+wrtbuf:
+	tst.b	_blitxst	; BLiTTER exists?
+	beq.s	.0		; if not, do programmed IO
+	move.w	#1,YCNT(a1)	; one destination line
+	move.b	#$80,BUSY(a1)	; start the BLiTTER
+	bsr	restart
+	addq.l	#2,SRCADDR(a1)	; advance to next word of source
+	rts
+				; Programmed IO
+.0:	moveq	#127,d0		; d0 = # longs to write - 1
+;.0:	move.l	#255,d0		; d0 = # words to write - 1
+	lea	ATDR,a1		; a1 -> data bus
+.1:	move.l	(a0)+,(a1)	; write data to bus
+;.1:	move.w	(a0)+,(a1)	; write data to bus
+	dbra	d0,.1		;  repeat until all done
+	rts
+
+
+;+
+; initblit() - initialize the BLiTTER chip for 512 bytes I/O transfer
+;
+; Passed:
+;	a0.l = destination address if read; source address if write
+;	d0.w = flag to tell whether it's a read or a write
+;-
+initblit:
+	lea	bBLiTTER,a1		; a1 -> BLiTTER register map
+	tst.b	d0			; read or write?
+	bne.s	ib0			; (write)
+	move.l	#ATDR,SRCADDR(a1)	; source addr = AT data register
+	move.l	a0,DESTADDR(a1)		; destination addr = given buffer
+	move.w	#2,DESTXINC(a1)		; words read
+	moveq	#0,d0
+	move.w	d0,SRCXINC(a1)		; never increment source X
+	bra.s	ib1
+					; initialize BLiTTER to write to disk
+ib0:	move.l	a0,SRCADDR(a1)		; source addr = write buffer
+	move.l	#ATDR,DESTADDR(a1)	; destination addr = AT data register
+	move.w	#2,SRCXINC(a1)		; words write
+	moveq	#0,d0
+	move.w	d0,DESTXINC(a1)		; never increment destination X
+
+ib1:	move.w	d0,SRCYINC(a1)		; never increment source Y
+	move.w	d0,DESTYINC(a1)		; never increment destination Y
+	move.b	d0,SKEW(a1)		; no skew
+	moveq	#$ff,d0
+	move.l	d0,ENDMASK1(a1)		; change all bits at destination
+	move.w	d0,ENDMASK3(a1)		; change all bits at destination
+	move.w	#$203,HOP(a1)		; set HOP and OP to source
+	move.w	#256,XCNT(a1)		; num of words to transfer
+	rts
+
+
+;+
+; restart() - restart the BLiTTER
+;
+; Passed:
+;	a1.l = base address of BLiTTER
+;-
+restart:
+	nop
+	tas	BUSY(a1)	; restart BLiTTER and test if busy
+	bmi.s	restart		; quit if not busy
+	rts
+
+
+.if	!DRIVER
+
+;+
+; clrsbuf() - clear the scratch buffer
+;-
+clrsbuf:
+	movem.l	d0/a0,-(sp)	; save d0 and a0
+	lea	sbuf,a0		; a0 -> scratch buffer
+	move.w	#127,d0		; d0 = counter
+.0:	clr.l	(a0)+		; clear 4 bytes
+	dbra	d0,.0		; repeat until done
+	movem.l	(sp)+,d0/a0	; restore d0 and a0
+	rts
+
+
+;+
+; recal() - moves the R/W heads from anywhere on the disk to cylinder 0.
+;
+; recal(pdev)
+; WORD	pdev;	$4(sp).w
+;-
+	.globl	_recal
+_recal:	move.w	4(sp),d0	; d0 = physical unit #
+	andi.b	#7,d0		; mask off flags (if any)
+	lsl.b	#4,d0		; shift unit # to place
+	move.b	d0,ATSDH	; write drive #
+	move.b	#0,ATDOR	; enable interrupt
+	move.b	#RECAL,ATCR	; write command code
+	bra	w4int		; go wait for interrupt
+
+
+;+
+; verify() - functions similarly to read() except that no data is
+;	     transferred to the host.
+;-
+	.globl	_verify
+_verify:
+	move.w	$e(sp),d0	; d0.w = physical unit #
+	move.l	4(sp),d1	; d1.l = starting logical sector #
+	bsr	set_dhcs	; set drive#, head#, cylinder# and sector#
+	move.l	$a(sp),a0	; a0 -> buffer to write from
+	move.b	9(sp),ATSC	; set sector count
+	move.b	#0,ATDOR	; enable interrupt
+	move.b	#VERIFY,ATCR	; set command code
+.0:	bsr	w4int		; wait for interrupt
+	bne.s	.1		; if has error, return
+	tst.b	ATSC		; more to verify?
+	bne.s	.0		; if so, continue
+	moveq	#0,d0		; everything's fine
+.1:	rts
+
+
+;+
+; fmtunt() - formats a unit
+;	   - always formats sectors as good ones.
+;	   - interleave 1:1.
+;
+; fmtunt(pdev)
+; WORD	pdev;	4(sp).w		/* physical unit number */
+;-
+	.globl	_fmtunt
+_fmtunt:
+	pea	sbuf		; scratch buffer
+	move.w	$8(sp),-(sp)	; physical unit #
+	bsr	_identify	; identify(pdev, buf)
+	addq.w	#6,sp		; clean up stack
+	tst.w	d0		; successful?
+	bne	.4		; if not, return
+				; else make sure we are in native mode
+	lea	sbuf,a1		; a1 -> sbuf
+	move.w	NSPT(a1),-(sp)	; # of sectors per track
+	move.w	NHEAD(a1),-(sp)	; # of heads
+	move.w	8(sp),-(sp)	; physcial unit #
+	bsr	_initparm	; initparm(pdev, head, spt)
+	addq.w	#6,sp		; clean up stack
+	tst.w	d0		; successful?
+	bne	.4		; if not, return
+				; else get drive parameters
+	lea	sbuf,a1		; a1 -> sbuf
+	move.w	NCYL(a1),d0	; d0.w = # of cylinders
+	move.w	NHEAD(a1),d1	; d1.w = # of heads
+	move.w	NSPT(a1),d2	; d2.w = # of sectors per track
+				; fill format data
+	bsr	clrsbuf		; clear scratch buffer
+	move.l	d3,-(sp)	; save d3
+	moveq	#1,d3		; d3 = sector # (starts with sector 1)
+.0:	move.b	d3,(a1)+	; set sector #
+	clr.b	(a1)+		; format sector good
+	addq.b	#1,d3		; next sector #
+	cmp.b	d3,d2		; all sector # set?
+	bcc.s	.0		; if not, continue
+	move.l	(sp)+,d3	; restore d3
+				; format unit
+	move.w	4(sp),d2	; d2.w = physical unit #
+	andi.b	#7,d2		; mask off flags (if any)
+	lsl.b	#4,d2		; shift physical unit # into place
+	move.b	d2,ATSDH	; set physical unit #
+	subq.w	#1,d0		; dbra likes one less
+	subq.w	#1,d1		; dbra likes one less
+	move.w	d1,d2		; d2 = # heads - 1
+.1:	move.w	d2,d1		; reinitialize head number for next cylinder
+.2:	movem.l	d0-d2,-(sp)	; save cylinder and head counts
+	lea	sbuf,a0		; a0 -> format data
+	bsr	_fmttrk		; format track of current cylinder and head
+	beq.s	.3		; if successful, continue
+	adda.l	#12,sp		; else clean up stack
+	rts			; and return
+.3:	movem.l	(sp)+,d0-d2	; restore cylinder and head counts
+	dbra	d1,.2		; for all heads
+	dbra	d0,.1		; for all cylinders
+	moveq	#0,d0		; everything's fine
+.4:	rts
+
+
+;+
+; fmttrk() - formats a track with format data provided.
+;
+; Passed:
+;	d0.w = cylinder #
+;	d1.w = head #
+;	a0.l -> format data
+;-
+	.globl	_fmttrk
+_fmttrk:
+	or.b	d1,ATSDH	; set head #
+	move.b	d0,ATCL		; set cylinder low
+	lsr.w	#8,d0		; d0.b = cylinder high
+	move.b	d0,ATCH		; set cylinder high
+	move.b	#0,ATDOR	; enable interrupt
+	move.w	#256,d1		; d1.w = word count
+
+	tst.b	_blitxst	; BLiTTER exists?
+	beq.s	.0		; if not, don't use it
+	moveq	#1,d0		; it's a write
+	bsr	initblit	; initialize the BLiTTER
+
+.0:	move.b	#FMTTRK,ATCR	; set command code
+.1:	btst.b	#DRQ,ATASR	; DRQ?
+	beq.s	.1		; if not, wait longer
+
+	bsr	wrtbuf		; write format data to sector buffer
+	bra	w4int
+
+
+;+
+; seek() - initiates a seek to the track and selects the head 
+;	   specified in the Task File.
+;
+; seek(pdev, head, cyl)
+; WORD	pdev;	$4(sp).w
+; WORD	head;	$6(sp).w
+; WORD	cyl;	$8(sp).w
+;-
+	.globl	_seek
+_seek:	move.w	4(sp),d0	; d0 = physical unit #
+	andi.b	#7,d0		; mask off flags
+	lsl.b	#4,d0		; shift unit # to place
+	or.b	7(sp),d0	; b4 of d0 = drive #; b3-b0 of d0 = head #;
+	move.b	d0,ATSDH	; set drive and head #
+	move.b	#0,ATDOR	; enable interrupt
+	move.b	9(sp),ATCL	; set cylinder low
+	move.b	8(sp),ATCH	; set cylinder high
+	move.b	#SEEK,ATCR	; set command code
+	bra	w4int		; go wait for interrupt
+
+
+;+
+; diag() - performs the internal diagnostic tests implemented by 
+;	   the drive.
+;-
+	.globl	_diag
+_diag:	move.b	#0,ATDOR	; enable interrupt
+	move.b	#DIAG,ATCR	; set command code
+	bra	w4int
+
+
+;+
+; rsbuf() - allows the Host to read the current contents of the
+;	    drive's sector buffer.
+;
+; rsbuf(pdev, buf)
+; WORD	pdev;	4(sp).w
+; BYTE	*buf;	6(sp).l
+;-
+	.globl	_rsbuf
+_rsbuf:	move.w	4(sp),d0	; d0 = physical unit #
+	andi.b	#7,d0		; mask off flags (if any)
+	lsl.w	#4,d0		; shift it into place
+	move.b	d0,ATSDH	; set physical unit #
+	move.l	6(sp),a0	; a0 -> buffer
+	move.w	#256,d1
+
+	tst.b	_blitxst	; BLiTTER exists?
+	beq.s	.0		; if not, don't use it
+	moveq	#0,d0		; it's a read
+	bsr	initblit	; initialize the BLiTTER
+
+.0:	move.b	#0,ATDOR	; enable interrupt
+	move.b	#RSBUF,ATCR	; set command code
+	bsr	w4int		; go wait for interrupt
+	tst.w	d0		; successful?
+	bmi.s	.1		; if timed-out, return
+	btst	#DRQ,d0		; DRQ?
+	beq.s	.1		; if not, return with error
+
+	bsr	readbuf		; read data
+	moveq	#0,d0		; return successful
+.1:	rts 
+
+
+;+
+; wsbuf() - allows the Host to overwrite the contents of the drive's
+;	    sector buffer.
+;
+; wsbuf(pdev, buf)
+; WORD	pdev;	4(sp).w
+; BYTE	*buf;	6(sp).l
+;-
+	.globl	_wsbuf
+_wsbuf:	move.w	4(sp),d0	; d0 = physical unit #
+	andi.b	#7,d0		; mask off flags (if any)
+	lsl.w	#4,d0		; shift it into place
+ 	move.b	d0,ATSDH	; set physical unit #
+	move.l	6(sp),a0	; a0 -> buffer
+	move.w	#256,d0		; d0 = word count
+
+	tst.b	_blitxst	; BLiTTER exists?
+	beq.s	.0		; if not, don't use it
+	moveq	#0,d0		; it's a read
+	bsr	initblit	; initialize the BLiTTER
+
+.0:	move.b	#WSBUF,ATCR	; set command code
+.1:	btst	#DRQ,ATSR		; DRQ?
+	beq.s	.1		; if not, wait some more
+
+	bsr	wrtbuf		; read data
+	moveq	#0,d0		; return successful
+	rts 
+
+;+
+; standby() - set drive to Standby mode
+;
+; standby(pdev)
+; WORD	pdev;	4(sp).w		; physical unit #
+;-
+	.globl	_standby
+_standby:
+	move.w	4(sp),d0	; d0 = physical unit #
+	andi.b	#7,d0		; mask off flags (if any)
+	lsl.b	#4,d0		; shift unit # to place
+	move.b	d0,ATSDH	; set drive #
+	move.b	#STANDBY,ATCR	; set command code
+	bra	w4int		; go wait for interrupt
+
+
+;+
+; active() - set drive to Active mode
+;
+; active(pdev)
+; WORD	pdev;	4(sp).w		; physical unit #
+;-
+	.globl	_active
+_active:
+	move.w	4(sp),d0	; d0 = physical unit #
+	andi.b	#7,d0		; mask off flags (if any)
+	lsl.b	#4,d0		; shift unit # to place
+	move.b	d0,ATSDH	; set drive #
+	move.b	#ACTIVE,ATCR	; set command code
+	bra	w4int		; go wait for interrupt
+
+
+;+
+; sbwto() - set drive to Standby mode with timeout counter (in 5s increments)
+;
+; sbwto(pdev, timeout)
+; WORD	pdev;		4(sp).w		; physical unit #
+; WORD	timeout;	6(sp).w
+;-
+	.globl	_sbwto
+_sbwto:	
+	move.w	4(sp),d0	; d0 = physical unit #
+	andi.b	#7,d0		; mask off flags (if any)
+	lsl.b	#4,d0		; shift unit # to place
+	move.b	d0,ATSDH	; set drive #
+	move.b	7(sp),ATSC	; set timeout counter
+	move.b	#SBWTO,ATCR	; set command code
+	bra	w4int		; go wait for interrupt
+
+
+;+
+; ssc() - set sector count wrt current mode of drive
+;
+; ssc(pdev)
+; WORD	pdev;	4(sp).w		; physical unit #
+;-
+	.globl	_ssc
+_ssc:	
+	move.w	4(sp),d0	; d0 = physical unit #
+	andi.b	#7,d0		; mask off flags (if any)
+	lsl.b	#4,d0		; shift unit # to place
+	move.b	d0,ATSDH	; set drive #
+	move.b	#SSC,ATCR	; set command code
+	bra	w4int		; go wait for interrupt
+
+
+;+
+; sbres() - set drive to Standby mode.
+;	  - drive will not wake up until reset is sent to drive
+;
+; sbres(pdev)
+; WORD	pdev;	4(sp).w		; physical unit #
+;-
+	.globl	_sbres
+_sbres:	
+	move.w	4(sp),d0	; d0 = physical unit #
+	andi.b	#7,d0		; mask off flags (if any)
+	lsl.b	#4,d0		; shift unit # to place
+	move.b	d0,ATSDH	; set drive #
+	move.b	#SBRES,ATCR	; set command code
+	bra	w4int		; go wait for interrupt
+
+
+.data
+sbuf:	dcb.b	512,0		; scratch buffer
+
+.endif	;!DRIVER
+
+

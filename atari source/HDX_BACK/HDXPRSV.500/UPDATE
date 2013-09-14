@@ -1,0 +1,196 @@
+chkroot(dev, bs)
+int dev;
+char *bs;
+{
+    extern long get3bytes();
+    extern long get4bytes();
+    SETMODE *mb;
+    int i, ret, set, scsidrv, mask=0x0001;
+	int page=4, bsiz;
+    int head, spt;
+    SECTOR size, msiz, cyl;	/* size of media */
+    char buf[512], sendata[32];
+    long dmaptr, tmpptr;
+    char *dmahigh=0xffff8609,
+         *dmamid=0xffff860b,
+         *dmalow=0xffff860d;
+    
+    size = ((RSECT *)(bs + 0x200 - sizeof(RSECT)))->hd_siz;
+    
+	ret = OK;
+	if (dev == 16)	{		/* it is a IDE-AT drive */
+		msiz = (SECTOR)athead * (SECTOR)atcyl * (SECTOR)atspt;
+		if (size != msiz)
+			ret = ERROR;
+		return(ret);
+	} else if (dev > 7)	{	/* it is a scsi drive */
+    	ostack = Super(NULL);
+		delay();
+		if ((ret = readcap(dev, 0, (long)0, sendata)) == OK) {
+			if (msiz = get4bytes(sendata))	{
+				msiz += 1;
+    			delay();
+    			Super(ostack);
+				goto chkend;
+			} 
+		} 
+		for (i = 0; i < 32; i++)
+			sendata[i] = 0;
+		if ((ret = mdsense(dev, 4, 0, 32, sendata)) == OK)	{
+			if((msiz=get3bytes(sendata+5)))	{
+    					delay();
+    					Super(ostack);
+						goto chkend;
+			}
+		}
+		for (i = 0; i < 32; i++)
+			sendata[i] = 0;
+		if ((ret = mdsense(dev, 0, 0, 16, sendata)) == OK)	{
+			if((msiz=get3bytes(sendata+5)))	{
+    					delay();
+    					Super(ostack);
+						goto chkend;
+			}
+		}
+		for (i = 0; i < 32; i++)
+			sendata[i] = 0;
+		if ((ret = mdsense(dev, 3, 0, 32, sendata)) == OK)	{
+			if((msiz=get3bytes(sendata+5)))	{
+    					delay();
+    					Super(ostack);
+						goto chkend;
+			}
+		}
+		msiz = size;
+		delay();
+		Super(ostack);
+		goto chkerr;
+	}
+
+    ostack = Super(NULL);
+    /* Get format parameters/ disk size from media */
+	set = typedev & (mask << dev);
+	scsidrv = typedrv & (mask << dev);
+	bsiz = ((set) || (scsidrv)) ? (16) : (22);
+	if ((set) || (scsidrv))	{
+		for (i = 0; i < 32; i++)
+			sendata[i] = 0;
+		mdsense(dev, 0, 0, bsiz, sendata);
+		if((msiz=get3bytes(sendata+5)))	{
+    				delay();
+    				Super(ostack);
+					goto chkend;
+		}
+redopg:
+		for (i = 0; i < 32; i++)
+			sendata[i] = 0;
+		ret = mdsense(dev, page, 0, 32, sendata);/* use page code 4, but get */
+											/* info from the mdsense header */
+		for (i = 0; i < 32; i++)
+			if (sendata[i])
+				break;
+		if ((i==32) && (page == 4))		{
+			page = 3;
+			goto redopg;
+		} else if (i == 32)	{
+			msiz = size;
+    		delay();
+    		Super(ostack);
+			goto chkend;
+		}
+		if (!(msiz = get3bytes(sendata+5)))	{
+			if (page == 4)	{
+				page = 3;
+				/*
+				cyl = get3bytes(sendata+14);
+				head = *(sendata+17);
+				*/
+				goto redopg;
+			} else {
+				/*
+				spt = getword(sendata+22);
+				msiz = cyl * head * spt;
+				*/
+				msiz = size;
+			}
+		}
+    	delay();
+    	Super(ostack);
+		goto chkend;
+	} else	{
+		ret = mdsense(dev, 0, 0, 22, sendata);
+    	delay();
+    	Super(ostack);
+
+    	/* If full SCSI, will return number of blocks */
+    	/* on disk at byte 5, 6 and 7.  If Adaptec,   */
+    	/* will return 0 for number of blocks on disk */
+    	/* on SCSI. */
+
+   		 if (!(msiz = get3bytes(sendata+5))) {	/* no disk size returned? */
+    		/* Yup, ie., it's adaptec's.  Interpret as SETMODE structure */
+    		mb = (SETMODE *)sendata;
+			/* get number of cylinders */
+			cyl = mb->smd_cc[0];
+			cyl <<= 8;
+			cyl |= mb->smd_cc[1];
+    
+			/* get number of heads */
+			head = mb->smd_dhc;
+    
+			msiz = (SECTOR)head * (SECTOR)cyl * MFM;
+    
+			for (i = 0; i < 20; i++) {
+	    		if ((ret = rdsects(dev, 1, buf, msiz+i)) == OK) {
+					/* find out whether data has been transferred, by
+	   	   			checking if dma pointer has been moved.	  */
+
+					ostack = Super(NULL);
+					delay();
+					dmaptr = *dmahigh;
+					dmaptr &= 0x0000003f;
+					dmaptr <<= 16;
+					tmpptr = *dmamid;
+					tmpptr &= 0x000000ff;
+					tmpptr <<= 8;
+					dmaptr |= tmpptr;
+					tmpptr = *dmalow;
+					tmpptr &= 0x000000ff;
+					dmaptr |= tmpptr;
+    				delay();
+    				Super(ostack);
+
+					if (dmaptr != buf)
+					    break;
+	   			} else {			/* rdsects return an error */
+					if (tsterr(ret) == OK) {
+	           			break;
+					}
+    	    	}
+        	}
+    
+			if (ret == MDMCHGD)		/* check if error occurred */
+			    return (ret);
+       
+			/* Determine if media is MFM or RLL */
+			if (i < 20)	{
+			    msiz = (SECTOR)head * (SECTOR)cyl * RLL;
+				goto chkend;
+			}
+    	}
+	}
+chkerr:
+    if (ret != 0) {
+		ret = errcode(dev);
+		if (tsterr(ret) != OK) 
+	        return ERROR;
+		return (-3);	/* don't have to show the alert box */
+    }
+chkend:
+    if (size != msiz)
+        ret = ERROR;
+    else 
+        ret = OK;
+        
+    return (ret);
+}

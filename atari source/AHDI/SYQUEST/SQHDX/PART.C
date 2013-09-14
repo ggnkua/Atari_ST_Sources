@@ -1,0 +1,346 @@
+/* part.c */
+
+
+#include "obdefs.h"
+#include "defs.h"
+#include "part.h"
+#include "bsl.h"
+#include "hdx.h"
+#include "addr.h"
+
+
+extern char sbuf[];
+extern int rebootp;
+
+extern long bslsiz;
+extern long gbslsiz();
+
+/*
+ * Complain about partition error.
+ *
+ */
+parterr(devno)
+int devno;
+{
+    char *pdev="X";
+    
+    *pdev = devno + '0';
+    (cantpart[PTNDEV].ob_spec)->te_ptext = pdev;
+    cantpart[PTNERROK].ob_state = NORMAL;
+    execform(cantpart);
+    return ERROR;
+}
+
+
+/*
+ * Fill in partition entry with default information
+ * and configuration values from the current "pr" wincap entry.
+ *
+ */
+fillpart(n, part)
+int n;
+PART *part;
+{
+    long num;
+    char *partid;
+    char *idstr = "XX";
+    char *wgetstr();
+
+    idstr[1] = n + '0';
+
+    part->p_flg = 0;		/* set defaults */
+    part->p_id[0] = 'G';
+    part->p_id[1] = 'E';
+    part->p_id[2] = 'M';
+    part->p_st = 0;
+    part->p_siz = 0;
+
+    /* see if `pX' is mentioned */
+    *idstr = 'p';
+    if (wgetnum(idstr, &num) == OK)
+    {
+	part->p_siz = (LONG)(num / 512);
+	*idstr = 'f';
+	if (wgetnum(idstr, &num) == OK)
+	    part->p_flg = (BYTE)num;
+	    else part->p_flg = P_EXISTS;
+	*idstr = 'i';
+	if ((partid = wgetstr(idstr)) != NULL)
+	    for (num = 0; num < 3; ++num)
+		part->p_id[num] = partid[num];
+    }
+}
+
+
+/*
+ * Extract partition structures from root sector.
+ *
+ */
+gpart(image, pinfo)
+char *image;
+PART *pinfo;
+{
+    register PART *rpart;
+    int i, j;
+
+    rpart = &((RSECT *)(image + 0x200 - sizeof(RSECT)))->hd_p[0];
+
+    for (i = 0; i < 4; ++i)
+    {
+	pinfo->p_flg = rpart->p_flg;
+	for (j = 0; j < 3; ++j)
+	    pinfo->p_id[j] = rpart->p_id[j];
+	pinfo->p_st = rpart->p_st;
+	pinfo->p_siz = rpart->p_siz;
+
+	++pinfo;
+	++rpart;
+    }
+}
+
+
+/*
+ * Install partition structures in root sector.
+ *
+ */
+spart(image, pinfo)
+char *image;
+PART *pinfo;
+{
+    register PART *rpart;
+    int i, j;
+
+    rpart = &((RSECT *)(image + 0x200 - sizeof(RSECT)))->hd_p[0];
+
+    for (i = 0; i < 4; ++i)
+    {
+	rpart->p_flg = pinfo->p_flg;	/* copy part struct */
+	for (j = 0; j < 3; ++j)
+	    rpart->p_id[j] = pinfo->p_id[j];
+	rpart->p_st = pinfo->p_st;
+	rpart->p_siz = pinfo->p_siz;
+
+	++rpart;
+	++pinfo;
+    }
+}
+
+
+/*
+ * Setup partitions on the disk;
+ * write boot sectors and zero FATs and root directories.
+ *
+ */
+dopart(physdev, pinfo)
+int physdev;
+register PART *pinfo;
+{
+    int i, ldev, ret;
+    SECTOR data;
+    char image[512], *devno="X";
+    long ndirs;
+    UWORD fatsiz;
+    BOOT *bs;
+
+    if ((bslsiz = gbslsiz(physdev)) < 0L) {
+        if (bslsiz == ERROR)
+            err(rootread);
+        return ERROR;
+    }
+        
+    
+    for (i = 0; i < NPARTS; ++i, ++pinfo) {
+    	
+    	/* don't care if partition does not exist */
+	if (!(pinfo->p_flg & P_EXISTS)) {
+	    continue;
+	}
+
+	/*
+	 * Compute boot sector parameters.
+	 */
+	if (pinfo->p_siz >= 0x10000L) {		/* partition >=? 32Mb */
+	    *devno = i + '0';
+	    (part2big[BGPART].ob_spec)->te_ptext = devno;
+	    part2big[BGPARTOK].ob_state = NORMAL;
+	    execform(part2big);
+	    return ERROR;
+	}
+
+	/*
+	 * Install entries in boot sector image;
+	 * force sector checksum to zero (non-executable);
+	 * write boot sector to media.
+	 *
+ 	 *	512 bytes/sector
+	 *	2 or 4 sectors/cluster (partition > 16Mb has 4 spc)
+	 *	1 reserved sector (for boot)
+	 *	2 FATs
+	 *	... dir slots
+	 *	... # sectors
+	 *	F8 means media is a hard disk
+	 *	... FAT size
+	 *
+	 */
+	 
+	/* Make a clean boot sector */
+	fillbuf(image, 512L, 0L);
+	bs = (BOOT *)image;
+        
+        /* bytes per sector */
+	iw((UWORD *)&bs->b_bps[0], (UWORD)512);
+	
+	/* sectors per cluster */
+	if (pinfo->p_siz >= 0x8000L)	/* partition >= 16Mb */
+	    bs->b_spc = 4;
+	else				/* partition < 16Mb */
+	    bs->b_spc = 2;
+	    
+	/* number of reserved sectors */
+	iw((UWORD *)&bs->b_res[0], (UWORD)1);
+	
+	/* number of FATs */
+	bs->b_nfats = 2;
+	
+
+	/*
+	 * Compute root directory size
+	 * 256 entries, plus fudge on devs > 10Mb
+	 */
+	if (pinfo->p_siz < 0x5000L) ndirs = 256;
+	else ndirs = pinfo->p_siz / 80;	/* 1 dir entry per 80 sectors */
+	ndirs = (ndirs + 15) & ~15;	/* round to nearest sector */
+	iw((UWORD *)&bs->b_ndirs[0], (UWORD)ndirs);
+	
+	/* number of sectors on media (partition) */
+	iw((UWORD *)&bs->b_nsects[0], (UWORD)pinfo->p_siz);
+	
+	/* media descriptor */
+	bs->b_media = 0xf8;
+
+	/*--------------------------------------------------------------*
+	 * Compute FAT size						*
+	 *								*
+	 * Num entries to map the entire partition			*
+	 *	= partition's size in clusters				*
+	 *	= partition's size in sectors / spc			*
+	 *								*
+	 * Num entries in FAT						*
+	 *	= Num entries to map partition + reserved entries	*
+	 *	= (partition's size in sectors / spc) + 2		*
+	 *								*
+	 * Num sectors FAT occupies					*
+	 *	= Num entries in FAT / Num entries of FAT per sector	*
+	 *	= Num entries in FAT / (512 / 2)    <16-bit FAT>	*
+	 *	= ((partition's size in sectors / spc) + 2) / 256 + 1	*
+	 *					    <+1 to round up>	*
+	 *--------------------------------------------------------------*/
+	fatsiz = (((pinfo->p_siz / bs->b_spc) + 2) / 256) + 1;
+	iw((UWORD *)&bs->b_spf[0], (UWORD)fatsiz);
+
+	/*
+	 * Write partition's boot sector
+	 */
+	forcesum((UWORD *)image, (UWORD)0);	/* force image checksum */
+	if ((ret = wrsects(physdev, 1, image, (SECTOR)pinfo->p_st)) != OK) {
+	    if (tsterr(ret) != OK)
+	        err(bootwrit);
+	    return ERROR;
+	}
+
+	/*
+	 * Zero the partition
+	 */
+	if ((ret = zerosect(physdev, (SECTOR)(pinfo->p_st+1),
+		     (UWORD)(fatsiz*2 + ndirs/16))) != OK) {
+	    if (tsterr(ret) != OK)
+	        err(hdrwrite);
+	    return ERROR;
+	}
+		     
+	/*
+	 * Make first 2 entries in FATs more IBM-like.
+	 */
+	if ((ret = rdsects(physdev, 1, image, (SECTOR)(pinfo->p_st+1))) != 0) {
+	    if (tsterr(ret) != OK)
+	        err(fatread);
+	    return ERROR;
+	}
+	*(UWORD *)&image[0] = 0xf8ff;
+	*(UWORD *)&image[2] = 0xffff;
+	if ((ret = wrsects(physdev, 1, image, (SECTOR)(pinfo->p_st+1))) != 0 ||
+	    (ret = wrsects(physdev, 1, image, (SECTOR)(pinfo->p_st+1+fatsiz)))
+	    != 0) {
+	    if (tsterr(ret) != OK)
+	        err(fatwrite);
+	    return ERROR;
+	}
+
+	/*
+	 * Mark bad sectors recorded in the BSL into the FATs.
+	 * Calculating parameters:
+	 *	ldev - from physdev and i.
+	 *	fat0 - always equals 1.
+	 *	fatsiz - calculated above.
+	 *	data - starts after the boot sector, 2 FATs and rootdir.
+	 */
+	if (bslsiz > 0) {
+	    if ((ldev = phys2log(physdev, i)) == ERROR)
+	        return parterr(physdev);
+	    data = (SECTOR)1 + (SECTOR)(fatsiz*2) + (SECTOR)(ndirs/16);
+	    bsl2fat(ldev, (SECTOR)1, fatsiz, data, MEDIA);
+	}
+    }
+    return OK;
+}
+
+
+/*
+ * Force checksum of sector image to a value
+ */
+forcesum(image, sum)
+UWORD *image;
+UWORD sum;
+{
+    register int i;
+    register UWORD w;
+
+    w = 0;
+    for (i = 0; i < 255; ++i)
+	w += *image++;
+    *image++ = sum - w;
+}
+
+
+/*
+ * Put word in memory in 8086 byte-reversed format.
+ *
+ */
+iw(wp, w)
+UWORD *wp;
+UWORD w;
+{
+    char *p;
+
+    p = (char *)wp;
+    p[0] = (w & 0xff);
+    p[1] = ((w >> 8) & 0xff);
+}
+
+
+/*
+ * Get word in memory, from 8086 byte-reversed format.
+ *
+ */
+UWORD gw(wp, aw)
+UWORD *wp;
+UWORD *aw;
+{
+    char *p, *q;
+
+    p = (char *)wp;
+    q = (char *)aw;
+    q[0] = p[1];
+    q[1] = p[0];
+    return *aw;
+}

@@ -1,0 +1,4662 @@
+/**************************************************************************/
+/*  FILE:  HANDLERS.C		PROGRAM TITLE: DeskSET II Alpha Version   */
+/*  Date Created: 12/15/87						  */ 
+/*  Last Modified: 06/30/89						  */
+/*									  */
+/*  Description: MENU, MESSAGE, EVNT_MULTI HANDLERS			  */
+/*  Routines:								  */
+/*    	o front_end()   	- Initializer				  */
+/*	o initialize()  	- Initialize variables			  */
+/*  	o event()    		- Event Multi				  */
+/*	o hndl_keybd()		- Event Keyboard Handler		  */
+/*      o mesag_handle()	- Event Message Handler			  */
+/*	o menu_handler() 	- Menu Event Handler			  */
+/*	o button_handler() 	- Button Event Handler		  	  */
+/*	o do_nada()		- Handler to select a region		  */
+/*	o screen_clip()		- Set Screen clipping			  */
+/*	o scrn2clip()		- Another clip setting routine - PADJCNT  */
+/*	o poly_handler()	- Secondary poly draw handler		  */
+/*	o button_end()  	- Concludes Button and poly handler       */
+/*	o check_region_ptr()	- checks for active graphic or text region*/
+/*	o check_only_blit()	- check if all we need is a blit...	  */
+/*	o do_delregion()	- Delete the currently selected region	  */
+/*	o do_unlinkreg()	- Unlink the current text region	  */
+/*	o do_delpage()		- Delete the current page		  */
+/*	o do_move_region()	- Handles moving a selected region	  */
+/*	o check_boxes()		- handles 8 boxes for scaling region 	  */
+/*	o do_rule_mark()	- Handles the ruler markers		  */
+/*	o update_repel()	- Repels new region for flowing of text	  */
+/*	o snap_to_grid()	- snaps vertices to a specific grid	  */
+/*	o snap_mu()		- snap in machine units			  */
+/*	o do_edit_prim()	- Select w/ right button a primitive      */
+/*	o calc_prim()		- Calculate outer boundary of primitive   */
+/*	o edit_prims()		- Move and Size Primitives		  */
+/*	o check_prim_box()	- Size a primitive			  */
+/*	o recalc_region()	- Recalc region bndry after editing prim  */
+/*	o move_prim_box()	- move a primitive within a region	  */
+/*	o inside_primitive()	- check if clicked within a primitive	  */
+/*	o hndl_icons()		- handle left icon panel selections	  */
+/**************************************************************************/
+
+/**************************************************************************/
+/* HISTORY								  */
+/* 									  */
+/* 11/03/89	Changes made to delete the page if the last region on     */
+/*		that page is deleted.					  */
+/* 		Modified  - do_delregion()				  */
+/*			  - do_delmulti()				  */
+/**************************************************************************/
+
+/**************************************************************************/
+/* INCLUDE FILES							  */
+/**************************************************************************/
+#include "define.h"
+#include "gemdefs.h"
+#include "deskset2.h"
+#include <obdefs.h>
+#include <osbind.h>
+#include "alert.h"
+#include "dbase.h"
+
+/**************************************************************************/
+/* DEFINES								  */
+/**************************************************************************/
+
+#define max(x,y)   (((x) > (y)) ? (x) : (y))
+#define min(x,y)   (((x) < (y)) ? (x) : (y))
+#define MICRON   319
+#define NULLPTR  0x0L
+#define MIN_MEM_TO_RUN 5000L
+
+/**************************************************************************/
+/* EXTERNALS								  */
+/**************************************************************************/
+extern int ptsin[];			/* PTSIN array			  */
+extern char rscerr3[];			/* Delete Regions Alert Box text  */
+extern char del_page[];
+extern char delregion[];
+extern char quiter[];
+
+extern int (*funcs)();			/* Drawing Primitive Functions    */
+extern long find_region();		/* Function - Find Region 	  */
+extern int nada();			/* Default Drawing Primitive      */
+extern int poly_draw();
+extern long getf_scaninfo();
+extern long getn_scaninfo();
+extern long prev_aregion();
+extern int scrntomu();
+extern int recalc_txtptrs();
+
+extern OBJECT *ad_menu;			/* OBJECT for menu bar etc.       */
+extern OBJECT *ad_deskset;		/* OBJECT for ABOUT dialog box    */
+extern OBJECT *ad_paths;
+extern OBJECT *adpagedef;		/* page type dialog box		  */
+
+extern int dummy;			/* well, dummy...		  */
+extern int hpage_size;			/* horizontal and vertical page   */
+extern int vpage_size;			/* size in Machine Units (MU)     */
+extern int view_size;			/* Current scaling size-ACTUAL etc*/
+extern int prev_size;			/* Previous Scale Size...	  */
+
+extern int curr_page;			/* Current Page Number displayed  */
+
+extern unsigned long region_ptr;	/* Pointer to Region in STructure */
+extern unsigned long gl_region_ptr;	/* Ptr to Current Active region   */
+extern unsigned long gl_grregion_ptr;   /* Ptr to current graphic region  */
+
+extern int shandle;			/* screen workstation handle      */
+extern int mhandle;			/* Preview Buffer Driver Handle   */
+extern int xor_handle;			/* Secondary Screen workstation   */
+extern int prev_handle;			/* Preview window handle.	  */
+extern int rule_handle;
+
+extern int txt_handle;
+
+extern GRECT work;			/* GRECT of work area of window   */
+extern GRECT pwork;			/* Preview GRECT Work Window      */
+extern GRECT dpwork;
+
+extern int pagew,pageh;			/* page width and height (Pixels) */
+extern int opwidth,opheight;
+					/* Note: Size is for current scale*/
+
+int rect_in_mu[4];			/* x1,y1,x2,y2 of current region  */
+
+extern int mode_flag;			/* Outline/Solid Mode     	  */
+extern char *mode_text[];		/* Info for Prev Window   	  */
+
+extern int write_flag;			/* write white/black flag         */
+extern char *write_mode[];		/* write white/black menu text    */
+extern char *ruler_mode[];
+
+extern int clip_area[];			/* Supposed clip area set         */
+extern unsigned long page_ptr;		/* Preview Buffer Pointer         */
+extern FDB page_MFDB;			/* Preview MFDB area		  */
+
+extern int gl_lstyle;			/* Current line styles and fill   */
+extern int gl_lwidth;			/* styles...			  */
+extern int gl_fstyle;
+extern int gl_findex;
+extern int gl_repel;
+extern int gl_repoffset;
+extern int gl_repbounds;
+
+extern int SH;				/* adjusted point size ht in pix  */
+extern int zdevice;			/* index into xdip/ydpi    	  */
+
+extern int BSTATE;			/* Button State...		  */
+extern BUT_OR();			/* routine to get button state    */
+extern long BADDR;
+extern int BREAL;
+
+extern int  article_flag;		
+extern char pathbuf[];			/* path to file...		  */
+
+extern int cur_scale;			/* current scale		  */
+extern int cur_primitive;		/* current primitive in RCS #s    */
+		
+extern struct txtattr gltxtattr;	/* Global txt attributes 	  */
+extern struct txtattr cp;
+extern int glgrattr[];			/* Global graphics attributes     */
+
+extern int force_draw_flag;
+
+extern long get_regart();		/* Return regions article pointer */
+
+extern int mboxx1[];
+extern int mboxx2[];
+extern int mboxy1[];
+extern int mboxy2[];
+
+extern int count,wmode;
+extern int ptsarray[];
+extern int xruler_offset;
+extern int yruler_offset;
+
+extern int hhalf,vhalf;
+
+extern int mouse_on;
+extern int clipf[];
+extern int *clipe;
+extern int *icdata;
+extern int *primicons;
+extern BITBLK *bgicptr;
+extern ICONBLK *icnptr;
+extern OBJECT *ad_bkgrnd;
+extern int ybook;
+extern int syres;
+
+extern char fntdrs[];
+extern int alt_offset;
+
+extern long location;
+
+extern struct textobj gltext;
+extern long get_fregion();
+extern long get_nregion();
+
+extern char *winfo[][4];
+
+extern long get_curreg();
+
+extern char *dpath1;
+extern char *dpath2;
+extern char *dpath3;
+extern char *dpath4;
+
+extern char *get_edit();
+
+extern long getf_aregion();
+extern long getn_aregion();
+
+extern int reopen_prim;
+
+extern short mlink[];
+extern long curregion;
+extern long sfregion;
+
+extern int tmplate_flag;
+extern char *template_mode[];
+
+extern PAGE *curpage;
+extern PAGE *pagehd;
+
+extern unsigned char *get_lcmem();
+
+extern char *disp_tmpl[];
+extern OBJECT *ad_settmpl;
+
+extern long MALLOC();
+extern ARTICLE *arthd;
+extern ARTICLE *curart;
+extern long curprim;
+
+extern int sxres,syres;
+extern long first_aregion();
+extern long lmalloc();
+extern int free();
+extern int force_preview();
+extern int do_blit();
+extern int dotext();
+extern int redraw_laser;
+
+extern REGION *create_region();
+extern OBJECT *unitobj;
+
+extern int sdevm;
+extern int zrat;
+
+extern int info_what; /* info dialog box - DOC,TEMPLATE,CLIP 0,1,2 */
+extern int info_type; /* info dialog box - TEXT,GRAPHIC 0 or 1     */
+extern OBJECT *ad_info;
+
+extern char pfname[];	/* title for preview window */
+extern char basefname[]; /* title for base page */
+
+int	*gcurx;					/* Ptr to mouse x position*/
+int	*gcury;					/* Ptr to mouse y position*/
+
+char outdev_alert[] = 
+"[1][      Output to:              ][PRINTER|DISK (TDO FILE)]";
+
+
+extern long OVMOUSE;
+extern long NVMOUSE;
+extern KICKAES();
+
+extern int circle_draw();
+extern int ellipse_draw();
+extern int axdpi[];
+extern int aydpi[];
+extern int zdevice;
+extern int scan_xres;
+extern int scan_yres;
+
+/**************************************************************************/
+/* GLOBAL VARIABLES							  */
+/**************************************************************************/
+GRECT page_area;			/* Page area/work area of prev    */
+int done;					/* event multi flag       */
+int evnt_which;
+int msg_buff[8];				/* event message buffer   */
+int pxyarray[254];
+
+GRECT area;					/* Well, you got me?      */
+int newx,newy;					/* new x and y mouse pos  */
+int mode_change;				/* Flag if solid/text mode*/
+int button,key;					/* following used for the */
+int oldx,oldy;					/* evnt_multi calls.	  */
+int nmx,nmy;
+int status;
+int pxy[254];
+int num;
+int aindex;
+
+USERBLK   filler[24];
+int ob_x[24];
+int ob_y[24];
+int graph_flag;				/* graphic primitive? 0-no,1-yes  */
+int image_status;			/* display images? 0-no,1-yes     */
+
+
+sbox0() { pxy[0] = newx; pxy[1] = newy; }
+sbox1() { pxy[1] = newy; }
+sbox2() { pxy[1] = newy; pxy[2] = newx; }
+sbox3() { pxy[2] = newx; }
+sbox4() { pxy[2] = newx; pxy[3] = newy; }
+sbox5() { pxy[3] = newy; }
+sbox6() { pxy[0] = newx; pxy[3] = newy; }
+sbox7() { pxy[0] = newx; }
+
+amouse0() {*gcurx = pxy[0]; *gcury = pxy[1];}
+amouse1() {*gcury = pxy[1]; *gcurx = (pxy[0] + pxy[2])/2;} /* * */
+amouse2() {*gcury = pxy[1]; *gcurx = pxy[2];}
+amouse3() {*gcurx = pxy[2]; *gcury = (pxy[1] + pxy[3])/2;} /* * */
+amouse4() {*gcurx = pxy[2]; *gcury = pxy[3];}
+amouse5() {*gcury = pxy[3]; *gcurx = (pxy[0] + pxy[2])/2;} /* * */
+amouse6() {*gcurx = pxy[0]; *gcury = pxy[3];}
+amouse7() {*gcurx = pxy[0]; *gcury = (pxy[1] + pxy[3])/2;} /* * */
+
+
+bmouse0() {*gcurx = pxy[0] - 5; *gcury = pxy[1] - 5;}
+bmouse1() {*gcury = pxy[1] - 5; *gcurx = (pxy[0] + pxy[2])/ 2;} /* * */
+bmouse2() {*gcury = pxy[1] - 5; *gcurx = pxy[2] + 5;}
+bmouse3() {*gcurx = pxy[2] + 5; *gcury = (pxy[1] + pxy[3])/2;}/* * */
+bmouse4() {*gcurx = pxy[2] + 5; *gcury = pxy[3] + 5;}
+bmouse5() {*gcury = pxy[3] + 5; *gcurx = (pxy[0] + pxy[2]) / 2;}/* * */
+bmouse6() {*gcurx = pxy[0] - 5; *gcury = pxy[3] + 5;}
+bmouse7() {*gcurx = pxy[0] - 5; *gcury = (pxy[1] + pxy[3]) / 2;}/* * */
+
+
+
+int (*da_box[8])() = 
+		{
+		  &sbox0,
+		  &sbox1,
+		  &sbox2,
+		  &sbox3,
+		  &sbox4,
+		  &sbox5,
+		  &sbox6,
+		  &sbox7
+		};
+
+int (*adj_mouse[8])() = 
+		  {
+		    &amouse0,
+		    &amouse1,
+		    &amouse2,
+		    &amouse3,
+		    &amouse4,
+		    &amouse5,
+		    &amouse6,
+		    &amouse7
+		  };
+
+int (*bdj_mouse[8])() = 
+		  {
+		    &bmouse0,
+		    &bmouse1,
+		    &bmouse2,
+		    &bmouse3,
+		    &bmouse4,
+		    &bmouse5,
+		    &bmouse6,
+		    &bmouse7
+		  };
+
+int voldx,voldy;
+int deltax,deltay;
+int txscale,tyscale;
+int ruler_flag;
+
+int 	unit_type;
+int xold_mark,yold_mark;
+int deferhj;
+int show_grids,snap_to_grids,hgridspace,vgridspace;
+int clipfull;
+int pagetype;				/* current page type 		 */
+					/* DEFAULT to US LETTER          */
+					/* A4, B5, Letter, Legal,        */
+					/* Landscape A4, Landscape B5,   */
+					/* Landscape Letter, Landscape   */
+					/* Legal (eof)			 */
+
+/* The page x and y sizes are based in machine units			 */
+/* 1296 mu per inch horizontally...				  	 */
+/* 1152 mu per inch vertically...					 */
+/* All sizes are in inches						 */
+/* Paper sizes are:	PAPER TYPE      WIDTH           HEIGHT		 */
+/*			 LETTER          8.0   	          10.6           */
+/*                       LEGAL           8.0              13.6           */
+/*		         A4              7.787            11.287	 */
+/*		         B5              6.72              9.713         */
+
+
+
+
+/* Paper Sizes (LASER Printer: 300 DPI) 				 */
+/* Sizes were calculated at base 0 (ergo, there is 1 pixel more)	 */
+/* All units are in pixels                                               */
+/*                     PAPER TYPE      WIDTH           HEIGHT            */
+/*                       LETTER        2400             3180             */
+/*                       LEGAL         2400             4080             */
+/*                       A4            2336             3386             */
+/*                       B5            2016             2914             */
+
+/* Below are page sizes converted to machine units (MUs)		 */
+/* 1296 Horizontal MUs == 1 horizontal inch				 */
+/* 1152 Vertical MUs == 1 vertical inch					 */
+
+int pagemux[] = {			/* A4,B5,Letter,Legal - Horizonta*/
+		   10092,		/*A4 Portrait	     7.787 * 1296  */
+		   8709,		/*B5 Portrait        6.72  * 1296  */
+		   10368,		/*Letter Portrait    8.0   * 1296  */
+		   10368,		/*Legal Portrait     8.0   * 1296  */
+
+		   14628,		/* A4 Landscape     11.287 * 1296  */
+		   12588,		/* B5 Landscape      9.713 * 1296  */
+		   13738,		/* Letter Landscape 10.6   * 1296  */
+		   17626		/* Legal Landscape  13.6   * 1296  */
+	        };
+
+int pagemuy[] = {			/* A4,B5,Letter,Legal -VERTICAL  */
+		   13003,		/* A4 Portrait	    11.287 * 1152  */
+		   11189,		/* B5 Portrait	     9.713 * 1152  */
+		   12211,		/* Letter Portrait  10.6   * 1152  */
+		   15667,		/* Legal Portrait   13.6   * 1152  */ 
+
+		   8971,		/* A4 Landscape      7.787 * 1152  */
+		   7741,		/* B5 Landscape      6.72  * 1152  */
+		   9216,		/* Letter Landscape  8.0   * 1152  */
+		   9216			/* Legal Landscape   8.0   * 1152  */
+		};
+
+
+/* mu_array and world_setup must contain the largest x width in mu possible*/
+int mu_array[17625];			/* CS store mu to pix conversions */
+
+int active_prim;			/* flag */
+long prim_ptr;				/* ptr to current primitive*/
+
+short mlink1[37];
+
+PAGE *left_tmplate;
+PAGE *right_tmplate;
+
+int  temp_page;				/* backup of actual page for template*/
+
+PAGE *tpagehd;
+PAGE *tcurpage;
+ARTICLE *tarthd;
+ARTICLE *tcurart;
+ARTICLE *ltarthd;
+ARTICLE *rtarthd;
+
+int  displ_tmpl_flag;			/* display template? 0-no 1 - yes */
+int disp_pos;				/* template in front or back?     */
+int disp_type;				/* template - both,left,right     */
+int kstat;
+
+PNUMBER pnum;
+
+#define DSMSG 0x1000
+int dsbuff[30];
+int multi_mode;			/* multiple regions selected		 */
+int multi_box[4];
+
+int rcopy_flag;			/* copy a region flag? */
+
+int (*boxes)();
+
+long funct_array[10];
+
+/**************************************************************************/
+/* Function: front_end()						  */
+/* Description: Initialize everything else and call event_multi().	  */
+/**************************************************************************/
+front_end(docname)
+char *docname;
+{
+     long msize;
+
+     initialize();			       /* Initialize variables    */
+     init_structs();			       /* Initialize data structre*/
+     world_setup();
+     msize = Malloc(-1L);
+      
+     if(msize >= MIN_MEM_TO_RUN)
+     {
+	force_preview();
+	if(docname)
+	{
+	   load_doc(docname);
+	}
+        event();			       /* Do the event...         */
+     }
+     else
+	alert_cntre(ALERT14);
+     close_work();			       /* and exit program        */
+}
+
+world_setup()
+{
+   int dummy;
+   register int i;
+
+   zrat = 100;
+   graf_mouse(2,&dummy);		/* Busy bee */
+   for(i = 0;i < 17625;i++)
+   {
+	mu_array[i] = world_rc_x(i);
+   }
+   graf_mouse(ARROW,&dummy);
+}
+
+ 
+/**************************************************************************/
+/*  Function:     initialize()						  */
+/*  Description:  Initialize Variables					  */
+/**************************************************************************/
+initialize()
+{
+     char *buf;
+     int drv;
+     char obuf[40];
+     register int i;
+     int titem;
+     int dummy;
+
+     location = 0x0L;
+     set_ad_dpi();			    /* set dialog box for dpi to  */
+					    /* at LEAST, 95dpi. Below will*/
+					    /* change the defaults, if    */
+					    /* necessary...		  */
+
+     vmicron(mhandle,MICRON,MICRON);	    /* adjust memory driver to    */
+     vmicron(shandle,MICRON,MICRON);	    /* this micron size...	  */
+
+     xruler_offset = yruler_offset = 0;
+     deferhj = 0;
+     curr_page  = 1;		            /* Current Page = 1		  */
+     funcs      = &nada;	            /* Default drawing function   */
+     mode_flag  = FALSE;		    /* solid/text fill - OFF      */
+     write_flag = TRUE;			    /* write black - default      */
+     page_area.g_x = page_area.g_y = 0;     /* Preview area blit defaults */
+     page_MFDB.fd_addr = page_ptr;	    /* Preview address MFDB       */
+     opwidth = opheight = 0;		    /* old page width and height  */
+   
+     vswr_mode(shandle,1);		    /* replace mode...            */
+     vswr_mode(xor_handle,3);		    /* xor mode for xor handle    */
+
+     vswr_mode(mhandle,1);		    /* replace mode for preview   */
+     write_black(mhandle);		    /* and set to write black...  */
+	
+     vswr_mode(rule_handle,3);		    /* xor mode for ruler	  */
+     article_flag = FALSE;
+
+     vex_butv(xor_handle,&BUT_OR,&BADDR);
+
+     vex_motv(shandle,&NVMOUSE,&OVMOUSE);
+     vex_motv(shandle,OVMOUSE,&dummy);
+
+
+     if(!restore_defaults())
+     {
+       set_text_defaults();
+       init_tattr();
+
+       hpage_size = pagemux[PLETTER - PA4];    /* Default to US LETTER       */
+       vpage_size = pagemuy[PLETTER - PA4];
+       mutomem(hpage_size,vpage_size,&scan_xres,&scan_yres);
+       pagetype   = PLETTER;
+       view_size  = PSIZE;		       /* Default to Size to Fit     */
+       wind_set(prev_handle,WF_INFO,winfo[view_size - PSIZE][unit_type]);
+       ruler_flag = FALSE;     
+       gl_lstyle = 1;
+       gl_lwidth = 0;			/* 0 mu's means line width of 1 pix */
+       gl_fstyle = 2;
+       gl_fstyle |= 0x8000;		/* high bit set for perimeter on*/
+       gl_findex = 10;
+       gl_repel = 0;
+       gl_repbounds = 0;
+       gl_repoffset = 10;
+
+       unit_type = 0;				/* Inches	*/
+       show_grids = 0;
+       snap_to_grids = 0;
+       disp_pos = 1;			/* Set initial to back      */
+       disp_type = 0;			/* Set to Both...	    */
+       ad_settmpl[SETTBOTH].ob_state = SELECTED;
+       ad_settmpl[SETTBACK].ob_state = SELECTED;     
+       pnum.pfnum = 1;
+       pnum.pptsize = 24*8;	/* ptsize and setsize stored*/
+       pnum.pstsize = 24*8;	/* as x8   11-14-88	    */
+       pnum.units = 0;		/* inches */
+       pnum.ljust  = 1;		/* center */
+       pnum.rjust  = 1;
+       pnum.usage = 2;		/* both   */
+       pnum.vpos  = 1;		/* bottom */
+       pnum.distance = 0.0;	/* 0 distance */
+       pnum.text[0]  = NULLPTR;	/* blank space */
+       pnum.display = 0;		/* Don't display till later  */
+       pnum.tpage = pnum.fpage = 0; /* number from page 0 to 0 */
+
+       hgridspace = 1296;
+       vgridspace = 1152;
+
+       get_work(prev_handle);
+       prev_size = view_size;
+       size_fit_handle();
+
+     }
+     else
+     {
+       hpage_size = pagemux[pagetype - PA4];
+       vpage_size = pagemuy[pagetype - PA4];
+       mutomem(hpage_size,vpage_size,&scan_xres,&scan_yres);
+
+       get_work(prev_handle);
+       prev_size = view_size;
+       for(i=PSIZE;i<= PADJCNT;i++)
+		   menu_icheck(ad_menu,i,FALSE);
+       menu_icheck(ad_menu,view_size,TRUE);
+       if(pagetype == PLEGAL + 4) /* Landscape Legal Paper?  */
+       {			  /* Disable 200% and Adjacent pages for now*/
+            menu_ienable(ad_menu,PADJCNT,FALSE);
+            menu_ienable(ad_menu,P200,FALSE);
+       }
+      if(!sdevm)
+	   change_dpi();
+    
+      if(view_size == PADJCNT)
+		recalc_alt_text();
+      
+      if(view_size != PADJCNT)
+ 	titem = view_size;
+      else
+        titem = ((curr_page % 2)?(view_size + 1):(view_size));	    
+
+      wind_set(prev_handle,WF_INFO,winfo[titem - PSIZE][unit_type]);
+      wind_set(prev_handle,WF_TOP,&dummy,&dummy,&dummy,&dummy);
+      page_area.g_x = page_area.g_y = 0L;
+
+      vsf_interior(shandle,0);			/* Set to Solid   */
+
+      if( (view_size == PSIZE) ||
+	  (view_size == PADJCNT))
+		 pdraw_fit(view_size);
+      else
+		 pdraw_scale();
+
+
+      prev_size = view_size;
+      zoom_setup();
+      cur_scale = get_scale_num(view_size);
+      get_work(prev_handle);
+      update_preview_blit();
+      set_clip(TRUE,&pwork);
+      vr_recfl(shandle,pxy);
+      clear_window(prev_handle,2,1);
+      init_rulers();
+      slider_chk();
+      set_clip(TRUE,&dpwork);
+
+								
+      menu_text(ad_menu,PRULER,ruler_mode[ruler_flag]); /* ruler   */
+
+      for(i=MINCHES;i<=MCICERO;i++)	/* handle unit dialog box  */
+		unitobj[i].ob_state = NORMAL;
+      unitobj[MINCHES+unit_type].ob_state = SELECTED;
+
+	
+      if(show_grids)			/* handle display of grids */
+	   change_icstate(SELECTED,ICBOX7,1);
+      else
+	   change_icstate(NORMAL,ICBOX7,1);
+      menu_icheck(ad_menu,OSHOWGR,show_grids);
+
+
+      if(snap_to_grids)			/* handle snap to grids	   */
+	   change_icstate(SELECTED,ICBOX8,1);
+      else
+	   change_icstate(NORMAL,ICBOX8,1);
+      menu_icheck(ad_menu,OSNAP,snap_to_grids);
+      
+     }
+
+     update_point_dialog();
+
+     zdevice = SCANNER;
+     SH = vmutopix((int)gltxtattr.lnsp);
+
+
+     buf = pathbuf;
+     *buf++ = (drv= Dgetdrv()) + 'A';
+     *buf++=':';
+     *buf++='\\';
+     *buf++=0;
+     Dgetpath(obuf,drv+1);
+     if(strlen(obuf)== 0);
+     else strcat(pathbuf,&obuf[1]);
+
+     if(pathbuf[strlen(pathbuf)-1]!='\\')
+		      strcat(pathbuf,"\\");
+     icon_setup();
+
+
+     gl_region_ptr = gl_grregion_ptr = 0L;
+     graph_flag = image_status = 0;
+/*     menu_ienable(ad_menu,ACREATE,FALSE);*/
+     menu_ienable(ad_menu,RDELETE,FALSE);
+     menu_ienable(ad_menu,RUNLINK,FALSE);
+     menu_ienable(ad_menu,RCOORD,FALSE);
+
+     clipfull = 0;
+
+
+     dpath1 = get_edit(ad_paths,PATHTEXT);
+     dpath2 = get_edit(ad_paths,PATHCLIP);
+     dpath3 = get_edit(ad_paths,PATHGRAP);
+     dpath4 = get_edit(ad_paths,PATHDOC);
+
+
+     if(read_path(dpath1,dpath2,dpath3,dpath4))
+     {
+       set_tedit(ad_paths,PATHTEXT,dpath1);
+       set_tedit(ad_paths,PATHCLIP,dpath2);
+       set_tedit(ad_paths,PATHGRAP,dpath3);
+       set_tedit(ad_paths,PATHDOC,dpath4);
+     }
+     else
+     {
+       set_tedit(ad_paths,PATHTEXT,pathbuf);
+       set_tedit(ad_paths,PATHCLIP,pathbuf);
+       set_tedit(ad_paths,PATHGRAP,pathbuf);
+       set_tedit(ad_paths,PATHDOC,pathbuf);
+       store_paths(dpath1,dpath2,dpath3,dpath4);
+     }
+     reopen_prim = FALSE;		/* reopen_region init = FALSE*/
+     for(i = 0;i < 5;i++)
+	mlink1[i] = mlink[i];
+     for(i = 21;i < 37;i++)		/* Invert data */
+	mlink1[i] = mlink[i] ^ 0xffff;
+
+     displ_tmpl_flag = TRUE;
+     init_templates();
+
+     f_move(&gltxtattr,&pnum.tattrib,sizeof(pnum.tattrib));
+     pnum.tattrib.ptsz = pnum.pptsize;
+     pnum.tattrib.font = pnum.pfnum;
+     pnum.tattrib.ssiz = pnum.pstsize;
+     pnum.tattrib.lnsp = (long)pttomu(pnum.pptsize/8);
+
+     pnum.tattrib.kernmd = 0;		/* kerning      */
+     pnum.tattrib.rvomd  = 0;		/* reverse video*/
+
+     if(!sdevm)
+		menu_ienable(ad_menu,ODPI,TRUE);
+     else
+		menu_ienable(ad_menu,ODPI,FALSE);
+
+
+     info_what = info_type = 0;  /* set info dialog box to DOC and TEXT  */
+     ad_info[info_what + DIDOC].ob_state = SELECTED;
+     ad_info[info_type + DITEXT].ob_state = SELECTED;
+}
+
+
+
+/**************************************************************************/
+/*  Function:     event()						  */
+/*  Description:  Event Multi Call...					  */
+/**************************************************************************/
+event()
+{
+int flag;
+int key;
+
+    done = FALSE;
+    while(done == FALSE)
+    {
+       flag = MU_BUTTON|MU_MESAG|MU_KEYBD;
+       if(ruler_flag)
+	   flag |= MU_M1;
+       evnt_which = evnt_multi(flag,
+			     1,1,1,
+			     1,oldx,oldy,1,1,
+			     0,0,0,0,0,
+			     msg_buff,
+			     0,0,
+			     &newx,&newy,
+			     &dummy,
+			     &kstat,	/* Kbd shift state for GOG      */
+			     &key,
+			     &dummy);
+
+       wind_update(TRUE);
+       if(evnt_which & MU_M1)
+       {
+	   do_rule_mark();
+           oldx = newx;
+           oldy = newy;
+       }
+       if(evnt_which & MU_KEYBD)
+  		hndl_keybd(key);
+
+       if(evnt_which & MU_MESAG)
+	   if(msg_buff[0] == 0x1000)
+		hndl_acc();
+	   else
+                mesag_handle(msg_buff);
+
+       if(evnt_which & MU_BUTTON)
+	      	     button_handler(newx,newy);
+
+       if(check_TWtop()) Editor();
+       wind_update(FALSE);
+    }
+}
+
+
+hndl_acc()
+{
+   long *buffptr;
+   int id;
+   long holder;
+
+   id = appl_find("DSACC   ");
+   if(id != -1)
+   {
+      msg_buff[0] = DSMSG;
+      buffptr = (long *)(msg_buff + 1);
+      *buffptr = dsbuff;
+      holder = &pagehd;
+      f_move(&holder,&dsbuff[0],4);
+      holder = &arthd;
+      f_move(&holder,&dsbuff[2],4);
+      holder = &gl_region_ptr;
+      f_move(&holder,&dsbuff[4],4);
+      holder = &gl_grregion_ptr;
+      f_move(&holder,&dsbuff[6],4);
+      holder = &curprim;
+      f_move(&holder,&dsbuff[8],4);
+      dsbuff[10] = active_prim;			/* Primitive selected? */
+      dsbuff[11] = curr_page;			/* Current page	       */
+      holder = &cp;
+      f_move(&holder,&dsbuff[12],4);
+      holder = funct_array;
+      f_move(&holder,&dsbuff[14],4);
+      dsbuff[16] = multi_mode;
+      dsbuff[17] = hpage_size;
+      dsbuff[18] = vpage_size;
+      funct_array[0] = &lmalloc;
+      funct_array[1] = &free;
+      funct_array[2] = &force_preview;
+      funct_array[3] = &do_blit;
+      funct_array[4] = &dotext;
+      funct_array[5] = &redraw_laser;
+      funct_array[6] = &scrntomu;
+      funct_array[7] = &recalc_txtptrs;
+      appl_write(id,16,msg_buff);
+   }
+}
+
+/**************************************************************************/
+/* Function: hndl_keybd()						  */
+/* Description: Keyboard handler					  */
+/**************************************************************************/
+hndl_keybd(key)
+int key;
+{
+    register int menu;
+    register int item;
+    char ch;
+    ch = (char)key & 0xff;
+    switch(ch)
+    {
+  /* FILE MENU ITEMS    */
+	case 0x0e:
+		menu = TFILE;				/* ^N */
+		item = FNEW;
+		break;
+	case 0x0c:
+		menu = TFILE;				/* ^L */
+		item = FLOADDOC;
+		break;
+	case 0x13:
+		menu = TFILE;			/* ^S */
+		item = FSAVEDOC;
+		break;
+	case 0x1b:	
+		menu = TFILE;			/* ^[ */
+		item = FLOADCLI;
+		break;
+	case 0x1d:	
+		menu = TFILE;			/* ^] */
+		item = FSAVECLI;
+		break;
+	case 0x10:	
+		menu = TFILE;			/* ^P */
+		item = FPRINT;
+		break;
+	case 0x11:	
+		menu = TFILE;			/* ^Q */
+		item = FQUIT;
+		break;
+  /* PAGE MENU ITEMS    */
+	case 0x07:	
+		menu = TPAGE;			/* ^G */
+		item = PGOTO;
+		break;
+	case 0x00:
+		menu = TPAGE;
+		if(key == 0x4d00)
+			item = PNEXT;
+		else if(key == 0x4b00)
+			item = PPREV;
+		else 
+			item = 0;
+		break;
+	case 0x16:	
+		menu = TPAGE;			/* ^V */
+		item = PCLTOP;
+		break;
+	case 0x18:	
+		menu = TPAGE;			/* ^X */
+		item = PPTOCL;
+		break;
+	case 0x0b:	
+		menu = TPAGE;			/* ^K */
+		item = PDELCLIP;
+		break;
+  /* REGION MENU ITEMS  */
+	case 0x14:	
+		menu = TREGION;			/* ^T */
+		item = RTOGGLE;
+		break;
+	case 0x09:	
+		menu = TREGION;			/* ^I */
+		item = RDIMAGES;
+		break;
+	case 0x01:	
+		menu = TREGION;			/* ^A */
+		item = RGRATTR;
+		break;
+
+	case 0x1C:
+		menu = TREGION;			/* ^\ */
+		item = RSCANOFF;
+		break;
+
+  /* SETUP MENU ITEMS   */
+	case 0x06:	
+		menu = TSETUP;			/* ^F */
+		item = PPOINT;
+		break;
+	case 0x03:	
+		menu = TSETUP;			/* ^C */
+		item = CHARCPMN;
+		break;
+	case 0x08:	
+		menu = TSETUP;			/* ^H */
+		item = HYPARMN;
+		break;
+	case 0x0a:	
+		menu = TSETUP;			/* ^J */
+		item = JUSTMN;
+		break;
+	case 0x17:	
+		menu = TSETUP;			/* ^W */
+		item = WSPMN;
+		break;
+  /* OPTIONS MENU ITEMS */
+	case 0x12:	
+		menu = TOPTIONS;		/* ^R */
+		item = PRULER;
+		break;
+	case 0x15:
+		menu = TOPTIONS;
+		item = PUNITS;			/* ^U */
+		break;
+	case 0x0d:
+		menu = TOPTIONS;
+		item = OGRIDSP;			/* ^M */
+		break;
+	case 0x1a:		
+		menu = TOPTIONS;		/* ^Z */
+		item = OSHOWGR;
+		break;
+	case 0x0f:		
+		menu = TOPTIONS;		/* ^O */
+		item = OSNAP;
+		break;
+	default:
+		item = 0;
+		break;
+    }
+    if(item && !(ad_menu[item].ob_state & DISABLED))
+    {
+	if(!(ad_menu[menu].ob_state & DISABLED))
+		menu_handler(1,item);
+    }
+}
+
+
+
+/**************************************************************************/
+/* Function:    Mesag_handler()						  */
+/* Description: Event Message Handler					  */
+/**************************************************************************/
+mesag_handle(msg_buff)
+register int msg_buff[];
+{
+    switch(msg_buff[0])
+    {
+      case MN_SELECTED: menu_handler(msg_buff[3],msg_buff[4]);
+			break;
+
+      case WM_REDRAW:   do_redraw(msg_buff);
+			break;
+
+      case WM_TOPPED:	top_window(msg_buff[3],0L);
+			do_redraw(msg_buff);
+			break;
+
+      case WM_CLOSED:   close_window(msg_buff[3]);
+			break;
+
+      case WM_FULLED:   full_window(msg_buff[3]);
+			break;
+
+      case WM_ARROWED:  arrow_window(msg_buff[3],msg_buff[4]);
+			break;
+
+      case WM_HSLID:    hslide_window(msg_buff[3],msg_buff[4]);
+			break;
+
+      case WM_VSLID:    vslide_window(msg_buff[3],msg_buff[4]);
+			break;
+
+      case WM_SIZED:    size_window(msg_buff);
+			break;
+
+      case WM_MOVED:	move_window(msg_buff);
+			break;
+    }
+}
+
+
+/**************************************************************************/
+/* Function:    menu_handler()						  */
+/* Description: Menu Control Routines					  */
+/**************************************************************************/
+menu_handler(menu,item)
+int menu;
+int item;
+{
+        int x,y;
+	int rtmplate_flag;
+        
+	menu_tnormal(ad_menu,menu,1);
+	switch(item)
+	{
+	  case ABOUT:	do_about();
+			active_prim = FALSE;
+			ad_deskset[OK].ob_state = NORMAL;
+			break;
+
+	  case FNEW:    
+			if(alert_cntre(ALERT4) == 1)
+			{
+			     graf_mouse(BUSY_BEE,&dummy);
+			 /*    menu_ienable(ad_menu,ACREATE,FALSE);*/
+			     menu_ienable(ad_menu,ODELPRIM,FALSE);
+			     menu_ienable(ad_menu,OPCOORD,FALSE);
+			     menu_ienable(ad_menu,OMOVEFNT,FALSE);
+			     menu_ienable(ad_menu,OMOVEBAK,FALSE);
+			     if(view_size == PADJCNT)
+                                wind_set(prev_handle,WF_INFO,
+				      winfo[PADJCNT - PSIZE + 1][unit_type]);
+			     article_flag = FALSE;
+    	    	             erase_all(1);
+			     init_tattr();
+			     strcpy(pfname," Preview Window ");
+			     wind_set(prev_handle,WF_NAME,pfname,0,0);
+		             graf_mouse(ARROW,&dummy);		
+			}
+			break;
+
+	  case FLOADDOC: 
+		        graf_mouse(BUSY_BEE,&dummy);
+			active_prim = FALSE;
+			load_doc(0L);
+			if(deferhj)
+			{
+			   menu_icheck(ad_menu,ADEFER,0);
+			   deferhj = 0;
+			}
+		        graf_mouse(ARROW,&dummy);		
+			break;
+
+	  case FSAVEDOC:
+		        graf_mouse(BUSY_BEE,&dummy);
+    			if(deferhj)
+    			{
+			   menu_icheck(ad_menu,ADEFER,0);
+			   deferhj = 0;
+			   recalc_txtptrs();
+    			}
+			active_prim = FALSE;
+			save_doc();
+		        graf_mouse(ARROW,&dummy);		
+			break;
+
+	  case FDINFO:  do_info();
+			break;
+
+	  case FPRINT: 	active_prim = FALSE;
+			change_icstate(SELECTED,ICBOX6,1);
+			output_doc();
+			change_icstate(NORMAL,ICBOX6,1);
+			break;
+
+	  case FQUIT:   if(form_alert(2,quiter) == 1)
+			{
+ 		          graf_mouse(BUSY_BEE,&dummy);
+		          done = TRUE;
+    		          delete_clip();
+			  erase_all(0);
+		          graf_mouse(ARROW,&dummy);		
+			}
+			break;
+
+	  case FLOADCLI:active_prim = FALSE; 
+		        graf_mouse(BUSY_BEE,&dummy);
+			if(!load_clipb())
+			{
+			   clipfull = 1;
+			   icnptr->ib_pdata = &clipf[0];
+			   form_dial(3,0,0,0,0,
+				ad_bkgrnd[CLIPOBJ].ob_x,
+				ybook,
+				ad_bkgrnd[CLIPOBJ].ob_width,
+				syres - ybook);
+	                   menu_ienable(ad_menu,ACREATE,1);
+			}
+		        graf_mouse(ARROW,&dummy);		
+			break;
+
+	  case FSAVECLI:
+		         graf_mouse(BUSY_BEE,&dummy);
+			 save_clipb();
+		         graf_mouse(ARROW,&dummy);		
+			 break;
+
+          case FLOADTMP: graf_mouse(BUSY_BEE,&dummy);
+			 active_prim = FALSE;
+			 load_tmplate();
+  		         graf_mouse(ARROW,&dummy);		
+			 break;
+	
+          case FSAVETMP: graf_mouse(BUSY_BEE,&dummy);
+			 active_prim = FALSE;
+			 save_tmplate();
+ 		         graf_mouse(ARROW,&dummy);		
+			 break;
+
+	  case FLOADTAG: graf_mouse(BUSY_BEE,&dummy);
+			 active_prim = FALSE;
+			 load_tags();
+		         graf_mouse(ARROW,&dummy);		
+			 break;
+
+	  case FSAVETAG: graf_mouse(BUSY_BEE,&dummy);
+			 active_prim = FALSE;
+			 save_tags();
+		         graf_mouse(ARROW,&dummy);		
+			 break;
+
+	  case PSIZE:
+	  case P50:
+	  case P75:
+	  case PACTUAL:
+	  case P200:
+	  case PADJCNT: do_view_size(item);
+			break;
+
+	  case RGRATTR: do_grdialog();
+			active_prim = FALSE;
+			break;
+
+          case RSCANOFF: 
+			do_scoffset();
+			active_prim = FALSE;
+			break;
+
+	  case RCOORD: 
+			do_rcoord();
+			break;
+
+	  case PGOTO:   do_go_page();
+			active_prim = FALSE;
+			break;
+
+	  case PPREV:
+	  case PNEXT:   do_flip_page(item);
+		        do_pagenum(curr_page,(curr_page%2)?1:0);
+			active_prim = FALSE;
+			break;
+
+	  case PDELETE: do_delpage();
+			active_prim = FALSE;
+			break;
+
+	  case PINSERT:	active_prim = FALSE;
+			ins_page();
+			force_draw_flag = TRUE;
+			recalc_txtptrs();
+			force_preview();
+			break;
+
+	  case PRULER:  ruler_flag ^= TRUE;
+			menu_text(ad_menu,PRULER,ruler_mode[ruler_flag]);
+		        wind_set(prev_handle,WF_TOP,&dummy,&dummy,&dummy,&dummy);
+			get_work(prev_handle);
+			update_preview_blit();
+			gsx_moff();
+			if((view_size == PSIZE) ||
+			   (view_size == PADJCNT))
+			{
+			   force_draw_flag = TRUE;
+			   vsf_interior(shandle,0);
+			   pdraw_fit(view_size);
+			   vr_recfl(shandle,pxy);
+			   zoom_setup();
+			   cur_scale = get_scale_num(view_size);
+			   get_work(prev_handle);
+			   update_preview_blit();
+			   set_clip(TRUE,&pwork);
+			}
+			clear_window(prev_handle,2,1);
+			slider_chk();
+			set_clip(TRUE,&dpwork);
+			
+			if(!ruler_flag)
+			    xruler_offset = yruler_offset = 0;
+			else
+	                   init_rulers();
+			send_redraw(prev_handle);
+			gsx_mon();
+			break;
+
+	  case PUNITS:  if(do_unit_dialog())
+			{
+			  if(ruler_flag)
+			  {
+			     init_rulers();
+ 			     if(show_grids)
+			            force_preview();
+			     else
+			            send_redraw(prev_handle);
+			  }
+			}
+		 	break;
+
+	  case PCLTOP:  
+			if(clipfull)
+			{
+			   active_prim = FALSE;
+			   do_clip_dialog();
+			}
+                        break;
+
+	  case PPTOCL:  
+			if(!clipfull)
+			{
+		           if(page_to_clip())
+			   {
+			      clipfull = 1;
+			      icnptr->ib_pdata = &clipf[0];
+			      form_dial(3,0,0,0,0,
+				       ad_bkgrnd[CLIPOBJ].ob_x,
+				       ybook,
+				       ad_bkgrnd[CLIPOBJ].ob_width,
+				       syres - ybook);
+			   }
+			}
+			else
+			   alert_cntre(ALERT26);	   
+			break;
+
+
+	  case PDELCLIP:
+			if(clipfull)
+			{
+			   clipfull = 0;
+			   delete_clip();
+			   icnptr->ib_pdata = clipe;
+			   form_dial(3,0,0,0,0,
+				       ad_bkgrnd[CLIPOBJ].ob_x,
+				       ybook,
+				       ad_bkgrnd[CLIPOBJ].ob_width,
+				       syres - ybook);
+			}
+			break;
+
+	  case PPAGENUM: page_numbering();
+			 active_prim = FALSE;
+			 break;
+
+          case ACREATE: make_article();
+			active_prim = FALSE;
+			break;
+
+	  case ACLOSE:  close_article();
+			break;
+
+	  case AAUTOFL: do_autoflow();
+			active_prim = FALSE;
+			break;
+
+	  case ASAVEART: do_saveart();
+			 active_prim = FALSE;
+			 break;
+
+	  case ASELECT:	active_prim = FALSE;
+			do_artopen();
+			break;
+
+	  case ADELETE: do_artdelete();
+			active_prim = FALSE;
+			break;
+
+	  case ADEFER:  deferhj ^= 1;
+			menu_icheck(ad_menu,ADEFER,deferhj);
+			if(!deferhj)
+			   recalc_txtptrs();
+			break;
+
+	  case RCREATE: rmenu_fix(1);
+			active_prim = FALSE;
+			genesis_region();
+			
+			if(bgicptr->bi_pdata == icdata)
+			{
+			   bgicptr->bi_pdata = primicons;
+			   objc_offset(ad_bkgrnd,BGICBOX,&x,&y);
+			   ad_bkgrnd[ICBOX6].ob_state = DISABLED;
+			   ad_bkgrnd[ICBOX7].ob_state = DISABLED;
+			   ad_bkgrnd[ICBOX8].ob_state = DISABLED;
+			   clr_bgicons(0);
+			   form_dial(3,0,0,0,0,x,y,
+				ad_bkgrnd[BGICBOX].ob_width,
+				ad_bkgrnd[BGICBOX].ob_height);
+			}
+			clr_bgicons(1);
+			change_icstate(SELECTED,(OBOX - OPOLYGON)+ICBOX2,1);
+			break;
+
+	  case RDELETE: 
+			if(alert_cntre(ALERT7) == 1)
+                        {
+			  do_delregion();
+			  active_prim = FALSE;
+  			}
+			clear_regprim_flags();
+			break;
+
+	  case RUNLINK: do_unlinkreg();
+			break;
+
+          case ROPENGR: rmenu_fix(1);
+			graphic_region();
+			if(bgicptr->bi_pdata == icdata)
+			{
+			   bgicptr->bi_pdata = primicons;
+			   objc_offset(ad_bkgrnd,BGICBOX,&x,&y);
+			   clr_bgicons(0);
+			   form_dial(3,0,0,0,0,x,y,
+				ad_bkgrnd[BGICBOX].ob_width,
+				ad_bkgrnd[BGICBOX].ob_height);
+			}
+			clr_bgicons(1);
+			change_icstate(SELECTED,(OBOX - OPOLYGON)+ICBOX2,1);
+			break;
+
+	  case RCLOSE:  close_region();
+			break;
+
+          case RTOGGLE: 
+			graf_mouse(BUSY_BEE,&dummy);
+			if(mode_flag)
+			   change_icstate(NORMAL,ICBOX3,1);
+			else
+			   change_icstate(SELECTED,ICBOX3,1);
+			clear_regprim_flags();
+			display_toggle();
+	                graf_mouse(ARROW,&dummy);		
+			break;
+
+          case RDIMAGES: image_status ^= TRUE;
+			 graf_mouse(BUSY_BEE,&dummy);
+			 if(image_status)
+			    change_icstate(SELECTED,ICBOX4,1);
+			 else
+			    change_icstate(NORMAL,ICBOX4,1);
+			 menu_icheck(ad_menu,RDIMAGES,image_status);
+			 force_draw_flag = TRUE;
+			 clear_regprim_flags();
+			 force_preview();
+		         graf_mouse(ARROW,&dummy);		
+			 break;
+
+          case RWRITE:  write_flag ^= TRUE;
+			menu_text(ad_menu,RWRITE,write_mode[write_flag]);
+			break;
+
+	  case RMOVEFNT:  graf_mouse(BUSY_BEE,&dummy);
+			  region_front();
+ 		          graf_mouse(ARROW,&dummy);		
+			  break;
+
+	  case RMOVEBAK:  graf_mouse(BUSY_BEE,&dummy);
+			  region_back();
+		          graf_mouse(ARROW,&dummy);		
+			  break;
+
+
+	  case OPOLYGON:
+	  case OCIRCLE:
+	  case OELLIPSE:
+	  case OBOX:
+	  case OLINE:
+	  case ORBOX:
+	  case OIMAGE:  
+			clr_bgicons(1);
+			change_icstate(SELECTED,(item - OPOLYGON)+ICBOX2,1);
+			draw_items(item);
+			break;
+	
+          case OADDPRIM:
+			 if(region_ptr)
+			 {
+			   rmenu_fix(1);
+			   reopen_region();
+			   if(bgicptr->bi_pdata == icdata)
+			   {
+			     bgicptr->bi_pdata = primicons;
+			     if(mode_flag)	/* Enable close box */
+			        ad_bkgrnd[ICBOX1].ob_state = NORMAL;
+			     if(gl_region_ptr)	/* Text region */
+			     {
+			        ad_bkgrnd[ICBOX6].ob_state = DISABLED;
+			        ad_bkgrnd[ICBOX7].ob_state = DISABLED;
+			        ad_bkgrnd[ICBOX8].ob_state = DISABLED;
+			     }
+			     clr_bgicons(0);
+			     objc_offset(ad_bkgrnd,BGICBOX,&x,&y);
+			     form_dial(3,0,0,0,0,x,y,
+				 ad_bkgrnd[BGICBOX].ob_width,
+				 ad_bkgrnd[BGICBOX].ob_height);
+			   }
+			   clr_bgicons(1);
+			   change_icstate(SELECTED,(OBOX - OPOLYGON)+ICBOX2,1);
+			 }
+			 else
+			    clear_regprim_flags();
+			 break;
+
+	  case ODELPRIM: del_prim();
+			 break;
+
+          case OPCOORD:  do_pcoord();
+			 break;
+  
+          case OMOVEFNT: graf_mouse(BUSY_BEE,&dummy);
+			 prim_front();
+		         graf_mouse(ARROW,&dummy);		
+			 break;
+
+	  case OMOVEBAK: graf_mouse(BUSY_BEE,&dummy);
+			 prim_back();
+		         graf_mouse(ARROW,&dummy);		
+			 break;
+
+
+	/* Options */
+	  case OSHOWGR: show_grids ^= 1;
+			if(show_grids)
+			   change_icstate(SELECTED,ICBOX7,1);
+			else
+			   change_icstate(NORMAL,ICBOX7,1);
+			menu_icheck(ad_menu,OSHOWGR,show_grids);
+			force_preview();
+			break;
+
+	  case OGRIDSP: if(do_grid_space())
+			{
+			  if(show_grids)
+			      force_preview();
+			}
+			break;
+	  case OSNAP:	snap_to_grids ^= 1;
+			if(snap_to_grids)
+			   change_icstate(SELECTED,ICBOX8,1);
+			else
+			   change_icstate(NORMAL,ICBOX8,1);
+			menu_icheck(ad_menu,OSNAP,snap_to_grids);
+			break;		
+
+ 	  case OEDITTMP: do_template_edit(); 
+			 active_prim = FALSE;
+	  		 break;
+
+          case OERASETP: erase_template();	/* erase current template */
+			 active_prim = FALSE;
+			 break;
+
+          case ODISPTMP: displ_tmpl_flag ^= TRUE;
+			 menu_text(ad_menu,ODISPTMP,disp_tmpl[displ_tmpl_flag]);
+			 force_preview();
+			 break;          
+
+          case OTMPLOPT: set_template();
+			 break;
+
+	  case ODELTMPL: if(alert_cntre(ALERT28) == 1)
+			 {
+			  rtmplate_flag = tmplate_flag;
+			  active_prim = FALSE;
+			  delete_tmplates();
+			  if(tmplate_flag)
+			  {
+	                   curpage=((curr_page%2)?(right_tmplate):(left_tmplate));
+			   pagehd = curpage;
+			   curr_page = pagehd->pagenum;
+			   curart = arthd = ((curr_page%2)?(rtarthd):(ltarthd));
+		           wind_set(prev_handle,WF_NAME,basefname,0,0);
+			  }
+			  tmplate_flag = rtmplate_flag;
+			  force_preview();
+			 }
+			 break;
+
+	  case ODPI:	do_dpi();
+			active_prim = FALSE;
+			break;
+          
+          case OCACHE:  IF_close();
+			IF_open(0);		/* Free cache memory */
+			break;
+
+	/* setup */				
+	
+	  case DPTDRS:	Fnt_cmd('D',"");
+			active_prim = FALSE;
+			break;
+
+	  case MDTDRS:
+			Fnt_cmd('M',fntdrs);
+			active_prim = FALSE;
+			break;
+
+	  case DICTMN:
+			runExDict();	
+	  		break;
+
+   	  case TRANMN:  runTrans();
+			break;
+
+	  case HYLANMN:
+			do_hylang();
+	  		break;
+
+	  case PWUPFLMN:
+			do_pwrup();
+	  		break;
+/*	  case FONTSMN:*/
+	  case PPOINT:
+			/*do_fonts();*/		/* GOG   version */
+			do_point_size();	/* ATARI version */
+			active_prim = FALSE;
+	  		break;
+
+	  case CHARCPMN:
+			do_chcomp();
+			active_prim = FALSE;
+	  		break;
+	  case WSPMN:
+			do_wdsp();
+			active_prim = FALSE;
+	  		break;
+
+	  case HYPARMN:
+			do_hypar();
+	  		break;
+	  case JUSTMN:
+			do_just();
+	  		break;
+  	  case SPDEF:	
+			do_page_def();
+			break;
+
+	  case SPATHS:  do_set_paths();
+			break;
+
+	  case SDEFPARM: save_parameters();
+			 break;
+        }
+}
+
+
+rmenu_fix(disable)
+int disable;
+{
+   register int i;
+
+   for(i = TFILE;i <= TOPTIONS;i++)
+		menu_ienable(ad_menu,0x8000|i,disable^1);
+   menu_ienable(ad_menu,0x8000|TREGION,1);
+   menu_ienable(ad_menu,0x8000|TOBJECTS,1);
+   if(disable)
+   {
+      	for(i = RUNLINK;i <= RMOVEBAK;i++)
+	   menu_ienable(ad_menu,i,0);
+	for(i = OADDPRIM;i <= OMOVEBAK;i++)
+	   menu_ienable(ad_menu,i,0);
+	menu_ienable(ad_menu,RWRITE,TRUE);	/* still need RWRITE */
+   }
+   else
+   {
+	menu_ienable(ad_menu,0x8000|TEXT,0);
+	menu_ienable(ad_menu,RTOGGLE,1);
+	menu_ienable(ad_menu,RDIMAGES,1);
+	menu_ienable(ad_menu,RWRITE,1);
+	menu_ienable(ad_menu,RGRATTR,1);
+	menu_ienable(ad_menu,RSCANOFF,1);
+   }
+}
+
+
+amenu_fix(disable)
+int disable;
+{
+   register int i;
+
+   for(i = TFILE;i <= TOPTIONS;i++)
+	menu_ienable(ad_menu,0x8000|i,disable^1);
+   menu_ienable(ad_menu,0x8000|TPAGE,1);
+   menu_ienable(ad_menu,0x8000|TARTICLE,1);
+   menu_ienable(ad_menu,0x8000|TEXT,0);
+   for(i = PSIZE;i <= PINSERT;i++)
+	menu_ienable(ad_menu,i,disable^1);
+   menu_ienable(ad_menu,ASELECT,disable^1);
+   menu_ienable(ad_menu,ADELETE,disable^1);
+   menu_ienable(ad_menu,ADEFER,disable^1);
+   if(disable)
+   {
+	menu_ienable(ad_menu,PGOTO,1);
+	menu_ienable(ad_menu,PPREV,1);
+	menu_ienable(ad_menu,PNEXT,1);
+   }
+   else
+   {
+	menu_ienable(ad_menu,PADJCNT+1,0);	/* disable dashed separator*/
+	menu_ienable(ad_menu,PINSERT+1,0);
+   }
+}
+	
+
+/**************************************************************************/
+/* Function:    button_handler()					  */
+/* Description: Mouse Button Control Routines				  */
+/**************************************************************************/
+button_handler(mx,my)
+int mx;
+int my;
+{
+   int whandle;
+   int obj;
+   int axy[4];
+   int planted;
+   int tmp_buff[8];
+   int event;
+   int omx,omy;
+
+   whandle = wind_find(mx,my);
+   if(!whandle)
+   {
+     obj = objc_find(ad_bkgrnd,BGICBOX,MAX_DEPTH,mx,my);
+     if(obj != -1)
+     {
+        hndl_icons(obj);   
+  	return;
+     }
+   }
+
+   screen_clip();				/* set screen clipping    */
+
+   if(article_flag)				/* if opening a new       */
+   {						/* let's calculate links  */
+      if(whandle == prev_handle)
+      {
+         do_hot_link(mx,my);
+         return;
+      }
+   }
+
+
+   if(funcs == &nada)				/* no primitive to draw   */
+   {						/* so we select a region  */
+      if(BSTATE == 1)
+      		do_nada(mx,my);
+      
+      if(BSTATE == 2)
+		do_edit_prim();
+      return;
+   }
+
+
+
+
+	
+   if((whandle != prev_handle) || !check_dpwork_box(mx,my))
+				return; /*Didn't click within work area */
+
+   if(snap_to_grids)
+	snap_to_grid(&mx,&my);
+   pxy[0] = pxy[2] = newx = mx;
+   pxy[1] = pxy[3] = newy = my;
+
+   wind_update(BEG_MCTRL);
+   wind_update(BEG_UPDATE);
+
+   gsx_moff();
+
+   if(gl_grregion_ptr)
+        get_grattr(gl_grregion_ptr,glgrattr);
+
+   scrn2clip();
+
+   if(funcs == &poly_draw)   		/* polygon drawing routine*/
+   {
+       if(BSTATE == 1)
+             poly_handler(mx,my);
+       else
+       {
+          gsx_mon();
+          wind_update(END_UPDATE);
+          wind_update(END_MCTRL);
+       }   
+       mclip();
+       return;
+   }
+
+
+   button = 1;
+   evnt_mouse(1,mx,my,1,1,&oldx,&oldy,&button,&key);
+   if(button == 0)
+   {
+     gsx_mon();
+     wind_update(END_UPDATE);
+     wind_update(END_MCTRL);
+     mclip();
+     return;
+   }
+   
+
+   while(button == 1)
+   {
+      graf_mkstate(&newx,&newy,&button,&key);
+      if( (oldx != newx) || (oldy != newy))
+      {
+	 do_rule_mark();
+         (*funcs)(xor_handle);
+         pxy[2] = newx;
+         pxy[3] = newy;
+         (*funcs)(xor_handle);
+      }
+      oldx = newx;
+      oldy = newy;
+   }
+
+   planted = TRUE;
+   axy[0] = pxy[0];
+   axy[1] = pxy[1];
+   axy[2] = pxy[2];
+   axy[3] = pxy[3];
+   omx = oldx;
+   omy = oldy;
+
+   while(planted)
+   {
+
+      evnt_which = 0;
+      while((evnt_which & MU_BUTTON) == 0)
+      {
+        evnt_which = evnt_multi((MU_BUTTON|MU_M1),
+				 1,1,1,			/* evnt button */
+				 1,oldx,oldy,1,1,	/* evnt_mouse1 */
+				 0,0,0,0,0,
+				 &dummy,
+				 0,0,
+				 &newx,&newy,
+			 	 &dummy,
+				 &dummy,
+				 &dummy,
+				 &dummy);
+
+	if((oldx != newx) || (oldy != newy))
+	{
+	   do_rule_mark();
+	   (*funcs)(xor_handle);
+	   pxy[0] += newx - oldx;
+	   pxy[1] += newy - oldy;
+           pxy[2] += newx - oldx;
+           pxy[3] += newy - oldy;
+	   (*funcs)(xor_handle);
+        }
+        oldx = newx;
+        oldy = newy;
+      }
+
+      if(!check_dpwork_box(newx,newy))
+      {
+	  (*funcs)(xor_handle);			/* erase last drawn */
+          newx = oldx = *gcurx = omx;
+          newy = oldy = *gcury = omy;          
+          Supexec(KICKAES);			/* now adjust system  */
+	  pxy[0] = axy[0];			/* restore old array  */
+	  pxy[1] = axy[1];
+	  pxy[2] = axy[2];
+	  pxy[3] = axy[3];
+	  (*funcs)(xor_handle);			/* and draw new line  */
+	  planted = TRUE;
+	  do_rule_mark();
+          BSTATE = 0;
+          event = 0;
+
+          while( (BREAL == 1) || (BREAL == 2) || (BREAL == 3));	/* sit when button down */
+							
+          	  
+          for(;;)	/* used to bleed off unwanted messages...*/
+          {
+		event = evnt_multi((MU_MESAG|MU_TIMER),
+				    0,0,0,
+				    0,0,0,0,0,
+				    0,0,0,0,0,
+				    tmp_buff,
+				    0,0,		/* timer == 0 */
+				    &dummy,&dummy,
+				    &dummy,&dummy,
+				    &dummy,&dummy);
+
+		if(event == MU_TIMER)
+				break;
+          }
+          BSTATE = 0;
+      }
+      else
+	 planted = FALSE;
+   }
+   if(snap_to_grids)
+   {
+      snap_to_grid(&pxy[0],&pxy[1]);
+      snap_to_grid(&pxy[2],&pxy[3]);
+   }
+   (*funcs)(shandle);
+   button_end();
+}
+
+
+/**************************************************************************/
+/* Function:    do_nada()						  */
+/* Description: Handler for object/region/primitive selections		  */
+/**************************************************************************/
+do_nada(mx,my)
+int mx,my;
+{
+   int whandle;
+   int direction;
+   int type;
+   int page;
+   int x1,y1,x2,y2;
+   long txtptr,slvptr;
+   int found;
+   long scanlist;
+   int msg[8];
+   REGION *rptr;
+   REGION *rptr1;
+   int no_go;
+   int bwidth,bheight;
+   int boxmu_w,boxmu_h;
+
+if(whandle = wind_find(mx,my))
+{
+ if(whandle == prev_handle)
+ {
+   if(check_dpwork_box(mx,my))
+   {
+    
+      scrntomu(mx,my,&nmx,&nmy,0);
+      if(multi_mode && curr_page % 2 && view_size == PADJCNT)
+      {
+	   nmx += hpage_size;
+      }
+      if(multi_mode && (nmx >= multi_box[0]) && (nmy >= multi_box[1]) &&
+		    (nmx <= multi_box[2]) && (nmy <= multi_box[3]))
+      {
+	   do_move_multi(mx,my);		/* Move multiple boxes */
+	   return;
+      }
+
+      if(gl_region_ptr  || gl_grregion_ptr)
+      {
+
+	  if(active_prim)
+          { 
+		edit_prims(mx,my);
+		return;
+          }
+
+          region_ptr = ((gl_region_ptr) ? (gl_region_ptr):(gl_grregion_ptr));	
+	  if(check_boxes(mx,my))
+	   		return;
+
+          if(inside_region(nmx,nmy,region_ptr,
+		      &rect_in_mu[0],&rect_in_mu[1],
+		      &rect_in_mu[2],&rect_in_mu[3],&type,&page))
+          {
+             if( (((page % 2) && alt_offset) ||
+	         (!( page % 2) && !alt_offset) && (view_size == PADJCNT)) 
+	         || (view_size != PADJCNT))
+             {
+		if(alt_offset)
+	        {
+		   rect_in_mu[0] += hpage_size;
+		   rect_in_mu[2] += hpage_size;
+	        }
+                do_move_region(mx,my,type);
+	        return;
+             }
+
+          }
+      }	
+  } /* if check dpwork_box()      */
+  else
+     active_prim = FALSE;
+ }  /* check if in prev_handle    */
+ else
+     active_prim = FALSE;
+}   /* check if clicked on window */
+else
+     active_prim = FALSE;
+
+
+   if(whandle = wind_find(mx,my))
+   {
+      if(whandle == prev_handle)
+      {
+        if(check_dpwork_box(mx,my))
+        {
+            scrntomu(mx,my,&nmx,&nmy,0);
+
+       				/* alt_offset set by scrntomu()*/
+				/* 0 - clicked on left page    */
+				/* 1 - clicked on right page   */
+
+            if(view_size == PADJCNT)
+	    {
+	       if(curr_page % 2)		/*right active */
+		   no_go = ((!alt_offset)?(TRUE):(FALSE));
+	       else				/* left active */
+		   no_go = ((!alt_offset)?(FALSE):(TRUE));
+            }
+	    else
+	       no_go = FALSE;			/* not adjacent pages */
+
+
+            if(!no_go)
+	    {
+               region_ptr = find_region(nmx,nmy,curr_page,
+ 	                                &rect_in_mu[0],&rect_in_mu[1],
+	                                &rect_in_mu[2],&rect_in_mu[3],&type);
+
+
+	       if(alt_offset && (view_size == PADJCNT))
+	       {
+		  rect_in_mu[0] += hpage_size;
+	          rect_in_mu[2] += hpage_size;
+	       }
+
+	    }
+	    else
+	       region_ptr = 0L;
+
+
+
+            if(region_ptr)
+            {
+	         do_blit();
+		 if((kstat & 0x0001)||(kstat & 0x0002))	 /* multi-box */
+		 {
+		    if(gl_region_ptr)
+			rptr = (REGION *)gl_region_ptr;
+		    else if(gl_grregion_ptr)
+			rptr = (REGION *)gl_grregion_ptr;
+		    else 
+			rptr = 0L;
+		    if(rptr)
+		    {
+			rptr->multi_select = 1;
+		    }
+		    if(rptr || multi_mode)
+		    {
+			rptr1 = (REGION *)region_ptr;
+			rptr1->multi_select = 1;
+			calc_multbox(multi_box);
+			multi_mode = 1;
+			gl_region_ptr = gl_grregion_ptr = 0L;
+ 		        menu_ienable(ad_menu,RCOORD,FALSE);
+ 		        menu_ienable(ad_menu,OADDPRIM,FALSE);
+ 		        menu_ienable(ad_menu,RMOVEFNT,FALSE);
+		        menu_ienable(ad_menu,RMOVEBAK,FALSE);
+		    }
+		 }
+		 else
+		 {
+		    clr_multi_flags(curr_page);
+		    multi_mode = 0;
+		 }
+		 gsx_moff();
+		 if(multi_mode)
+		 {
+                    mutoscrn(multi_box[0],multi_box[1],&pxy[0],&pxy[1],0);
+                    mutoscrn(multi_box[2],multi_box[3],&pxy[2],&pxy[3],0);
+		    do_outer(xor_handle,pxy);	 /* don't draw size boxes */
+		 }
+		 else
+		 {
+/*********	    if(!mode_flag)		 only of non-text display */
+    	 	    menu_ienable(ad_menu,OADDPRIM,TRUE);
+		    menu_ienable(ad_menu,RUNLINK,TRUE);
+		    menu_ienable(ad_menu,RDELETE,TRUE);
+		    menu_ienable(ad_menu,RCOORD,TRUE);
+		    menu_ienable(ad_menu,RMOVEFNT,TRUE);
+		    menu_ienable(ad_menu,RMOVEBAK,TRUE);
+                    mutoscrn(rect_in_mu[0],rect_in_mu[1],&pxy[0],&pxy[1],0);
+                    mutoscrn(rect_in_mu[2],rect_in_mu[3],&pxy[2],&pxy[3],0);
+		    do_outline(xor_handle,pxy);
+		 }
+		 gsx_mon();
+
+                 if(!type)
+                 {
+       	           gl_region_ptr = region_ptr;
+		   gl_grregion_ptr = 0L;
+                   get_txtattr(gl_region_ptr,&gltxtattr);
+                   update_point_dialog();
+
+                   zdevice = SCANNER;
+                   SH = vmutopix((int)gltxtattr.lnsp);
+		   
+
+		   if(kstat & 0x0008)		/* alt click	*/
+		   {
+			found = 0;
+			scanlist = getf_scaninfo(region_ptr,&x1,&y1,
+				        &x2,&y2,&txtptr,&slvptr);
+			while(scanlist)
+			{
+			    if(nmx >= x1 && nmx <= x2 && nmy >= y1 &&
+			       nmy <= y2)
+			    {
+				found = 1;
+				break;
+			    }
+			    scanlist = getn_scaninfo(&x1,&y1,&x2,&y2,
+					&txtptr,&slvptr);
+			}
+			if(found)
+			{
+			    top_window(txt_handle,txtptr);
+			    wind_get(txt_handle,WF_CURRXYWH,&msg[4],
+				&msg[5],&msg[6],&msg[7]);
+			    msg[3] = txt_handle;
+			    do_redraw(msg);
+			}
+		   }
+			
+                 }
+	         else
+                 {
+		    gl_grregion_ptr = region_ptr;
+		    gl_region_ptr = 0L;
+                    get_grattr(gl_grregion_ptr,glgrattr);
+                    gl_lstyle = glgrattr[0];
+              	    gl_lwidth = glgrattr[1];
+              	    gl_fstyle = glgrattr[2];
+              	    gl_findex = glgrattr[3];
+		    gl_repel  = glgrattr[4];
+		    gl_repbounds = glgrattr[6];
+		    gl_repoffset = glgrattr[5];
+                 }
+	         evnt_button(1,1,0,&dummy,&dummy,&dummy,&dummy);
+           }
+           else
+	   {
+	      if(gl_region_ptr  || gl_grregion_ptr || multi_mode)
+	      {
+	         check_only_blit();
+	      }
+
+	      if(valid_page(curr_page))
+	      {
+                graf_rubbox(mx,my,0,0,&bwidth,&bheight);
+                scrntomu(bwidth,bheight,&boxmu_w,&boxmu_h,1);
+                do_calc_multi(nmx,nmy,boxmu_w,boxmu_h);
+	      }
+           }
+
+       }			/* if(check_dpwork_box()     */
+       else
+	  check_only_blit();
+      }				/* if whandle == prev_handle */
+   }
+   else
+   {
+	check_only_blit();
+ 	if(icon_clicked(mx,my))
+	   if(animate_icon(mx,&direction))
+	      do_flip_page(direction);	
+   }
+}
+
+
+
+
+do_calc_multi(x,y,w,h)
+int x,y,w,h;
+{
+   int rubbox[4];
+   int rect[4];
+   int pxy[4];
+   register REGION *rptr;
+   int found;
+
+   found = 0;
+   rptr = curpage->regptr;
+   rubbox[0] = x;
+   rubbox[1] = y;
+   rubbox[2] = x + w - 1;
+   rubbox[3] = y + h - 1;
+   while(rptr)
+   {
+	rect[0] = rptr->x1;
+        rect[1] = rptr->y1;
+        rect[2] = rptr->x2;
+        rect[3] = rptr->y2;
+	if(rect_intersect(rubbox,rect))
+	{
+	   found = 1;
+	   rptr->multi_select = 1;
+	}
+	rptr = rptr->plink;
+   }
+   multi_mode = found;
+   if(multi_mode)
+   {
+      menu_ienable(ad_menu,RUNLINK,TRUE);
+      menu_ienable(ad_menu,RDELETE,TRUE);
+      calc_multbox(multi_box);
+      mutoscrn(multi_box[0],multi_box[1],&pxy[0],&pxy[1],0);
+      mutoscrn(multi_box[2],multi_box[3],&pxy[2],&pxy[3],0);
+      gsx_moff();
+      do_outer(xor_handle,pxy);	 /* don't draw size boxes */
+      gsx_mon();
+   }
+}
+
+/**************************************************************************/
+/* Function:    screen_clip()						  */
+/* Description: 							  */
+/**************************************************************************/
+screen_clip()
+{
+   set_clip(TRUE,&dpwork);
+   grect_to_array(&dpwork,clip_area);
+   vs_clip(xor_handle,TRUE,clip_area);
+   grect_to_array(&pwork,clip_area);
+   vs_clip(rule_handle,TRUE,clip_area);
+}
+
+
+
+/**************************************************************************/
+/* Function: scrn2clip()						  */
+/* Description: Allows clipping settings for PADJCNT			  */
+/**************************************************************************/
+scrn2clip()
+{
+  GRECT  tpwork;
+
+  if(view_size == PADJCNT)
+  {
+       tpwork.g_w = dpwork.g_w / 2;
+       tpwork.g_h = dpwork.g_h;
+       tpwork.g_y = dpwork.g_y;
+       tpwork.g_x = ((curr_page % 2) ? (dpwork.g_x + tpwork.g_w):(dpwork.g_x));
+       set_clip(TRUE,&tpwork);
+  }
+  else
+     set_clip(TRUE,&dpwork);
+  grect_to_array(&dpwork,clip_area);
+  vs_clip(xor_handle,TRUE,clip_area);
+  grect_to_array(&pwork,clip_area);
+  vs_clip(rule_handle,TRUE,clip_area);
+
+ 
+}
+
+
+
+/**************************************************************************/
+/* Function:    poly_handler()						  */
+/* Description: Polygon handler						  */
+/**************************************************************************/
+poly_handler(mx,my)
+int mx,my;
+{
+     pxy[0] = pxyarray[0] = pxyarray[2] = mx;
+     pxy[1] = pxyarray[1] = pxyarray[3] = my;
+     num    = 1;
+     aindex  = 2;
+
+
+     while(BSTATE != 2)
+     {
+         while((BSTATE != 1) && (BSTATE != 2) && (BSTATE != 3))
+         {
+            graf_mkstate(&newx,&newy,&button,&key);
+            if((oldx != newx) || (oldy != newy))
+            {
+	      if(snap_to_grids)
+		 snap_to_grid(&newx,&newy);
+	      do_rule_mark();
+              (*funcs)(xor_handle,2);
+	      pxyarray[2] = newx;
+              pxyarray[3] = newy;
+              (*funcs)(xor_handle,2);	          
+	    }
+	    oldx = newx;
+	    oldy = newy;
+         }
+	 
+	 if(BSTATE == 1)
+         {
+            v_pline(xor_handle,2,pxyarray);
+            v_pline(xor_handle,2,pxyarray);
+            pxy[aindex++] = pxyarray[2];
+ 	    pxy[aindex++] = pxyarray[3];
+	    pxyarray[0] = pxyarray[2];
+	    pxyarray[1] = pxyarray[3];
+            num++;
+	    BSTATE = 0;
+	    if(num > 125)		/* max of 125 vertices */
+		  BSTATE = 2;		/* so exit immediately.*/
+         }
+     }
+     evnt_button(1,1,0,&dummy,&dummy,&dummy,&dummy);
+     evnt_button(1,2,0,&dummy,&dummy,&dummy,&dummy);
+     (*funcs)(xor_handle,2);
+     (*funcs)(shandle,num);
+     button_end();
+}
+
+
+
+
+/**************************************************************************/
+/* Function:    button_end()						  */
+/* Description: Button handler and poly_handler completion routines	  */
+/**************************************************************************/
+button_end()
+{
+   int pxy[4];
+
+   if(view_size == PADJCNT)
+   {
+      pxy[0] = pxy[2] = pagew/2;
+      pxy[1] = 0;
+      pxy[3] = pageh;
+      v_pline(mhandle,2,pxy);
+   }
+
+   do_blit();
+   set_clip(TRUE,&dpwork);
+   gsx_mon();
+   mclip();
+   wind_update(END_UPDATE);
+   wind_update(END_MCTRL);
+   evnt_button(1,1,0,&dummy,&dummy,&dummy,&dummy);
+}
+
+
+
+/**************************************************************************/
+/* Function:    check_region_ptr					  */
+/* Description: checks for active graphic or text region		  */
+/**************************************************************************/
+check_region_ptr()
+{
+    if(gl_region_ptr || gl_grregion_ptr || multi_mode)
+    {
+       if(multi_mode)
+       {
+	  clr_multi_flags(curr_page);
+	  multi_mode = 0;
+       }
+       region_ptr = gl_grregion_ptr = gl_region_ptr = 0L;
+       active_prim = FALSE;
+       force_blit_redraw(0);
+    }
+}
+
+
+
+
+
+/**************************************************************************/
+/* Function:    check_only_blit						  */
+/* Description:	Checks if a blit is all that is needed			  */
+/**************************************************************************/
+check_only_blit()
+{
+       gl_grregion_ptr = gl_region_ptr = 0L;
+       if(multi_mode)
+       {
+          clr_multi_flags(curr_page);
+          multi_mode = 0;
+       }
+       menu_ienable(ad_menu,RDELETE,FALSE);
+       menu_ienable(ad_menu,RUNLINK,FALSE);
+       menu_ienable(ad_menu,RCOORD,FALSE);
+       menu_ienable(ad_menu,OADDPRIM,FALSE);
+       menu_ienable(ad_menu,RMOVEFNT,FALSE);
+       menu_ienable(ad_menu,RMOVEBAK,FALSE);
+       do_blit();
+}
+
+
+
+
+/**************************************************************************/
+/* Function:    do_delregion()						  */
+/* Description:  Delete the currently selected region			  */
+/**************************************************************************/
+do_delregion()
+{
+int dummy;
+long tmp;
+long nextregion;
+int rect[4];
+
+   if((!gl_grregion_ptr)&&(!gl_region_ptr) && !multi_mode)
+   {
+	clear_regprim_flags();
+	return;
+   }
+        if(multi_mode)
+	{
+	   do_delmulti();
+	   return;
+
+        }
+	if(gl_grregion_ptr)
+	{
+	   find_boundary(gl_grregion_ptr,&rect[0],&rect[1],&rect[2],
+			 &rect[3],&dummy,&dummy);
+     	   tmp = 0L;
+	   delete_region(gl_grregion_ptr);
+	   gl_grregion_ptr = 0L;
+	   update_repel(0,rect);
+	}
+	else
+	{
+	   find_boundary(gl_region_ptr,&rect[0],&rect[1],&rect[2],
+			 &rect[3],&dummy,&dummy);
+	   tmp = get_regart(gl_region_ptr);
+	   if(tmp)
+	   {
+	      curregion = gl_region_ptr;
+	      nextregion = prev_aregion(curregion); /* To properly clean up */
+	      if(!nextregion)   /* we must get the region before the deleted*/
+				/* one. If 0L then start from the next one  */
+		 nextregion = getn_aregion(&dummy,&dummy,&dummy,&dummy,&dummy);
+	   }		
+	   delete_region(gl_region_ptr);
+	   
+	}
+	if(tmp)
+	{
+	   open_article(tmp);
+	   if(nextregion)
+	      page_redraw(nextregion);
+	   graf_mouse(ARROW,&dummy);
+	}
+
+	if(view_size == PADJCNT)
+	             force_preview();
+ 	
+        if((view_size != PADJCNT) && !deferhj)
+		redraw_area(0L,rect,1);
+        clear_regprim_flags();
+	if(curpage->regptr == 0L )		/* If no more regions on    */
+	{					/* the page..delete the page*/
+	    delete_page();
+	    recalc_txtptrs();
+	    force_preview();
+	}
+}	
+
+
+
+do_delmulti()
+{
+int dummy;
+long tmp;
+long nextregion;
+int rect[4];
+register REGION *rptr;
+REGION *nextptr;
+REGION *tmpregion;
+
+   multi_mode = 0;
+   tmpregion = curregion;
+   rptr = curpage->regptr;
+   while(rptr)
+   {
+      nextptr = rptr->plink;
+      if(rptr->multi_select)
+      {
+	if(rptr->type)
+	{
+	   find_boundary(rptr,&rect[0],&rect[1],&rect[2],
+			 &rect[3],&dummy,&dummy);
+     	   tmp = 0L;
+	   delete_region(rptr);
+           gl_grregion_ptr = 0L;
+	   update_repel(0,rect);
+	}
+	else
+	{
+	   find_boundary(rptr,&rect[0],&rect[1],&rect[2],
+			 &rect[3],&dummy,&dummy);
+	   tmp = get_regart(rptr);
+	   if(tmp)
+	   {
+	      curregion = rptr;
+	      nextregion = prev_aregion(curregion);
+	      if(!nextregion)
+		 nextregion = getn_aregion(&dummy,&dummy,&dummy,&dummy,&dummy);
+	   }		
+	   delete_region(rptr);
+	}
+	if(tmp)
+	{
+
+	   open_article(tmp);
+	   if(nextregion)
+	      page_redraw(nextregion);
+	   graf_mouse(ARROW,&dummy);
+	}
+	redraw_area(0L,rect,1);
+      }
+     rptr = nextptr;
+   }
+   curregion = tmpregion;
+   clr_multi_flags(curr_page);
+/*   multi_mode = 0;  */
+   clear_regprim_flags();
+   if(curpage->regptr == 0L )			/* if no more regions on the */
+   {						/* page, delete the page too */
+	delete_page();
+	recalc_txtptrs();
+ 	force_preview();
+   }
+}
+
+
+/**************************************************************************/
+/* Function:    do_unlinkreg();						  */
+/* Description:  unlink  the currently selected region	from it's article */
+/**************************************************************************/
+do_unlinkreg()
+{
+int dummy;
+long tmp;
+long nextregion;
+int rect[4];
+
+   if(multi_mode)
+   {
+	do_multunlink();
+	return;
+   }
+   if(!gl_region_ptr)
+   {
+	clear_regprim_flags();
+	return;
+   }
+   active_prim = FALSE;
+   tmp = get_regart(gl_region_ptr);
+   if(tmp)
+   {
+	   find_boundary(gl_region_ptr,&rect[0],&rect[1],&rect[2],
+			 &rect[3],&dummy,&dummy);
+	   curregion = gl_region_ptr;
+	   nextregion = prev_aregion(curregion);
+	   if(!nextregion)
+           	nextregion = getn_aregion(&dummy,&dummy,&dummy,&dummy,&dummy);
+   }
+   unlink_region(gl_region_ptr);
+
+   if(tmp)
+   {
+      graf_mouse(2,&dummy);
+      open_article(tmp);
+      if(nextregion)
+	      page_redraw(nextregion);
+      graf_mouse(ARROW,&dummy);
+   }
+   redraw_area(gl_region_ptr,rect,1);
+   clear_regprim_flags();
+}
+
+
+do_multunlink()
+{
+int dummy;
+long tmp;
+int rect[4];
+REGION *nextregion;
+register REGION *rptr;
+REGION *tmpregion;
+
+   multi_mode = 0;
+   tmpregion = curregion;
+   rptr = curpage->regptr;
+   while(rptr)
+   {
+      if(rptr->multi_select)
+      {
+	if(!rptr->type)
+       	{
+	   tmp = get_regart(rptr);
+	   if(tmp)
+	   {
+  	      find_boundary(rptr,&rect[0],&rect[1],&rect[2],
+			 &rect[3],&dummy,&dummy);
+	      curregion = rptr;
+	      nextregion = prev_aregion(curregion);
+	      if(!nextregion)
+		 nextregion = getn_aregion(&dummy,&dummy,&dummy,&dummy,&dummy);
+	   }		
+	   unlink_region(rptr);
+	   if(tmp)
+	   {
+	      open_article(tmp);
+	      if(nextregion)
+	         page_redraw(nextregion);
+	      graf_mouse(ARROW,&dummy);
+   	      redraw_area(0L,rect,1);
+	   }
+        }
+      }
+      rptr = rptr->plink;
+   }
+   curregion = tmpregion;
+   clr_multi_flags(curr_page);
+   clear_regprim_flags();
+}
+
+/**************************************************************************/
+/* Function:    do_delpage()						  */
+/* Description:  Delete the current page.				  */
+/**************************************************************************/
+do_delpage()
+{
+   register PAGE *pptr;
+   register REGION *rptr;
+
+   if(alert_cntre(ALERT6) == 1)
+   {    
+	if(valid_page(curr_page))
+        {
+	   delete_page();			/* Delete and recalc text ptrs    */
+        }
+        else
+        {
+           pptr = pagehd;		/* all pages AFTER the current one  */
+           do				/* have their page numbers bumped   */
+           {				/* DOWN by 1 due to deletion of page*/
+              if(pptr->pagenum > curr_page)
+              {
+                pptr->pagenum -= 1;
+                rptr = pptr->regptr;
+	        while(rptr)
+	        {
+	 	  rptr->p = pptr->pagenum;
+	 	  rptr = rptr->plink;
+		}
+      	      }
+              pptr = pptr->nextpage;
+           }while(pptr != NULLPTR);
+        }
+	recalc_txtptrs();
+	force_preview();
+   }
+}
+	
+
+
+
+/**************************************************************************/
+/* Function: do_move_region()						  */
+/* Description: Handles a selected region that is moved...		  */
+/**************************************************************************/
+do_move_region(mx,my,type)
+int mx,my;
+int type;
+{
+     	int opcode;
+	int fflag;
+	int fx,fy;
+        register int i;
+	long tregion_ptr;
+	int mbutton;
+	int toggle;
+	int tempx,tempy;
+	int page;
+	int line_flag;
+        int gtype;
+
+	mutoscrn(rect_in_mu[0],rect_in_mu[1],&pxy[0],&pxy[1],0);
+	mutoscrn(rect_in_mu[2],rect_in_mu[3],&pxy[2],&pxy[3],0);
+
+	voldx = oldx = mx;
+	voldy = oldy = my;
+	
+	graf_mouse(4,&dummy);
+
+			
+        line_flag=(((pxy[0]==pxy[2])||(pxy[1]==pxy[3]))?(TRUE):(FALSE));
+
+	gsx_moff();
+	do_outline(xor_handle,pxy);
+	if(line_flag)
+		do_outer(xor_handle,pxy);
+	else
+		do_box(xor_handle,pxy[0],pxy[1],pxy[2],pxy[3]);
+	gsx_mon();
+
+	mbutton = TRUE;
+	while(mbutton)
+	{
+		graf_mkstate(&newx,&newy,&mbutton,&dummy);
+		if((oldx != newx) || (oldy != newy))
+		{
+		  gsx_moff();
+		  do_rule_mark();
+		  if(line_flag)
+			do_outer(xor_handle,pxy);
+		  else
+			do_box(xor_handle,pxy[0],pxy[1],pxy[2],pxy[3]);
+		  pxy[0] += newx - oldx;
+		  pxy[1] += newy - oldy;
+		  pxy[2] += newx - oldx;
+		  pxy[3] += newy - oldy;
+		  if(line_flag)
+			do_outer(xor_handle,pxy);
+		  else
+			do_box(xor_handle,pxy[0],pxy[1],pxy[2],pxy[3]);
+		  gsx_mon();		  
+		}
+	        oldx = newx;
+		oldy = newy;
+	}
+
+  if(check_dpwork_box(newx,newy))
+  {	
+	if((voldx != newx) || (voldy != newy))
+	{
+	   deltax = newx - voldx;
+	   deltay = newy - voldy;
+	   fx = ((deltax < 0) ? (-1) : (1));
+	   fy = ((deltay < 0) ? (-1) : (1));
+
+	   scrntomu(abs(newx - voldx),abs(newy - voldy),&deltax,&deltay,1);
+
+	   deltax *= fx;
+	   deltay *= fy;
+	   
+	   if(snap_to_grids)
+	   {
+		tempx = deltax + rect_in_mu[0];
+		tempy = deltay + rect_in_mu[1];
+		snap_mu(&tempx,&tempy);
+		deltax = tempx - rect_in_mu[0];
+		deltay = tempy - rect_in_mu[1];
+           }	   
+
+           if(kstat & 0x0004)
+           {
+			copy_region();
+			return;
+           }
+
+	   opcode = get_fprimitive(region_ptr,&count,&wmode);
+	   fflag = TRUE;
+	   while(opcode != -1)
+	   {
+		switch(opcode)
+		{
+		    case 3:
+		    case 4:
+		    case 0: toggle = TRUE;
+		            for(i=0;i<(count*2);i++)
+			    {
+			       ptsarray[i] += ((toggle) ? (deltax):(deltay));
+			       toggle ^= TRUE;
+			    }
+			    break;
+
+		    case 1: ptsarray[0] += deltax;
+			    ptsarray[1] += deltay;
+			    break;
+
+		    case 2: ptsarray[0] += deltax;
+			    ptsarray[2] += deltax;
+			    ptsarray[1] += deltay;
+			    ptsarray[3] += deltay;
+			    break;
+	   
+		}	/* end of switch(opcode) */
+		update_primitive(opcode,count,wmode,fflag);
+		fflag = FALSE;
+		opcode = get_nprimitive(&count,&wmode);
+	   }		/* end of while		 */
+
+	   tregion_ptr = region_ptr;
+	   graf_mkstate(&mx,&my,&mbutton,&dummy);
+
+	   if(gl_region_ptr)
+	   {		
+		page_redraw(region_ptr);
+		gtype = FALSE;
+	   }
+	   else
+	   {
+		update_repel(1,rect_in_mu);
+		gtype = TRUE;
+	   }
+  	   if(view_size != PADJCNT && !deferhj && gl_region_ptr)
+	      redraw_area(tregion_ptr,rect_in_mu,1);	/* Cleanup old area */
+	   if(gtype)
+		gl_grregion_ptr = tregion_ptr;
+	   else
+		gl_region_ptr = tregion_ptr;
+	   region_ptr = tregion_ptr;
+	   find_boundary(tregion_ptr,
+				  &rect_in_mu[0],&rect_in_mu[1],
+				  &rect_in_mu[2],&rect_in_mu[3],&dummy,&page);
+
+	   if((page % 2) && (view_size == PADJCNT))
+	   {
+		alt_offset = TRUE;
+		rect_in_mu[0] += hpage_size;
+		rect_in_mu[2] += hpage_size;
+	   }
+	   mutoscrn(rect_in_mu[0],rect_in_mu[1],&pxy[0],&pxy[1],0);
+	   mutoscrn(rect_in_mu[2],rect_in_mu[3],&pxy[2],&pxy[3],0);
+	   gsx_moff();
+	   do_outline(xor_handle,pxy);
+	   gsx_mon();
+	}
+	else
+	{
+	   gsx_moff();
+	   do_outline(xor_handle,pxy);
+	   do_box(xor_handle,pxy[0],pxy[1],pxy[2],pxy[3]);
+	   gsx_mon();
+	}
+   }
+   else
+   {
+      gsx_moff();
+      do_blit();
+      find_boundary(region_ptr,&rect_in_mu[0],&rect_in_mu[1],
+			&rect_in_mu[2],&rect_in_mu[3],&dummy,&dummy);
+      if((curr_page % 2) && (view_size == PADJCNT))
+      {
+	alt_offset = TRUE;
+	rect_in_mu[0] += hpage_size;
+	rect_in_mu[2] += hpage_size;
+      }
+      mutoscrn(rect_in_mu[0],rect_in_mu[1],&pxy[0],&pxy[1],0);
+      mutoscrn(rect_in_mu[2],rect_in_mu[3],&pxy[2],&pxy[3],0);
+
+      do_outline(xor_handle,pxy);
+      gsx_mon();
+   }
+	graf_mouse(0,&dummy);
+}
+
+
+
+/**************************************************************************/
+/* Function: do_move_multi()						  */
+/* Description: Handles moving multiple regions				  */
+/**************************************************************************/
+do_move_multi(mx,my)
+int mx,my;
+{
+     	int opcode;
+	int fflag;
+	int fx,fy,i;
+	int mbutton;
+	int toggle;
+	long art;
+	int tempx,tempy;
+        register REGION *rptr;
+        int type;
+        long tmpcurregion;
+        register long *rtable;
+        register int rcount;
+        long rtblsize;
+        int line_flag;
+        REGION *saveregion;
+
+	rcount = 0;
+        rptr = curpage->regptr;
+	while(rptr)			/* How many selected regions ? */
+        {
+	   if(rptr->multi_select)
+	   {
+		rcount++;
+           }
+           rptr = rptr->plink;
+        }
+        rtblsize = 4L * ((long)rcount + 1L);
+        rtable = (long *)lmalloc(rtblsize);   /* Get table to save them */
+        if(!rtable)
+        {
+	   alert_cntre(ALERT12);
+	   return;
+        }
+        i = 0;
+        rptr = curpage->regptr;
+	while(rptr)			/* Save selected regions           */ 
+        {				/* They get reset during redraw    */
+	   if(rptr->multi_select)	/* and this is the only case where */
+	   {				/* we want to preserve them        */
+		rtable[i++] = (long)rptr;
+           }
+           rptr = rptr->plink;
+        }
+	         
+	mutoscrn(multi_box[0],multi_box[1],&pxy[0],&pxy[1],0);
+	mutoscrn(multi_box[2],multi_box[3],&pxy[2],&pxy[3],0);
+
+	voldx = oldx = mx;
+	voldy = oldy = my;
+	
+	graf_mouse(4,&dummy);
+
+        line_flag=(((pxy[0]==pxy[2])||(pxy[1]==pxy[3]))?(TRUE):(FALSE));
+
+	gsx_moff();
+	if(!line_flag)
+	{
+	  do_box(xor_handle,pxy[0],pxy[1],pxy[2],pxy[3]);
+	  do_outer(xor_handle,pxy);
+	}
+
+	gsx_mon();
+	
+	mbutton = TRUE;
+	while(mbutton)
+	{
+		graf_mkstate(&newx,&newy,&mbutton,&dummy);
+		if((oldx != newx) || (oldy != newy))
+		{
+		  gsx_moff();
+		  do_rule_mark();
+		  if(line_flag)
+			do_outer(xor_handle,pxy);
+		  else		
+		  	do_box(xor_handle,pxy[0],pxy[1],pxy[2],pxy[3]);
+		  pxy[0] += newx - oldx;
+		  pxy[1] += newy - oldy;
+		  pxy[2] += newx - oldx;
+		  pxy[3] += newy - oldy;
+		  if(line_flag)
+			do_outer(xor_handle,pxy);
+		  else
+		  	do_box(xor_handle,pxy[0],pxy[1],pxy[2],pxy[3]);
+		  gsx_mon();		  
+		}
+	        oldx = newx;
+		oldy = newy;
+	}
+
+    if(check_dpwork_box(newx,newy))
+    {
+	if((voldx != newx) || (voldy != newy))
+	{
+	   deltax = newx - voldx;
+	   deltay = newy - voldy;
+	   fx = ((deltax < 0) ? (-1) : (1));
+	   fy = ((deltay < 0) ? (-1) : (1));
+
+	   scrntomu(abs(newx - voldx),abs(newy - voldy),&deltax,&deltay,1);
+
+	   deltax *= fx;
+	   deltay *= fy;
+	   
+	   if(snap_to_grids)
+	   {
+		tempx = deltax + multi_box[0];
+		tempy = deltay + multi_box[1];
+		snap_mu(&tempx,&tempy);
+		deltax = tempx - multi_box[0];
+		deltay = tempy - multi_box[1];
+           }	   
+	   tmpcurregion = curregion;
+
+           if(kstat & 0x004)
+	   {
+	  	for(i = 0;i < rcount;i++)
+		{
+		   curregion = rtable[i];
+		   copy_region();
+		}
+
+	        for(i = 0;i < rcount;i++)
+    	        {
+	           rptr = (REGION *)rtable[i];
+	           rptr->multi_select = 1;
+                }
+	   	free(rtable);
+
+		curregion = 0L;
+                multi_mode = 1;
+                gl_region_ptr = gl_grregion_ptr = 0L;
+	        mcalc_multbox(multi_box);
+
+	        if((curr_page % 2) && (view_size == PADJCNT))
+	        {
+		   alt_offset = TRUE;
+		   multi_box[0] += hpage_size;
+		   multi_box[2] += hpage_size;
+	        }
+		
+	        mutoscrn(multi_box[0],multi_box[1],&pxy[0],&pxy[1],0);
+	        mutoscrn(multi_box[2],multi_box[3],&pxy[2],&pxy[3],0);
+	        gsx_moff();
+	        do_outer(xor_handle,pxy);
+	        gsx_mon();
+		return;
+	   }
+           rptr = get_fregion(curr_page,&rect_in_mu[0],&rect_in_mu[1],
+			      &rect_in_mu[2],&rect_in_mu[3],&type);
+           while(rptr)
+           {
+	      if(rect_in_mu[0] >= hpage_size)	/* clip it out! */
+					goto next;
+
+	      curregion = (long)rptr;
+	      if(rptr->multi_select)
+              {
+	         opcode = get_fprimitive(rptr,&count,&wmode);
+	         fflag = TRUE;
+	         while(opcode != -1)
+	         {
+		    switch(opcode)
+		    {
+		       case 3:
+		       case 4:
+		       case 0: 
+			    toggle = TRUE;
+		            for(i=0;i<(count*2);i++)
+			    {
+			       ptsarray[i] += ((toggle) ? (deltax):(deltay));
+			       toggle ^= TRUE;
+			    }
+			    break;
+
+		       case 1: 
+                            ptsarray[0] += deltax;
+			    ptsarray[1] += deltay;
+			    break;
+
+		       case 2: 
+                            ptsarray[0] += deltax;
+			    ptsarray[2] += deltax;
+			    ptsarray[1] += deltay;
+			    ptsarray[3] += deltay;
+			    break;
+	   
+		    }	/* end of switch(opcode) */
+		   update_primitive(opcode,count,wmode,fflag);
+		   fflag = FALSE;
+		   opcode = get_nprimitive(&count,&wmode);
+	         }		/* end of while		 */
+	         if(!rptr->type)
+	         {
+		    art = get_regart(rptr);
+		    if(art)
+		    {
+		       saveregion = sfregion;
+		       open_article(art);
+		       do_artcleanup(rptr,0);
+		       sfregion = saveregion;
+		    }
+	         }
+	      }
+next:	      rptr = get_nregion(&rect_in_mu[0],&rect_in_mu[1],
+			  &rect_in_mu[2],&rect_in_mu[3],&type);
+           }
+           curregion = tmpcurregion;
+
+           force_preview();
+           for(i = 0;i < rcount;i++)
+    	   {
+	      rptr = (REGION *)rtable[i];
+	      rptr->multi_select = 1;
+           }
+	   free(rtable);
+           multi_mode = 1;
+	   mcalc_multbox(multi_box);
+
+	   if((curr_page % 2) && (view_size == PADJCNT))
+	   {
+		alt_offset = TRUE;
+		multi_box[0] += hpage_size;
+		multi_box[2] += hpage_size;
+	   }
+	   mutoscrn(multi_box[0],multi_box[1],&pxy[0],&pxy[1],0);
+	   mutoscrn(multi_box[2],multi_box[3],&pxy[2],&pxy[3],0);
+	   gsx_moff();
+	   do_outer(xor_handle,pxy);
+	   gsx_mon();
+	}
+	else
+	{
+	   gsx_moff();
+	   do_outer(xor_handle,pxy);
+	   do_box(xor_handle,pxy[0],pxy[1],pxy[2],pxy[3]);
+	   gsx_mon();
+	}
+   }
+   else
+   {
+      gsx_moff();
+      do_blit();
+      mutoscrn(multi_box[0],multi_box[1],&pxy[0],&pxy[1],0);
+      mutoscrn(multi_box[2],multi_box[3],&pxy[2],&pxy[3],0);
+      do_outer(xor_handle,pxy);
+      gsx_mon();
+   }
+	graf_mouse(0,&dummy);
+}
+
+
+
+
+/**************************************************************************/
+/* Function: check_boxes();						  */
+/* Description: Selects a box of a selected region.			  */
+/**************************************************************************/
+check_boxes(mx,my)
+int mx,my;
+{
+	int type;
+	int dflag;
+	register int pos;
+	int tpxy[4];
+	int old_width,old_height;
+	int new_width,new_height;
+	int opcode,fflag;
+        register int i;
+	int mbutton;
+        int odeltax,odeltay;
+	int ndeltax,ndeltay;
+        int old_murect[4];
+	int new_murect[4];
+	int temp;
+	long tregion_ptr;
+	int page;
+	long treg_ptr;
+        int dummy;	
+
+	mutoscrn(rect_in_mu[0],rect_in_mu[1],&pxy[0],&pxy[1],0);
+        mutoscrn(rect_in_mu[2],rect_in_mu[3],&pxy[2],&pxy[3],0);
+
+	dflag = FALSE;
+	tpxy[0] = pxy[0];
+	tpxy[1] = pxy[1];
+	tpxy[2] = pxy[2];
+	tpxy[3] = pxy[3];
+
+	for(pos=0;pos<8;pos++)
+	{
+	  if( (mx >= mboxx1[pos]) &&
+	      (mx <= mboxx2[pos]) &&
+	      (my >= mboxy1[pos]) &&
+	      (my <= mboxy2[pos])
+	    )
+	  {
+	     graf_mouse(3,&dummy);
+	     dflag = TRUE;
+	     break;
+	  }
+	}
+
+	if(dflag)
+	{
+	   oldx = mx;
+	   oldy = my;
+
+	   gsx_moff();
+	   do_outline(xor_handle,pxy);
+	   (*adj_mouse[pos])();		/* shift mouse */
+	   Supexec(KICKAES);
+	   do_box(xor_handle,pxy[0],pxy[1],pxy[2],pxy[3]);
+	   gsx_mon();
+
+	   mbutton = TRUE;
+	   while(mbutton)
+	   {
+	      graf_mkstate(&newx,&newy,&mbutton,&dummy);
+	      if((oldx != newx) || (oldy != newy))
+	      {
+		 gsx_moff();
+		 do_rule_mark();
+	         do_box(xor_handle,pxy[0],pxy[1],pxy[2],pxy[3]);
+		 (*da_box[pos])();
+	         do_box(xor_handle,pxy[0],pxy[1],pxy[2],pxy[3]);
+		 gsx_mon();
+	      }
+	      oldx = newx;
+	      oldy = newy;
+	   }
+	   graf_mouse(2,&dummy);	
+
+
+	   if(pxy[2] < pxy[0])		/* If x2 < x1 then swap 	*/
+  	   {
+	        temp = pxy[0];
+		pxy[0] = pxy[2];
+		pxy[2] = temp;
+	   }
+	   if(pxy[3] < pxy[1])
+	   {
+		temp = pxy[1];
+		pxy[1] = pxy[3];
+		pxy[3] = temp;
+	   }
+	   if(snap_to_grids)
+	   {
+		snap_to_grid(&pxy[0],&pxy[1]);
+		snap_to_grid(&pxy[2],&pxy[3]);
+	   }
+	
+ 	   treg_ptr = ((gl_region_ptr) ? (gl_region_ptr):(gl_grregion_ptr));
+	   find_page(treg_ptr,&page);
+
+	   alt_offset = (((page % 2)&&(view_size == PADJCNT))?(TRUE):(FALSE));
+
+	   scrn2mu(tpxy[0],tpxy[1],&old_murect[0],&old_murect[1],0,alt_offset);
+	   scrn2mu(tpxy[2],tpxy[3],&old_murect[2],&old_murect[3],0,alt_offset);
+	   scrn2mu(pxy[0],pxy[1],&new_murect[0],&new_murect[1],0,alt_offset);
+	   scrn2mu(pxy[2],pxy[3],&new_murect[2],&new_murect[3],0,alt_offset);
+
+	   gsx_moff();
+           (*bdj_mouse[pos])();		/* shift mouse */
+           if(*gcurx < 0) *gcurx = 0;
+ 	   if(*gcurx >= sxres) *gcurx = sxres - 1;
+           if(*gcury < 0) *gcury = 0;
+      	   if(*gcury >= syres) *gcury = syres - 1;
+       	   Supexec(KICKAES);
+           gsx_mon();
+
+	   if((voldx != newx) || (voldy != newy))
+	   {
+
+		old_width = old_murect[2] - old_murect[0] + 1;
+		old_height = old_murect[3] - old_murect[1] + 1;
+
+		new_width = new_murect[2] - new_murect[0];
+		new_height = new_murect[3] - new_murect[1];
+		opcode = get_fprimitive(region_ptr,&count,&wmode);
+		fflag = TRUE;
+		while(opcode != -1)
+	 	{
+		    switch(opcode)
+		    {
+			case 0: 
+			case 3:
+			case 4:
+				i=0;
+				while(i<count*2)
+				{
+				   odeltax = ptsarray[i] - old_murect[0];
+				   ndeltax = scale_iv(odeltax,new_width,
+					old_width); 
+				   ptsarray[i++] = new_murect[0] + ndeltax;
+
+				   odeltay = ptsarray[i] - old_murect[1];
+				   ndeltay = scale_iv(odeltay,new_height,
+					old_height);
+				   ptsarray[i++] = new_murect[1] + ndeltay;
+				}
+				break;
+
+			case 1: case12_scale(old_murect[0],
+					     old_murect[1],
+					     old_width,old_height,
+					     new_murect[0],
+					     new_murect[1],
+					     new_width,
+					     new_height,1);
+				break;
+
+			case 2: case12_scale(old_murect[0],
+					     old_murect[1],
+					     old_width,old_height,
+					     new_murect[0],
+					     new_murect[1],
+					     new_width,
+					     new_height,2);
+				break;
+		    }
+		    update_primitive(opcode,count,wmode,fflag);
+		    fflag = FALSE;
+		    opcode = get_nprimitive(&count,&wmode);
+		}
+	   	tregion_ptr = region_ptr;
+		if(gl_region_ptr)
+		{
+		   page_redraw(gl_region_ptr);
+		   type = FALSE;
+		}
+		else
+		{
+		   update_repel(1,old_murect);
+		   type = TRUE;
+ 		}
+  	   if(view_size != PADJCNT && !deferhj && gl_region_ptr)
+	      redraw_area(tregion_ptr,old_murect,1);	/* Cleanup old area */		
+	   if(type)
+		gl_grregion_ptr = tregion_ptr;
+	   else
+		gl_region_ptr = tregion_ptr;
+	   region_ptr = tregion_ptr;
+	   find_boundary(tregion_ptr,
+				  &rect_in_mu[0],&rect_in_mu[1],
+				  &rect_in_mu[2],&rect_in_mu[3],&dummy,&page);
+	   if((page % 2) && (view_size == PADJCNT))
+	   {
+		rect_in_mu[0] += hpage_size;
+		rect_in_mu[2] += hpage_size;
+	   }
+	   mutoscrn(rect_in_mu[0],rect_in_mu[1],&pxy[0],&pxy[1],0);
+	   mutoscrn(rect_in_mu[2],rect_in_mu[3],&pxy[2],&pxy[3],0);
+	   gsx_moff();
+	   do_outline(xor_handle,pxy);
+	   gsx_mon();
+    	   }
+	}
+	graf_mouse(0,&dummy);
+        return(dflag);
+}
+
+
+
+
+/**************************************************************************/
+/* Function: do_rule_mark()						  */
+/* Description: Handles the ruler markers				  */
+/**************************************************************************/
+do_rule_mark()
+{
+   int thandle;
+   int dummy;
+   int pts[4];
+   int temp;
+   int temp_mouse;
+
+   if(!ruler_flag)
+	return;
+   if(newx < dpwork.g_x)
+ 	return;
+   if(newy < dpwork.g_y)
+	return;
+   temp = dpwork.g_x + dpwork.g_w - 1;
+   if(newx > temp)
+	return;
+   temp = dpwork.g_y + dpwork.g_h - 1;
+   if(newy > temp)
+	return;
+
+   wind_get(0,WF_TOP,&thandle,&dummy,&dummy,&dummy);
+   if(thandle != prev_handle)
+        return;
+	
+   temp_mouse = mouse_on;
+   if(mouse_on)
+      gsx_moff();
+   pts[1] = pwork.g_y;			/* Erase horizontal mark	*/
+   pts[3] = pts[1] + vhalf;
+   if(xold_mark >= 0)
+   {
+      pts[0] = pts[2] = xold_mark;
+      v_pline(rule_handle,2,pts);
+   }
+   pts[0] = pts[2] =  newx;
+   v_pline(rule_handle,2,pts);		/* Draw new horizontal mark    */
+   xold_mark = newx;			/* Save x for erasing later    */
+
+   pts[0] = pwork.g_x;
+   pts[2] = pts[0] + hhalf;
+   if(yold_mark >= 0)
+   {
+      pts[1] = pts[3] =  yold_mark;
+      v_pline(rule_handle,2,pts);	/* Erase old vertical mark	*/
+   }
+   pts[1] = pts[3] = newy;
+   v_pline(rule_handle,2,pts);		/* Draw new vertical mark	*/
+   yold_mark = newy;			/* Save for erasing later       */
+   if(temp_mouse)
+      gsx_mon();
+}
+
+
+
+
+rect_intersect(rect,grect)
+int rect[];
+int grect[];
+{
+    int x1,y1,x2,y2;
+    x2 = min(rect[2],grect[2]);
+    y2 = min(rect[3],grect[3]);
+    x1 = max(rect[0],grect[0]);
+    y1 = max(rect[1],grect[1]);
+    return(x2 >= x1 && y2 >= y1);
+}
+
+
+
+
+long first_aregion(reg1,reg2,art)
+long reg1,reg2;
+long art;
+{
+   long rptr;
+   long tmpreg;
+   int dummy;
+   long tmpart;
+   long firstreg;
+   
+   firstreg = 0L;
+   tmpart = curart;
+   curart = art;
+   tmpreg = curregion;
+   rptr = getf_aregion(&dummy,&dummy,&dummy,&dummy,&dummy);
+   while(rptr)
+   {
+	if(rptr == reg1)
+	{
+	   firstreg = reg1;
+	   break;
+	}
+        if(rptr == reg2)
+	{
+	   firstreg = reg2;
+	   break;
+        }
+        rptr = getn_aregion(&dummy,&dummy,&dummy,&dummy,&dummy);
+   }
+   curregion = tmpreg;
+   curart = tmpart;
+   return firstreg;
+}
+
+
+
+
+
+/**************************************************************************/
+/* Function: update_repel()						  */
+/* Description: Repels new region for flowing of text			  */
+/* 	Check each text region to see if it intersects with the affected  */
+/*	graphic region.  If it does, put it's article into the list of    */
+/*	articles that need to be redrawn if...1) a previous region did    */
+/*      not have the same article and 2) that previous region was linked  */
+/*	after the current one.  In other words, make sure all intersecting*/
+/*	regions are redrawn at least once but not more than once	  */
+/**************************************************************************/
+update_repel(check,oldrect)
+int check;
+int oldrect[];
+{
+   int grattr[11];
+   long tmprptr;
+   int rect[4];
+   int gflag;
+   int grect[4];
+   int redraw_rect[4];
+   int dummy;
+   long art;
+   int found;
+   long mouse_ptr;
+   REGION *saveregion;
+   
+   graf_mouse(2,&mouse_ptr);		/* Busy bee */
+   if(gl_grregion_ptr)
+      find_boundary(gl_grregion_ptr,&grect[0],&grect[1],&grect[2],
+        	&grect[3],&dummy,&dummy);
+   if(gl_grregion_ptr && view_size != PADJCNT)
+   {
+      if(oldrect && rect_intersect(oldrect,grect))
+      {
+        redraw_rect[0] = min(grect[0],oldrect[0]);
+ 	redraw_rect[1] = min(grect[1],oldrect[1]);
+        redraw_rect[2] = max(grect[2],oldrect[2]);
+        redraw_rect[3] = max(grect[3],oldrect[3]);
+        redraw_area(gl_grregion_ptr,redraw_rect,1);
+      }
+      else
+      {
+        if(oldrect)
+           redraw_area(gl_grregion_ptr,oldrect,1);
+        redraw_area(gl_grregion_ptr,grect,1);
+      }
+   }
+   else
+      if(gl_grregion_ptr && oldrect && view_size != PADJCNT)
+         redraw_area(gl_grregion_ptr,oldrect,1);
+   if(check)		/* If flow through, don't re H and J */
+   {
+      get_grattr(gl_grregion_ptr,grattr);
+      if(!grattr[4])
+      {
+	 if(view_size == PADJCNT)
+	   force_preview();
+	 graf_mouse(ARROW,&mouse_ptr);			/* Busy bee */
+	 return;
+      }
+   }
+   tmprptr = gl_region_ptr;
+
+   gl_region_ptr = get_fregion(curr_page,&rect[0],&rect[1],&rect[2],
+				&rect[3],&gflag);
+   while(gl_region_ptr)
+   {
+      if(rect[0] >= hpage_size)	/* clip it out! */
+		   goto next;
+
+      art = get_regart(gl_region_ptr);
+      if((!gflag && art && gl_grregion_ptr && rect_intersect(rect,grect)) || 
+	 (!gflag && art && oldrect && rect_intersect(oldrect,rect)))
+      {
+	  saveregion = sfregion;
+	  page_redraw(gl_region_ptr);
+	  sfregion = saveregion;
+      }
+next: gl_region_ptr = get_nregion(&rect[0],&rect[1],&rect[2],&rect[3],&gflag);	
+   }
+   if(view_size == PADJCNT)
+	force_preview();
+   gl_region_ptr = tmprptr;
+   graf_mouse(ARROW,&mouse_ptr);		/* Busy bee */
+}
+
+
+
+
+/**************************************************************************/
+/* Function: snap_to_grid()						  */
+/* Description: snaps vertices to a specific grid			  */
+/**************************************************************************/
+snap_to_grid(sx,sy)
+int *sx;
+int *sy;
+{
+   int hremain;
+   int vremain;
+   int mux,muy;
+
+   if(sx < 0 || sy < 0)
+	return;
+
+   scrntomu(*sx,*sy,&mux,&muy,0);
+   hremain = mux % hgridspace;
+   vremain = muy % vgridspace;     
+   mux /= hgridspace;
+   mux *= hgridspace;
+   muy /= vgridspace;
+   muy *= vgridspace;
+
+   if(hremain >= hgridspace/2)
+	mux += hgridspace;
+   if(vremain >= vgridspace/2)
+	muy += vgridspace;   
+
+   mutoscrn(mux,muy,sx,sy,0);
+}
+
+
+
+
+/**************************************************************************/
+/* Function: snap_mu()							  */
+/* Description: Snaps vertice in mu...		???			  */
+/**************************************************************************/
+snap_mu(mux,muy)
+register int *mux;
+register int *muy;
+{
+   int hremain;
+   int vremain;
+
+   if(*mux < 0 || *muy < 0)
+	return;
+   hremain = *mux % hgridspace;
+   vremain = *muy % vgridspace;     
+   *mux /= hgridspace;
+   *mux *= hgridspace;
+   *muy /= vgridspace;
+   *muy *= vgridspace;
+
+   if(hremain >= hgridspace/2)
+	*mux += hgridspace;
+   if(vremain >= vgridspace/2)
+	*muy += vgridspace;   
+}
+
+
+/**************************************************************************/
+/* Function: do_edit_prim()					 	  */
+/* Description: Select with right button a primitive to edit		  */
+/**************************************************************************/
+do_edit_prim()
+{
+   int opcode;
+   int minx,miny,maxx,maxy;
+   int page;
+   int pcount;
+   int type;
+
+   if(gl_region_ptr  || gl_grregion_ptr)
+   {
+      region_ptr = ((gl_region_ptr)?(gl_region_ptr):(gl_grregion_ptr));
+
+      if(!active_prim)					/* get first prim...*/
+	opcode = get_fprimitive(region_ptr,&pcount,&wmode);
+      else						/* get next prim    */
+        opcode = get_nprimitive(&pcount,&wmode);
+        
+      do_blit();
+      if(opcode != -1)				/* outline primitive */
+      {
+	calc_prim(opcode,&minx,&miny,&maxx,&maxy,pcount);
+	active_prim = TRUE;
+	menu_ienable(ad_menu,ODELPRIM,TRUE);
+	menu_ienable(ad_menu,OPCOORD,TRUE);
+        menu_ienable(ad_menu,OMOVEFNT,TRUE);
+	menu_ienable(ad_menu,OMOVEBAK,TRUE);
+	find_page(region_ptr,&page);
+	region_ptr = get_curreg(&type);
+      }
+      else					/* out of primitives      */
+      {
+	find_boundary(region_ptr,&minx,&miny,
+				 &maxx, &maxy,&dummy,&page);
+	menu_ienable(ad_menu,ODELPRIM,FALSE);
+	menu_ienable(ad_menu,OPCOORD,FALSE);
+        menu_ienable(ad_menu,OMOVEFNT,FALSE);
+        menu_ienable(ad_menu,OMOVEBAK,FALSE);
+        active_prim = FALSE;
+      }
+      outline_primman(minx,miny,maxx,maxy,type,page);
+   }
+   evnt_button(1,1,0,&dummy,&dummy,&dummy,&dummy);
+}
+
+
+
+
+/**************************************************************************/
+/* Function: calc_prim()						  */
+/* Description: Calculate boundary rectangle of the current primitive     */
+/**************************************************************************/
+calc_prim(op,minx,miny,maxx,maxy,count)
+int op;
+int *minx,*miny,*maxx,*maxy;
+register int count;
+{
+     register int i;
+     int tcount;
+
+     tcount = count;
+
+     if(op == 1)			/* ELLIPSE - CIRCLE */
+     {
+	*minx = ptsarray[0] - ptsarray[2];
+        *maxx = ptsarray[0] + ptsarray[2];
+	*miny = ptsarray[1] - ptsarray[3];
+        *maxy = ptsarray[1] + ptsarray[3];
+     }
+     else
+     {					/* poly,lines, and boxes...*/
+        if((op == 0) || (op == 3) || (op == 4))
+        {
+	   i = 0;
+           --count;
+	   *minx = *maxx = ptsarray[i++];
+	   *miny = *maxy = ptsarray[i++];
+           while(count--)
+           {
+	      if(ptsarray[i] > *maxx)
+			*maxx = ptsarray[i];
+              if(ptsarray[i] < *minx)
+			*minx = ptsarray[i];
+	      i++;
+              if(ptsarray[i] > *maxy)
+			*maxy = ptsarray[i];
+	      if(ptsarray[i] < *miny)
+			*miny = ptsarray[i];
+	      i++;
+	   }
+        }
+        else
+        {
+	   if(op == 2)		/* Graphic images	   */
+	   {
+		*minx = ptsarray[0];
+		*miny = ptsarray[1];
+		*maxx = ptsarray[2];
+	        *maxy = ptsarray[3];
+	   }
+        }
+     }
+     count = tcount;
+}
+
+
+
+
+
+/**************************************************************************/
+/* Function: edit_prims()						  */
+/* Description: Move and Size Primitives...				  */
+/**************************************************************************/
+edit_prims(mx,my)
+int mx,my;
+{
+     int nmx,nmy;
+
+     if(check_prim_box(mx,my))
+     {
+	region_ptr = ((gl_region_ptr)?(gl_region_ptr):(gl_grregion_ptr));
+	active_prim = TRUE;
+	return;
+     }
+     scrntomu(mx,my,&nmx,&nmy,0);
+     if(inside_primitive(nmx,nmy))
+     {
+	move_prim_box(mx,my);
+	active_prim = TRUE;
+	return;
+     }
+     menu_ienable(ad_menu,ODELPRIM,FALSE);
+     menu_ienable(ad_menu,OPCOORD,FALSE);
+     menu_ienable(ad_menu,OMOVEFNT,FALSE);
+     menu_ienable(ad_menu,OMOVEBAK,FALSE);
+
+/*     router_selected(); Deleted because this means it was outside the box*/
+/*   hence, no item is now selected					   */
+
+     active_prim = FALSE;        
+     check_only_blit();		  /* clears menu items and blits to screen */
+}
+
+
+
+
+
+/**************************************************************************/
+/* Function: check_prim_box()						  */
+/* Description: Size a primitve						  */
+/**************************************************************************/
+check_prim_box(mx,my)
+int mx,my;
+{
+      int dflag;
+      register int pos;
+      int tpxy[4];
+      int mbutton;
+      int temp;
+      int opcode;
+      int page;
+      int old_width,old_height;
+      int new_width,new_height;
+      int odeltax,odeltay;
+      int ndeltax,ndeltay;
+      int old_murect[4];
+      int new_murect[4];
+      register int i;
+      int topcode;
+      int pcount;
+      int minx,miny,maxx,maxy;
+
+      dflag = FALSE;
+
+      topcode = opcode = get_cur_prim(&pcount,&wmode,&prim_ptr);
+      calc_prim(opcode,&minx,&miny,&maxx,&maxy,pcount);
+
+      if(alt_offset)
+      {
+	minx += hpage_size;
+	maxx += hpage_size;
+      }
+
+      mutoscrn(minx,miny,&pxy[0],&pxy[1],0);
+      mutoscrn(maxx,maxy,&pxy[2],&pxy[3],0);
+
+      tpxy[0] = pxy[0];		/* where the hell do these #s come from?*/
+      tpxy[1] = pxy[1];		/* from outline_primman();		*/
+      tpxy[2] = pxy[2];		/* aka do_edit_prims();			*/
+      tpxy[3] = pxy[3];
+
+      for(pos=0;pos<8;pos++)
+      {
+	if( (mx >= mboxx1[pos]) &&	/* setup by outline_primman()	*/
+	    (mx <= mboxx2[pos]) &&
+	    (my >= mboxy1[pos]) &&
+	    (my <= mboxy2[pos])
+          )
+        {
+	    graf_mouse(3,&dummy);
+	    dflag = TRUE;
+	    break;
+	}
+      }
+
+      if(dflag)
+      {
+	oldx = mx;
+	oldy = my;
+	
+        gsx_moff();
+        do_outline(xor_handle,pxy);
+        (*adj_mouse[pos])();		/* shift mouse */
+	Supexec(KICKAES);
+	do_box(xor_handle,pxy[0],pxy[1],pxy[2],pxy[3]);
+	gsx_mon();
+ 
+        mbutton = TRUE;
+	while(mbutton)
+        {
+	   graf_mkstate(&newx,&newy,&mbutton,&dummy);
+           if((oldx != newx) || (oldy != newy))
+           {
+		gsx_moff();
+		do_rule_mark();
+ 		do_box(xor_handle,pxy[0],pxy[1],pxy[2],pxy[3]);
+		(*da_box[pos])();
+ 		do_box(xor_handle,pxy[0],pxy[1],pxy[2],pxy[3]);
+		gsx_mon();
+	   }
+	   oldx = newx;
+	   oldy = newy;
+        }
+
+	graf_mouse(2,&dummy);
+	if(pxy[2] < pxy[0])   	/* if x2 < x1 then swap */
+	{
+	   temp = pxy[0];
+	   pxy[0] = pxy[2];
+	   pxy[2] = temp;
+	}
+        if(pxy[3] < pxy[1])
+	{
+	   temp = pxy[1];
+	   pxy[1] = pxy[3];
+	   pxy[3] = temp;
+	}
+	
+ 	if(snap_to_grids)
+	{
+	    snap_to_grid(&pxy[0],&pxy[1]);
+	    snap_to_grid(&pxy[2],&pxy[3]);
+	}
+
+        gsx_moff();
+        (*bdj_mouse[pos])();		/* shift mouse */
+    	if(*gcurx < 0) *gcurx = 0;
+ 	if(*gcurx >= sxres) *gcurx = sxres - 1;
+        if(*gcury < 0) *gcury = 0;
+      	if(*gcury >= syres) *gcury = syres - 1;
+        Supexec(KICKAES);
+	gsx_mon();
+
+	region_ptr = ((gl_region_ptr) ? (gl_region_ptr):(gl_grregion_ptr));
+	find_page(region_ptr,&page);
+	alt_offset = (((page % 2) && (view_size == PADJCNT))?(TRUE):(FALSE));
+	
+	scrn2mu(tpxy[0],tpxy[1],&old_murect[0],&old_murect[1],0,alt_offset);
+	scrn2mu(tpxy[2],tpxy[3],&old_murect[2],&old_murect[3],0,alt_offset);
+	scrn2mu(pxy[0],pxy[1],&new_murect[0],&new_murect[1],0,alt_offset);
+	scrn2mu(pxy[2],pxy[3],&new_murect[2],&new_murect[3],0,alt_offset);
+
+	if((voldx != newx) || (voldy != newy))
+	{
+	 /* modify primitive to new data coordinates */	   
+	 old_width  = old_murect[2] - old_murect[0] + 1;
+	 old_height = old_murect[3] - old_murect[1] + 1;
+
+	 new_width  = new_murect[2] - new_murect[0];
+	 new_height = new_murect[3] - new_murect[1];
+
+	 topcode = opcode = get_cur_prim(&pcount,&wmode,&prim_ptr);
+	 if(opcode != -1)
+	 {
+	       switch(opcode)
+	       {
+		 case 0: 
+		 case 3:
+		 case 4:
+			i=0;
+			while(i<pcount*2)
+			{
+			   odeltax = ptsarray[i] - old_murect[0];
+			   ndeltax = scale_iv(odeltax,new_width,
+				old_width); 
+			   ptsarray[i++] = new_murect[0] + ndeltax;
+				   odeltay = ptsarray[i] - old_murect[1];
+			   ndeltay = scale_iv(odeltay,new_height,
+				old_height);
+			   ptsarray[i++] = new_murect[1] + ndeltay;
+			}
+			break;
+
+		case 1: case12_scale(old_murect[0],
+				     old_murect[1],
+				     old_width,old_height,
+				     new_murect[0],
+				     new_murect[1],
+				     new_width,
+				     new_height,1);
+			break;
+
+		case 2: case12_scale(old_murect[0],
+				     old_murect[1],
+				     old_width,old_height,
+				     new_murect[0],
+				     new_murect[1],
+				     new_width,
+				     new_height,2);
+			break;
+	       }
+	       post_edit_prim(opcode,pcount,wmode,prim_ptr);
+	 }
+	}
+      }
+   graf_mouse(0,&dummy);	
+   return(dflag);
+}
+
+
+
+
+
+/**************************************************************************/
+/* Function: recalc_region()						  */
+/* Description: Calculate region boundary after editing primitive	  */
+/**************************************************************************/
+recalc_region()
+{
+   register int opcode;
+   int fflag;
+   int pcount;
+
+   opcode = get_fprimitive(region_ptr,&pcount,&wmode);
+   fflag = TRUE;
+   while(opcode != -1)
+   {
+      calc_newbounds(fflag,opcode,pcount);
+      opcode = get_nprimitive(&pcount,&wmode);
+      fflag = FALSE;
+   }	
+}
+
+
+
+
+
+/**************************************************************************/
+/* Function: move_prim_box()						  */
+/* Description: move a primitive within a region			  */
+/**************************************************************************/
+move_prim_box(mx,my)
+int mx,my;
+{
+    int opcode;
+    int mbutton;
+    int fx,fy;
+    register int i;
+    int tempx,tempy;
+    int toggle;
+    int minx,miny,maxx,maxy;
+    int topcode;
+    int pcount;
+    int line_flag;
+
+    topcode = opcode = get_cur_prim(&pcount,&wmode,&prim_ptr);
+    calc_prim(opcode,&minx,&miny,&maxx,&maxy,pcount);
+
+    if(alt_offset)
+    {
+	minx += hpage_size;
+	maxx += hpage_size;
+    }
+    mutoscrn(minx,miny,&pxy[0],&pxy[1],0);
+    mutoscrn(maxx,maxy,&pxy[2],&pxy[3],0);
+
+    voldx = oldx = mx;
+    voldy = oldy = my;
+
+    line_flag=(((pxy[0]==pxy[2])||(pxy[1]==pxy[3]))?(TRUE):(FALSE));
+
+    graf_mouse(4,&dummy);
+    gsx_moff();
+    do_outline(xor_handle,pxy);
+    if(line_flag)
+	do_outer(xor_handle,pxy);
+    else
+	do_box(xor_handle,pxy[0],pxy[1],pxy[2],pxy[3]);
+    gsx_mon();
+
+    mbutton = TRUE;
+    while(mbutton)
+    {
+      graf_mkstate(&newx,&newy,&mbutton,&dummy);
+      if((oldx != newx) || (oldy != newy))
+      {
+	 gsx_moff();
+         do_rule_mark();
+    	 if(line_flag)
+		do_outer(xor_handle,pxy);
+    	 else
+		do_box(xor_handle,pxy[0],pxy[1],pxy[2],pxy[3]);
+
+	 pxy[0] += newx - oldx;
+         pxy[1] += newy - oldy;
+         pxy[2] += newx - oldx;
+         pxy[3] += newy - oldy;
+         if(line_flag)
+	   	do_outer(xor_handle,pxy);
+    	 else
+		do_box(xor_handle,pxy[0],pxy[1],pxy[2],pxy[3]);
+
+	 gsx_mon();
+      }
+      oldx = newx;
+      oldy = newy;
+    }
+
+
+  if(check_dpwork_box(newx,newy))
+  {
+     if((voldx != newx) || (voldy != newy))
+     {
+       deltax = newx - voldx;
+       deltay = newy - voldy;
+
+       fx = ((deltax < 0) ? (-1) : (1));
+       fy = ((deltay < 0) ? (-1) : (1));
+
+       scrntomu(abs(newx - voldx),abs(newy - voldy),&deltax,&deltay,1);
+
+       deltax *= fx;
+       deltay *= fy;
+
+       if(snap_to_grids)
+       {
+	  tempx = deltax + minx;
+	  tempy = deltay + miny;
+	  snap_mu(&tempx,&tempy);
+	  deltax = tempx - minx;
+	  deltay = tempy - miny;
+       }
+
+       
+	switch(opcode)
+	{
+	    case 3:
+	    case 4:
+	    case 0: toggle = TRUE;
+	            for(i=0;i<(pcount*2);i++)
+		    {
+		       ptsarray[i] += ((toggle) ? (deltax):(deltay));
+		       toggle ^= TRUE;
+		    }
+		    break;
+
+	    case 1: ptsarray[0] += deltax;
+		    ptsarray[1] += deltay;
+		    break;
+
+	    case 2: ptsarray[0] += deltax;
+		    ptsarray[2] += deltax;
+		    ptsarray[1] += deltay;
+		    ptsarray[3] += deltay;
+		    break;
+	   
+	}	/* end of switch(opcode) */
+
+        if(kstat & 0x0004)
+	{
+           copy_prim(opcode,pcount,wmode);
+           return;
+        }
+
+        post_edit_prim(opcode,pcount,wmode,prim_ptr);
+    }
+    else
+    {
+	   gsx_moff();
+	   do_outline(xor_handle,pxy);
+	   do_box(xor_handle,pxy[0],pxy[1],pxy[2],pxy[3]);
+	   gsx_mon();
+
+    }
+ }
+ else
+ {
+   gsx_moff();
+   do_blit();
+   mutoscrn(minx,miny,&pxy[0],&pxy[1],0);
+   mutoscrn(maxx,maxy,&pxy[2],&pxy[3],0);
+   do_outline(xor_handle,pxy);
+   gsx_mon();
+ }
+    graf_mouse(0,&dummy);
+}
+
+
+
+/**************************************************************************/
+/* Function: inside_primitive()					  	  */
+/* Description: Check if clicked within a primitive			  */
+/**************************************************************************/
+inside_primitive(x,y)
+int x,y;
+{
+   int opcode;
+   int minx,miny,maxx,maxy;
+   int pcount;
+   int xoffset,yoffset;			/* Offset for 1 pixel of mu's */
+   int temp;
+
+   temp = alt_offset;
+   scrntomu(2,2,&xoffset,&yoffset,1);
+   alt_offset = temp;
+
+   opcode = get_cur_prim(&pcount,&wmode,&prim_ptr);    
+   calc_prim(opcode,&minx,&miny,&maxx,&maxy,pcount);
+   if(minx == maxx || miny == maxy)
+   {
+		xoffset *= 3;
+		yoffset *= 3;
+   }
+   if(x >= minx-xoffset && x <= maxx+xoffset &&
+      y >= miny-yoffset && y <= maxy+yoffset)
+	return 1;
+   else
+	return 0;
+}
+
+
+
+/**************************************************************************/
+/*		Handle left icon panel selections			  */
+/**************************************************************************/
+hndl_icons(obj)
+int obj;
+{
+   int item;
+   int title;
+
+   if(ad_bkgrnd[obj].ob_state == DISABLED)
+	return;
+   if(bgicptr->bi_pdata == primicons)
+   {
+      switch(obj)
+      {
+	case ICBOX1:
+		item = RCLOSE;
+		title = TREGION;
+		break;
+
+	case ICBOX2:
+	   	item = OPOLYGON;
+		title = TOBJECTS;
+		break;
+
+	case ICBOX3:
+      		item = OCIRCLE;
+		title = TOBJECTS;
+		break;
+
+	case ICBOX4:
+		item = OELLIPSE;
+		title = TOBJECTS;
+		break;
+
+	case ICBOX5:
+		item = OBOX;
+		title = TOBJECTS;
+		break;
+
+	case ICBOX6:
+		item = OLINE;
+		title = TOBJECTS;
+		break;
+
+	case ICBOX7:
+		item = ORBOX;
+		title = TOBJECTS;
+		break;
+
+	case ICBOX8:
+		item = OIMAGE;
+		title = TOBJECTS;
+		break;
+
+	default:
+		item = 0;
+		title = 0;
+		break;
+	}
+   }
+   else
+   {
+      switch(obj)
+      {
+	case ICBOX1:
+	   	item = RCREATE;
+		title = TREGION;
+		break;
+
+	case ICBOX2:
+      		item = ROPENGR;
+		title = TREGION;
+		break;
+
+	case ICBOX3:
+		item = RTOGGLE;
+		title = TREGION;
+		break;
+
+	case ICBOX4:
+		item = RDIMAGES;
+		title = TREGION;
+		break;
+
+	case ICBOX5:
+		item = FNEW;
+		title = TFILE;
+		break;
+
+	case ICBOX6:
+		item = FPRINT;
+		title = TFILE;
+		break;
+
+	case ICBOX7:
+		item = OSHOWGR;
+		title = TOPTIONS;
+		break;
+
+	case ICBOX8:
+		item = OSNAP;
+		title = TOPTIONS;
+		break;
+
+	default:
+		item = 0;
+		title = 0;
+		break;
+	}
+   }
+
+   if(item && !(ad_menu[item].ob_state & DISABLED)
+	   && !(ad_menu[title].ob_state & DISABLED))
+   {
+	menu_handler(1,item);
+   }
+}
+	
+change_icstate(state,obj,redraw_flag)
+int state;
+int obj;
+int redraw_flag;
+{
+   int x,y;
+   ad_bkgrnd[obj].ob_state = state;
+   if(redraw_flag)
+   {
+      objc_offset(ad_bkgrnd,obj,&x,&y);
+      form_dial(3,0,0,0,0,x,y,
+	  ad_bkgrnd[obj].ob_width,
+	  ad_bkgrnd[obj].ob_height); 
+   }
+}
+
+clr_bgicons(redraw_flag)
+int redraw_flag;
+{
+   register int i;
+
+   for(i = ICBOX1;i <= ICBOX8;i++)
+      if(ad_bkgrnd[i].ob_state == SELECTED)
+	  change_icstate(NORMAL,i,redraw_flag);
+}      
+
+
+
+
+
+do_template_edit()
+{
+   int titem;
+
+   tmplate_flag ^= TRUE;
+
+   menu_text(ad_menu,OEDITTMP,template_mode[tmplate_flag]);
+   if(tmplate_flag)			/* now editing templates 	*/
+   {
+/*     wind_set(prev_handle,WF_NAME," Base Page Window ",0,0);*/
+     wind_set(prev_handle,WF_NAME,basefname,0,0);
+      menu_ienable(ad_menu,OERASETP,TRUE);
+     menu_ienable(ad_menu,PGOTO,FALSE);
+     menu_ienable(ad_menu,PDELETE,FALSE);
+     menu_ienable(ad_menu,PINSERT,FALSE);
+     tpagehd = pagehd;
+     tcurpage = curpage;
+     temp_page = curr_page;
+     tarthd = arthd;
+     tcurart = curart;     
+
+     curr_page = right_tmplate->pagenum;
+     pagehd = curpage = right_tmplate;
+     do_pagenum(curr_page,(curr_page%2)?1:0);
+     curart = arthd = ((curr_page % 2)?(rtarthd):(ltarthd));
+
+     if(view_size == PADJCNT)
+     {
+       titem = ((curr_page % 2) ? (PADJCNT + 1) : (PADJCNT));
+       wind_set(prev_handle,WF_INFO,winfo[titem - PSIZE][unit_type]);       
+     }
+
+   }
+   else					/* Now editing preview buffers  */
+   {
+     wind_set(prev_handle,WF_NAME,pfname,0,0);
+     menu_ienable(ad_menu,OERASETP,FALSE);
+     menu_ienable(ad_menu,PGOTO,TRUE);
+     menu_ienable(ad_menu,PDELETE,TRUE);
+     menu_ienable(ad_menu,PINSERT,TRUE);
+
+     if(curr_page == -2)
+		ltarthd = arthd;
+     else
+		rtarthd = arthd;
+	
+     curart = tcurart;
+     arthd  = tarthd;
+     pagehd = tpagehd;
+     curpage = tcurpage;
+     curr_page = temp_page;
+     do_pagenum(curr_page,(curr_page%2)?1:0);
+     if(view_size == PADJCNT)
+     {
+       titem = ((curr_page % 2) ? (PADJCNT + 1) : (PADJCNT));
+       wind_set(prev_handle,WF_INFO,winfo[titem - PSIZE][unit_type]);       
+     }
+   }
+   force_preview();
+}
+
+
+/* clears only one template */
+erase_template()
+{
+   if(alert_cntre(ALERT27) == 1)
+   {
+     if(pagehd  == right_tmplate)
+          free_right_tmplate();
+     else
+          free_left_tmplate();
+     strcpy(basefname," Base Page Window ");
+     wind_set(prev_handle,WF_NAME,basefname,0,0);
+     force_preview();
+   }
+}
+
+
+
+/* clears both templates*/
+delete_tmplates()
+{
+   strcpy(basefname," Base Page Window ");
+   free_templates();
+   init_templates();
+}
+
+
+
+init_templates()
+{
+/*   tmplate_flag = FALSE;		* Set to Edit Preview       */
+
+   left_tmplate  = (PAGE *)get_lcmem((long)sizeof(PAGE));
+   right_tmplate = (PAGE *)get_lcmem((long)sizeof(PAGE));
+
+   left_tmplate->pagenum = -2;		/* left page */
+   right_tmplate->pagenum = -1;		/* right page */
+   
+   left_tmplate->nextpage = NULLPTR;
+   right_tmplate->nextpage = NULLPTR;
+   
+   ltarthd = 0L;
+   rtarthd = 0L;
+}
+
+
+
+free_templates()
+{
+   PAGE *rpagehd;
+   PAGE *rcurpage;
+   int  dummy;
+   ARTICLE *art;
+   ARTICLE *rarthd;
+   ARTICLE *rcurart;
+   int rcurr_page;
+
+   rpagehd = pagehd;
+   rcurpage = curpage;
+   rcurr_page = curr_page;
+   rarthd = arthd;
+   rcurart = curart;
+
+   pagehd = curpage = left_tmplate;
+   get_fpage(&dummy);
+   while(delete_page());
+
+   pagehd = curpage = right_tmplate;
+   get_fpage(&dummy);
+   while(delete_page());
+   arthd = ltarthd;
+   art = getf_article();
+   while(delete_article());
+   
+   arthd = rtarthd;
+   art = getf_article();
+   while(delete_article());
+
+   
+   ltarthd = rtarthd = 0L;	/* CJG */
+
+   pagehd = rpagehd;
+   curpage = rcurpage;
+   arthd = rarthd;
+   curart = rcurart;
+   curr_page = rcurr_page;
+
+}
+
+
+free_right_tmplate()
+{
+    ARTICLE *art;
+    int dummy;
+
+    get_fpage(&dummy);
+    while(delete_page());
+
+    right_tmplate  = (PAGE *)get_lcmem((long)sizeof(PAGE));    
+    right_tmplate->pagenum = -1;		/* right page */
+    right_tmplate->nextpage = NULLPTR;
+
+    art = getf_article();
+    while(delete_article());
+    rtarthd = 0L;
+
+    pagehd = curpage = right_tmplate;
+    curr_page = -1;
+}
+
+
+
+
+free_left_tmplate()
+{
+    ARTICLE *art;
+    int dummy;
+
+    get_fpage(&dummy);
+    while(delete_page());
+
+    left_tmplate  = (PAGE *)get_lcmem((long)sizeof(PAGE));    
+    left_tmplate->pagenum = -2;		/* left page */
+    left_tmplate->nextpage = NULLPTR;
+
+    art = getf_article();
+    while(delete_article());
+    ltarthd = 0L;
+    pagehd = curpage = left_tmplate;
+    curr_page = -2;
+}
+
+
+
+
+copy_region()
+{
+   int opcode;
+   REGION *new_region;
+   REGION *old_region;
+   int type;
+   PRIMITIVE *tprim;
+   int toggle;
+   register int i;
+   int page;
+   int rectmu[4];
+   int tmulti;
+
+   rcopy_flag = FALSE;
+
+   old_region = get_curreg(&type);
+
+   if(!type)
+   	get_txtattr(old_region,&gltxtattr);
+   else
+        get_grattr(old_region,glgrattr);
+   
+
+   curregion = new_region = create_region(curr_page,type);
+   if(!type)
+	put_txtattr(curregion,&gltxtattr);
+   else
+        put_grattr(curregion,glgrattr);
+
+   
+   opcode = get_fprimitive(old_region,&count,&wmode);
+   
+   while(opcode != -1)
+   {
+       switch(opcode)
+       {
+         case 3:
+         case 4:
+         case 0: toggle = TRUE;
+		 for(i=0;i<(count*2);i++)
+		 {
+		   ptsarray[i] += ((toggle) ?(deltax):(deltay));
+		   toggle ^= TRUE;
+                 }
+     	 	 break;
+
+         case 1: ptsarray[0] += deltax;
+                 ptsarray[1] += deltay;
+		 break;
+
+         case 2: ptsarray[0] += deltax;
+                 ptsarray[2] += deltax;
+                 ptsarray[1] += deltay;
+		 ptsarray[3] += deltay;
+		 break;
+       }
+
+       tprim = curprim;
+       switch(opcode)
+       {
+	  case 3:
+	  case 4:
+	  case 0: 
+	  case 2: put_poly(opcode,count,wmode,type);
+		  break;
+
+          case 1: put_ellipse(wmode,type);
+		  break;
+       }
+       
+       curprim = tprim;
+       opcode = get_nprimitive(&count,&wmode);
+   }
+   graf_mouse(ARROW,&dummy);
+
+
+   curregion = region_ptr = new_region;
+
+   if(type)
+       gl_grregion_ptr = new_region;
+   else
+       gl_region_ptr = new_region;
+
+
+   find_boundary(region_ptr,
+                 &rect_in_mu[0],&rect_in_mu[1],
+                 &rect_in_mu[2],&rect_in_mu[3],&dummy,&page);
+
+   rectmu[0] = rect_in_mu[0];
+   rectmu[1] = rect_in_mu[1];
+   rectmu[2] = rect_in_mu[2];
+   rectmu[3] = rect_in_mu[3];
+
+
+   tmulti = multi_mode;
+   if(!type)
+	page_redraw(region_ptr);
+   else
+	update_repel(1,rect_in_mu);
+
+   if(view_size != PADJCNT && !deferhj && gl_region_ptr)
+        redraw_area(region_ptr,rect_in_mu,1);/* Cleanup old area */
+
+   multi_mode = tmulti;
+   rect_in_mu[0] = rectmu[0];
+   rect_in_mu[1] = rectmu[1];
+   rect_in_mu[2] = rectmu[2];
+   rect_in_mu[3] = rectmu[3];
+
+   curregion = region_ptr = new_region;
+   if(!type)					/* cjg 01/31/89 */
+         gl_region_ptr = region_ptr;
+   else
+	 gl_grregion_ptr = region_ptr;
+
+   if((page % 2) && (view_size == PADJCNT))
+   {
+      alt_offset = TRUE;
+      rect_in_mu[0] += hpage_size;
+      rect_in_mu[2] += hpage_size;
+   }
+   mutoscrn(rect_in_mu[0],rect_in_mu[1],&pxy[0],&pxy[1],0);
+   mutoscrn(rect_in_mu[2],rect_in_mu[3],&pxy[2],&pxy[3],0);
+   if(!multi_mode)
+   {
+      gsx_moff();
+      do_outline(xor_handle,pxy);
+      gsx_mon();
+   }
+}
+
+
+
+
+copy_prim(opcode,count,wmode)
+int opcode;
+int count;
+int wmode;
+{
+   int type;
+   REGION *tregion;
+   int oldrect[4];
+   int dummy;
+   long prim_ptr;
+   int minx,miny,maxx,maxy;
+
+   tregion = get_curreg(&type);
+
+   switch(opcode)
+   {
+      case 3:
+      case 4:
+      case 0: 
+      case 2: put_poly(opcode,count,wmode,type);
+     	      break;
+
+      case 1: put_ellipse(wmode,type);
+	      break;
+   }
+   get_cur_prim(&count,&wmode,&prim_ptr);
+
+   region_ptr = tregion;
+
+   find_boundary(tregion,&oldrect[0],&oldrect[1],&oldrect[2],
+			 &oldrect[3],&dummy,&dummy);
+
+   if(!type)
+   {
+      page_redraw(region_ptr);
+      gl_region_ptr = tregion;
+   }
+   else
+   {
+      update_repel(1,oldrect);
+      gl_grregion_ptr = tregion;
+   }
+   region_ptr = tregion;
+   active_prim = TRUE;
+   open_region(region_ptr);
+   recalc_region();
+   set_cur_prim(prim_ptr);
+   calc_prim(opcode,&minx,&miny,&maxx,&maxy,count);   
+   outline_primman(minx,miny,maxx,maxy,type,curr_page);
+   graf_mouse(ARROW,&dummy);
+}
+
+
+
+check_dpwork_box(mx,my)
+int mx,my;
+{
+    int x1,y1,x2,y2;
+
+    y1 = dpwork.g_y;
+    y2 = dpwork.g_y + dpwork.g_h - 1;
+
+    if(view_size == PADJCNT)
+    {
+      if(curr_page % 2)
+      {				/* right side of alternate pages */
+         x1 = dpwork.g_x + (dpwork.g_w/2);
+         x2 = dpwork.g_x + dpwork.g_w - 1;
+      }
+      else
+      {				/* left side of alternate pages  */
+         x1 = dpwork.g_x;
+         x2 = dpwork.g_x + (dpwork.g_w/2) - 1;
+      }
+    }
+    else
+    {
+      x1 = dpwork.g_x;
+      x2 = dpwork.g_x + dpwork.g_w - 1;
+    }
+
+    if(((mx > x1) && (mx < x2)) &&
+      ((my > y1) && (my < y2)))
+			return(1);
+    else
+       return(0);
+}

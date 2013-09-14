@@ -1,0 +1,1041 @@
+/*	DESKDIR.C		7/31/89			Jian Ye		*/
+/*	Fix the count operation	8/1/89			D.Mui		*/
+/* 	Change and fix another bug in the count()	8/2/89	J.Ye	*/
+/* 	8/7/89							J.Ye	*/
+/* 	Add the check point in the countrec(). When the Depth of path	*/
+/* 	reach the 9 level, the system stack will over flow 		*/
+/*	Fix at rmfile	8/8/89			D.Mui			*/
+/*	Fix count 	8/8/89						*/
+/*	Fix the delete() for root dir		8/9/89			*/
+/*	Fix at chkfile, close file after opening it	8/15/89	D.Mui	*/
+/* 	Fix tow bugs in the chkfile() and chkdir() so that they check	*/
+/*		the second name conflict.		8/17/89	J.Ye	*/
+/* 	Optimize, simplify, compact this function.	8/27/89 J.Ye	*/
+/*	Modify edname					9/6/89	D.Mui	*/
+/*	Take out wdesk,hdesk	9/7/89			D.Mui		*/
+/* 	simplify the single flopy disk copy		9/11/89	J.Ye	*/
+
+#include <portab.h>	
+#include <osbind.h>
+#include <mobdefs.h>
+#include <gemdefs.h>
+#include <window.h>
+#include <defines.h>
+#include <deskusa.h>
+#include <error.h>
+#include <extern.h>
+
+EXTERN	char 	*strcat();
+EXTERN	char 	*strcpy();
+EXTERN 	int 	d_next();
+EXTERN	OBJECT	*get_tree();
+
+/* "DMA" buffer structure for Fsfirst() and Fsnext().	*/
+
+typedef struct {
+	char	d_glob[12];	/* GEMDOS wildcard string from Fsfirst */
+	char	d_mask;		/* Attribute mask from Fsfirst */
+	char	d_dirent[4];	/* Offset into directory, MSB first */
+	char	d_dirid[4];	/* Pointer to directory structure in GEM mem */
+	char	d_fattr;	/* File attributes */
+	long	d_tandd;	/* Time and date words */
+	long	d_fsize;	/* File size */
+	char 	d_fname[14];	/* File name */
+} DMABUFFER;
+
+#define OK	1
+#define CHECK	-9
+#define DTOD	3
+#define FILE_LEN 12
+#define HOME	'.'
+#define MAXDEPTH 8
+
+OBJECT 	*cpbox;			/* cp or rm or mv dialog box */
+
+int	srclen, dstlen;		/* the size of source and target buffer */
+long	numfiles,numdirs;	/* the number of files and dirs show in the dialog box*/
+long	tolsize;		/* the total size of all files in the path */
+int	srcbuf, dstbuf;	/* the size of source and target buffer be define */
+int	f_level;	/* the current depth of the directory path */
+int	f_abort;	/* the flag for the abort button selected */
+int	opcode;		/* the operation codes for cp, mv and rm */
+int	d_display;	/* display copy box or not		*/
+int	back_update;	/* update background	*/
+int	namecon, rename;
+
+			/* the source and target string pointer */	
+char 	*fixsrc, *fixdst;	
+
+char *getall = "*.*";
+char *bckslsh = "\\";
+char *curall = ".\\*.*";
+char *baklvl = ".\\..";
+
+
+char *filestr = "abcdefgh.abcd";	/* the buffer for the file */
+
+
+/*	Main entrance of the file operation function	*/
+
+dofiles(s, d, code, ndirs, nfiles, tsize)
+	char *s, *d;
+	int code;
+	long *ndirs, *nfiles, *tsize;
+{
+	int ret,trash;
+
+	desk_wait( TRUE );
+				/* get the dialog box string */
+	cpbox = get_tree( CPBOX );
+
+	f_level = 1;		/* the current depth of the directory path */
+	f_abort = 0;
+	rename	= 0;
+
+	back_update = FALSE;
+
+	if ( (opcode = code) == OP_COUNT )
+	{
+	  numfiles = 0x0L;	/* the number of files show in the dialog box */
+	  numdirs = 0x0L;	/* the number of directories */
+	  tolsize = 0x0L;	/* the total size of all files in the path */
+	}
+	else
+	{
+	  numdirs = *ndirs;
+	  numfiles = *nfiles;
+	  tolsize = *tsize;
+	}
+
+	do
+	{
+   	  if (code == OP_COUNT)
+	  {
+	    if ( !(ret = count( s ) ) )
+	      goto clnup;		/* error	*/
+	  }
+	  else
+	  {	
+	    if (!(ret = getinfo(s, d)))
+	      goto clnup;
+		else if (ret == SKIP)
+		  continue;
+
+	    if (!(ret = doright(ret)))
+	      goto clnup;
+	  }
+
+	}while ( d_next( &s, &trash ) );
+	
+	*ndirs = numdirs;
+	*nfiles = numfiles;
+	*tsize = tolsize;
+
+clnup:
+	desk_wait( FALSE );
+
+	if ( f_abort )
+	  return( TRUE );
+
+	return( ret );
+}
+
+/* do the rm, cp and mv file job */
+
+doright(flag)
+int flag;
+{
+	int 	ret,retmsg=TRUE;
+	char	*temp, buf[14];
+
+	if (opcode == OP_DELETE)
+	{
+		temp = fixdst;
+		fixdst = fixsrc;
+	}
+	if (flag == DTOD)
+	{
+		if (!(retmsg=doact()))
+			goto endright;
+		if (opcode != OP_COPY)
+			retmsg = deleted();	/* rm the first folder */
+	}
+	else					/* file to file */
+	{
+		getlastpath(filestr, fixdst);
+		backdir(fixdst);
+		getlastpath(buf, fixdst);
+		strcat(filestr, fixdst);
+		updatname(CPFILE, filestr);
+		updatname(CPDIR, buf);
+		if (opcode != OP_DELETE)
+			if ((!(retmsg = wrfile(filestr)))||(rename)||(retmsg == SKIP))
+				goto endright;
+		if (opcode != OP_COPY)
+		{
+redel:
+	   		if ( (ret = Fdelete(fixsrc)) )	
+	   		{
+				if ( (ret == 0xFFFA) || (ret == 0xFFFE) )	/* seek error or */
+	      		{
+					retmsg = FALSE;	  		/* drive not ready */
+					goto endright;
+	      		}
+
+	      		if ( do_alert( 1, CNTDELF ) == 2 )/* retry */	
+					goto redel;
+				else
+				{
+					f_abort = 1;
+					retmsg = FALSE;
+					goto endright;
+				}
+	    	}
+	    	else
+	    	{		
+				if (opcode == OP_DELETE)
+	      			updatnum(NUMFILE, --numfiles);	
+	      		updesk( fixsrc );
+	    	}
+		} 
+	}
+
+endright:
+	Mfree(fixsrc);
+	if (opcode == OP_DELETE)
+		Mfree(temp);
+	else
+		Mfree(fixdst);
+	return(retmsg);
+}
+
+
+/* recursively cp or mv or rm files or directoies from a given path */
+
+doact()
+{
+	char *saved;
+	DMABUFFER dumb;
+	int ret, retmsg;
+
+	retmsg = TRUE;
+	saved = (DMABUFFER *)Fgetdta();
+	Fsetdta(&dumb);
+	strcat(getall, fixsrc);
+
+	if (!Fsfirst(fixsrc, 0xFF))	
+	{
+	  do
+	  {
+	    if (dumb.d_fname[0] != HOME)	
+	    {
+	      if (SUBDIR & dumb.d_fattr)	
+	      {
+		chkbuf(srclen, srcbuf, &fixsrc);		/* check buf size */
+		addfile(fixsrc, dumb.d_fname); /* add a dir into the path */
+		strcat(bckslsh, fixsrc);
+		if (opcode != OP_DELETE)
+		{
+			chkbuf(dstlen, dstbuf, &fixdst);		/* check buf size */
+			strcat(dumb.d_fname, fixdst);
+		}
+		else
+			goto dorec;
+
+		updatbox(dumb.d_fname);
+	rechkd1: 						/* update check the dir existing or not */
+		switch( chkdf( dumb.d_fname, CPDIR ) ) 
+		{
+		  case	QUIT:
+		  	f_abort = 1;
+		  	retmsg = FALSE;
+		  	goto mvend;
+		  case	SKIP:
+		  	backdir(fixsrc);
+		  	backdir(fixdst);
+		  	updatnum(NUMDIR, --numdirs);
+		  	srclen -= FILE_LEN;		/* subtract the add lenth */
+		  	dstlen -= FILE_LEN;		/* subtract the add lenth */
+		  	retmsg = TRUE;
+		  	continue;
+		  case 	FALSE:
+		  	goto 	mvend;
+		  case 	CHECK:
+		 	goto 	rechkd1;
+		  case 	OK:
+recrtd:
+		  	if (Dcreate(fixdst))	
+		  	{
+		  	  if ( write_save )
+	      	         goto kk_1;
+
+			  switch( do_alert(1,CNTCRTDR))
+		  	  {	
+			  	case 1:					/* skip */
+		  	      backdir(fixsrc);
+		  	      backdir(fixdst);
+		  	      updatnum(NUMDIR, --numdirs);
+		  	      srclen -= FILE_LEN;	/* subtract the add lenth */
+		  	      dstlen -= FILE_LEN;	/* subtract the add lenth */
+		  	      continue;
+				case 2:					/* retry */
+		  	      goto recrtd;
+			  	default: 				/* quit */
+		  	     f_abort = 1;
+		  	     retmsg = FALSE;
+		  	     goto mvend;
+		  	  }
+		  	}/* if recrtd */
+			break;
+		}
+kk_1:
+		updatnum(NUMDIR, --numdirs);
+		strcat(bckslsh, fixdst);
+dorec:
+		if (!doact())	 /* do the recursion */
+		{
+		  retmsg = FALSE;
+		  goto mvend;
+		}
+		if (opcode == OP_COPY)
+			goto clndir;
+		rmstarb(fixsrc);		/* after call, -> c:\d1\ */
+		if (opcode == OP_DELETE)
+		{
+			getlastpath(filestr, fixsrc);
+			updatbox(filestr);
+		}
+remvd:
+		if (Ddelete(fixsrc))	
+		{ 				/* delete a dir */
+		  if ((ret = do_alert(1,CNTDELD)) == 2)	
+		    goto remvd; /* retry */
+		  else if (ret == 3)
+		  { 				/* abort */
+		    f_abort = 1;
+		    retmsg = FALSE;
+		    goto mvend;
+		  }
+	 	}
+
+clndir:
+		backdir(fixsrc);		/* back one dir */
+		srclen -= FILE_LEN;		/* subtract the add lenth */
+		if (opcode == OP_DELETE)
+			updatnum(NUMDIR, --numdirs);
+		else
+		{
+			backdir(fixdst);		/* back one dir */
+			dstlen -= FILE_LEN;		/* subtract the add lenth */
+		}
+	    } 
+	    else 
+	    {
+		getlastpath(filestr, fixdst);
+		updatname(CPDIR, filestr);			/* update the dir */
+		updatname( CPFILE, dumb.d_fname ); 	/* update the file */
+		chkbuf(srclen, srcbuf, &fixsrc);		/* check buf size */
+		addfile(fixsrc, dumb.d_fname);
+		if (opcode != OP_DELETE)
+		{
+			chkbuf(dstlen, dstbuf, &fixdst);		/* check buf size */
+			addfile(fixdst, dumb.d_fname);
+			rename = 0;
+			if (!(retmsg = wrfile(dumb.d_fname)))
+			  goto mvend;
+			if ((rename) || (retmsg == SKIP))
+			  goto clnfile;
+		}
+		if (opcode == OP_COPY)
+			goto clnfile;
+remvf:
+		if (ret = (Fdelete(fixsrc))) 	/* rm the file from source */
+		{
+		  if ((ret == 0xFFFA) || (ret == 0xFFFE))
+		  {
+		  	/* seek error or drive not ready */
+			retmsg = FALSE;
+			goto mvend;
+		  }
+		  if ((ret = do_alert(1,CNTDELF)) == 2)	 /* retry */
+		    goto remvf;
+		  else if (ret == 3)	
+		  	{			/* abort */
+		  	  f_abort = 1;
+		  	  retmsg = FALSE;
+		  	  goto mvend;
+		  	}
+		}
+		else
+		  updesk( fixsrc );
+clnfile:
+		backdir(fixsrc);		/* back one dir */
+		srclen -= FILE_LEN;		/* subtract the add lenth */
+		if (opcode == OP_DELETE)
+			updatnum(NUMFILE, --numfiles);
+		else
+		{
+			backdir(fixdst);		/* back one dir */
+			dstlen -= FILE_LEN;		/* subtract the add lenth */
+		}
+	    }
+	    } 
+	  } while (!Fsnext());
+	}
+	else 
+	  retmsg = FALSE;
+	
+mvend:
+	Fsetdta(saved);
+	return(retmsg);
+}
+
+
+/* set the right drive and call the recursive routine to do the counting */
+
+count( s )
+	char *s;
+{
+	char *tmp;
+
+	tmp = s;
+	while ( *tmp++ );
+
+	if (*(tmp-2) == '*')		/* a dir */
+	{
+	  set_dir( s );				/* set the path		*/
+	  return(countrec());		/* recursive count	*/	
+	}
+	numfiles++;
+	return(TRUE);
+}
+
+
+/* counte the file and directory recursivly */
+
+countrec()
+{
+	char 	*saved;
+	DMABUFFER dumb;
+	int 	retmsg;
+
+	retmsg = TRUE;
+	saved = (DMABUFFER *)Fgetdta();
+	Fsetdta(&dumb);
+
+	if (!Fsfirst(curall, 0xFF))	
+	{
+	  do 	
+	  {
+	    if (dumb.d_fname[0] != HOME)	
+	    {
+	      if (SUBDIR & dumb.d_fattr)	
+	      {	       				/* setpath to one more down */
+		if (Dsetpath(dumb.d_fname))	
+		{
+		  retmsg = FALSE;
+		  goto endrec;
+		}
+
+	    	numdirs++;
+
+		if ( ++f_level > MAXDEPTH ) 	
+		{
+		  form_alert(1, "[1][Not enough system stack|for this operation.][  OK  ]");
+		  retmsg = FALSE;
+		  goto endrec;
+		}
+
+		if (!countrec())	/* to the recursion setpath to one back */
+		{
+		  retmsg = FALSE;
+		  goto endrec;
+		}
+		f_level--;
+		if (Dsetpath(baklvl))	
+		{
+		  retmsg = FALSE;
+		  goto endrec;
+		}
+	      }
+	      else 
+	      {
+		numfiles++;	/* add up the file count and size	*/
+		tolsize += dumb.d_fsize;
+	      }
+	    } 
+          } while (!Fsnext());
+	}
+
+endrec:
+	Fsetdta( saved );	/* reset the dta	*/
+	return(retmsg);
+}
+
+
+/* Copy the file from the s to d */
+
+wrfile( fstr )
+	char *fstr;
+{
+	int 	ret, retmsg;
+	int 	inhand,outhand;
+	int		time[2];
+	DMABUFFER *mydta;
+	char 	*buffer, *saved;
+	long 	copysiz, bufsiz, wrsiz, tmpsiz; 
+	int 	crted=0, sttime=1;
+
+	retmsg = TRUE;
+	rename = 0;
+open:
+
+	if ((inhand = Fopen(fixsrc, 0)) < 0)	
+	{
+	  if ((inhand == 0xFFFA) || (inhand == 0xFFFE))/* seek error or */	
+	    return(FALSE);
+
+	  if ((ret = do_alert(1,CNTOPEN)) == 1)	/* skip */	
+	  {
+	    updatnum(NUMFILE, --numfiles);
+	    return SKIP;
+	  }
+	  else if (ret == 2)			/* retry */
+		  goto open;
+		else 				/* abort */
+		  return(FALSE);
+	}
+
+	saved = (DMABUFFER *)Fgetdta();
+	Fsetdta(mydta=(DMABUFFER *)Malloc((long)sizeof(DMABUFFER)));
+
+	if (Fsfirst(fixsrc, 0xF7))	
+	{
+	   retmsg = SKIP;
+	   if (do_alert(1,RDERROR) == 2)	/* abort */
+	   {
+	   	 f_abort = 1;
+	   	 retmsg = FALSE;
+	   }
+	   goto y2;
+	}
+	bufsiz = (long )Malloc(-1L);
+	buffer = (char *)Malloc(bufsiz);
+	copysiz = mydta->d_fsize;
+	Fdatime( &time, inhand, 0 );	/* read the time and date */
+	while (copysiz > 0)	
+	{
+	  tmpsiz = (copysiz > bufsiz) ? bufsiz : copysiz;
+	  if (Fread(inhand, tmpsiz, buffer) < 0)	
+	  {
+	  	retmsg = SKIP;
+		if (crted)	Fdelete(fixdst);
+	    if (do_alert(1,RDERROR) == 2)	
+	    {					/* abort */
+	      f_abort = 1;
+	      retmsg = FALSE;
+	    }
+	    goto y1;			/* skip */
+	  }
+	  if (sttime)
+	  {
+	  	sttime = 0;
+		rechkd:
+			switch(chkdf(fstr, CPFILE))
+			{
+			  case CHECK:	goto rechkd;
+			  case	SKIP:	retmsg = SKIP;	
+			  				goto y1;
+			  case 	QUIT:	f_abort = 1;
+							retmsg = FALSE;
+							goto y1;
+			  case	FALSE:	retmsg = FALSE;
+			  				goto y1;
+			}
+			if ((opcode == OP_MOVE)&&(*fixsrc == *fixdst))
+			{
+			  if (Frename(0, fixsrc, fixdst))
+			  	retmsg = FALSE;
+			  rename = 1;
+			  goto y1;
+			}
+
+		create:
+		if ((outhand = Fcreate(fixdst, mydta->d_fattr&7)) < 0)	
+		{
+		  if ((ret = do_alert(1,CNTCRTFL)) == 2)		/* retry */
+			goto create;
+		  else if (ret == 3)				/* abort */
+			{
+				f_abort = 1;
+				retmsg = FALSE;
+			}
+		  else	
+		  	retmsg = SKIP;
+		  goto y1;
+		}
+		crted = 1;
+	  }
+
+	  if ((wrsiz = Fwrite(outhand, tmpsiz, buffer)) < 0)	
+	  {
+	  	retmsg = SKIP;
+	   	Fdelete(fixdst);
+	    if (do_alert(1,WRERROR) == 2)	
+	    {					/* abort */
+			f_abort = 1;
+			retmsg = FALSE;
+	    }
+		goto y0;
+	   }
+		/* check if there are sufficent memory */
+		if (wrsiz != tmpsiz)		{ /* not sufficent memory ??*/
+			do_alert( 1,STDISKFU );
+			f_abort = 1;
+			retmsg = FALSE;
+			Fdelete(fixdst);		
+			goto y0;
+		}
+		copysiz -= bufsiz;
+	}
+
+	Fdatime( &time, outhand, 1 );	
+
+y0:
+	Fclose(outhand);
+y1:
+	Mfree(buffer);
+y2:
+	updatnum(NUMFILE, --numfiles);
+	Fsetdta(saved);
+y3:
+	Fclose(inhand);
+	Mfree(mydta);
+	return(retmsg);
+}
+
+
+/* Copy s and d into fixsrc and fixdst. Also check it is one file
+   copy or files and directories copy */
+
+	int
+getinfo(s, d)
+char *s, *d;
+{
+	int 	ret, sdir, ddir;
+
+	srclen = strlen(s) + 5; 	/* 1 byte for null and 4 byte for \*.* */
+	dstlen = strlen(d) + 17; 	/* 1 for null, 4 for \*.* and 13 for folder */
+	srcbuf = 500;				/* initialize the buffer */
+	dstbuf = 500;
+
+	while (srclen > srcbuf)
+	  srcbuf *= 2;
+
+	while (dstlen > dstbuf)
+	  dstbuf *= 2;
+
+	fixsrc = (char *)Malloc((long)srcbuf);
+	fixdst = (char *)Malloc((long)dstbuf);
+	sdir = mystrcp(s, fixsrc);
+
+	if ( opcode == OP_DELETE )	/* do directories or files rm */
+	  return( (sdir)? DTOD:OK );
+	else			/* do directories or files cp or mv */
+	{		
+	   getlastpath(filestr,fixsrc);
+	   if (((ddir = mystrcp(d, fixdst))) && (sdir))	
+	   { 					/* dir to dir */
+	     if (*filestr)	
+	     {					/* folder cp */
+	       chkbuf(dstlen, dstbuf, &fixdst);		/* check buf size */
+	       addfile(fixdst, filestr);	/* add the folder to dst */
+		   ret = created(filestr);		/* create the 1st folder */
+	       if ((!ret) || (ret == SKIP)) 	
+	       {
+		 	Mfree( fixsrc );
+		 	Mfree( fixdst );
+		 	return(ret);
+	       }
+	       strcat(bckslsh, fixdst);
+	     }
+	     return (DTOD);
+	   }
+	   if (ddir)
+	   {										/* one file to dir */
+	     chkbuf(dstlen, dstbuf, &fixdst);		/* check buf size */
+	     strcat(filestr, fixdst);
+	   }
+	   return OK;			
+	} 
+}
+
+
+created(dir)
+char *dir;
+{
+	int ret;
+
+	updatbox(dir);
+rechkd2: 				/* update check the dir existing or not */
+	switch( chkdf( dir, CPDIR ) )	
+	{
+	  case	QUIT:
+	  	f_abort = 1;
+	  	return(FALSE);
+	  case	SKIP:
+	  	return(SKIP);
+	  case	FALSE:
+		return(FALSE);
+	  case 	CHECK:
+	 	goto 	rechkd2;
+	  case	OK:	
+repeat:
+	  	if (Dcreate(fixdst))	
+	  	{
+	  	  if ( write_save )
+	  	    goto ll_1;
+
+		  if ((ret = do_alert(1,CNTCRTDR)) == 2)		/* retry */
+		    goto repeat;
+		  else if (ret == 3)		/* abort */
+		    { 			
+		      f_abort = 1;
+		      return(FALSE);
+		    }
+		}
+		break;	/* default */
+	}
+ll_1:			/* update the number of dir */
+	updatnum(NUMDIR, --numdirs);
+	return(TRUE);
+}
+
+
+deleted()
+{
+	int	ret;
+	char buf[14];
+	
+	rmstarb(fixsrc);		/* remove the back slash */
+
+	if ( !fixsrc[2] )
+	  return( TRUE );
+	
+	getlastpath(buf, fixsrc);
+	updatname(CPDIR, buf);
+domore:
+	if ( Ddelete(fixsrc) )	
+	{
+	  if ( ( ret = do_alert(1,CNTDELD)) == 2 )	/* retry */	
+	    goto domore;
+	  else if ( ret == 3 )		/* abort */
+	    {	
+	      f_abort = 1;
+	      return(FALSE);
+	    }
+	}
+
+	if (opcode == OP_DELETE)	updatnum(NUMDIR, --numdirs);
+	return(TRUE);
+}
+
+
+/*  this call will copy the string inside the s to 
+ * 	the fixs. For example,
+ * 	if s0 -> c:\d1\d2\*.* or c:\d1\d2\f, after the call,
+ *	s1 -> c:\d1\d2\  or c:\d1\d2\f ; 						*/
+
+mystrcp(s0, s1 )
+char *s0, *s1;
+{
+	register char *ptr;
+
+	ptr = s0;
+	while ((*ptr) && (*ptr != '*'))		
+	  *s1++ = *ptr++;
+
+	*s1 = '\0';
+	return((*ptr == '*') ? 1 : 0);
+
+}
+
+
+/* check the size of source buffer */
+
+chkbuf(len, bufsiz, src)
+int len, bufsiz;
+char **src;
+{
+
+	char *ptr;
+
+	if ((len + FILE_LEN) > bufsiz)		
+	{
+	  bufsiz *= 2;
+	  ptr = *src;
+	  *src = (char *)Malloc((long)bufsiz);
+	  strcpy(ptr, *src);
+	  Mfree(ptr);
+	}
+	len += FILE_LEN;
+}
+
+
+/* s -> c:\d1\d2\*.* or c:\d1\d2\, obj -> f; after the call
+ * s -> c:\d1\d2\f							*/
+
+addfile(s, obj)
+char *s, *obj;
+{
+	register char *ptr;
+
+	ptr = s;
+
+	while (*ptr++);	
+
+	if (*(ptr-2) == '*')	
+	  *(ptr-4) = '\0';
+	  
+	strcat(obj, s);
+}
+
+
+/* src -> c:\d1\d2\*.* or -> c:\d3\d5\, after the call,
+ * src -> c:\d1\d2 or -> c:\d3\d5				*/
+
+rmstarb(src)
+char *src;
+{
+	register char *ptr;
+
+	ptr = src;
+	while (*ptr++);		
+
+	if (*(ptr-2) == '\\')		/* src -> c:\d3\d5\ */	
+	  *(ptr-2) = '\0';
+	else 				/* src -> c:\d3\d5\*.*  */
+	  *(ptr-5) = '\0';
+}
+
+
+/* str -> c:\d1\d2\ or c:\d1\d2\*.* or c:\d2\d4 or c:\; after the call,
+ * str -> c:\d1\  or c:\d2\ or c:\		*/
+
+backdir(str)
+char *str;
+{
+	register char *ptr;
+
+	ptr = str;
+	while (*ptr++);
+
+	ptr -= 2;
+  	if (*(ptr-1) == ':')	/* str -> c:\ */
+	  return OK;
+	if (*ptr == '*')		/* c:\d1\d2\*.* */
+	  ptr -= 3;
+	while (*--ptr != '\\'); /* str -> c:\d1\d2 or c:\d1\d2\ */
+
+	*(ptr + 1) = '\0';
+}
+
+
+/* check the directory or file is exist or not */
+
+	int
+chkdf( str, flag )
+	char *str;
+	int flag;
+{
+	int 	ret;
+
+	if ( write_save )
+	  return( OK );
+
+	if ( flag == CPFILE )
+	{
+	  if ((ret = Fopen(fixdst, 0)) >= 0)	
+	  {			 		/* file exist */
+	    Fclose( ret );
+	    return(edname(str, CPFILE));
+	  }
+	}
+	else
+	{
+	  Dsetdrv(*fixdst - 'A');
+	  if (!(ret = Dsetpath(fixdst+2)))	/* direcory exist */
+	    return(edname(str, CPDIR)); 	/* update name conflict box */
+	}
+
+	/* 0xFFDE: path not found. 0xFFDF: file not found. */
+	return (((ret == 0xFFDF)||(ret == 0xFFDE))? OK:FALSE);	
+}
+
+
+edname(src, kind)
+	char 	*src;
+	int	kind;
+{
+	int 	but;
+	REG OBJECT	*obj;
+
+	obj = get_tree( SAMENAME );
+
+	pack(src, 0);
+	strcpy(src, ((TEDINFO *)(obj[FNAME].ob_spec))->te_ptext);
+	strcpy(src, ((TEDINFO *)(obj[EDFNAME].ob_spec))->te_ptext);
+	obj[COPY].ob_state = NORMAL;
+	obj[SKIP].ob_state = NORMAL;
+	obj[QUIT].ob_state = NORMAL;
+	desk_wait( FALSE );
+	fm_draw( SAMENAME );
+
+	switch((but = form_do(obj, 0)))	
+	{
+	    case COPY:	
+     	      if (!strcmp(((TEDINFO *)(obj[EDFNAME].ob_spec))->te_ptext, src)) 
+	      {			/* user edit the new name */
+		strcpy( ((TEDINFO *)(obj[EDFNAME].ob_spec))->te_ptext,src);
+		strcpy( src, ((TEDINFO *)(cpbox[kind].ob_spec))->te_ptext);
+		pack(src,1);
+		backdir(fixdst);
+		strcat(src, fixdst);
+		but = CHECK;
+	      }	else {/* check if the source and destination are the same */
+		  	if (kind == CPDIR)
+		  		rmstarb(fixsrc);
+			if (strcmp(fixsrc, fixdst))/* they are the same */
+				but = SKIP;
+		  	if (kind == CPDIR)
+				strcat(bckslsh, fixsrc);
+		  }
+	      break;
+	  	
+	    case SKIP:
+	    case QUIT:	
+	      break;
+	  }
+
+          desk_wait( TRUE );
+	  
+	  if ( d_display )
+	    fm_draw( CPBOX );
+	  else
+	    namecon = TRUE;
+
+	  if (but != CHECK)		
+	    pack(src, 1);
+
+	  return but;
+}
+
+/* pack	 : src -> file    rsc, after the call; src -> file.rsc	*/
+/* unpack: buf -> unpack.rsc, after the call, buf -> unpack  rsc.  */
+
+pack( src, flag )
+	char *src;
+	int flag;
+{
+	char temp[14];
+
+	if (flag) 	unfmt_str( src, temp );	/* pack */
+	else		fmt_str( src, temp );	/* unpack */
+	strcpy( temp, src );
+}
+
+/* src -> c:\f or c:\d1\f or c:\f\, or c:\f\*.*, after the call,
+   buf -> f. But if src ->c:\, then buf -> Null 	*/
+
+getlastpath(buf, src)
+	register char *buf, *src;
+{
+	register	char *tmp;
+
+	tmp = src;
+ 	*buf = '\0';
+
+	while (*tmp++);	
+
+	tmp -= 2;						
+	if (*tmp == '*')			/* src -> c:\f\*.* */
+		tmp -= 3;				
+	if (*(tmp-1) == ':')			/* src -> c:\ */
+	  return OK;
+
+  	while (*--tmp != '\\');			/* back one more path */	
+
+	while ((*buf = *++tmp) != '\\')
+		if (!*buf++)	return OK;
+	*buf = '\0';
+}
+
+
+/* up date the number of file or directory in the dialog box */
+
+updatnum(obj, num)
+int obj;
+long num;
+{
+	if ( d_display )
+	{
+	  f_str( cpbox, obj, num );
+	  draw_fld( cpbox, obj );
+	}
+}
+
+/* up date the file or directory in the dialog box */
+
+updatname(obj, str)
+int obj; 
+char *str;
+{
+	if ( d_display )
+	{
+	  pack(str,0);
+	  strcpy(str, ((TEDINFO *)(cpbox[obj].ob_spec))->te_ptext);
+	  pack(str,1);
+	  draw_fld( cpbox, obj );
+	}
+}
+
+
+updatbox(str)
+char *str;
+{
+	if ( d_display )
+	{
+	  pack(str,0);
+	  strcpy(str, ((TEDINFO *)(cpbox[CPDIR].ob_spec))->te_ptext);
+	  pack(str,1);
+	  strcpy("_", ((TEDINFO *)(cpbox[CPFILE].ob_spec))->te_ptext);
+	  objc_draw( cpbox, HIDECBOX, MAX_DEPTH, 0, 0, full.w, full.h );
+	}
+}
+
+
+updesk( s )
+	BYTE	*s;
+{
+	REG WORD	i;
+	WORD	limit,found;
+	REG OBJECT	*obj;
+
+	obj = background;
+
+	limit = obj->ob_tail;
+	found = FALSE;
+
+	for ( i = 1; i <= limit; i++ )
+	  if ( ( obj[i].ob_flags != HIDETREE ) && ( backid[i].i_type == XFILE ) )
+	    if ( strcmp( s, backid[i].i_path ) )
+	    {
+	      obj[i].ob_state = SELECTED;
+	      found = TRUE;
+	    }
+	if ( found )
+	{
+	  lp_collect();
+	  back_update = TRUE;
+	}
+}

@@ -1,0 +1,126 @@
+/*
+ * osbind.h -- define functions that use Atari calls bios, gemdos, and xbios.
+ *
+ * Copyright (c) 1986-1987, Mark Williams Company, Chicago
+ * This file and its contents may not be copied or distributed
+ * without permission.
+ */
+
+extern long bios();
+extern long xbios();
+extern long gemdos();
+
+/* GEMDOS functions (trap #1) */
+
+#define Pterm0()		gemdos(0x0)
+#define Cconin()		gemdos(0x1)
+#define Cconout(a)		gemdos(0x2,a)
+#define Cauxin()		gemdos(0x3)
+#define Cauxout(a)		gemdos(0x4,a)
+#define Cprnout(a)		gemdos(0x5,a)
+#define Crawio(a)		gemdos(0x6,a)
+#define Crawcin()		gemdos(0x7)
+#define Cnecin()		gemdos(0x8)
+#define Cconws(a)		gemdos(0x9,a)
+#define Cconrs(a)		gemdos(0x0a,a)
+#define Cconis()		gemdos(0x0b)
+#define Dsetdrv(a)		gemdos(0x0e,a)
+#define Cconos()		gemdos(0x10)
+#define Cprnos()		gemdos(0x11)
+#define Cauxis()		gemdos(0x12)
+#define Cauxos()		gemdos(0x13)
+#define Dgetdrv()		gemdos(0x19)
+#define Fsetdta(a)		gemdos(0x1a,a)
+#define Super(a)		gemdos(0x20,a)
+#define Tgetdate()		gemdos(0x2a)
+#define Tsetdate(a)		gemdos(0x2b,a)
+#define Tgettime()		gemdos(0x2c)
+#define Tsettime(a)		gemdos(0x2d,a)
+#define Fgetdta()		gemdos(0x2f)
+#define Sversion()		gemdos(0x30)
+#define Ptermres(a,b)		gemdos(0x31,a,b)
+#define Dfree(a,b)		gemdos(0x36,a,b)
+#define Dcreate(a)		gemdos(0x39,a)
+#define Ddelete(a)		gemdos(0x3a,a)
+#define Dsetpath(a)		gemdos(0x3b,a)
+#define Fcreate(a,b)		gemdos(0x3c,a,b)
+#define Fopen(a,b)		gemdos(0x3d,a,b)
+#define Fclose(a)		gemdos(0x3e,a)
+#define Fread(a,b,c)		gemdos(0x3f,a,b,c)
+#define Fwrite(a,b,c)		gemdos(0x40,a,b,c)
+#define Fdelete(a)		gemdos(0x41,a)
+#define Fseek(a,b,c)		gemdos(0x42,a,b,c)
+#define Fattrib(a,b,c)		gemdos(0x43,a,b,c)
+#define Fdup(a)			gemdos(0x45,a)
+#define Fforce(a,b)		gemdos(0x46,a,b)
+#define Dgetpath(a,b)		gemdos(0x47,a,b)
+#define Malloc(a)		gemdos(0x48,a)
+#define Mfree(a)		gemdos(0x49,a)
+#define Mshrink(a,b)		gemdos(0x4a,0,a,b)
+				/* NOTE: NULL parameter added */
+#define Pexec(a,b,c,d)		gemdos(0x4b,a,b,c,d)
+#define Pterm(a)		gemdos(0x4c,a)
+#define Fsfirst(a,b)		gemdos(0x4e,a,b)
+#define Fsnext()		gemdos(0x4f)
+#define Frename(a,b,c)		gemdos(0x56,a,b,c)
+#define Fdatime(a,b,c)		gemdos(0x57,a,b,c)
+
+/* BIOS functions (trap #13) */
+
+#define	Getmpb(a)		bios(0,a)
+#define Bconstat(a)		bios(1,a)
+#define Bconin(a)		bios(2,a)
+#define Bconout(a,b)		bios(3,a,b)
+#define Rwabs(a,b,c,d,e)	bios(4,a,b,c,d,e)
+#define Setexc(a,b)		bios(5,a,b)
+#define	Tickcal()		bios(6)
+#define	Getbpb(a)		bios(7,a)
+#define Bcostat(a)		bios(8,a)
+#define Mediach(a)		bios(9,a)
+#define Drvmap()		bios(10)
+#define Getshift(a)		bios(11,a)
+
+/* XBIOS functions (trap #14) */
+
+#define Initmous(a,b,c)		(void) xbios(0,a,b,c)
+#define Physbase()              (char *) xbios(2)
+#define Logbase()               (char *) xbios(3)
+#define Getrez()                (int) xbios(4)
+#define Setscreen(a,b,c)        (void) xbios(5,a,b,c)
+#define Setpallete(a)           (void) xbios(6,a)
+#define Setpalette(a)           (void) xbios(6,a)
+#define Setcolor(a,b)           (int) xbios(7,a,b)
+#define Floprd(a,b,c,d,e,f,g)   (int) xbios(8,a,b,c,d,e,f,g)
+#define Flopwr(a,b,c,d,e,f,g)   (int) xbios(9,a,b,c,d,e,f,g)
+#define	Flopfmt(a,b,c,d,e,f,g,h,i) (int) xbios(10,a,b,c,d,e,f,g,h,i)
+/* XBIOS function 11 is unused */
+#define Midiws(a,b)		(void) xbios(12,a,b)
+#define Mfpint(a,b)		(void) xbios(13,a,b)
+#define Iorec(a)		(char *) xbios(14,a)
+#define Rsconf(a,b,c,d,e,f)	(void) xbios(15,a,b,c,d,e,f)
+#define Keytbl(a,b,c)		(char *) xbios(16,a,b,c)
+#define Random()		xbios(17)
+#define Protobt(a,b,c,d)	(void) xbios(18,a,b,c,d)
+#define Flopver(a,b,c,d,e,f,g)	(int) xbios(19,a,b,c,d,e,f,g)
+#define Scrdmp()		(void) xbios(20)
+#define Cursconf(a,b)		(int) xbios(21,a,b)
+#define Settime(a)		(void) xbios(22,a)
+#define Gettime()		xbios(23)
+#define Bioskeys()		(void) xbios(24)
+#define Ikbdws(a,b)		(void) xbios(25,a,b)
+#define Jdisint(a)		(void) xbios(26,a)
+#define Jenabint(a)		(void) xbios(27,a)
+#define Giaccess(a,b)		(char) xbios(28,a,b)
+#define Offgibit(a)		(void) xbios(29,a)
+#define Ongibit(a)		(void) xbios(30,a)
+#define Xbtimer(a,b,c,d)	(void) xbios(31,a,b,c,d)
+#define Dosound(a)		xbios(32,a)
+#define Setprt(a)		(int) xbios(33,a)
+#define Kbdvbase()		(char **) xbios(34)
+#define Kbrate(a,b)		(int) xbios(35,a,b)
+#define Prtblk(a)		(int) xbios(36,a)
+#define	Vsync()			(void) xbios(37)
+#define	Supexec(a)		(unsigned long) xbios(38,a)
+#define	Puntaes()		(void) xbios(39)
+
+/* End of osbind.h */
