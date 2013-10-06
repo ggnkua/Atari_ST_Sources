@@ -1,0 +1,43 @@
+#define DESKTOP 0  	/* TREE */
+#define BUTPORST 13  	/* OBJECT in TREE #0 */
+#define BUTRESET 43  	/* OBJECT in TREE #0 */
+#define BUTCONT 44  	/* OBJECT in TREE #0 */
+#define BUT6502 57  	/* OBJECT in TREE #0 */
+#define BUTDEGAS 58  	/* OBJECT in TREE #0 */
+#define BUTEXIT 72  	/* OBJECT in TREE #0 */
+#define RBFPSTND 18  	/* OBJECT in TREE #0 */
+#define RBFPFAST 17  	/* OBJECT in TREE #0 */
+#define RBFONT1 53  	/* OBJECT in TREE #0 */
+#define RBFONT2 54  	/* OBJECT in TREE #0 */
+#define RBFONT3 55  	/* OBJECT in TREE #0 */
+#define RBDRIVE1 35  	/* OBJECT in TREE #0 */
+#define RBDRIVE2 36  	/* OBJECT in TREE #0 */
+#define RBDRIVE3 37  	/* OBJECT in TREE #0 */
+#define RBDRIVE4 38  	/* OBJECT in TREE #0 */
+#define RBDRIVE5 39  	/* OBJECT in TREE #0 */
+#define RBDRIVE6 40  	/* OBJECT in TREE #0 */
+#define RBDRIVE7 41  	/* OBJECT in TREE #0 */
+#define RBDRIVE8 42  	/* OBJECT in TREE #0 */
+#define RBFONT4 56  	/* OBJECT in TREE #0 */
+#define RBXCD 48  	/* OBJECT in TREE #0 */
+#define RBXCP 49  	/* OBJECT in TREE #0 */
+#define BUTLCNTX 62  	/* OBJECT in TREE #0 */
+#define BUTSCNTX 71  	/* OBJECT in TREE #0 */
+#define FRERAM 61  	/* OBJECT in TREE #0 */
+#define EMULMODE 60  	/* OBJECT in TREE #0 */
+#define DRIVES 1  	/* TREE */
+#define TITLED1 1  	/* OBJECT in TREE #1 */
+#define RBEXTERN 3  	/* OBJECT in TREE #1 */
+#define RBVIRTFD 4  	/* OBJECT in TREE #1 */
+#define RBVIRTHD 5  	/* OBJECT in TREE #1 */
+#define RBXF35 6  	/* OBJECT in TREE #1 */
+#define RBRD 7  	/* OBJECT in TREE #1 */
+#define RBOFF 8  	/* OBJECT in TREE #1 */
+#define DRIVEXIT 20  	/* OBJECT in TREE #1 */
+#define RBBASIC1 22  	/* OBJECT in TREE #0 */
+#define RBBASIC0 23  	/* OBJECT in TREE #0 */
+#define RBWP 19  	/* OBJECT in TREE #1 */
+#define RBSPEED0 11  	/* OBJECT in TREE #1 */
+#define RBSPEED1 12  	/* OBJECT in TREE #1 */
+#define RBSPEED2 13  	/* OBJECT in TREE #1 */
+
