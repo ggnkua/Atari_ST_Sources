@@ -1,0 +1,560 @@
+***********************************************************************
+***********										***********
+***********										***********
+***********		Zoom de Fractales sur Cube Mapp‚		***********
+***********										***********
+***********										***********
+***********		   Par Simplet / ABSTRACT			***********
+***********										***********
+***********************************************************************
+
+KeyBD	EQU		1			; Si = 0, routine simple
+							; Si = 1, routine evolu‚e
+
+; Couleur de Fond (sur 32 niveaux)
+Rouge	EQU		5
+Vert		EQU		3
+Bleu		EQU		8
+
+		OPT		O+,OW-
+
+		IncDir	'..\INITS\'
+		Include	'MACROS.AST'
+
+***********************************************************************
+***********				Inits G‚n‚rales			***********
+***********************************************************************
+
+		Section	TEXT
+
+		clr.l	-(sp)					; Passage en Mode Supervisor
+		move.w	#$20,-(sp)				; SUPER
+		trap		#1						; Gemdos
+		addq.l 	#6,sp
+
+***********************************************************************
+***********				Inits DSP					***********
+***********************************************************************
+
+		move.w	#113,-(sp)				; DSP_RequestUniqueAbility
+		trap		#14						; XBios
+		addq.l	#2,sp					; Correction Pile
+
+		move.w	d0,-(sp)					; No Ability
+		move.l	#DSP_Size,-(sp)			; Longueur en Mots DSP
+		pea.l	DSP_Code					; Adresse du code binaire
+		move.w	#109,-(sp)				; Dsp_ExecProg
+		trap		#14						; XBios
+		lea.l	12(sp),sp					; Correction Pile
+
+Connect	move.l	#87654321,$ffffa204.w
+		moveq.l	#0,d0
+
+Conct_Get	btst.b	#0,$ffffa202.w
+		bne.s	DSP_Test
+		addq.l	#1,d0
+		cmp.l	#100000,d0
+		beq		DSP_Error
+		bra.s	Conct_Get
+
+DSP_Test	move.l	$ffffa204.w,d0
+		cmp.l	#12345678,d0
+		bne		DSP_Error
+
+		lea.l	$ffffa204.w,a6
+		bsr		Envoie_Table_1_x
+		bsr		Envoie_Table_Sinus
+
+		movea.l	Image_Adr,a0
+		lea.l	16200(a0),a1
+		move.l	a1,Image_Adr
+		bsr		Envoie_Image
+
+***********************************************************************
+***********				Inits G‚n‚rales			***********
+***********************************************************************
+
+		move.w	#$2700,sr
+
+		bsr		Save_System
+		bsr		Init_System
+
+		lea.l	Videl_320_200_True,a0
+		lea.l	Adr_Screen1,a1
+		lea.l	Screens,a2
+		moveq.l	#2-1,d0
+		bsr		Init_Video
+		bsr		Init_Falcon_Palette
+		bsr		Init_IT
+
+		move.l	#Rouge*16777216*8+Vert*65536*8+Bleu*8,$ffff9800.w
+		movea.l	Adr_Screen1,a1
+		movea.l	Adr_Screen2,a2
+		move.l	#(Rouge*2048+Vert*64+Bleu)*(65536+1),d0
+		move.w	#320*200/2-1,d7
+Fill_Screens
+		move.l	d0,(a2)+
+		move.l	d0,(a1)+
+		move.l	d0,(a2)+
+		move.l	d0,(a1)+
+		dbra		d7,Fill_Screens
+
+		lea		Pic_1+18,a0		
+		move.l	Adr_Screen1,a1
+		move.l	Adr_Screen2,a2
+		lea		240*2(a1),a1
+		lea		240*2(a2),a2
+		
+		moveq.l	#50-1,d7				; Nombre de lignes
+.Cop_Pic	move.w	#40/2-1,d6
+.Cop_Line	move.l	(a0),(a1)+
+		move.l	(a0)+,(a2)+
+		move.l	(a0),(a1)+
+		move.l	(a0)+,(a2)+
+		dbf		d6,.Cop_Line
+		lea		320*2-(80*2)(a1),a1
+		lea		320*2-(80*2)(a2),a2
+		dbf		d7,.Cop_Pic
+
+
+		move.l	#New_VBL,$70.w
+
+		IfNe	KeyBD
+			move.l	#KeyBoard_Mouse_and_JoySticks,$118.w
+		Else
+			move.l	#KeyBoard,$118.w
+		EndC
+		or.b		#$40,$fffffa09.w			; Autorise nouvelle
+		or.b		#$40,$fffffa15.w			; routine clavier
+
+***********************************************************************
+***********			Inits Sp‚cifiques				***********
+***********************************************************************
+
+***********************************************************************
+***********		Boucle principale d'attente			***********
+***********************************************************************
+
+Main_Loop	clr.w	VBL_Cmpt
+
+VBL_Wait	tst.w	VBL_Cmpt					; Attend
+		beq.s	VBL_Wait					; prochaine VBL
+
+		bsr.s	VBL_Rout					; ex‚cute routine
+
+		cmp.b	#$39,LastKey				; Touche Espace Press‚e ???
+		bne.s	Main_Loop
+
+***********************************************************************
+***********	C'est fini, on remet tout en place			***********
+***********************************************************************
+
+		bsr		Restore_System
+
+DSP_Error	clr.w 	-(sp)					; PTerm
+		trap 	#1						; Gemdos
+
+***********************************************************************
+***********		Routine tournant … chaque VBL			***********
+***********************************************************************
+
+VBL_Rout	SaveColor
+
+		move.l	Adr_Screen1,d0				; Flipping
+		move.l	Adr_Screen2,Adr_Screen1		; Ecrans
+		move.l	d0,Adr_Screen2				; Physique
+		lsr.w	#8,d0					; /
+		move.l	d0,$ffff8200.w				; Logique
+
+		CPUTimeColor		#$dd150028
+
+; Port Host
+		lea.l	$ffffa204.w,a6
+		lea.l	2(a6),a5
+
+*		WaitDSPToSend
+*		move.b	Rotation_Flag,d0
+*		extb.l	d0
+*		move.l	d0,(a6)
+
+		WaitDSPToGet
+		move.l	(a6),d0
+		cmp.w	#90*90,d0
+		beq.s	End_Image
+		bgt.s	No_Image_Request
+
+		movea.l	Image_Adr,a0
+		lea.l	(a0,d0.w*2),a0
+		move.w	#90*90/30-1,d7
+Send_Part_Image
+		move.w	(a0)+,(a5)
+		dbra		d7,Send_Part_Image
+		bra.s	No_Image_Request
+
+End_Image	add.l	#16200,Image_Adr
+
+; Envoie Informations globales
+No_Image_Request
+		move.l	Adr_Screen1,(a6)			; Adresse de l'‚cran
+		move.w	Object(pc),(a5)			; Num‚ro d'objet
+
+		lea.l	Rotations(pc),a0
+		moveq.l	#6-1,d7
+Envoie_Infos
+		move.l	(a0)+,(a6)
+		dbra		d7,Envoie_Infos
+
+; Attend que le DSP soit prˆt
+		WaitDSPToGet
+		move.w	(a5),d0
+
+Routs_Choice
+		WaitDSPToGet						; Le DSP nous envoie
+		moveq.l	#0,d0					; le num‚ro de
+		move.w	(a5),d0					; routine solicit‚e
+		bne		Mapping_Rout
+
+Clear_Borders_Rout
+		CPUTimeColor		#$dd550088
+		move.l	#(Rouge*2048+Vert*64+Bleu)*(65536+1),d0
+
+Clear_Borders
+		WaitDSPToGet
+		move.w	(a5),d6
+		beq.s	Rotate
+		movea.l	(a6),a1
+
+		lsr.w	d6						; Si nombre impair
+		bcc.s	Clear_Borders_				; de pixels
+		
+		move.w	d0,(a1)+					; affiche un premier
+
+Clear_Borders_
+		subq.w	#1,d6
+		bmi.s	Clear_Borders
+
+Clear_Borders_Loop
+		move.l	d0,(a1)+					; Affiche deux Pixels
+		dbra		d6,Clear_Borders_Loop
+		bra.s	Clear_Borders
+
+Rotate	cmp.b	#$66,LastKey
+		beq.s	VBL_Ret
+
+		lea.l	Rotations,a0
+		lea.l	Rot_Incr,a1
+		moveq.l	#3-1,d7
+Incremente_Rotations
+		move.l	(a0),d0
+		move.l	(a1)+,d1
+		bpl.s	Incr_Ok
+		add.l	#360,d1
+
+Incr_Ok	add.l	d1,d0
+		cmp.l	#360,d0
+		blo.s	Angle_Ok
+		sub.l	#360,d0
+Angle_Ok	move.l	d0,(a0)+
+		dbra		d7,Incremente_Rotations
+
+VBL_Ret	RestoreColor
+		rts
+
+***********************************************************************
+***********			Routine de Mapping				***********
+***********************************************************************
+
+Mapping_Rout
+		CPUTimeColor		#$5f6f00ff
+
+		WaitDSPToGet
+		move.w	(a5),d7					; Nombre de Lignes
+		subq.w	#1,d7					; horizontales … tracer
+
+		CPUTimeColor		#$ff8f002f
+
+Mapping_Lines_Loop
+		WaitDSPToGet
+		move.w	(a5),d6					; Nombre de Pixels
+		beq.s	Mapping_Next_Line
+		WaitDSPToGet
+		movea.l	(a6),a1					; Adresse de d‚part
+		WaitDSPToGet
+
+		lsr.w	d6						; Si nombre impair
+		bcc.s	Mapping_Line				; de pixels
+		
+		move.w	(a5),(a1)+				; Affiche un premier
+
+Mapping_Line
+		subq.w	#1,d6
+		bmi.s	Mapping_Next_Line
+
+Mapping_Line_Loop
+		move.w	(a5),(a1)+
+		addq.b	#1,d0
+		move.w	(a5),(a1)+
+		dbra		d6,Mapping_Line_Loop
+
+Mapping_Next_Line
+		dbra		d7,Mapping_Lines_Loop
+		bra		Routs_Choice
+
+***********************************************************************
+***********		   Interruption VBL : compteur		***********
+***********************************************************************
+
+New_VBL	addq.w	#1,VBL_Cmpt
+
+		movem.l	d0-a6,-(sp)
+
+		movea.l	Adr_Script(pc),a0
+		lea.l	Time(pc),a1
+		subq.w	#1,(a1)
+		bsr		Script
+		move.l	a0,Adr_Script
+
+Translate	lea.l	Translat,a0
+		lea.l	Trans_Incr,a1
+		moveq.l	#3-1,d7
+Incremente_Translations
+		move.l	(a1)+,d0
+		add.l	d0,(a0)+
+		dbra		d7,Incremente_Translations
+
+		movem.l	(sp)+,d0-a6
+		rte
+
+VBL_Cmpt		ds.w		1
+
+***********************************************************************
+***********				Sous-Programmes			***********
+***********************************************************************
+
+Script	tst.w	(a1)
+		bpl		Script_Return
+
+		move.w	(a0)+,d0
+		bpl.s	Script_Ok
+
+		movea.l	(a0)+,a0
+		bra.s	Script
+
+Script_Ok	beq.s	Script_Pos
+		subq.b	#2,d0			; 2
+		beq.s	Script_Picture
+
+		sf		Sinus_Flag
+
+		subq.b	#1,d0			; 3
+		beq.s	Script_Increments
+
+		subq.b	#1,d0			; 4
+		beq.s	Clear_Trans_X_Y
+
+		subq.b	#1,d0			; 5
+		beq.s	Rotation_On
+
+		st		Sinus_Flag		; 1
+		bra.s	Script_Increments
+
+Rotation_On
+		st		Rotation_Flag
+		bra.s	Script
+
+Clear_Trans_X_Y
+		clr.l	Translat
+		clr.l	Translat+4
+		bra.s	Script
+
+Script_Picture
+		movea.l	(a0)+,a3
+		move.l	(a0)+,d0
+		lea.l	([Adr_Screen1,pc],d0.l),a4
+		lea.l	([Adr_Screen2,pc],d0.l),a5
+
+		move.w	(a0)+,d5		; Largeur
+		move.w	#160,d4
+		sub.w	d5,d4		; Offset entre 2 lignes
+		asl.w	#2,d4
+		move.w	(a0)+,d7		; Hauteur - 1
+		subq.w	#1,d5
+
+Script_Trace_Picture
+		move.w	d5,d6		; Largeur - 1
+Script_Trace_Line
+		move.l	(a3)+,d0
+		move.l	d0,(a4)+
+		move.l	d0,(a5)+
+		dbra		d6,Script_Trace_Line
+		adda.w	d4,a4
+		adda.w	d4,a5
+		dbra		d7,Script_Trace_Picture
+		bra		Script
+
+Script_Pos
+		lea.l	2(a1),a2
+		move.w	(a0)+,(a2)+			; Objet
+		moveq.l	#6-1,d7
+Script_Copy_Pos
+		move.l	(a0)+,(a2)+
+		dbra		d7,Script_Copy_Pos
+		bra		Script
+
+Script_Increments
+		move.w	(a0)+,(a1)+		; Temps
+		move.w	(a0)+,(a1)+		; Objet
+		adda.w	#6*4,a1
+		moveq.l	#6-1,d7
+Script_Copy_Incr
+		move.l	(a0)+,(a1)+
+		dbra		d7,Script_Copy_Incr
+
+Script_Return
+		rts
+
+; Envoie une image
+
+Envoie_Image
+		move.w	#90*90-1,d7
+		moveq.l	#0,d0
+Envoie_Image_Loop
+		move.w	(a0)+,d0
+		move.l	d0,(a6)
+		dbra		d7,Envoie_Image_Loop
+		rts
+
+; Envoie la table des 1/x
+
+Envoie_Table_1_x
+		move.w	#300-1,d7
+		move.l	#-300,d0
+
+Negatifs	move.l	#$7fffff,d6
+		divs.l	d0,d6
+		move.l	d6,(a6)
+		addq.l	#1,d0
+		dbra		d7,Negatifs
+
+Zero		move.l	#$7fffff,(a6)
+
+		move.w	#1700-1,d7
+		moveq.l	#1,d0
+
+Positifs	move.l	#$7fffff,d6
+		divs.l	d0,d6
+		move.l	d6,(a6)
+		addq.l	#1,d0
+		dbra		d7,Positifs
+		rts
+
+; Envoie la table de sinus/cosinus
+
+Envoie_Table_Sinus
+		lea.l	Sinus_Table(pc),a0
+		move.w	#360+90-1,d7
+Envoie_Sinus
+		move.l	(a0)+,d0
+		asr.l	#8,d0
+		move.l	d0,(a6)
+		dbra		d7,Envoie_Sinus
+		rts
+
+		Include	'INITSFAL.AST'
+
+***********************************************************************
+***********				Section DATA				***********
+***********************************************************************
+
+		Section	DATA
+
+Time			dc.w		-1
+Object		dc.w		1-1
+Rotations		dc.l		0,0,0
+Translat		dc.l		0*512,0*512,0*512
+Rot_Incr		dc.l		0,0,0
+Trans_Incr	dc.l		0*512,0*512,0*512
+
+Adr_Script	dc.l		Scripteu
+
+Scripteu		dc.w		0,1-1
+			dc.l		0,0,0
+			dc.l		+0*512,29*512,-50*512
+			dc.w		1,200-1,1-1
+			dc.l		0,0,0,0,0,0
+			dc.w		5				; D‚clenche Rotation
+			dc.w		1,200-1,1-1
+			dc.l		0,0,0,0,0,0
+			dc.w		1,10000-1,1-1
+			dc.l		-3,2,-2,0,0,0
+			dc.w		-1
+			dc.l		Scripteu
+
+XAng1		dc.w		$0000
+YAng1		dc.w		$0000
+XAng2		dc.w		$0000
+YAng2		dc.w		$0000
+
+DSP_Code		IncBin	'FRACTAL.P56'
+DSP_Size		equ		(*-DSP_Code)/3
+
+Sinus_Table	IncBin	'COSIN32B.TAB'
+
+Image_Adr		dc.l		Image_1
+
+Image_1		IncBin	'ZOOM_001.BIL'
+Image_2		IncBin	'ZOOM_002.BIL'
+Image_3		IncBin	'ZOOM_003.BIL'
+Image_4		IncBin	'ZOOM_004.BIL'
+Image_5		IncBin	'ZOOM_005.BIL'
+Image_6		IncBin	'ZOOM_006.BIL'
+Image_7		IncBin	'ZOOM_007.BIL'
+Image_8		IncBin	'ZOOM_008.BIL'
+Image_9		IncBin	'ZOOM_009.BIL'
+Image_10		IncBin	'ZOOM_010.BIL'
+Image_11		IncBin	'ZOOM_011.BIL'
+Image_12		IncBin	'ZOOM_012.BIL'
+Image_13		IncBin	'ZOOM_013.BIL'
+Image_14		IncBin	'ZOOM_014.BIL'
+Image_15		IncBin	'ZOOM_015.BIL'
+Image_16		IncBin	'ZOOM_016.BIL'
+Image_17		IncBin	'ZOOM_017.BIL'
+Image_18		IncBin	'ZOOM_018.BIL'
+Image_19		IncBin	'ZOOM_019.BIL'
+Image_20		IncBin	'ZOOM_020.BIL'
+Image_21		IncBin	'ZOOM_021.BIL'
+Image_22		IncBin	'ZOOM_022.BIL'
+Image_23		IncBin	'ZOOM_023.BIL'
+Image_24		IncBin	'ZOOM_024.BIL'
+Image_25		IncBin	'ZOOM_025.BIL'
+Image_26		IncBin	'ZOOM_026.BIL'
+Image_27		IncBin	'ZOOM_027.BIL'
+Image_28		IncBin	'ZOOM_028.BIL'
+Image_29		IncBin	'ZOOM_029.BIL'
+Image_30		IncBin	'ZOOM_030.BIL'
+Image_31		IncBin	'ZOOM_031.BIL'
+Image_32		IncBin	'ZOOM_032.BIL'
+Image_33		IncBin	'ZOOM_033.BIL'
+Image_34		IncBin	'ZOOM_034.BIL'
+			dcb.l	90*90*2/4,0
+			dcb.l	90*90*2/4,0
+
+PIC_1		IncBin	'FRACTALZ.TG1'
+
+***********************************************************************
+***********				Section BSS				***********
+***********************************************************************
+
+		Section	BSS
+
+; Adresses Ecrans
+Adr_Screen1	ds.l		1
+Adr_Screen2	ds.l		1
+
+Compteur		ds.w		1
+Sinus_Flag	ds.b		1
+Rotation_Flag	ds.b		1
+
+; Place pour Ecrans
+Screens		ds.b		2*((320*200*2)+256)
+	

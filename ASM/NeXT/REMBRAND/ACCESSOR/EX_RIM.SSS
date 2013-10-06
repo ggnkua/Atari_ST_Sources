@@ -1,0 +1,318 @@
+*
+*
+* Utilisation des RIM pour le chargement et l'affichage d'une image.
+*
+*
+disp equ 0
+
+;
+;
+; Quelques constantes pour les modes vid‚os
+;
+;
+col2=0
+col4=1
+col16=2
+col256=3
+coltc=4
+
+l40=0
+l80=8
+
+tv=0
+vga=16
+pal=32
+overscan=64
+st=128
+interlace=256
+
+mode=coltc+l40+tv+pal
+
+ pea superviseur
+ move #$26,-(sp)
+ trap #14
+ addq #6,sp
+;
+; Et quitte
+; 
+ clr -(sp)
+ trap #1
+
+
+
+ 
+superviseur 
+ move.l #ecran+4,d0
+ and.b #%11111100,d0
+ move.l d0,‚cran
+
+;
+; R‚cupŠre la r‚solution courante et l'adresse de la m‚moire
+; vid‚o
+;
+ ifne disp
+ move #-1,-(sp)
+ move #88,-(sp)
+ trap #14
+ addq #4,sp
+ move d0,old_video
+ 
+ move #2,-(sp)
+ trap #14
+ addq #2,sp
+ move.l d0,old_adresse
+
+;
+; Valide ma propre r‚solution
+; et mon propre ecran
+; 
+ move #mode,-(sp)
+ move #3,-(sp)
+ move.l ‚cran,-(sp)
+ move.l ‚cran,-(sp)
+ move #5,-(sp)
+ trap #14
+ add #14,sp
+ endc
+ 
+ bsr d‚code_image
+
+ move #7,-(sp)
+ trap #1
+ addq #2,sp
+
+ ifne disp  
+;
+; Restaure tout
+; 
+ move old_video,-(sp)
+ move #3,-(sp)
+ move.l old_adresse,-(sp)
+ move.l old_adresse,-(sp)
+ move #5,-(sp)
+ trap #14
+ add #14,sp
+ endc
+ rts
+
+
+
+d‚code_image
+ pea mfdb
+ pea ".PI1"
+ pea taille_fichier
+ pea taille_image
+ pea image
+ clr -(sp)		; 0->1er appel / 1->second appel
+ jsr rim_teste_image
+ lea 22(sp),sp
+ tst d0
+
+ move mfdb_largeur_image,d0
+ add d0,d0
+ move d0,largeur_image
+
+ move mfdb_hauteur_image,d0
+ move d0,hauteur_image
+
+ move mfdb_nombre_plans,d1
+ move d1,nombre_plans
+ subq #1,d1
+ moveq #2,d0
+ lsl d1,d0
+ move d0,nombre_couleurs
+
+ move mfdb_largeur_plan,d0
+ add d0,d0
+ move d0,largeur_plan		Largeur d'un plan en octets...
+  
+ nop
+ nop
+ 
+ pea mfdb 			Adresse MFDB
+ move nombre_couleurs,-(sp)	Nombre de couleurs
+ pea adresse_palette		Adresse de la palette finale
+ move.l mfdb_palette,-(sp)	Taille de la palette
+ lea image,a0			Adresse de la palette source
+ add mfdb_seek,a0
+ pea (a0)
+ clr -(sp)			Code
+ jsr rim_charge_palette
+ lea 22(sp),sp
+ tst d0
+
+ move.l buffer_chargement,mfdb_adresse_buffer
+ pea mfdb 			Adresse MFDB
+ move.l #taille_fichier,-(sp)
+ lea image,a0			Adresse de la palette source
+ add mfdb_seek,a0
+ pea (a0)
+ clr -(sp)			Code
+ jsr rim_charge_image
+ lea 14(sp),sp
+ tst d0
+
+******* On recode la palette au format TrueColor 16 bits !
+ bsr recode_palette
+ bsr transforme_image
+ bsr affiche_image 
+ rts
+
+*0 -> Format inconnu
+*1 ->  Quantit‚ de donn‚es insuffisante pour aller  au  bout  des 
+*tests.  Le PRG appelant rechargera un autre bout du fichier  afin 
+*que la routine puisses continuer sa v‚rification.  Etant donn‚ la 
+*perte de temps du chargement,  le PRG principal a tout int‚rˆt  … 
+*charger le plus possible de donn‚es. Rappel: la quantit‚ minimale 
+*de donn‚e est de 512 octets.
+*2 -> Fichier reconnu contenant une palette
+*3 -> Fichier reconnu, ne contenant PAS de palette
+
+
+
+recode_palette
+*
+* On recode la palette sur elle meme, sans
+* risquer de problŠme, puisque l'on passe
+* format occupant 6 octets, vers un
+* format en prenant seulement 2 par couleur !
+*
+ lea adresse_palette,a0
+ move.l a0,a1
+ move nombre_couleurs,d7
+ subq #1,d7
+.recopie_palette
+ movem (a0)+,d0-d2
+ mulu.l #31,d0
+ divu.l #1000,d0		R‚cupŠre le rouge sur [0-31]
+ mulu.l #63,d1
+ divu.l #1000,d1		R‚cupŠre le vert sur [0-63]
+ mulu.l #31,d2
+ divu.l #1000,d2		R‚cupŠre le bleu sur [0-31]
+ lsl #5,d1			Repositionne le vert au centre
+ or d1,d2
+ ror #5,d0			Et met le rouge … gauche
+ or d0,d2
+ move d2,(a1)+
+ dbra d7,.recopie_palette
+ rts
+
+
+
+transforme_image
+ lea adresse_palette,a0		La palette TrueBidouill‚e !
+ move.l buffer_chargement,a1	L'image … convertir
+ move.l fichier,a2		Le buffer pour stocker l'image
+
+
+ move largeur_plan,d0		largeur d'un plan en mot
+ mulu hauteur_image,d0		La taille totale d'un plan en octets.
+     
+ move.l d0,d4
+ lsr.l d4			Nombre de mots … traiter.
+
+ move nombre_plans,d2
+ subq #1,d2
+  
+.bloc_suivant
+
+ moveq #16-1,d6			Il y … 16 pixels par bloc
+.pixel_suivant
+ move.l a1,a3			D‚but du bloc du premier plan.
+ move d2,d7			Le nombre de plans (de 1 … n)
+ moveq #0,d3			La couleur est mise … 0
+.plan_suivant
+ roxl.w (a3)			Teste le bit
+ addx d3,d3			M‚morise le bit
+ add.l d0,a3			Passe au plan suivant.
+ dbra d7,.plan_suivant
+ and #%11111111,d3
+ move (a0,d3.w*2),(a2)+		Affiche le pixel
+ dbra d6,.pixel_suivant
+
+ addq #2,a1			Passe au bloc suivant (2*nombre de plans)
+
+ subq.l #1,d4
+ bne .bloc_suivant		Passe au multiple de 16 suivant...
+ moveq #0,d0
+ rts
+ 
+
+
+affiche_image
+ move.l fichier,a0
+ move.l ‚cran,a1
+ move #200,d1
+.recopie_y   
+ move.l a0,a2
+ move.l a1,a3
+ add largeur_image,a0
+ lea 640(a1),a1
+ move #320,d0
+.recopie_x
+ move (a2)+,(a3)+
+ dbra d0,.recopie_x
+ dbra d1,.recopie_y
+ rts 
+   
+ section DATA 
+
+rim_teste_image=*+56
+rim_charge_palette=*+56+4
+rim_charge_image=*+56+8
+*rim			incbin D:\GRAPHES\DRIVERS\RIM\prism_up.rim
+*image			incbin "D:\GRAPHES\<_IMAGES.__>\PNT\GIRL00.PNT"
+
+rim			incbin D:\GRAPHES\DRIVERS\RIM\degas_pc.rim
+image			incbin "D:\GRAPHES\<_IMAGES.__>\DEGAS\BELLAMY2.PC1"
+
+fin_image
+taille_image=fin_image-image
+taille_fichier=fin_image-image
+
+buffer_chargement	dc.l buffer_image
+fichier			dc.l buffer_truecolor
+
+
+ section BSS
+
+‚cran			ds.l 1
+
+ecran			ds.l 512000/4
+buffer_truecolor	ds.l 512000/4
+buffer_image		ds.l 512000/4
+
+old_video	ds.w 1 
+old_adresse	ds.w 1
+
+fin_pile
+ ds.l 100000
+pile
+
+
+nombre_colonnes	ds.w 1
+nombre_lignes	ds.w 1
+longueur_ligne	ds.l 1
+nombre_plans	ds.w 1
+nombre_couleurs	ds.w 1
+largeur_plan	ds.w 1
+
+largeur_image	ds.w 1
+hauteur_image	ds.w 1
+
+
+adresse_palette	ds.l 256		Au maximum, 256 couleurs*4 octets !
+
+mfdb
+mfdb_adresse_buffer
+mfdb_seek		ds.l 1	seek palette 
+mfdb_largeur_image	ds.w 1	largeur de l'image en pixels
+mfdb_hauteur_image	ds.w 1	hauteur de l'image en pixels
+mfdb_largeur_plan	ds.w 1	largeur d'un plan en mot
+mfdb_type_format	ds.w 1	les donn‚es sont au format standard
+mfdb_nombre_plans	ds.w 1	nombre de plans
+mfdb_palette		ds.l 1	nbr d'octets de la palette 
+mfdb_r‚serv‚		ds.w 1	r‚serv‚
+
+ end
+ 

@@ -1,0 +1,82 @@
+'  Tutorial program MATMULT4.BAS supplied with DevpacDSP
+'  (c) Copyright HiSoft 1993
+'  All rights reserved
+ 
+DEFINT a-z
+REM	$NOFNSINLIBS
+LIBRARY "falcon"
+CONST n=4
+DEFSNG a-c
+
+
+SUB Mult(a(2),b(2),c(2))
+
+DIM a1&(N-1,N-1),b1&(N-1,N-1),c1&(N-1,N*2-1)
+' First we need to convert the values to fixed point
+FOR i=0 TO N-1
+	FOR j=0 TO N-1
+		a1&(i,j)=&h800000*a(i,j)
+		b1&(i,j)=&h800000*b(i,j)
+	NEXT j
+NEXT i
+
+IF Dsp_lock THEN
+		PRINT "DSP is already in use"
+		STOP
+END IF
+IF Dsp_reserve(&h40+N*N,&h1000+N*N*2) THEN
+	PRINT "Can't reserve enough DSP RAM"
+	STOP
+END IF
+
+abil=Dsp_RequestUniqueAbility
+
+' load the progran
+OPEN "matmult4.p56" FOR INPUT AS #1
+progsize&=LOF(1)\3
+buffer$=INPUT$(progsize&*3,#1)
+CLOSE #1
+'now run the program
+	Dsp_Execprog SADD(buffer$),progsize&,abil
+
+' send the data
+Dsp_BlkUnpacked VARPTR(a1&(0,0)),N*N,0,0
+Dsp_BlkUnpacked VARPTR(b1&(0,0)),N*N,0,0
+Dsp_BlkUnpacked 0,0,VARPTR(c1&(0,0)),N*N*2
+' the c1& array should now contain pairs of integer and fractional parts
+Dsp_Unlock
+' now convert them to floating point
+FOR i=0 TO N-1
+	FOR j=0 TO N-1
+	c(i,j)=c1&(i,j*2)*2+c1&(i,j*2+1)/&h800000
+	NEXT j
+NEXT i
+
+END SUB
+
+DIM a(N-1,N-1),b(N-1,N-1),c(N-1,N-1)
+
+FOR i=0 TO N-1
+	FOR j=0 TO N-1
+		a(i,j)=RND
+		b(i,j)=RND
+	NEXT j
+NEXT i
+
+showmat a()
+showmat b()
+
+Mult a(),b(),c()
+
+showmat c()
+
+SUB showmat(c(2))
+FOR j= 0 TO N-1
+	FOR i=0 TO N-1
+		PRINT c(i,j),
+	NEXT i
+	PRINT
+NEXT j
+PRINT
+
+END SUB

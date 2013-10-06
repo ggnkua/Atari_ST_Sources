@@ -1,0 +1,159 @@
+ TEXT 
+Begin:
+L0000:BRA       L0001 
+      BRA       L000A 
+      BRA       L000C 
+      BRA       L000D 
+      TST.W     -(A1) 
+      BEQ.S     L0004 
+      BSR.S     L0005 
+      DC.B      ' 2.3+ ky'
+      DC.B      'ne/SPR'
+L0001:MOVEM.L   A6/A0-A2/D0-D5,-(A7)
+      LEA       L0000(PC),A6
+      MOVE.L    A0,D0 
+      BEQ.S     L0003 
+      MOVEQ     #0,D0 
+L0002:TST.L     (A0)+ 
+      BEQ.S     L0003 
+      ADD.L     D0,D0 
+      BSET      #0,D0 
+      BRA.S     L0002 
+L0003:MOVE.L    D0,426(A6)
+      MOVE.L    426(A6),430(A6) 
+      CLR.W     434(A6) 
+      ST        436(A6) 
+      LEA       L0015(PC),A2
+      LEA       L0017(PC),A0
+      MOVE.W    #$F,D4
+      MOVE.W    #$10,D5 
+      BSR.S     L0005 
+      LEA       L0016(PC),A2
+L0004 EQU       *-2 
+      LEA       L0018(PC),A0
+      MOVE.W    #3,D4 
+      MOVE.W    #8,D5 
+      BSR.S     L0005 
+      MOVEM.L   (A7)+,A6/A0-A2/D0-D5
+      RTS 
+L0005:MOVE.W    #3,D3 
+L0006:MOVE.W    D4,D1 
+L0007:MOVEA.L   A2,A1 
+      MOVE.W    D1,D0 
+      MOVEQ     #0,D2 
+L0008:LSR.B     #1,D0 
+      BCC.S     L0009 
+      OR.L      (A1),D2 
+L0009:ADDQ.W    #4,A1 
+      TST.B     D0
+      BNE.S     L0008 
+      MOVE.L    D2,(A0)+
+      DBF       D1,L0007
+      ADDA.W    D5,A2 
+      DBF       D3,L0006
+      RTS 
+L000A:MOVEM.L   A0-A2/D2-D5,-(A7) 
+      LEA       $FFFF9200.W,A0
+      LEA       L0017(PC),A1
+      LEA       L0018(PC),A2
+      MOVEQ     #0,D0 
+      MOVEQ     #0,D1 
+      MOVE.W    #3,D5 
+      MOVE.W    #$FFEE,D4 
+L000B:MOVE.W    D4,2(A0)
+      MOVE.B    2(A0),D2
+      MOVE.B    D2,D3 
+      AND.W     #$F,D2
+      AND.W     #$F0,D3 
+      LSR.W     #2,D3 
+      OR.L      (0.B,A1,D2.W*4),D0
+      OR.L      0(A1,D3.W),D1 
+      MOVE.W    D4,2(A0)
+      MOVE.B    1(A0),D2
+      MOVE.B    D2,D3 
+      AND.W     #3,D2 
+      AND.W     #$C,D3
+      OR.L      (0.B,A2,D2.W*4),D0
+      OR.L      0(A2,D3.W),D1 
+      LEA       64(A1),A1 
+      LEA       16(A2),A2 
+      ROL.B     #1,D4 
+      BCS.S     L000B 
+      MOVEM.L   (A7)+,A0-A2/D2-D5 
+      RTS 
+L000C:MOVE.L    D1,-(A7)
+      MOVE.L    (A0),4(A0)
+      MOVE.L    D0,(A0)+
+      EOR.L     D0,(A0) 
+      MOVE.L    (A0)+,D1
+      EOR.L     D0,(A0) 
+      MOVE.L    (A0),D0 
+      AND.L     D1,(A0)+
+      AND.L     D1,D0 
+      EOR.L     D0,(A0) 
+      MOVE.L    (A7)+,D1
+      RTS 
+L000D:MOVEM.L   A6/D2-D6,-(A7)
+      LEA       L0000(PC),A6
+      CMP.L     422(A6),D0
+      BEQ.S     L0013 
+      MOVE.L    D0,422(A6)
+      BEQ.S     L0014 
+      TST.B     436(A6) 
+      BEQ.S     L0013 
+      CLR.W     D3
+      MOVE.W    434(A6),D4
+      MOVE.L    430(A6),D5
+      MOVEQ     #0,D6 
+L000E:MOVE.L    (A0)+,D2
+      BEQ.S     L0011 
+      MOVEA.L   D2,A1 
+      BTST      D6,D5 
+      BEQ.S     L0010 
+      CMP.L     0(A1,D4.W),D0 
+      BNE.S     L000F 
+      MOVE.W    #4,D3 
+      SF        436(A6) 
+      TST.L     4(A1,D4.W)
+      BNE.S     L0010 
+      BCHG      D6,D1 
+      MOVE.L    D6,D0 
+      MOVE.L    426(A6),430(A6) 
+      CLR.W     434(A6) 
+      BRA.S     L0013 
+L000F:MOVE.L    D0,D2 
+      AND.L     0(A1,D4.W),D2 
+      BNE.S     L0010 
+      BCLR      D6,D5 
+L0010:ADDQ.W    #1,D6 
+      CMP.W     #$20,D6 
+      BNE.S     L000E 
+L0011:ADD.W     D3,434(A6)
+      TST.L     D5
+      BNE.S     L0012 
+      MOVE.L    426(A6),D5
+      CLR.W     434(A6) 
+L0012:MOVE.L    D5,430(A6)
+      MOVEQ     #$FF,D0 
+L0013:MOVEM.L   (A7)+,A6/D2-D6
+      RTS 
+L0014:ST        436(A6) 
+      BRA.S     L0013 
+      DS.W      8,0 
+L0015:DC.B      $00,$00,$00,$01,$00,$00,$00,$02 
+      DC.B      $00,$00,$00,$04,$00,$00,$00,$08 
+      DC.B      $80,$00,$00,$00,$00,$80,$00,$00 
+      DC.B      $00,$10,$00,$00,$00,$02,$00,$00 
+      DC.B      $00,$01,$00,$00,$01,$00,$00,$00 
+      DC.B      $00,' ',$00,$00,$00,$04,$00,$00 
+      DC.B      '@',$00,$00,$00,$02,$00,$00,$00 
+      DC.B      $00,'@',$00,$00,$00,$08,$00,$00 
+L0016:DC.B      ' ',$00,$00,$00,$00,$00,$01,$80 
+      DS.W      3,0 
+      DC.B      $02,$80,$00,$00,$00,$00,$00,$00 
+      DC.B      $04,$80,$00,$00,$00,$00,$10,$00 
+      DC.B      $00,$00 
+L0017:DS.W      128,0 
+L0018:DS.W      32,0
+      DC.B      '(c)',$27,'95'
+ZUEND: END

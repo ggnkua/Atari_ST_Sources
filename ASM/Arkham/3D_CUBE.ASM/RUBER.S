@@ -1,0 +1,614 @@
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; 3D LIGNE BY TCHOOM/ARKHAM ;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+ dc.w $a00a
+ lea.l pile,a7
+ clr -(sp)
+ pea $1f8000
+ pea $1f8000
+ move.w #5,-(sp)
+ trap #14
+ lea.l 12(sp),sp
+ lea.l $1f0300,a1
+ move.w #15999,d0
+clr_ecr
+ clr.l (a1)+
+ dbf d0,clr_ecr
+
+ jsr init_line
+
+; courbe de deplacement
+
+ lea.l cosinus,a0
+ lea.l courbe,a1
+ moveq.w #0,d0
+make_courbe
+ move.w #60,d1
+ move.w d0,d2
+ mulu.w #1,d2
+ divu.w #360,d2
+ swap d2
+ mulu.w #4,d2
+ muls.w (a0,d2.w),d1
+ asr.l #7,d1
+ asr.l #7,d1
+ add.w #160,d1
+ move.w d1,(a1)+
+
+ move.w #30,d1
+ move.w d0,d2
+ mulu.w #3,d2
+ divu.w #360,d2
+ swap d2
+ mulu.w #4,d2
+ muls.w 2(a0,d2.w),d1
+ asr.l #7,d1
+ asr.l #7,d1
+ add.w #100,d1
+ move.w d1,(a1)+
+
+ move.w #50,d1
+ move.w d0,d2
+ mulu.w #1,d2
+ divu.w #360,d2
+ swap d2
+ mulu.w #4,d2
+ muls.w 2(a0,d2.w),d1
+ asr.l #7,d1
+ asr.l #7,d1
+ add.w #90,d1
+ move.w d1,(a1)+
+
+ addq.w #1,d0
+ cmp.w #360,d0
+ bne.s make_courbe
+
+ pea superviseur
+ move.w #$26,-(sp)
+ trap #14
+ addq.l #6,sp
+ clr -(sp)
+ trap #1
+
+; programme principal 
+
+superviseur
+ clr.w $ffff8240.w
+ move.w #$777,$ffff8242.w
+ move.w #$777,$ffff8246.w
+
+prog
+ move.w #37,-(sp)
+ trap #14
+ addq.l #2,sp
+ clr.w $ffff8240.w
+ cmpi.b #$b9,$fffffc02.w
+ beq end
+
+; efface ancien objet
+
+ movea.l adr_clr2,a0
+ moveq.w #0,d0
+ move.l adr_clr2+4,d1
+clr_object
+ movem.l (a0)+,a1-a6
+ move.b d0,(a1)
+ move.b d0,(a2)
+ move.b d0,(a3)
+ move.b d0,(a4)
+ move.b d0,(a5)
+ move.b d0,(a6)
+ cmp.l d1,a0
+ blo.s clr_object
+
+ cmpi.b #$36,$fffffc02.w
+ bne.s no_see_clr
+ move.w #$123,$ffff8240.w
+no_see_clr
+
+; calcul de l'objet
+
+ lea.l points,a0
+ lea.l object,a1
+ lea.l cosinus,a2
+ add.w alpha,a2
+ lea.l cosinus,a3
+ add.w beta,a3
+courbe_reg lea.l courbe,a4
+ move.w #nbre_line*2-1,d0
+calcul
+ move.w (a0)+,d1
+ move.w (a0)+,d2
+ move.w (a0)+,d3
+
+; rotation Y
+
+ move.w (a3),d6
+ move.w 2(a3),d7
+
+ move.w d1,d4
+ move.w d3,d5
+ muls.w d6,d1
+ muls.w d7,d3
+ add.l d3,d1
+ asr.l #7,d1
+ asr.l #7,d1
+ muls.w d6,d5
+ muls.w d7,d4
+ sub.l d4,d5
+ asr.l #7,d5
+ asr.l #7,d5
+ move.w d5,d3
+
+; rotation X
+
+ move.w (a2),d6
+ move.w 2(a2),d7
+ 
+ move.w d2,d4
+ move.w d3,d5
+ muls.w d6,d2
+ muls.w d7,d3
+ add.l d3,d2
+ asr.l #7,d2
+ asr.l #7,d2
+ muls.w d6,d5
+ muls.w d7,d4
+ sub.l d4,d5
+ asr.l #7,d5 
+ asr.l #7,d5 
+ move.w d5,d3
+
+; projection
+
+ asr.w #2,d3
+ add.w #100,d3
+ muls.w d3,d1
+ muls.w d3,d2
+ asr.w #7,d1
+ asr.w #7,d2
+ add.w (a4),d1
+ add.w 2(a4),d2
+ move.w d1,(a1)+
+ move.w d2,(a1)+
+ dbf d0,calcul
+
+ add.l #6,a4
+ cmpa.l #courbe+360*6,a4
+ blo.s nofin_courbe
+ sub.l #360*6,a4
+nofin_courbe
+ move.l a4,courbe_reg+2
+
+ cmpi.b #$36,$fffffc02.w
+ bne.s no_see_rot
+ move.w #$321,$ffff8240.w
+no_see_rot
+
+; affiche objet
+ 
+ lea.l object,a0
+ movea.l adr_clr2,a3
+ move.w #nbre_line-1,d7
+aff_object
+ movem.w (a0)+,d0-d3
+ pea (a0)
+ move.w d7,-(sp)
+ movea.l ecr2,a0
+ bsr line
+ move.w (sp)+,d7
+ move.l (sp)+,a0
+ dbf d7,aff_object
+ move.l a3,adr_clr2+4
+
+ add.w #4,alpha
+ cmp.w #1440,alpha
+ blo.s nofin_alpha
+ sub.w #1440,alpha
+nofin_alpha
+
+ add.w #8,beta
+ cmp.w #1440,beta
+ blo.s nofin_beta
+ sub.w #1440,beta
+nofin_beta
+
+ move.b ecr2+1,$ffff8201.w
+ move.b ecr2+2,$ffff8203.w
+ move.l ecr2,d0
+ move.l ecr1,ecr2
+ move.l d0,ecr1
+
+ move.l adr_clr1,d0
+ move.l adr_clr1+4,d1
+ move.l adr_clr2,adr_clr1
+ move.l adr_clr2+4,adr_clr1+4
+ move.l d0,adr_clr2
+ move.l d1,adr_clr2+4
+
+ cmpi.b #$36,$fffffc02.w
+ bne.s no_shift
+ move.w #$231,$ffff8240.w
+no_shift
+
+ bra prog
+
+end
+ clr.w $ffff8240.w
+ move.w #$777,$ffff8246.w
+ rts
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; routine de ligne by TCHOOM/ARKHAM ;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+line
+ cmp.w d0,d2		Sens gauche_droite
+ bhi.s no_change1
+ exg d0,d2
+ exg d1,d3
+no_change1
+
+ sub.w d0,d2		Dx
+ sub.w d1,d3		Dy
+
+ move.w d1,d4
+ lea.l table_y,a1	Calcul de l'adresse ecran
+ lsl.w d4
+ add.w d4,a1
+ add.w (a1)+,a0
+ move.w d0,d4
+ lea.l table_x,a1	
+ lsl.w #2,d4
+ add.w d4,a1
+ add.w (a1)+,a0
+ move.w (a1)+,d4
+
+ move.w #$a0,a2		Sens de la pente
+ tst.w d3
+ bpl.s no_change2
+ neg.w d3
+ move.w #-$a0,a2
+no_change2
+
+ cmp.w d2,d3		Diagonale
+ bne.s no_equ
+ addq.w #1,d3
+no_equ
+
+ cmp.w d2,d3
+ blo.s line_x
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; routine de ligne verticale ;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+line_y
+ move.l #$00070001,d1
+ cmpi.w #8,d4
+ blo.s no_change4
+ addq.w #1,a0
+ subq.w #8,d4
+ swap d1
+no_change4
+ moveq.w #7,d0
+ sub.w d4,d0
+ swap d2 
+ tst.w d3
+ bne.s no_nul_d3
+ moveq.w #1,d3
+no_nul_d3
+ divu.w d3,d2
+ lea.l offset_y,a1
+ add.w d3,d3
+ add.w d3,d3
+ adda.w d3,a1
+ move.l (a1),a1
+
+ move.l a1,r_rts2+4
+ move.w (a1),r_rts2+2
+ move.w #$4e75,(a1)
+ move.w d2,a1
+ moveq.w #0,d6
+ jsr code_y
+r_rts2 move.w #0,code_y
+ rts
+
+;;;;;;;;;;;;;;;;;;;;;;;
+; routine horizontale ;
+;;;;;;;;;;;;;;;;;;;;;;;
+
+line_x
+ cmpi.w #8,d4
+ blo.s no_change3
+ addq.w #1,a0
+no_change3
+ swap d3
+ tst.w d2
+ bne.s no_d2_0
+ moveq.w #1,d2		Evite division par zero !
+no_d2_0
+ divu.w d2,d3
+
+ lea.l offset_x,a1
+ add.w d0,d0
+ add.w d0,d0
+ add.w d0,a1
+ move.l (a1),saut1+2
+ add.w d2,d2
+ add.w d2,d2
+ add.w d2,a1
+ move.l (a1),a1
+
+ move.l a1,r_rts+4
+ move.w (a1),r_rts+2
+ move.w #$4e75,(a1)
+
+ move.w d3,a1		Transfere pente
+ moveq.w #0,d6		Compteur de pente
+ moveq.w #-128,d5
+ moveq.w #64,d4
+ moveq.w #32,d3
+ moveq.w #8,d2
+ moveq.w #4,d1		Sert pour le 4 et 16
+ moveq.w #1,d0		Sert pour le 1 et 2
+saut1 jsr code_x
+ move.l a0,(a3)+
+r_rts move.w #0,code_x
+ rts  
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; routine pour code horizontale ;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+code_x
+ or.b d5,(a0)		; 128
+ add.w a1,d6
+ bcc.s code_x1
+ move.l a0,(a3)+
+ add.w a2,a0
+code_x1
+ or.b d4,(a0)		; 64
+ add.w a1,d6
+ bcc.s code_x2
+ move.l a0,(a3)+
+ add.w a2,a0
+code_x2
+ or.b d3,(a0)		; 32
+ add.w a1,d6
+ bcc.s code_x3
+ move.l a0,(a3)+
+ add.w a2,a0
+code_x3
+ bset.b d1,(a0)		; 16
+ add.w a1,d6
+ bcc.s code_x4
+ move.l a0,(a3)+
+ add.w a2,a0
+code_x4
+ or.b d2,(a0)		; 8
+ add.w a1,d6
+ bcc.s code_x5
+ move.l a0,(a3)+
+ add.w a2,a0
+code_x5
+ or.b d1,(a0)		; 4
+ add.w a1,d6
+ bcc.s code_x6
+ move.l a0,(a3)+
+ add.w a2,a0
+code_x6
+ bset.b d0,(a0)		; 2
+ add.w a1,d6
+ bcc.s code_x7
+ move.l a0,(a3)+
+ add.w a2,a0
+code_x7
+ move.l a0,(a3)+
+ or.b d0,(a0)+		; 1
+ add.w a1,d6
+ bcc.s code_x8
+ move.l a0,(a3)+
+ add.w a2,a0
+code_x8
+ or.b d5,(a0)		; 128
+ add.w a1,d6
+ bcc.s code_x9
+ move.l a0,(a3)+
+ add.w a2,a0
+code_x9
+ or.b d4,(a0)		; 64
+ add.w a1,d6
+ bcc.s code_x10
+ move.l a0,(a3)+
+ add.w a2,a0
+code_x10
+ or.b d3,(a0)		; 32
+ add.w a1,d6
+ bcc.s code_x11
+ move.l a0,(a3)+
+ add.w a2,a0
+code_x11
+ bset.b d1,(a0)		; 16
+ add.w a1,d6
+ bcc.s code_x12
+ move.l a0,(a3)+
+ add.w a2,a0
+code_x12
+ or.b d2,(a0)		; 8
+ add.w a1,d6
+ bcc.s code_x13
+ move.l a0,(a3)+
+ add.w a2,a0
+code_x13
+ or.b d1,(a0)		; 4
+ add.w a1,d6
+ bcc.s code_x14
+ move.l a0,(a3)+
+ add.w a2,a0
+code_x14
+ bset.b d0,(a0)		; 2
+ add.w a1,d6
+ bcc.s code_x15
+ move.l a0,(a3)+
+ add.w a2,a0
+code_x15
+ or.b d0,(a0)		; 1
+ add.w a1,d6
+ bcc.s code_x16
+ move.l a0,(a3)+
+ add.w a2,a0
+code_x16
+ move.l a0,(a3)+
+ addq.l #7,a0
+code_x17
+ ds.b 19*(code_x17-code_x)
+x_rts rts
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; code pour routine verticale ;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+code_y
+ bset.b d0,(a0)
+ move.l a0,(a3)+
+ add.w a2,a0
+ add.w a1,d6
+ bcc.s code_y2
+ dbf d0,code_y2
+ add.w d1,a0
+ swap d1
+ moveq.w #7,d0
+code_y2
+ ds.b 199*(code_y2-code_y)
+y_rts rts
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; routine d'init de la ligne ;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+init_line
+ lea.l table_x,a0		Rempli Table_x
+ move.w #319,d0
+ moveq.w #0,d1
+ move.w #0,d2
+rempli_table_x
+ move.w d1,(a0)+
+ move.w d2,(a0)+
+ addq.w #1,d2
+ cmpi.w #16,d2
+ bne.s rempli_table_x2
+ moveq.w #0,d2
+ addq.w #8,d1
+rempli_table_x2
+ dbf d0,rempli_table_x
+ lea.l table_y,a0		Rempli Table_y
+ move.w #199,d0
+ moveq.w #0,d1
+rempli_table_y
+ move.w d1,(a0)+
+ addi.w #160,d1
+ dbf d0,rempli_table_y
+
+ lea.l offset_x,a0		Rempli offset_x
+
+n set 0
+ rept 20
+ move.l #code_x+n,(a0)+
+ move.l #code_x1+n,(a0)+
+ move.l #code_x2+n,(a0)+
+ move.l #code_x3+n,(a0)+
+ move.l #code_x4+n,(a0)+
+ move.l #code_x5+n,(a0)+
+ move.l #code_x6+n,(a0)+
+ move.l #code_x7+n,(a0)+
+ move.l #code_x8+n,(a0)+
+ move.l #code_x9+n,(a0)+
+ move.l #code_x10+n,(a0)+
+ move.l #code_x11+n,(a0)+
+ move.l #code_x12+n,(a0)+
+ move.l #code_x13+n,(a0)+
+ move.l #code_x14+n,(a0)+
+ move.l #code_x15+n,(a0)+
+n set n+(code_x17-code_x)
+ endr
+
+ lea.l code_x,a0		Complete code_x
+ lea.l code_x17,a1
+ move.w #18,d0
+rempli_code_x
+ rept (code_x17-code_x)
+ move.b (a0)+,(a1)+
+ endr
+ dbf d0,rempli_code_x
+
+ lea.l code_y,a0		Complete code_y
+ lea.l code_y2,a1
+ move.w #198,d0
+complete_x
+ rept (code_y2-code_y)
+ move.b (a0)+,(a1)+
+ endr
+ dbf d0,complete_x
+
+ lea.l offset_y,a0
+ lea.l code_y,a1
+ move.w #199,d0
+rempli_offset_y
+ move.l a1,(a0)+
+ add.l #code_y2-code_y,a1
+ dbf d0,rempli_offset_y
+ rts
+
+
+adr_clr1 dc.l clr_buf1
+	 dc.l fin_buf1
+adr_clr2 dc.l clr_buf2
+	 dc.l fin_buf2
+ecr1	 dc.l $1f0300
+ecr2	 dc.l $1f8000
+table_x  ds.l 320
+table_y  ds.w 200
+offset_x ds.l 320
+offset_y ds.l 200
+alpha 	 dc.w 0
+beta	 dc.w 0
+courbe	 ds.w 360*3
+
+nbre_line	equ 12
+object 	 ds.w nbre_line*6+2
+
+points
+ dc.w -50,-50,-50,50,-50,-50
+ dc.w 50,-50,-50,50,50,-50
+ dc.w 50,50,-50,-50,50,-50
+ dc.w -50,50,-50,-50,-50,-50
+ dc.w -50,-50,50,50,-50,50
+ dc.w 50,-50,50,50,50,50
+ dc.w 50,50,50,-50,50,50
+ dc.w -50,50,50,-50,-50,50
+ dc.w -50,-50,-50,-50,-50,50
+ dc.w 50,-50,-50,50,-50,50
+ dc.w -50,50,-50,-50,50,50
+ dc.w 50,50,-50,50,50,50
+
+
+cosinus incbin cosinus2.dat
+  
+ ds.l 5000
+pile ds.l 200 
+
+clr_buf1 
+ rept 1500
+ dc.l $1f8000
+ endr   
+fin_buf1
+                                                                                                                                                                                                                                
+clr_buf2 
+ rept 1500
+ dc.l $1f8000
+ endr                                                                                                                                                                                                                                   
+fin_buf2
+
+                                                                                                                                                                                                                             

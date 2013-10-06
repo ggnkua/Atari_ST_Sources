@@ -1,0 +1,885 @@
+*****************************************************************************
+                           The system                                    
+*****************************************************************************
+
+I ) The processor
+ I.1 ) The exception table
+ I.2 ) Supervisor mode versus user mode
+ I.3 ) Internal exceptions
+ I.4 ) The system byte of the status register
+ I.5 ) The processor response to traps
+
+II ) The calculator
+ II.1 ) The calculator
+ II.2 ) The timer
+ II.3 ) The screen
+ II.4 ) The RAM
+ II.5 ) The keyboard
+ II.6 ) The link microcontroler
+ II.7 ) Conclusion
+
+III ) Fargo
+ III.1 ) Fargo 0.1.x
+ III.2 ) Fargo II 0.2.x
+ III.3 ) Fargo use of the memory
+  III.3.1 ) Introduction
+  III.3.2 ) Relocation: the assembler
+  III.3.3 ) Relocation: Fargo
+ III.4 ) The use of TI OS routines
+
+IV ) The texas instrument's operating system
+ IV.1 ) handles
+ IV.2 ) VAT: variable alocation tables
+ IV.3 ) Lite Pascal
+  IV.3.1 ) introduction
+  IV.3.2 ) Tokenization
+** IV.4 ) Auto-interrupts
+
+**V ) Developing functions
+
+I ) The processor
+
+ When you switch on the calculator, the processor goes to see at address
+$0000000 in the memory: the 64 bits that are stored there are called
+the initialisation vector. They are the address of the memory where the
+first program to be executed is stored. That initialisation vector
+points to the routines of the operating system ( Texas Instrument's OS ) ..
+
+ I.1 ) The exception table
+
+ A trap or exception routine is a program which is called by some internal
+( software ) or external ( hardware ) routines.
+ To each trap, we associate a vector ( the address to the program to be
+executed ). On the 68000 processor, there are 255 vectors. These vectors are
+longwords stored at the beginning of the memory in the exception vector table.
+This table begins at $000000 and is over at $0003FF
+
+here is this table:
+addresses  |  Vector   |   Description
+( hex )    |  number   |
+000000     |    0      |   initialisation vector ( special: 64 bits )
+000008     |    2      |   Bus Error
+00000C     |    3      |   Address Error
+000010     |    4      |   Illegal Instructions
+000014     |    5      |   Division by zero
+000018     |    6      |   "Chk" instruction
+00001C     |    7      |   "Trapv" instruction
+000020     |    8      |   Privilege violation
+000024     |    9      |   Trace
+000028     |   10      |   Line 1010 emulator
+00002C     |   11      |   Line 1111 emulator
+000030/    |   12/     |   Reserved or
+000060     |   24      |   useless
+000064     |   25      |   Auto-Interrupt level 1
+000068     |   26      |   Auto-interrupt level 2
+00006C     |   27      |   Auto-interrupt level 3
+000070     |   28      |   Auto-interrupt level 4
+000074     |   29      |   Auto-interrupt level 5
+000078     |   30      |   Auto-interrupt level 6
+00007C     |   31      |   Auto-interrupt level 7
+000080/    |   32      |   Trap instruction
+0000BF     |   47      |   vectors
+           |  48/63    |   Reserved
+000100     |  64/255   |   User interrupt vectors
+
+ I.2 ) Supervisor mode versus user mode
+
+ The 68000 processor was a revolution when it was released: it was powerful
+and RELIABLE. That reliability ( which is vital to many systems ) was
+accomplished using two modes: supervisor and user mode.
+ The processor runs programs in the user mode. The supervisor mode is
+dedicated to the operating system which launches programs and takes control
+in case of errors or at the end of the execution of the program.
+ In supervisor mode, you have access to all the software and hardware
+resources of the system: the whole status register, the supervisor stack and
+all the instructions ( see I.3.b privilege violation ) .
+ When the supervisor mode is launched ( when any vector is triggered ) , the
+A7 register is modified by the processor and points to the supervisor stack
+opposed to user stack.
+ Note: the supervisor stack on the 92 is 4 KB long. There, is stored some
+information on the program being launched, the state of the processor before
+the program was launched, ...
+
+ I.3 ) Internal exceptions
+
+    a ) "normal traps"
+
+  *  Division by Zero: this trap is called when the divisor of a DIVU or DIVS
+  instruction is equal to zero. The programmer may freely redirect this trap
+  to a self made one to , for example, to recalculate the divisor or to
+  exit from the program with a simple message without freezing the calculator.
+  *  "CHK": The instruction "Chk" allows us to test if an operand is into a
+  certain interval. If not, the Chk trap is called: the programmer may well
+  redirect this trap.
+  *  TrapV: if the V flag is set during the execution  of this instruction,
+  the trap  is called: again, the programmer may redirect this trap.
+  *  Trap: this instruction allows us to redirect our program to one of the
+  32/47 vector: you need just to type: " Trap <number_of_vector> "
+  some are used by the system: look in the "traps.txt" file
+
+    b ) Programming errors
+
+  * Address Error: this happens, when you write or read a word or a longword
+  at an odd address. Bytes may be written anywhere.. This is due to the fact
+  that the processor has only 23 address pins to address 2^24=16Mb of memory.
+  Proper explanation of this phenomenon is included in the Motorola hardware
+  reference manual.
+
+  * Privilege violation: this happens when, in the user mode, a program
+  tries to execute a supervisor mode instruction.
+  supervisor instructions are:
+  	Stop
+  	Reset
+  	Rte
+  	Move.w source,SR
+  	and.w  #data,SR
+  	Eor.w  #data,SR
+  	Or.w   #data,SR
+  	move.l An,USP
+  	move.l USP,An
+
+  You don't need to bother about these instructions ( I have put all this
+  here just for documentation purposes ) : privilege violation traps occur
+  when you haven't set the S bit of the system byte and you are trying to
+  execute a supervisor instruction: it may happen as "illegal instruction"
+  happen: see below.
+
+  * Illegal instructions: an instruction is invalid if the processor doesn't
+  recognize the instruction... As we are using a compiler which code the
+  instructions, there are only two reasons to such a phenomenon:
+   * you have branched to a label which wasn't a label with instructions (
+   for example, a label to a table or some data you use... ) : thus, the
+   processor is trying to execute ... well... nothing at all: data... at
+   best, you get an illegal instruction ( at best cause this could lead to
+   destroying memory, or other such things)
+   * the processor executed one of the following code: $4AFA, $4AFB or 4AFC
+   the first 2 ones are reserved and the last one may be used to force an
+   illegal instruction ( in fact, it is what we do when we write " illegal"
+   to make a breakpoint: see \newbies.txt, section VII.1 )
+
+  * line 1111 emulator or line 1010 emulator: these happen respectively
+  when $FXXX or $AXXX is executed: ( where X is anything ) as sooner, it
+  often happens when you are trying to execute random data...
+  note: line 1010 is used by the system: it is redirected: thus, you should
+  never get such an instruction...
+  Originally, these opcodes were implemented to allow the programmer to define
+  new instructions. Note that the 1111 code is used in later Motorola
+  processors: it is used to control the arithmetic coprocessor.
+  Under some conditions a line A emulator error will be thrown, this comes
+  about from an ER_Throw being thrown without an ER_Catch run before this..
+  The standard use of the Line A emulator on the TI92 is to raise
+  errors in the form $Axxx, where xxx is the error code
+
+  * Trace: when the T bit of the status register, after each instruction,
+  the trace vector is launched: used to write debuggers: that is what Db92
+  does...
+
+ I.4 ) The system byte of the status register
+
+ The system byte is: |T|0|S|0|0|I2|I1|I0|
+Note: you may modify that byte only when in supervisor mode.
+
+*  The T ( trace ) bit is set by the Raven debugger: it allows to "trace" a
+program: when set, after each instruction, it launches the trace vector
+( it launches the program which the trace vector points to: ie: the debugger )
+
+*  The S ( system ) bit : when set, it allows to modify freely the system byte
+and to have access to the supervisor resources.
+
+*  I2,I1 and I0 are the bits of the interrupt mask.
+ The I0, I1 and I2 bits of the system register are used to set the interrupt
+level mask. These bits are set to an interrupt level: if the trap generated
+has a higher level than the interrupt mask, then the trap is executed.
+Otherwise it is ignored. ( ignoring a trap generally means that another
+interrupt, with a higher priority is being treated )
+
+Here is how these bits are set:
+
+          I2   I1   I0
+
+level 0 |  0    0    0 |  ---------> lowest priority
+level 1 |  0    0    1 |
+level 2 |  0    1    0 |
+level 3 |  0    1    1 |
+level 4 |  1    0    0 |
+level 5 |  1    0    1 |
+level 6 |  1    1    0 |
+level 7 |  1    1    1 |  ---------> highest priority
+
+
+Note: #0=%000; #1=%001; #2=%010; etc...
+
+ I.5 ) The processor response to traps
+
+ This section is added for documentation purposes. till you do not decide
+to write a debugger, data in this section will never be of any use to you....
+If you just want to know how it works, then...
+
+The Processor services Exceptions with a certain priority.
+There exist 3 groups:
+
+------------------------------------------------------------------
+|  Group    |   Exception         |   recognition    |  priority |
+------------------------------------------------------------------
+|     0     |     RESET           |  at the end of   |     ^     |
+|           |    BUS ERROR        |  the clock cycle |     |     |    ^
+|           |  ADDRESS ERROR      |                  |     |     |    |
+------------------------------------------------------------------    |
+|     1     |     TRACE           |  at the end of   |     ^     |    |
+|           |  INTERRUPTION       |  an instruction  |     |     |    |
+|           | ILLEGAL INSTRUCTION |  cycle           |     |     |    |
+|           | PRIVILEGE VIOLATION |                  |     |     |    |
+------------------------------------------------------------------    |
+|     2     |  Trap #0 to #15     |  during an       |   NO      |    |
+|           |  TRAPV, CHK         |  instruction     |  PRIORITY |    |
+|           |  DIVU, DIVS         |  cycle           |           |
+|           |  (if division by 0) |                  |           |
+------------------------------------------------------------------
+
+The exception column indicates the names of the exceptions in the group.
+The recognition column indicates when the processor takes into account the
+exceptions.
+The priority column indicates what is the priority ( ie: the one which will
+be treated first ) within the group.
+Finally, the arrow to the right indicates the increasing priority of the
+groups.
+
+Thus, some exceptions may happen during an instruction...
+These groups reflect the way the processor will handle them.
+during each exception, the processor stores some information on the
+supervisor stack so that the OS may found what went wrong...
+
+The group 0 will result in the following data structure on the stack:
+
+Status of the R/W,I/N,FC2,FC1,FC0 pins ( the 5 first bits of the word )  ^
+the address which was on the bus address ( a longword )                  |
+a copy of the instruction register     ( a word )                        |
+a copy of the status register          ( a word )                        |
+the PC                                 ( a longword )                    |
+
+The arrow indicates the decreasing addresses. The Stack pointer points at the
+first entry of that table after the exception.
+
+The group 1 and 2 will result in the following data structure on the stack:
+
+a copy of the status register          ( a word )                        ^
+the PC                                 ( a longword )                    |
+
+
+-----------------------------------------------------------------------------
+
+II ) The calculator
+
+ II.1 ) The calculator.
+
+ Physically, the processor is wired on a card. To the processor, is
+connected other hardware. There is the RAM, the ROM, the timer, the link
+microcontroler, the screen refresher and some others. These devices can be
+accessed through certain addresses ( these addresses depend on the way these
+devices were wired to the processor ). In fact , what happens when you execute
+a move D0,($xxxx) command is: the processor uses some of its output pins to
+write the D0 register at address $xxxx.
+First, the address pins are pulled high or low ( logic level 1 or 0 ) to match
+the address $xxxx. There is some external decoding logic which connected on the
+address bus ( some "and" gates in a small IC ) which triggers only the device
+located at this address. Then, when the data pins are pulled high or low to
+match the D0 register, only the right device reads the pins.
+Thus, this address has no physical meaning: it may be effectively some RAM or
+ROM but it may be the input pin of the graphic controller. Whether it is some
+real memory or the internal register of a peripheral depends on the external
+decoding logic.
+
+$000000-$1FFFFF : RAM
+$200000-$3FFFFF : Module ROM, or masked ROM if there's no module
+$400000-$5FFFFF : Module ROM
+$600000-$6FFFFF : Memory mapped I/O (only the lower 6 bits of the address
+                                     really point to something)
+$700000-$FFFFFF : Nothing (floating bus)
+
+ The Memory mapped I/O is used by all the devices other than RAM and ROM.
+For example, you may command and have access to all the features of the link
+microcontroler by switching some bits at addresses: $60000C and $60000E.
+ Not all these ports are understood... Check the "lowlevel.txt" file for more
+on these.
+ However, here is a list of the most important:
+   *  The timer: it may be freely reprogrammed to trigger interrupts with new
+      frequencies
+   *  The video controller: it is not very well understood but it is possible
+      for now to adjust the contrast, and tell him where to get in memory the
+      data to update the screen. ( see I.7 for more...)
+   *  The I/O link microcontroler: it is possible to directly command the
+      lines of the i/o port.
+   *  The keyboard: it may be read directly by these ports. ( check
+      "lowlevel.txt" and see \lesson\lesson_2.txt)
+
+ II.2 ) The Timer
+
+ Outside of the processor, on the card which supports the processor, there
+is a component, a hardware timer which periodically triggers the auto
+interrupts (see I.1: vector nø25-31)( not all with the same rate ) . These
+interrupts are used by the system to read the keyboard for example and many
+other tasks. They allow the processor (and your programs) to be aware to the
+time.
+ Note:
+1) disabling interrupts will greatly increase the programs speed ( it can
+be done by setting the interrupt mask to level 7 ) but will require special
+programming ( for example: the OS keyboard reading routine uses interrupts:
+you will no be able to access to the keyboard anymore with them: you will
+have to directly read the keyboard controller. To know why, see
+\lesson\lesson_2.txt)
+2) Interrupts can be redirected to create a resident program for example or
+to have grayscale graphics.
+
+ II.3 ) The screen
+
+  As the screen is a simple Black & White screen, a screen is described by
+128(height)*240(width)/8=3840 bytes =$F00 bytes, each bit representing one
+pixel. To display something on the screen you just need to build a
+"virtual screen" in RAM: first, allocate a $F00 bytes long memory area.
+There, the first bit will be the upper left pixel: %1 for on and %0 for off.
+Then, all following bits will be the pixels to the right till the end of the
+upper line of the screen. Then, pixels are mapped the same way, one line
+after the other. Now, if go back at the beginning of that memory area, and
+if you read the bits for $F00 bytes, you will read the pixels from the left
+to the right of one line, from the upper line to the down line.
+
+  All you need now to do is to tell the video controller that you wish him
+to display a picture using the data stored in the area you allocated (you
+need to write to the $600010 I/O port the address of your memory area
+divided by 8: check "lowlevel.txt" ). Now, the video controller
+will read that memory area just like we did and it will update the screen
+100 times per second depending on the data in this memory area.
+
+  On 92 with ROM 1.x, the memory used by the system is at address $4440 and
+on ROM 2.x, this address is $4720. The calculator $600010 port is originally
+configured to get LCD data in this location. To get the exact location of
+the LCD memory, use the system variable: "tios::main_lcd".
+  For more on Grayscale and the use of virtual screens, look at
+\lesson\lesson_3.txt
+
+ II.4 ) The RAM
+
+ Please, note that this section is not very useful for programming it is
+there just for those of you who are interested to know how it works.
+ The 92 was probably originally build to have a 256 k memory. When only 128 k
+are present, then, the RAM can be linearly addressable from the processor:
+the RAM is in one piece: it is one chip.
+ When using 256 k, there are two chip: this allows interleaving 2 and
+increases the access to the memory sometimes with a factor 50 % (I tested it:
+just write a program with many access to memory: you will see..).
+Here is why:
+128k:
+
+-----------         ---------------
+          |   Wire  |             |
+Processor |---------| Memory bank |
+          |         |             |
+-----------         ---------------
+
+256k:
+                        |--------|
+-----------    |--------| Bank 1 |
+          |    |        |--------|
+Processor |----|
+          |    |        |--------|
+-----------    |--------| Bank 2 |
+                        |--------|
+
+The interleaved memory is build so that consecutive addresses are always on
+different memory banks. Here is a schematic of what happens when doing a
+sequential memory access with and without interleaving.
+128k:
+each memory access requires the same access time ( often around 5 or 20
+processor cycles )
+
+address nøi:  i        i+1       i+2
+              |         |         |
+----------------------------------------> time ( unit: processor cycle )
+
+256k:
+each access is done at the same time on both banks: the process is
+paralleled: while the first access will require the same time than without
+interleaving, all other will require half less time if access is sequential.
+
+address nøi:  1    2    3     4    5
+              |    |    |     |    |
+-----------------------------------------> time ( unit: processor cycle )
+
+ II.5 ) The keyboard
+
+To understand the matrix type keyboard, look at the following 4 keys keyboard:
+
+D0  ------------+------------+
+                |            |
+         key 1 |-     key 2 |-
+                |            |
+                +--+         +--+
+                   |            |
+                   |            |
+                   |            |
+D1  ------------+------------+  |
+                |  |         |  |
+         key 3 |-  |  key 4 |-  |
+                |  |         |  |
+                +--+         +--+
+                   |            |
+                   D2           D3
+
+
+Where "+" is a connected node.
+
+ |       ; This is a
+|-       ; manual switch
+ |       ;
+
+ If one pulls high the D2 and D3 lines (+5V), D0 or D1 will be pulled high if
+one key was hit. Now, if you decide to mask column D2 (0V) and apply +5V to D3
+, if you check first D0 then D1, you will know for sure if one of the key 2 or
+4 was hit and you will know which one(s): If key 4 is hit, D1 is high and if
+key 2 is hit, D0 is high.
+ This system can be generalized to any size: the 92 keyboard is based on this
+matrix type design
+
+ A thoughtful search on the 92 motherboard will show you that the 92
+keyboard is wired in a standard fashion. It is a 10 lines/8 columns matrix.
+ The keys are wired so that the two lowest enter keys are the same and the
+highest enter key is different. The on key does not belong to this matrix
+which is build on the basis of the matrix shown in the lowlevel.txt file.
+ The 10+8 lines are directly connected to the CPU: I have been unable to
+get their exact pinout. I don't really understand how this works because
+if the keyboard is directly connected to the CPU, it should interfere with
+the bus.. Don't know really why it works..
+
+ II.6 ) The link microcontroler
+
+ Note: This section was written by Sami Khawam
+       <sKhawam@bigfoot.com>
+       <a9501901@unet.univie.ac.at>
+
+ All TI calculators have two open-drain lines. There is a method under Fargo
+to access each line individually for input and output (see "lowlevel.txt"),
+but in most cases where byte-transfers are needed, TI's built-in link
+routines are simple en effective to use. The protocol used by these routines
+will be described here:
+
+ When the lines are not active they are high. You should remember that if
+an end of an open-drain line is pulled-down (connected to the ground) by
+a device, all devices that are attached to that line (including the
+device that pulled the line down) will read a low signal even if they are
+trying to pull the line up.
+
+We will assume that Calculator1 (C1) want to send a byte to Calculator2
+(C2).
+The lines will be refered by L1 and L2. In the text "10" means L1 high
+and L2 low, and "01" means L1 low and L2 high.
+
+
+-In idle mode, both lines are high. Depending on the bit that C1 wants to
+ send, it will pull-down different lines:
+
+   * .L2 will be pulled-down if the bit is 1.
+     .C1 reads now 10.
+
+   * .L1 will be pulled-down if the bit is 0.
+     .C1 reads now 01.
+
+ C1 will wait until it reads a 00.
+
+
+-C2 was waiting for a signal change on L1 or L2.
+
+   * .If it reads 10 it knows that the bit sent is 1.
+     .L1 will be pulled-down by C2
+     .Now C2 reads 00. It will wait for a 01
+
+   * .If it reads 01 it knows that the bit sent is 0.
+     .L2 will be pulled-down by C2
+     .Now C2 reads 00. It will wait for a 10
+
+
+-C1 was waiting for a 00. Now it pull-up both lines. After this
+ C1 will read either 01 or 10.
+
+
+-C2 will also pull-up the lines, and reads 11.
+
+-C1 reads also 11.
+
+
+This will be repeated 8 times in order to transfer a bit.
+
+This protocol used by TI on their calculators, is an effective protocol.
+But in most cases you do not need to go through those details when
+programming, since everything is made by the built-in ROM routines.
+ To learn more on the byte level protocol, look at \doc\ti-prot.txt
+
+ II.7 ) Conclusion
+
+ If you are curious enough to open your calculator, you will notice that what
+I explained there is not exactly what happens:
+ There are 4 video controllers: 2 for the lines and 2 for the columns. I found
+no dedicated link microcontroler on my mother board: perhaps does one of the
+video MCU also handle the link ... I also found no external timer and found
+no external address decoding logic for the i/o ports. One should also notice
+that the processor has between 90 and 120 pins ( I did not counted them but
+looked at the processor ) while the original Motorola 68k processor had
+~75 pins. This may mean that the processor has many build in newer functions.
+
+-----------------------------------------------------------------------------
+
+III ) Fargo
+
+ When Fargo is not installed, the TI OS is running and it is not possible to
+have access directly to the processor: it is impossible to execute ASM
+( impossible... perhaps someone will find a way one day ... ). At least,
+no one ever found a leak into the TI OS: it is very well programmed...
+
+ III.1 ) Fargo 0.1.x
+
+ To overcome that problem, David Ellsworth had a great idea:
+He just send the 92 a backup slightly bigger than the calc's memory: at one
+point or another, the address the backup writes to will be bigger than
+$20000 ( 128 kb ). Higher addresses go back at the beginning of the memory:
+( ex: the initialisation vector is $000000 and $020000 is physically just the
+same... Just the way the memory chip is connected ) Thus, the backup will be
+writing in the exception vector table and on the vectors used to send or
+receive data...
+ At one point or another, a special routine, already copied in memory,
+will be triggered instead of those in charge of the backup. Thus, the backup
+will end abnormally but the special routine ( located at the end of the
+memory, at the begening of the core.o file ) will redirect some auto
+interrupts to newer interrupt routine. One of those will test each time it
+is launched by the timer if the [shift] + [on] combination key was hit.
+Then, basic routines ( the core ) and some libs can be send to the 92 to
+execute assembly.
+
+ III.2 ) Fargo II 0.2.x
+
+ That version works exactly the same but it uses an "event handler" which is
+located around 36 kb in the memory. it writes upon that handler the routine
+which then redirects some auto interrupts. It saves the pain to rewrite things
+on the exception table and generates smaller backups....
+
+ Note: The major advantage is that no "RESET" code needs to be run. Restoring
+the vector table was just a matter of one ROM call (although it was done with
+a loop). Fargo 0.1.x had a minimal portion of the actual ROM reset code
+(without the memory clearing code etc.) as writing over all the memory damaged
+sytem data in the RAM and the running CODE in the ROM would therefore crash
+the machine after the backup had been sent. With Fargo II this is not
+necessary.
+
+ III.3 ) Fargo use of the memory
+
+  III.3.1 ) Introduction
+
+ The greatest treat to assembly programming is the TI OS. The thing is that
+it will relocate programs in the RAM so that as little RAM as possible is
+used.
+ For example, if you delete a standard TI program, the OS will move data and
+variables in memory so that RAM is really freed: the memory is defragmented
+just like a defragmentation program works on your Hard Disk.
+ This means that it is impossible to know where in memory programs will be
+executed. This is a problem with immediate addressing: BSR and JSR
+instructions refer to precise addresses which are not known when the program
+is compiled and which are not known even when copied in the RAM: the programs
+they refer to can be moved anytime.
+ This phenomenon is common to all the modern computers. The size of the
+program memory is limited and must be used in the most efficient way
+possible. The solution to this problem is Relocation !!!
+
+  III.3.2 ) Relocation: the assembler
+
+ An easy way to understand how it works is to sneak into the object files
+generated by the A68k assembler ( before they are turned into 92 files by the
+linker: "flinker" ). If you just look into the Fargo.bat file (dos users),
+you will see that a68k generates .o files which are used to build .92p files
+and which are then deleted. Just remove the line which delete these object
+files. Then, assembling one of your program will generate the .92p file and
+a .o file.
+ A file is included in this distribution: \doc\amiga.txt. This file describes
+the format of these object files. Note that this file format is named "amiga"
+because it was originally developed by the authors of the amiga OS and was
+used by the amiga OS.
+
+ Relocation is a process transparent to the user. It must be taken care of by
+the OS.
+ To allow the process to take place, the assembler generates tables at the
+end of the code. These tables contain relative pointers from the beginning of
+the code section. Each of these relative pointer point to a place in the code
+where an immediate address is used. These relative pointers are called offsets.
+
+For example, here is a program I compiled:
+**************************
+ include "flib.h"
+ xdef _main
+ xdef _comment
+
+_main:
+   jsr       flib::clr_scr
+   rts
+
+_comment:
+ dc.b "esai",0
+
+ end
+***************************
+here is the corresponding object file generated.
+
+        0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F   0123456789ABCDEF
+  00   00 00 03 e7 00 00 00 00 00 00 03 e8 00 00 00 01   ..þ......Þ...   00
+  10   20 00 00 00 00 00 03 e9 00 00 00 04 4e b9 00 00    .....Ú...N¦..   10
+  20   00 00 4e 75 65 73 61 69 00 00 4e 71 00 00 03 ef   ..Nuesai..Nq..´   20
+  30   01 00 00 02 5f 6d 61 69 6e 00 00 00 00 00 00 00   .._main........   30
+  40   01 00 00 02 5f 63 6f 6d 6d 65 6e 74 00 00 00 08   .._comment....   40
+  50   81 00 00 03 66 6c 69 62 40 30 30 30 39 00 00 00   ü..flib@0009...   50
+  60   00 00 00 01 00 00 00 02 00 00 00 00 00 00 03 f2   ............._   60
+
+The hunk code begins at $14:
+00 00 03 e9 00 00 00 04 4e b9 00 00 00 00 4e 75 65 73 61 69 00 00 4e 71
+hunk type | hunk length|               code                           |
+
+Note that the name of the program is considered as some code by the assembler
+and that it adds the $00004e71 longword at the end of all program codes
+( don't know really why: probably something to do with Fargo... )
+
+Then the hunk_ext
+
+00 00 03 ef     ;   hunk type
+01 00 00 02 5f 6d 61 69 6e 00 00 00 00 00 00 00   ; symbol type 01
+01 00 00 02 5f 63 6f 6d 6d 65 6e 74 00 00 00 08   ; length: 02 longwords
+81 00 00 03 66 6c 69 62 40 30 30 30 39 00 00 00   ; symbol type 81, length 03
+the last symbol name is the library name/number which is called in the
+program. Here, flib::clr_scr is flib@0009.
+
+Lastly, following the library symbol is its relocation table.
+00 00 00 01     00 00 00 02
+table lenght |  offsets ( in longwords ) 
+
+Here, there is only one call to clr_scr located at $2 from the beginning of
+the code.
+ Then, flinker will create a Fargo file with the right header structure, it
+will add the code to this file and lastly, will compress these tables and add
+them at the end of the file.
+
+  III.3.3 ) Relocation: Fargo
+
+ Now, if you send this .92p file to the 92 and execute it, here is what Fargo
+will do.
+ First, it will look at these tables. It will get the address of each
+subroutine called and will replace all the blanks left by the assembler in the
+"Jsr" opcodes. It will use the relocation table to know where to do these
+replacements.
+
+ Perhaps some already wondered who relocated the Fargo shell ? Well, the
+Fargo core is stored at the end of the RAM at a place the TI OS never reaches.
+I believe there exist a TI OS variable which gives the end of the available
+memory. All what is necessary to do is to change this variable
+( to decrease it slightly...) .
+
+ Note: it is dangerous to play with it though, in reducing memory size (like
+Raven did). TI-BASIC tokens are processed at the end of memory, if a Fargo
+program writes data at the end of memory and adjusts this pointer then
+this data could be overwritten. If this wasn't the case Fargo would support
+TSR's already (most probably). 
+
+ The only problem left is how Fargo gets the address of the subroutine. I
+believe that in the relocation table, there is the library name. Fargo
+searches this file in memory ( it probably uses the VAT to do so. See IV.2)
+and then reads at the beginning of the library a table which lists the
+relative address -from the beginning of the library file- of the subroutine
+( it probably uses the library number to do so ).
+
+ III.4 ) The use of TI OS routines
+
+ Fargo solves another problem than the problem of relocation.
+There exist different ROM versions for the 92. While these different ROM
+versions correct a few bugs in the different units of the calculator, they
+also have a great drawback. The same routines ( ex: display routines ) are
+not at the same place in different ROM versions. This means that using the
+TI OS routines is not very easy if you want to write a program which will work
+on any 92. The solution is the use of a table of pointers pointing to the
+correct addresses.
+ When Fargo is installed into a backup, it initialises the TIOS library so
+that it uses the right addresses. Each subroutine there is an absolute pointer
+to the right subroutine in ROM.
+ Then, during the relocation process, the TIOS library is not handled like all
+other libraries. To blanks in the "Jsr" opcodes using TIOS are added the
+absolute address corresponding to the routine number in the table library
+-located at the beginning of the file-.
+ RAM constants which were used in the "move.l tios::clr_scr,a0" opcode are
+handled in a similar fashion: the blanks left are replaced by the "subroutine
+absolute address" .
+
+------------------------------------------------------------------------------
+
+IV ) The texas instrument's operating system
+
+ IV.1 ) handles
+
+  When you want to get some dynamic memory ( a memory you will free at the
+end of the program ), you use a TI-OS routine called "tios::HeapAlloc" with
+the correct parameters ( size of memory needed on a longword ). This routine
+will return a word integer: a handle. It is a sort of pointer to the memory
+you asked for. To get the real pointer to that memory, you should use the
+"tios::deref" macro which will return a pointer you will be able to use.
+  Handles are the TI-OS solution to moving programs in memory to save
+as much space as possible ( see II.3 ). Basically, a handle is a number.
+It is the number of an entry in an array. That array is pointed to by the
+longword stored at address $5D42. The entries in this array are the 
+relative address from the beginning of the array to the memory the handle
+represents. So, to get the address of a handle: (($5D42) + handle * 4) - 2
+This is what the "tios::deref" macro does.
+
+Note:  $5D42 == tios::Heap , "-2" isn't done by the tios::deref macro.
+       tios::Heap+handle*4-2 would give the address of the word
+       (preceeding the data) indicating the length of the memory block
+       (in words)
+
+Note: There exist some static handles: these are studied in IV.2
+      Please, check also "handles.txt" .
+      If you wish to use practically handles, look at \doc\68kguide.txt,
+      section 1.9: handles.
+
+Now, if the TI OS decides to move a program in memory to compact the memory
+so that no "holes" are left, it adjusts the pointer to the program or the
+data while the handle number is kept unmodified. If you knew the handle
+number, you can always get the address: the moving process is transparent
+to the user.
+
+ IV.2 ) VAT: variable allocation tables
+
+ As stated in Fargo documentation, handles between 0000 and 0015 included
+are system handles: they are used by TI OS and are de facto static.
+Handles $0B and $0C are used to store the info on folders and files on the 92.
+Note: They have the same use as that of the FAT on a DOS Hard Disk
+
+handle $B : folder table
+handle $C : main folder
+
+The first hex number indicates the relative address from the beginning of the
+file/folder table handle.
+
+format of file/folder tables
+----------------------------
+$00.W : maximum number of files/folders before handle has to be resized
+$02.W : number (N) of files/folders in table
+$04   : listing in the format below (alphabetical order)
+     +$00   : file/folder name (lowercase) terminating in 0s until $08
+     +$08.W : file/folder flags
+            . 3 (bit3)   : locked
+            . 4 (bit4)   : hidden
+            . 7 (bit7)   : folder
+            . 14 (bit14) : parameter (in function/program)
+     +$0A.W : handle of file/file table
+$04 + ( $0C * N ): end of the table
+
+Note: These tables only change in size when more room is required to store the
+      entries, for speed the table is only resized at intervals of 10 entries.
+      This is marked by the first word in the table, their corresponding size
+      change is $78 bytes.
+
+So, the handle $B will point to a table which lists all folders on the calc
+( including the folder "main" ). In this table, you will find the handle of
+each folder and each of these handle will point to a table of files. In each
+of these table of files, there will be the files and their respective handle
+which will point to the file itself.
+
+Note: this last paragraph is included for documentation purposes: using it
+      to effectively access to these handles would probably lead to a big
+      BUGS as resizing these handles could lead the TI OS memory routines to
+      move your program in memory which would mean that the Fargo relocation
+      was useless...
+
+For more on the TI OS file formats, functions/programs structure and
+tokenization, please read Gareth's documentation, \doc\files.txt.
+
+-----------------------------------------------------------------------------
+
+ IV.3 ) Lite Pascal
+
+  IV.3.1 ) introduction
+
+ The programmation langage implemented in the 92 is extremly powerfull as it
+allows the definition of local variables and features many high level langage
+functions.
+ However, as some of you have perhaps allready tested it, it is extremly slow.
+For example, here is a small program i did to test this:
+
+****************
+essai()
+Prgm
+local a,i
+0->a
+For i,0,10000
+a+1->a
+EndFor
+EndPrgm
+****************
+
+The corresponding program i wrote in assembly:
+
+****************
+ include "flib.h"
+ xdef _main
+ xdef _comment
+
+i    equ  10000
+
+_main:
+
+  jsr      flib::clr_scr
+  clr.l    d1
+  move.l   #i-1,d0
+loop
+  add.l    #1,d1
+  dbra.l   d0,loop
+  rts
+
+_comment:
+ dc.b "essai",0
+
+ end
+*************************************
+
+The ti version took exactly 2 minutes to execute on my 92 II
+The assembly version executed itself so fast that it was impossible to
+measure anything. I used the assembly version with the maximum value possible
+for i ( 2^32-1 = 4.5 billion ). Doing 4.5 billion loops took me less than
+one second...
+
+Impressive, eh ? !!
+
+  IV.3.2 ) Tokenization
+
+ The explanation to this phenomenon is the way the ti traduces the program.
+The ti does not generate any assembly code for this program. It interpretes it
+This means that it simulates a computer which understands the lite pascal
+instructions. To do this, it has a whole bunch of subroutines with parameters
+which simulate these instructions.
+ First, when you edit your program, the text of the program is stored
+(probably) in the stack. Upon exit, the OS creates a file to store this
+program. The program is stored in a very peculiar form which is explained in
+\doc\files.txt.
+In fact, it is translated in a post fixed notation: the greatest advantage
+to this notation is that it takes into account the priority of the operateurs.
+Upon execution, two process take place: first, there is an error checking on
+each expression before execution. Then, expressions are executed.
+ The fact that the error checking is not done before execution slows down the
+whole process and the way the instructions are executed is extremly slow by
+itself. A book of mine states that interpretation is usually 10000 slower than
+compilaton.
+
+Note to those interested in compilation theory.
+The process of tokenizing is likely not to be done by a syntax analysis
+program. In this case, most of the errors would have been detected sooner.
+This means that the Post Fixed Notation is probably generated by a homemade
+algorithm. Please, note that it would be possible to write a code generator
+on PC's for the 92 using this post fixed notation. However, the greatest pb
+with this notation is that the code is very difficult to optimize.
+That is why it is not used very often in compilers. Only in interpreters.
+
+*****************************************************************************
+                                 System
+*****************************************************************************
+
+
