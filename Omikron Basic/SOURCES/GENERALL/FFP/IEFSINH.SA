@@ -1,0 +1,134 @@
+         TTL       IEEE FORMAT EQUIVALENT HYPERBOLICS (IEFSINH)
+***************************************
+* (C) COPYRIGHT 1981 BY MOTOROLA INC. *
+***************************************
+ 
+*************************************************
+*            IEFSINH/IEFCOSH/IEFTANH            *
+* IEEE EQUIVALENT FLOATING POINT HYPERBOLICS    *
+*                                               *
+*  INPUT:   D7 - IEEE FORMAT ARGUMENT           *
+*                                               *
+*  OUTPUT:  D7 - IEEE FORMAT HYPERBOLIC RESULT  *
+*                                               *
+*     ALL OTHER REGISTERS ARE TRANSPARENT       *
+*                                               *
+*      MAXIMUM STACK USEAGE:    54 BYTES        *
+*                                               *
+*  CALLS: IEFEXP, IEFDIV, IEFADD AND IEFSUB     *
+*                                               *
+*  CONDITION CODES:                             *
+*        Z - SET IF RESULT IS ZERO              *
+*        N - SET IF RESULT IS NEGATIVE          *
+*        V - SET IF RESULT IS NAN (NOT-A-NUMBER)*
+*            (RETURNED IF INPUT WAS NAN)        *
+*        C - UNDEFINED                          *
+*        X - UNDEFINED                          *
+*                                               *
+*  NOTES:                                       *
+*    1) SEE THE MC68344 USER'S GUIDE FOR THE    *
+*       LIMITATIONS ON IEEE FORMAT NORMALIZED   *
+*       VALUES.                                 *
+*    2) IF THE INPUT ARGUMENT IS A NAN, IT WILL *
+*       BE RETURNED WITH THE "V" BIT SET.       *
+*    3) SPOT CHECKS SHOW AT LEAST SEVEN DIGIT   *
+*       PRECISION.                              *
+*                                               *
+*************************************************
+         PAGE
+IEFSINH  IDNT  1,1 IEEE FORMAT EQUIVALENT HYPERBOLICS
+ 
+         OPT       PCS
+ 
+         SECTION   9
+ 
+         XDEF      IEFSINH,IEFCOSH,IEFTANH       ENTRY POINTS
+ 
+         XREF      9:IEFEXP,9:IEFMUL,9:IEFDIV,9:IEFADD,9:IEFSUB CALLED
+         XREF      FFPCPYRT            COPYRIGHT STUB
+ 
+FPONE    EQU       $3F800000           FLOATING ONE
+FPTWO    EQU       $40000000           FLOATING TWO
+ 
+**********************************
+*            IEFCOSH             *
+*  THIS FUNCTION IS DEFINED AS   *
+*            X    -X             *
+*           E  + E               *
+*           --------             *
+*              2                 *
+* WE EVALUATE EXACTLY AS DEFINED *
+**********************************
+ 
+IEFCOSH  MOVE.L    D6,-(SP)  SAVE OUR WORK REGISTER
+         BSR       IEFEXP    EVALUATE E TO THE X
+         MOVE.L    D7,-(SP)  SAVE RESULT
+         MOVE.L    D7,D6     SETUP FOR DIVIDE INTO ONE
+         MOVE.L    #FPONE,D7 LOAD FLOATING POINT ONE
+         BSR       IEFDIV    COMPUTE E TO -X AS THE INVERSE
+         MOVE.L    (SP)+,D6  PREPARE TO ADD TOGETHER
+         BSR       IEFADD    CREATE THE NUMERATOR
+         MOVE.L    #FPTWO,D6 PREPARE TO DIVIDE BY TWO
+         BSR       IEFDIV    DIVIDE BY TWO
+         MOVEM.L   (SP)+,D6  RESTORE WORK REGISTER
+         RTS                 RETURN TO CALLER
+         PAGE
+**********************************
+*            IEFSINH             *
+*  THIS FUNCTION IS DEFINED AS   *
+*            X    -X             *
+*           E  - E               *
+*           --------             *
+*              2                 *
+* WE EVALUATE EXACTLY AS DEFINED *
+**********************************
+ 
+IEFSINH  MOVE.L    D6,-(SP)  SAVE OUR WORK REGISTER
+         BSR       IEFEXP    EVALUATE E TO THE X
+         MOVE.L    D7,-(SP)  SAVE RESULT
+         MOVE.L    D7,D6     SETUP FOR DIVIDE INTO ONE
+         MOVE.L    #FPONE,D7 LOAD FLOATING POINT ONE
+         BSR       IEFDIV    COMPUTE E TO -X AS THE INVERSE
+         MOVE.L    D7,D6     PREPARE TO SUBTRACT
+         MOVE.L    (SP)+,D7  FROM FIRST CALCULATION
+         BSR       IEFSUB    CREATE THE NUMERATOR
+         MOVE.L    #FPTWO,D6 PREPARE TO DIVIDE BY TWO
+         BSR       IEFDIV    DIVIDE BY TWO
+         MOVEM.L   (SP)+,D6  RESTORE WORK REGISTER
+         RTS                 RETURN TO CALLER
+         PAGE
+**********************************
+*            IEFTANH             *
+*  THIS FUNCTION IS DEFINED AS   *
+*  SINH/COSH WHICH REDUCES TO:   *
+*            2X                  *
+*           E  - 1               *
+*           ------               *
+*            2X                  *
+*           E  + 1               *
+*                                *
+* WHICH WE EVALUATE.             *
+**********************************
+ 
+IEFTANH  MOVE.L    D6,-(SP)  SAVE OUR ONE WORK REGISTER
+         MOVE.L    #FPTWO,D6 PREPARE TO MULTIPLY TIMES TWO
+         BSR       IEFMUL    GET ARGUMENT TIMES TWO
+         BSR       IEFEXP    EVALUATE E TO THE 2X
+         MOVE.L    D7,-(SP)  SAVE RESULT
+         MOVE.L    #FPONE,D6 LOAD FLOATING POINT ONE
+         BSR       IEFADD    ADD 1 TO E**2X
+         MOVE.L    D7,-(SP)  SAVE DENOMINATOR
+         MOVE.L    4(SP),D7  NOW PREPARE TO SUBTRACT
+         BSR       IEFSUB    CREATE NUMERATOR
+         MOVEM.L    (SP)+,D6  RESTORE DENOMINATOR (KEEP CCR SAME)
+         BVS.S     IEFTRTN   BRANCH IF NAN HERE
+         CMP.L     D6,D7     ***ALLOW INFINITY BY INFINITY TO BE ONE***
+         BNE.S     IEFTDOD   BRANCH TO DO DIVIDE IF NOT SAME VALUE
+         MOVE.L    #FPONE,D7 RESULT IS A ONE
+         BRA.S     IEFTRTN   AND RETURN
+IEFTDOD  BSR       IEFDIV    CREATE RESULT
+IEFTRTN  ADD.L     #4,SP     FREE E**2X OFF OF STACK
+         MOVEM.L   (SP)+,D6  RESTORE OUR WORK REGISTER
+         RTS                 RETURN TO CALLER WITH ANSWER AND CCR SET
+ 
+         END

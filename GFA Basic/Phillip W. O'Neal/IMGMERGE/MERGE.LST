@@ -1,0 +1,1506 @@
+' IMAGE MERGE 1995
+' RESERVE 5000000
+$m128000
+$*%
+$S%
+@init_variables
+'
+DO
+  @event ! JUST WAIT FOR THE USER TO DO SOMETHING
+LOOP
+'
+' ----------------------------------------------------------------------------
+> PROCEDURE event
+  '
+  event_type&=EVNT_MULTI(&X110011,1,1,1,0,0,0,0,0,0,0,0,0,0,buffer_address%,1000,x_mouse&,y_mouse&,button_state&,key_state&,key_press&,num_clicks&)
+  @check_event
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE init_variables
+  '
+  rsc%=0
+  '
+  tga_buffer%=0
+  pic_buffer%=0
+  merge_buffer%=0
+  '
+  pic_handle%=-1
+  info_handle%=-1
+  pic_open%=0
+  info_open%=0
+  '
+  screen_colors%=WORK_OUT(13)  ! 2,4,16,256,256(TRUE COLOR)
+  screen_width%=WORK_OUT(0)+1
+  screen_height%=WORK_OUT(1)+1
+  screen_palette%=WORK_OUT(39)
+  '
+  my_handle&=V~H  ! GET VDI HANDLE OF PROGRAMS WORKSTATION
+  handle&=APPL_INIT()
+  '
+  mint%=0
+  jar%=LPEEK(1440) ! ADDRESS OF COOKIE JAR
+  '
+  IF jar% THEN     ! IF JAR PRESENT THEN jar%=ADDRESS OF JAR
+    cookie_num%=0
+    DO
+      cookie%=LPEEK(jar%+cookie_num%*8)
+      cookie$=CHR$(SHR(cookie% AND &HFF000000,24))
+      cookie$=cookie$+CHR$(SHR(cookie% AND &HFF0000,16))
+      cookie$=cookie$+CHR$(SHR(cookie% AND &HFF00,8))
+      cookie$=cookie$+CHR$(cookie% AND &HFF)
+      IF cookie$="MiNT" THEN  ! IS MINT PRESENT
+        mint%=1
+      ENDIF
+      INC cookie_num%
+    LOOP UNTIL cookie%=0
+  ENDIF
+  '
+  IF mint% THEN  ! IF MINT PRESENT THEN REGISTER PRG NAME UNDER MENU
+    ~MENU_REGISTER(handle&,"  Merge ")
+  ENDIF
+  '
+  old_dta%=FGETDTA()
+  dta%=GEMDOS(72,L:1024)
+  ~FSETDTA(dta%)
+  @path_setup
+  '
+  pic_saved%=1  ! 0=IMAGE NOT SAVED, 1=HAS BEEN SAVED
+  '
+  DIM event_buffer&(7)  ! EVENT BUFFER FOR EVENT_MULTI CALL
+  buffer_address%=VARPTR(event_buffer&(0))
+  '
+  DIM my_event_buffer&(1024)  ! EVENT BUFFER FOR EVENT_MULTI CALL
+  my_buffer_address%=VARPTR(my_event_buffer&(0))
+  '
+  DIM source_mfdb%(8),destination_mfdb%(8),parameters%(8)
+  '
+  FOR zero%=4 TO 8
+    source_mfdb%(zero%)=0
+    destination_mfdb%(zero%)=0
+  NEXT zero%
+  '
+  source_mfdb%(5)=screen_bits%
+  destination_mfdb%(5)=screen_bits%
+  parameters%(8)=7 ! REPLACE MODE
+  '
+  DIM tga_color_map(2,256),pic_color_map(2,256),merge_color_map(2,256)
+  '
+  MODE 1
+  DEFFILL 0,2,8  ! COLOR 0 SOLID FILL PATTERN
+  '
+  @rsc_setup
+  '
+  info_name$="Untitled"
+  info_file_size%=-1
+  info_width%=-1
+  info_height%=-1
+  info_bits%=-1
+  info_type%=-1
+  info_color_map_flag%=-1
+  info_color_map_length%=-1
+  info_color_map_bits%=-1
+  info_id$=""
+  @info_text
+  '
+  DEFMOUSE 0
+  '
+  ~MENU_BAR(merge_menu%,1)           ! TURN MENU ON
+  '
+  INLINE pic_title%,32
+  INLINE info_title%,32
+  '
+  @window_setup
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE window_setup
+  '
+  ~WIND_GET(0,4,mwx%,mwy%,mww%,mwh%)
+  pic_x%=mwx%
+  pic_y%=mwy%
+  pic_w%=mww%
+  pic_h%=mwh%
+  pic_handle%=WIND_CREATE(&X1011,pic_x%,pic_y%,pic_w%,pic_h%)
+  pic_title$=pic_save$
+  CHAR{pic_title%}=pic_title$+CHR$(0)+CHR$(0)
+  ~WIND_SET(pic_handle%,2,CARD(SWAP(pic_title%)),CARD(pic_title%),0,0)
+  '
+  info_tx%=info_ix%
+  info_ty%=info_iy%
+  info_tw%=info_iw%
+  info_th%=info_ih%
+  '
+  ~WIND_CALC(0,&X1011,info_tx%,info_ty%,info_tw%,info_th%,info_x%,info_y%,info_w%,info_h%)
+  info_handle%=WIND_CREATE(&X1011,info_x%,info_y%,info_w%,info_h%)
+  CHAR{info_title%}="TARGA file information"+CHR$(0)+CHR$(0)
+  ~WIND_SET(info_handle%,2,CARD(SWAP(info_title%)),CARD(info_title%),0,0)
+  OB_X(info_dialog%,0)=info_ix%
+  OB_Y(info_dialog%,0)=info_iy%
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE open_pic
+  ~WIND_OPEN(pic_handle%,pic_x%,pic_y%,pic_w%,pic_h%)
+  ~WIND_GET(pic_handle%,4,pic_ix%,pic_iy%,pic_iw%,pic_ih%)
+  '
+  OB_X(left_tool_dialog%,0)=pic_ix%
+  OB_Y(left_tool_dialog%,0)=pic_iy%
+  '
+  OB_X(right_tool_dialog%,0)=pic_ix%+pic_iw%-OB_W(right_tool_dialog%,0)
+  OB_Y(right_tool_dialog%,0)=pic_iy%
+  '
+  pic_open%=1
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE open_info
+  ~WIND_OPEN(info_handle%,info_x%,info_y%,info_w%,info_h%)
+  info_open%=1
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE path_setup
+  shell%=SHEL_READ(command_line$,tail$)
+  tail$=MID$(tail$,2)
+  test%=RINSTR(command_line$,"\")
+  IF test% THEN
+    command_line$=MID$(command_line$,1,test%)
+  ENDIF
+  '
+  current_drive%=GEMDOS(25)
+  current_path$=DIR$(current_drive%+1)+"\"
+  test%=RINSTR(current_path$,"\")
+  IF test% THEN
+    current_path$=MID$(current_path$,1,test%)
+  ENDIF
+  IF MID$(current_path$,2,1)<>":" THEN
+    current_path$=CHR$(current_drive%+65)+":"+current_path$
+  ENDIF
+  '
+  search_file$=command_line$+"MERGE.RSC"+CHR$(0)
+  ~FSETDTA(dta%)
+  test%=GEMDOS(78,L:V:search_file$,&X100111)
+  IF test%=0 THEN
+    prg_path$=command_line$
+    '
+  ELSE
+    search_file$=current_path$+"MERGE.RSC"+CHR$(0)
+    ~FSETDTA(dta%)
+    test%=GEMDOS(78,L:V:search_file$,&X100111)
+    IF test%=0 THEN
+      prg_path$=current_path$
+      '
+    ELSE
+      txt$="Sorry, I can not find my RSC  |file, would you like to look  |for it ? | "
+      ALERT 0,txt$,1,"OK|Cancel",button%
+      '
+      IF button%=1 THEN
+        FILESELECT #"FIND IMAGE MERGE RSC",current_path$+"*.*","MERGE.RSC",temp$
+        test%=RINSTR(temp$,"\")
+        IF test% THEN
+          temp$=MID$(temp$,1,test%)+"MERGE.RSC"
+        ELSE
+          temp$="\MERGE.RSC"
+        ENDIF
+        '
+        search_file$=temp$+CHR$(0)
+        ~FSETDTA(dta%)
+        test_file%=GEMDOS(78,L:V:search_file$,&X100111)
+        IF test_file%=0 THEN
+          test%=RINSTR(temp$,"\")
+          prg_path$=MID$(temp$,1,test%)
+        ELSE
+          @quit
+        ENDIF
+        '
+      ELSE
+        @quit
+      ENDIF
+      '
+    ENDIF
+  ENDIF
+  '
+  ' ADD DRIVE LETTER TO PRG_PATH$
+  '
+  pic_path$=prg_path$
+  pic_save_path$=prg_path$
+  merge_path$=prg_path$
+  info_path$=prg_path$
+  rsc_path$=prg_path$+"MERGE.RSC"
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE check_event
+  '
+  IF event_type& AND &X10 THEN      ! BUTTON
+    @event_button
+  ENDIF
+  '
+  IF event_type& AND &X1 THEN      ! KEY
+    @event_key
+    '
+  ENDIF
+  '
+  IF event_type& AND &X10000 THEN   ! MENU OR WINDOW EVENT
+    '
+    command%=event_buffer&(0)       ! TYPE OF EVENT
+    '
+    IF command%=10 THEN             ! MENU ITEM
+      @event_menu
+    ELSE          ! WINDOW EVENT
+      '
+      which_window%=event_buffer&(3) ! HANDLE OF WINDOW
+      '
+      IF which_window%=pic_handle% THEN
+        @event_pic
+      ENDIF
+      '
+      IF which_window%=info_handle% THEN
+        @event_info
+      ENDIF
+      '
+    ENDIF
+    '
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE event_key
+  scan_code&=SHR(key_press& AND &HFF00,8)  ! KEYBOARD SCAN CODE
+  ~WIND_GET(0,10,top%,d%,d%,d%)
+  SELECT scan_code&
+    '
+  CASE 24 ! (O)PEN SOURCE
+    dialog_button%=m_open%
+    @process_button
+    '
+  CASE 31 ! (S)AVE 3-D
+    dialog_button%=m_save%
+    @process_button
+    '
+  CASE 17 ! (W) CLOSE
+    dialog_button%=m_close%
+    @process_button
+    '
+  CASE 50 ! (M)ERGE
+    dialog_button%=m_merge%
+    @process_button
+    '
+  CASE 16 ! (Q)UIT
+    dialog_button%=m_quit%
+    @process_button
+    '
+  ENDSELECT
+  '
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE event_menu
+  '
+  menu_title%=event_buffer&(3)             ! OBJECT # OF TITLE
+  menu_item%=event_buffer&(4)              ! WHICH MENU ITEM WAS SELECTED
+  ~MENU_TNORMAL(merge_menu%,menu_title%,1)  ! MAKE MENU TITLE NORMAL TEXT
+  '
+  SELECT menu_item%
+  CASE m_open%
+    dialog_button%=m_open%
+    @process_button
+    '
+  CASE m_merge%
+    dialog_button%=m_merge%
+    @process_button
+    '
+  CASE m_close%
+    dialog_button%=m_close%
+    @process_button
+    '
+  CASE m_save%
+    dialog_button%=m_save%
+    @process_button
+    '
+  CASE m_view_pic%
+    dialog_button%=m_view_pic%
+    @process_button
+    '
+  CASE m_view_info%
+    dialog_button%=m_view_info%
+    @process_button
+    '
+  CASE m_read_info%
+    dialog_button%=m_read_info%
+    @process_button
+    '
+  CASE m_quit%
+    dialog_button%=m_quit%
+    @process_button
+    '
+  ENDSELECT
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE event_button
+  '
+  ~WIND_GET(0,10,top%,d%,d%,d%) ! WINDOW SET TO TOP
+  wind_found%=WIND_FIND(x_mouse&,y_mouse&) ! WHICH WINDOW UNDER MOUSE
+  '
+  IF wind_found%=pic_handle% AND top%=pic_handle% THEN
+    dialog_button%=OBJC_FIND(left_tool_dialog%,0,4,x_mouse&,y_mouse&)
+    IF dialog_button%>0 THEN
+      dialog%=left_tool_dialog%
+      @process_tool_button
+    ELSE
+      dialog_button%=OBJC_FIND(right_tool_dialog%,0,4,x_mouse&,y_mouse&)
+      IF dialog_button%>0 THEN
+        dialog%=right_tool_dialog%
+        @process_tool_button
+      ENDIF
+    ENDIF
+    '
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE process_button
+  SELECT dialog_button%
+  CASE m_open%
+    @pic_open
+    @update_pic
+    '
+  CASE m_merge%
+    @merge_open
+    @update_pic
+    '
+  CASE m_close%
+    '
+  CASE m_save%
+    ' @pic_save
+    '
+  CASE m_view_pic%
+    IF pic_open%=0 THEN
+      @open_pic
+    ELSE
+      IF pic_handle%>0 THEN
+        ~WIND_SET(pic_handle%,10,0,0,0,0) ! WINDOW SET TO TOP
+      ENDIF
+    ENDIF
+    '
+  CASE m_view_info%
+    IF info_open%=0 THEN
+      @open_info
+    ELSE
+      IF info_handle%>0 THEN
+        ~WIND_SET(info_handle%,10,0,0,0,0) ! WINDOW SET TO TOP
+      ENDIF
+    ENDIF
+    '
+  CASE m_read_info%
+    @info_load
+    '
+  CASE m_quit%
+    @trying_to_quit
+    '
+  ENDSELECT
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE process_tool_button
+  SELECT dialog_button%
+  CASE b_tool_up%
+    @set_button
+    '
+    IF dialog%=left_tool_dialog% THEN
+      DEC pic_offset_y%
+    ELSE
+      DEC merge_offset_y%
+    ENDIF
+    @update_pic
+    '
+    @reset_button
+    '
+  CASE b_tool_down%
+    @set_button
+    '
+    IF dialog%=left_tool_dialog% THEN
+      INC pic_offset_y%
+    ELSE
+      INC merge_offset_y%
+    ENDIF
+    @update_pic
+    '
+    @reset_button
+    '
+  CASE b_tool_left%
+    @set_button
+    '
+    IF dialog%=left_tool_dialog% THEN
+      pic_offset_x%=pic_offset_x%-1
+    ELSE
+      merge_offset_x%=merge_offset_x%-1
+    ENDIF
+    @update_pic
+    '
+    @reset_button
+    '
+  CASE b_tool_left16%
+    @set_button
+    '
+    IF dialog%=left_tool_dialog% THEN
+      pic_offset_x%=pic_offset_x%-16
+    ELSE
+      merge_offset_x%=merge_offset_x%-16
+    ENDIF
+    @update_pic
+    '
+    @reset_button
+    '
+  CASE b_tool_right%
+    @set_button
+    '
+    IF dialog%=left_tool_dialog% THEN
+      pic_offset_x%=pic_offset_x%+1
+    ELSE
+      merge_offset_x%=merge_offset_x%+1
+    ENDIF
+    @update_pic
+    '
+    @reset_button
+    '
+  CASE b_tool_right16%
+    @set_button
+    '
+    IF dialog%=left_tool_dialog% THEN
+      pic_offset_x%=pic_offset_x%+16
+    ELSE
+      merge_offset_x%=merge_offset_x%+16
+    ENDIF
+    @update_pic
+    '
+    @reset_button
+    '
+  ENDSELECT
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE reset_button
+  PAUSE 5
+  IF BTST(OB_STATE(dialog%,dialog_button%),0) THEN
+    OB_STATE(dialog%,dialog_button%)=BCLR(OB_STATE(dialog%,dialog_button%),0)
+    ~OBJC_DRAW(dialog%,0,3,pic_ix%,pic_iy%,pic_iw%,pic_ih%)
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE set_button
+  IF BTST(OB_STATE(dialog%,dialog_button%),0)=0 THEN
+    OB_STATE(dialog%,dialog_button%)=BSET(OB_STATE(dialog%,dialog_button%),0)
+    ~OBJC_DRAW(dialog%,0,3,pic_ix%,pic_iy%,pic_iw%,pic_ih%)
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE event_info
+  '
+  SELECT command%
+  CASE 20 ! UPDATE WINDOW
+    @repair_info
+    '
+  CASE 21 ! WINDOW CLICKED ON
+    ~WIND_SET(info_handle%,10,0,0,0,0) ! WINDOW SET TO TOP
+    DEFMOUSE 0
+    '
+  CASE 22 ! CLOSE BOX
+    ~WIND_CLOSE(info_handle%)
+    info_open%=0
+    '
+  CASE 28 ! WINDOW MOVED
+    info_x%=event_buffer&(4)
+    info_y%=event_buffer&(5)
+    ~WIND_SET(info_handle%,5,info_x%,info_y%,info_w%,info_h%)
+    ~WIND_GET(info_handle%,4,info_ix%,info_iy%,info_iw%,info_ih%)
+    '
+    OB_X(info_dialog%,0)=info_ix%
+    OB_Y(info_dialog%,0)=info_iy%
+    '
+  ENDSELECT
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE event_pic
+  '
+  SELECT command%
+  CASE 20           ! WIND UPDATE
+    @repair_pic
+    '
+  CASE 21           ! WINDOW CLICKED ON
+    ~WIND_SET(pic_handle%,10,0,0,0,0) ! WINDOW SET TO TOP
+    DEFMOUSE 0
+    '
+  CASE 22           ! CLOSE WINDOW
+    ~WIND_CLOSE(pic_handle%)
+    pic_open%=0
+    '
+  CASE 28        ! WINDOW SIZED, MOVED
+    pic_x%=event_buffer&(4)      ! X POSITION OF WINDOW
+    pic_y%=event_buffer&(5)      ! Y      "    "    "
+    '
+    ~WIND_SET(pic_handle%,5,pic_x%,pic_y%,pic_w%,pic_h%)             ! SIZE WINDOW
+    ~WIND_GET(pic_handle%,4,pic_ix%,pic_iy%,pic_iw%,pic_ih%) ! WINDOW SET TO TOP
+    '
+    OB_X(left_tool_dialog%,0)=pic_ix%
+    OB_Y(left_tool_dialog%,0)=pic_iy%
+    '
+    OB_X(right_tool_dialog%,0)=pic_ix%+pic_iw%-OB_W(right_tool_dialog%,0)
+    OB_Y(right_tool_dialog%,0)=pic_iy%
+    '
+  ENDSELECT
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE repair_pic
+  '
+  ~WIND_UPDATE(1)      ! TELL GEM WE ARE TAKING OVER
+  '
+  '                    GET FIRST RECTANGLE
+  ~WIND_GET(pic_handle%,11,fix_x%,fix_y%,fix_width%,fix_height%)
+  fix_wx%=event_buffer&(4)
+  fix_wy%=event_buffer&(5)
+  fix_ww%=event_buffer&(6)
+  fix_wh%=event_buffer&(7)
+  fix_flag%=RC_INTERSECT(fix_wx%,fix_wy%,fix_ww%,fix_wh%,fix_x%,fix_y%,fix_width%,fix_height%)
+  IF fix_flag% THEN
+    CLIP fix_x%,fix_y%,fix_width%,fix_height%
+    PBOX fix_x%,fix_y%,fix_x%+fix_width%-1,fix_y%+fix_height%-1
+    @pic_copy
+    ~OBJC_DRAW(left_tool_dialog%,0,3,fix_x%,fix_y%,fix_width%,fix_height%)
+    ~OBJC_DRAW(right_tool_dialog%,0,3,fix_x%,fix_y%,fix_width%,fix_height%)
+  ENDIF
+  '
+  fix_done%=0
+  '
+  DO
+    '                  GET NEXT RECTANGLE
+    ~WIND_GET(pic_handle%,12,fix_x%,fix_y%,fix_width%,fix_height%)
+    '
+    IF fix_width%+fix_height%=0 THEN   ! ANY MORE RECTANGLES ?
+      fix_done%=1
+    ELSE
+      fix_wx%=event_buffer&(4)
+      fix_wy%=event_buffer&(5)
+      fix_ww%=event_buffer&(6)
+      fix_wh%=event_buffer&(7)
+      fix_flag%=RC_INTERSECT(fix_wx%,fix_wy%,fix_ww%,fix_wh%,fix_x%,fix_y%,fix_width%,fix_height%)
+      IF fix_flag% THEN
+        CLIP fix_x%,fix_y%,fix_width%,fix_height%
+        PBOX fix_x%,fix_y%,fix_x%+fix_width%-1,fix_y%+fix_height%-1
+        @pic_copy
+        ~OBJC_DRAW(left_tool_dialog%,0,3,fix_x%,fix_y%,fix_width%,fix_height%)
+        ~OBJC_DRAW(right_tool_dialog%,0,3,fix_x%,fix_y%,fix_width%,fix_height%)
+      ENDIF
+    ENDIF
+    '
+  LOOP UNTIL fix_done%=1
+  '
+  ~WIND_UPDATE(0)          ! DONE!
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE pic_copy
+  '
+  IF pic_buffer%>0 THEN       ! ONLY DO IF THERE IS A STIS IMAGE
+    '
+    fx%=pic_ix%+(pic_iw%/2)+pic_offset_x%-pic_width%
+    fy%=pic_iy%+pic_offset_y%
+    '
+    source_mfdb%(0)=pic_buffer%
+    source_mfdb%(1)=pic_width%
+    source_mfdb%(2)=pic_height%
+    source_mfdb%(3)=pic_width%/16
+    source_mfdb%(5)=pic_bits%
+    '
+    destination_mfdb%(0)=0
+    '
+    parameters%(0)=0
+    parameters%(1)=0
+    parameters%(2)=pic_width%-1
+    parameters%(3)=pic_height%-1
+    parameters%(4)=fx%
+    parameters%(5)=fy%
+    parameters%(6)=pic_width%-1
+    parameters%(7)=pic_height%-1
+    BITBLT source_mfdb%(),destination_mfdb%(),parameters%()
+    '
+  ENDIF
+  '
+  IF merge_buffer%>0 THEN       ! ONLY DO IF THERE IS A STIS IMAGE
+    '
+    fx%=pic_ix%+(pic_iw%/2)+merge_offset_x%
+    fy%=pic_iy%+merge_offset_y%
+    '
+    source_mfdb%(0)=merge_buffer%
+    source_mfdb%(1)=merge_width%
+    source_mfdb%(2)=merge_height%
+    source_mfdb%(3)=merge_width%/16
+    source_mfdb%(5)=merge_bits%
+    '
+    destination_mfdb%(0)=0
+    '
+    parameters%(0)=0
+    parameters%(1)=0
+    parameters%(2)=merge_width%-1
+    parameters%(3)=merge_height%-1
+    parameters%(4)=fx%
+    parameters%(5)=fy%
+    parameters%(6)=merge_width%-1
+    parameters%(7)=merge_height%-1
+    BITBLT source_mfdb%(),destination_mfdb%(),parameters%()
+    '
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE update_pic
+  IF pic_handle%>0 THEN
+    my_event_buffer&(0)=20
+    my_event_buffer&(3)=pic_handle%
+    my_event_buffer&(4)=pic_ix%
+    my_event_buffer&(5)=pic_iy%
+    my_event_buffer&(6)=pic_iw%
+    my_event_buffer&(7)=pic_ih%
+    ~APPL_WRITE(handle&,16,my_buffer_address%)
+  ENDIF
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE repair_info
+  '
+  ~WIND_UPDATE(1)      ! TELL GEM WE ARE TAKING OVER
+  '
+  '                    GET FIRST RECTANGLE
+  ~WIND_GET(info_handle%,11,fx%,fy%,fx2%,fy2%) ! GET FIRST RECTANGLE
+  fix_wx%=event_buffer&(4)
+  fix_wy%=event_buffer&(5)
+  fix_ww%=event_buffer&(6)
+  fix_wh%=event_buffer&(7)
+  fix_flag%=RC_INTERSECT(fix_wx%,fix_wy%,fix_ww%,fix_wh%,fx%,fy%,fx2%,fy2%)
+  IF fix_flag% THEN
+    CLIP fx%,fy%,fx2%,fy2%
+    ~OBJC_DRAW(info_dialog%,0,3,fx%,fy%,fx2%,fy2%)
+  ENDIF
+  fix_done%=0
+  '
+  DO
+    '                  GET NEXT RECTANGLE
+    ~WIND_GET(info_handle%,12,fx%,fy%,fx2%,fy2%) ! GET FIRST RECTANGLE
+    '
+    IF fx2%+fy2%=0 THEN   ! ANY MORE RECTANGLES ?
+      fix_done%=1
+    ELSE
+      fix_wx%=event_buffer&(4)
+      fix_wy%=event_buffer&(5)
+      fix_ww%=event_buffer&(6)
+      fix_wh%=event_buffer&(7)
+      fix_flag%=RC_INTERSECT(fix_wx%,fix_wy%,fix_ww%,fix_wh%,fx%,fy%,fx2%,fy2%)
+      IF fix_flag% THEN
+        CLIP fx%,fy%,fx2%,fy2%
+        ~OBJC_DRAW(info_dialog%,0,3,fx%,fy%,fx2%,fy2%)
+      ENDIF
+    ENDIF
+    '
+  LOOP UNTIL fix_done%=1
+  '
+  ~WIND_UPDATE(0)          ! DONE!
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE update_info
+  IF info_handle%>0 THEN
+    my_event_buffer&(0)=20
+    my_event_buffer&(3)=info_handle%
+    my_event_buffer&(4)=info_ix%
+    my_event_buffer&(5)=info_iy%
+    my_event_buffer&(6)=info_iw%
+    my_event_buffer&(7)=info_ih%
+    ~APPL_WRITE(handle&,16,my_buffer_address%)
+  ENDIF
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE pic_open
+  '
+  temp_name$=pic_name$
+  temp_path$=pic_path$
+  FILESELECT #"Select template file",pic_path$+"*.TGA",temp_name$,temp_load$
+  '
+  test%=RINSTR(temp_load$,"\")
+  IF test% THEN
+    temp_path$=MID$(temp_load$,1,test%)
+    temp_name$=MID$(temp_load$,test%+1)
+  ELSE
+    temp_path$="\"
+    temp_name$=temp_load$
+  ENDIF
+  '
+  test%=RINSTR(temp_name$,".")
+  IF test%>1 THEN
+    temp_name$=MID$(temp_name$,1,test%-1)
+  ENDIF
+  DEFMOUSE 2
+  @do_pic_open
+  DEFMOUSE 0
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE do_pic_open
+  @tga_load
+  '
+  IF tga_buffer%>0 THEN
+    pic_name$=tga_name$
+    pic_path$=tga_path$
+    '
+    IF pic_buffer%>0 THEN
+      d%=GEMDOS(73,L:pic_buffer%)
+      pic_buffer%=0
+    ENDIF
+    '
+    pic_buffer%=tga_buffer%
+    tga_buffer%=0
+    '
+    pic_color_map_flag%=tga_color_map_flag%
+    pic_type%=tga_type%
+    pic_color_map_length%=tga_color_map_length%
+    pic_color_map_bits%=tga_color_map_bits%
+    pic_width%=tga_width%
+    pic_height%=tga_height%
+    pic_bits%=tga_bits%
+    pic_discriptor%=32
+    '
+    MAT CPY pic_color_map()=tga_color_map()
+    '
+    pic_offset_x%=0
+    pic_offset_y%=0
+    '
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE merge_open
+  '
+  temp_name$=merge_name$
+  temp_path$=merge_path$
+  FILESELECT #"Select template file",merge_path$+"*.TGA",temp_name$,temp_load$
+  '
+  test%=RINSTR(temp_load$,"\")
+  IF test% THEN
+    temp_path$=MID$(temp_load$,1,test%)
+    temp_name$=MID$(temp_load$,test%+1)
+  ELSE
+    temp_path$="\"
+    temp_name$=temp_load$
+  ENDIF
+  '
+  test%=RINSTR(temp_name$,".")
+  IF test%>1 THEN
+    temp_name$=MID$(temp_name$,1,test%-1)
+  ENDIF
+  DEFMOUSE 2
+  @do_merge_open
+  DEFMOUSE 0
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE do_merge_open
+  @tga_load
+  '
+  IF tga_buffer%>0 THEN
+    merge_name$=tga_name$
+    merge_path$=tga_path$
+    '
+    IF merge_buffer%>0 THEN
+      d%=GEMDOS(73,L:merge_buffer%)
+      merge_buffer%=0
+    ENDIF
+    '
+    merge_buffer%=tga_buffer%
+    tga_buffer%=0
+    '
+    merge_color_map_flag%=tga_color_map_flag%
+    merge_type%=tga_type%
+    merge_color_map_length%=tga_color_map_length%
+    merge_color_map_bits%=tga_color_map_bits%
+    merge_width%=tga_width%
+    merge_height%=tga_height%
+    merge_bits%=tga_bits%
+    merge_discriptor%=32
+    '
+    MAT CPY merge_color_map()=tga_color_map()
+    '
+    merge_offset_x%=0
+    merge_offset_y%=0
+    '
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE pic_save
+  '
+  temp$=pic_save_name$
+  FILESELECT #"Save Merged image",pic_save_path$+"*.TGA",temp$,temp_save$
+  '
+  test%=RINSTR(temp_save$,"\")
+  IF test% THEN
+    temp_path$=MID$(temp_save$,1,test%)
+    temp_name$=MID$(temp_save$,test%+1)
+  ELSE
+    temp_path$="\"
+    temp_name$=temp_save$
+  ENDIF
+  '
+  test%=RINSTR(temp_name$,".")
+  IF test%>1 THEN
+    temp_name$=MID$(temp_name$,1,test%-1)
+  ENDIF
+  temp_save$=temp_path$+temp_name$+".TGA"
+  '
+  IF temp_name$<>"" THEN
+    button%=0
+    ~FSETDTA(dta%)
+    search_file$=temp_save$+CHR$(0)
+    finished%=GEMDOS(78,L:V:search_file$,&X100111)
+    ~FSETDTA(dta%)
+    IF finished%=0 THEN
+      ' EXIST ALERT
+    ENDIF
+    '
+    IF button%<>5 THEN
+      @do_pic_save
+    ENDIF
+    '
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE do_pic_save
+  pic_id_size%=11
+  pic_id$="IMAGE MERGE"
+  '
+  pic_name$=temp_name$
+  pic_path$=temp_path$
+  '
+  IF pic_color_map_bits%=32 THEN
+    pic_color_map_bits%=24
+  ENDIF
+  OPEN "O",#1,pic_path$+pic_name$+".TGA"
+  '
+  OUT #1,pic_id_size%
+  OUT #1,pic_color_map_flag%
+  OUT #1,pic_type%
+  OUT #1,0
+  OUT #1,0
+  '
+  hi%=INT(pic_color_map_length%/256)
+  lo%=pic_color_map_length%-(256*hi%)
+  OUT #1,lo%
+  OUT #1,hi%
+  '
+  OUT #1,pic_color_map_bits%
+  OUT #1,0
+  OUT #1,0
+  OUT #1,0
+  OUT #1,0
+  '
+  hi%=INT(pic_width%/256)
+  lo%=pic_width%-(256*hi%)
+  OUT #1,lo%
+  OUT #1,hi%
+  '
+  hi%=INT(pic_height%/256)
+  lo%=pic_height%-(256*hi%)
+  OUT #1,lo%
+  OUT #1,hi%
+  '
+  OUT #1,pic_bits%
+  OUT #1,pic_discriptor%
+  '
+  IF pic_id_size%>0 THEN
+    FOR x%=1 TO pic_id_size%
+      OUT #1,ASC(MID$(pic_id$,x%,1))
+    NEXT x%
+  ENDIF
+  '
+  IF pic_color_map_flag% THEN
+    FOR color%=0 TO pic_color_map_length%-1
+      '
+      SELECT pic_color_map_bits%
+      CASE 16
+        OUT& #1,pic_color_map(0,color%)
+        '
+      CASE 24
+        OUT #1,pic_color_map(0,color%)
+        OUT #1,pic_color_map(1,color%)
+        OUT #1,pic_color_map(2,color%)
+        '
+      ENDSELECT
+      '
+    NEXT color%
+  ENDIF
+  '
+  SELECT pic_bits%
+  CASE 8
+    pic_size%=pic_width%*pic_height%
+  CASE 15,16
+    pic_size%=pic_width%*pic_height%*2
+  CASE 24
+    pic_size%=pic_width%*pic_height%*3
+  ENDSELECT
+  '
+  BPUT #1,pic_buffer%,pic_size%
+  pic_file_size%=LOF(#1)
+  pic_file_size%=LOF(#1)
+  CLOSE #1
+  ~FSETDTA(dta%)
+  pic_saved%=1
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE tga_load
+  '
+  tga_name$=temp_name$
+  tga_path$=temp_path$
+  temp_load$=tga_path$+tga_name$+".TGA"
+  ~FSETDTA(dta%)
+  search_file$=temp_load$+CHR$(0)
+  finished%=GEMDOS(78,L:V:search_file$,&X100111)
+  ~FSETDTA(dta%)
+  IF finished%=0 THEN
+    OPEN "I",#1,temp_load$
+    @tga_headder
+    IF (tga_bits%=1 AND tga_type%=11) OR tga_bits%=32 THEN
+      left_start%=1
+    ENDIF
+    IF left_start%=0 THEN
+      @tga_id
+      @info_text
+      IF info_handle%>0 THEN
+        @update_info
+      ENDIF
+      @tga_palette
+      @tga_buffer
+      IF tga_buffer%>0 THEN
+        @tga_get
+      ENDIF
+    ENDIF
+    CLOSE #1
+    ~FSETDTA(dta%)
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE tga_headder
+  tga_file_size%=LOF(#1)
+  '
+  tga_id_size%=INP(#1)
+  tga_color_map_flag%=INP(#1)
+  tga_type%=INP(#1)
+  d%=INP&(#1)
+  '
+  lo%=INP(#1)
+  hi%=INP(#1)
+  tga_color_map_length%=lo%+256*hi%
+  '
+  tga_color_map_bits%=INP(#1)
+  d%=INP%(#1)
+  '
+  lo%=INP(#1)
+  hi%=INP(#1)
+  tga_width%=lo%+256*hi%
+  '
+  lo%=INP(#1)
+  hi%=INP(#1)
+  tga_height%=lo%+256*hi%
+  '
+  tga_bits%=INP(#1)
+  tga_discriptor%=INP(#1)
+  left_start%=BTST(tga_discriptor%,4)
+  top_down%=BTST(tga_discriptor%,5)
+  '
+  map_size%=0
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE tga_id
+  tga_id$=""
+  IF tga_id_size% THEN
+    FOR x%=0 TO tga_id_size%-1
+      tga_id$=tga_id$+CHR$(INP(#1))
+    NEXT x%
+  ELSE
+    SEEK #1,tga_file_size%-26
+    b1%=INP(#1)
+    b2%=INP(#1)
+    b3%=INP(#1)
+    b4%=INP(#1)
+    extension%=b1%+SHL(b2%,8)+SHL(b3%,16)+SHL(b4%,24)
+    b1%=INP(#1)
+    b2%=INP(#1)
+    b3%=INP(#1)
+    b4%=INP(#1)
+    developer%=b1%+SHL(b2%,8)+SHL(b3%,16)+SHL(b4%,24)
+    temp_id$=""
+    FOR x%=0 TO 17
+      temp_id$=temp_id$+CHR$(INP(#1))
+    NEXT x%
+    IF temp_id$="TRUEVISION-TARGA."+CHR$(0) AND extension%>0 AND extension%<tga_file_size% THEN
+      IF extension%>0 THEN
+        SEEK #1,extension%+2
+        x%=0
+        DO
+          temp_char%=INP(#1)
+          IF temp_char%>32 THEN
+            tga_id$=tga_id$+CHR$(temp_char%)
+          ENDIF
+          INC x%
+        LOOP UNTIL x%=365
+        SEEK #1,extension%+379
+        x%=0
+        DO
+          temp_char%=INP(#1)
+          IF temp_char%>32 THEN
+            tga_id$=tga_id$+CHR$(temp_char%)
+          ENDIF
+          INC x%
+        LOOP UNTIL x%=41
+        SEEK #1,extension%+426
+        x%=0
+        DO
+          temp_char%=INP(#1)
+          IF temp_char%>32 THEN
+            tga_id$=tga_id$+CHR$(temp_char%)
+          ENDIF
+          INC x%
+        LOOP UNTIL x%=41
+      ENDIF
+    ENDIF
+  ENDIF
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE tga_palette
+  map_size%=0
+  IF tga_color_map_flag% THEN
+    SELECT tga_color_map_bits%
+    CASE 16
+      map_size%=tga_color_map_length%*2
+    CASE 24
+      map_size%=tga_color_map_length%*3
+    CASE 32
+      map_size%=tga_color_map_length%*4
+    ENDSELECT
+    SEEK #1,18+tga_id_size%
+    FOR color%=0 TO tga_color_map_length%-1
+      SELECT tga_color_map_bits%
+      CASE 15,16
+        tga_color_map(0,color%)=INP&(#1)
+        '
+      CASE 24
+        tga_color_map(0,color%)=INP(#1)
+        tga_color_map(1,color%)=INP(#1)
+        tga_color_map(2,color%)=INP(#1)
+        '
+      CASE 32
+        tga_color_map(0,color%)=INP(#1)
+        tga_color_map(1,color%)=INP(#1)
+        tga_color_map(2,color%)=INP(#1)
+        d%=INP(#1)
+        '
+      ENDSELECT
+      '
+    NEXT color%
+  ENDIF
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE tga_buffer
+  IF tga_buffer%>0 THEN
+    d%=GEMDOS(73,L:tga_buffer%)
+    tga_buffer%=0
+  ENDIF
+  tga_size%=0
+  SELECT tga_bits%
+  CASE 1
+    tga_size%=INT(tga_width%/8)*tga_height%
+  CASE 8
+    tga_size%=tga_width%*tga_height%
+  CASE 15,16
+    tga_bits%=16
+    tga_size%=tga_width%*tga_height%*2
+  CASE 24,32
+    tga_size%=tga_width%*tga_height%*3
+  ENDSELECT
+  IF tga_size%>0 THEN
+    tga_buffer%=GEMDOS(72,L:tga_size%)
+    IF tga_buffer%<1 THEN
+      ' NOT ENOUGH MEM ALERT
+      no_mem%=1
+    ENDIF
+  ELSE
+    ' CAN'T READ THIS TYPE ALERT
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE tga_get
+  '
+  SELECT tga_bits%
+  CASE 1
+    tga_byte_size%=0
+  CASE 8
+    tga_byte_size%=1
+  CASE 15,16
+    tga_byte_size%=2
+  CASE 24
+    tga_byte_size%=3
+    '
+  ENDSELECT
+  '
+  SEEK #1,18+tga_id_size%+map_size%
+  SELECT tga_type%
+  CASE 1,2,3     ! UNCOMPRESSED
+    IF top_down%=TRUE THEN
+      BGET #1,tga_buffer%,tga_size%
+    ELSE
+      IF tga_byte_size%=0 THEN
+        FOR py%=0 TO tga_height%-1
+          BGET #1,tga_buffer%+tga_size%-((py%+1)*INT((tga_width%+7)/8)),INT((tga_width%+7)/8)
+        NEXT py%
+      ELSE
+        FOR py%=0 TO tga_height%-1
+          BGET #1,tga_buffer%+tga_size%-((py%+1)*tga_width%*tga_byte_size%),tga_byte_size%*tga_width%
+        NEXT py%
+      ENDIF
+    ENDIF
+    '
+  CASE 9,10,11   ! COMPRESSED
+    @tga_get_compressed
+    '
+  ENDSELECT
+  IF tga_bits%=32 THEN
+    tga_bits%=24
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE tga_get_compressed
+  tga_type%=tga_type%-8
+  px%=0
+  py%=0
+  DO
+    DO
+      tga_byte%=INP(#1)
+      IF BTST(tga_byte%,7) THEN
+        tga_byte%=BCLR(tga_byte%,7)
+        SELECT tga_byte_size%
+        CASE 1
+          tga_pixel1%=INP(#1)
+        CASE 2
+          tga_pixel1%=INP(#1)
+          tga_pixel2%=INP(#1)
+        CASE 3
+          tga_pixel1%=INP(#1)
+          tga_pixel2%=INP(#1)
+          tga_pixel3%=INP(#1)
+          IF tga_bits%=32 THEN
+            d%=INP(#1)
+          ENDIF
+        ENDSELECT
+        z%=-1
+        DO
+          @tga_pixel_copy
+          INC px%
+          INC z%
+        LOOP UNTIL z%=tga_byte%
+        '
+      ELSE
+        z%=-1
+        DO
+          SELECT tga_byte_size%
+          CASE 1
+            tga_pixel1%=INP(#1)
+          CASE 2
+            tga_pixel1%=INP(#1)
+            tga_pixel2%=INP(#1)
+          CASE 3
+            tga_pixel1%=INP(#1)
+            tga_pixel2%=INP(#1)
+            tga_pixel3%=INP(#1)
+            IF tga_bits%=32 THEN
+              d%=INP(#1)
+            ENDIF
+          ENDSELECT
+          @tga_pixel_copy
+          INC px%
+          INC z%
+        LOOP UNTIL z%=tga_byte%
+        '
+      ENDIF
+    LOOP UNTIL px%=tga_width%
+    px%=0
+    INC py%
+  LOOP UNTIL py%=tga_height%
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE tga_pixel_copy
+  IF top_down%=TRUE THEN
+    SELECT tga_byte_size%
+    CASE 1
+      POKE tga_buffer%+(py%+1)*tga_width%*tga_byte_size%-(px%*tga_byte_size%),tga_pixel1%
+    CASE 2
+      POKE tga_buffer%+(py%+1)*tga_width%*tga_byte_size%-(px%*tga_byte_size%),tga_pixel1%
+      POKE tga_buffer%+(py%+1)*tga_width%*tga_byte_size%+1-(px%*tga_byte_size%),tga_pixel2%
+    CASE 3,4
+      POKE tga_buffer%+(py%+1)*tga_width%*tga_byte_size%-(px%*tga_byte_size%),tga_pixel1%
+      POKE tga_buffer%+(py%+1)*tga_width%*tga_byte_size%+1-(px%*tga_byte_size%),tga_pixel2%
+      POKE tga_buffer%+(py%+1)*tga_width%*tga_byte_size%+2-(px%*tga_byte_size%),tga_pixel3%
+    ENDSELECT
+  ELSE
+    SELECT tga_byte_size%
+    CASE 1
+      POKE tga_buffer%+tga_size%+px%*tga_byte_size%-((py%+1)*tga_width%*tga_byte_size%),tga_pixel1%
+    CASE 2
+      POKE tga_buffer%+tga_size%+px%*tga_byte_size%-((py%+1)*tga_width%*tga_byte_size%),tga_pixel1%
+      POKE tga_buffer%+tga_size%+px%*tga_byte_size%+1-((py%+1)*tga_width%*tga_byte_size%),tga_pixel2%
+    CASE 3,4
+      POKE tga_buffer%+tga_size%+px%*tga_byte_size%-((py%+1)*tga_width%*tga_byte_size%),tga_pixel1%
+      POKE tga_buffer%+tga_size%+px%*tga_byte_size%+1-((py%+1)*tga_width%*tga_byte_size%),tga_pixel2%
+      POKE tga_buffer%+tga_size%+px%*tga_byte_size%+2-((py%+1)*tga_width%*tga_byte_size%),tga_pixel3%
+    ENDSELECT
+  ENDIF
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE trying_to_quit
+  '
+  IF pic_saved%=1 THEN
+    '
+  ELSE
+    '
+  ENDIF
+  '
+  IF button%<>5 THEN
+    '
+    @quit
+    '
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE quit
+  IF pic_handle%>0 THEN
+    ~WIND_CLOSE(pic_handle%)
+    ~WIND_DELETE(pic_handle%)
+  ENDIF
+  '
+  IF info_handle%>0 THEN
+    ~WIND_CLOSE(info_handle%)
+    ~WIND_DELETE(info_handle%)
+  ENDIF
+  '
+  ~FSETDTA(old_dta%)
+  IF dta%>0 THEN
+    d%=GEMDOS(73,L:dta%)  ! RELEASE MEMORY
+  ENDIF
+  IF pic_buffer%>0 THEN
+    d%=GEMDOS(73,L:pic_buffer%)  ! RELEASE MEMORY
+  ENDIF
+  IF merge_buffer%>0 THEN
+    d%=GEMDOS(73,L:merge_buffer%)  ! RELEASE MEMORY
+  ENDIF
+  IF merge_menu%>0 THEN
+    ~MENU_BAR(merge_menu%,0)
+  ENDIF
+  IF rsc%>0 THEN
+    ~RSRC_FREE()
+  ENDIF
+  END
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE rsc_setup
+  '
+  rsc%=RSRC_LOAD(rsc_path$)
+  '
+  ' GET ADDRESS OF EACH TREE OF RSC
+  ~RSRC_GADDR(0,0,merge_menu%)
+  ~RSRC_GADDR(0,1,info_dialog%)
+  ~RSRC_GADDR(0,2,left_tool_dialog%)
+  ~RSRC_GADDR(0,3,right_tool_dialog%)
+  '
+  ' CENTER OBJ. ON SCREEN
+  ~FORM_CENTER(info_dialog%,info_ix%,info_iy%,info_iw%,info_ih%)
+  ~FORM_CENTER(left_tool_dialog%,left_tool_ix%,left_tool_iy%,left_tool_iw%,left_tool_ih%)
+  ~FORM_CENTER(right_tool_dialog%,right_tool_ix%,right_tool_iy%,right_tool_iw%,right_tool_ih%)
+  '
+  tool_offset%=OB_H(left_tool_dialog%,1)
+  '
+  m_open%=17
+  m_merge%=18
+  m_close%=19
+  m_save%=21
+  m_quit%=23
+  m_view_pic%=25
+  m_view_info%=27
+  m_read_info%=28
+  '
+  b_tool_up%=1
+  b_tool_left16%=2
+  b_tool_left%=3
+  b_tool_right%=4
+  b_tool_right16%=5
+  b_tool_down%=6
+  '
+  t_info_name%=2
+  t_info_size%=4
+  t_info_type%=6
+  t_info_width%=8
+  t_info_bits%=10
+  t_info_height%=12
+  t_info_colormap%=14
+  t_info_palette%=16
+  t_info_origin%=18
+  t_info_compression%=20
+  t_info_id%=22
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE info_load
+  '
+  temp$=info_name$
+  FILESELECT #"TGA file information",info_path$+"*.TGA",temp$,temp_load$
+  IF temp_load$<>"" THEN
+    test%=RINSTR(temp_load$,"\")
+    IF test% THEN
+      temp_path$=MID$(temp_load$,1,test%)
+      temp_name$=MID$(temp_load$,test%+1)
+    ELSE
+      temp_path$="\"
+      temp_name$=temp_load$
+    ENDIF
+    '
+    test%=RINSTR(temp_name$,".")
+    IF test%>1 THEN
+      temp_name$=MID$(temp_name$,1,test%-1)
+    ENDIF
+    temp$=temp_path$+temp_name$+".TGA"
+    '
+    ~FSETDTA(dta%)
+    search_file$=temp$+CHR$(0)
+    finished%=GEMDOS(78,L:V:search_file$,&X100111)
+    ~FSETDTA(dta%)
+    IF finished%=0 THEN
+      info_name$=temp_name$
+      info_path$=temp_path$
+      '
+      OPEN "I",#1,info_path$+info_name$+".TGA"
+      @tga_headder
+      @tga_id
+      '
+      CLOSE #1
+      ~FSETDTA(dta%)
+      '
+      info_file_size%=tga_file_size%
+      info_color_map_flag%=tga_color_map_flag%
+      info_type%=tga_type%
+      info_color_map_length%=tga_color_map_length%
+      info_color_map_bits%=tga_color_map_bits%
+      info_width%=tga_width%
+      info_height%=tga_height%
+      info_bits%=tga_bits%
+      info_discriptor%=32
+      '
+      @info_text
+      @update_info
+    ENDIF
+    '
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE info_text
+  '
+  CHAR{{OB_SPEC(info_dialog%,t_info_name%)}}=info_name$
+  IF info_file_size%>0 THEN
+    CHAR{{OB_SPEC(info_dialog%,t_info_size%)}}=STR$(info_file_size%)
+  ELSE
+    CHAR{{OB_SPEC(info_dialog%,t_info_size%)}}="-"
+  ENDIF
+  IF info_width%>0 THEN
+    CHAR{{OB_SPEC(info_dialog%,t_info_width%)}}=STR$(info_width%)
+  ELSE
+    CHAR{{OB_SPEC(info_dialog%,t_info_width%)}}="-"
+  ENDIF
+  IF info_height%>0 THEN
+    CHAR{{OB_SPEC(info_dialog%,t_info_height%)}}=STR$(info_height%)
+  ELSE
+    CHAR{{OB_SPEC(info_dialog%,t_info_height%)}}="-"
+  ENDIF
+  IF info_bits%>0 THEN
+    CHAR{{OB_SPEC(info_dialog%,t_info_bits%)}}=STR$(info_bits%)+" BIT"
+  ELSE
+    CHAR{{OB_SPEC(info_dialog%,t_info_bits%)}}="-"
+  ENDIF
+  '
+  SELECT info_type%
+  CASE -1,0     ! NO IMAGE DATA
+    type$="NO IMAGE"
+    comp$="-"
+  CASE 1     ! UNCOMPRESSED COLOR-MAPPED
+    type$="COLOR-MAPPED"
+    comp$="NONE"
+  CASE 2     ! UNCOMPRESSED RGB
+    type$="RGB"
+    comp$="NONE"
+  CASE 3     ! UNCOMPRESSED MONOCHROME
+    type$="GRAYSCALE"
+    comp$="NONE"
+  CASE 9     ! RLE COLOR-MAPPED
+    type$="COLOR-MAPPED"
+    comp$="RLE"
+  CASE 10    ! RLE RGB
+    type$="RGB"
+    comp$="RLE"
+  CASE 11    ! COMPRESSED MONOCHROME
+    type$="GRAYSACLE"
+    comp$="RLE"
+  CASE 32,33 ! ALL COMPRESSED COLOR-MAPPED
+    type$="COLOR-MAPPED"
+    comp$="?"
+  ENDSELECT
+  CHAR{{OB_SPEC(info_dialog%,t_info_type%)}}=type$
+  CHAR{{OB_SPEC(info_dialog%,t_info_compression%)}}=comp$
+  '
+  SELECT info_color_map_flag%
+  CASE -1,0
+    CHAR{{OB_SPEC(info_dialog%,t_info_colormap%)}}="-"
+    CHAR{{OB_SPEC(info_dialog%,t_info_palette%)}}="-"
+  CASE 1
+    CHAR{{OB_SPEC(info_dialog%,t_info_colormap%)}}=STR$(info_color_map_length%)
+    CHAR{{OB_SPEC(info_dialog%,t_info_palette%)}}=STR$(info_color_map_bits%)+" BIT"
+  ENDSELECT
+  '
+  IF info_color_map_bits%=-1 THEN
+    CHAR{{OB_SPEC(info_dialog%,t_info_origin%)}}="-"
+  ELSE
+    IF left_start%=-1 THEN
+      CHAR{{OB_SPEC(info_dialog%,t_info_origin%)}}="-"
+    ELSE
+      IF left_start%=0 THEN
+        IF top_down%=TRUE THEN
+          CHAR{{OB_SPEC(info_dialog%,t_info_origin%)}}="Top/Left"
+        ELSE
+          CHAR{{OB_SPEC(info_dialog%,t_info_origin%)}}="Bottom/Left"
+        ENDIF
+      ELSE
+        IF top_down%=TRUE THEN
+          CHAR{{OB_SPEC(info_dialog%,t_info_origin%)}}="Top/Right"
+        ELSE
+          CHAR{{OB_SPEC(info_dialog%,t_info_origin%)}}="Bottom/right"
+        ENDIF
+      ENDIF
+    ENDIF
+  ENDIF
+  '
+  FOR set%=0 TO 8
+    CHAR{{OB_SPEC(info_dialog%,t_info_id%+set%)}}=MID$(info_id$,set%*50+1,50)
+  NEXT set%
+  '
+RETURN

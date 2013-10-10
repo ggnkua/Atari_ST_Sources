@@ -1,0 +1,67 @@
+         TTL       IEEE FORMAT EQUIVALENT EXPONENT (IEFEXP)
+***************************************
+* (C) COPYRIGHT 1981 BY MOTOROLA INC. *
+***************************************
+ 
+*************************************************
+*                  IEFEXP                       *
+* IEEE FORMAT EQUIVALENT EXPONENT FUNCTION      *
+*                                               *
+*  INPUT:   D7 - IEEE FLOATING POINT ARGUMENT   *
+*                                               *
+*  OUTPUT:  D7 - IEEE FLOATING POINT EXPONENTIAL*
+*                RESULT                         *
+*                                               *
+*     ALL OTHER REGISTERS ARE TRANSPARENT       *
+*                                               *
+*       MAXIMUM STACK USED:   54 BYTES          *
+*                                               *
+*  CONDITION CODES:                             *
+*        Z - SET IF RESULT IN D7 IS ZERO        *
+*        N - CLEARED                            *
+*        V - SET IF RESULT IS NAN (NOT-A-NUMBER)*
+*        C - UNDEFINED                          *
+*        X - UNDEFINED                          *
+*                                               *
+*                                               *
+*  NOTES:                                       *
+*    1) IF THE INPUT ARGUMENT IS A NAN (NOT-A-  *
+*       NUMBER) THEN THE "V" BIT WILL BE SET    *
+*       AND THE ARGUMENT UNCHANGED UPON RETURN. *
+*    2) SEE THE MC68344 USER'S GUIDE FOR DETAILS*
+*       ON THE RANGE OF IEEE NORMALIZED VALUES  *
+*       SUPPORTED.                              *
+*    2) SPOT CHECKS SHOW AT LEAST 6.8 DIGIT     *
+*       ACCURACY FOR ALL ABS(ARG) < 30.         *
+*                                               *
+*************************************************
+         PAGE
+IEFEXP   IDNT  1,1 IEEE FORMAT EQUIVALENT EXP
+ 
+         OPT       PCS
+ 
+         SECTION   9
+ 
+         XDEF      IEFEXP                        ENTRY POINT
+ 
+         XREF      9:FFPEXP            FAST FLOATING POINT EXPONENT
+         XREF      9:IEFSOP            FRONT-END SINGLE ARGUMENT ROUTINE
+         XREF      9:IEFTIEEE         BACK-END RETURN TO IEEE FORMAT
+         XREF      9:IEFRTD7          RETURN TO CALLER ARGUMENT IN D7
+         XREF      FFPCPYRT            COPYRIGHT STUB
+ 
+************************
+* EXPONENT ENTRY POINT *
+************************
+IEFEXP   BSR       IEFSOP    CONVERT ARGUMENT TO FFP FORMAT
+         BRA.S     IEFNRM    BRANCH NORMALIZED
+* ARGUMENT IS AN INFINITY
+         BPL.S     IEFDRTN   BRANCH IF PLUS - RETURN ITSELF
+         MOVE.L    #0,D7     RETURN PLUS ZERO IF WAS NEGATIVE INFINITY
+IEFDRTN  BRA       IEFRTD7   RETURN THE RESULT THAT IS IN D7
+ 
+* ARGUMENT IS NORMALIZED
+IEFNRM   BSR       FFPEXP    CALL FAST FLOATING POINT EXPONENT FUNCTION
+         BRA       IEFTIEEE  AND RETURN IN IEEE FORMAT
+ 
+         END

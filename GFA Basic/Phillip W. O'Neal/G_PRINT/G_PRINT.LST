@@ -1,0 +1,1946 @@
+' RESERVE 2000000
+$M2048000
+@init_variables
+DO
+  @event ! JUST WAIT FOR THE USER TO DO SOMETHING
+LOOP
+> PROCEDURE event
+  '
+  event_type&=EVNT_MULTI(&X110011,1,1,1,0,0,0,0,0,0,0,0,0,0,buffer%,1000,x_mouse&,y_mouse&,button_state&,key_state&,key_press&,num_clicks&)
+  @check_event
+  '
+RETURN
+> PROCEDURE check_update
+  event_type&=EVNT_MULTI(&X110000,1,1,1,0,0,0,0,0,0,0,0,0,0,buffer%,1000,x_mouse&,y_mouse&,button_state&,key_state&,key_press&,num_clicks&)
+  IF event_type& AND &X10000 THEN   ! MENU OR WINDOW EVENT
+    command%=buffer&(0)       ! TYPE OF EVENT
+    @event_window
+  ENDIF
+RETURN
+> PROCEDURE init_variables
+  '
+  my_handle&=V~H  ! GET VDI HANDLE OF PROGRAMS WORKSTATION
+  ap_id&=APPL_INIT()
+  mint%=0
+  @check_jar
+  '
+  IF id$<>"_SPD"
+    END
+  ENDIF
+  '
+  old_dta%=FGETDTA()
+  dta%=GEMDOS(72,L:1024)
+  ~FSETDTA(dta%)
+  '
+  CONTRL(0)=100  ! V_OPNVWK
+  CONTRL(1)=0
+  CONTRL(3)=11
+  CONTRL(6)=0
+  INTIN(0)=1
+  INTIN(1)=1
+  INTIN(2)=1
+  INTIN(3)=1
+  INTIN(4)=1
+  INTIN(5)=font%
+  INTIN(6)=1
+  INTIN(7)=1
+  INTIN(8)=1
+  INTIN(9)=1
+  INTIN(10)=2
+  VDISYS
+  temp_handle%=CONTRL(6)
+  IF temp_handle%<>0 THEN
+    micro_width%=INTOUT(3)
+    micro_height%=INTOUT(4)
+    CONTRL(0)=101  ! V_CLSVWK
+    CONTRL(1)=0
+    CONTRL(3)=0
+    CONTRL(6)=temp_handle%
+    VDISYS
+  ELSE
+  ENDIF
+  '
+  CONTRL(0)=102   ! 'VQ_EXTND' - GET EXTRA INFO ABOUT WORKSTATION
+  CONTRL(1)=0
+  CONTRL(3)=1
+  CONTRL(6)=my_handle&
+  INTIN(0)=1
+  VDISYS
+  screen_bits%=INTOUT(4)  ! GET # OF SCREEN PLANES
+  '
+  INLINE preview_title%,128
+  INLINE info%,128
+  '
+  OPTION BASE 0
+  DIM font_name$(16384),face%(16384)
+  DIM buffer&(7)  ! EVENT BUFFER FOR EVENT_MULTI CALL
+  buffer%=VARPTR(buffer&(0))
+  DIM my_buffer&(7)
+  my_buffer%=VARPTR(my_buffer&(0))
+  '
+  max_buffer_lines%=32767
+  DIM txt$(max_buffer_lines%)
+  DIM print$(max_buffer_lines%)
+  DIM print_x%(max_buffer_lines%)
+  DIM print_y%(max_buffer_lines%)
+  DIM print_page%(1024)
+  DEFFILL 0,2,8  ! COLOR 0 SOLID FILL PATTERN
+  '
+  current_drive%=GEMDOS(25)            ! DRIVE PROGRAM WAS RAN FROM
+  my_path$=DIR$(current_drive%+1)+"\"  ! PATH     "     "   "   "
+  IF MID$(my_path$,1,1)="\" THEN
+    my_path$=CHR$(current_drive%+65)+":"+my_path$
+  ENDIF
+  rsc$=my_path$+"G_PRINT.RSC"
+  '
+  @rsc_setup
+  font%=1
+  points%=24
+  display_points%=24
+  columns%=1
+  preview_handle%=0
+  preview_ready%=0
+  preview_open%=0
+  temp_font$="Swiss 721"
+  formated%=0
+  ltrim%=0
+  rtrim%=0
+  my_inf$=my_path$+"G_PRINT.INF"
+  @settings_load
+  fonts%=VST_LOAD_FONTS(0)
+  '
+  FOR x%=1 TO fonts%+1
+    face%(x%)=VQT_NAME(x%,font_name$(x%))
+    IF temp_font$=font_name$(x%) THEN
+      font%=x%
+    ENDIF
+  NEXT x%
+  '
+  view_path$=my_path$
+  view_name$=""
+  buffer_lines%=0
+  min_points%=3
+  max_points%=999
+  min_columns%=1
+  max_columns%=99
+  '
+  CHAR{{OB_SPEC(main%,t_file%)}}=view_name$
+  CHAR{{OB_SPEC(main%,t_file_size%)}}=STR$(buffer_lines%)
+  CHAR{{OB_SPEC(main%,b_font_name%)}}=font_name$(font%)
+  CHAR{{OB_SPEC(main%,t_points%)}}=STR$(points%)
+  CHAR{{OB_SPEC(main%,t_columns%)}}=STR$(columns%)
+  @window_setup
+  @set_buttons_state
+  ~OBJC_OFFSET(main%,b_display%,display_x%,display_y%)
+  display_w%=OB_W(main%,b_display%)
+  display_h%=OB_H(main%,b_display%)
+  @font_set
+  @open_workstation
+  @close_workstation
+  IF gdos_handle%>0 THEN
+    gdos_inch_width=25400/gdos_micro_width%
+    gdos_inch_height=25400/gdos_micro_height%
+    inch_width=25400/micro_width%
+    inch_height=25400/micro_height%
+    micro_x=inch_width/gdos_inch_width
+    micro_y=inch_height/gdos_inch_height
+  ELSE
+    micro_x=1
+    micro_y=1
+  ENDIF
+  '
+  DEFTEXT 1
+  DEFMOUSE 0  ! BE SURE MOUSE SHAPE IS A POINTER
+  '
+RETURN
+> PROCEDURE window_setup
+  '
+  INLINE window_title%,128
+  IF mint%=1 THEN
+    ~MENU_REGISTER(ap_id&,"  GDOS print")
+  ELSE
+    ~MENU_BAR(menu%,1)           ! TURN MENU ON
+  ENDIF
+  flag%=WIND_GET(0,4,mwx%,mwy%,mww%,mwh%)
+  ~WIND_CALC(0,&X1011,main_x%,main_y%,main_w%,main_h%,window_x%,window_y%,window_w%,window_h%)
+  window_handle%=WIND_CREATE(&X1011,window_x%,window_y%,window_w%,window_h%)
+  window_title$=" Gdos printer"+CHR$(0)
+  CHAR{window_title%}=window_title$
+  flag%=WIND_SET(window_handle%,2,CARD(SWAP(window_title%)),CARD(window_title%),0,0)
+  flag%=WIND_OPEN(window_handle%,window_x%,window_y%,window_w%,window_h%)
+  flag%=WIND_GET(window_handle%,4,window_ix%,window_iy%,window_iw%,window_ih%)
+  preview_x%=mwx%
+  preview_y%=mwy%
+  preview_w%=mww%
+  preview_h%=mwh%
+  flag%=WIND_GET(0,4,preview_x%,preview_y%,preview_w%,preview_h%)
+  preview_handle%=WIND_CREATE(&X111111111111,preview_x%,preview_y%,preview_w%,preview_h%)
+  @preview_title
+  '
+RETURN
+> PROCEDURE open_preview
+  '
+  IF preview_open%=0 THEN
+    preview_open%=1
+    flag%=WIND_OPEN(preview_handle%,preview_x%,preview_y%,preview_w%,preview_h%)
+    flag%=WIND_SET(preview_handle%,5,preview_x%,preview_y%,preview_w%,preview_h%)
+    flag%=WIND_GET(preview_handle%,4,preview_ix%,preview_iy%,preview_iw%,preview_ih%)
+  ENDIF
+  @size_preview_slider
+  @preview_title
+  @info_line
+  '
+RETURN
+> PROCEDURE check_event
+  '
+  IF event_type& AND &X1 THEN        ! KEY
+    @event_keypress
+    '
+  ENDIF
+  '
+  IF event_type& AND &X10 THEN      ! BUTTON
+    clicked_on%=WIND_FIND(x_mouse&,y_mouse&)
+    IF window_handle%=clicked_on% THEN
+      dialog_button%=OBJC_FIND(main%,0,4,x_mouse&,y_mouse&)
+      @process_button
+    ENDIF
+    IF preview_handle%=clicked_on% THEN
+      IF print_page%>1 THEN
+        IF x_mouse&>preview_ix% AND x_mouse&<preview_ix%+preview_iw% AND y_mouse&>preview_iy% AND y_mouse&<preview_iy%+preview_ih% THEN
+          @page_dialog
+        ENDIF
+      ENDIF
+    ENDIF
+    '
+  ENDIF
+  '
+  IF event_type& AND &X10000 THEN   ! MENU OR WINDOW EVENT
+    '
+    command%=buffer&(0)       ! TYPE OF EVENT
+    '
+    IF command%=10 THEN             ! MENU ITEM
+      @event_menu
+    ELSE          ! WINDOW EVENT
+      @event_window
+    ENDIF
+    '
+  ENDIF
+  '
+RETURN
+> PROCEDURE event_menu
+  '
+  tit%=buffer&(3)   ! WHICH MENU TITLE ?
+  ~MENU_TNORMAL(menu%,tit%,1)  ! MAKE MENU TITLE NORMAL AGAIN
+  item%=buffer&(4)  ! WHICH MENU ITEM WAS SELECTED
+  '
+  SELECT item%
+  CASE m_about%  ! ABOUT
+    ALERT 0," |Speedo font printer  |½1995 by Phillip O'Neal  | ",1,"OK",d%
+    '
+  ENDSELECT
+  '
+RETURN
+> PROCEDURE event_window
+  top%=buffer&(3)
+  SELECT command%
+  CASE 20 ! WIND UPDATE
+    @repair
+  CASE 21 ! WINDOW CLICKED ON
+    flag%=WIND_SET(top%,10,0,0,0,0)
+    DEFMOUSE 0
+  CASE 22 ! CLOSE WINDOW
+    IF top%=window_handle% THEN
+      @trying_to_quit
+    ELSE
+      ~WIND_CLOSE(preview_handle%)
+      preview_open%=0
+    ENDIF
+  CASE 23 ! FULL WINDOW
+    flag%=WIND_SET(preview_handle%,5,mwx%,mwy%,mww%,mwh%)
+    flag%=WIND_GET(preview_handle%,5,preview_x%,preview_y%,preview_w%,preview_h%)
+    flag%=WIND_GET(preview_handle%,4,preview_ix%,preview_iy%,preview_iw%,preview_ih%)
+    @size_preview_slider
+    IF view_x%>preview_page_width%-preview_iw% THEN
+      view_x%=preview_page_width%-preview_iw%
+      @preview_fix_hslider
+    ENDIF
+    IF view_y%>preview_page_height%-preview_ih% THEN
+      view_y%=preview_page_height%-preview_ih%
+      @preview_fix_vslider
+    ENDIF
+  CASE 24,25,26 ! SLIDERS
+    IF preview_ready%=1 THEN
+      old_view_x%=view_x%
+      old_view_y%=view_y%
+      @event_preview_slider
+      IF old_view_x%<>view_x% OR old_view_y%<>view_y% THEN
+        @update_preview
+      ENDIF
+    ENDIF
+  CASE 27,28 ! WINDOW SIZED, MOVED
+    IF top%=window_handle% THEN
+      window_x%=buffer&(4) ! GET NEW WINDOW POSITION/SIZE
+      window_y%=buffer&(5)
+      '
+      flag%=WIND_SET(window_handle%,5,window_x%,window_y%,window_w%,window_h%)     ! SIZE WINDOW
+      flag%=WIND_GET(window_handle%,4,window_ix%,window_iy%,window_iw%,window_ih%) ! GET INSIDE SIZE
+      '
+      OB_X(main%,0)=window_ix%
+      OB_Y(main%,0)=window_iy%
+      ~OBJC_OFFSET(main%,b_display%,display_x%,display_y%)
+      '
+    ELSE
+      preview_x%=buffer&(4)
+      preview_y%=buffer&(5)
+      preview_w%=buffer&(6)
+      preview_h%=buffer&(7)
+      '
+      flag%=WIND_SET(preview_handle%,5,preview_x%,preview_y%,preview_w%,preview_h%)
+      flag%=WIND_GET(preview_handle%,4,preview_ix%,preview_iy%,preview_iw%,preview_ih%)
+      @size_preview_slider
+    ENDIF
+  ENDSELECT
+RETURN
+> PROCEDURE event_keypress
+  '
+  code&=SHR(key_press& AND &HFF00,8)
+  ' UPPER BYTE OF WORD CONTAINS SCAN CODE
+  '
+  SELECT code&
+    '
+  CASE 38 ! 'L'OAD
+    dialog_button%=b_read%
+    @process_button
+    '
+  CASE 31 ! 'S'AVE
+    dialog_button%=b_write%
+    @process_button
+    '
+  CASE 25 ! 'P'RINT
+    dialog_button%=b_print%
+    @process_button
+    '
+  CASE 16 ! 'Q'UIT
+    @trying_to_quit
+    '
+  CASE 18 ! 'E'DIT
+    dialog_button%=t_points%
+    @process_button
+    '
+  CASE 24 ! 'O' LOAD
+    dialog_button%=b_load%
+    @process_button
+    '
+  CASE 75 ! LEFT
+    dialog_button%=b_columns_down%
+    @process_button
+    '
+  CASE 77 ! RIGHT
+    dialog_button%=b_columns_up%
+    @process_button
+    '
+  CASE 51 ! '<'
+    IF BTST(key_state&,0) OR BTST(key_state&,1) THEN ! RIGHT, LEFT SHIFT
+      dialog_button%=b_points_big_down%
+    ELSE
+      dialog_button%=b_points_down%
+    ENDIF
+    @process_button
+    '
+  CASE 52 ! '>'
+    IF BTST(key_state&,0) OR BTST(key_state&,1) THEN ! RIGHT, LEFT SHIFT
+      dialog_button%=b_points_big_up%
+    ELSE
+      dialog_button%=b_points_up%
+    ENDIF
+    @process_button
+    '
+  ENDSELECT
+  '
+RETURN
+> PROCEDURE process_button
+  IF BTST(OB_STATE(main%,dialog_button%),3)=FALSE! THEN
+    SELECT dialog_button%
+      '
+    CASE t_default%
+      ALERT 0," |Gdos printer  |½1995 by Phillip O'Neal  | ",1,"OK",d%
+      '
+    CASE t_points%,t_columns%
+      edit%=dialog_button%
+      @edit_values
+      '
+    CASE b_points_big_down%
+      @set_button
+      old_points%=points%
+      points%=points%-16
+      @check_points
+      @set_text
+      @set_buttons_state
+      @reset_button
+      '
+    CASE b_points_down%
+      @set_button
+      old_points%=points%
+      DEC points%
+      @check_points
+      @set_text
+      @set_buttons_state
+      @reset_button
+      '
+    CASE b_points_up%
+      @set_button
+      old_points%=points%
+      INC points%
+      @check_points
+      @set_text
+      @set_buttons_state
+      @reset_button
+      '
+    CASE b_points_big_up%
+      @set_button
+      old_points%=points%
+      points%=points%+16
+      @check_points
+      @set_text
+      @set_buttons_state
+      @reset_button
+      '
+    CASE b_columns_up%
+      @set_button
+      old_columns%=columns%
+      INC columns%
+      @check_columns
+      @set_text
+      @set_buttons_state
+      @reset_button
+      '
+    CASE b_columns_down%
+      @set_button
+      old_columns%=columns%
+      DEC columns%
+      @check_columns
+      @set_text
+      @set_buttons_state
+      @reset_button
+      '
+    CASE b_read%
+      @set_button
+      temp_font$=""
+      @settings_load
+      IF temp_font$<>"" THEN
+        FOR x%=1 TO fonts%+1
+          IF temp_font$=font_name$(x%) THEN
+            font%=x%
+          ENDIF
+        NEXT x%
+      ENDIF
+      @check_points
+      @check_columns
+      @set_text
+      @set_buttons_state
+      @font_set
+      @reset_button
+      '
+    CASE b_write%
+      @set_button
+      @settings_save
+      @set_buttons_state
+      @reset_button
+      '
+    CASE b_print%
+      @set_button
+      @on_line
+      IF on_line%=1 THEN
+        @print
+      ENDIF
+      @reset_button
+      '
+    CASE b_load%
+      @set_button
+      @load
+      @set_buttons_state
+      @reset_button
+      '
+    CASE b_erase%
+      @set_button
+      view_name$=""
+      buffer_lines%=0
+      preview_ready%=0
+      @clear_preview
+      @set_text
+      @set_buttons_state
+      @reset_button
+      '
+    CASE b_preview%
+      @set_button
+      @on_line
+      IF on_line%=1 THEN
+        @preview
+      ENDIF
+      @reset_button
+      '
+    CASE b_ltrim%
+      IF ltrim%=0 THEN
+        ltrim%=1
+      ELSE
+        ltrim%=0
+      ENDIF
+      preview_ready%=0
+      @clear_preview
+      @set_buttons_state
+      '
+    CASE b_rtrim%
+      IF rtrim%=0 THEN
+        rtrim%=1
+      ELSE
+        rtrim%=0
+      ENDIF
+      preview_ready%=0
+      @clear_preview
+      @set_buttons_state
+      '
+    CASE b_format%
+      IF formated%=0 THEN
+        formated%=1
+      ELSE
+        formated%=0
+      ENDIF
+      preview_ready%=0
+      @clear_preview
+      @set_buttons_state
+      '
+    CASE b_font_name%
+      @set_font
+      '
+    ENDSELECT
+  ENDIF
+  '
+RETURN
+> PROCEDURE set_button
+  OB_STATE(main%,dialog_button%)=BSET(OB_STATE(main%,dialog_button%),0)
+  object%=dialog_button%
+  @get_offset
+  @update
+  '
+  IF MOUSEK<>0 THEN
+    PAUSE 10
+  ENDIF
+  '
+RETURN
+> PROCEDURE reset_button
+  OB_STATE(main%,dialog_button%)=BCLR(OB_STATE(main%,dialog_button%),0)
+  object%=dialog_button%
+  @get_offset
+  @update
+RETURN
+> PROCEDURE get_offset
+  ~OBJC_OFFSET(main%,object%,rx%,ry%)
+  rw%=OB_W(main%,object%)
+  rh%=OB_H(main%,object%)
+  '
+RETURN
+> PROCEDURE update
+  '
+  my_buffer&(0)=20
+  my_buffer&(3)=window_handle%
+  my_buffer&(4)=rx%-2
+  my_buffer&(5)=ry%-2
+  my_buffer&(6)=rw%+4
+  my_buffer&(7)=rh%+4
+  ~APPL_WRITE(ap_id&,16,my_buffer%)
+  @check_update
+  '
+RETURN
+> PROCEDURE update_preview
+  '
+  my_buffer&(0)=20
+  my_buffer&(3)=preview_handle%
+  my_buffer&(4)=preview_ix%
+  my_buffer&(5)=preview_iy%
+  my_buffer&(6)=preview_iw%
+  my_buffer&(7)=preview_ih%
+  ~APPL_WRITE(ap_id&,16,my_buffer%)
+  @check_update
+  '
+RETURN
+> PROCEDURE repair
+  '
+  er%=WIND_UPDATE(1)                      ! TELL GEM WE ARE TAKING OVER SCREEN
+  er%=WIND_UPDATE(3)
+  HIDEM
+  er%=WIND_GET(top%,11,fx%,fy%,fx2%,fy2%) ! GET FIRST RECTANGLE
+  fix_wx%=buffer&(4)
+  fix_wy%=buffer&(5)
+  fix_ww%=buffer&(6)
+  fix_wh%=buffer&(7)
+  fix_flag%=RC_INTERSECT(fix_wx%,fix_wy%,fix_ww%,fix_wh%,fx%,fy%,fx2%,fy2%)
+  IF fix_flag% THEN
+    IF top%=window_handle% THEN
+      @display_main
+    ELSE
+      IF top%=preview_handle% THEN
+        @display_preview
+      ENDIF
+    ENDIF
+  ENDIF
+  fix_done%=0
+  '
+  DO
+    er%=WIND_GET(top%,12,fx%,fy%,fx2%,fy2%) ! GET FIRST RECTANGLE
+    '
+    IF fx2%+fy2%=0 THEN                          ! ANY MORE RECTANGLES ?
+      fix_done%=1
+    ELSE
+      fix_wx%=buffer&(4)
+      fix_wy%=buffer&(5)
+      fix_ww%=buffer&(6)
+      fix_wh%=buffer&(7)
+      fix_flag%=RC_INTERSECT(fix_wx%,fix_wy%,fix_ww%,fix_wh%,fx%,fy%,fx2%,fy2%)
+      IF fix_flag% THEN
+        IF top%=window_handle% THEN
+          @display_main
+        ELSE
+          IF top%=preview_handle% THEN
+            @display_preview
+          ENDIF
+        ENDIF
+      ENDIF
+    ENDIF
+    '
+  LOOP UNTIL fix_done%=1
+  '
+  er%=WIND_UPDATE(2)
+  er%=WIND_UPDATE(0)                      !  DONE WITH SCREEN
+  SHOWM
+  '
+RETURN
+> PROCEDURE display_main
+  CLIP fx%,fy%,fx2%,fy2%
+  ~OBJC_DRAW(main%,0,2,fx%,fy%,fx2%,fy2%)
+  '
+  display_flag%=RC_INTERSECT(display_x%,display_y%,display_w%,display_h%,fx%,fy%,fx2%,fy2%)
+  IF display_flag% THEN
+    CLIP fx%,fy%,fx2%,fy2%
+    '
+    temp_done%=0
+    display_points%=48
+    CONTRL(0)=246  ! VST_ARBPT
+    CONTRL(1)=0
+    CONTRL(3)=1
+    CONTRL(6)=my_handle&
+    INTIN(0)=display_points%
+    VDISYS
+    '
+    DO
+      ~VQT_EXTENT(font_name$(font%),d%,d%,d%,d%,twidth%,theight%,d%,d%)
+      IF twidth%>display_width% OR theight%>display_height% THEN
+        display_points%=display_points%-2
+        CONTRL(0)=246  ! VST_ARBPT
+        CONTRL(1)=0
+        CONTRL(3)=1
+        CONTRL(6)=my_handle&
+        INTIN(0)=display_points%
+        VDISYS
+      ELSE
+        temp_done%=1
+      ENDIF
+    LOOP UNTIL temp_done%=1
+    '
+    x%=0
+    y%=0
+    IF twidth%<display_width% THEN
+      x%=(display_width%-twidth%)/2
+    ENDIF
+    IF theight%<display_height% THEN
+      y%=(display_height%-theight%)/2
+    ENDIF
+    TEXT display_x%+x%,display_y%+y%,font_name$(font%)
+    '
+    CONTRL(0)=246  ! VST_ARBPT
+    CONTRL(1)=0
+    CONTRL(3)=1
+    CONTRL(6)=my_handle&
+    INTIN(0)=points%
+    VDISYS
+    '
+  ENDIF
+  '
+RETURN
+> PROCEDURE display_preview
+  CLIP fx%,fy%,fx2%,fy2%
+  preview_flag%=RC_INTERSECT(preview_ix%,preview_iy%,preview_iw%,preview_ih%,fx%,fy%,fx2%,fy2%)
+  IF preview_flag% THEN
+    DEFFILL 0,2,8
+    PBOX fx%,fy%,fx%+fx2%-1,fy%+fy2%-1
+    IF preview_ready%=1 THEN
+      DEFMOUSE 2
+      '
+      CONTRL(0)=246  ! VST_ARBPT
+      CONTRL(1)=0
+      CONTRL(3)=1
+      CONTRL(6)=my_handle&
+      INTIN(0)=preview_points%
+      VDISYS
+      '
+      x%=0
+      start%=print_page%(current_page%)
+      end%=print_page%(current_page%+1)-1
+      FOR x%=start% TO end%
+        TEXT preview_ix%+print_x%(x%)-view_x%,preview_iy%+print_y%(x%)-view_y%,print$(x%)
+      NEXT x%
+      DEFLINE 1
+      FOR y%=1 TO columns%-1
+        LINE preview_ix%+y%*gcolumn_width-(view_x%+(space_width%/2)),0,preview_ix%+y%*+gcolumn_width-(view_x%+(space_width%/2)),preview_iy%+gdos_y_rez
+      NEXT y%
+      DEFMOUSE 0
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE preview_title
+  IF preview_ready%=1 THEN
+    preview_title$=" Preview of "+view_name$+CHR$(0)
+  ELSE
+    preview_title$=" Preview (Empty)"+CHR$(0)
+  ENDIF
+  CHAR{preview_title%}=preview_title$
+  flag%=WIND_SET(preview_handle%,2,CARD(SWAP(preview_title%)),CARD(preview_title%),0,0)
+RETURN
+> PROCEDURE info_line
+  IF preview_ready%=1 THEN
+    info$="Page "+STR$(current_page%+1)+" of "+STR$(print_page%)+" "+STR$(gdos_x_rez)+"x"+STR$(gdos_y_rez)+" "
+    IF columns%=1 THEN
+      info$=info$+STR$(columns%)+" column "+STR$(points%)+" point "+font_name$(font%)
+    ELSE
+      info$=info$+STR$(columns%)+" columns "+STR$(points%)+" point "+font_name$(font%)
+    ENDIF
+  ELSE
+    info$=""
+  ENDIF
+  CHAR{info%}=info$
+  flag%=WIND_SET(preview_handle%,3,CARD(SWAP(info%)),CARD(info%),0,0)
+RETURN
+> PROCEDURE size_preview_slider
+  '
+  preview_page_width%=gdos_x_rez
+  preview_page_height%=gdos_y_rez
+  '
+  IF preview_ready%=1 AND preview_page_width%>preview_iw% THEN
+    preview_hslider_size%=(preview_iw%/preview_page_width%)*1000
+  ELSE
+    view_x%=0
+    preview_hslider_size%=1000
+  ENDIF
+  '
+  IF preview_ready%=1 AND preview_page_height%>preview_ih% THEN
+    preview_vslider_size%=(preview_ih%/preview_page_height%)*1000
+  ELSE
+    view_y%=0
+    preview_vslider_size%=1000
+  ENDIF
+  '
+  @preview_fix_hslider
+  flag%=WIND_SET(preview_handle%,15,preview_hslider_size%,0,0,0)
+  '
+  @preview_fix_vslider
+  flag%=WIND_SET(preview_handle%,16,preview_vslider_size%,0,0,0)
+  '
+RETURN
+> PROCEDURE clear_preview
+  flag%=WIND_SET(preview_handle%,9,0,0,0,0)
+  flag%=WIND_SET(preview_handle%,8,0,0,0,0)
+  flag%=WIND_SET(preview_handle%,15,1000,0,0,0)
+  flag%=WIND_SET(preview_handle%,16,1000,0,0,0)
+  @info_line
+  @update_preview
+RETURN
+> PROCEDURE event_preview_slider
+  '
+  SELECT command%
+  CASE 24
+    slider_event%=buffer&(4)
+    SELECT slider_event%
+    CASE 0 ! 'ABOVE'
+      IF view_y%>0
+        view_y%=view_y%-preview_ih%
+        IF view_y%<0 THEN
+          view_y%=0
+        ENDIF
+        @preview_fix_vslider
+        '
+      ENDIF
+      '
+    CASE 1 ! 'BELOW'
+      IF view_y%<preview_page_height%-preview_ih% AND preview_vslider_size%<1000 THEN
+        view_y%=view_y%+preview_ih%
+        IF view_y%>preview_page_height%-preview_ih% THEN
+          view_y%=preview_page_height%-preview_ih%
+        ENDIF
+        @preview_fix_vslider
+      ENDIF
+      '
+    CASE 2 ! 'UP'
+      IF view_y%>0
+        view_y%=view_y%-gheight%
+        IF view_y%<0 THEN
+          view_y%=0
+        ENDIF
+        @preview_fix_vslider
+        '
+      ENDIF
+      '
+    CASE 3 ! 'DOWN'
+      IF view_y%<preview_page_height%-preview_ih% AND preview_vslider_size%<1000 THEN
+        view_y%=view_y%+gheight%
+        IF view_y%>preview_page_height%-preview_ih% THEN
+          view_y%=preview_page_height%-preview_ih%
+        ENDIF
+        @preview_fix_vslider
+      ENDIF
+      '
+    CASE 4 ! 'LEFT OF SLIDER'
+      IF view_x%>0
+        view_x%=view_x%-preview_iw%
+        IF view_x%<0 THEN
+          view_x%=0
+        ENDIF
+        @preview_fix_hslider
+        '
+      ENDIF
+      '
+    CASE 5 ! 'RIGHT OF SLIDER'
+      IF view_x%<preview_page_width%-preview_iw% AND preview_hslider_size%<1000 THEN
+        view_x%=view_x%+preview_iw%
+        IF view_x%>preview_page_width%-preview_iw% THEN
+          view_x%=preview_page_width%-preview_iw%
+        ENDIF
+        @preview_fix_hslider
+      ENDIF
+      '
+    CASE 6 ! 'LEFT'
+      IF view_x%>0
+        view_x%=view_x%-gwidth%
+        IF view_x%<0 THEN
+          view_x%=0
+        ENDIF
+        @preview_fix_hslider
+        '
+      ENDIF
+      '
+    CASE 7 ! 'RIGHT'
+      IF view_x%<preview_page_width%-preview_iw% AND preview_hslider_size%<1000 THEN
+        view_x%=view_x%+gwidth%
+        IF view_x%>preview_page_width%-preview_iw% THEN
+          view_x%=preview_page_width%-preview_iw%
+        ENDIF
+        @preview_fix_hslider
+      ENDIF
+      '
+    ENDSELECT
+  CASE 25 ! 'H SLIDER BOX'
+    IF preview_hslider_size%<1000 THEN
+      preview_hslider_position%=buffer&(4)
+      view_x%=(preview_hslider_position%/1000)*(preview_page_width%-preview_iw%)
+      @preview_fix_hslider
+      '
+    ENDIF
+    '
+  CASE 26 ! 'V SLIDER BOX'
+    IF preview_vslider_size%<1000 THEN
+      preview_vslider_position%=buffer&(4)
+      view_y%=(preview_vslider_position%/1000)*(preview_page_height%-preview_ih%)
+      @preview_fix_vslider
+      '
+    ENDIF
+    '
+  ENDSELECT
+  '
+RETURN
+> PROCEDURE preview_fix_vslider
+  '
+  IF preview_vslider_size%<1000 THEN
+    preview_vslider_position%=(view_y%/(preview_page_height%-preview_ih%))*1000
+  ENDIF
+  flag%=WIND_SET(preview_handle%,9,preview_vslider_position%,0,0,0)
+  '
+RETURN
+> PROCEDURE preview_fix_hslider
+  '
+  IF preview_hslider_size%<1000 THEN
+    preview_hslider_position%=(view_x%/(preview_page_width%-preview_iw%))*1000
+  ENDIF
+  flag%=WIND_SET(preview_handle%,8,preview_hslider_position%,0,0,0)
+  '
+RETURN
+> PROCEDURE trying_to_quit
+  '
+  txt$=" |Sure you want to quit ?  | "
+  ALERT 2,txt$,1,"OK|Cancel",button%
+  '
+  IF button%=1 THEN
+    '
+    ~FSETDTA(old_dta%)
+    IF dta%>0 THEN
+      d%=GEMDOS(73,L:dta%)  ! RELEASE MEMORY
+    ENDIF
+    '
+    ~VST_UNLOAD_FONTS(0)
+    ~WIND_CLOSE(window_handle%)
+    ~WIND_DELETE(window_handle%)
+    IF preview_handle%>0 THEN
+      ~WIND_CLOSE(preview_handle%)
+      ~WIND_DELETE(preview_handle%)
+    ENDIF
+    IF mint%=0 THEN
+      ~MENU_BAR(menu%,0)
+    ENDIF
+    ~RSRC_FREE()
+    END
+    '
+  ENDIF
+  '
+RETURN
+> PROCEDURE rsc_setup
+  '
+  IF EXIST(rsc$) THEN
+    rsc%=RSRC_LOAD(rsc$)
+  ELSE ! CAN'T FIND RSC FILE
+    END
+  ENDIF
+  '
+  ~RSRC_GADDR(0,0,menu%)
+  ~RSRC_GADDR(0,1,main%)
+  ~RSRC_GADDR(0,2,set_font%)
+  ~RSRC_GADDR(0,3,page_dialog%)
+  '
+  m_about%=6
+  '
+  t_default%=1
+  b_load%=3
+  b_erase%=4
+  b_print%=5
+  t_file%=6
+  t_file_size%=8
+  b_read%=10
+  b_write%=11
+  t_columns%=13
+  b_columns_down%=14
+  b_columns_up%=15
+  t_points%=17
+  b_points_big_down%=18
+  b_points_down%=19
+  b_points_up%=20
+  b_points_big_up%=21
+  b_format%=22
+  b_ltrim%=23
+  b_rtrim%=24
+  b_preview%=25
+  b_font_name%=27
+  b_display%=28
+  '
+  b_page_ok%=2
+  b_page_left%=3
+  b_page_right%=5
+  b_page_number%=4
+  b_page_cancel%=6
+  '
+  ~FORM_CENTER(main%,main_x%,main_y%,main_w%,main_h%)
+  ~FORM_CENTER(set_font%,set_font_x%,set_font_y%,set_font_w%,set_font_h%)
+  ~FORM_CENTER(page_dialog%,page_x%,page_y%,page_w%,page_h%)
+  pick_height%=OB_H(set_font%,2)
+  display_height%=OB_H(main%,b_display%)
+  display_width%=OB_W(main%,b_display%)
+  '
+  IF screen_bits%<16 THEN
+    FOR x%=1 TO b_display%
+      OB_FLAGS(main%,x%)=BCLR(OB_FLAGS(main%,x%),10)
+    NEXT x%
+    FOR x%=1 TO b_page_ok%
+      OB_FLAGS(page_dialog%,x%)=BCLR(OB_FLAGS(page_dialog%,x%),10)
+    NEXT x%
+  ENDIF
+  '
+RETURN
+> PROCEDURE check_jar
+  jar%=LPEEK(1440) ! ADDRESS OF COOKIE JAR
+  IF jar% THEN     ! IF JAR PRESENT THEN jar%=ADDRESS OF JAR
+    cookie_num%=0
+    DO
+      cookie%=LPEEK(jar%+cookie_num%*8)
+      cookie$=CHR$(SHR(cookie% AND &HFF000000,24))
+      cookie$=cookie$+CHR$(SHR(cookie% AND &HFF0000,16))
+      cookie$=cookie$+CHR$(SHR(cookie% AND &HFF00,8))
+      cookie$=cookie$+CHR$(cookie% AND &HFF)
+      IF cookie$="FSMC" THEN
+        '
+        id%=LPEEK(LPEEK(jar%+cookie_num%*8+4))
+        id$=CHR$(SHR(id% AND &HFF000000,24))
+        id$=id$+CHR$(SHR(id% AND &HFF0000,16))
+        id$=id$+CHR$(SHR(id% AND &HFF00,8))
+        id$=id$+CHR$(id% AND &HFF)
+        '
+      ENDIF
+      IF cookie$="MiNT" OR cookie$="MagX" THEN
+        mint%=1
+      ENDIF
+      INC cookie_num%
+    LOOP UNTIL cookie%=0
+  ENDIF
+RETURN
+> PROCEDURE page_dialog
+  old_current_page%=current_page%
+  CHAR{{OB_SPEC(page_dialog%,b_page_number%)}}=STR$(current_page%+1)
+  page_x%=x_mouse&-(page_w%/2)
+  page_y%=y_mouse&-page_h%
+  IF page_x%<mwx% THEN
+    page_x%=mwx%
+  ENDIF
+  IF page_x%+page_w%>mww% THEN
+    page_x%=mww%-page_w%
+  ENDIF
+  IF page_y%<mwy% THEN
+    page_y%=mwy%
+  ENDIF
+  IF page_y%+page_h%>mwh% THEN
+    page_y%=mwh%-page_h%
+  ENDIF
+  OB_X(page_dialog%,0)=page_x%
+  OB_Y(page_dialog%,0)=page_y%
+  ~FORM_DIAL(0,0,0,0,0,page_x%,page_y%,page_w%,page_h%)
+  er%=WIND_UPDATE(1)
+  er%=WIND_UPDATE(3)
+  '
+  page_done%=0
+  ~OBJC_DRAW(page_dialog%,0,2,page_x%,page_y%,page_w%,page_h%)
+  @set_page
+  DO
+    exit%=FORM_DO(page_dialog%,0)
+    exit%=exit% AND &H7FFF
+    '
+    OB_STATE(page_dialog%,exit%)=BSET(OB_STATE(page_dialog%,exit%),0)
+    SELECT exit%
+    CASE b_page_cancel%
+      current_page%=old_current_page%
+      page_done%=1
+      '
+    CASE b_page_left%
+      IF current_page%>0 THEN
+        DEC current_page%
+        CHAR{{OB_SPEC(page_dialog%,b_page_number%)}}=STR$(current_page%+1)
+        ~OBJC_DRAW(page_dialog%,b_page_number%,2,page_x%,page_y%,page_w%,page_h%)
+        @set_page
+      ENDIF
+      '
+    CASE b_page_right%
+      IF current_page%<print_page%-1 THEN
+        INC current_page%
+        CHAR{{OB_SPEC(page_dialog%,b_page_number%)}}=STR$(current_page%+1)
+        ~OBJC_DRAW(page_dialog%,b_page_number%,2,page_x%,page_y%,page_w%,page_h%)
+        @set_page
+      ENDIF
+      '
+    CASE b_page_ok%
+      page_done%=1
+      '
+    ENDSELECT
+    OB_STATE(page_dialog%,exit%)=BCLR(OB_STATE(page_dialog%,exit%),0)
+    ~OBJC_DRAW(page_dialog%,exit%,2,page_x%,page_y%,page_w%,page_h%)
+    DO
+      ~GRAF_MKSTATE(event_mouse_x%,event_mouse_y%,mouse_button%,key_state%)
+    LOOP UNTIL mouse_button%=0
+  LOOP UNTIL page_done%
+  er%=WIND_UPDATE(2)
+  er%=WIND_UPDATE(0)
+  ~FORM_DIAL(3,0,0,0,0,page_x%,page_y%,page_w%,page_h%)
+  IF old_current_page%<>current_page% THEN
+    @update_preview
+  ENDIF
+RETURN
+> PROCEDURE set_page
+  IF current_page%=0 THEN
+    IF BTST(OB_STATE(page_dialog%,b_page_left%),3)=FALSE! THEN
+      OB_STATE(page_dialog%,b_page_left%)=BSET(OB_STATE(page_dialog%,b_page_left%),3)
+      ~OBJC_DRAW(page_dialog%,b_page_left%,2,page_x%,page_y%,page_w%,page_h%)
+    ENDIF
+  ELSE
+    IF BTST(OB_STATE(page_dialog%,b_page_left%),3)=TRUE! THEN
+      OB_STATE(page_dialog%,b_page_left%)=BCLR(OB_STATE(page_dialog%,b_page_left%),3)
+      ~OBJC_DRAW(page_dialog%,b_page_left%,2,page_x%,page_y%,page_w%,page_h%)
+    ENDIF
+  ENDIF
+  IF current_page%=print_page%-1 THEN
+    IF BTST(OB_STATE(page_dialog%,b_page_right%),3)=FALSE! THEN
+      OB_STATE(page_dialog%,b_page_right%)=BSET(OB_STATE(page_dialog%,b_page_right%),3)
+      ~OBJC_DRAW(page_dialog%,b_page_right%,2,page_x%,page_y%,page_w%,page_h%)
+    ENDIF
+  ELSE
+    IF BTST(OB_STATE(page_dialog%,b_page_right%),3)=TRUE! THEN
+      OB_STATE(page_dialog%,b_page_right%)=BCLR(OB_STATE(page_dialog%,b_page_right%),3)
+      ~OBJC_DRAW(page_dialog%,b_page_right%,2,page_x%,page_y%,page_w%,page_h%)
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE font_set
+  '
+  CONTRL(0)=21   ! VST_FONT
+  CONTRL(1)=0
+  CONTRL(3)=1
+  CONTRL(6)=my_handle&
+  INTIN(0)=face%(font%)
+  VDISYS
+  '
+  CONTRL(0)=236  ! VST_CHARMAP
+  CONTRL(1)=0
+  CONTRL(3)=1
+  CONTRL(6)=my_handle&
+  INTIN(0)=1
+  VDISYS
+  '
+  CONTRL(0)=39  ! VST_ALIGNMENT
+  CONTRL(1)=0
+  CONTRL(3)=2
+  CONTRL(6)=my_handle&
+  INTIN(0)=0    ! LEFT JUSTIFIED
+  INTIN(1)=5    ! TOP LINE
+  VDISYS
+  '
+  object%=b_display%
+  @get_offset
+  @update
+  '
+  CONTRL(0)=246  ! VST_ARBPT
+  CONTRL(1)=0
+  CONTRL(3)=1
+  CONTRL(6)=my_handle&
+  INTIN(0)=points%
+  VDISYS
+  '
+RETURN
+> PROCEDURE get_text
+  points%=VAL(CHAR{{OB_SPEC(main%,t_points%)}})
+  columns%=VAL(CHAR{{OB_SPEC(main%,t_columns%)}})
+  @check_points
+  @check_columns
+  @set_text
+  '
+RETURN
+> PROCEDURE check_points
+  IF points%>max_points% THEN
+    points%=max_points%
+  ENDIF
+  IF points%<min_points% THEN
+    points%=min_points%
+  ENDIF
+RETURN
+> PROCEDURE check_columns
+  IF columns%>max_columns% THEN
+    columns%=max_columns%
+  ENDIF
+  IF columns%<min_columns% THEN
+    columns%=min_columns%
+  ENDIF
+  '
+RETURN
+> PROCEDURE set_text
+  temp$=CHAR{{OB_SPEC(main%,t_file%)}}
+  IF view_name$<>temp$ THEN
+    CHAR{{OB_SPEC(main%,t_file%)}}=view_name$
+    object%=t_file%
+    @get_offset
+    @update
+  ENDIF
+  '
+  check$=STR$(buffer_lines%)
+  temp$=CHAR{{OB_SPEC(main%,t_file_size%)}}
+  IF check$<>temp$ THEN
+    CHAR{{OB_SPEC(main%,t_file_size%)}}=check$
+    object%=t_file_size%
+    @get_offset
+    @update
+  ENDIF
+  '
+  temp$=CHAR{{OB_SPEC(main%,b_font_name%)}}
+  IF font_name$(font%)<>temp$ THEN
+    CHAR{{OB_SPEC(main%,b_font_name%)}}=font_name$(font%)
+    object%=b_font_name%
+    @get_offset
+    @update
+  ENDIF
+  '
+  temp$=CHAR{{OB_SPEC(main%,t_points%)}}
+  IF STR$(points%)<>temp$ THEN
+    CHAR{{OB_SPEC(main%,t_points%)}}=STR$(points%)
+    object%=t_points%
+    @get_offset
+    @update
+  ENDIF
+  '
+  temp$=CHAR{{OB_SPEC(main%,t_columns%)}}
+  IF STR$(columns%)<>temp$ THEN
+    CHAR{{OB_SPEC(main%,t_columns%)}}=STR$(columns%)
+    object%=t_columns%
+    @get_offset
+    @update
+  ENDIF
+  '
+  IF old_points%<>points% OR old_columns%<>columns% OR old_font%<>fonts% THEN
+    preview_ready%=0
+    @clear_preview
+  ENDIF
+  '
+RETURN
+> PROCEDURE set_buttons_state
+  IF formated% THEN
+    IF BTST(OB_STATE(main%,b_format%),0)=FALSE! THEN
+      OB_STATE(main%,b_format%)=BSET(OB_STATE(main%,b_format%),0)
+      object%=b_format%
+      @get_offset
+      @update
+    ENDIF
+  ELSE
+    IF BTST(OB_STATE(main%,b_format%),0)=TRUE! THEN
+      OB_STATE(main%,b_format%)=BCLR(OB_STATE(main%,b_format%),0)
+      object%=b_format%
+      @get_offset
+      @update
+    ENDIF
+  ENDIF
+  '
+  IF ltrim%=1 THEN
+    IF BTST(OB_STATE(main%,b_ltrim%),0)=FALSE! THEN
+      OB_STATE(main%,b_ltrim%)=BSET(OB_STATE(main%,b_ltrim%),0)
+      object%=b_ltrim%
+      @get_offset
+      @update
+    ENDIF
+  ELSE
+    IF BTST(OB_STATE(main%,b_ltrim%),0)=TRUE! THEN
+      OB_STATE(main%,b_ltrim%)=BCLR(OB_STATE(main%,b_ltrim%),0)
+      object%=b_ltrim%
+      @get_offset
+      @update
+    ENDIF
+  ENDIF
+  '
+  IF rtrim%=1 THEN
+    IF BTST(OB_STATE(main%,b_rtrim%),0)=FALSE! THEN
+      OB_STATE(main%,b_rtrim%)=BSET(OB_STATE(main%,b_rtrim%),0)
+      object%=b_rtrim%
+      @get_offset
+      @update
+    ENDIF
+  ELSE
+    IF BTST(OB_STATE(main%,b_rtrim%),0)=TRUE! THEN
+      OB_STATE(main%,b_rtrim%)=BCLR(OB_STATE(main%,b_rtrim%),0)
+      object%=b_rtrim%
+      @get_offset
+      @update
+    ENDIF
+  ENDIF
+  '
+  IF points%=min_points% THEN
+    IF BTST(OB_STATE(main%,b_points_down%),3)=FALSE! THEN
+      OB_STATE(main%,b_points_down%)=BSET(OB_STATE(main%,b_points_down%),3)
+      object%=b_points_down%
+      @get_offset
+      @update
+    ENDIF
+    IF BTST(OB_STATE(main%,b_points_big_down%),3)=FALSE! THEN
+      OB_STATE(main%,b_points_big_down%)=BSET(OB_STATE(main%,b_points_big_down%),3)
+      object%=b_points_big_down%
+      @get_offset
+      @update
+    ENDIF
+  ELSE
+    IF BTST(OB_STATE(main%,b_points_down%),3)=TRUE! THEN
+      OB_STATE(main%,b_points_down%)=BCLR(OB_STATE(main%,b_points_down%),3)
+      object%=b_points_down%
+      @get_offset
+      @update
+    ENDIF
+    IF BTST(OB_STATE(main%,b_points_big_down%),3)=TRUE! THEN
+      OB_STATE(main%,b_points_big_down%)=BCLR(OB_STATE(main%,b_points_big_down%),3)
+      object%=b_points_big_down%
+      @get_offset
+      @update
+    ENDIF
+  ENDIF
+  '
+  IF points%=max_points% THEN
+    IF BTST(OB_STATE(main%,b_points_up%),3)=FALSE! THEN
+      OB_STATE(main%,b_points_up%)=BSET(OB_STATE(main%,b_points_up%),3)
+      object%=b_points_up%
+      @get_offset
+      @update
+    ENDIF
+    IF BTST(OB_STATE(main%,b_points_big_up%),3)=FALSE! THEN
+      OB_STATE(main%,b_points_big_up%)=BSET(OB_STATE(main%,b_points_big_up%),3)
+      object%=b_points_big_up%
+      @get_offset
+      @update
+    ENDIF
+  ELSE
+    IF BTST(OB_STATE(main%,b_points_up%),3)=TRUE! THEN
+      OB_STATE(main%,b_points_up%)=BCLR(OB_STATE(main%,b_points_up%),3)
+      object%=b_points_up%
+      @get_offset
+      @update
+    ENDIF
+    IF BTST(OB_STATE(main%,b_points_big_up%),3)=TRUE! THEN
+      OB_STATE(main%,b_points_big_up%)=BCLR(OB_STATE(main%,b_points_big_up%),3)
+      object%=b_points_big_up%
+      @get_offset
+      @update
+    ENDIF
+  ENDIF
+  '
+  IF columns%=min_columns% THEN
+    IF BTST(OB_STATE(main%,b_columns_down%),3)=FALSE! THEN
+      OB_STATE(main%,b_columns_down%)=BSET(OB_STATE(main%,b_columns_down%),3)
+      object%=b_columns_down%
+      @get_offset
+      @update
+    ENDIF
+  ELSE
+    IF BTST(OB_STATE(main%,b_columns_down%),3)=TRUE! THEN
+      OB_STATE(main%,b_columns_down%)=BCLR(OB_STATE(main%,b_columns_down%),3)
+      object%=b_columns_down%
+      @get_offset
+      @update
+    ENDIF
+  ENDIF
+  '
+  IF columns%=max_columns% THEN
+    IF BTST(OB_STATE(main%,b_columns_up%),3)=FALSE! THEN
+      OB_STATE(main%,b_columns_up%)=BSET(OB_STATE(main%,b_columns_up%),3)
+      object%=b_columns_up%
+      @get_offset
+      @update
+    ENDIF
+  ELSE
+    IF BTST(OB_STATE(main%,b_columns_up%),3)=TRUE! THEN
+      OB_STATE(main%,b_columns_up%)=BCLR(OB_STATE(main%,b_columns_up%),3)
+      object%=b_columns_up%
+      @get_offset
+      @update
+    ENDIF
+  ENDIF
+  '
+  IF buffer_lines%<1 THEN
+    IF BTST(OB_STATE(main%,b_print%),3)=FALSE! THEN
+      OB_STATE(main%,b_print%)=BSET(OB_STATE(main%,b_print%),3)
+      object%=b_print%
+      @get_offset
+      @update
+    ENDIF
+    IF BTST(OB_STATE(main%,b_erase%),3)=FALSE! THEN
+      OB_STATE(main%,b_erase%)=BSET(OB_STATE(main%,b_erase%),3)
+      object%=b_erase%
+      @get_offset
+      @update
+    ENDIF
+  ELSE
+    IF BTST(OB_STATE(main%,b_print%),3)=TRUE! THEN
+      OB_STATE(main%,b_print%)=BCLR(OB_STATE(main%,b_print%),3)
+      object%=b_print%
+      @get_offset
+      @update
+    ENDIF
+    IF BTST(OB_STATE(main%,b_erase%),3)=TRUE! THEN
+      OB_STATE(main%,b_erase%)=BCLR(OB_STATE(main%,b_erase%),3)
+      object%=b_erase%
+      @get_offset
+      @update
+    ENDIF
+  ENDIF
+  '
+RETURN
+> PROCEDURE edit_values
+  old_points%=points%
+  old_columns%=columns%
+  er%=WIND_UPDATE(1)
+  exit%=FORM_DO(main%,edit%)
+  exit%=exit% AND &H7FFF
+  er%=WIND_UPDATE(0)
+  IF BTST(OB_STATE(main%,t_default%),0)=TRUE! THEN
+    OB_STATE(main%,t_default%)=BCLR(OB_STATE(main%,t_default%),0)
+    object%=t_default%
+    @get_offset
+    @update
+  ENDIF
+  @get_text
+  @set_buttons_state
+  '
+RETURN
+> PROCEDURE set_font
+  '
+  old_font%=font%
+  ~OBJC_OFFSET(main%,b_font_name%,set_font_x%,set_font_y%)
+  '
+  font_pos%=font%
+  IF font_pos%>fonts%-14 THEN
+    font_pos%=fonts%-14
+    IF font_pos%<1 THEN
+      font_pos%=1
+    ENDIF
+    set_font_y%=set_font_y%-(pick_height%*(font%+1-font_pos%))
+  ELSE
+    set_font_y%=set_font_y%-pick_height%
+  ENDIF
+  '
+  ok%=0
+  DO
+    IF set_font_y%+set_font_h%>mwy%+mwh% THEN
+      set_font_y%=set_font_y%-pick_height%
+    ELSE
+      ok%=1
+    ENDIF
+  LOOP UNTIL ok%=1
+  ok%=0
+  DO
+    IF set_font_y%<mwy% THEN
+      set_font_y%=set_font_y%+pick_height%
+    ELSE
+      ok%=1
+    ENDIF
+  LOOP UNTIL ok%=1
+  '
+  OB_X(set_font%,0)=set_font_x%
+  OB_Y(set_font%,0)=set_font_y%
+  @set_pick_font
+  pick_exit%=0
+  '
+  ~FORM_DIAL(0,0,0,0,0,set_font_x%-2,set_font_y%-2,set_font_w%+4,set_font_h%+4)
+  er%=WIND_UPDATE(1)
+  er%=WIND_UPDATE(3)
+  '
+  DO
+    ~GRAF_MKSTATE(event_mouse_x%,event_mouse_y%,mouse_button%,key_state%)
+  LOOP UNTIL mouse_button%=0
+  ~OBJC_DRAW(set_font%,0,3,set_font_x%-2,set_font_y%-2,set_font_w%+4,set_font_h%+4)
+  DO
+    font_exit%=FORM_DO(set_font%,0)
+    font_exit%=font_exit% AND &H7FFF
+    OB_STATE(set_font%,font_exit%)=BCLR(OB_STATE(set_font%,font_exit%),0)
+    SELECT font_exit%
+    CASE 18
+      font_pos%=font_pos%+16
+      IF font_pos%>fonts%-14 THEN
+        font_pos%=fonts%-14
+        IF font_pos%<1 THEN
+          font_pos%=1
+        ENDIF
+      ENDIF
+      @set_pick_font
+      ~OBJC_DRAW(set_font%,0,3,set_font_x%-2,set_font_y%-2,set_font_w%+4,set_font_h%+4)
+    CASE 1
+      font_pos%=font_pos%-16
+      IF font_pos%<1 THEN
+        font_pos%=1
+      ENDIF
+      @set_pick_font
+      ~OBJC_DRAW(set_font%,0,3,set_font_x%-2,set_font_y%-2,set_font_w%+4,set_font_h%+4)
+    CASE 2 TO 17
+      pick_exit%=1
+    ENDSELECT
+  LOOP UNTIL pick_exit%=1
+  font%=font_pos%+font_exit%-2
+  OB_STATE(set_font%,font_exit%)=BCLR(OB_STATE(set_font%,font_exit%),0)
+  IF old_font%<>font% THEN
+    preview_ready%=0
+    @clear_preview
+    CHAR{{OB_SPEC(main%,b_font_name%)}}=font_name$(font%)
+    @font_set
+  ENDIF
+  '
+  DO
+    ~GRAF_MKSTATE(event_mouse_x%,event_mouse_y%,mouse_button%,key_state%)
+  LOOP UNTIL mouse_button%=0
+  er%=WIND_UPDATE(2)
+  er%=WIND_UPDATE(0)
+  ~FORM_DIAL(3,0,0,0,0,set_font_x%-2,set_font_y%-2,set_font_w%+4,set_font_h%+4)
+  '
+RETURN
+> PROCEDURE set_pick_font
+  IF fonts%>15 THEN
+    IF font_pos%=fonts%-14 THEN
+      OB_FLAGS(set_font%,18)=BCLR(OB_FLAGS(set_font%,18),6)
+      OB_STATE(set_font%,18)=BSET(OB_STATE(set_font%,18),3)
+    ELSE
+      OB_FLAGS(set_font%,18)=BSET(OB_FLAGS(set_font%,18),6)
+      OB_STATE(set_font%,18)=BCLR(OB_STATE(set_font%,18),3)
+    ENDIF
+    IF font_pos%=1 THEN
+      OB_FLAGS(set_font%,1)=BCLR(OB_FLAGS(set_font%,1),6)
+      OB_STATE(set_font%,1)=BSET(OB_STATE(set_font%,1),3)
+    ELSE
+      OB_FLAGS(set_font%,1)=BSET(OB_FLAGS(set_font%,1),6)
+      OB_STATE(set_font%,1)=BCLR(OB_STATE(set_font%,1),3)
+    ENDIF
+  ELSE
+    OB_FLAGS(set_font%,18)=BCLR(OB_FLAGS(set_font%,18),6)
+    OB_STATE(set_font%,18)=BSET(OB_STATE(set_font%,18),3)
+    OB_FLAGS(set_font%,1)=BCLR(OB_FLAGS(set_font%,1),6)
+    OB_STATE(set_font%,1)=BSET(OB_STATE(set_font%,1),3)
+  ENDIF
+  '
+  FOR x%=0 TO 15
+    IF font_name$(font_pos%+x%)<>"" THEN
+      CHAR{{OB_SPEC(set_font%,x%+2)}}=font_name$(font_pos%+x%)
+      OB_FLAGS(set_font%,x%+2)=BCLR(OB_FLAGS(set_font%,x%+2),6)
+    ELSE
+      CHAR{{OB_SPEC(set_font%,x%+2)}}=""
+      OB_FLAGS(set_font%,x%+2)=BSET(OB_FLAGS(set_font%,x%+2),6)
+    ENDIF
+  NEXT x%
+RETURN
+> PROCEDURE load
+  '
+  FILESELECT #"Select file to view",view_path$+"*.*",view_name$,temp_name$
+  '
+  IF temp_name$<>"" THEN
+    '
+    view_test%=RINSTR(temp_name$,"\")
+    IF view_test% THEN
+      temp_path$=MID$(temp_name$,1,view_test%)
+      temp_name$=MID$(temp_name$,view_test%+1)
+    ELSE
+      temp_path$="\"
+    ENDIF
+    '
+    IF temp_name$<>""
+      exit%=0
+      '
+      search_file$=temp_path$+temp_name$+CHR$(0)
+      ~FSETDTA(dta%)
+      finished%=GEMDOS(78,L:V:search_file$,&X100111)
+      '
+      DEFMOUSE 2
+      IF finished%=0 THEN
+        file$=CHAR{dta%+30}
+        '
+        IF file$<>"." AND file$<>".."
+          '
+          @get_file
+          '
+        ENDIF
+        '
+        ~FSETDTA(dta%)
+        finished%=GEMDOS(79)
+        '
+      ENDIF
+      '
+      DEFMOUSE 0
+      '
+    ENDIF
+    '
+  ENDIF
+  '
+RETURN
+> PROCEDURE get_file
+  '
+  view_path$=temp_path$
+  view_name$=file$
+  buffer_lines%=0
+  preview_ready%=0
+  @clear_preview
+  OPEN "I",#1,view_path$+view_name$
+  size%=LOF(#1)
+  CLOSE #1
+  @get_words
+  @set_text
+  '
+RETURN
+> PROCEDURE get_words
+  '
+  IF size%>0 THEN
+    word_buffer%=GEMDOS(72,L:size%+1)
+    IF word_buffer%>0 THEN
+      BLOAD view_path$+view_name$,word_buffer%
+      POKE word_buffer%+size%,0
+      place%=0
+      FOR x%=0 TO size%-1
+        IF PEEK(word_buffer%+x%)=13 THEN
+          IF PEEK(word_buffer%+x%+1)=10 THEN
+            POKE word_buffer%+x%,32
+            INC x%
+            POKE word_buffer%+x%,0
+          ELSE
+            POKE word_buffer%+x%,0
+          ENDIF
+        ENDIF
+      NEXT x%
+      DO
+        txt$(buffer_lines%)=CHAR{word_buffer%+place%}
+        place%=place%+LEN(txt$(buffer_lines%))+1
+        INC buffer_lines%
+      LOOP WHILE place%<size%
+      d%=GEMDOS(73,L:word_buffer%)
+    ELSE
+      OPEN "I",#1,view_path$+view_name$
+      DO WHILE EOF(#1)=0
+        LINE INPUT #1,txt$(buffer_lines%)
+        INC buffer_lines%
+      LOOP UNTIL buffer_lines%=max_buffer_lines%
+      CLOSE #1
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE open_workstation
+  CONTRL(0)=1  ! V_OPNWK
+  CONTRL(1)=0
+  CONTRL(3)=11
+  CONTRL(6)=0
+  INTIN(0)=21
+  INTIN(1)=1
+  INTIN(2)=1
+  INTIN(3)=1
+  INTIN(4)=1
+  INTIN(5)=font%
+  INTIN(6)=1
+  INTIN(7)=1
+  INTIN(8)=1
+  INTIN(9)=1
+  INTIN(10)=2
+  VDISYS
+  gdos_handle%=CONTRL(6)
+  '
+  IF gdos_handle%<>0 THEN
+    '
+    gdos_x_rez=INTOUT(0)+1
+    gdos_y_rez=INTOUT(1)+1
+    gdos_micro_width%=INTOUT(3)
+    gdos_micro_height%=INTOUT(4)
+    '
+    V~H=gdos_handle%
+    '
+    CLIP 0,0,gdos_x_rez-1,gdos_y_rez-1
+    '
+    CONTRL(0)=119  ! VST_LOAD_FONTS
+    CONTRL(1)=0
+    CONTRL(3)=1
+    CONTRL(6)=gdos_handle%
+    INTIN(0)=0
+    VDISYS
+    '
+    CONTRL(0)=21   ! VST_FONT
+    CONTRL(1)=0
+    CONTRL(3)=1
+    CONTRL(6)=gdos_handle%
+    INTIN(0)=face%(font%)
+    VDISYS
+    '
+    CONTRL(0)=236  ! VST_CHARMAP
+    CONTRL(1)=0
+    CONTRL(3)=1
+    CONTRL(6)=gdos_handle%
+    INTIN(0)=1
+    VDISYS
+    '
+    CONTRL(0)=39  ! VST_ALIGNMENT
+    CONTRL(1)=0
+    CONTRL(3)=2
+    CONTRL(6)=gdos_handle%
+    INTIN(0)=0    ! LEFT JUSTIFIED
+    INTIN(1)=5    ! TOP LINE
+    VDISYS
+    '
+    CONTRL(0)=246  ! VST_ARBPT
+    CONTRL(1)=0
+    CONTRL(3)=1
+    CONTRL(6)=gdos_handle%
+    INTIN(0)=points%
+    VDISYS
+  ENDIF
+  '
+RETURN
+> PROCEDURE close_workstation
+  '
+  IF gdos_handle%<>0 THEN
+    ~VST_UNLOAD_FONTS(0)
+    '
+    CONTRL(0)=2  ! V_CLSWK
+    CONTRL(1)=0
+    CONTRL(3)=0
+    CONTRL(6)=gdos_handle%
+    VDISYS
+  ENDIF
+  '
+  V~H=-1
+RETURN
+> PROCEDURE print
+  @open_workstation
+  IF gdos_handle%<>0 THEN
+    GRAPHMODE 2
+    @do_print
+    GRAPHMODE 1
+  ENDIF
+  @close_workstation
+RETURN
+> PROCEDURE do_print
+  DEFMOUSE 2
+  '
+  IF preview_ready%=0 THEN
+    @calc_print_pages
+  ENDIF
+  '
+  COLOR 1
+  DEFLINE 1,1
+  FOR page%=0 TO print_page%-1
+    start%=print_page%(page%)
+    end%=print_page%(page%+1)-1
+    FOR x%=start% TO end%
+      TEXT print_x%(x%),print_y%(x%),print$(x%)
+    NEXT x%
+    DEFLINE 3
+    DEFLINE 1
+    FOR y%=1 TO columns%-1
+      LINE y%*gcolumn_width-(gwidth%/2),0,y%*+gcolumn_width-(gwidth%/2),gdos_y_rez
+    NEXT y%
+    @eject_page
+  NEXT page%
+  DEFMOUSE 0
+RETURN
+> PROCEDURE calc_print_pages
+  gcolumn_width=gdos_x_rez/columns%
+  print_page%=0
+  print_lines%=0
+  place%=0
+  print_page%(print_page%)=print_lines%
+  '
+  IF buffer_lines%>0 THEN
+    temp_line$=""
+    ~VQT_EXTENT(" ",d%,d%,d%,d%,gwidth%,gheight%,d%,d%)
+    ~VQT_EXTENT(" ",d%,d%,d%,d%,space_width%,d%,d%,d%)
+    DO     ! PAGE
+      temp$="("+STR$(print_page%+1)+")"
+      ~VQT_EXTENT(temp$,d%,d%,d%,d%,pn_width%,pn_height%,d%,d%)
+      print$(print_lines%)=temp$
+      print_x%(print_lines%)=gdos_x_rez-pn_width%
+      print_y%(print_lines%)=gdos_y_rez-pn_height%
+      INC print_lines%
+      current_column%=0
+      DO   ! COLUMN
+        y%=0
+        DO ! LINE
+          IF temp_line$="" THEN
+            DO
+              temp_line$=txt$(place%)
+              IF ltrim%=1 AND rtrim%=1 THEN
+                temp_line$=TRIM$(temp_line$)
+              ELSE
+                IF ltrim%=1 THEN
+                  trim_exit%=0
+                  DO
+                    IF MID$(temp_line$,1,1)=" " THEN
+                      IF LEN(temp_line$)>0 THEN
+                        temp_line$=MID$(temp_line$,2)
+                      ELSE
+                        trim_exit%=1
+                      ENDIF
+                    ELSE
+                      trim_exit%=1
+                    ENDIF
+                  LOOP UNTIL trim_exit%=1
+                ENDIF
+                IF rtrim%=1 THEN
+                  trim_exit%=0
+                  DO
+                    IF MID$(temp_line$,LEN(temp_line$),1)=" " THEN
+                      IF LEN(temp_line$)>0 THEN
+                        temp_line$=MID$(temp_line$,1,LEN(temp_line$)-1)
+                      ELSE
+                        trim_exit%=1
+                      ENDIF
+                    ELSE
+                      trim_exit%=1
+                    ENDIF
+                  LOOP UNTIL trim_exit%=1
+                ENDIF
+              ENDIF
+              INC place%
+            LOOP UNTIL place%>=buffer_lines% OR temp_line$<>""
+          ENDIF
+          exit%=0
+          temp$=temp_line$
+          DO
+            ~VQT_EXTENT(temp$+" ",d%,d%,d%,d%,twidth%,d%,d%,d%)
+            '
+            IF twidth%>gcolumn_width THEN
+              IF formated% THEN
+                IF LEN(temp$)>1 THEN
+                  test%=RINSTR(MID$(temp$,1,LEN(temp$)-1)," ")
+                ELSE
+                  test%=0
+                ENDIF
+              ELSE
+                test%=0
+              ENDIF
+              IF test%>1 THEN
+                temp$=MID$(temp$,1,test%)
+              ELSE
+                IF LEN(temp$)>1 THEN
+                  temp$=MID$(temp$,1,LEN(temp$)-1)
+                ELSE
+                  print$(print_lines%)=temp$
+                  print_x%(print_lines%)=current_column%*gcolumn_width
+                  print_y%(print_lines%)=y%
+                  INC print_lines%
+                  IF LEN(temp$)<LEN(temp_line$)+1 THEN
+                    temp_line$=MID$(temp_line$,LEN(temp$)+1)
+                  ELSE
+                    temp_line$=""
+                  ENDIF
+                  exit%=1
+                ENDIF
+              ENDIF
+              '
+            ELSE
+              print$(print_lines%)=temp$
+              print_x%(print_lines%)=current_column%*gcolumn_width
+              print_y%(print_lines%)=y%
+              INC print_lines%
+              IF LEN(temp$)<LEN(temp_line$)+1 THEN
+                temp_line$=MID$(temp_line$,LEN(temp$)+1)
+              ELSE
+                temp_line$=""
+              ENDIF
+              exit%=1
+            ENDIF
+            '
+          LOOP UNTIL exit%
+          '
+          y%=y%+gheight%
+        LOOP UNTIL y%+gheight%>=gdos_y_rez-pn_height% OR (place%>=buffer_lines% AND temp_line$="")
+        INC current_column%
+      LOOP UNTIL current_column%=columns% OR (place%>=buffer_lines% AND temp_line$="")
+      INC print_page%
+      print_page%(print_page%)=print_lines%
+    LOOP UNTIL place%>=buffer_lines% AND temp_line$=""
+    '
+    view_x%=0
+    view_y%=0
+    current_page%=0
+    preview_ready%=1
+    ~VQT_EXTENT("W",d%,d%,d%,d%,test_width%,test_height%,d%,d%)
+  ELSE
+    preview_ready%=0
+  ENDIF
+RETURN
+> PROCEDURE eject_page
+  CONTRL(0)=4  ! V_UPDWK
+  CONTRL(1)=0
+  CONTRL(3)=0
+  CONTRL(6)=gdos_handle%
+  VDISYS
+  '
+  CONTRL(0)=3  ! V_CLRWK
+  CONTRL(1)=0
+  CONTRL(3)=0
+  CONTRL(6)=gdos_handle%
+  VDISYS
+  '
+RETURN
+> PROCEDURE on_line
+  on_line%=0
+  DO
+    IF OUT?(0) THEN
+      on_line%=1
+    ELSE
+      ALERT 0,"Sorry, but your printer is  |off-line. Please check the  |printer and I will try again.  | ",1,"OK|Cancel",button%
+      IF button%=2 THEN
+        on_line%=-1
+      ENDIF
+    ENDIF
+  LOOP UNTIL on_line%<>0
+RETURN
+> PROCEDURE preview
+  IF preview_ready%=0 THEN
+    DEFMOUSE 2
+    @open_workstation
+    @calc_print_pages
+    @close_workstation
+    DEFMOUSE 0
+  ENDIF
+  IF preview_ready%=1 THEN
+    DEFMOUSE 2
+    preview_points%=points%
+    FOR x%=points% TO points%+100
+      CONTRL(0)=246  ! VST_ARBPT
+      CONTRL(1)=0
+      CONTRL(3)=1
+      CONTRL(6)=my_handle&
+      INTIN(0)=x%
+      VDISYS
+      ~VQT_EXTENT("W",d%,d%,d%,d%,twidth%,theight%,d%,d%)
+      IF twidth%>=test_width% THEN
+        preview_points%=x%-1
+        x%=points%+100
+      ENDIF
+    NEXT x%
+    DEFMOUSE 0
+  ENDIF
+  @open_preview
+  @update_preview
+RETURN
+> PROCEDURE settings_save
+  '
+  OPEN "O",#1,my_inf$
+  '
+  PRINT #1,"GDOS PRINT setup"
+  PRINT #1,"FONT:";font_name$(font%)
+  PRINT #1,"POINTS:";STR$(points%)
+  PRINT #1,"COLUMNS:";STR$(columns%)
+  PRINT #1,"FORMAT:";STR$(formated%)
+  PRINT #1,"LEFT TRIM:";STR$(ltrim%)
+  PRINT #1,"RIGHT TRIM:";STR$(rtrim%)
+  '
+  CLOSE #1
+  '
+RETURN
+> PROCEDURE settings_load
+  '
+  search_file$=my_inf$+CHR$(0)
+  '
+  ~FSETDTA(dta%)
+  test%=GEMDOS(78,L:V:search_file$,&X100111)
+  IF test%=0 THEN
+    OPEN "I",#1,my_inf$
+    DO WHILE EOF(#1)=FALSE
+      INPUT #1,temp$
+      test%=RINSTR(temp$,":")
+      IF test%>1 THEN
+        command$=MID$(temp$,1,test%-1)
+        inf_set$=MID$(temp$,test%+1)
+        '
+        IF command$="FONT"
+          temp_font$=MID$(inf_set$,1,30)
+        ENDIF
+        '
+        IF command$="POINTS"
+          old_points%=points%
+          points%=VAL(inf_set$)
+        ENDIF
+        '
+        IF command$="COLUMNS"
+          old_columns%=columns%
+          columns%=VAL(inf_set$)
+        ENDIF
+        '
+        IF command$="FORMAT"
+          formated%=VAL(inf_set$)
+        ENDIF
+        '
+        IF command$="LEFT TRIM"
+          ltrim%=VAL(inf_set$)
+        ENDIF
+        '
+        IF command$="RIGHT TRIM"
+          rtrim%=VAL(inf_set$)
+        ENDIF
+        '
+      ENDIF
+    LOOP UNTIL EOF(#1)=TRUE
+    CLOSE #1
+  ENDIF
+  '
+RETURN

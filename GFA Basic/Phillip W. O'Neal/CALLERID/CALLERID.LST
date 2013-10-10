@@ -1,0 +1,849 @@
+' CALLER ID 1995
+' RESERVE 1000000
+$m100000
+$*%
+$S%
+@init_variables
+calling%=0
+DO
+  event_type&=EVNT_MULTI(&X110000,0,0,0,0,0,0,0,0,0,0,0,0,0,buffer_address%,100)
+  IF (event_type& AND &X10000) OR calling%=1 ! MENU/WINDOW EVENT
+    IF (event_buffer&(0)=40) OR calling%=1 ! 40=OPEN ACC
+      calling%=0
+      done%=0
+      DEFMOUSE 0
+      @window_setup
+      DO
+        event_type&=EVNT_MULTI(&X110011,2,1,1,0,0,0,0,0,0,0,0,0,0,buffer_address%,100,x_mouse&,y_mouse&,button_state&,key_state&,key_press&,num_clicks&)
+        @check_event
+        @check_for_call
+      LOOP UNTIL done%=1
+      flag%=WIND_CLOSE(window_handle%)
+      flag%=WIND_DELETE(window_handle%)
+      window_handle%=0
+      IF rsc%>0
+        ~RSRC_FREE()
+      ENDIF
+      IF change_flag%=1
+        @write_callers
+      ENDIF
+      END
+    ENDIF
+  ENDIF
+  @check_for_call
+LOOP
+> PROCEDURE init_variables
+  status$="No new calls."
+  send$="AT#CID=1"+CHR$(13)
+  @send
+  screen_width%=WORK_OUT(0)+1
+  screen_height%=WORK_OUT(1)+1
+  IF screen_width%<1000
+    @bail
+  ENDIF
+  DIM event_buffer&(7)
+  buffer_address%=VARPTR(event_buffer&(0))
+  OPTION BASE 0
+  change_flag%=0
+  caller_width%=54
+  caller_list_size%=16
+  e_name%=1
+  e_number%=24
+  e_date%=39
+  e_time%=45
+  e_calls%=51
+  e_flag%=caller_width%
+  max_caller%=1000
+  DIM callers$(max_caller%)
+  FOR x%=0 TO max_caller%
+    callers$(x%)=SPACE$(caller_width%)
+  NEXT x%
+  sort_at%=0
+  caller%=0
+  sort%=1
+  window_handle%=0
+  MODE 1
+  DEFFILL 0,2,8
+  @path_setup
+  @read_callers
+  @rsc_setup
+  @set_sort
+  INLINE window_title%,32
+  INLINE window_infoline%,128
+  handle&=APPL_INIT()
+  acc_id&=MENU_REGISTER(handle&,"  CALLER ID")
+  ~WIND_CALC(0,&X11001,main_x%,main_y%,main_w%,main_h%,window_x%,window_y%,window_w%,window_h%)
+  @slider_init
+  @slider_move
+RETURN
+> PROCEDURE bail
+  END
+  DO
+    ~EVNT_MESAG(buffer_address%)
+  LOOP
+RETURN
+> PROCEDURE window_setup
+  window_handle%=WIND_CREATE(&X11001,window_x%,window_y%,window_w%,window_h%)
+  window_title$="CALLER ID"
+  CHAR{window_title%}=window_title$+CHR$(0)+CHR$(0)
+  ~WIND_SET(window_handle%,2,CARD(SWAP(window_title%)),CARD(window_title%),0,0)
+  window_infoline$=status$
+  @infoline
+  ~WIND_OPEN(window_handle%,window_x%,window_y%,window_w%,window_h%)
+  ~WIND_SET(window_handle%,5,window_x%,window_y%,window_w%,window_h%)
+  ~WIND_GET(window_handle%,4,window_ix%,window_iy%,window_iw%,window_ih%)
+  main_x%=window_ix%
+  main_y%=window_iy%
+  OB_X(main_dialog%,0)=main_x%
+  OB_Y(main_dialog%,0)=main_y%
+  DEFMOUSE 0
+RETURN
+> PROCEDURE infoline
+  IF window_handle%>0
+    CHAR{window_infoline%}=window_infoline$+CHR$(0)+CHR$(0)
+    ~WIND_SET(window_handle%,3,CARD(SWAP(window_infoline%)),CARD(window_infoline%),0,0)
+  ENDIF
+RETURN
+> PROCEDURE path_setup
+  shell%=SHEL_READ(command_line$,tail$)
+  test%=RINSTR(command_line$,"\")
+  IF test%
+    command_line$=MID$(command_line$,1,test%)
+  ENDIF
+  current_drive%=GEMDOS(25)
+  current_path$=DIR$(current_drive%+1)+"\"
+  test%=RINSTR(current_path$,"\")
+  IF test%
+    current_path$=MID$(current_path$,1,test%)
+  ENDIF
+  IF MID$(current_path$,2,1)<>":"
+    current_path$=CHR$(current_drive%+65)+":"+current_path$
+  ENDIF
+  search$=current_path$+"CALLERID.RSC"
+  IF EXIST(search$)
+    prg_path$=current_path$
+  ELSE
+    search$=command_line$+"CALLERID.RSC"
+    IF EXIST(search$)
+      prg_path$=command_line$
+    ELSE
+      @bail
+    ENDIF
+  ENDIF
+  rsc_path$=prg_path$+"CALLERID.RSC"
+  id_path$=prg_path$+"CALLERID.DAT"
+RETURN
+> PROCEDURE check_event
+  IF event_type& AND &X10
+    @event_button
+  ENDIF
+  IF event_type& AND &X1
+    @event_key
+  ENDIF
+  IF event_type& AND &X10000
+    which_window%=event_buffer&(3)
+    IF which_window%=window_handle% AND window_handle%>0
+      command%=event_buffer&(0)
+      @event_window
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE event_key
+  scan_code&=SHR(key_press& AND &HFF00,8)
+  ' PRINT scan_code&
+  SELECT scan_code&
+  CASE 72 ! UP
+    dialog_button%=b_up%
+    @process_button
+  CASE 80 ! DOWN
+    dialog_button%=b_down%
+    @process_button
+  CASE 83 ! DELETE
+    dialog_button%=b_delete%
+    @process_button
+  CASE 25 ! (P)RINT
+    dialog_button%=b_dump%
+    @process_button
+  CASE 32 ! (D)IAL
+    dialog_button%=b_dial%
+    @process_button
+  CASE 35 ! (H)ANG UP
+    dialog_button%=b_hangup%
+    @process_button
+  CASE 31 ! (S)ET SID
+    dialog_button%=b_set_sid%
+    @process_button
+  CASE 18 ! (E)XIT
+    dialog_button%=b_exit%
+    @process_button
+  CASE 97 ! UNDO
+    FOR entry%=0 TO last_caller%
+      IF MID$(callers$(entry%),e_flag%)="*"
+        MID$(callers$(entry%),e_flag%)=" "
+      ENDIF
+    NEXT entry%
+    @set_text
+  ENDSELECT
+RETURN
+> PROCEDURE event_button
+  ~WIND_GET(0,10,top%,d%,d%,d%)
+  wind_found%=WIND_FIND(x_mouse&,y_mouse&)
+  IF wind_found%=window_handle% AND top%=window_handle% AND window_handle%>0
+    dialog_button%=OBJC_FIND(main_dialog%,0,4,x_mouse&,y_mouse&)
+    @process_button
+  ENDIF
+RETURN
+> PROCEDURE process_button
+  SELECT dialog_button%
+  CASE t_caller_name% TO t_caller_last%
+    IF num_clicks&>1
+      edit%=dialog_button%
+      IF BTST(OB_FLAGS(main_dialog%,dialog_button%),3)
+        @edit_text
+      ENDIF
+    ELSE
+      temp%=dialog_button%-t_caller_name%
+      IF INT(temp%/3)=temp%/3
+        temp%=INT(temp%/3)+caller%
+        IF MID$(callers$(temp%),e_flag%)=" "
+          MID$(callers$(temp%),e_flag%)="*"
+        ELSE
+          MID$(callers$(temp%),e_flag%)=" "
+        ENDIF
+        @set_text
+      ENDIF
+    ENDIF
+  CASE b_up%
+    IF caller%>0
+      @set_arrow
+      caller%=caller%-1
+      @slider_move
+      @reset_button
+    ENDIF
+  CASE b_down%
+    IF caller%<last_caller%-caller_list_size%
+      @set_arrow
+      caller%=caller%+1
+      IF caller%>last_caller%-caller_list_size%
+        caller%=last_caller%-caller_list_size%
+      ENDIF
+      @slider_move
+      @reset_button
+    ENDIF
+  CASE b_slider%
+    ~OBJC_OFFSET(main_dialog%,b_box%,rx%,ry%)
+    IF y_mouse&<ry%
+      caller%=caller%-caller_list_size%
+      IF caller%<0
+        caller%=0
+      ENDIF
+    ELSE
+      caller%=caller%+caller_list_size%
+      IF caller%>last_caller%-caller_list_size%
+        caller%=last_caller%-caller_list_size%
+      ENDIF
+    ENDIF
+    @slider_move
+  CASE b_box%
+    slide_box%=GRAF_SLIDEBOX(main_dialog%,b_slider%,b_box%,1)
+    caller%=(slide_box%/1000)*(last_caller%-caller_list_size%)
+    @slider_move
+  CASE b_delete%
+    @set_button
+    FOR call%=0 TO last_caller%
+      IF MID$(callers$(call%),e_flag%)="*"
+        callers$(call%)=SPACE$(caller_width%)
+        change_flag%=1
+      ENDIF
+    NEXT call%
+    IF change_flag%=1
+      @sort
+      IF caller%>last_caller%-caller_list_size%
+        caller%=last_caller%-caller_list_size%
+      ENDIF
+      @slider_init
+      @slider_move
+      @set_text
+    ENDIF
+    @reset_button
+  CASE b_dump%
+    @set_button
+    @dump
+    @reset_button
+  CASE b_sort%
+    @sort_list
+  CASE b_dial%
+    @set_button
+    current%=-1
+    FOR call%=0 TO last_caller%
+      IF MID$(callers$(call%),e_flag%)<>" "
+        current%=call%
+        call%=last_caller%
+      ENDIF
+    NEXT call%
+    IF current%>-1
+      old_status$=status$
+      status$="Dialing "+TRIM$(MID$(callers$(current%),e_name%,23))+" at "
+      status$=status$+TRIM$(MID$(callers$(current%),e_number%,15))+"..."
+      @infoline
+      send$="ATD"+TRIM$(MID$(callers$(current%),e_number%,15)+CHR$(13))
+      @send
+      @check_send
+      PAUSE 100
+      status$=old_status$
+      @infoline
+    ENDIF
+    @reset_button
+  CASE b_hangup%
+    @set_button
+    send$="ATH0"+CHR$(13)
+    @send
+    @check_send
+    @reset_button
+  CASE b_set_sid%
+    @set_button
+    send$="AT#CID=1"+CHR$(13)
+    @send
+    @check_send
+    @reset_button
+  CASE b_exit%
+    @set_button
+    done%=1
+    @reset_button
+  ENDSELECT
+RETURN
+> PROCEDURE set_button
+  OB_STATE(main_dialog%,dialog_button%)=BSET(OB_STATE(main_dialog%,dialog_button%),0)
+  ~OBJC_DRAW(main_dialog%,dialog_button%,4,window_x%,window_y%,window_w%,window_h%)
+  PAUSE 10
+  DO
+  LOOP UNTIL MOUSEK=0
+RETURN
+> PROCEDURE reset_button
+  IF BTST(OB_STATE(main_dialog%,dialog_button%),0)
+    OB_STATE(main_dialog%,dialog_button%)=BCLR(OB_STATE(main_dialog%,dialog_button%),0)
+    ~OBJC_DRAW(main_dialog%,dialog_button%,4,window_x%,window_y%,window_w%,window_h%)
+  ENDIF
+RETURN
+> PROCEDURE set_arrow
+  OB_STATE(main_dialog%,dialog_button%)=BSET(OB_STATE(main_dialog%,dialog_button%),0)
+  ~OBJC_DRAW(main_dialog%,dialog_button%,4,window_x%,window_y%,window_w%,window_h%)
+  PAUSE 10
+RETURN
+> PROCEDURE event_window
+  SELECT command%
+  CASE 20 ! WIND UPDATE
+    @repair_window
+  CASE 21 ! WINDOW CLICKED ON
+    ~WIND_SET(window_handle%,10,0,0,0,0)
+    DEFMOUSE 0
+  CASE 28 ! WINDOW MOVED
+    window_x%=event_buffer&(4) ! X
+    window_y%=event_buffer&(5) ! Y
+    ~WIND_SET(window_handle%,5,window_x%,window_y%,window_w%,window_h%)
+    ~WIND_GET(window_handle%,4,window_ix%,window_iy%,window_iw%,window_ih%)
+    OB_X(main_dialog%,0)=window_ix%
+    OB_Y(main_dialog%,0)=window_iy%
+  ENDSELECT
+RETURN
+> PROCEDURE repair_window
+  ~WIND_UPDATE(1)
+  ~WIND_GET(window_handle%,11,fx%,fy%,fx2%,fy2%)
+  fix_wx%=event_buffer&(4)
+  fix_wy%=event_buffer&(5)
+  fix_ww%=event_buffer&(6)
+  fix_wh%=event_buffer&(7)
+  fix_flag%=RC_INTERSECT(fix_wx%,fix_wy%,fix_ww%,fix_wh%,fx%,fy%,fx2%,fy2%)
+  IF fix_flag%
+    CLIP fx%,fy%,fx2%,fy2%
+    ~OBJC_DRAW(main_dialog%,0,4,fx%,fy%,fx2%,fy2%)
+  ENDIF
+  fix_done%=0
+  DO
+    ~WIND_GET(window_handle%,12,fx%,fy%,fx2%,fy2%)
+    IF fx2%+fy2%=0
+      fix_done%=1
+    ELSE
+      fix_wx%=event_buffer&(4)
+      fix_wy%=event_buffer&(5)
+      fix_ww%=event_buffer&(6)
+      fix_wh%=event_buffer&(7)
+      fix_flag%=RC_INTERSECT(fix_wx%,fix_wy%,fix_ww%,fix_wh%,fx%,fy%,fx2%,fy2%)
+      IF fix_flag%
+        CLIP fx%,fy%,fx2%,fy2%
+        ~OBJC_DRAW(main_dialog%,0,4,fx%,fy%,fx2%,fy2%)
+      ENDIF
+    ENDIF
+  LOOP UNTIL fix_done%=1
+  ~WIND_UPDATE(0)
+RETURN
+> PROCEDURE rsc_setup
+  rsc%=RSRC_LOAD(rsc_path$)
+  ~RSRC_GADDR(0,0,main_dialog%)
+  ~RSRC_GADDR(0,1,sort_dialog%)
+  ~FORM_CENTER(main_dialog%,main_x%,main_y%,main_w%,main_h%)
+  ~FORM_CENTER(sort_dialog%,sort_x%,sort_y%,sort_w%,sort_h%)
+  t_caller_name%=6
+  t_caller_last%=53
+  b_up%=54
+  b_slider%=55
+  b_box%=56
+  b_down%=66
+  b_delete%=58
+  b_dump%=59
+  b_sort%=61
+  b_dial%=62
+  b_hangup%=63
+  b_set_sid%=64
+  b_exit%=65
+  sort_height%=OB_H(main_dialog%,b_sort%)
+  slider_height%=OB_H(main_dialog%,b_slider%)
+RETURN
+> PROCEDURE set_text
+  FOR entry%=0 TO caller_list_size%-1
+    flag%=0
+    IF MID$(callers$(caller%+entry%),e_flag%)="*"
+      IF BTST(OB_STATE(main_dialog%,t_caller_name%+entry%*3),0)=0
+        OB_STATE(main_dialog%,t_caller_name%+entry%*3)=BSET(OB_STATE(main_dialog%,t_caller_name%+entry%*3),0)
+        flag%=1
+      ENDIF
+    ELSE
+      IF BTST(OB_STATE(main_dialog%,t_caller_name%+entry%*3),0)
+        OB_STATE(main_dialog%,t_caller_name%+entry%*3)=BCLR(OB_STATE(main_dialog%,t_caller_name%+entry%*3),0)
+        flag%=1
+      ENDIF
+    ENDIF
+    test$=CHAR{{OB_SPEC(main_dialog%,t_caller_name%+entry%*3)}}
+    set$=MID$(callers$(caller%+entry%),e_name%,23)
+    IF set$=SPACE$(23)
+      set$=""
+    ENDIF
+    IF test$<>set$
+      CHAR{{OB_SPEC(main_dialog%,t_caller_name%+entry%*3)}}=set$
+      flag%=1
+    ENDIF
+    IF flag%=1
+      IF window_handle%>0
+        ~OBJC_DRAW(main_dialog%,t_caller_name%+entry%*3,4,window_x%,window_y%,window_w%,window_h%)
+      ENDIF
+    ENDIF
+    flag%=0
+    test$=CHAR{{OB_SPEC(main_dialog%,t_caller_name%+entry%*3+1)}}
+    set$=MID$(callers$(caller%+entry%),e_number%,15)
+    IF set$=SPACE$(15)
+      set$=""
+    ENDIF
+    IF test$<>set$
+      CHAR{{OB_SPEC(main_dialog%,t_caller_name%+entry%*3+1)}}=set$
+      flag%=1
+    ENDIF
+    IF flag%=1
+      IF window_handle%>0
+        ~OBJC_DRAW(main_dialog%,t_caller_name%+entry%*3+1,4,window_x%,window_y%,window_w%,window_h%)
+      ENDIF
+    ENDIF
+    flag%=0
+    test$=CHAR{{OB_SPEC(main_dialog%,t_caller_name%+entry%*3+2)}}
+    set$=MID$(callers$(caller%+entry%),e_date%,15)
+    IF test$<>set$
+      CHAR{{OB_SPEC(main_dialog%,t_caller_name%+entry%*3+2)}}=set$
+      flag%=1
+    ENDIF
+    IF flag%=1
+      IF window_handle%>0
+        ~OBJC_DRAW(main_dialog%,t_caller_name%+entry%*3+2,4,window_x%,window_y%,window_w%,window_h%)
+      ENDIF
+    ENDIF
+  NEXT entry%
+RETURN
+> PROCEDURE get_text
+  FOR entry%=0 TO caller_list_size%-1
+    test$=CHAR{{OB_SPEC(main_dialog%,t_caller_name%+entry%*3)}}
+    MID$(callers$(caller%+entry%),e_name%,23)=SPACE$(23)
+    MID$(callers$(caller%+entry%),e_name%)=test$
+    test$=CHAR{{OB_SPEC(main_dialog%,t_caller_name%+entry%*3+1)}}
+    IF LEN(test$)>0
+      FOR check%=5 TO 15
+        temp%=ASC(MID$(test$,check%,1))
+        SELECT temp%
+        CASE 65 TO 67,97 TO 99
+          MID$(test$,check%,1)="2"
+        CASE 68 TO 70,100 TO 102
+          MID$(test$,check%,1)="3"
+        CASE 71 TO 73,103 TO 105
+          MID$(test$,check%,1)="4"
+        CASE 74 TO 76,106 TO 108
+          MID$(test$,check%,1)="5"
+        CASE 77 TO 79,109 TO 111
+          MID$(test$,check%,1)="6"
+        CASE 80 TO 83,112 TO 115
+          MID$(test$,check%,1)="7"
+        CASE 84 TO 86,116 TO 118
+          MID$(test$,check%,1)="8"
+        CASE 87 TO 90,119 TO 122
+          MID$(test$,check%,1)="9"
+        ENDSELECT
+      NEXT check%
+    ENDIF
+    MID$(callers$(caller%+entry%),e_number%,15)=SPACE$(15)
+    MID$(callers$(caller%+entry%),e_number%)=test$
+  NEXT entry%
+RETURN
+> PROCEDURE set_sort
+  test$=CHAR{{OB_SPEC(sort_dialog%,sort%)}}
+  temp$=CHAR{{OB_SPEC(main_dialog%,b_sort%)}}
+  IF temp$<>test$
+    CHAR{{OB_SPEC(main_dialog%,b_sort%)}}=test$
+    IF window_handle%>0
+      ~OBJC_DRAW(main_dialog%,b_sort%,4,window_x%,window_y%,window_w%,window_h%)
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE sort
+  QSORT callers$(-) OFFSET 0,last_caller%+caller_list_size%+1
+  FOR x%=0 TO last_caller%+caller_list_size%
+    IF callers$(x%)=SPACE$(caller_width%)
+      last_caller%=x%-1
+      x%=max_caller%
+    ENDIF
+  NEXT x%
+  IF last_caller%>0
+    SELECT sort%
+    CASE 2
+      FOR x%=0 TO last_caller%
+        IF callers$(x%)<>SPACE$(caller_width%)
+          callers$(x%)=callers$(x%)+MID$(callers$(x%),1,23)
+        ENDIF
+      NEXT x%
+    CASE 3
+      FOR x%=0 TO last_caller%
+        IF callers$(x%)<>SPACE$(caller_width%)
+          callers$(x%)=callers$(x%)+MID$(callers$(x%),1,38)
+        ENDIF
+      NEXT x%
+    ENDSELECT
+    QSORT callers$() OFFSET sort_at%,last_caller%+1
+    SELECT sort%
+    CASE 2,3
+      FOR x%=0 TO last_caller%
+        IF callers$(x%)<>SPACE$(caller_width%)
+          callers$(x%)=MID$(callers$(x%),1,caller_width%)
+        ENDIF
+      NEXT x%
+    ENDSELECT
+  ENDIF
+  last_caller%=last_caller%+caller_list_size%
+  IF last_caller%<caller_list_size%+1
+    last_caller%=caller_list_size%+1
+  ENDIF
+RETURN
+> PROCEDURE edit_text
+  change_flag%=1
+  er%=WIND_UPDATE(1)
+  exit%=FORM_DO(main_dialog%,edit%)
+  exit%=exit% AND &H7FFF
+  er%=WIND_UPDATE(0)
+  OB_STATE(main_dialog%,exit%)=BCLR(OB_STATE(main_dialog%,exit%),0)
+  ~OBJC_DRAW(main_dialog%,exit%,4,window_x%,window_y%,window_w%,window_h%)
+  @get_text
+  @sort
+  @slider_init
+  @slider_move
+  @set_text
+RETURN
+> PROCEDURE write_callers
+  OPEN "O",#1,id_path$
+  FOR call%=0 TO last_caller%
+    IF callers$(call%)<>SPACE$(caller_width%)
+      MID$(callers$(call%),e_calls%)="    "
+      PRINT #1,callers$(call%)
+    ENDIF
+  NEXT call%
+  CLOSE #1
+  change_flag%=0
+RETURN
+> PROCEDURE read_callers
+  last_caller%=0
+  IF EXIST(id_path$)
+    OPEN "I",#1,id_path$
+    DO
+      INPUT #1,callers$(last_caller%)
+      INC last_caller%
+    LOOP UNTIL EOF(#1)=TRUE
+    CLOSE #1
+  ENDIF
+  @sort
+RETURN
+> PROCEDURE sort_list
+  old_sort%=sort%
+  ~OBJC_OFFSET(main_dialog%,b_sort%,rx%,ry%)
+  sort_x%=rx%
+  sort_y%=ry%-(sort_height%*(sort%-1))
+  OB_X(sort_dialog%,0)=sort_x%
+  OB_Y(sort_dialog%,0)=sort_y%
+  cx%=sort_x%
+  cy%=sort_y%
+  cw%=sort_w%
+  ch%=sort_h%
+  FOR test%=1 TO 3
+    IF BTST(OB_STATE(sort_dialog%,test%),0)=TRUE
+      OB_STATE(sort_dialog%,test%)=BCLR(OB_STATE(sort_dialog%,test%),0)
+    ENDIF
+  NEXT test%
+  OB_STATE(sort_dialog%,sort%)=BSET(OB_STATE(sort_dialog%,sort%),0)
+  exit%=0
+  temp_sort%=sort%
+  er%=WIND_UPDATE(1)
+  ~FORM_DIAL(0,0,0,0,0,sort_x%-1,sort_y%-1,sort_w%+2,sort_h%+2)
+  ~OBJC_DRAW(sort_dialog%,0,2,sort_x%-1,sort_y%-1,sort_w%+2,sort_h%+2)
+  DO
+  LOOP UNTIL MOUSEK=0
+  DO
+    event_type&=EVNT_MULTI(&X100110,1,1,1,0,cx%,cy%,cw%,ch%,0,0,0,0,0,buffer_address%,10,x_mouse&,y_mouse&,button_state&,key_state&,key_press&,num_clicks&)
+    IF event_type& AND &X100 ! IN
+      button%=OBJC_FIND(sort_dialog%,0,1,x_mouse&,y_mouse&)
+      IF button%>0
+        IF BTST(OB_STATE(sort_dialog%,button%),0)=0
+          OB_STATE(sort_dialog%,temp_sort%)=BCLR(OB_STATE(sort_dialog%,temp_sort%),0)
+          ~OBJC_DRAW(sort_dialog%,temp_sort%,1,sort_x%-1,sort_y%-1,sort_w%+2,sort_h%+2)
+          OB_STATE(sort_dialog%,button%)=BSET(OB_STATE(sort_dialog%,button%),0)
+          ~OBJC_DRAW(sort_dialog%,button%,1,sort_x%-1,sort_y%-1,sort_w%+2,sort_h%+2)
+          temp_sort%=button%
+        ENDIF
+      ENDIF
+    ELSE
+      exit%=1
+    ENDIF
+    IF event_type& AND &X10
+      sort%=temp_sort%
+      SELECT sort%
+      CASE 1
+        sort_at%=e_name%-1
+      CASE 2
+        sort_at%=e_number%-1
+      CASE 3
+        sort_at%=e_date%-1
+      ENDSELECT
+      IF old_sort%<>sort%
+        @sort
+        @set_text
+      ENDIF
+      exit%=1
+    ENDIF
+  LOOP UNTIL exit%=1
+  er%=WIND_UPDATE(0)
+  ~FORM_DIAL(3,0,0,0,0,sort_x%-1,sort_y%-1,sort_w%+2,sort_h%+2)
+  DO
+  LOOP UNTIL MOUSEK=0
+  @set_sort
+RETURN
+> PROCEDURE slider_move
+  OB_Y(main_dialog%,b_box%)=(slider_height%-box_height%)*(caller%/(last_caller%-caller_list_size%))
+  IF window_handle%>0
+    ~OBJC_DRAW(main_dialog%,b_slider%,4,window_x%,window_y%,window_w%,window_h%)
+  ENDIF
+  @slider_set
+  @set_text
+  PAUSE 5
+RETURN
+> PROCEDURE slider_init
+  box_height%=(caller_list_size%/last_caller%)*slider_height%
+  IF box_height%<slider_height%*0.1
+    box_height%=slider_height%*0.1
+  ENDIF
+  OB_H(main_dialog%,b_box%)=box_height%
+  OB_Y(main_dialog%,b_box%)=(slider_height%-box_height%)*(caller%/(last_caller%+1-caller_list_size%))
+RETURN
+> PROCEDURE slider_set
+  IF caller%=0
+    OB_STATE(main_dialog%,b_up%)=BSET(OB_STATE(main_dialog%,b_up%),3)
+    IF window_handle%>0
+      ~OBJC_DRAW(main_dialog%,b_up%,4,window_x%,window_y%,window_w%,window_h%)
+    ENDIF
+  ELSE
+    OB_STATE(main_dialog%,b_up%)=BCLR(OB_STATE(main_dialog%,b_up%),3)
+    IF window_handle%>0
+      ~OBJC_DRAW(main_dialog%,b_up%,4,window_x%,window_y%,window_w%,window_h%)
+    ENDIF
+  ENDIF
+  IF caller%=last_caller%-caller_list_size%
+    OB_STATE(main_dialog%,b_down%)=BSET(OB_STATE(main_dialog%,b_down%),3)
+    IF window_handle%>0
+      ~OBJC_DRAW(main_dialog%,b_down%,4,window_x%,window_y%,window_w%,window_h%)
+    ENDIF
+  ELSE
+    OB_STATE(main_dialog%,b_down%)=BCLR(OB_STATE(main_dialog%,b_down%),3)
+    IF window_handle%>0
+      ~OBJC_DRAW(main_dialog%,b_down%,4,window_x%,window_y%,window_w%,window_h%)
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE check_for_call
+  IF BIOS(1,1)
+    flag%=0
+    call$=""
+    DO
+      IF BIOS(1,1)
+        call$=call$+CHR$(BIOS(2,1))
+      ELSE
+        PAUSE 2
+        IF BIOS(1,1)
+          call$=call$+CHR$(BIOS(2,1))
+        ELSE
+          flag%=1
+        ENDIF
+      ENDIF
+    LOOP UNTIL flag%
+    test1%=INSTR(call$,"DATE")
+    test2%=INSTR(call$,"TIME")
+    test3%=INSTR(call$,"NMBR")
+    test4%=INSTR(call$,"NAME")
+    IF test1%+test2%+test3%+test4%>0
+      caller_date$=""
+      caller_time$=""
+      caller_number$=""
+      caller_name$=""
+      flag%=0
+      test%=INSTR(call$,"DATE = ")
+      IF test%
+        flag%=1
+        caller_date$=MID$(call$,test%+7,4)
+      ENDIF
+      test%=INSTR(call$,"TIME = ")
+      IF test%
+        flag%=1
+        caller_time$=MID$(call$,test%+7,4)
+      ENDIF
+      test%=INSTR(call$,"NMBR = ")
+      IF test%
+        flag%=1
+        caller_number$=MID$(call$,test%+7,10)
+        IF MID$(caller_number$,1,3)="813"
+          MID$(caller_number$,1,3)="   "
+          my_area%=3
+        ELSE
+          my_area%=0
+        ENDIF
+        IF LEN(caller_number$)<11
+          caller_number$=SPACE$(11-LEN(caller_number$))+caller_number$
+        ENDIF
+      ENDIF
+      test%=INSTR(call$,"NAME = ")
+      IF test%
+        flag%=1
+        caller_name$=MID$(call$,test%+7,10)
+      ENDIF
+      IF VAL(caller_number$)>0
+        call_new%=1
+        FOR x%=0 TO last_caller%
+          IF VAL(MID$(callers$(x%),e_number%+1+my_area%,10-my_area%))=VAL(caller_number$)
+            call_new%=0
+            current_caller%=x%
+            temp%=VAL(MID$(callers$(current_caller%),e_calls%,3))+1
+            MID$(callers$(current_caller%),e_date%,5)=MID$(caller_date$,1,2)+"/"+MID$(caller_date$,3)
+            MID$(callers$(current_caller%),e_time%,5)=MID$(caller_time$,1,2)+":"+MID$(caller_time$,3)
+            SELECT temp%
+            CASE 1 TO 9
+              MID$(callers$(current_caller%),e_calls%,3)="  "+STR$(temp%)
+            CASE 10 TO 99
+              MID$(callers$(current_caller%),e_calls%,3)=" "+STR$(temp%)
+            DEFAULT
+              MID$(callers$(current_caller%),e_calls%,3)=STR$(temp%)
+            ENDSELECT
+            MID$(callers$(current_caller%),e_flag%)="*"
+          ENDIF
+        NEXT x%
+        IF call_new%
+          current_caller%=-1
+          FOR x%=0 TO last_caller%-1
+            IF callers$(x%)=SPACE$(caller_width%)
+              current_caller%=x%
+            ENDIF
+          NEXT x%
+          IF current_caller%=-1
+            INC last_caller%
+            current_caller%=last_caller%
+            callers$(current_caller%)=SPACE$(caller_width%)
+          ENDIF
+          MID$(callers$(current_caller%),e_name%,23)=caller_name$
+          MID$(callers$(current_caller%),e_number%,11)=caller_number$
+          MID$(callers$(current_caller%),e_date%,5)=MID$(caller_date$,1,2)+"/"+MID$(caller_date$,3)
+          MID$(callers$(current_caller%),e_time%,5)=MID$(caller_time$,1,2)+":"+MID$(caller_time$,3)
+          MID$(callers$(current_caller%),e_calls%,3)="  1"
+          MID$(callers$(current_caller%),e_flag%)="*"
+        ENDIF
+        change_flag%=1
+        status$="New Calls."
+        @infoline
+        @sort
+        @slider_init
+        @slider_move
+        IF window_handle%=0
+          calling%=1
+        ENDIF
+      ENDIF
+    ENDIF
+    check$=call$
+    @check_send
+  ENDIF
+RETURN
+> PROCEDURE send
+  FOR bite%=1 TO LEN(send$)
+    ~BIOS(3,1,ASC(MID$(send$,bite%,1)))
+  NEXT bite%
+  flag%=0
+  check$=""
+  DO
+    IF BIOS(1,1)
+      check$=check$+CHR$(BIOS(2,1))
+    ELSE
+      flag%=1
+    ENDIF
+  LOOP UNTIL flag%
+RETURN
+> PROCEDURE check_send
+  IF check$=""
+    window_infoline$="Modem off-line..."
+    @infoline
+  ELSE
+    check%=INSTR(check$,"ERROR")
+    IF check%>0
+      window_infoline$="Modem ERROR..."
+      @infoline
+    ELSE
+      window_infoline$=status$
+      @infoline
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE dump
+  IF OUT?(0)<>0
+    OUT 0,13,10
+    temp$="Phone list for "+DATE$
+    FOR char%=1 TO LEN(temp$)
+      OUT 0,ASC(MID$(temp$,char%,1))
+    NEXT char%
+    OUT 0,13,10
+    OUT 0,13,10
+    FOR call%=0 TO last_caller%
+      IF callers$(call%)<>SPACE$(caller_width%)
+        IF VAL(MID$(callers$(call%),e_number%,3))>0
+          t1$="("
+          t2$=")"
+        ELSE
+          t1$=" "
+          t2$=" "
+        ENDIF
+        temp$=MID$(callers$(call%),e_name%,e_number%)+t1$
+        temp$=temp$+MID$(callers$(call%),e_number%+1,3)+t2$
+        temp$=temp$+MID$(callers$(call%),e_number%+4,3)+"-"
+        temp$=temp$+MID$(callers$(call%),e_number%+7,8)
+        FOR char%=1 TO LEN(temp$)
+          OUT 0,ASC(MID$(temp$,char%,1))
+        NEXT char%
+        OUT 0,13,10
+      ENDIF
+    NEXT call%
+    OUT 0,12
+  ENDIF
+RETURN

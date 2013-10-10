@@ -29,7 +29,7 @@
 
 
 	comment head=%111
-	output	d:\gtplay.pgt
+	output	e:\gtk08770.dmo\sys\gtplay.pgt
 	Opt	p=68030,x-,d-,e-,s-
 	
 	;Output	f:\dev.gtk\sys\gtplay.pgt
@@ -5128,27 +5128,30 @@ ev_tremolotype_t:	Rs.b	1	; Type de tremolo (0 = sin, 1 = carr‚, 2 = triangle)
 ev_tremortime1_t:	Rs.b	1	; Longueur du tremor Volume On
 ev_tremortime2_t:	Rs.b	1	; Longueur du tremor Volume Off
 ev_tremorsection_t:	Rs.b	1	; Section actuelle du tremor (0 = time1, 1 = time2)
-ev_tremorcpt_t:		Rs.b	1	; Compteur du tremor
-current_rs:		rs.b	1	;current_rs&1	; Equivaut … RsEven
-et_waitcpt_t:		Rs.w	1	; Compteur de la commande Wait de l'enveloppe de tonalit‚
-et_loopcpt_t:		Rs.w	1	; Compteur de boucle
+ev_tremorcpt_t:	Rs.b	1	; Compteur du tremor
+current_rs:
+		rs.b	current_rs&1	; Equivaut … RsEven
+et_waitcpt_t:	Rs.w	1	; Compteur de la commande Wait de l'enveloppe de tonalit‚
+et_loopcpt_t:	Rs.w	1	; Compteur de boucle
 et_tone_t:		Rs.w	1	; P‚riode courante
-et_tonestep_t:		Rs.w	1	; Pas de la p‚riode
-et_tonespeed_t:		Rs.w	1	; Vitesse de la p‚riode
-et_tonecpt_t:		Rs.w	1	; Compteur de la p‚riode
+et_tonestep_t:	Rs.w	1	; Pas de la p‚riode
+et_tonespeed_t:	Rs.w	1	; Vitesse de la p‚riode
+et_tonecpt_t:	Rs.w	1	; Compteur de la p‚riode
 et_vibratoflag_t:	Rs.b	1	; Flag de vibrato (on/off)
 et_vibratospeed_t:	Rs.b	1	; Vitesse du vibrato
 et_vibratowidth_t:	Rs.b	1	; Amplitude du vibrato
 et_vibratocpt_t:	Rs.b	1	; Compteur du vibrato
 et_vibratotype_t:	Rs.b	1	; Type de vibrato (0 = sin, 1 = carr‚, 2 = triangle)
-current_rs2:		rs.b	1	;current_rs2&1	; Equivaut … RsEven
-ep_waitcpt_t:		Rs.w	1	; Compteur de la commande Wait de l'enveloppe de panning
-ep_loopcpt_t:		Rs.w	1	; Compteur de boucle
+current_rs2:
+		rs.b	current_rs2&1	; Equivaut … RsEven
+ep_waitcpt_t:	Rs.w	1	; Compteur de la commande Wait de l'enveloppe de panning
+ep_loopcpt_t:	Rs.w	1	; Compteur de boucle
 ep_pan_t:		Rs.w	1	; Panning courant
-ep_panstep_t:		Rs.w	1	; Pas du panning
-ep_panspeed_t:		Rs.w	1	; Vitesse du panning
-ep_pancpt_t:		Rs.w	1	; Compteur du panning
-current_rs3:		rs.b	1	;current_rs3&1	; Equivaut … RsEven
+ep_panstep_t:	Rs.w	1	; Pas du panning
+ep_panspeed_t:	Rs.w	1	; Vitesse du panning
+ep_pancpt_t:	Rs.w	1	; Compteur du panning
+current_rs3:
+		rs.b	current_rs3&1	; Equivaut … RsEven
 flag_new_note_t:	Rs.w	1	; 1 si la note courante doit ˆtre "initialis‚e"
 				; 0 si ‡a a d‚j… ‚t‚ fait (vbl suivante).
 flag_autotempo_t:	Rs.w	1	; 1 au 1er tick, 0 sinon.
@@ -5270,7 +5273,8 @@ midi_ts_pat_note:	Rs.b	1	; \ Note ‚quivalente dans le pattern
 midi_ts_pat_instr:	Rs.b	1	;  \
 midi_ts_pat_effect:	Rs.w	1	;  / *** Ne pas dissocier
 midi_ts_pat_volume:	Rs.b	1	; /
-current_rs4:		rs.b	1	;current_rs4&1	; Equivaut … RsEven
+current_rs4:
+		rs.b	current_rs4&1	; Equivaut … RsEven
 midi_ts_next:	Rs	0
 
 ;--- Structure IOREC ---------------------------------------------------------

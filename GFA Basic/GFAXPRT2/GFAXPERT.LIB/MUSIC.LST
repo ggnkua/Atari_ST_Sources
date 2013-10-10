@@ -1,0 +1,320 @@
+' *****************
+' *** MUSIC.LST ***
+' *****************
+'
+DEFWRD "a-z"
+'
+> PROCEDURE play.song(play$)
+  ' *** play song (XBIOS 32 - format)
+  ' *** Keyclick temporarily switched off
+  ' *** Song-file not larger than 32767 bytes
+  ' *** global :   PLAY.SONG!   SONG.ADRES%
+  LOCAL bytes,song$
+  IF EXIST(play$)
+    play.song!=TRUE
+    IF (PEEK(&H484) AND 1)=1
+      SPOKE &H484,(PEEK(&H484) XOR 1)         ! key-click off
+    ENDIF
+    OPEN "I",#90,play$
+    bytes=LOF(#90)
+    CLOSE #90
+    song$=SPACE$(bytes)
+    song.adres%=VARPTR(song$)
+    BLOAD play$,song.adres%
+    VOID XBIOS(32,L:song.adres%)
+  ELSE
+    play.song!=FALSE
+  ENDIF
+RETURN
+' ***
+> PROCEDURE stop.song
+  ' *** abort song, switch Keyclick on
+  WAVE 0,0
+  IF (PEEK(&H484) AND 1)=0
+    SPOKE &H484,(PEEK(&H484) OR 1)         ! key-click on
+  ENDIF
+  play.song!=FALSE
+RETURN
+' **********
+'
+> PROCEDURE interrupt.song
+  ' *** interrupt X32-song temporarily to do something important
+  ' *** uses global variable song.adres% (Procedure Play.song)
+  LOCAL i,adres%
+  IF play.song!
+    ERASE register()
+    DIM register(15)
+    adres%=XBIOS(32,L:-1)               ! where are we ?
+    FOR i=0 TO 15
+      register(i)=XBIOS(28,0,i)         ! store registers
+    NEXT i
+    IF (PEEK(&H484) AND 1)=0
+      SPOKE &H484,(PEEK(&H484) OR 1)    ! key-click on
+    ENDIF
+  ENDIF
+  '
+  WAVE 0,0
+  ' *** do something important here
+  '
+  PAUSE 100                             ! just an example, not very important
+  '
+  ' *** continue the interrupted song
+  IF play.song!
+    IF (PEEK(&H484) AND 1)=1
+      SPOKE &H484,(PEEK(&H484) XOR 1)   ! key-click off
+    ENDIF
+    FOR i=0 TO 15
+      ~XBIOS(28,register(i),i OR 128)   ! restore registers
+    NEXT i
+    IF adres%=0
+      adres%=song.adres%
+    ENDIF
+    ~XBIOS(32,L:adres%)                  ! music, maestro ...
+  ENDIF
+RETURN
+' **********
+'
+> PROCEDURE play.cont.song(play$)
+  ' *** play song continuously (XBIOS 32 - format)
+  ' *** uses EVERY to test every 1 second if song is finished
+  ' *** remember, EVERY doesn't work during "long" commands (~INP(2),PAUSE,etc.)
+  ' *** Keyclick temporarily switched off
+  ' *** Song-file not larger than 32767 bytes (use MALLOC for larger songs)
+  ' *** global :   CONT.SONG!   SONG.ADR%
+  LOCAL bytes,song$
+  IF EXIST(play$)
+    cont.song!=TRUE
+    IF (PEEK(&H484) AND 1)=1
+      SPOKE &H484,(PEEK(&H484) XOR 1)         ! key-click off
+    ENDIF
+    OPEN "I",#90,play$
+    bytes=LOF(#90)
+    CLOSE #90
+    song$=SPACE$(bytes)
+    song.adr%=VARPTR(song$)
+    BLOAD play$,song.adr%
+    EVERY 200 GOSUB check.song
+    ~XBIOS(32,L:song.adr%)
+  ELSE
+    cont.song!=FALSE
+  ENDIF
+RETURN
+' ***
+> PROCEDURE check.song
+  IF XBIOS(32,L:-1)=0
+    ~XBIOS(32,L:song.adr%)
+  ENDIF
+RETURN
+' ***
+> PROCEDURE stop.cont.song
+  ' *** abort song, switch Keyclick on
+  EVERY STOP
+  WAVE 0,0
+  IF (PEEK(&H484) AND 1)=0
+    SPOKE &H484,(PEEK(&H484) OR 1)         ! key-click on
+  ENDIF
+  cont.song!=FALSE
+RETURN
+' **********
+'
+> PROCEDURE initio.soundmachine(file$)
+  ' *** load and play Soundmachine-song file$
+  ' *** songs created by The Soundmachine ST (TommySoftware)
+  ' *** song (*.SNG) compiled to Precode-file (*.DAT)
+  ' *** program SMSOUND.EXE plays song; reset necessary because of RESERVE 3 !
+  ' *** global :   SM.FLAG%
+  LOCAL s$,cmd$,k
+  s$=STRING$(4,0)
+  RESERVE 50000                   ! Soundmachine needs a lot of space
+  cmd$=file$+"  "+STR$(V:s$)
+  cmd$=CHR$(LEN(cmd$)+1)+cmd$
+  EXEC 0,"SMSOUND.EXE",cmd$,""    ! load and start (change path if necessary)
+  sm.flag%=CVL(s$)
+  IF sm.flag%=0
+    ALERT 3,"Can't load| |SMSOUND.EXE",1,"EDIT",k
+    RESERVE
+    EDIT
+  ENDIF
+RETURN
+' ***
+> PROCEDURE soundmachine(flag!)
+  ' *** if restart-flag is set in program, restart of song is possible :
+  ' ***           POKE sm.flag%+7,1         ! set restart-flag
+  ' ***           FOR t=1 TO 10000          ! wait
+  ' ***           NEXT t
+  ' ***           @soundmachine(on!)        ! restart song
+  ' *** abort song with @soundmachine(off!)
+  '
+  IF flag!                     ! sound on
+    SDPOKE &H452,0             ! no VBL
+    SLPOKE &HFF8800,&H7007F00  ! load sound-register
+    SPOKE &HFFFA1D,0           ! system-timer off (no click,menu,break,etc.)
+    SPOKE &HFFFA17,64          ! MFP AEoI-mode
+    SPOKE &HFFFA19,1           ! start timer A
+  ELSE                         ! sound off
+    SPOKE &HFFFA19,0           ! timer A off (2x !!)
+    SPOKE &HFFFA19,0
+    SPOKE &HFFFA17,72          ! MFP SEoI-mode
+    SPOKE &HFFFA1D,81          ! system-timer on (GEM alive again)
+    SDPOKE &H452,1             ! VBL
+  ENDIF
+RETURN
+' **********
+'
+> PROCEDURE sm.initio(object$,buffer%)
+  ' *** reserve space for object-file and load it
+  ' *** also reserve space for buffer (if object-file contains compressed song)
+  ' *** use @sm.exit to restore memory
+  LOCAL object%,m$,k,res.mem%,bufp%
+  IF EXIST(object$)
+    OPEN "I",#90,object$
+    object%=LOF(#90)
+    CLOSE #90
+  ELSE
+    m$="Sorry, can't|find the file|"+object$
+    ALERT 3,m$,1,"QUIT",k
+    @exit
+  ENDIF
+  res.mem%=object%+buffer%+256     ! 256 not necessary ?
+  RESERVE -res.mem%                ! reserve space for object-file + buffer
+  sm.sam%=MALLOC(object%)          ! space for object-file (see SAMLINK.PRG)
+  sm.taon%=sm.sam%+&H186           ! special function (see Procedure Sm.space)
+  sm.taoff%=sm.sam%+&H1B6          !
+  sm.flags%=sm.sam%+&HE76          ! address of the 8 Flags
+  bufp%=sm.sam%+&HE7E              ! points to a buffer (for the unpacked music)
+  BLOAD object$,sm.sam%            ! load object-file
+  ~XBIOS(38,L:sm.sam%)             ! call assembler-routine in Supervisor-mode !
+  SDPOKE &H452,0                   ! disable VBL
+  IF buffer%>0
+    sm.song%=MALLOC(buffer%)       ! space for the buffer (see SAMLINK.PRG)
+    LPOKE (bufp%),sm.song%         ! tell buffer-address to SOUNDMACHINE
+  ENDIF
+RETURN
+' *****
+> PROCEDURE sm.flag(flag,value)
+  ' *** assign value (0-255) to flag (0-7)
+  BYTE{sm.flags%+flag}=value
+RETURN
+' *****
+> PROCEDURE sm.start.x100
+  ' *** start Soundmachine song (compressed song will be decompressed first)
+  ' *** use this for X100-mode only
+  ' *** song can be stopped only (<Space>) if Procedure Sm.space is switched on
+  @sm.space(on!)
+  SPOKE &HFFFA19,1
+  @sm.wait
+  @sm.space(off!)
+RETURN
+' *****
+> PROCEDURE sm.wait
+  ' *** wait until Restart recognized
+  REPEAT
+  UNTIL PEEK(&HFFFA19)=0
+RETURN
+' *****
+> PROCEDURE sm.start.x66
+  ' *** start Soundmachine song (compressed song will be decompressed first)
+  ' *** use this for X66-mode only
+  SPOKE &HFFFA19,1
+RETURN
+' *****
+> PROCEDURE sm.stop.x66
+  ' *** stop Soundmachine song
+  ' *** this works only in X66-mode (Flag 7 is set to 1)
+  @sm.flag(7,1)
+  @sm.wait
+RETURN
+' *****
+> PROCEDURE sm.space(switch!)
+  ' *** after @sm.space(TRUE) the song will stop playing after detecting <Space>
+  ' *** this works in X100-mode !
+  ' *** this function uses XBIOS-calls to detect the keypress
+  ' *** don't forget to disable this funcion with @sm.space(FALSE) !!
+  IF switch!
+    CALL sm.taon%
+  ELSE
+    CALL sm.taoff%
+  ENDIF
+RETURN
+' *****
+> PROCEDURE sm.exit
+  ' *** exit Soundmachine; restore memory (a few bytes are lost)
+  LOCAL dummy%,m$,k
+  IF sm.song%>0
+    dummy%=MFREE(sm.song%)            ! return buffer to GEMDOS
+    IF dummy%<>0
+      m$="*** WARNING ***| |MFREE-error with|Song-buffer"
+      ALERT 3,m$,1," OK ",k
+    ENDIF
+  ENDIF
+  SDPOKE &H452,1                      ! VBL on
+  SPOKE &HFFFA1D,80                   ! Systemtimer on (200 Hz)
+  dummy%=MFREE(sm.sam%)               ! return memory to GEMDOS
+  IF dummy%<>0
+    m$="*** WARNING ***| |MFREE-error with|Object-file"
+    ALERT 3,m$,1," OK ",k
+  ENDIF
+  RESERVE                             ! return memory to GFA-Basic
+RETURN
+' **********
+'
+> PROCEDURE msm.initio(object$)
+  ' *** reserve space for object-file and load it
+  ' *** use @msm.exit to restore memory
+  LOCAL object%,m$,k
+  IF EXIST(object$)
+    OPEN "I",#90,object$
+    object%=LOF(#90)
+    CLOSE #90
+  ELSE
+    m$="Sorry, can't|find the file|"+object$
+    ALERT 3,m$,1,"QUIT",k
+    @exit
+  ENDIF
+  res.mem%=object%+256               ! 256 not necessary ?
+  RESERVE -res.mem%                  ! reserve space for object-file
+  msm.chip%=MALLOC(object%)          ! allocate space for object-file
+  msm.flags%=msm.chip%+&HC64         ! address of the Flags
+  msm.systim%=LPEEK(&H114)           ! 200 Hz Systemtimer (Timer C)
+  BLOAD object$,msm.chip%            ! load object-file
+  VOID XBIOS(38,L:msm.chip%)         ! call assembler-routine in Supervisor-mode
+RETURN
+' *****
+> PROCEDURE msm.start
+  ' *** start Mini-Soundmachine song
+  SPOKE &HFFFA1D,16
+RETURN
+' *****
+> PROCEDURE msm.stop
+  ' *** stop Mini-Soundmachine song (set Flag 7 to 1)
+  @msm.flag(7,1)
+  REPEAT
+  UNTIL PEEK(&HFFFA1D)=0
+RETURN
+' *****
+> PROCEDURE msm.effect(effect,freq)
+  ' *** play sound-effect from Mainsong
+  ' *** frequency 245000/freq Hz  (freq : 11-255)
+  @msm.flag(9,freq)
+  @msm.flag(8,effect)
+RETURN
+' *****
+> PROCEDURE msm.flag(flag,value)
+  ' *** assign value to flag
+  BYTE{msm.flags%+flag}=value
+RETURN
+' *****
+> PROCEDURE msm.exit
+  ' *** exit Mini-Soundmachine; restore memory (a few bytes are lost)
+  LOCAL dummy%,m$,k
+  @msm.stop
+  dummy%=MFREE(msm.chip%)                ! return memory to GEMDOS
+  IF dummy%<>0
+    m$="*** WARNING ***| |MFREE-error with|Object-file"
+    ALERT 3,m$,1," OK ",k
+  ENDIF
+  VOID XBIOS(31,2,80,192,L:msm.systim%)  ! switch back to Timer C
+  RESERVE                                ! return memory to GFA-Basic
+RETURN
+' **********
+'

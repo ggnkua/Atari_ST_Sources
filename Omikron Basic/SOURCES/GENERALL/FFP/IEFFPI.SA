@@ -1,0 +1,77 @@
+        TTL       IEEE FORMAT EQUIVALENT FLOAT TO INTEGER (IEFFPI)
+**************************************
+* (C) COPYRIGHT 1981 BY MOTORLA INC. *
+**************************************
+ 
+***********************************************************
+*    IEFFPI - IEEE FORMAT EQUIVALENT FLOAT TO INTEGER     *
+*                                                         *
+*      INPUT:  D7 = IEEE FORMAT NUMBER                    *
+*      OUTPUT: D7 = FIXED POINT LONGWORD INTEGER          *
+*                            (2'S COMPLEMENT)             *
+*                                                         *
+*  CONDITION CODES:                                       *
+*             N - SET IF RESULT IS NEGATIVE               *
+*             Z - SET IF RESULT IS ZERO                   *
+*             V - SET IF RESULT OVERFLOWED INTEGER        *
+*                 REPRESENTATION OR INPUT WAS A NAN       *
+*                 (NOT-A-NUMBER)                          *
+*             C - UNDEFINED                               *
+*             X - UNDEFINED                               *
+*                                                         *
+*     REGISTERS ARE TRANSPARENT OVER THIS ROUTINE         *
+*                                                         *
+*              STACK USED:    54 BYTES                    *
+*                                                         *
+*  THE RANGE PROVIDED WITH 2'S COMPLEMENT LONGWORD BINARY *
+*  IS:   -2,147,483,649 < VALUE < +2,147,483,648          *
+*                                                         *
+*  NOTES:                                                 *
+*   1) SINCE IEEE SINGLE PRECISION FORMAT HOLDS 24 BITS   *
+*      OF PRECISION WHICH IS LESS THAN THE 31 BITS OF     *
+*      LONGWORD BINARY INTEGER ARITHMETIC, RESULTS OF     *
+*      OVER 24 BIT INTEGER MAGNITUDE WILL BE IMPRECISE    *
+*      AND HAVE LOW-END ZEROES.                           *
+*   2) IF THE INPUT ARGUMENT IS TOO LARGE TO BE CONTAINED *
+*      IN THE LONGWORD FIXED POINT BINARY FORMAT, THE     *
+*      LARGEST POSSIBLE MAGNITUDE VALUE IS RETURNED WITH  *
+*      THE "V" BIT SET IN THE CONDITION CODE REGISTER.    *
+*   3) IF A NAN (NOT-A-NUMBER) IS THE INPUT ARGUMENT,     *
+*      IT WILL BE RETURNED AS IS WITH THE "V" BIT SET.    *
+*   4) SINCE THE "V" BIT IS SET FOR TWO POSSIBLE          *
+*      CONDITIONS (OVERFLOW OR NAN) THEY CAN BE SEPARATED *
+*      BY TESTING THE SIGNIFICAND (BITS 0 THRU 22).  IF   *
+*      THESE BITS ARE ALL ONES, THEN THE VALUE PROBABLY   *
+*      WAS AN OVERFLOW.  ANY OTHER PATTERN INDICATES THE  *
+*      INPUT ARGUMENT WAS NAN.                            *
+*                                                         *
+***********************************************************
+         PAGE
+         XDEF      IEFFPI    ENTRY POINT
+ 
+        XREF       9:FFPFPI     FAST FLOATING POINT FLOAT TO INTEGER
+         XREF      9:FFPFIEEE  FFP CONVERSION OF IEEE TO FFP FORMAT
+         XREF      9:IEFSOP  IEEE SINGLE OPERAND CONVERT INTERNAL ROUTINE
+        XREF       FFPCPYRT   COPYRIGHT NOTICE
+ 
+IEFFPI  IDNT      1,1  IEEE FORMAT EQUIVALENT FLOAT TO INTEGER
+ 
+        SECTION    9
+ 
+*************************
+* IEEE FLOAT TO INTEGER *
+*************************
+IEFFPI   BSR       IEFSOP    CONVERT TO FAST FLOATING POINT OR REJECT NAN
+         BRA.S     IEFNRM    +0 NORMALIZED VALUE, DENORMALIZED VALUE OR ZERO
+*                                       +2 ARGUMENT INFINITY
+ 
+* INFINITY - CONVERT TO FFP FORMAT'S LARGEST MAGNITUDE
+         BSR       FFPFIEEE  FFP'S CONVERSION WILL FORCE TO HIGHEST POSSIBLE
+ 
+* NORMALIZED VALUE, DENORMALIZED OR ZERO
+IEFNRM   BSR       FFPFPI    CONVERT FROM FAST FLOATING POINT TO INTEGER
+         MOVEM.L   (SP)+,D3-D6 RELOAD CALLERS REGISTERS
+         ADD.L     #4,SP     SKIP ORIGINAL ARGUMENT
+         RTS                 RETURN TO CALLER WITH INTEGER IN D7 AND CCR SET
+ 
+         END

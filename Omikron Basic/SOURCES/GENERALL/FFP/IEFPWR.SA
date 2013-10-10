@@ -1,0 +1,60 @@
+         TTL       IEEE FORMAT EQUIVALENT POWER FUNCTION(IEFPWR)
+***************************************
+* (C) COPYRIGHT 1981 BY MOTOROLA INC. *
+***************************************
+ 
+*************************************************
+*                  IEFPWR                       *
+*   IEEE FORMAT EQUIVALENT  POWER FUNCTION      *
+*                                               *
+*  INPUT:   D6 - IEEE FORMAT EXPONENT VALUE     *
+*           D7 - IEEE FORMAT ARGUMENT VALUE     *
+*                                               *
+*  OUTPUT:  D7 - RESULT OF THE VALUE TAKEN TO   *
+*                THE POWER SPECIFIED            *
+*                                               *
+*     ALL REGISTERS ARE TRANSPARENT             *
+*                                               *
+*    MAXIMUM STACK USED:    52 BYTES            *
+*                                               *
+*  CONDITION CODES:                             *
+*        Z - SET IF RESULT IS ZERO              *
+*        N - CLEARED                            *
+*        V - SET IF RESULT IS NAN (NOT-A-NUMBER)*
+*            (INPUT ARGUMENT NEGATIVE OR NAN)   *
+*        C - UNDEFINED                          *
+*        X - UNDEFINED                          *
+*                                               *
+*  NOTES:                                       *
+*    1) SEE THE MC68344 USER'S GUIDE FOR DETAILS*
+*       CONCERNING LIMITATIONS ON NORMALIZED    *
+*       ARGUMENT RANGES.                        *
+*    2) A NEGATIVE BASE VALUE, OR ZERO TO A     *
+*       NEGATIVE POWER IS INVALID AND RETURNS   *
+*       A NAN WITH THE "V" BIT SET.             *
+*    3) SPOT CHECKS SHOW AT LEAST SIX DIGIT     *
+*       PRECISION FOR 80 PERCENT OF THE CASES.  *
+*                                               *
+*************************************************
+         PAGE
+IEFPWR   IDNT  1,1 IEEE FORMAT EQUIVALENT POWER FUNCTION
+ 
+         OPT       PCS
+ 
+         SECTION   9
+ 
+         XDEF      IEFPWR                        ENTRY POINT
+ 
+         XREF      9:IEFLOG            IEEE LOG FUNCTION
+         XREF      9:IEFMUL            IEEE MULTIPLY ROUTINE
+         XREF      9:IEFEXP            IEEE EXPONENT FUNCTION
+         XREF      FFPCPYRT            COPYRIGHT STUB
+ 
+*****************
+* POWER  ENTRY  *
+*****************
+IEFPWR   BSR       IEFLOG              FIND LOW OF BASE VALUE
+         BSR       IEFMUL              MULTIPLY BY THE POWER
+         BRA       IEFEXP              FINISH WITH EXPONENT RESULT
+ 
+         END

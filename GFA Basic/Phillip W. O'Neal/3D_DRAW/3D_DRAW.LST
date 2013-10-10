@@ -1,0 +1,2258 @@
+' 3-D DRAW
+' RESERVE 2000000
+$m2000000
+@prg_setup
+' @temp_objects
+DO
+  @event ! JUST WAIT FOR THE USER TO DO SOMETHING
+LOOP
+> PROCEDURE prg_setup
+  @set_paths
+  dta%=GEMDOS(72,L:1024)
+  old_dta%=FGETDTA()
+  ~FSETDTA(dta%)
+  @init_variables
+  @store_colors
+  @set_colors
+  @check_for_mint
+  @window_setup
+  raito_x=window_w%/area%
+  raito_y=window_h%/area%
+  @rsc_setup
+  ' SEE IF WE WERE RUN AS PRG OR ACC
+  IF mint%=1 THEN
+    prg_title$="3-D Draw"
+    me_id&=MENU_REGISTER(ap_id&,"  "+prg_title$)
+  ELSE
+    ap_id&=APPL_INIT()
+  ENDIF
+  ~MENU_BAR(menu%,1)
+  MODE 1
+  IF tail$<>""
+    test%=RINSTR(tail$,"\")
+    IF test%>0
+      view_name$=tail$
+    ELSE
+      view_name$=current_path$+tail$
+    ENDIF
+    ' @load
+  ENDIF
+  DEFMOUSE 0
+RETURN
+> PROCEDURE init_variables
+  LOCAL zero%
+  ' GET VDI HANDLE OF PROGRAMS WORKSTATION
+  my_handle&=V~H
+  screen_colors%=WORK_OUT(13)  ! 2,4,16,256,256(TRUE COLOR)
+  screen_width%=WORK_OUT(0)+1
+  screen_height%=WORK_OUT(1)+1
+  system_palette%=WORK_OUT(39)
+  CONTRL(0)=102  ! 'VQ_EXTND' - GET EXTRA INFO ABOUT WORKSTATION
+  CONTRL(1)=0
+  CONTRL(3)=1
+  CONTRL(6)=my_handle&
+  INTIN(0)=1
+  VDISYS
+  screen_bits%=INTOUT(4)  ! GET # OF SCREEN PLANES
+  IF screen_colors%<256 THEN
+    ' END
+  ENDIF
+  DIM palette%(screen_colors%,2)
+  ' MESSAGE BUFFER FOR EVENT CALL
+  DIM event_buffer&(15)
+  event_buffer%=VARPTR(event_buffer&(0))
+  ' MESSAGE BUFFER FOR ME TO SEND EVENT MESSAGES
+  DIM my_buffer&(15)
+  my_buffer%=VARPTR(my_buffer&(0))
+  DIM source_mfdb%(8),destination_mfdb%(8),parameters%(8)
+  FOR zero%=4 TO 8
+    source_mfdb%(zero%)=0
+    destination_mfdb%(zero%)=0
+  NEXT zero%
+  source_mfdb%(5)=screen_bits%
+  destination_mfdb%(5)=screen_bits%
+  parameters%(8)=3 ! REPLACE MODE
+  last_object%=500
+  area%=32768
+  DIM temp(49)
+  DIM object%(last_object%+1,49)
+  FOR x%=0 TO last_object%
+    object%(x%,0)=0
+  NEXT x%
+  flag%=WIND_GET(0,4,mwx%,mwy%,mww%,mwh%)
+  ~WIND_CALC(1,0,mwx%,mwy%,mww%,mwh%,d%,d%,iww%,iwh%)
+  window_x_plus%=mww%-iww%
+  window_y_plus%=mwh%-iwh%
+  svg_saved%=1
+  wire%=1
+  fine%=0
+  old_scale%=100
+  old_move_x%=0
+  old_move_y%=0
+  snap_x%=0
+  snap_y%=0
+  view%=0
+  current_object%=0
+  svg_name$=""
+  tpi_name$=""
+RETURN
+> PROCEDURE set_paths
+  LOCAL test%,command$,current_path$,search_file$
+  shell%=SHEL_READ(command$,tail$)
+  tail$=MID$(tail$,2)
+  test%=RINSTR(command$,"\")
+  IF test%>0 THEN
+    command$=MID$(command$,1,test%)
+  ENDIF
+  ' GET CURRENT DIRECTORY
+  current_drive%=GEMDOS(25)
+  current_path$=DIR$(current_drive%+1)+"\"
+  test%=RINSTR(current_path$,"\")
+  IF test%>0 THEN
+    current_path$=MID$(current_path$,1,test%)
+  ENDIF
+  ' ADD DRIVE LETTER IF NOT PRESENT
+  IF MID$(current_path$,1,1)="\" THEN
+    current_path$=CHR$(current_drive%+65)+":"+current_path$
+  ELSE
+    IF MID$(current_path$,2,1)<>":" THEN
+      current_path$=CHR$(current_drive%+65)+":\"+current_path$
+    ENDIF
+  ENDIF
+  search_file$=command$+"DRAW_3D.RSC"+CHR$(0)
+  ~FSETDTA(dta%)
+  test%=GEMDOS(78,L:V:search_file$,&X100111)
+  IF test%=0 THEN
+    my_path$=command$
+  ELSE
+    my_path$=current_path$
+  ENDIF
+  path_read$=my_path$
+  path_write$=my_path$
+  rsc$=my_path$+"3D_DRAW.RSC"
+RETURN
+> PROCEDURE temp_objects
+  LOCAL object%
+  object%=0
+  object%(object%,0)=2     ! DISPLAY: -2 = SELECTED WIRE, -1 = SELECTED SOLID, 0= UNUSED, 1 = SOLID, 2= WIRE
+  object%(object%,1)=0     ! * 0= NORMAL, 1=SELECTED
+  object%(object%,2)=100   ! X 1
+  object%(object%,3)=100   ! Y 1
+  object%(object%,4)=0     ! *
+  object%(object%,5)=900   ! CONTROL X 1
+  object%(object%,6)=100   ! CONTROL Y 1
+  object%(object%,7)=0     ! *
+  object%(object%,8)=1700  ! CONTROL X 2
+  object%(object%,9)=100   ! CONTROL Y 2
+  object%(object%,10)=0    ! *
+  object%(object%,11)=2500 ! X 2
+  object%(object%,12)=100  ! Y 2
+  object%(object%,13)=0    ! *
+  object%(object%,14)=2500 ! CONTROL X 3
+  object%(object%,15)=900  ! CONTROL Y 3
+  object%(object%,16)=0    ! *
+  object%(object%,17)=2500 ! CONTROL X 4
+  object%(object%,18)=1700 ! CONTROL Y 4
+  object%(object%,19)=0    ! *
+  object%(object%,20)=2500 ! X 3
+  object%(object%,21)=2500 ! Y 3
+  object%(object%,22)=0    ! *
+  object%(object%,23)=1700 ! CONTROL X 5
+  object%(object%,24)=2500 ! CONTROL Y 5
+  object%(object%,25)=0    ! *
+  object%(object%,26)=900  ! CONTROL X 6
+  object%(object%,27)=2500 ! XONTROL Y 6
+  object%(object%,28)=0    ! *
+  object%(object%,29)=100  ! X 4
+  object%(object%,30)=2500 ! Y 4
+  object%(object%,31)=0    ! *
+  object%(object%,32)=100  ! CONTROL X 7
+  object%(object%,33)=1700 ! CONTROL Y 7
+  object%(object%,34)=0    ! *
+  object%(object%,35)=100  ! CONTROL X 8
+  object%(object%,36)=900  ! CONTROL Y 8
+  object%(object%,37)=0    ! *
+  object%(object%,38)=1350 ! HOT X
+  object%(object%,39)=1350 ! HOT Y
+  object%(object%,40)=1    ! COMPASS: 0 = CENTER, 1 = UP, 2 = RIGHT, 3 = DOWN, 4 = LEFT
+  object%(object%,41)=0    ! FIRST COLOR
+  object%(object%,42)=239  ! LAST COLOR
+  object%(object%,43)=100  ! MINIMUM X
+  object%(object%,44)=100  ! MINIMUM Y
+  object%(object%,45)=2500 ! MAXIMUM X
+  object%(object%,46)=2500 ! MAXIMUM Y
+  object%(object%,47)=0    ! ADDRESS OF RASTER BUFFER
+  object%(object%,48)=0    ! SIZE OF RASTER (BYTES)
+  object%(object%,49)=2    ! RASTER STATUS: 0 = READY, 1 = NEED TO UPDATE, 2 = NEED TO GET NEW RASTER
+  @open_window
+RETURN
+> PROCEDURE check_for_mint
+  LOCAL cookie%,jar%
+  ' CHECK FOR MINT COOKIE
+  INLINE cookie%,6
+  CHAR{cookie%}="    "+CHR$(0)+CHR$(0)
+  ' GET ADDRESS OF COOKIE JAR
+  jar%=LPEEK(1440)
+  mint%=0
+  IF jar%>0 THEN
+    DO
+      IF LPEEK(jar%)>0 THEN
+        LPOKE cookie%,LPEEK(jar%)
+        cookie$=CHAR{cookie%}
+        jar%=jar%+8
+        IF cookie$="MiNT" THEN
+          mint%=1
+          jar%=0
+        ENDIF
+      ELSE
+        jar%=0
+      ENDIF
+    LOOP UNTIL jar%=0
+  ENDIF
+RETURN
+> PROCEDURE rsc_setup
+  IF EXIST(rsc$) THEN
+    rsc%=RSRC_LOAD(rsc$)
+    IF rsc%=0 THEN
+      END
+    ENDIF
+  ELSE ! CAN'T FIND RSC FILE
+    END
+  ENDIF
+  ' GET ADDRESS TREE
+  ~RSRC_GADDR(0,0,menu%)
+  ~RSRC_GADDR(0,1,object_edit%)
+  ~RSRC_GADDR(0,2,preferences%)
+  ~RSRC_GADDR(0,3,scale%)
+  ~RSRC_GADDR(0,4,move%)
+  ~RSRC_GADDR(0,5,flip%)
+  menu_credit%=10
+  menu_new%=19
+  menu_open%=21
+  menu_merge%=22
+  menu_save%=24
+  menu_export%=25
+  menu_quit%=27
+  menu_view%=29
+  menu_wire%=31
+  menu_fine%=32
+  menu_add%=34
+  menu_copy%=35
+  menu_delete%=36
+  menu_edit%=38
+  menu_move%=39
+  menu_scale%=40
+  menu_smooth%=41
+  menu_straighten%=42
+  menu_flip%=43
+  menu_select%=45
+  menu_deselect%=46
+  menu_front%=47
+  menu_back%=48
+  menu_set_pref%=50
+  menu_load_pref%=51
+  menu_save_pref%=52
+  '
+  object_edit_move%=1
+  object_edit_px%=2
+  object_edit_py%=15
+  object_edit_hotx%=39
+  object_edit_hoty%=41
+  object_edit_first%=28
+  object_edit_last%=29
+  object_edit_up%=33
+  object_edit_left%=34
+  object_edit_center%=35
+  object_edit_right%=36
+  object_edit_down%=37
+  object_edit_ok%=14
+  object_edit_pre%=27
+  object_edit_next%=38
+  object_edit_cancel%=40
+  '
+  preferences_move%=1
+  preferences_pic_size_x%=2
+  preferences_pic_size_y%=3
+  preferences_snap_x%=4
+  preferences_snap_y%=5
+  preferences_ok%=6
+  preferences_cancel%=7
+  '
+  scale_move%=1
+  scale_precent%=2
+  scale_ok%=3
+  scale_cancel%=4
+  '
+  move_move%=1
+  move_mx%=2
+  move_my%=3
+  move_ok%=4
+  move_cancel%=5
+  '
+  ' GET SIZE OF FORM
+  ~FORM_CENTER(object_edit%,object_edit_x%,object_edit_y%,object_edit_w%,object_edit_h%)
+  ~FORM_CENTER(preferences%,preferences_x%,preferences_y%,preferences_w%,preferences_h%)
+  ~FORM_CENTER(scale%,scale_x%,scale_y%,scale_w%,scale_h%)
+  ~FORM_CENTER(move%,move_x%,move_y%,move_w%,move_h%)
+  ~FORM_CENTER(flip%,flip_x%,flip_y%,flip_w%,flip_h%)
+  '
+  CHAR{{OB_SPEC(preferences%,preferences_pic_size_x%)}}=STR$(pic_width%)
+  CHAR{{OB_SPEC(preferences%,preferences_pic_size_y%)}}=STR$(pic_height%)
+  CHAR{{OB_SPEC(preferences%,preferences_snap_x%)}}=STR$(snap_x%)
+  CHAR{{OB_SPEC(preferences%,preferences_snap_y%)}}=STR$(snap_y%)
+  CHAR{{OB_SPEC(scale%,scale_precent%)}}=STR$(100)
+  CHAR{{OB_SPEC(move%,move_mx%)}}=" "+STR$(0)
+  CHAR{{OB_SPEC(move%,move_my%)}}=" "+STR$(0)
+  '
+RETURN
+> PROCEDURE window_setup
+  LOCAL flag%,wx%,wy%,ww%,wh%
+  flag%=WIND_GET(0,4,wx%,wy%,ww%,wh%)
+  window_x%=wx%
+  window_y%=wy%
+  temp_w%=mww%-window_x_plus%
+  temp_h%=mwh%-window_y_plus%
+  window_w%=MIN(temp_w%,temp_h%)
+  window_h%=window_w%
+  ' window_x%=(mww%-window_w%)/2
+  ' CREATE WINDOW WITH TITLE, MOVE, AND CLOSE BOX
+  window_handle%=WIND_CREATE(0,mwx%,mwy%,mww%,mwh%)
+  pic_width%=window_w%-window_x_plus%
+  pic_height%=pic_width%
+RETURN
+> PROCEDURE open_window
+  IF view%=0 THEN
+    flag%=WIND_OPEN(window_handle%,window_x%,window_y%,window_w%,window_h%)
+    flag%=WIND_GET(window_handle%,4,window_ix%,window_iy%,window_iw%,window_ih%)
+    view%=1
+    ~MENU_TEXT(menu%,menu_view%,"  Hide  V "+CHR$(0))
+  ENDIF
+RETURN
+> PROCEDURE close_window
+  IF view%=1 THEN
+    ~WIND_CLOSE(window_handle%)
+    view%=0
+    ~MENU_TEXT(menu%,menu_view%,"  Show  V "+CHR$(0))
+  ENDIF
+RETURN
+> PROCEDURE event
+  LOCAL event_type%
+  event_type&=EVNT_MULTI(&X111111,1,1,1,0,0,0,0,0,0,0,0,0,0,event_buffer%,1,x_mouse&,y_mouse&,button_state&,key_state&,key_press&,num_clicks&)
+  @check_event(event_type%)
+RETURN
+> PROCEDURE check_event(event_type%)
+  LOCAL command%,which_window%
+  IF event_type& AND &X1 THEN       ! KEY PRESS
+    @event_key
+  ENDIF
+  IF event_type& AND &X10 THEN      ! BUTTON
+    @event_button
+  ENDIF
+  IF event_type& AND &X10000 THEN   ! MENU OR WINDOW EVENT
+    command%=event_buffer&(0)       ! TYPE OF EVENT
+    IF command%=10 THEN             ! MENU ITEM
+      @event_menu
+    ELSE          ! WINDOW EVENT
+      which_window%=event_buffer&(3) ! HANDLE OF WINDOW
+      IF which_window%=window_handle% THEN
+        @event_window(command%)
+      ENDIF
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE event_update
+  LOCAL event_type%,command%
+  event_type&=EVNT_MULTI(&X110000,1,1,1,0,0,0,0,0,0,0,0,0,0,event_buffer%,1)
+  IF event_type& AND &X10000 THEN   ! MENU OR WINDOW EVENT
+    command%=event_buffer&(0)       ! TYPE OF EVENT
+    IF command%=20 THEN             ! MENU ITEM
+      @repair_window
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE event_menu
+  LOCAL try%,test%,menu_title%,menu_item%
+  menu_title%=event_buffer&(3)             ! OBJECT # OF TITLE
+  menu_item%=event_buffer&(4)              ! WHICH MENU ITEM WAS SELECTED
+  ~MENU_TNORMAL(menu%,menu_title%,1)       ! MAKE MENU TITLE NORMAL TEXT
+  @process_command
+RETURN
+> PROCEDURE event_key
+  LOCAL scan_code&
+  scan_code&=SHR(key_press& AND &HFF00,8)  ! KEYBOARD SCAN CODE
+  SELECT scan_code&
+  CASE 49           ! 'N'EW
+    menu_item%=menu_new%
+    @process_command
+  CASE 24           ! 'O'OPEN
+    menu_item%=menu_open%
+    @process_command
+  CASE 50           ! 'M'ERGE
+    menu_item%=menu_merge%
+    @process_command
+  CASE 31           ! 'S'AVE
+    menu_item%=menu_save%
+    @process_command
+  CASE 45           ! E'X'PORT
+    menu_item%=menu_export%
+    @process_command
+  CASE 16           ! 'Q'UIT
+    menu_item%=menu_quit%
+    @process_command
+  CASE 47           ! 'V'IEW
+    menu_item%=menu_view%
+    @process_command
+  CASE 9            ! '' WIRE
+    menu_item%=menu_wire%
+    @process_command
+  CASE 10           ! '' SOLID
+    menu_item%=menu_fine%
+    @process_command
+  CASE 30           ! 'A'DD
+    menu_item%=menu_add%
+    @process_command
+  CASE 46           ! 'C'OPY
+    menu_item%=menu_copy%
+    @process_command
+  CASE 83           ! 'DELETE'
+    menu_item%=menu_delete%
+    @process_command
+  CASE 18           ! 'E'DIT
+    menu_item%=menu_edit%
+    @process_command
+  CASE 2            ! '' MOVE
+    menu_item%=menu_move%
+    @process_command
+  CASE 3            ! '' SCALE
+    menu_item%=menu_scale%
+    @process_command
+  CASE 4            ! '' SMOOTH
+    menu_item%=menu_smooth%
+    @process_command
+  CASE 5            ! '' STRAIGHTEN
+    menu_item%=menu_straighten%
+    @process_command
+  CASE 6            ! '' FILP
+    menu_item%=menu_flip%
+    @process_command
+  CASE 7            ! '' SELECT ALL
+    menu_item%=menu_select%
+    @process_command
+  CASE 8            ! '' DESALECT ALL
+    menu_item%=menu_deselect%
+    @process_command
+  CASE 33           ! 'F'RONT
+    menu_item%=menu_front%
+    @process_command
+  CASE 48           ! 'B'ACK
+    menu_item%=menu_back%
+    @process_command
+  CASE 25           ! SET 'P'REFERENCES
+    menu_item%=menu_set_pref%
+    @process_command
+  CASE -1           ! '' LOAD PREF
+    menu_item%=menu_load_pref%
+    @process_command
+  CASE -1           ! '' SAVE PREF
+    menu_item%=menu_save_pref%
+    @process_command
+  ENDSELECT
+RETURN
+> PROCEDURE process_command
+  SELECT menu_item%
+  CASE menu_credit%
+  CASE menu_new%
+    @open_window
+    @clear_all
+  CASE menu_open%
+    @open_window
+    @svg_load
+  CASE menu_merge%
+    @open_window
+    @svg_load
+  CASE menu_save%
+    @svg_save
+  CASE menu_export%
+    @open_window
+    ' @tga_save
+  CASE menu_quit%
+    @trying_to_quit
+  CASE menu_view%
+    IF view%=0 THEN
+      @open_window
+    ELSE
+      @close_window
+    ENDIF
+  CASE menu_wire%
+    IF wire%=0 THEN
+      wire%=1
+      ~MENU_TEXT(menu%,menu_wire%,"  Solid  "+CHR$(0))
+      FOR try%=0 TO last_object%
+        IF object%(try%,0)=1 THEN
+          object%(try%,0)=2
+          @get_offset(try%)
+          @update_display
+        ENDIF
+      NEXT try%
+    ELSE
+      wire%=0
+      ~MENU_TEXT(menu%,menu_wire%,"  Wire    "+CHR$(0))
+      FOR try%=0 TO last_object%
+        IF object%(try%,49)=1 THEN
+          object%(try%,49)=2
+        ENDIF
+        IF object%(try%,0)=2 THEN
+          object%(try%,0)=1
+          FOR test%=1 TO 37 STEP 3
+            object%(try%,test%)=0
+          NEXT test%
+          @get_offset(try%)
+          @update_display
+        ENDIF
+      NEXT try%
+    ENDIF
+  CASE menu_fine%
+    IF fine%=0 THEN
+      fine%=1
+      ~MENU_TEXT(menu%,menu_fine%,"  Quick   "+CHR$(0))
+    ELSE
+      fine%=0
+      ~MENU_TEXT(menu%,menu_fine%,"  Normal  "+CHR$(0))
+    ENDIF
+  CASE menu_add%
+    @get_empty
+    @object_edit(current_object%)
+  CASE menu_copy%
+    @copy
+  CASE menu_delete%
+    @delete
+  CASE menu_edit%
+    @get_selected
+    @object_edit(current_object%)
+  CASE menu_move%
+    @move
+  CASE menu_scale%
+    @scale
+  CASE menu_smooth%
+    ' @smooth
+  CASE menu_straighten%
+    @straighten
+  CASE menu_flip%
+    ' @flip
+  CASE menu_select%
+    FOR try%=0 TO last_object%
+      IF object%(try%,0)<>0 THEN
+        IF object%(try%,0)>0 THEN
+          object%(try%,0)=-object%(try%,0)
+        ENDIF
+        FOR test%=1 TO 37 STEP 3
+          object%(try%,test%)=1
+        NEXT test%
+        @get_offset(try%)
+        @update_display
+      ENDIF
+    NEXT try%
+  CASE menu_deselect%
+    FOR try%=0 TO last_object%
+      IF object%(try%,0)<0 THEN
+        object%(try%,0)=-object%(try%,0)
+        FOR test%=1 TO 37 STEP 3
+          object%(try%,test%)=0
+        NEXT test%
+        @get_offset(try%)
+        @update_display
+      ENDIF
+    NEXT try%
+  CASE menu_front%
+    last%=-1
+    FOR try%=0 TO last_object%
+      IF object%(try%,0)=0 THEN
+        last%=try%-1
+      ENDIF
+    NEXT try%
+    IF last%>0 THEN
+      ' MAT CPY object%(last_object%+1,0)=object%(current_object%,0),1,47
+      ' MAT CPY object%(current_object%,0)=object%(last%,0),last%+1-current_object%,47
+      ' MAT CPY object%(last%,0)=object%(last_object%+1,0),1,47
+      FOR try%=0 TO last_object%
+        IF object%(try%,0)>0 THEN
+          @get_offset(try%)
+          @update_display
+        ENDIF
+      NEXT try%
+    ENDIF
+  CASE menu_back%
+    ' MAT CPY object%(last_object%+1,0)=object%(current_object%,0),1,47
+    ' MAT CPY object%(1,0)=object%(0,0),current_object%,47
+    ' MAT CPY object%(0,0)=object%(last_object%+1,0),1,47
+    FOR try%=0 TO last_object%
+      IF object%(try%,0)>0 THEN
+        @get_offset(try%)
+        @update_display
+      ENDIF
+    NEXT try%
+  CASE menu_set_pref%
+    @preferences
+  CASE menu_load_pref%
+  CASE menu_save_pref%
+  ENDSELECT
+RETURN
+> PROCEDURE event_button
+  LOCAL try%,test%,test1%,which_window%,check%,x%,y%,k%,mx%,my%,mw%,mh%,mk%,current_point%,mx,my
+  which_window%=event_buffer&(3) ! HANDLE OF WINDOW
+  IF which_window%=window_handle% THEN
+    x%=x_mouse&-window_ix%
+    y%=y_mouse&-window_iy%
+    FOR try%=0 TO last_object%
+      IF object%(try%,0)<>0 THEN
+        tx1%=object%(try%,43)*raito_x
+        ty1%=object%(try%,44)*raito_y
+        tx2%=object%(try%,45)*raito_x+1-tx1%
+        ty2%=object%(try%,46)*raito_y+1-ty1%
+        flag%=RC_INTERSECT(x%,y%,1,1,tx1%,ty1%,tx2%,ty2%)
+        IF flag% THEN ! ON AN OBJECT
+          point_flag%=0
+          IF object%(try%,0)<0 THEN ! SELECTED OBJECT
+            FOR test%=2 TO 38 STEP 3
+              ox1%=object%(try%,test%)*raito_x-3
+              oy1%=object%(try%,test%+1)*raito_y-3
+              ox2%=7
+              oy2%=7
+              flag%=RC_INTERSECT(x%,y%,1,1,ox1%,oy1%,ox2%,oy2%)
+              IF flag% THEN ! POINT FOUND
+                point_flag%=1
+                IF BTST(key_state&,0) OR BTST(key_state&,1) THEN ! RIGHT, LEFT SHIFT
+                  FOR test2%=1 TO 37 STEP 3
+                    object%(try%,test2%)=1
+                  NEXT test2%
+                ELSE
+                  current_point%=test%-1
+                  IF MOUSEK=1 THEN
+                    CLIP window_ix%,window_iy%,window_iw%,window_ih%
+                    DO
+                      MOUSE mx%,my%,mk%
+                      IF old_mx%<>mx% OR old_my%<>my% THEN
+                        object%(try%,current_point%+1)=(mx%-window_ix%)/raito_x
+                        object%(try%,current_point%+2)=(my%-window_iy%)/raito_y
+                        object%(try%,43)=MIN(object%(try%,43),object%(try%,current_point%+1))
+                        object%(try%,44)=MIN(object%(try%,44),object%(try%,current_point%+2))
+                        object%(try%,45)=MAX(object%(try%,45),object%(try%,current_point%+1))
+                        object%(try%,46)=MAX(object%(try%,46),object%(try%,current_point%+2))
+                        DEFFILL 0,2,8
+                        PBOX object%(try%,43)*raito_x+window_ix%-3,object%(try%,44)*raito_y+window_iy%-3,object%(try%,45)*raito_x+window_ix%+3,object%(try%,46)*raito_y+window_iy%+3
+                        @wire(try%)
+                        @gadgets(try%)
+                      ENDIF
+                      old_mx%=mx%
+                      old_my%=my%
+                    LOOP UNTIL mk%=0
+                    object%(try%,49)=1
+                  ELSE
+                    object%(try%,current_point%)=BCHG(object%(try%,current_point%),0)
+                  ENDIF
+                ENDIF
+                @get_offset(try%)
+                @update_display
+                test%=41
+              ENDIF
+            NEXT test%
+          ENDIF
+          IF point_flag%=0 THEN
+            IF MOUSEK=1 THEN
+              CLIP window_ix%,window_iy%,window_iw%,window_ih%
+              DEFFILL 0,2,8
+              PBOX object%(try%,43)*raito_x+window_ix%-3,object%(try%,44)*raito_y+window_iy%-3,object%(try%,45)*raito_x+window_ix%+3,object%(try%,46)*raito_y+window_iy%+3
+              mx%=object%(try%,43)*raito_x
+              my%=object%(try%,44)*raito_y
+              old_mx%=mx%
+              old_my%=my%
+              mw%=(object%(try%,45)*raito_x)-mx%
+              mh%=(object%(try%,46)*raito_y)-my%
+              ~GRAF_DRAGBOX(mw%,mh%,mx%+window_ix%,my%+window_iy%,window_ix%,window_iy%,window_iw%,window_ih%,mx%,my%)
+              mx%=(mx%-(window_ix%+old_mx%))/raito_x
+              my%=(my%-(window_iy%+old_my%))/raito_y
+              object%(try%,43)=area%
+              object%(try%,44)=area%
+              object%(try%,45)=0
+              object%(try%,46)=0
+              FOR change%=2 TO 38 STEP 3
+                object%(try%,change%)=object%(try%,change%)+mx%
+                object%(try%,change%+1)=object%(try%,change%+1)+my%
+                object%(try%,43)=MIN(object%(try%,43),object%(try%,change%))
+                object%(try%,44)=MIN(object%(try%,44),object%(try%,change%+1))
+                object%(try%,45)=MAX(object%(try%,45),object%(try%,change%))
+                object%(try%,46)=MAX(object%(try%,46),object%(try%,change%+1))
+              NEXT change%
+              @get_offset(try%)
+              @update_display
+            ELSE
+              object%(try%,0)=-object%(try%,0)
+              IF object%(try%,0)>0 THEN
+                FOR test%=1 TO 37 STEP 3
+                  object%(try%,test%)=0
+                NEXT test%
+              ENDIF
+              IF object%(try%,49)=1 THEN
+                object%(try%,49)=2
+              ENDIF
+              @get_offset(try%)
+              @update_display
+              DO
+              LOOP UNTIL MOUSEK=0
+            ENDIF
+          ENDIF
+          try%=last_object%
+        ENDIF
+      ENDIF
+    NEXT try%
+  ENDIF
+RETURN
+> PROCEDURE event_window(command%)
+  LOCAL try%,window_clicked_on%
+  ' HANDLE OF WINDOW THAT TRIGGERED EVENT
+  window_clicked_on%=event_buffer&(3)
+  IF window_clicked_on%=window_handle% THEN
+    SELECT command%
+    CASE 20           ! WIND UPDATE
+      @repair_window
+    CASE 21           ! WINDOW CLICKED ON
+      ~WIND_SET(window_handle%,10,0,0,0,0) ! WINDOW SET TO TOP
+      DEFMOUSE 0
+    ENDSELECT
+  ENDIF
+RETURN
+> PROCEDURE repair_window
+  LOCAL fix_flag%,fix_done%,fix_x%,fix_y%,fix_w%,fix_h%,wfx%,wfy%,wfw%,wfh%
+  ' TELL GEM WE ARE TAKING OVER SCREEN AND MOUSE
+  er%=WIND_UPDATE(1)
+  er%=WIND_UPDATE(3)
+  ' GET FIRST RECTANGLE FROM LIST
+  er%=WIND_GET(window_handle%,11,wfx%,wfy%,wfw%,wfh%)
+  ' GET DIRTY AREA
+  fix_x%=event_buffer&(4)
+  fix_y%=event_buffer&(5)
+  fix_w%=event_buffer&(6)
+  fix_h%=event_buffer&(7)
+  ' CALC AREA THAT OVERLAPS DIRTY AREA
+  fix_flag%=RC_INTERSECT(fix_x%,fix_y%,fix_w%,fix_h%,wfx%,wfy%,wfw%,wfh%)
+  IF fix_flag% THEN
+    @pic_copy(wfx%,wfy%,wfw%,wfh%)
+  ENDIF
+  fix_done%=0
+  ' SAME AS ABOVE FOR THE OTHER RECTANGLES FROM LIST
+  DO
+    er%=WIND_GET(window_handle%,12,wfx%,wfy%,wfw%,wfh%)
+    IF fx2%+fy2%=0 THEN
+      fix_done%=1
+    ELSE
+      fix_x%=event_buffer&(4)
+      fix_y%=event_buffer&(5)
+      fix_w%=event_buffer&(6)
+      fix_h%=event_buffer&(7)
+      fix_flag%=RC_INTERSECT(fix_x%,fix_y%,fix_w%,fix_h%,wfx%,wfy%,wfw%,wfh%)
+      IF fix_flag% THEN
+        @pic_copy(wfx%,wfy%,wfw%,wfh%)
+      ENDIF
+    ENDIF
+  LOOP UNTIL fix_done%=1
+  er%=WIND_UPDATE(2)
+  er%=WIND_UPDATE(0)                      !  DONE!
+RETURN
+> PROCEDURE pic_copy(wfx%,wfy%,wfw%,wfh%)
+  LOCAL object%
+  HIDEM
+  ~WIND_UPDATE(1)
+  CLIP wfx%,wfy%,wfw%,wfh%
+  DEFFILL 0,2,8
+  PBOX wfx%,wfy%,wfx%+wfw%-1,wfy%+wfh%-1
+  object%=0
+  DO WHILE object%(object%,0)<>0
+    SELECT object%(object%,0)
+    CASE -2,-1 ! SELECTED
+      @wire(object%)
+      @gadgets(object%)
+    CASE 1 ! SOLID
+      IF object%(object%,49)=2 THEN
+        object%(object%,49)=0
+        @get_xy(object%)
+        IF fine%=1 THEN
+          @solid(object%)
+        ELSE
+          @ruff(object%)
+        ENDIF
+        @get_raster(object%)
+      ELSE
+        @put_raster(object%)
+      ENDIF
+    CASE 2 ! WIRE
+      @wire(object%)
+    ENDSELECT
+    INC object%
+  LOOP UNTIL object%=last_object%
+  ~WIND_UPDATE(0)
+  SHOWM
+RETURN
+> PROCEDURE gadgets(object%)
+  LOCAL cross%,corner%,current_point%,x%,y%
+  COLOR 2
+  DEFLINE 1,1,0,0
+  DEFFILL 1,2,8
+  FOR corner%=1 TO 4
+    current_point%=corner%*9-8
+    IF object%(object%,current_point%)=1 THEN
+      DEFFILL 2
+    ELSE
+      DEFFILL 3
+    ENDIF
+    x%=object%(object%,current_point%+1)*raito_x+window_ix%
+    y%=object%(object%,current_point%+2)*raito_y+window_iy%
+    PBOX x%-3,y%-3,x%+3,y%+3
+  NEXT corner%
+  FOR cross%=1 TO 4
+    current_point%=cross%*9-5
+    @cross(object%,current_point%)
+    current_point%=cross%*9-2
+    @cross(object%,current_point%)
+  NEXT cross%
+  IF object%(object%,37)=1 THEN
+    DEFFILL 2
+  ELSE
+    DEFFILL 3
+  ENDIF
+  COLOR 2
+  x%=object%(object%,38)*raito_x+window_ix%
+  y%=object%(object%,39)*raito_y+window_iy%
+  PBOX x%-3,y%-3,x%+3,y%+3
+RETURN
+> PROCEDURE cross(object%,current_point%)
+  LOCAL x%,y%
+  IF object%(object%,current_point%)=1 THEN
+    DEFFILL 2
+  ELSE
+    DEFFILL 3
+  ENDIF
+  x%=object%(object%,current_point%+1)*raito_x+window_ix%
+  y%=object%(object%,current_point%+2)*raito_y+window_iy%
+  PBOX x%-3,y%,x%+3,y%
+  PBOX x%,y%-3,x%,y%+3
+RETURN
+> PROCEDURE wire(object%)
+  LOCAL curve%,current_point%,x1%,y1%,x2%,y2%,x3%,y3%,x4%,y4%
+  COLOR 4
+  DEFLINE 1,1,0,0
+  FOR curve%=1 TO 4
+    current_point%=curve%*9-8
+    x1%=object%(object%,current_point%+1)*raito_x+window_ix%
+    y1%=object%(object%,current_point%+2)*raito_y+window_iy%
+    x2%=object%(object%,current_point%+4)*raito_x+window_ix%
+    y2%=object%(object%,current_point%+5)*raito_y+window_iy%
+    x3%=object%(object%,current_point%+7)*raito_x+window_ix%
+    y3%=object%(object%,current_point%+8)*raito_y+window_iy%
+    IF curve%=4 THEN
+      x4%=object%(object%,2)*raito_x+window_ix%
+      y4%=object%(object%,3)*raito_y+window_iy%
+    ELSE
+      x4%=object%(object%,current_point%+10)*raito_x+window_ix%
+      y4%=object%(object%,current_point%+11)*raito_y+window_iy%
+    ENDIF
+    CURVE x1%,y1%,x2%,y2%,x3%,y3%,x4%,y4%
+  NEXT curve%
+RETURN
+> PROCEDURE get_raster(object%)
+  LOCAL raster%,bytes%,bx%,by%,bx2%,by2%,bw%,bh%,bt%
+  raster%=object%(object%,47)
+  IF raster%>0 THEN
+    d%=GEMDOS(73,L:raster%)   ! RELEASE MEMORY
+  ENDIF
+  bx%=object%(object%,43)*raito_x
+  by%=object%(object%,44)*raito_y
+  bx2%=object%(object%,45)*raito_x
+  by2%=object%(object%,46)*raito_y
+  bw%=bx2%+1-bx%
+  bh%=by2%+1-by%
+  bt%=(bw%+16) AND &HFFF0
+  bytes%=bt%*bh%
+  object%(object%,48)=bytes%
+  raster%=GEMDOS(72,L:bytes%)
+  object%(object%,47)=raster%
+  IF raster%>0 THEN
+    source_mfdb%(0)=0
+    destination_mfdb%(0)=raster%
+    destination_mfdb%(1)=bt%
+    destination_mfdb%(2)=bh%
+    destination_mfdb%(3)=destination_mfdb%(1)/16
+    destination_mfdb%(5)=screen_bits%
+    parameters%(0)=bx%+window_ix%
+    parameters%(1)=by%+window_iy%
+    parameters%(2)=bx2%+window_ix%
+    parameters%(3)=by2%+window_iy%
+    parameters%(4)=0
+    parameters%(5)=0
+    parameters%(6)=bw%-1
+    parameters%(7)=bh%-1
+    parameters%(8)=3 ! REPLACE MODE
+    BITBLT source_mfdb%(),destination_mfdb%(),parameters%()
+  ELSE
+    object%(object%,48)=0
+  ENDIF
+RETURN
+> PROCEDURE put_raster(object%)
+  LOCAL raster%,bx%,by%,bx2%,by2%,bw%,bh%,bt%
+  raster%=object%(object%,47)
+  IF raster%>0 THEN
+    bx%=object%(object%,43)*raito_x
+    by%=object%(object%,44)*raito_y
+    bx2%=object%(object%,45)*raito_x
+    by2%=object%(object%,46)*raito_y
+    bw%=bx2%+1-bx%
+    bh%=by2%+1-by%
+    bt%=(bw%+16) AND &HFFF0
+    source_mfdb%(0)=raster%
+    source_mfdb%(1)=bt%
+    source_mfdb%(2)=bh%
+    source_mfdb%(3)=source_mfdb%(1)/16
+    source_mfdb%(5)=screen_bits%
+    destination_mfdb%(0)=0
+    parameters%(0)=0
+    parameters%(1)=0
+    parameters%(2)=bw%-1
+    parameters%(3)=bh%-1
+    parameters%(4)=bx%+window_ix%
+    parameters%(5)=by%+window_iy%
+    parameters%(6)=bx2%+window_ix%
+    parameters%(7)=by2%+window_iy%
+    parameters%(8)=7 ! TRANSPARENT
+    BITBLT source_mfdb%(),destination_mfdb%(),parameters%()
+  ENDIF
+RETURN
+> PROCEDURE get_xy(object%)
+  x1%=object%(object%,2)*raito_x
+  y1%=object%(object%,3)*raito_y
+  cx1%=object%(object%,5)*raito_x
+  cy1%=object%(object%,6)*raito_y
+  cx2%=object%(object%,8)*raito_x
+  cy2%=object%(object%,9)*raito_y
+  x2%=object%(object%,11)*raito_x
+  y2%=object%(object%,12)*raito_y
+  cx3%=object%(object%,14)*raito_x
+  cy3%=object%(object%,15)*raito_y
+  cx4%=object%(object%,17)*raito_x
+  cy4%=object%(object%,18)*raito_y
+  x3%=object%(object%,20)*raito_x
+  y3%=object%(object%,21)*raito_y
+  cx5%=object%(object%,23)*raito_x
+  cy5%=object%(object%,24)*raito_y
+  cx6%=object%(object%,26)*raito_x
+  cy6%=object%(object%,27)*raito_y
+  x4%=object%(object%,29)*raito_x
+  y4%=object%(object%,30)*raito_y
+  cx7%=object%(object%,32)*raito_x
+  cy7%=object%(object%,33)*raito_y
+  cx8%=object%(object%,35)*raito_x
+  cy8%=object%(object%,36)*raito_y
+  dx%=object%(object%,38)*raito_x
+  dy%=object%(object%,39)*raito_y
+  compass%=object%(object%,40)
+  first_color%=object%(object%,41)
+  last_color%=object%(object%,42)
+  bx1%=object%(object%,43)*raito_x
+  by1%=object%(object%,44)*raito_y
+  bx2%=object%(object%,45)*raito_x
+  by2%=object%(object%,46)*raito_y
+RETURN
+> PROCEDURE solid(object%)
+  LOCAL step,color,curve%
+  DEFLINE 1,3,0,0
+  SELECT compass%
+  CASE 0 ! CENTER
+    step=(last_color%+1-first_color%)/(by2%+1-by1%)
+    color=first_color%+16
+    inc=1/(by2%+1-by1%)
+    ' DOWN
+    FOR on=0 TO 1 STEP inc*2
+      COLOR color
+      color=color+step
+      IF color>last_color%+16 THEN
+        color=last_color%+16
+      ENDIF
+      cp0=((1-on)*(1-on)*(1-on)*x1%)+(3*on*(1-on)*(1-on)*x1%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      cp1=((1-on)*(1-on)*(1-on)*y1%)+(3*on*(1-on)*(1-on)*y1%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      cp2=((1-on)*(1-on)*(1-on)*cx1%)+(3*on*(1-on)*(1-on)*cx1%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      cp3=((1-on)*(1-on)*(1-on)*cy1%)+(3*on*(1-on)*(1-on)*cy1%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      cp4=((1-on)*(1-on)*(1-on)*cx2%)+(3*on*(1-on)*(1-on)*cx2%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      cp5=((1-on)*(1-on)*(1-on)*cy2%)+(3*on*(1-on)*(1-on)*cy2%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      cp6=((1-on)*(1-on)*(1-on)*x2%)+(3*on*(1-on)*(1-on)*x2%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      cp7=((1-on)*(1-on)*(1-on)*y2%)+(3*on*(1-on)*(1-on)*y2%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      CURVE window_ix%+cp0,window_iy%+cp1,window_ix%+cp2,window_iy%+cp3,window_ix%+cp4,window_iy%+cp5,window_ix%+cp6,window_iy%+cp7
+      cp0=cp6
+      cp1=cp7
+      ' cp0=((1-on)*(1-on)*(1-on)*x2%)+(3*on*(1-on)*(1-on)*x2%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      ' cp1=((1-on)*(1-on)*(1-on)*y2%)+(3*on*(1-on)*(1-on)*y2%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      cp2=((1-on)*(1-on)*(1-on)*cx3%)+(3*on*(1-on)*(1-on)*cx3%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      cp3=((1-on)*(1-on)*(1-on)*cy3%)+(3*on*(1-on)*(1-on)*cy3%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      cp4=((1-on)*(1-on)*(1-on)*cx4%)+(3*on*(1-on)*(1-on)*cx4%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      cp5=((1-on)*(1-on)*(1-on)*cy4%)+(3*on*(1-on)*(1-on)*cy4%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      cp6=((1-on)*(1-on)*(1-on)*x3%)+(3*on*(1-on)*(1-on)*x3%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      cp7=((1-on)*(1-on)*(1-on)*y3%)+(3*on*(1-on)*(1-on)*y3%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      CURVE window_ix%+cp0,window_iy%+cp1,window_ix%+cp2,window_iy%+cp3,window_ix%+cp4,window_iy%+cp5,window_ix%+cp6,window_iy%+cp7
+      cp0=cp6
+      cp1=cp7
+      ' cp0=((1-on)*(1-on)*(1-on)*x3%)+(3*on*(1-on)*(1-on)*x3%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      ' cp1=((1-on)*(1-on)*(1-on)*y3%)+(3*on*(1-on)*(1-on)*y3%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      cp2=((1-on)*(1-on)*(1-on)*cx5%)+(3*on*(1-on)*(1-on)*cx5%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      cp3=((1-on)*(1-on)*(1-on)*cy5%)+(3*on*(1-on)*(1-on)*cy5%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      cp4=((1-on)*(1-on)*(1-on)*cx6%)+(3*on*(1-on)*(1-on)*cx6%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      cp5=((1-on)*(1-on)*(1-on)*cy6%)+(3*on*(1-on)*(1-on)*cy6%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      cp6=((1-on)*(1-on)*(1-on)*x4%)+(3*on*(1-on)*(1-on)*x4%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      cp7=((1-on)*(1-on)*(1-on)*y4%)+(3*on*(1-on)*(1-on)*y4%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      CURVE window_ix%+cp0,window_iy%+cp1,window_ix%+cp2,window_iy%+cp3,window_ix%+cp4,window_iy%+cp5,window_ix%+cp6,window_iy%+cp7
+      cp0=cp6
+      cp1=cp7
+      ' cp0=((1-on)*(1-on)*(1-on)*x4%)+(3*on*(1-on)*(1-on)*x4%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      ' cp1=((1-on)*(1-on)*(1-on)*y4%)+(3*on*(1-on)*(1-on)*y4%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      cp2=((1-on)*(1-on)*(1-on)*cx7%)+(3*on*(1-on)*(1-on)*cx7%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      cp3=((1-on)*(1-on)*(1-on)*cy7%)+(3*on*(1-on)*(1-on)*cy7%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      cp4=((1-on)*(1-on)*(1-on)*cx8%)+(3*on*(1-on)*(1-on)*cx8%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      cp5=((1-on)*(1-on)*(1-on)*cy8%)+(3*on*(1-on)*(1-on)*cy8%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      cp6=((1-on)*(1-on)*(1-on)*x1%)+(3*on*(1-on)*(1-on)*x1%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      cp7=((1-on)*(1-on)*(1-on)*y1%)+(3*on*(1-on)*(1-on)*y1%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      CURVE window_ix%+cp0,window_iy%+cp1,window_ix%+cp2,window_iy%+cp3,window_ix%+cp4,window_iy%+cp5,window_ix%+cp6,window_iy%+cp7
+    NEXT on
+  CASE 1 ! UP
+    step=(last_color%+1-first_color%)/(by2%+1-by1%)
+    color=first_color%+16
+    inc=1/(by2%+1-by1%)
+    FOR on=0 TO 1 STEP inc
+      cp0=((1-on)*(1-on)*(1-on)*x4%)+(3*on*(1-on)*(1-on)*cx7%)+(3*(on*on)*(1-on)*cx8%)+((on*on*on)*x1%)
+      cp1=((1-on)*(1-on)*(1-on)*y4%)+(3*on*(1-on)*(1-on)*cy7%)+(3*(on*on)*(1-on)*cy8%)+((on*on*on)*y1%)
+      cp2=((1-on)*(1-on)*(1-on)*cx6%)+(3*on*(1-on)*(1-on)*cx2%)+(3*(on*on)*(1-on)*cx1%)+((on*on*on)*cx1%)
+      cp3=((1-on)*(1-on)*(1-on)*cy6%)+(3*on*(1-on)*(1-on)*cy7%)+(3*(on*on)*(1-on)*cy8%)+((on*on*on)*cy1%)
+      cp4=((1-on)*(1-on)*(1-on)*cx5%)+(3*on*(1-on)*(1-on)*cx5%)+(3*(on*on)*(1-on)*cx6%)+((on*on*on)*cx2%)
+      cp5=((1-on)*(1-on)*(1-on)*cy5%)+(3*on*(1-on)*(1-on)*cy4%)+(3*(on*on)*(1-on)*cy3%)+((on*on*on)*cy2%)
+      cp6=((1-on)*(1-on)*(1-on)*x3%)+(3*on*(1-on)*(1-on)*cx4%)+(3*(on*on)*(1-on)*cx3%)+((on*on*on)*x2%)
+      cp7=((1-on)*(1-on)*(1-on)*y3%)+(3*on*(1-on)*(1-on)*cy4%)+(3*(on*on)*(1-on)*cy3%)+((on*on*on)*y2%)
+      COLOR color
+      CURVE window_ix%+cp0,window_iy%+cp1,window_ix%+cp2,window_iy%+cp3,window_ix%+cp4,window_iy%+cp5,window_ix%+cp6,window_iy%+cp7
+      color=color+step
+      IF color>last_color%+16 THEN
+        color=last_color%+16
+      ENDIF
+    NEXT on
+  CASE 2 ! RIGHT
+    step=(last_color%+1-first_color%)/(bx2%+1-bx1%)
+    color=first_color%+16
+    inc=1/(bx2%+1-bx1%)
+    FOR on=0 TO 1 STEP inc
+      cp0=((1-on)*(1-on)*(1-on)*x1%)+(3*on*(1-on)*(1-on)*cx1%)+(3*(on*on)*(1-on)*cx2%)+((on*on*on)*x2%)
+      cp1=((1-on)*(1-on)*(1-on)*y1%)+(3*on*(1-on)*(1-on)*cy1%)+(3*(on*on)*(1-on)*cy2%)+((on*on*on)*y2%)
+      cp2=((1-on)*(1-on)*(1-on)*cx8%)+(3*on*(1-on)*(1-on)*cx1%)+(3*(on*on)*(1-on)*cx2%)+((on*on*on)*cx3%)
+      cp3=((1-on)*(1-on)*(1-on)*cy8%)+(3*on*(1-on)*(1-on)*cy8%)+(3*(on*on)*(1-on)*cy3%)+((on*on*on)*cy3%)
+      cp4=((1-on)*(1-on)*(1-on)*cx7%)+(3*on*(1-on)*(1-on)*cx6%)+(3*(on*on)*(1-on)*cx5%)+((on*on*on)*cx4%)
+      cp5=((1-on)*(1-on)*(1-on)*cy7%)+(3*on*(1-on)*(1-on)*cy7%)+(3*(on*on)*(1-on)*cy4%)+((on*on*on)*cy4%)
+      cp6=((1-on)*(1-on)*(1-on)*x4%)+(3*on*(1-on)*(1-on)*cx6%)+(3*(on*on)*(1-on)*cx5%)+((on*on*on)*x3%)
+      cp7=((1-on)*(1-on)*(1-on)*y4%)+(3*on*(1-on)*(1-on)*cy6%)+(3*(on*on)*(1-on)*cy5%)+((on*on*on)*y3%)
+      COLOR color
+      CURVE window_ix%+cp0,window_iy%+cp1,window_ix%+cp2,window_iy%+cp3,window_ix%+cp4,window_iy%+cp5,window_ix%+cp6,window_iy%+cp7
+      color=color+step
+      IF color>last_color%+16 THEN
+        color=last_color%+16
+      ENDIF
+    NEXT on
+  CASE 3 ! DOWN
+    step=(last_color%+1-first_color%)/(by2%+1-by1%)
+    color=first_color%+16
+    inc=1/(by2%+1-by1%)
+    FOR on=0 TO 1 STEP inc
+      cp0=((1-on)*(1-on)*(1-on)*x1%)+(3*on*(1-on)*(1-on)*cx8%)+(3*(on*on)*(1-on)*cx7%)+((on*on*on)*x4%)
+      cp1=((1-on)*(1-on)*(1-on)*y1%)+(3*on*(1-on)*(1-on)*cy8%)+(3*(on*on)*(1-on)*cy7%)+((on*on*on)*y4%)
+      cp2=((1-on)*(1-on)*(1-on)*cx1%)+(3*on*(1-on)*(1-on)*cx1%)+(3*(on*on)*(1-on)*cx2%)+((on*on*on)*cx6%)
+      cp3=((1-on)*(1-on)*(1-on)*cy1%)+(3*on*(1-on)*(1-on)*cy8%)+(3*(on*on)*(1-on)*cy7%)+((on*on*on)*cy6%)
+      cp4=((1-on)*(1-on)*(1-on)*cx2%)+(3*on*(1-on)*(1-on)*cx6%)+(3*(on*on)*(1-on)*cx5%)+((on*on*on)*cx5%)
+      cp5=((1-on)*(1-on)*(1-on)*cy2%)+(3*on*(1-on)*(1-on)*cy3%)+(3*(on*on)*(1-on)*cy4%)+((on*on*on)*cy5%)
+      cp6=((1-on)*(1-on)*(1-on)*x2%)+(3*on*(1-on)*(1-on)*cx3%)+(3*(on*on)*(1-on)*cx4%)+((on*on*on)*x3%)
+      cp7=((1-on)*(1-on)*(1-on)*y2%)+(3*on*(1-on)*(1-on)*cy3%)+(3*(on*on)*(1-on)*cy4%)+((on*on*on)*y3%)
+      COLOR color
+      CURVE window_ix%+cp0,window_iy%+cp1,window_ix%+cp2,window_iy%+cp3,window_ix%+cp4,window_iy%+cp5,window_ix%+cp6,window_iy%+cp7
+      color=color+step
+      IF color>last_color%+16 THEN
+        color=last_color%+16
+      ENDIF
+    NEXT on
+  CASE 4 ! LEFT
+    step=(last_color%+1-first_color%)/(bx2%+1-bx1%)
+    color=first_color%+16
+    inc=1/(bx2%+1-bx1%)
+    FOR on=0 TO 1 STEP inc
+      cp0=((1-on)*(1-on)*(1-on)*x2%)+(3*on*(1-on)*(1-on)*cx2%)+(3*(on*on)*(1-on)*cx1%)+((on*on*on)*x1%)
+      cp1=((1-on)*(1-on)*(1-on)*y2%)+(3*on*(1-on)*(1-on)*cy2%)+(3*(on*on)*(1-on)*cy1%)+((on*on*on)*y1%)
+      cp2=((1-on)*(1-on)*(1-on)*cx3%)+(3*on*(1-on)*(1-on)*cx2%)+(3*(on*on)*(1-on)*cx1%)+((on*on*on)*cx8%)
+      cp3=((1-on)*(1-on)*(1-on)*cy3%)+(3*on*(1-on)*(1-on)*cy3%)+(3*(on*on)*(1-on)*cy8%)+((on*on*on)*cy8%)
+      cp4=((1-on)*(1-on)*(1-on)*cx4%)+(3*on*(1-on)*(1-on)*cx5%)+(3*(on*on)*(1-on)*cx6%)+((on*on*on)*cx7%)
+      cp5=((1-on)*(1-on)*(1-on)*cy4%)+(3*on*(1-on)*(1-on)*cy4%)+(3*(on*on)*(1-on)*cy7%)+((on*on*on)*cy7%)
+      cp6=((1-on)*(1-on)*(1-on)*x3%)+(3*on*(1-on)*(1-on)*cx5%)+(3*(on*on)*(1-on)*cx6%)+((on*on*on)*x4%)
+      cp7=((1-on)*(1-on)*(1-on)*y3%)+(3*on*(1-on)*(1-on)*cy5%)+(3*(on*on)*(1-on)*cy6%)+((on*on*on)*y4%)
+      COLOR color
+      CURVE window_ix%+cp0,window_iy%+cp1,window_ix%+cp2,window_iy%+cp3,window_ix%+cp4,window_iy%+cp5,window_ix%+cp6,window_iy%+cp7
+      color=color+step
+      IF color>last_color%+16 THEN
+        color=last_color%+16
+      ENDIF
+    NEXT on
+  ENDSELECT
+RETURN
+> PROCEDURE ruff(object%)
+  LOCAL step,color,curve%
+  DEFLINE 1,19,0,0
+  SELECT compass%
+  CASE 0 ! CENTER
+    DEFLINE 1,13,0,0
+    step=(last_color%+1-first_color%)/(by2%+1-by1%)
+    color=first_color%+16
+    inc=1/(by2%+1-by1%)
+    ' DOWN
+    FOR on=0 TO 1 STEP inc*16
+      COLOR color
+      color=color+step*16
+      IF color>last_color%+16 THEN
+        color=last_color%+16
+      ENDIF
+      cp0=((1-on)*(1-on)*(1-on)*x1%)+(3*on*(1-on)*(1-on)*x1%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      cp1=((1-on)*(1-on)*(1-on)*y1%)+(3*on*(1-on)*(1-on)*y1%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      cp2=((1-on)*(1-on)*(1-on)*cx1%)+(3*on*(1-on)*(1-on)*cx1%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      cp3=((1-on)*(1-on)*(1-on)*cy1%)+(3*on*(1-on)*(1-on)*cy1%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      cp4=((1-on)*(1-on)*(1-on)*cx2%)+(3*on*(1-on)*(1-on)*cx2%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      cp5=((1-on)*(1-on)*(1-on)*cy2%)+(3*on*(1-on)*(1-on)*cy2%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      cp6=((1-on)*(1-on)*(1-on)*x2%)+(3*on*(1-on)*(1-on)*x2%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      cp7=((1-on)*(1-on)*(1-on)*y2%)+(3*on*(1-on)*(1-on)*y2%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      CURVE window_ix%+cp0,window_iy%+cp1,window_ix%+cp2,window_iy%+cp3,window_ix%+cp4,window_iy%+cp5,window_ix%+cp6,window_iy%+cp7
+      cp0=cp6
+      cp1=cp7
+      ' cp0=((1-on)*(1-on)*(1-on)*x2%)+(3*on*(1-on)*(1-on)*x2%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      ' cp1=((1-on)*(1-on)*(1-on)*y2%)+(3*on*(1-on)*(1-on)*y2%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      cp2=((1-on)*(1-on)*(1-on)*cx3%)+(3*on*(1-on)*(1-on)*cx3%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      cp3=((1-on)*(1-on)*(1-on)*cy3%)+(3*on*(1-on)*(1-on)*cy3%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      cp4=((1-on)*(1-on)*(1-on)*cx4%)+(3*on*(1-on)*(1-on)*cx4%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      cp5=((1-on)*(1-on)*(1-on)*cy4%)+(3*on*(1-on)*(1-on)*cy4%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      cp6=((1-on)*(1-on)*(1-on)*x3%)+(3*on*(1-on)*(1-on)*x3%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      cp7=((1-on)*(1-on)*(1-on)*y3%)+(3*on*(1-on)*(1-on)*y3%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      CURVE window_ix%+cp0,window_iy%+cp1,window_ix%+cp2,window_iy%+cp3,window_ix%+cp4,window_iy%+cp5,window_ix%+cp6,window_iy%+cp7
+      cp0=cp6
+      cp1=cp7
+      ' cp0=((1-on)*(1-on)*(1-on)*x3%)+(3*on*(1-on)*(1-on)*x3%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      ' cp1=((1-on)*(1-on)*(1-on)*y3%)+(3*on*(1-on)*(1-on)*y3%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      cp2=((1-on)*(1-on)*(1-on)*cx5%)+(3*on*(1-on)*(1-on)*cx5%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      cp3=((1-on)*(1-on)*(1-on)*cy5%)+(3*on*(1-on)*(1-on)*cy5%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      cp4=((1-on)*(1-on)*(1-on)*cx6%)+(3*on*(1-on)*(1-on)*cx6%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      cp5=((1-on)*(1-on)*(1-on)*cy6%)+(3*on*(1-on)*(1-on)*cy6%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      cp6=((1-on)*(1-on)*(1-on)*x4%)+(3*on*(1-on)*(1-on)*x4%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      cp7=((1-on)*(1-on)*(1-on)*y4%)+(3*on*(1-on)*(1-on)*y4%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      CURVE window_ix%+cp0,window_iy%+cp1,window_ix%+cp2,window_iy%+cp3,window_ix%+cp4,window_iy%+cp5,window_ix%+cp6,window_iy%+cp7
+      cp0=cp6
+      cp1=cp7
+      ' cp0=((1-on)*(1-on)*(1-on)*x4%)+(3*on*(1-on)*(1-on)*x4%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      ' cp1=((1-on)*(1-on)*(1-on)*y4%)+(3*on*(1-on)*(1-on)*y4%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      cp2=((1-on)*(1-on)*(1-on)*cx7%)+(3*on*(1-on)*(1-on)*cx7%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      cp3=((1-on)*(1-on)*(1-on)*cy7%)+(3*on*(1-on)*(1-on)*cy7%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      cp4=((1-on)*(1-on)*(1-on)*cx8%)+(3*on*(1-on)*(1-on)*cx8%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      cp5=((1-on)*(1-on)*(1-on)*cy8%)+(3*on*(1-on)*(1-on)*cy8%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      cp6=((1-on)*(1-on)*(1-on)*x1%)+(3*on*(1-on)*(1-on)*x1%)+(3*(on*on)*(1-on)*dx%)+((on*on*on)*dx%)
+      cp7=((1-on)*(1-on)*(1-on)*y1%)+(3*on*(1-on)*(1-on)*y1%)+(3*(on*on)*(1-on)*dy%)+((on*on*on)*dy%)
+      CURVE window_ix%+cp0,window_iy%+cp1,window_ix%+cp2,window_iy%+cp3,window_ix%+cp4,window_iy%+cp5,window_ix%+cp6,window_iy%+cp7
+    NEXT on
+  CASE 1 ! UP
+    step=(last_color%+1-first_color%)/(by2%+1-by1%)
+    color=first_color%+16
+    inc=1/(by2%+1-by1%)
+    FOR on=0 TO 1 STEP inc*16
+      cp0=((1-on)*(1-on)*(1-on)*x4%)+(3*on*(1-on)*(1-on)*cx7%)+(3*(on*on)*(1-on)*cx8%)+((on*on*on)*x1%)
+      cp1=((1-on)*(1-on)*(1-on)*y4%)+(3*on*(1-on)*(1-on)*cy7%)+(3*(on*on)*(1-on)*cy8%)+((on*on*on)*y1%)
+      cp2=((1-on)*(1-on)*(1-on)*cx6%)+(3*on*(1-on)*(1-on)*cx2%)+(3*(on*on)*(1-on)*cx1%)+((on*on*on)*cx1%)
+      cp3=((1-on)*(1-on)*(1-on)*cy6%)+(3*on*(1-on)*(1-on)*cy7%)+(3*(on*on)*(1-on)*cy8%)+((on*on*on)*cy1%)
+      cp4=((1-on)*(1-on)*(1-on)*cx5%)+(3*on*(1-on)*(1-on)*cx5%)+(3*(on*on)*(1-on)*cx6%)+((on*on*on)*cx2%)
+      cp5=((1-on)*(1-on)*(1-on)*cy5%)+(3*on*(1-on)*(1-on)*cy4%)+(3*(on*on)*(1-on)*cy3%)+((on*on*on)*cy2%)
+      cp6=((1-on)*(1-on)*(1-on)*x3%)+(3*on*(1-on)*(1-on)*cx4%)+(3*(on*on)*(1-on)*cx3%)+((on*on*on)*x2%)
+      cp7=((1-on)*(1-on)*(1-on)*y3%)+(3*on*(1-on)*(1-on)*cy4%)+(3*(on*on)*(1-on)*cy3%)+((on*on*on)*y2%)
+      COLOR color
+      CURVE window_ix%+cp0,window_iy%+cp1,window_ix%+cp2,window_iy%+cp3,window_ix%+cp4,window_iy%+cp5,window_ix%+cp6,window_iy%+cp7
+      color=color+step*16
+      IF color>last_color%+16 THEN
+        color=last_color%+16
+      ENDIF
+    NEXT on
+  CASE 2 ! RIGHT
+    step=(last_color%+1-first_color%)/(bx2%+1-bx1%)
+    color=first_color%+16
+    inc=1/(bx2%+1-bx1%)
+    FOR on=0 TO 1 STEP inc*16
+      cp0=((1-on)*(1-on)*(1-on)*x1%)+(3*on*(1-on)*(1-on)*cx1%)+(3*(on*on)*(1-on)*cx2%)+((on*on*on)*x2%)
+      cp1=((1-on)*(1-on)*(1-on)*y1%)+(3*on*(1-on)*(1-on)*cy1%)+(3*(on*on)*(1-on)*cy2%)+((on*on*on)*y2%)
+      cp2=((1-on)*(1-on)*(1-on)*cx8%)+(3*on*(1-on)*(1-on)*cx1%)+(3*(on*on)*(1-on)*cx2%)+((on*on*on)*cx3%)
+      cp3=((1-on)*(1-on)*(1-on)*cy8%)+(3*on*(1-on)*(1-on)*cy8%)+(3*(on*on)*(1-on)*cy3%)+((on*on*on)*cy3%)
+      cp4=((1-on)*(1-on)*(1-on)*cx7%)+(3*on*(1-on)*(1-on)*cx6%)+(3*(on*on)*(1-on)*cx5%)+((on*on*on)*cx4%)
+      cp5=((1-on)*(1-on)*(1-on)*cy7%)+(3*on*(1-on)*(1-on)*cy7%)+(3*(on*on)*(1-on)*cy4%)+((on*on*on)*cy4%)
+      cp6=((1-on)*(1-on)*(1-on)*x4%)+(3*on*(1-on)*(1-on)*cx6%)+(3*(on*on)*(1-on)*cx5%)+((on*on*on)*x3%)
+      cp7=((1-on)*(1-on)*(1-on)*y4%)+(3*on*(1-on)*(1-on)*cy6%)+(3*(on*on)*(1-on)*cy5%)+((on*on*on)*y3%)
+      COLOR color
+      CURVE window_ix%+cp0,window_iy%+cp1,window_ix%+cp2,window_iy%+cp3,window_ix%+cp4,window_iy%+cp5,window_ix%+cp6,window_iy%+cp7
+      color=color+step*16
+      IF color>last_color%+16 THEN
+        color=last_color%+16
+      ENDIF
+    NEXT on
+  CASE 3 ! DOWN
+    step=(last_color%+1-first_color%)/(by2%+1-by1%)
+    color=first_color%+16
+    inc=1/(by2%+1-by1%)
+    FOR on=0 TO 1 STEP inc*16
+      cp0=((1-on)*(1-on)*(1-on)*x1%)+(3*on*(1-on)*(1-on)*cx8%)+(3*(on*on)*(1-on)*cx7%)+((on*on*on)*x4%)
+      cp1=((1-on)*(1-on)*(1-on)*y1%)+(3*on*(1-on)*(1-on)*cy8%)+(3*(on*on)*(1-on)*cy7%)+((on*on*on)*y4%)
+      cp2=((1-on)*(1-on)*(1-on)*cx1%)+(3*on*(1-on)*(1-on)*cx1%)+(3*(on*on)*(1-on)*cx2%)+((on*on*on)*cx6%)
+      cp3=((1-on)*(1-on)*(1-on)*cy1%)+(3*on*(1-on)*(1-on)*cy8%)+(3*(on*on)*(1-on)*cy7%)+((on*on*on)*cy6%)
+      cp4=((1-on)*(1-on)*(1-on)*cx2%)+(3*on*(1-on)*(1-on)*cx6%)+(3*(on*on)*(1-on)*cx5%)+((on*on*on)*cx5%)
+      cp5=((1-on)*(1-on)*(1-on)*cy2%)+(3*on*(1-on)*(1-on)*cy3%)+(3*(on*on)*(1-on)*cy4%)+((on*on*on)*cy5%)
+      cp6=((1-on)*(1-on)*(1-on)*x2%)+(3*on*(1-on)*(1-on)*cx3%)+(3*(on*on)*(1-on)*cx4%)+((on*on*on)*x3%)
+      cp7=((1-on)*(1-on)*(1-on)*y2%)+(3*on*(1-on)*(1-on)*cy3%)+(3*(on*on)*(1-on)*cy4%)+((on*on*on)*y3%)
+      COLOR color
+      CURVE window_ix%+cp0,window_iy%+cp1,window_ix%+cp2,window_iy%+cp3,window_ix%+cp4,window_iy%+cp5,window_ix%+cp6,window_iy%+cp7
+      color=color+step*16
+      IF color>last_color%+16 THEN
+        color=last_color%+16
+      ENDIF
+    NEXT on
+  CASE 4 ! LEFT
+    step=(last_color%+1-first_color%)/(bx2%+1-bx1%)
+    color=first_color%+16
+    inc=1/(bx2%+1-bx1%)
+    FOR on=0 TO 1 STEP inc*16
+      cp0=((1-on)*(1-on)*(1-on)*x2%)+(3*on*(1-on)*(1-on)*cx2%)+(3*(on*on)*(1-on)*cx1%)+((on*on*on)*x1%)
+      cp1=((1-on)*(1-on)*(1-on)*y2%)+(3*on*(1-on)*(1-on)*cy2%)+(3*(on*on)*(1-on)*cy1%)+((on*on*on)*y1%)
+      cp2=((1-on)*(1-on)*(1-on)*cx3%)+(3*on*(1-on)*(1-on)*cx2%)+(3*(on*on)*(1-on)*cx1%)+((on*on*on)*cx8%)
+      cp3=((1-on)*(1-on)*(1-on)*cy3%)+(3*on*(1-on)*(1-on)*cy3%)+(3*(on*on)*(1-on)*cy8%)+((on*on*on)*cy8%)
+      cp4=((1-on)*(1-on)*(1-on)*cx4%)+(3*on*(1-on)*(1-on)*cx5%)+(3*(on*on)*(1-on)*cx6%)+((on*on*on)*cx7%)
+      cp5=((1-on)*(1-on)*(1-on)*cy4%)+(3*on*(1-on)*(1-on)*cy4%)+(3*(on*on)*(1-on)*cy7%)+((on*on*on)*cy7%)
+      cp6=((1-on)*(1-on)*(1-on)*x3%)+(3*on*(1-on)*(1-on)*cx5%)+(3*(on*on)*(1-on)*cx6%)+((on*on*on)*x4%)
+      cp7=((1-on)*(1-on)*(1-on)*y3%)+(3*on*(1-on)*(1-on)*cy5%)+(3*(on*on)*(1-on)*cy6%)+((on*on*on)*y4%)
+      COLOR color
+      CURVE window_ix%+cp0,window_iy%+cp1,window_ix%+cp2,window_iy%+cp3,window_ix%+cp4,window_iy%+cp5,window_ix%+cp6,window_iy%+cp7
+      color=color+step*16
+      IF color>last_color%+16 THEN
+        color=last_color%+16
+      ENDIF
+    NEXT on
+  ENDSELECT
+RETURN
+> PROCEDURE get_offset(object%)
+  ux%=object%(object%,43)*raito_x+window_ix%-4
+  uy%=object%(object%,44)*raito_y+window_iy%-4
+  uw%=object%(object%,45)*raito_x+9-(object%(object%,43)*raito_x)
+  uh%=object%(object%,46)*raito_y+9-(object%(object%,44)*raito_y)
+RETURN
+> PROCEDURE update_all
+  ux%=window_ix%
+  uy%=window_iy%
+  uw%=window_iw%
+  uh%=window_ih%
+  @update_display
+RETURN
+> PROCEDURE update_display
+  my_buffer&(0)=20
+  my_buffer&(3)=window_handle%
+  my_buffer&(4)=ux%
+  my_buffer&(5)=uy%
+  my_buffer&(6)=uw%
+  my_buffer&(7)=uh%
+  ~APPL_WRITE(ap_id&,16,my_buffer%)
+  @event_update
+RETURN
+> PROCEDURE object_edit(current_object%)
+  LOCAL exit%,set%,change_flag%
+  change_flag%=0
+  @set_edit(current_object%)
+  ~FORM_DIAL(0,0,0,0,0,object_edit_x%,object_edit_y%,object_edit_w%,object_edit_h%)
+  ~OBJC_DRAW(object_edit%,0,2,object_edit_x%,object_edit_y%,object_edit_w%,object_edit_h%)
+  DO
+    exit%=FORM_DO(object_edit%,object_edit_px%)
+    OB_STATE(object_edit%,exit%)=BCLR(OB_STATE(object_edit%,exit%),0)
+    '
+    SELECT exit%
+    CASE object_edit_move%
+      ~FORM_DIAL(3,0,0,0,0,object_edit_x%,object_edit_y%,object_edit_w%,object_edit_h%)
+      IF MOUSEK=1 THEN
+        ~GRAF_DRAGBOX(object_edit_w%,object_edit_h%,object_edit_x%,object_edit_y%,mwx%,mwy%,mww%,mwh%,object_edit_x%,object_edit_y%)
+        OB_X(object_edit%,0)=object_edit_x%
+        OB_Y(object_edit%,0)=object_edit_y%
+      ENDIF
+      @event_update
+      ~FORM_DIAL(0,0,0,0,0,object_edit_x%,object_edit_y%,object_edit_w%,object_edit_h%)
+      ~OBJC_DRAW(object_edit%,0,2,object_edit_x%,object_edit_y%,object_edit_w%,object_edit_h%)
+    CASE object_edit_ok%
+      change_flag%=1
+      @get_edit(current_object%)
+      FOR set%=0 TO 49
+        IF temp(set%)<>object%(current_object%,set%) THEN
+          change_flag%=1
+          set%=49
+        ENDIF
+      NEXT set%
+    CASE object_edit_pre%
+      IF current_object%>0 THEN
+        @get_edit(current_object%)
+        FOR set%=0 TO 49
+          IF temp(set%)<>object%(current_object%,set%) THEN
+            change_flag%=1
+            set%=49
+          ENDIF
+        NEXT set%
+        DEC current_object%
+        @set_edit(current_object%)
+        ~OBJC_DRAW(object_edit%,0,2,object_edit_x%,object_edit_y%,object_edit_w%,object_edit_h%)
+      ENDIF
+    CASE object_edit_next%
+      IF object%(current_object%+1,0)<>0 THEN
+        FOR set%=0 TO 49
+          IF temp(set%)<>object%(current_object%,set%) THEN
+            change_flag%=1
+            set%=49
+          ENDIF
+        NEXT set%
+        @get_edit(current_object%)
+        INC current_object%
+        @set_edit(current_object%)
+        ~OBJC_DRAW(object_edit%,0,2,object_edit_x%,object_edit_y%,object_edit_w%,object_edit_h%)
+      ENDIF
+    ENDSELECT
+    ~OBJC_DRAW(object_edit%,exit%,1,object_edit_x%,object_edit_y%,object_edit_w%,object_edit_h%)
+  LOOP UNTIL exit%=object_edit_ok% OR exit%=object_edit_cancel%
+  ~FORM_DIAL(3,0,0,0,0,object_edit_x%,object_edit_y%,object_edit_w%,object_edit_h%)
+  IF change_flag%=1 THEN
+    @update_all
+  ENDIF
+RETURN
+> PROCEDURE set_edit(current_object%)
+  FOR set%=0 TO 49
+    temp(set%)=object%(current_object%,set%)
+  NEXT set%
+  FOR set%=0 TO 11
+    CHAR{{OB_SPEC(object_edit%,object_edit_px%+set%)}}=STR$(object%(current_object%,set%*3+2))
+    CHAR{{OB_SPEC(object_edit%,object_edit_py%+set%)}}=STR$(object%(current_object%,set%*3+3))
+  NEXT set%
+  CHAR{{OB_SPEC(object_edit%,object_edit_hotx%)}}=STR$(object%(current_object%,38))
+  CHAR{{OB_SPEC(object_edit%,object_edit_hoty%)}}=STR$(object%(current_object%,39))
+  CHAR{{OB_SPEC(object_edit%,object_edit_first%)}}=STR$(object%(current_object%,41))
+  CHAR{{OB_SPEC(object_edit%,object_edit_last%)}}=STR$(object%(current_object%,42))
+  OB_STATE(object_edit%,object_edit_center%)=BCLR(OB_STATE(object_edit%,object_edit_center%),0)
+  OB_STATE(object_edit%,object_edit_up%)=BCLR(OB_STATE(object_edit%,object_edit_up%),0)
+  OB_STATE(object_edit%,object_edit_right%)=BCLR(OB_STATE(object_edit%,object_edit_right%),0)
+  OB_STATE(object_edit%,object_edit_down%)=BCLR(OB_STATE(object_edit%,object_edit_down%),0)
+  OB_STATE(object_edit%,object_edit_left%)=BCLR(OB_STATE(object_edit%,object_edit_left%),0)
+  SELECT object%(current_object%,40)
+  CASE 0 ! CENTER
+    OB_STATE(object_edit%,object_edit_center%)=BSET(OB_STATE(object_edit%,object_edit_center%),0)
+  CASE 1 ! UP
+    OB_STATE(object_edit%,object_edit_up%)=BSET(OB_STATE(object_edit%,object_edit_up%),0)
+  CASE 2 ! RIGHT
+    OB_STATE(object_edit%,object_edit_right%)=BSET(OB_STATE(object_edit%,object_edit_right%),0)
+  CASE 3 ! DOWN
+    OB_STATE(object_edit%,object_edit_down%)=BSET(OB_STATE(object_edit%,object_edit_down%),0)
+  CASE 4 ! LEFT
+    OB_STATE(object_edit%,object_edit_left%)=BSET(OB_STATE(object_edit%,object_edit_left%),0)
+  ENDSELECT
+  IF current_object%>0 THEN
+    OB_FLAGS(object_edit%,object_edit_pre%)=BSET(OB_FLAGS(object_edit%,object_edit_pre%),0)
+    OB_FLAGS(object_edit%,object_edit_pre%)=BSET(OB_FLAGS(object_edit%,object_edit_pre%),6)
+    OB_STATE(object_edit%,object_edit_pre%)=BCLR(OB_STATE(object_edit%,object_edit_pre%),3)
+  ELSE
+    OB_FLAGS(object_edit%,object_edit_pre%)=BCLR(OB_FLAGS(object_edit%,object_edit_pre%),0)
+    OB_FLAGS(object_edit%,object_edit_pre%)=BCLR(OB_FLAGS(object_edit%,object_edit_pre%),6)
+    OB_STATE(object_edit%,object_edit_pre%)=BSET(OB_STATE(object_edit%,object_edit_pre%),3)
+  ENDIF
+  IF object%(current_object%+1,0)<>0 AND current_object%<>last_object% THEN
+    OB_FLAGS(object_edit%,object_edit_next%)=BSET(OB_FLAGS(object_edit%,object_edit_next%),0)
+    OB_FLAGS(object_edit%,object_edit_next%)=BSET(OB_FLAGS(object_edit%,object_edit_next%),6)
+    OB_STATE(object_edit%,object_edit_next%)=BCLR(OB_STATE(object_edit%,object_edit_next%),3)
+  ELSE
+    OB_FLAGS(object_edit%,object_edit_next%)=BCLR(OB_FLAGS(object_edit%,object_edit_next%),0)
+    OB_FLAGS(object_edit%,object_edit_next%)=BCLR(OB_FLAGS(object_edit%,object_edit_next%),6)
+    OB_STATE(object_edit%,object_edit_next%)=BSET(OB_STATE(object_edit%,object_edit_next%),3)
+  ENDIF
+RETURN
+> PROCEDURE get_edit(current_object%)
+  FOR set%=0 TO 11
+    object%(current_object%,set%*3+2)=VAL(CHAR{{OB_SPEC(object_edit%,object_edit_px%+set%)}})
+    object%(current_object%,set%*3+3)=VAL(CHAR{{OB_SPEC(object_edit%,object_edit_py%+set%)}})
+  NEXT set%
+  object%(current_object%,38)=VAL(CHAR{{OB_SPEC(object_edit%,object_edit_hotx%)}})
+  object%(current_object%,39)=VAL(CHAR{{OB_SPEC(object_edit%,object_edit_hoty%)}})
+  object%(current_object%,41)=VAL(CHAR{{OB_SPEC(object_edit%,object_edit_first%)}})
+  object%(current_object%,42)=VAL(CHAR{{OB_SPEC(object_edit%,object_edit_last%)}})
+  IF BTST(OB_STATE(object_edit%,object_edit_center%),0) THEN
+    object%(current_object%,40)=0
+  ENDIF
+  IF BTST(OB_STATE(object_edit%,object_edit_up%),0) THEN
+    object%(current_object%,40)=1
+  ENDIF
+  IF BTST(OB_STATE(object_edit%,object_edit_right%),0) THEN
+    object%(current_object%,40)=2
+  ENDIF
+  IF BTST(OB_STATE(object_edit%,object_edit_down%),0) THEN
+    object%(current_object%,40)=3
+  ENDIF
+  IF BTST(OB_STATE(object_edit%,object_edit_left%),0) THEN
+    object%(current_object%,40)=4
+  ENDIF
+  object%(object%,49)=2
+RETURN
+> PROCEDURE copy
+  LOCAL try%,set%,change_flag%,offset%,temp%
+  change_flag%=0
+  try%=0
+  DO WHILE object%(try%,0)<>0
+    INC try%
+  LOOP UNTIL try%=last_object%
+  new_object%=try%
+  try%=0
+  DO WHILE try%<last_object% AND new_object%<last_object%
+    IF object%(try%,0)<0 THEN
+      temp%=object%(try%,45)+1-object%(try%,43)
+      IF object%(try%,45)+temp%<area% THEN
+        offset%=temp%
+      ELSE
+        IF object%(try%,45)-temp%>0 THEN
+          offset%=-temp%
+        ELSE
+          offset%=0
+        ENDIF
+      ENDIF
+      object%(new_object%,0)=2
+      FOR set%=1 TO 37 STEP 3
+        object%(new_object%,set%)=0
+        object%(new_object%,set%+1)=object%(try%,set%+1)+offset%
+        object%(new_object%,set%+2)=object%(try%,set%+2)
+      NEXT set%
+      FOR set%=40 TO 42
+        object%(new_object%,set%)=object%(try%,set%)
+      NEXT set%
+      FOR set%=43 TO 45 STEP 2
+        object%(new_object%,set%)=object%(try%,set%)+offset%
+        object%(new_object%,set%+1)=object%(try%,set%+1)
+      NEXT set%
+      object%(new_object%,47)=0
+      object%(new_object%,48)=0
+      object%(new_object%,49)=2
+      INC new_object%
+      change_flag%=1
+    ENDIF
+    INC try%
+  LOOP
+  IF change_flag%=1 THEN
+    @update_all
+  ENDIF
+RETURN
+> PROCEDURE delete
+  LOCAL try%,set%,move%,change_flag%
+  change_flag%=0
+  try%=0
+  DO WHILE try%<last_object%
+    IF object%(try%,0)<0 THEN
+      move%=last_object%
+      DO WHILE object%(move%,0)=0
+        DEC move%
+      LOOP UNTIL move%=-1
+      IF move%>-1 THEN
+        FOR set%=0 TO 49
+          object%(try%,set%)=object%(move%,set%)
+        NEXT set%
+        change_flag%=1
+        object%(move%,0)=0
+      ENDIF
+    ENDIF
+    INC try%
+  LOOP
+  IF change_flag%=1 THEN
+    @update_all
+  ENDIF
+RETURN
+> PROCEDURE scale
+  LOCAL exit%,scale_value%
+  CHAR{{OB_SPEC(scale%,scale_precent%)}}=STR$(old_scale%)
+  ~FORM_DIAL(0,0,0,0,0,scale_x%,scale_y%,scale_w%,scale_h%)
+  ~OBJC_DRAW(scale%,0,2,scale_x%,scale_y%,scale_w%,scale_h%)
+  DO
+    exit%=FORM_DO(scale%,scale_precent%)
+    OB_STATE(scale%,exit%)=BCLR(OB_STATE(scale%,exit%),0)
+    SELECT exit%
+    CASE scale_move%
+      ~FORM_DIAL(3,0,0,0,0,scale_x%,scale_y%,scale_w%,scale_h%)
+      IF MOUSEK=1 THEN
+        ~GRAF_DRAGBOX(scale_w%,scale_h%,scale_x%,scale_y%,mwx%,mwy%,mww%,mwh%,scale_x%,scale_y%)
+        OB_X(scale%,0)=scale_x%
+        OB_Y(scale%,0)=scale_y%
+      ENDIF
+      @event_update
+      ~FORM_DIAL(0,0,0,0,0,scale_x%,scale_y%,scale_w%,scale_h%)
+      ~OBJC_DRAW(scale%,0,2,scale_x%,scale_y%,scale_w%,scale_h%)
+    CASE scale_ok%
+      scale_value%=VAL(CHAR{{OB_SPEC(scale%,scale_precent%)}})
+      IF scale_value%<1 THEN
+        scale_value%=1
+      ENDIF
+    ENDSELECT
+  LOOP UNTIL exit%=scale_ok% OR exit%=scale_cancel%
+  ~FORM_DIAL(3,0,0,0,0,scale_x%,scale_y%,scale_w%,scale_h%)
+  IF exit%=scale_ok% THEN
+    old_scale%=scale_value%
+    IF scale_value%<>100 AND scale_value%<>0 THEN
+      @do_scale(scale_value%)
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE do_scale(scale_value%)
+  LOCAL try%,obj%,scale,ox%,oy%,change_flag%
+  change_flag%=0
+  FOR try%=0 TO last_object%
+    IF object%(try%,0)=0 THEN
+      try%=last_object%
+    ELSE
+      IF object%(try%,0)<0 THEN
+        scale=scale_value%/100
+        ox%=object%(try%,43)
+        oy%=object%(try%,44)
+        IF scale>1 THEN
+          IF (object%(try%,45)-ox%)*scale+ox%>area% THEN
+            scale=(area%-ox%)/(object%(try%,45)-ox%)
+          ENDIF
+          IF oy%+(object%(try%,46)-oy%)*scale+oy%>area% THEN
+            scale=(area%-oy%)/(object%(try%,46)-oy%)
+          ENDIF
+        ENDIF
+        IF scale<>1 THEN
+          FOR set%=0 TO 49
+            temp(set%)=object%(current_object%,set%)
+          NEXT set%
+          object%(try%,5)=(object%(try%,5)-ox%)*scale+ox%
+          object%(try%,8)=(object%(try%,8)-ox%)*scale+ox%
+          object%(try%,11)=(object%(try%,11)-ox%)*scale+ox%
+          object%(try%,14)=(object%(try%,14)-ox%)*scale+ox%
+          object%(try%,15)=(object%(try%,15)-oy%)*scale+oy%
+          object%(try%,17)=(object%(try%,17)-ox%)*scale+ox%
+          object%(try%,18)=(object%(try%,18)-oy%)*scale+oy%
+          object%(try%,20)=(object%(try%,20)-ox%)*scale+ox%
+          object%(try%,21)=(object%(try%,21)-oy%)*scale+oy%
+          object%(try%,23)=(object%(try%,23)-ox%)*scale+ox%
+          object%(try%,24)=(object%(try%,24)-oy%)*scale+oy%
+          object%(try%,26)=(object%(try%,26)-ox%)*scale+ox%
+          object%(try%,27)=(object%(try%,27)-oy%)*scale+oy%
+          object%(try%,30)=(object%(try%,30)-oy%)*scale+oy%
+          object%(try%,33)=(object%(try%,33)-oy%)*scale+oy%
+          object%(try%,36)=(object%(try%,36)-oy%)*scale+oy%
+          object%(try%,38)=(object%(try%,38)-ox%)*scale+ox%
+          object%(try%,39)=(object%(try%,39)-oy%)*scale+oy%
+          object%(try%,45)=(object%(try%,45)-ox%)*scale+ox%
+          object%(try%,46)=(object%(try%,46)-oy%)*scale+oy%
+          FOR set%=0 TO 49
+            IF temp(set%)<>object%(current_object%,set%) THEN
+              change_flag%=1
+              set%=49
+              object%(try%,49)=2
+            ENDIF
+          NEXT set%
+        ENDIF
+      ENDIF
+    ENDIF
+  NEXT try%
+  IF change_flag%=1 THEN
+    @update_all
+  ENDIF
+RETURN
+> PROCEDURE move
+  LOCAL exit%,tempx%,tempy%
+  CHAR{{OB_SPEC(move%,move_mx%)}}=STR$(old_move_x%)
+  CHAR{{OB_SPEC(move%,move_my%)}}=STR$(old_move_y%)
+  ~FORM_DIAL(0,0,0,0,0,move_x%,move_y%,move_w%,move_h%)
+  ~OBJC_DRAW(move%,0,2,move_x%,move_y%,move_w%,move_h%)
+  DO
+    exit%=FORM_DO(move%,move_mx%)
+    OB_STATE(move%,exit%)=BCLR(OB_STATE(move%,exit%),0)
+    SELECT exit%
+    CASE move_ok%
+      temp_x$=CHAR{{OB_SPEC(move%,move_mx%)}}
+      temp_y$=CHAR{{OB_SPEC(move%,move_my%)}}
+      IF ASC(MID$(temp_x$,1,1))>47 AND ASC(MID$(temp_x$,1,1))<58 THEN
+        move_to_x%=VAL(temp_x$)
+      ELSE
+        move_to_x%=VAL(MID$(temp_x$,2))
+        IF ASC(MID$(temp_x$,1,1))=45 THEN
+          move_to_x%=-move_to_x%
+        ENDIF
+      ENDIF
+      IF ASC(MID$(temp_y$,1,1))>47 AND ASC(MID$(temp_y$,1,1))<58 THEN
+        move_to_y%=VAL(temp_y$)
+      ELSE
+        move_to_y%=VAL(MID$(temp_y$,2))
+        IF ASC(MID$(temp_y$,1,1))=45 THEN
+          move_to_y%=-move_to_y%
+        ENDIF
+      ENDIF
+    CASE move_move%
+      ~FORM_DIAL(3,0,0,0,0,move_x%,move_y%,move_w%,move_h%)
+      IF MOUSEK=1 THEN
+        ~GRAF_DRAGBOX(move_w%,move_h%,move_x%,move_y%,mwx%,mwy%,mww%,mwh%,move_x%,move_y%)
+        OB_X(move%,0)=move_x%
+        OB_Y(move%,0)=move_y%
+      ENDIF
+      @event_update
+      ~FORM_DIAL(0,0,0,0,0,move_x%,move_y%,move_w%,move_h%)
+      ~OBJC_DRAW(move%,0,2,move_x%,move_y%,move_w%,move_h%)
+    ENDSELECT
+  LOOP UNTIL exit%=move_ok% OR exit%=move_cancel%
+  ~FORM_DIAL(3,0,0,0,0,move_x%,move_y%,move_w%,move_h%)
+  IF exit%=move_ok% THEN
+    old_move_x%=move_to_x%
+    old_move_y%=move_to_y%
+    IF move_to_x%<>0 OR move_to_y%<>0 THEN
+      @do_move(move_to_x%,move_to_y%)
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE do_move(move_to_x%,move_to_y%)
+  LOCAL try%,move%,movex%,movey%,change_flag%
+  change_flag%=0
+  FOR try%=0 TO last_object%
+    IF object%(try%,0)=0 THEN
+      try%=last_object%
+    ELSE
+      IF object%(try%,0)<0 THEN
+        IF move_to_x%<>0 THEN
+          IF move_to_x%<0 THEN
+            IF object%(try%,43)+move_to_x%<0 THEN
+              movex%=-object%(try%,43)
+            ELSE
+              movex%=move_to_x%
+            ENDIF
+          ELSE
+            IF object%(try%,45)+move_to_x%>area% THEN
+              movex%=area%-object%(try%,45)
+            ELSE
+              movex%=move_to_x%
+            ENDIF
+          ENDIF
+          IF movex%<>0 THEN
+            FOR move%=2 TO 38 STEP 3
+              object%(try%,move%)=object%(try%,move%)+movex%
+            NEXT move%
+            object%(try%,43)=object%(try%,43)+movex%
+            object%(try%,45)=object%(try%,45)+movex%
+            object%(try%,49)=2
+            change_flag%=1
+          ENDIF
+        ENDIF
+        IF move_to_y%<>0 THEN
+          IF move_to_y%<0 THEN
+            IF object%(try%,44)+move_to_y%<0 THEN
+              movey%=-object%(try%,44)
+            ELSE
+              movey%=move_to_y%
+            ENDIF
+          ELSE
+            IF object%(try%,46)+move_to_y%>area% THEN
+              movey%=area%-object%(try%,46)
+            ELSE
+              movey%=move_to_y%
+            ENDIF
+          ENDIF
+          IF movey%<>0 THEN
+            FOR move%=2 TO 38 STEP 3
+              object%(try%,move%+1)=object%(try%,move%+1)+movey%
+            NEXT move%
+            object%(try%,44)=object%(try%,44)+movey%
+            object%(try%,46)=object%(try%,46)+movey%
+            object%(try%,49)=2
+            change_flag%=1
+          ENDIF
+        ENDIF
+      ENDIF
+    ENDIF
+  NEXT try%
+  IF change_flag%=1 THEN
+    @update_all
+  ENDIF
+RETURN
+> PROCEDURE flip
+  LOCAL exit%,tempx%,tempy%
+  ~FORM_DIAL(0,0,0,0,0,flip_x%,flip_y%,flip_w%,flip_h%)
+  ~OBJC_DRAW(flip%,0,2,flip_x%,flip_y%,flip_w%,flip_h%)
+  DO
+    exit%=FORM_DO(flip%,flip_mx%)
+    OB_STATE(flip%,exit%)=BCLR(OB_STATE(flip%,exit%),0)
+    SELECT exit%
+    CASE flip_ok%
+      temp_x$=CHAR{{OB_SPEC(flip%,flip_mx%)}}
+      temp_y$=CHAR{{OB_SPEC(flip%,flip_my%)}}
+      IF ASC(MID$(temp_x$,1,1))>47 AND ASC(MID$(temp_x$,1,1))<58 THEN
+        flip_to_x%=VAL(temp_x$)
+      ELSE
+        flip_to_x%=VAL(MID$(temp_x$,2))
+        IF ASC(MID$(temp_x$,1,1))=45 THEN
+          flip_to_x%=-flip_to_x%
+        ENDIF
+      ENDIF
+      IF ASC(MID$(temp_y$,1,1))>47 AND ASC(MID$(temp_y$,1,1))<58 THEN
+        flip_to_y%=VAL(temp_y$)
+      ELSE
+        flip_to_y%=VAL(MID$(temp_y$,2))
+        IF ASC(MID$(temp_y$,1,1))=45 THEN
+          flip_to_y%=-flip_to_y%
+        ENDIF
+      ENDIF
+    CASE flip_move%
+      ~FORM_DIAL(3,0,0,0,0,flip_x%,flip_y%,flip_w%,flip_h%)
+      IF MOUSEK=1 THEN
+        ~GRAF_DRAGBOX(flip_w%,flip_h%,flip_x%,flip_y%,mwx%,mwy%,mww%,mwh%,flip_x%,flip_y%)
+        OB_X(flip%,0)=flip_x%
+        OB_Y(flip%,0)=flip_y%
+      ENDIF
+      @event_update
+      ~FORM_DIAL(0,0,0,0,0,flip_x%,flip_y%,flip_w%,flip_h%)
+      ~OBJC_DRAW(flip%,0,2,flip_x%,flip_y%,flip_w%,flip_h%)
+    ENDSELECT
+  LOOP UNTIL exit%=flip_ok% OR exit%=flip_cancel%
+  ~FORM_DIAL(3,0,0,0,0,flip_x%,flip_y%,flip_w%,flip_h%)
+  IF exit%=flip_ok% THEN
+    IF flip_to_x%<>0 OR flip_to_y%<>0 THEN
+      @do_flip(flip_to_x%,flip_to_y%)
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE do_flip(flip_to_x%,flip_to_y%)
+  LOCAL try%,flip%,flipx%,flipy%,change_flag%
+  change_flag%=0
+  FOR try%=0 TO last_object%
+    IF object%(try%,0)=0 THEN
+      try%=last_object%
+    ELSE
+      IF object%(try%,0)<0 THEN
+        IF flip_to_x%<>0 THEN
+          IF flip_to_x%<0 THEN
+            IF object%(try%,43)+flip_to_x%<0 THEN
+              flipx%=-object%(try%,43)
+            ELSE
+              flipx%=flip_to_x%
+            ENDIF
+          ELSE
+            IF object%(try%,45)+flip_to_x%>area% THEN
+              flipx%=area%-object%(try%,45)
+            ELSE
+              flipx%=flip_to_x%
+            ENDIF
+          ENDIF
+          IF flipx%<>0 THEN
+            FOR flip%=2 TO 38 STEP 3
+              object%(try%,flip%)=object%(try%,flip%)+flipx%
+            NEXT flip%
+            object%(try%,43)=object%(try%,43)+flipx%
+            object%(try%,45)=object%(try%,45)+flipx%
+            object%(try%,49)=2
+            change_flag%=1
+          ENDIF
+        ENDIF
+        IF flip_to_y%<>0 THEN
+          IF flip_to_y%<0 THEN
+            IF object%(try%,44)+flip_to_y%<0 THEN
+              flipy%=-object%(try%,44)
+            ELSE
+              flipy%=flip_to_y%
+            ENDIF
+          ELSE
+            IF object%(try%,46)+flip_to_y%>area% THEN
+              flipy%=area%-object%(try%,46)
+            ELSE
+              flipy%=flip_to_y%
+            ENDIF
+          ENDIF
+          IF flipy%<>0 THEN
+            FOR flip%=2 TO 38 STEP 3
+              object%(try%,flip%+1)=object%(try%,flip%+1)+flipy%
+            NEXT flip%
+            object%(try%,44)=object%(try%,44)+flipy%
+            object%(try%,46)=object%(try%,46)+flipy%
+            object%(try%,49)=2
+            change_flag%=1
+          ENDIF
+        ENDIF
+      ENDIF
+    ENDIF
+  NEXT try%
+  IF change_flag%=1 THEN
+    @update_all
+  ENDIF
+RETURN
+> PROCEDURE straighten
+  LOCAL try%,on,x1%,y1%,x2%,y2%,x3%,y3%,x4%,y4%,change_flag%
+  change_flag%=0
+  FOR try%=0 TO last_object%
+    IF object%(try%,0)=0 THEN
+      try%=last_object%
+    ELSE
+      IF object%(try%,0)<0 THEN
+        FOR set%=0 TO 49
+          temp(set%)=object%(current_object%,set%)
+        NEXT set%
+        x1%=object%(try%,2)
+        y1%=object%(try%,3)
+        x2%=object%(try%,11)
+        y2%=object%(try%,12)
+        x3%=object%(try%,20)
+        y3%=object%(try%,21)
+        x4%=object%(try%,29)
+        y4%=object%(try%,30)
+        on=1/3
+        object%(try%,5)=((1-on)*(1-on)*(1-on)*x1%)+(3*on*(1-on)*(1-on)*x1%)+(3*(on*on)*(1-on)*x2%)+((on*on*on)*x2%)
+        object%(try%,6)=((1-on)*(1-on)*(1-on)*y1%)+(3*on*(1-on)*(1-on)*y1%)+(3*(on*on)*(1-on)*y2%)+((on*on*on)*y2%)
+        object%(try%,14)=((1-on)*(1-on)*(1-on)*x2%)+(3*on*(1-on)*(1-on)*x2%)+(3*(on*on)*(1-on)*x3%)+((on*on*on)*x3%)
+        object%(try%,15)=((1-on)*(1-on)*(1-on)*y2%)+(3*on*(1-on)*(1-on)*y2%)+(3*(on*on)*(1-on)*y3%)+((on*on*on)*y3%)
+        object%(try%,23)=((1-on)*(1-on)*(1-on)*x3%)+(3*on*(1-on)*(1-on)*x3%)+(3*(on*on)*(1-on)*x4%)+((on*on*on)*x4%)
+        object%(try%,24)=((1-on)*(1-on)*(1-on)*y3%)+(3*on*(1-on)*(1-on)*y3%)+(3*(on*on)*(1-on)*y4%)+((on*on*on)*y4%)
+        object%(try%,32)=((1-on)*(1-on)*(1-on)*x4%)+(3*on*(1-on)*(1-on)*x4%)+(3*(on*on)*(1-on)*x1%)+((on*on*on)*x1%)
+        object%(try%,33)=((1-on)*(1-on)*(1-on)*y4%)+(3*on*(1-on)*(1-on)*y4%)+(3*(on*on)*(1-on)*y1%)+((on*on*on)*y1%)
+        on=2/3
+        object%(try%,8)=((1-on)*(1-on)*(1-on)*x1%)+(3*on*(1-on)*(1-on)*x1%)+(3*(on*on)*(1-on)*x2%)+((on*on*on)*x2%)
+        object%(try%,9)=((1-on)*(1-on)*(1-on)*y1%)+(3*on*(1-on)*(1-on)*y1%)+(3*(on*on)*(1-on)*y2%)+((on*on*on)*y2%)
+        object%(try%,17)=((1-on)*(1-on)*(1-on)*x2%)+(3*on*(1-on)*(1-on)*x2%)+(3*(on*on)*(1-on)*x3%)+((on*on*on)*x3%)
+        object%(try%,18)=((1-on)*(1-on)*(1-on)*y2%)+(3*on*(1-on)*(1-on)*y2%)+(3*(on*on)*(1-on)*y3%)+((on*on*on)*y3%)
+        object%(try%,26)=((1-on)*(1-on)*(1-on)*x3%)+(3*on*(1-on)*(1-on)*x3%)+(3*(on*on)*(1-on)*x4%)+((on*on*on)*x4%)
+        object%(try%,27)=((1-on)*(1-on)*(1-on)*y3%)+(3*on*(1-on)*(1-on)*y3%)+(3*(on*on)*(1-on)*y4%)+((on*on*on)*y4%)
+        object%(try%,35)=((1-on)*(1-on)*(1-on)*x4%)+(3*on*(1-on)*(1-on)*x4%)+(3*(on*on)*(1-on)*x1%)+((on*on*on)*x1%)
+        object%(try%,36)=((1-on)*(1-on)*(1-on)*y4%)+(3*on*(1-on)*(1-on)*y4%)+(3*(on*on)*(1-on)*y1%)+((on*on*on)*y1%)
+        FOR set%=0 TO 49
+          IF temp(set%)<>object%(current_object%,set%) THEN
+            change_flag%=1
+            set%=49
+            object%(try%,49)=2
+          ENDIF
+        NEXT set%
+      ENDIF
+    ENDIF
+  NEXT try%
+  IF change_flag%=1 THEN
+    @update_all
+  ENDIF
+RETURN
+> PROCEDURE smooth
+  LOCAL try%,on,x1%,y1%,x2%,y2%,x3%,y3%,x4%,y4%,change_flag%
+  change_flag%=0
+  FOR try%=0 TO last_object%
+    IF object%(try%,0)=0 THEN
+      try%=last_object%
+    ELSE
+      IF object%(try%,0)<0 THEN
+        FOR set%=0 TO 49
+          temp(set%)=object%(current_object%,set%)
+        NEXT set%
+        x1%=object%(try%,2)
+        y1%=object%(try%,3)
+        x2%=object%(try%,11)
+        y2%=object%(try%,12)
+        x3%=object%(try%,20)
+        y3%=object%(try%,21)
+        x4%=object%(try%,29)
+        y4%=object%(try%,30)
+        ' object%(try%,5)=x1%+x2%
+        FOR set%=0 TO 49
+          IF temp(set%)<>object%(current_object%,set%) THEN
+            change_flag%=1
+            set%=49
+            object%(try%,49)=2
+          ENDIF
+        NEXT set%
+      ENDIF
+    ENDIF
+  NEXT try%
+  IF change_flag%=1 THEN
+    @update_all
+  ENDIF
+RETURN
+> PROCEDURE get_empty
+  current_object%=0
+  FOR try%=0 TO last_object%
+    IF object%(try%,0)=0 THEN
+      current_object%=try%
+      try%=last_object%
+    ENDIF
+  NEXT try%
+  object%(current_object%,0)=2     ! DISPLAY: -2 = SELECTED WIRE, -1 = SELECTED SOLID, 0= UNUSED, 1 = SOLID, 2= WIRE
+  object%(current_object%,1)=0     ! * 0= NORMAL, 1=SELECTED
+  object%(current_object%,2)=50    ! X 1
+  object%(current_object%,3)=50    ! Y 1
+  object%(current_object%,4)=0     ! *
+  object%(current_object%,5)=100    ! CONTROL X 1
+  object%(current_object%,6)=50    ! CONTROL Y 1
+  object%(current_object%,7)=0     ! *
+  object%(current_object%,8)=150   ! CONTROL X 2
+  object%(current_object%,9)=50    ! CONTROL Y 2
+  object%(current_object%,10)=0    ! *
+  object%(current_object%,11)=200  ! X 2
+  object%(current_object%,12)=50   ! Y 2
+  object%(current_object%,13)=0    ! *
+  object%(current_object%,14)=200  ! CONTROL X 3
+  object%(current_object%,15)=100  ! CONTROL Y 3
+  object%(current_object%,16)=0    ! *
+  object%(current_object%,17)=200  ! CONTROL X 4
+  object%(current_object%,18)=150  ! CONTROL Y 4
+  object%(current_object%,19)=0    ! *
+  object%(current_object%,20)=200  ! X 3
+  object%(current_object%,21)=200  ! Y 3
+  object%(current_object%,22)=0    ! *
+  object%(current_object%,23)=150  ! CONTROL X 5
+  object%(current_object%,24)=200  ! CONTROL Y 5
+  object%(current_object%,25)=0    ! *
+  object%(current_object%,26)=100  ! CONTROL X 6
+  object%(current_object%,27)=200  ! XONTROL Y 6
+  object%(current_object%,28)=0    ! *
+  object%(current_object%,29)=50   ! X 4
+  object%(current_object%,30)=200  ! Y 4
+  object%(current_object%,31)=0    ! *
+  object%(current_object%,32)=50   ! CONTROL X 7
+  object%(current_object%,33)=150  ! CONTROL Y 7
+  object%(current_object%,34)=0    ! *
+  object%(current_object%,35)=50   ! CONTROL X 8
+  object%(current_object%,36)=100  ! CONTROL Y 8
+  object%(current_object%,37)=0    ! *
+  object%(current_object%,38)=125  ! HOT X
+  object%(current_object%,39)=125  ! HOT Y
+  object%(current_object%,40)=1    ! COMPASS: 0 = CENTER, 1 = UP, 2 = RIGHT, 3 = DOWN, 4 = LEFT
+  object%(current_object%,41)=0    ! FIRST COLOR
+  object%(current_object%,42)=239  ! LAST COLOR
+  object%(current_object%,43)=50   ! MINIMUM X
+  object%(current_object%,44)=50   ! MINIMUM Y
+  object%(current_object%,45)=200  ! MAXIMUM X
+  object%(current_object%,46)=200  ! MAXIMUM Y
+  object%(current_object%,47)=0    ! ADDRESS OF RASTER BUFFER
+  object%(current_object%,48)=0    ! SIZE OF RASTER (BYTES)
+  object%(current_object%,49)=2    ! RASTER STATUS: 0 = READY, 1 = NEED TO UPDATE, 2 = NEED TO GET NEW RASTER
+RETURN
+> PROCEDURE get_selected
+  current_object%=0
+  FOR try%=0 TO last_object%
+    IF object%(try%,0)<0 THEN
+      current_object%=try%
+      try%=last_object%
+    ENDIF
+  NEXT try%
+RETURN
+> PROCEDURE preferences
+  LOCAL exit%,temp_x%,temp_y%,temp_width%,temp_height%
+  ~FORM_DIAL(0,0,0,0,0,preferences_x%,preferences_y%,preferences_w%,preferences_h%)
+  ~OBJC_DRAW(preferences%,0,2,preferences_x%,preferences_y%,preferences_w%,preferences_h%)
+  DO
+    exit%=FORM_DO(preferences%,preferences_pic_size_x%)
+    OB_STATE(preferences%,exit%)=BCLR(OB_STATE(preferences%,exit%),0)
+    SELECT exit%
+    CASE preferences_move%
+      ~FORM_DIAL(3,0,0,0,0,preferences_x%,preferences_y%,preferences_w%,preferences_h%)
+      IF MOUSEK=1 THEN
+        ~GRAF_DRAGBOX(preferences_w%,preferences_h%,preferences_x%,preferences_y%,mwx%,mwy%,mww%,mwh%,preferences_x%,preferences_y%)
+        OB_X(preferences%,0)=preferences_x%
+        OB_Y(preferences%,0)=preferences_y%
+      ENDIF
+      @event_update
+      ~FORM_DIAL(0,0,0,0,0,preferences_x%,preferences_y%,preferences_w%,preferences_h%)
+      ~OBJC_DRAW(preferences%,0,2,preferences_x%,preferences_y%,preferences_w%,preferences_h%)
+    CASE preferences_ok%
+      temp_width%=VAL(CHAR{{OB_SPEC(preferences%,preferences_pic_size_x%)}})
+      temp_height%=VAL(CHAR{{OB_SPEC(preferences%,preferences_pic_size_y%)}})
+      temp_x%=VAL(CHAR{{OB_SPEC(preferences%,preferences_snap_x%)}})
+      temp_y%=VAL(CHAR{{OB_SPEC(preferences%,preferences_snap_y%)}})
+      IF temp_width%<16 THEN
+        temp_width%=16
+      ENDIF
+      IF temp_width%>16384 THEN
+        temp_width%=16384
+      ENDIF
+      IF temp_height%<16 THEN
+        temp_height%=16
+      ENDIF
+      IF temp_height%>16384 THEN
+        temp_height%=16384
+      ENDIF
+      IF temp_x%>16384 THEN
+        temp_x%=16384
+      ENDIF
+      IF temp_y%>16384 THEN
+        temp_y%=16384
+      ENDIF
+      pic_width%=temp_width%
+      pic_height%=temp_height%
+      window_w%=pic_width%+window_x_plus%
+      window_h%=pic_height%+window_y_plus%
+      snap_x%=temp_x%
+      snap_y%=temp_y%
+      ~WIND_SET(window_handle%,5,window_x%,window_y%,window_w%,window_h%)
+      ~WIND_GET(window_handle%,4,window_ix%,window_iy%,window_iw%,window_ih%)
+    ENDSELECT
+  LOOP UNTIL exit%=preferences_ok% OR exit%=preferences_cancel%
+  ~FORM_DIAL(3,0,0,0,0,preferences_x%,preferences_y%,preferences_w%,preferences_h%)
+RETURN
+> PROCEDURE clear_all
+  FOR try%=0 TO last_object%
+    IF object%(try%,0)<>0 THEN
+      object%(try%,0)=0
+      FOR test%=0 TO 49
+        object%(try%,test%)=0
+      NEXT test%
+      ux%=window_ix%
+      uy%=window_iy%
+      uw%=window_iw%
+      uh%=window_ih%
+      @update_display
+    ENDIF
+  NEXT try%
+RETURN
+> PROCEDURE svg_save
+  FILESELECT #"Save SVG image",path_write$+"*.SVG",svg_name$,svg_name$
+  IF svg_name$<>"" THEN
+    button%=1
+    test%=RINSTR(svg_name$,"\")
+    IF test% THEN
+      path_write$=MID$(svg_name$,1,test%)
+      svg_name$=MID$(svg_name$,test%+1)
+    ELSE
+      path_write$="\"
+    ENDIF
+    IF EXIST(path_write$+svg_name$)
+      txt$=" |"+svg_name$+" |exist, overwrite it ? | "
+      ALERT 2,txt$,1,"OK|Cancel",button%
+    ENDIF
+    IF button%=1 THEN
+      last%=0
+      FOR try%=0 TO last_object%
+        IF object%(try%,0)=0 THEN
+          last%=try%
+          try%=last_object%
+        ENDIF
+      NEXT try%
+      OPEN "O",#1,path_write$+svg_name$
+      PRINT #1,"DRAW 3-D"
+      PRINT #1,last%
+      IF last%>0 THEN
+        FOR try%=0 TO last%-1
+          PRINT #1,0
+          FOR x%=1 TO 37 STEP 3
+            PRINT #1,0
+            PRINT #1,object%(try%,x%+1)
+            PRINT #1,object%(try%,x%+2)
+          NEXT x%
+          FOR x%=40 TO 46
+            PRINT #1,object%(try%,x%)
+          NEXT x%
+          PRINT #1,0
+          PRINT #1,0
+          PRINT #1,2
+        NEXT try%
+      ENDIF
+      CLOSE #1
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE svg_load
+  FILESELECT #"Load SVG image",path_read$+"*.SVG",svg_name$,svg_name$
+  IF EXIST(svg_name$) THEN
+    test%=RINSTR(svg_name$,"\")
+    IF test% THEN
+      path_read$=MID$(svg_name$,1,test%)
+      svg_name$=MID$(svg_name$,test%+1)
+    ELSE
+      path_read$="\"
+    ENDIF
+    OPEN "I",#1,path_read$+svg_name$
+    INPUT #1,test$
+    IF test$="DRAW 3-D" THEN
+      INPUT #1,last_new%
+      IF last_new%>0 THEN
+        last%=0
+        FOR try%=0 TO last_object%
+          IF object%(try%,0)=0 THEN
+            last%=try%
+            try%=last_object%
+          ENDIF
+        NEXT try%
+        try%=last%
+        DO WHILE try%<last%+last_new% AND try%<last_object%
+          FOR x%=0 TO 49
+            INPUT #1,object%(try%,x%)
+          NEXT x%
+          INC try%
+        LOOP
+        IF view%=0 THEN
+          @open_window
+        ELSE
+          @update_all
+        ENDIF
+      ENDIF
+    ELSE
+    ENDIF
+    CLOSE #1
+  ENDIF
+RETURN
+> PROCEDURE tga_save
+  test%=RINSTR(tpi_save_name$,"\")
+  IF test% THEN
+    tpi_save_name$=MID$(tpi_save_name$,test%+1)
+  ENDIF
+  FILESELECT #"Save STIS image",pic_save_path$+"*.*",tpi_save_name$,tpi_save_name$
+  IF tpi_save_name$<>"" AND tpi_save_name$<>pic_save_path$ AND RIGHT$(tpi_save_name$,1)<>"\" THEN
+    button%=1
+    IF EXIST(tpi_save_name$)
+      txt$=" |"+tpi_save_name$+" |exist, overwrite it ? | "
+      ALERT 2,txt$,1,"OK|Cancel",button%
+    ENDIF
+    test%=RINSTR(tpi_save_name$,"\")
+    IF test% THEN
+      pic_save_path$=MID$(tpi_save_name$,1,test%)
+    ELSE
+      pic_save_path$="\"
+    ENDIF
+    IF button%=1 THEN
+      OPEN "O",#3,tpi_save_name$
+      ' P N T CHR$(0)
+      OUT #3,80,78,84,0
+      OUT& #3,256,screen_colors%
+      hi%=INT(pic_width%/256)
+      lo%=pic_width%-(hi%*256)
+      OUT #3,hi%,lo%
+      hi%=INT(pic_height%/256)
+      lo%=pic_height%-(hi%*256)
+      OUT #3,hi%,lo%
+      OUT& #3,screen_bits%,0
+      OUT% #3,((pic_width%*screen_bits%)/8)*pic_height%
+      FOR headder%=10 TO 63
+        OUT& #3,0
+      NEXT headder%
+      FOR color%=0 TO screen_colors%-1
+        CONTRL(0)=26
+        CONTRL(1)=0
+        CONTRL(3)=2
+        CONTRL(6)=my_handle&
+        INTIN(0)=color%
+        INTIN(1)=0
+        VDISYS
+        red&=INTOUT(1)
+        green&=INTOUT(2)
+        blue&=INTOUT(3)
+        OUT& #3,red&,green&,blue&
+      NEXT color%
+      FOR row%=0 TO pic_height%-1
+        ' BPUT #3,pic_buffer%+row%*((pic_width%*screen_bits%)/8),(pic_width%*screen_bits%)/8
+      NEXT row%
+      CLOSE #3
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE trying_to_quit
+  LOCAL try%,raster%,button%,txt$
+  IF svg_saved%=1 THEN
+    txt$=" |Sure you want to quit ? | "
+    ALERT 2,txt$,1,"OK|Cancel",button%
+  ELSE
+    txt$=" |Sure you want to quit ? |Current image not saved. | "
+    ALERT 2,txt$,1,"OK|Cancel|save",button%
+    IF button%=3 THEN
+      ' @svg_save
+    ENDIF
+  ENDIF
+  IF button%<>2 THEN
+    @restore_colors
+    ~FSETDTA(old_dta%)
+    ~GEMDOS(73,L:dta%)
+    FOR try%=0 TO last_object%
+      raster%=object%(try%,47)
+      IF raster%>0 THEN
+        ~GEMDOS(73,L:raster%)   ! RELEASE MEMORY
+      ENDIF
+    NEXT try%
+    ~WIND_CLOSE(window_handle%)
+    ~WIND_DELETE(window_handle%)
+    ~MENU_BAR(menu%,0)
+    ~RSRC_FREE()
+    END
+  ENDIF
+RETURN
+> PROCEDURE store_colors
+  LOCAL color%
+  FOR color%=0 TO screen_colors%-1
+    CONTRL(0)=26              ! VQ_COLOR
+    CONTRL(1)=0
+    CONTRL(3)=2
+    CONTRL(6)=my_handle&
+    INTIN(0)=color%               ! VDI COLOR INDEX
+    INTIN(1)=0                ! FLAG 0= ,1=
+    VDISYS
+    palette%(color%,0)=INTOUT(1)  ! RED VALUE 0-1000
+    palette%(color%,1)=INTOUT(2)  ! GREEN  "    "
+    palette%(color%,2)=INTOUT(3)  ! BLUE   "    "
+  NEXT color%
+RETURN
+> PROCEDURE set_colors
+  LOCAL color%,gray%
+  gray%=4
+  FOR color%=16 TO screen_colors%-1
+    CONTRL(0)=14                 ! VS_COLOR
+    CONTRL(1)=0
+    CONTRL(3)=4
+    CONTRL(6)=my_handle&
+    INTIN(0)=color%              ! COLOR INDEX
+    INTIN(1)=gray%  ! RED VALUE 0-1000
+    INTIN(2)=gray%  ! GREEN  "     "
+    INTIN(3)=gray%  ! BLUE   "     "
+    VDISYS
+    gray%=gray%+4
+  NEXT color%
+RETURN
+> PROCEDURE restore_colors
+  LOCAL color%
+  FOR color%=0 TO screen_colors%-1
+    CONTRL(0)=14                 ! VS_COLOR
+    CONTRL(1)=0
+    CONTRL(3)=4
+    CONTRL(6)=my_handle&
+    INTIN(0)=color%              ! COLOR INDEX
+    INTIN(1)=palette%(color%,0)  ! RED VALUE 0-1000
+    INTIN(2)=palette%(color%,1)  ! GREEN  "     "
+    INTIN(3)=palette%(color%,2)  ! BLUE   "     "
+    VDISYS
+  NEXT color%
+RETURN
+> PROCEDURE settings_save
+  OPEN "O",#1,my_inf$
+  PRINT #1,"DRAW 3-D setup"
+  PRINT #1,"SNAP X:";STR$(snap_x%)
+  PRINT #1,"SNAP Y:";STR$(snap_y%)
+  CLOSE #1
+RETURN
+> PROCEDURE settings_load
+  LOCAL test%,inf_set$,search_file$,temp$,command$
+  search_file$=my_inf$+CHR$(0)
+  ~FSETDTA(dta%)
+  test%=GEMDOS(78,L:V:search_file$,&X100111)
+  IF test%=0 THEN
+    OPEN "I",#1,my_inf$
+    DO WHILE EOF(#1)=FALSE
+      INPUT #1,temp$
+      test%=RINSTR(temp$,":")
+      IF test%>1 THEN
+        command$=MID$(temp$,1,test%-1)
+        inf_set$=MID$(temp$,test%+1)
+        IF command$="SNAP X"
+          IF VAL(inf_set$)>=0 AND VAL(inf_set$)<=16384 THEN
+            snap_x%=VAL(inf_set$)
+          ENDIF
+        ENDIF
+        IF command$="SNAP Y"
+          IF VAL(inf_set$)>=0 AND VAL(inf_set$)<=16384 THEN
+            snap_y%=VAL(inf_set$)
+          ENDIF
+        ENDIF
+      ENDIF
+    LOOP UNTIL EOF(#1)=TRUE
+    CLOSE #1
+  ENDIF
+RETURN

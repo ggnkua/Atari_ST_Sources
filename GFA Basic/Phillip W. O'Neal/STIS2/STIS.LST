@@ -1,0 +1,3038 @@
+' ********** STIS 3-D Version 2.0 **********
+'
+' PROGRAM 'SHOULD' USE THIS MANY BYTES WHEN RUN
+$m42000
+'
+' SET COMPILER SWITCHES
+' *%=LONGWORD WITH MULS
+' S%=SELECT CASE USES 4 BYTE VALUES
+$*%
+$S%
+'
+' SETUP EVERYTHING
+@init_variables
+'
+DO
+  @event ! JUST WAIT FOR THE USER TO DO SOMETHING
+LOOP
+'
+' ----------------------------------------------------------------------------
+> PROCEDURE event
+  '
+  event_type&=EVNT_MULTI(&X110011,1,1,1,0,0,0,0,0,0,0,0,0,0,buffer_address%,1,x_mouse&,y_mouse&,button_state&,key_state&,key_press&,num_clicks&)
+  @check_event
+  '
+  IF TIME$<>old_time$ THEN
+    @system_time
+    old_time$=TIME$
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE init_variables
+  '
+  my_handle&=V~H  ! GET VDI HANDLE OF PROGRAMS WORKSTATION
+  '
+  mint%=0
+  jar%=LPEEK(1440) ! ADDRESS OF COOKIE JAR
+  '
+  IF jar% THEN     ! IF JAR PRESENT THEN jar%=ADDRESS OF JAR
+    '
+    cookie_num%=0
+    '
+    DO
+      '
+      cookie%=LPEEK(jar%+cookie_num%*8)
+      cookie$=CHR$(SHR(cookie% AND &HFF000000,24))
+      cookie$=cookie$+CHR$(SHR(cookie% AND &HFF0000,16))
+      cookie$=cookie$+CHR$(SHR(cookie% AND &HFF00,8))
+      cookie$=cookie$+CHR$(cookie% AND &HFF)
+      '
+      IF cookie$="MiNT" THEN  ! IS MINT PRESENT
+        mint%=1
+      ENDIF
+      '
+      INC cookie_num%
+      '
+    LOOP UNTIL cookie%=0
+    '
+  ENDIF
+  '
+  IF mint% THEN  ! IF MINT PRESENT THEN REGISTER PRG NAME UNDER MENU
+    ~MENU_REGISTER(my_handle&,"  STIS 3-D ")
+  ENDIF
+  '
+  screen_colors%=WORK_OUT(13)  ! 2,4,16,256,256(TRUE COLOR)
+  screen_width%=WORK_OUT(0)+1
+  screen_height%=WORK_OUT(1)+1
+  system_palette%=WORK_OUT(39)
+  '
+  CONTRL(0)=102  ! 'VQ_EXTND' - GET EXTRA INFO ABOUT WORKSTATION
+  CONTRL(1)=0
+  CONTRL(3)=1
+  CONTRL(6)=my_handle&
+  INTIN(0)=1
+  VDISYS
+  screen_bits%=INTOUT(4)  ! GET # OF SCREEN PLANES
+  '
+  INLINE default_pattern%,3072
+  '              ARRAYS FOR BITBLT COMMAND
+  DIM source_mfdb%(8),destination_mfdb%(8),parameters%(8)
+  '
+  FOR zero%=4 TO 8
+    source_mfdb%(zero%)=0
+    destination_mfdb%(zero%)=0
+  NEXT zero%
+  '
+  source_mfdb%(5)=screen_bits%
+  destination_mfdb%(5)=screen_bits%
+  parameters%(8)=3 ! REPLACE MODE
+  '
+  @path_setup
+  '
+  view_x%=0       ! X VIEW POSITION OF WINDOW ON STIS IMAGE
+  view_y%=0       ! Y  "      "     "      "     "      "
+  '
+  pat_view_x%=0       ! X VIEW POSITION OF WINDOW ON PATTERN
+  pat_view_x%=0       ! X VIEW POSITION OF WINDOW ON PATTERN
+  '
+  stis_exists%=0  ! 0=NO STIS, >0=ADDRESS OF STIS IMAGE
+  stis_pattern%=0  ! 0=NO STIS, >0=ADDRESS OF STIS IMAGE
+  '
+  credit_handle%=-1   ! SET ALL WINDOW HANDLES TO OFF
+  info_handle%=-1
+  pattern_handle%=-1
+  color_handle%=-1
+  status_handle%=-1
+  system_handle%=-1
+  '
+  system_colors%=1
+  '
+  tracing%=0     ! KEEPS UP WITH WHEN WE ARE DOING CONVERSION
+  '
+  old_block%=0   !
+  '
+  stis_saved%=1  ! 0=IMAGE NOT SAVED, 1=HAS BEEN SAVED
+  '
+  DIM event_buffer&(7)  ! EVENT BUFFER FOR EVENT_MULTI CALL
+  buffer_address%=VARPTR(event_buffer&(0))
+  '
+  DEFFILL 0,2,8  ! COLOR 0 SOLID FILL PATTERN
+  @color_setup
+  '
+  @store_colors
+  '
+  @rsc_setup
+  '
+  @pattern_init
+  '
+  @settings_load
+  '
+  @window_setup
+  '
+  MODE 1
+  DEFMOUSE 0  ! BE SURE MOUSE SHAPE IS A POINTER
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE window_setup
+  '
+  ' MEMORY TO STORE TITLE, INFOLINE FOR STIS IMAGE
+  INLINE window_title%,128
+  INLINE info_line%,128
+  '
+  ' OTHER TITLES, INFOLINES
+  INLINE pattern_title%,128
+  INLINE pattern_infoline%,128
+  INLINE credit_title%,32
+  INLINE info_title%,32
+  INLINE color_title%,32
+  INLINE system_title%,32
+  INLINE status_title%,32
+  '
+  ~MENU_BAR(stis_menu%,1)           ! TURN MENU ON
+  '
+  IF stis_pattern%<1 THEN     ! 0=NO PATTERN LOADED
+    ~MENU_IENABLE(stis_menu%,19,0)  ! DISABLE 'LOAD'
+    ~MENU_IENABLE(stis_menu%,32,0)  ! DISABLE 'VIEW'
+  ENDIF
+  '
+  IF system_colors%=1 OR stis_pattern%<1 THEN
+    ~MENU_IENABLE(stis_menu%,29,0)  ! DISABLE 'RESTORE'
+  ENDIF
+  '
+  ~MENU_IENABLE(stis_menu%,20,0)    ! DISABLE 'CLEAR'
+  ~MENU_IENABLE(stis_menu%,21,0)    ! DISABLE 'SAVE'
+  '
+  '    SIZE OF THE USEABLE SCREEN (WITHOUT THE MENU BAR)
+  ~WIND_GET(0,4,window_maxx%,window_maxy%,window_maxw%,window_maxh%)
+  '
+  '    THESE ARE USED AS MAX VALUES WHEN CREATING WINDOWS
+  ~WIND_GET(0,4,window_x%,window_y%,window_w%,window_h%)
+  ~WIND_GET(0,4,pattern_x%,pattern_y%,pattern_w%,pattern_h%)
+  '
+  '                   CREATE FULL SIZE WINDOW WITH FIRST 12 GADGETS
+  window_handle%=WIND_CREATE(&X111111111111,window_x%,window_y%,window_w%,window_h%)
+  '
+  window_title$="No STIS image"
+  @title
+  '
+  @size_sliders
+  '
+  @info_line_set
+  '                               OPEN WINDOW
+  ~WIND_OPEN(window_handle%,window_x%,window_y%,window_w%,window_h%)
+  '
+  '                        GET INSIDE SIZE OF WINDOW
+  ~WIND_GET(window_handle%,4,window_mix%,window_miy%,window_miw%,window_mih%)
+  ~WIND_GET(window_handle%,4,window_ix%,window_iy%,window_iw%,window_ih%)
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE color_setup
+  '
+  DIM bit_plane&(7)  ! TEMP STORAGE FOR 'PLANE' WORDS
+  '
+  DIM two_plane%(3)  ! TABLE TO TRANSLATE COLORS TO VDI FOR 2 PLANES
+  '
+  FOR plane%=0 TO 3
+    READ two_plane%(plane%)
+  NEXT plane%
+  '
+  DIM four_plane%(15)  ! TABLE TO TRANSLATE COLORS TO VDI FOR 4,8 PLANES
+  '
+  FOR plane%=0 TO 15
+    READ four_plane%(plane%)
+  NEXT plane%
+  '
+  DIM rgb(255)  ! TRANSLATE COLORS TABLE
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE path_setup
+  '
+  current_drive%=GEMDOS(25)
+  tpi_load_path$=DIR$(current_drive%+1)+"\"  ! PROGRAM'S PATH
+  '
+  pic_save_path$=tpi_load_path$
+  pattern_path$=tpi_load_path$
+  info_path$=tpi_load_path$
+  inf_path$=tpi_load_path$+"STIS.INF"
+  rsc$=tpi_load_path$+"STIS.RSC"
+  '
+  tpi_load_name$=""
+  tpi_save_name$=""
+  pattern_name$=""
+  pattern_title$=""
+  '
+  pnt$="PNT"+CHR$(0) ! PNT/TPI FLIE ID
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE path_setup2
+  '
+  test%=RINSTR(rsc$,"\")
+  '
+  IF test% THEN
+    my_path$=MID$(rsc$,1,test%)
+  ELSE
+    my_path$="\"
+  ENDIF
+  '
+  tpi_load_path$=my_path$
+  pic_save_path$=tpi_load_path$
+  pattern_path$=tpi_load_path$
+  info_path$=tpi_load_path$
+  inf_path$=tpi_load_path$+"STIS.INF"
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE check_event
+  '
+  IF event_type& AND &X1 THEN       ! KEY PRESS
+    @event_key
+  ENDIF
+  '
+  IF event_type& AND &X10 THEN      ! BUTTON
+    @event_button
+  ENDIF
+  '
+  IF event_type& AND &X10000 THEN   ! MENU OR WINDOW EVENT
+    '
+    command%=event_buffer&(0)       ! TYPE OF EVENT
+    '
+    IF command%=10 THEN             ! MENU ITEM
+      @event_menu
+    ELSE          ! WINDOW EVENT
+      '
+      which_window%=event_buffer&(3) ! HANDLE OF WINDOW
+      '
+      IF which_window%=window_handle% THEN
+        @event_stis
+      ENDIF
+      '
+      IF which_window%=credit_handle% THEN
+        @event_credit
+      ENDIF
+      '
+      IF which_window%=info_handle% THEN
+        @event_info
+      ENDIF
+      '
+      IF which_window%=pattern_handle% THEN
+        @event_pattern
+      ENDIF
+      '
+      IF which_window%=color_handle% THEN
+        @event_color
+      ENDIF
+      '
+      IF which_window%=status_handle% THEN
+        @event_status
+      ENDIF
+      '
+      IF which_window%=system_handle% THEN
+        @event_system
+      ENDIF
+      '
+    ENDIF
+    '
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE event_menu
+  '
+  menu_title%=event_buffer&(3)             ! OBJECT # OF TITLE
+  menu_item%=event_buffer&(4)              ! WHICH MENU ITEM WAS SELECTED
+  ~MENU_TNORMAL(stis_menu%,menu_title%,1)  ! MAKE MENU TITLE NORMAL TEXT
+  '
+  SELECT menu_item%
+  CASE 10         ! PROGRAM CREDITS
+    @credits
+    '
+  CASE 19         ! SELECT FILE TO CONVERT
+    @tpi_open
+    '
+  CASE 20         ! CLOSE STIS
+    @stis_erase
+    '
+  CASE 21         ! SAVE STIS
+    @tpi_save
+    '
+  CASE 23         ! QUIT PROGRAM
+    @trying_to_quit
+    '
+  CASE 25         ! SYS INFO
+    @system_info
+    '
+  CASE 26         ! FILE INFO
+    @tpi_info
+    '
+  CASE 28         ! COLOR USE
+    @color_use
+    '
+  CASE 29         ! RESTORE
+    @c_restore
+    '
+  CASE 31         ! LOAD PATTERN
+    @pattern_load
+    '
+  CASE 32         ! VIEW PATTERN
+    @pattern_view
+    '
+  ENDSELECT
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE event_key
+  '
+  scan_code&=SHR(key_press& AND &HFF00,8)  ! KEYBOARD SCAN CODE
+  '
+  SELECT scan_code&
+  CASE 1            ! 'ESC' ABORT CONVERTION
+    trace_line%=pic_y_size%
+    '
+  CASE 57          ! 'SPACE' UPDATE OR TOP STIS
+    IF tracing% THEN
+      @repair_window
+      '
+    ELSE
+      ~WIND_SET(window_handle%,10,0,0,0,0) ! WINDOW SET TO TOP
+      DEFMOUSE 0
+      '
+    ENDIF
+    '
+  CASE 17           ! 'W' WINDOW CLOSE
+    '
+    ~WIND_GET(0,10,top_window%,d%,d%,d%)
+    '
+    IF top_window%=credit_handle% THEN
+      ~WIND_CLOSE(credit_handle%)
+      ~WIND_DELETE(credit_handle%)
+      credit_handle%=-1
+    ENDIF
+    '
+    IF top_window%=info_handle% THEN
+      ~WIND_CLOSE(info_handle%)
+      ~WIND_DELETE(info_handle%)
+      info_handle%=-1
+    ENDIF
+    '
+    IF top_window%=pattern_handle% THEN
+      ~WIND_CLOSE(pattern_handle%)
+      ~WIND_DELETE(pattern_handle%)
+      pattern_handle%=-1
+    ENDIF
+    '
+    IF top_window%=color_handle% THEN
+      ~WIND_CLOSE(color_handle%)
+      ~WIND_DELETE(color_handle%)
+      color_handle%=-1
+    ENDIF
+    '
+    IF top_window%=system_handle% THEN
+      ~WIND_CLOSE(system_handle%)
+      ~WIND_DELETE(system_handle%)
+      system_handle%=-1
+    ENDIF
+    '
+    IF top_window%=window_handle% THEN
+      @trying_to_quit
+    ENDIF
+    '
+    '
+  CASE 24           ! 'O' SELECT FILE TO CONVERT
+    IF stis_pattern%>0 AND tracing%=0 THEN
+      @tpi_open
+      '
+    ELSE
+      IF tracing% THEN
+        ~WIND_SET(status_handle%,10,0,0,0,0) ! WINDOW SET TO TOP
+        '
+      ENDIF
+      '
+    ENDIF
+    '
+  CASE 46           ! 'C' CLOSE STIS
+    IF stis_exists% AND tracing%=0 THEN
+      @stis_erase
+    ENDIF
+    '
+  CASE 31           ! 'S' SAVE STIS
+    IF stis_exists% AND tracing%=0 THEN
+      @tpi_save
+    ENDIF
+    '
+  CASE 16           ! 'Q' QUIT PROGRAM
+    @trying_to_quit
+    '
+  CASE 53           ! '?' SYSTEM INFO
+    @system_info
+    '
+  CASE 33           ! 'F' FILE INFO
+    @tpi_info
+    '
+  CASE 22           ! 'U' COLOR USE
+    @color_use
+    '
+  CASE 19           ! 'R' RESTORE COLORS
+    IF system_colors%=0 THEN
+      @c_restore
+    ENDIF
+    '
+  CASE 38           ! 'L' PATTERN LOAD
+    IF tracing%=0 THEN
+      @pattern_load
+    ENDIF
+    '
+  CASE 47           ! 'V' VIEW PATTERN
+    @pattern_view
+    '
+  CASE 72,80,75,77  ! ARROWS UP, DOWN, LEFT, RIGHT
+    SELECT scan_code&
+    CASE 72
+      arrow%=2
+    CASE 80
+      arrow%=3
+    CASE 75
+      arrow%=6
+    CASE 77
+      arrow%=7
+    ENDSELECT
+    @sliders
+    '
+  CASE 15           ! 'TAB' FULL SCREEN VIEW
+    IF stis_exists% AND tracing%=0 AND (stis_x_plus%>window_miw% OR stis_y_real%>window_mih%) THEN
+      full_view
+    ENDIF
+    '
+  ENDSELECT
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE event_button
+  '
+  wind_found%=WIND_FIND(x_mouse&,y_mouse&) ! WHICH WINDOW UNDER MOUSE
+  '
+  IF wind_found%=color_handle% THEN
+    '
+    ' FIND OBJECT UNDER MOUSE
+    button%=OBJC_FIND(color_dialog%,0,2,x_mouse&,y_mouse&)
+    '
+    IF button%>0 THEN
+      '
+      SELECT button%
+      CASE 1,2 ! RGB / VDI
+        OB_STATE(color_dialog%,button%)=BCHG(OB_STATE(color_dialog%,button%),0)
+        update%=5
+        @update
+        rgb=BTST(OB_STATE(color_dialog%,1),0)
+        vdi=BTST(OB_STATE(color_dialog%,2),0)
+        update%=5
+        @update
+        '
+        DO
+        LOOP UNTIL MOUSEK=0
+        '
+      CASE 3 ! SAVE SETTINGS
+        OB_STATE(color_dialog%,button%)=BSET(OB_STATE(color_dialog%,button%),0)
+        '
+        update%=5
+        @update
+        OB_STATE(color_dialog%,button%)=BCLR(OB_STATE(color_dialog%,button%),0)
+        '
+        DO
+        LOOP UNTIL MOUSEK=0
+        '
+        update%=5
+        @update
+        '
+        txt$=" |Save STIS settings ? | "
+        ALERT 2,txt$,1,"OK|Cancel",button%
+        IF button%=1 THEN
+          @settings_save
+        ENDIF
+        '
+      ENDSELECT
+      '
+    ENDIF
+    '
+  ENDIF
+  '
+  IF wind_found%=info_handle% THEN
+    button%=OBJC_FIND(info_dialog%,13,1,x_mouse&,y_mouse&)
+    '
+    IF button%=13 THEN ! LOAD FILE INFO
+      OB_STATE(info_dialog%,13)=BSET(OB_STATE(info_dialog%,13),0)
+      '
+      update%=3
+      @update
+      OB_STATE(info_dialog%,13)=BCLR(OB_STATE(info_dialog%,13),0)
+      '
+      DO
+      LOOP UNTIL MOUSEK=0
+      '
+      update%=3
+      @update
+      '
+      @info_load
+    ENDIF
+    '
+  ENDIF
+  '
+  IF wind_found%=window_handle% AND tracing% THEN
+    @repair_window
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE event_stis
+  '
+  SELECT command%
+  CASE 20           ! WIND UPDATE
+    @repair_window
+    '
+  CASE 21           ! WINDOW CLICKED ON
+    ~WIND_SET(window_handle%,10,0,0,0,0) ! WINDOW SET TO TOP
+    DEFMOUSE 0
+    '
+  CASE 22           ! CLOSE WINDOW
+    @trying_to_quit
+    '
+  CASE 23           ! FULL WINDOW
+    IF window_full% THEN
+      '               GET LAST SIZE OF THIS WINDOW
+      ~WIND_GET(window_handle%,6,window_x%,window_y%,window_w%,window_h%)
+      window_full%=0
+    ELSE
+      '             GET MAX SIZE SET WITH WIND_CREATE
+      ~WIND_GET(window_handle%,7,window_x%,window_y%,window_w%,window_h%)
+      window_full%=1
+    ENDIF
+    '
+    ~WIND_SET(window_handle%,5,window_x%,window_y%,window_w%,window_h%)             ! SIZE WINDOW
+    '
+    '                  GET INSIDE SIZE OF WINDOW
+    ~WIND_GET(window_handle%,4,window_ix%,window_iy%,window_iw%,window_ih%)
+    @size_sliders
+    '
+  CASE 24           ! ARROWS / SLIDERS CLICKED ON
+    IF stis_exists% THEN
+      arrow%=event_buffer&(4)  ! WHAT WAS CLICKED ON
+      @sliders
+    ENDIF
+    '
+  CASE 25           ! HORZ SLIDER MOVED
+    IF horz_slider_size<1000 THEN  ! ONLY DO IF STIS IS WIDER THAN WINDOW
+      horz_pos=event_buffer&(4)    ! USER SELECTED SLIDER POSITION
+      ~WIND_SET(window_handle%,8,horz_pos,0,0,0)  ! SET SLIDER
+      @repair_window
+    ENDIF
+    '
+  CASE 26           ! VERT SLIDER MOVED
+    IF vert_slider_size<1000 THEN  ! ONLY DO IF STIS IS TALLER THAN WINDOW
+      vert_pos=event_buffer&(4)    ! USER SELECTED SLIDER POSITION
+      ~WIND_SET(window_handle%,9,vert_pos,0,0,0) ! SET SLIDER
+      @repair_window
+    ENDIF
+    '
+  CASE 27,28        ! WINDOW SIZED, MOVED
+    window_x%=event_buffer&(4)      ! X POSITION OF WINDOW
+    window_y%=event_buffer&(5)      ! Y      "    "    "
+    window_w%=event_buffer&(6)  ! WIDTH  "    "    "
+    window_h%=event_buffer&(7) ! HEIGHT "    "    "
+    '
+    ~WIND_SET(window_handle%,5,window_x%,window_y%,window_w%,window_h%)             ! SIZE WINDOW
+    ~WIND_GET(window_handle%,4,window_ix%,window_iy%,window_iw%,window_ih%) ! WINDOW SET TO TOP
+    '
+    window_full%=0
+    @size_sliders
+    '
+  ENDSELECT
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE event_pattern
+  '
+  SELECT command%
+  CASE 20           ! WIND UPDATE
+    @repair_pattern
+    '
+  CASE 21           ! WINDOW CLICKED ON
+    ~WIND_SET(pattern_handle%,10,0,0,0,0) ! WINDOW SET TO TOP
+    DEFMOUSE 0
+    '
+  CASE 22           ! CLOSE WINDOW
+    ~WIND_CLOSE(pattern_handle%)
+    ~WIND_DELETE(pattern_handle%)
+    pattern_handle%=-1
+    '
+  CASE 23           ! FULL WINDOW
+    IF pat_window_full% THEN
+      '               GET LAST SIZE OF THIS WINDOW
+      ~WIND_GET(pattern_handle%,6,pattern_x%,pattern_y%,pattern_w%,pattern_h%)
+      pat_window_full%=0
+    ELSE
+      '             GET MAX SIZE SET WITH WIND_CREATE
+      ~WIND_GET(pattern_handle%,7,pattern_x%,pattern_y%,pattern_w%,pattern_h%)
+      pat_window_full%=1
+    ENDIF
+    '
+    '                 GET OVER-ALL SIZE OF WINDOW
+    ~WIND_SET(pattern_handle%,5,pattern_x%,pattern_y%,pattern_w%,pattern_h%)
+    '
+    '                  GET INSIDE SIZE OF WINDOW
+    ~WIND_GET(pattern_handle%,4,pattern_ix%,pattern_iy%,pattern_iw%,pattern_ih%)
+    @pat_size_sliders
+    '
+  CASE 24           ! ARROWS / SLIDERS CLICKED ON
+    IF stis_pattern%>0 THEN
+      arrow%=event_buffer&(4)  ! WHAT WAS CLICKED ON
+      @pat_sliders
+    ENDIF
+    '
+  CASE 25           ! HORZ SLIDER MOVED
+    IF pat_horz_slider_size<1000 THEN  ! ONLY DO IF STIS IS WIDER THAN WINDOW
+      pat_horz_pos=event_buffer&(4)    ! USER SELECTED SLIDER POSITION
+      ~WIND_SET(pattern_handle%,8,pat_horz_pos,0,0,0)
+      @repair_pattern
+    ENDIF
+    '
+  CASE 26           ! VERT SLIDER MOVED
+    IF pat_vert_slider_size<1000 THEN  ! ONLY DO IF STIS IS TALLER THAN WINDOW
+      pat_vert_pos=event_buffer&(4)    ! USER SELECTED SLIDER POSITION
+      ~WIND_SET(pattern_handle%,9,pat_vert_pos,0,0,0) ! SET SLIDER
+      @repair_pattern
+    ENDIF
+    '
+  CASE 27,28        ! WINDOW SIZED, MOVED
+    pattern_x%=event_buffer&(4)      ! X POSITION OF WINDOW
+    pattern_y%=event_buffer&(5)      ! Y      "    "    "
+    pattern_w%=event_buffer&(6)  ! WIDTH  "    "    "
+    pattern_h%=event_buffer&(7) ! HEIGHT "    "    "
+    '
+    '             GET OVER-ALL SIZE OF WINDOW
+    ~WIND_SET(pattern_handle%,5,pattern_x%,pattern_y%,pattern_w%,pattern_h%)
+    ~WIND_GET(pattern_handle%,4,pattern_ix%,pattern_iy%,pattern_iw%,pattern_ih%)
+    '
+    pat_window_full%=0
+    @pat_size_sliders
+    '
+  ENDSELECT
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE event_credit
+  '
+  SELECT command%
+  CASE 20 ! UPDATE WINDOW
+    update%=1
+    @update
+    '
+  CASE 21 ! WINDOW CLICKED ON
+    ~WIND_SET(credit_handle%,10,0,0,0,0) ! WINDOW SET TO TOP
+    DEFMOUSE 0
+    '
+  CASE 22 ! CLOSE BOX
+    ~WIND_CLOSE(credit_handle%)
+    ~WIND_DELETE(credit_handle%)
+    credit_handle%=-1
+    '
+  CASE 28 ! WINDOW MOVED
+    ~WIND_SET(credit_handle%,5,event_buffer&(4),event_buffer&(5),credit_ow%,credit_oh%)
+    ~WIND_GET(credit_handle%,4,tempx%,tempy%,d%,d%)
+    '
+    OB_X(credit_dialog%,0)=tempx%
+    OB_Y(credit_dialog%,0)=tempy%
+    '
+    credit_x%=tempx%
+    credit_y%=tempy%
+    '
+  ENDSELECT
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE event_info
+  '
+  SELECT command%
+  CASE 20 ! UPDATE WINDOW
+    update%=2
+    @update
+    '
+  CASE 21 ! WINDOW CLICKED ON
+    ~WIND_SET(info_handle%,10,0,0,0,0) ! WINDOW SET TO TOP
+    DEFMOUSE 0
+    '
+  CASE 22 ! CLOSE BOX
+    ~WIND_CLOSE(info_handle%)
+    ~WIND_DELETE(info_handle%)
+    info_handle%=-1
+    '
+  CASE 28 ! WINDOW MOVED
+    ~WIND_SET(info_handle%,5,event_buffer&(4),event_buffer&(5),info_ow%,info_oh%)
+    ~WIND_GET(info_handle%,4,tempx%,tempy%,d%,d%)
+    '
+    OB_X(info_dialog%,0)=tempx%
+    OB_Y(info_dialog%,0)=tempy%
+    '
+    info_x%=tempx%
+    info_y%=tempy%
+    '
+  ENDSELECT
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE event_color
+  '
+  SELECT command%
+  CASE 20 ! UPDATE WINDOW
+    update%=4
+    @update
+    '
+  CASE 21 ! WINDOW CLICKED ON
+    ~WIND_SET(color_handle%,10,0,0,0,0) ! WINDOW SET TO TOP
+    DEFMOUSE 0
+    '
+  CASE 22 ! CLOSE BOX
+    ~WIND_CLOSE(color_handle%)
+    ~WIND_DELETE(color_handle%)
+    color_handle%=-1
+    '
+  CASE 28 ! WINDOW MOVED
+    ~WIND_SET(color_handle%,5,event_buffer&(4),event_buffer&(5),color_ow%,color_oh%)
+    ~WIND_GET(color_handle%,4,tempx%,tempy%,d%,d%)
+    '
+    OB_X(color_dialog%,0)=tempx%
+    OB_Y(color_dialog%,0)=tempy%
+    '
+    color_x%=tempx%
+    color_y%=tempy%
+    '
+  ENDSELECT
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE event_system
+  '
+  SELECT command%
+  CASE 20 ! UPDATE WINDOW
+    update%=8
+    @update
+    '
+  CASE 21 ! WINDOW CLICKED ON
+    ~WIND_SET(system_handle%,10,0,0,0,0) ! WINDOW SET TO TOP
+    DEFMOUSE 0
+    '
+  CASE 22 ! CLOSE BOX
+    ~WIND_CLOSE(system_handle%)
+    ~WIND_DELETE(system_handle%)
+    system_handle%=-1
+    '
+  CASE 28 ! WINDOW MOVED
+    ~WIND_SET(system_handle%,5,event_buffer&(4),event_buffer&(5),system_ow%,system_oh%)
+    ~WIND_GET(system_handle%,4,tempx%,tempy%,d%,d%)
+    '
+    OB_X(system_dialog%,0)=tempx%
+    OB_Y(system_dialog%,0)=tempy%
+    '
+    system_x%=tempx%
+    system_y%=tempy%
+    '
+  ENDSELECT
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE event_status
+  '
+  SELECT command%
+  CASE 20 ! UPDATE WINDOW
+    update%=7
+    @update
+    '
+  CASE 21 ! WINDOW CLICKED ON
+    ~WIND_SET(status_handle%,10,0,0,0,0) ! WINDOW SET TO TOP
+    DEFMOUSE 0
+    '
+  CASE 22 ! CLOSE BOX
+    trace_line%=pic_y_size%
+    '
+  CASE 28 ! WINDOW MOVED
+    status_ox%=event_buffer&(4)
+    status_oy%=event_buffer&(5)
+    '
+    ~WIND_SET(status_handle%,5,status_ox%,status_oy%,status_ow%,status_oh%)
+    ~WIND_GET(status_handle%,4,status_x%,status_y%,d%,d%)
+    '
+    OB_X(status_dialog%,0)=status_x%
+    OB_Y(status_dialog%,0)=status_y%
+    '
+  ENDSELECT
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE sliders
+  '
+  SELECT arrow%
+  CASE 0                   ! TOP HALF OF SLIDER
+    vert_pos=vert_pos-((window_ih%/(stis_y_real%-window_ih%))*1000)
+    IF vert_pos<0 THEN
+      vert_pos=0
+    ENDIF
+    ~WIND_SET(window_handle%,9,vert_pos,0,0,0)
+    @repair_window
+    '
+  CASE 1                   ! BOTTOM HALF OF SLIDER
+    vert_pos=vert_pos+((window_ih%/(stis_y_real%-window_ih%))*1000)
+    IF vert_pos>1000 THEN
+      vert_pos=1000
+    ENDIF
+    ~WIND_SET(window_handle%,9,vert_pos,0,0,0)
+    @repair_window
+    '
+  CASE 2                   ! UP ARROW
+    IF vert_pos<>0 AND vert_slider_size<1000 THEN
+      vert_pos=vert_pos-((window_ih%/(stis_y_real%-window_ih%))*100)
+      IF vert_pos<0 THEN
+        vert_pos=0
+      ENDIF
+      ~WIND_SET(window_handle%,9,vert_pos,0,0,0)
+      @repair_window
+    ENDIF
+    '
+  CASE 3                  ! DOWN ARROW
+    IF vert_pos<>1000 AND vert_slider_size<1000 THEN
+      vert_pos=vert_pos+((window_ih%/(stis_y_real%-window_ih%))*100)
+      IF vert_pos>1000 THEN
+        vert_pos=1000
+      ENDIF
+      ~WIND_SET(window_handle%,9,vert_pos,0,0,0)
+      @repair_window
+    ENDIF
+    '
+  CASE 4                 ! LEFT OF SLIDER
+    horz_pos=horz_pos-((window_iw%/(stis_x_plus%-window_iw%))*1000)
+    IF horz_pos<0 THEN
+      horz_pos=0
+    ENDIF
+    ~WIND_SET(window_handle%,8,horz_pos,0,0,0)
+    @repair_window
+    '
+  CASE 5                 ! RIGHT OF SLIDER
+    horz_pos=horz_pos+((window_iw%/(stis_x_plus%-window_iw%))*1000)
+    IF horz_pos>1000 THEN
+      horz_pos=1000
+    ENDIF
+    ~WIND_SET(window_handle%,8,horz_pos,0,0,0)
+    @repair_window
+    '
+  CASE 6                 ! LEFT ARROW
+    IF horz_pos<>0 AND horz_slider_size<1000 THEN
+      horz_pos=horz_pos-((window_iw%/(stis_x_plus%-window_iw%))*100)
+      IF horz_pos<0 THEN
+        horz_pos=0
+      ENDIF
+      ~WIND_SET(window_handle%,8,horz_pos,0,0,0)
+      @repair_window
+    ENDIF
+    '
+  CASE 7                ! RIGHT ARROW
+    IF horz_pos<>1000 AND horz_slider_size<1000 THEN
+      horz_pos=horz_pos+((window_iw%/(stis_x_plus%-window_iw%))*100)
+      IF horz_pos>1000 THEN
+        horz_pos=1000
+      ENDIF
+      ~WIND_SET(window_handle%,8,horz_pos,0,0,0)
+      @repair_window
+    ENDIF
+    '
+  ENDSELECT
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE size_sliders
+  '
+  IF stis_exists%>0 THEN
+    '
+    horz_slider_size=1000*(window_iw%/stis_x_plus%)
+    '
+    IF horz_slider_size>1000 THEN
+      horz_slider_size=1000
+    ENDIF
+    '
+    IF horz_slider_size=1000 THEN
+      horz_pos=0
+    ENDIF
+    '
+    vert_slider_size=1000*(window_ih%/stis_y_real%)
+    '
+    IF vert_slider_size>1000 THEN
+      vert_slider_size=1000
+    ENDIF
+    '
+    IF vert_slider_size=1000 THEN
+      vert_pos=0
+    ENDIF
+    '
+  ELSE
+    '
+    horz_slider_size=1000
+    vert_slider_size=1000
+    horz_pos=0
+    vert_pos=0
+    '
+  ENDIF
+  '
+  ~WIND_SET(window_handle%,15,horz_slider_size,0,0,0)
+  ~WIND_SET(window_handle%,16,vert_slider_size,0,0,0)
+  ~WIND_SET(window_handle%,9,vert_pos,0,0,0)
+  ~WIND_SET(window_handle%,8,horz_pos,0,0,0)
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE repair_window
+  '
+  IF horz_pos=0 THEN
+    view_x%=0
+  ELSE
+    view_x%=(horz_pos/1000)*(stis_x_plus%-window_iw%)
+  ENDIF
+  '
+  IF vert_pos=0 THEN
+    view_y%=0
+  ELSE
+    view_y%=(vert_pos/1000)*(stis_y_real%-window_ih%)
+  ENDIF
+  '
+  ~WIND_UPDATE(1)      ! TELL GEM WE ARE TAKING OVER
+  '
+  '                    GET FIRST RECTANGLE
+  ~WIND_GET(window_handle%,11,fix_x%,fix_y%,fix_width%,fix_height%)
+  '
+  @pic_copy
+  fix_done%=0
+  '
+  DO
+    '                  GET NEXT RECTANGLE
+    ~WIND_GET(window_handle%,12,fix_x%,fix_y%,fix_width%,fix_height%)
+    '
+    IF fix_width%+fix_height%=0 THEN   ! ANY MORE RECTANGLES ?
+      fix_done%=1
+    ELSE
+      @pic_copy
+    ENDIF
+    '
+  LOOP UNTIL fix_done%=1
+  '
+  ~WIND_UPDATE(0)          ! DONE!
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE pic_copy
+  '
+  IF stis_exists%>0 THEN       ! ONLY DO IF THERE IS A STIS IMAGE
+    '
+    blit_x_start%=view_x%+fix_x%-window_ix%
+    blit_x_end%=view_x%+fix_x%+fix_width%-(window_ix%+1)
+    blit_y_start%=view_y%+fix_y%-window_iy%
+    blit_y_end%=view_y%+fix_y%+fix_height%-(window_iy%+1)
+    '
+    fx%=fix_x%+fix_width%-1
+    fy%=fix_y%+fix_height%-1
+    '
+    flag%=1
+    '
+    IF blit_x_start%>stis_x_plus% OR blit_y_start%>stis_y_real% THEN
+      flag%=0
+      '
+    ELSE
+      IF blit_x_end%>stis_x_plus%-1 THEN
+        blit_x_end%=stis_x_plus%-1
+        flag%=2
+      ENDIF
+      '
+      IF blit_y_end%>stis_y_real%-1 THEN
+        blit_y_end%=stis_y_real%-1
+        flag%=2
+      ENDIF
+      '
+    ENDIF
+    '
+    IF flag% THEN
+      '
+      IF flag%=2 THEN
+        PBOX fix_x%,fix_y%,fix_x%+fix_width%-1,fix_y%+fix_height%-1
+        '
+      ENDIF
+      '
+      IF blit_x_start%<blit_x_end% AND blit_y_start%<blit_y_end% THEN
+        '
+        '
+        source_mfdb%(0)=stis_exists%
+        source_mfdb%(1)=stis_x_size%
+        source_mfdb%(2)=stis_y_size%
+        source_mfdb%(3)=stis_x_size%/16
+        source_mfdb%(5)=screen_bits%
+        '
+        destination_mfdb%(0)=0
+        '
+        parameters%(0)=blit_x_start%
+        parameters%(1)=blit_y_start%
+        parameters%(2)=blit_x_end%
+        parameters%(3)=blit_y_end%
+        parameters%(4)=fix_x%
+        parameters%(5)=fix_y%
+        parameters%(6)=fx%
+        parameters%(7)=fy%
+        BITBLT source_mfdb%(),destination_mfdb%(),parameters%()
+        '
+      ENDIF
+      '
+    ELSE
+      PBOX fix_x%,fix_y%,fix_x%+fix_width%-1,fix_y%+fix_height%-1
+      '
+    ENDIF
+    '
+  ELSE
+    PBOX fix_x%,fix_y%,fix_x%+fix_width%-1,fix_y%+fix_height%-1
+    '
+    '
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE full_view
+  '
+  ~MENU_BAR(stis_menu%,0)
+  ~FORM_DIAL(0,0,0,0,0,0,0,screen_width%,screen_height%)
+  ~WIND_UPDATE(1)
+  '
+  PBOX 0,0,screen_width%-1,screen_height%-1
+  '
+  full_x%=0
+  full_y%=0
+  full_w%=MIN(screen_width%,stis_x_plus%)
+  full_h%=MIN(screen_height%,stis_y_real%)
+  update_full
+  '
+  done%=0
+  DO
+    '
+    key_press&=EVNT_KEYBD()
+    scan_code%=SHR(key_press& AND &HFF00,8)  ! KEYBOARD SCAN CODE
+    SELECT scan_code%
+    CASE 15
+      done%=1
+      '
+    CASE 80  ! DOWN
+      IF stis_y_real%-full_y%>screen_height% THEN
+        full_y%=full_y%+(screen_height%/4)
+        IF stis_y_real%-full_y%<screen_height% THEN
+          full_y%=stis_y_real%-screen_height%
+        ENDIF
+        full_h%=full_y%+screen_height%
+        update_full
+      ENDIF
+      '
+    CASE 72  ! UP
+      IF full_y% THEN
+        full_y%=full_y%-(screen_height%/4)
+        IF full_y%<0 THEN
+          full_y%=0
+        ENDIF
+        full_h%=full_y%+screen_height%
+        update_full
+      ENDIF
+      '
+    CASE 75  ! LEFT
+      IF full_x% THEN
+        full_x%=full_x%-(screen_width%/4)
+        IF full_x%<0 THEN
+          full_x%=0
+        ENDIF
+        full_w%=full_x%+screen_width%
+        update_full
+      ENDIF
+      '
+    CASE 77  ! RIGHT
+      IF stis_x_plus%-full_x%>screen_width% THEN
+        full_x%=full_x%+(screen_width%/4)
+        IF stis_x_plus%-full_x%<screen_width% THEN
+          full_x%=stis_x_plus%-screen_width%
+        ENDIF
+        full_w%=full_x%+screen_width%
+        update_full
+      ENDIF
+      '
+    ENDSELECT
+    '
+  LOOP UNTIL done%
+  '
+  ~WIND_UPDATE(0)
+  ~FORM_DIAL(3,0,0,0,0,0,0,screen_width%,screen_height%)
+  ~MENU_BAR(stis_menu%,1)
+  long_event
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE update_full
+  '
+  source_mfdb%(0)=stis_exists%
+  source_mfdb%(1)=stis_x_size%
+  source_mfdb%(2)=stis_y_size%
+  source_mfdb%(3)=stis_x_size%/16
+  source_mfdb%(5)=screen_bits%
+  '
+  destination_mfdb%(0)=0
+  '
+  parameters%(0)=full_x%
+  parameters%(1)=full_y%
+  parameters%(2)=full_w%-1
+  parameters%(3)=full_h%-1
+  parameters%(4)=0
+  parameters%(5)=0
+  parameters%(6)=MIN(screen_width%,stis_x_plus%)-1
+  parameters%(7)=MIN(screen_height%,stis_y_real%)-1
+  '
+  BITBLT source_mfdb%(),destination_mfdb%(),parameters%()
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE trace
+  '
+  FOR trace_line%=0 TO stis_y_real%-1
+    @precent
+    '
+    source_mfdb%(0)=stis_exists%
+    source_mfdb%(1)=stis_x_size%
+    source_mfdb%(2)=stis_y_size%
+    source_mfdb%(3)=stis_x_size%/16
+    source_mfdb%(5)=screen_bits%
+    '
+    destination_mfdb%(0)=stis_exists%
+    destination_mfdb%(1)=stis_x_size%
+    destination_mfdb%(2)=stis_y_size%
+    destination_mfdb%(3)=stis_x_size%/16
+    destination_mfdb%(5)=screen_bits%
+    '
+    IF pic_bits&<16 THEN
+      @palette_to_palette_trace
+    ELSE
+      @image_to_palette_trace
+    ENDIF
+    '
+  NEXT trace_line%
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE palette_to_palette_trace
+  '
+  FOR trace_pixel%=0 TO pic_x_size%-1 STEP 16
+    '
+    FOR plane%=0 TO pic_bits&-1
+      bit_plane&(plane%)=INP&(#1)
+    NEXT plane%
+    '
+    FOR bit%=0 TO 15
+      level%=0
+      '
+      FOR plane%=0 TO pic_bits&-1
+        '
+        IF BTST(bit_plane&(plane%),15-bit%) THEN
+          level%=BSET(level%,plane%)
+        ENDIF
+        '
+      NEXT plane%
+      '
+      IF vdi THEN
+        '
+        SELECT pic_bits&
+        CASE 2
+          level%=two_plane%(level%)
+          '
+        CASE 4
+          level%=four_plane%(level%)
+          '
+        CASE 8
+          IF level%<16 THEN
+            level%=four_plane%(level%)
+          ENDIF
+          '
+        ENDSELECT
+        '
+      ENDIF
+      '
+      IF rgb THEN
+        level%=rgb(level%)
+      ENDIF
+      '
+      IF level% THEN
+        '
+        FOR trace_copy%=trace_pixel%+stepx%+bit% TO stis_x_size% STEP stepx%
+          '
+          IF trace_copy%-level%>-1 AND trace_copy%-level%<stis_x_size% THEN
+            @parameters1
+            BITBLT source_mfdb%(),destination_mfdb%(),parameters%()
+          ENDIF
+          '
+        NEXT trace_copy%
+        '
+      ENDIF
+      '
+    NEXT bit%
+    '
+  NEXT trace_pixel%
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE image_to_palette_trace
+  '
+  num_bytes%=pic_bits&/8
+  FOR trace_pixel%=0 TO pic_x_size%-1
+    '
+    level%=0
+    FOR col_info%=1 TO num_bytes%
+      temp%=INP(#1)
+      level%=level%+SHL(temp%,(num_bytes%-col_info%)*8)
+    NEXT col_info%
+    '
+    IF level%>1 THEN
+      FOR trace_copy%=trace_pixel%+stepx% TO stis_x_size% STEP stepx%
+        '
+        IF trace_copy%-level%>-1 AND trace_copy%-level%<stis_x_size% THEN
+          @parameters1
+          BITBLT source_mfdb%(),destination_mfdb%(),parameters%()
+        ENDIF
+        '
+      NEXT trace_copy%
+      '
+    ENDIF
+    '
+  NEXT trace_pixel%
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE precent
+  '
+  precent=trace_line%/pic_y_size%
+  @long_event
+  '
+  OB_W(status_dialog%,3)=status_w%*precent
+  update%=9
+  @update
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE tpi_open
+  '
+  test%=RINSTR(tpi_load_name$,"\")
+  IF test% THEN
+    tpi_load_name$=MID$(tpi_load_name$,test%+1)
+  ENDIF
+  '
+  FILESELECT #"Select file to convert to STIS",tpi_load_path$+"*.*",tpi_load_name$,tpi_load_name$
+  '
+  @long_event
+  IF tpi_load_name$<>"" AND EXIST(tpi_load_name$) THEN
+    '
+    window_title$=MID$(tpi_load_name$,1,125)
+    @title
+    '
+    test%=RINSTR(tpi_load_name$,"\")
+    IF test% THEN
+      tpi_load_path$=MID$(tpi_load_name$,1,test%)
+    ELSE
+      tpi_load_path$="\"
+    ENDIF
+    '
+    OPEN "I",#1,tpi_load_name$
+    @headder_info
+    '
+    IF test%=1 THEN
+      '
+      IF stis_exists%>0 THEN
+        d%=GEMDOS(73,L:stis_exists%)
+      ENDIF
+      '
+      IF INT(pic_x_size%/stepx%)=pic_x_size%/stepx% THEN
+        x_step%=(pic_x_size%/stepx%)+too_much%
+      ELSE
+        x_step%=INT(pic_x_size%/stepx%)+too_much%+1
+      ENDIF
+      '
+      stis_x_size%=x_step%*stepx%
+      stis_x_plus%=pic_x_size%+stepx%
+      '
+      IF INT(pic_y_size%/stepy%)=pic_y_size%/stepy% THEN
+        y_step%=pic_y_size%/stepy%
+      ELSE
+        y_step%=INT(pic_y_size%/stepy%)+1
+      ENDIF
+      '
+      stis_y_size%=y_step%*stepy%
+      stis_y_real%=pic_y_size%
+      '
+      pic_size%=((stis_x_size%*screen_bits%)/8)*stis_y_size%
+      stis_exists%=GEMDOS(72,L:pic_size%)
+      '
+      IF stis_exists%<=0 THEN
+        @no_mem
+      ELSE
+        '
+        IF pic_x_size%>stepx% THEN
+          '
+          @setup_status
+          '
+          @pic_make
+          '
+          CHAR{{OB_SPEC(status_dialog%,1)}}="Converting..."
+          update%=7
+          @update
+          '
+          horz_pos=0
+          vert_pos=0
+          '
+          ~WIND_SET(window_handle%,5,window_x%,window_y%,window_w%,window_h%)     ! SIZE WINDOW
+          ~WIND_GET(window_handle%,4,window_ix%,window_iy%,window_iw%,window_ih%) ! WINDOW SET TO TOP
+          '
+          @info_line_set
+          @size_sliders
+          @repair_window
+          '
+          ~MENU_IENABLE(stis_menu%,19,0)  ! DISABLE 'LOAD'
+          ~MENU_IENABLE(stis_menu%,20,0)  ! DISABLE 'CLEAR'
+          ~MENU_IENABLE(stis_menu%,21,0)  ! DISABLE 'SAVE'
+          ~MENU_IENABLE(stis_menu%,31,0)  ! DISABLE 'LOAD PAT'
+          '
+          tracing%=1
+          stis_saved%=0
+          @trace
+          tracing%=0
+          '
+          ~MENU_IENABLE(stis_menu%,19,1)  ! ENABLE 'LOAD'
+          ~MENU_IENABLE(stis_menu%,20,1)  ! ENABLE 'CLEAR'
+          ~MENU_IENABLE(stis_menu%,21,1)  ! ENABLE 'SAVE'
+          ~MENU_IENABLE(stis_menu%,31,1)  ! ENABLE 'LOAD PAT'
+          ~WIND_CLOSE(status_handle%)
+          ~WIND_DELETE(status_handle%)
+          '
+          status_handle%=-1
+          @repair_window
+          '
+        ELSE
+          @blank
+          txt$=" |Sorry, this picture is to |small for this pattern size, |it would not be visible. "
+          @long_event
+          ALERT 1,txt$,1,"OK",d%
+          window_title$="No STIS image"
+          @title
+          '
+        ENDIF
+        '
+      ENDIF
+      '
+    ENDIF
+    '
+  ENDIF
+  CLOSE #1
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE headder_info
+  '
+  IF LOF(#1)>127 THEN
+    test%=1
+    test_file_id$=""
+    '
+    FOR headder_char%=0 TO 3
+      char=INP(#1)
+      test_file_id$=test_file_id$+CHR$(char)
+    NEXT headder_char%
+    '
+    IF test_file_id$=pnt$ THEN  ! ID OF IMAGE
+      '
+      version&=INP&(#1)  ! FORMAT VERSION
+      palette_size&=INP&(#1)  ! NUMBER OF PENS IN PALETTE
+      '
+      hi%=INP(#1)
+      lo%=INP(#1)
+      pic_x_size%=hi%*256+lo%        ! WIDTH OF PIC
+      '
+      IF INT(pic_x_size%/16)*16<>pic_x_size% THEN  ! MUST BE MULTIPLY OF 16
+        pic_x_size%=(INT(pic_x_size%/16)+1)*16
+      ENDIF
+      '
+      hi%=INP(#1)
+      lo%=INP(#1)
+      pic_y_size%=hi%*256+lo%  ! HEIGHT OF PIC
+      '
+      pic_bits&=INP&(#1)  ! BITS PER PIXEL(PLANES IN PALETTE MODES)
+      compress&=INP&(#1)  ! IS FILE COMPRESSED
+      '
+      IF compress&=0 THEN
+        '
+        pic_bytes%=INP%(#1)  ! SIZE OF FILE IMAGE IN BYTES
+        '
+        SEEK #1,128  ! HEADDER SIZE
+        IF palette_size& THEN
+          '
+          change=31/1000
+          '
+          FOR color%=0 TO palette_size&-1
+            '
+            red=INP&(#1)
+            green=INP&(#1)
+            blue=INP&(#1)
+            red=red*change
+            green=green*change
+            blue=blue*change
+            rgb(color%)=blue+SHL(green,5)+SHL(red,11)
+            '
+          NEXT color%
+          '
+        ENDIF
+        '
+        SELECT pic_bits&
+        CASE 1
+          too_much%=2
+          '
+        CASE 2
+          too_much%=2
+          '
+        CASE 4
+          too_much%=3
+          '
+        CASE 8
+          too_much%=4
+          '
+        DEFAULT
+          too_much%=5  ! EXTRA AREA ON RIGHT OF STIS
+          '
+        ENDSELECT
+        '
+      ELSE
+        '
+        test%=0
+        txt$=" |Sorry STIS does not know how |to uncompress this image. | "
+        @long_event
+        ALERT 1,txt$,1,"OK",dummy%
+        '
+      ENDIF
+      '
+    ELSE
+      '
+      test%=0
+      @tpi_error
+      '
+    ENDIF
+    '
+  ELSE
+    '
+    test%=0
+    @tpi_error
+    '
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE setup_status
+  '
+  ~WIND_CALC(0,&X1011,status_x%,status_y%,status_width%,status_height%,status_ox%,status_oy%,status_ow%,status_oh%)
+  status_handle%=WIND_CREATE(&X1011,status_ox%,status_oy%,status_ow%,status_oh%)
+  '
+  IF status_handle%<1 THEN
+    @window_error
+    '
+    IF wind_flag%=0 THEN
+      @window_alert
+    ELSE
+      status_handle%=WIND_CREATE(&X1011,status_ox%,status_oy%,status_ow%,status_oh%)
+      ~WIND_OPEN(status_handle%,status_ox%,status_oy%,status_ow%,status_oh%)
+    ENDIF
+    '
+  ELSE
+    ~WIND_OPEN(status_handle%,status_ox%,status_oy%,status_ow%,status_oh%)
+  ENDIF
+  '
+  CHAR{status_title%}="STIS status"+CHR$(0)+CHR$(0)
+  ~WIND_SET(status_handle%,2,CARD(SWAP(status_title%)),CARD(status_title%),0,0)
+  '
+  CHAR{{OB_SPEC(status_dialog%,1)}}="Working..."
+  OB_W(status_dialog%,3)=0
+  update%=7
+  @update
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE pic_make
+  '
+  source_mfdb%(0)=stis_pattern%
+  source_mfdb%(1)=stepx%
+  source_mfdb%(2)=stepy%
+  source_mfdb%(3)=stepx%/16
+  source_mfdb%(5)=screen_bits%
+  '
+  destination_mfdb%(0)=stis_exists%
+  destination_mfdb%(1)=stis_x_size%
+  destination_mfdb%(2)=stis_y_size%
+  destination_mfdb%(3)=stis_x_size%/16
+  destination_mfdb%(5)=screen_bits%
+  '
+  FOR make_x%=0 TO x_step%-1
+    parameters%(0)=0
+    parameters%(1)=0
+    parameters%(2)=stepx%-1
+    parameters%(3)=stepy%-1
+    parameters%(4)=make_x%*stepx%
+    parameters%(5)=0
+    parameters%(6)=make_x%*stepx%+stepx%-1
+    parameters%(7)=stepy%-1
+    '
+    BITBLT source_mfdb%(),destination_mfdb%(),parameters%()
+    '
+  NEXT make_x%
+  '
+  source_mfdb%(0)=stis_exists%
+  source_mfdb%(1)=stis_x_size%
+  source_mfdb%(2)=stis_y_size%
+  source_mfdb%(3)=stis_x_size%/16
+  source_mfdb%(5)=screen_bits%
+  '
+  FOR make_y%=1 TO y_step%-1
+    '
+    parameters%(0)=0
+    parameters%(1)=0
+    parameters%(2)=stis_x_size%-1
+    parameters%(3)=stepy%-1
+    parameters%(4)=0
+    parameters%(5)=make_y%*stepy%
+    parameters%(6)=stis_x_size%-1
+    parameters%(7)=make_y%*stepy%+stepy%-1
+    '
+    BITBLT source_mfdb%(),destination_mfdb%(),parameters%()
+    '
+  NEXT make_y%
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE tpi_save
+  '
+  test%=RINSTR(tpi_save_name$,"\")
+  IF test% THEN
+    tpi_save_name$=MID$(tpi_save_name$,test%+1)
+  ENDIF
+  '
+  FILESELECT #"Save STIS image",pic_save_path$+"*.*",tpi_save_name$,tpi_save_name$
+  '
+  @long_event
+  IF tpi_save_name$<>"" AND tpi_save_name$<>pic_save_path$ AND RIGHT$(tpi_save_name$,1)<>"\" THEN
+    '
+    button%=1
+    '
+    IF EXIST(tpi_save_name$)
+      txt$=" |"+tpi_save_name$+" |exist, overwrite it ? | "
+      @long_event
+      ALERT 2,txt$,1,"OK|Cancel",button%
+    ENDIF
+    '
+    test%=RINSTR(tpi_save_name$,"\")
+    '
+    IF test% THEN
+      pic_save_path$=MID$(tpi_save_name$,1,test%)
+    ELSE
+      pic_save_path$="\"
+    ENDIF
+    '
+    IF button%=1 THEN
+      '
+      ' Saving...
+      ~FORM_DIAL(0,0,0,0,0,saving_x%,saving_y%,saving_width%,saving_height%)
+      ~OBJC_DRAW(saving_dialog%,0,1,saving_x%,saving_y%,saving_w%,saving_h%)
+      '
+      OPEN "O",#3,tpi_save_name$
+      '
+      ' P N T CHR$(0)
+      OUT #3,80,78,84,0
+      OUT& #3,256,screen_colors%
+      '
+      hi%=INT(stis_x_plus%/256)
+      lo%=stis_x_plus%-(hi%*256)
+      OUT #3,hi%,lo%
+      '
+      hi%=INT(stis_y_real%/256)
+      lo%=stis_y_real%-(hi%*256)
+      OUT #3,hi%,lo%
+      '
+      OUT& #3,screen_bits%,0
+      OUT% #3,((stis_x_plus%*screen_bits%)/8)*stis_y_real%
+      '
+      FOR headder%=10 TO 63
+        OUT& #3,0
+      NEXT headder%
+      '
+      FOR color%=0 TO screen_colors%-1
+        '
+        CONTRL(0)=26
+        CONTRL(1)=0
+        CONTRL(3)=2
+        CONTRL(6)=my_handle&
+        INTIN(0)=color%
+        INTIN(1)=0
+        VDISYS
+        red&=INTOUT(1)
+        green&=INTOUT(2)
+        blue&=INTOUT(3)
+        OUT& #3,red&,green&,blue&
+        '
+      NEXT color%
+      '
+      FOR row%=0 TO stis_y_real%-1
+        BPUT #3,stis_exists%+row%*((stis_x_size%*screen_bits%)/8),(stis_x_plus%*screen_bits%)/8
+      NEXT row%
+      stis_saved%=1
+      '
+      CLOSE #3
+      ~FORM_DIAL(3,0,0,0,0,saving_x%,saving_y%,saving_width%,saving_height%)
+      '
+    ENDIF
+    '
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE title
+  '
+  CHAR{window_title%}=window_title$+CHR$(0)+CHR$(0)
+  ~WIND_SET(window_handle%,2,CARD(SWAP(window_title%)),CARD(window_title%),0,0)
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE info_line
+  '
+  CHAR{info_line%}=info_line$+CHR$(0)+CHR$(0)
+  ~WIND_SET(window_handle%,3,CARD(SWAP(info_line%)),CARD(info_line%),0,0)
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE info_line_set
+  '
+  IF stis_exists% THEN
+    info_line$=STR$(stis_x_plus%)+"x"+STR$(stis_y_real%)+"x"+system_colors$+" STIS image"
+  ELSE
+    info_line$=""
+  ENDIF
+  '
+  @info_line
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE trying_to_quit
+  '
+  IF stis_saved%=1 OR tracing%=1 THEN
+    txt$=" |Sure you want to quit STIS ? | "
+    ALERT 2,txt$,1,"OK|Cancel",button%
+  ELSE
+    txt$=" |Sure you want to quit STIS ? |Current image not saved. | "
+    ALERT 2,txt$,1,"OK|Cancel|save",button%
+    IF button%=3 THEN
+      @tpi_save
+    ENDIF
+  ENDIF
+  '
+  IF button%<>2 THEN
+    '
+    ~WIND_CLOSE(window_handle%)
+    ~WIND_DELETE(window_handle%)
+    '
+    IF credit_handle%<>-1 THEN
+      ~WIND_CLOSE(credit_handle%)
+      ~WIND_DELETE(credit_handle%)
+    ENDIF
+    '
+    IF info_handle%<>-1 THEN
+      ~WIND_CLOSE(info_handle%)
+      ~WIND_DELETE(info_handle%)
+    ENDIF
+    '
+    IF pattern_handle%<>-1 THEN
+      ~WIND_CLOSE(pattern_handle%)
+      ~WIND_DELETE(pattern_handle%)
+    ENDIF
+    '
+    IF color_handle%<>-1 THEN
+      ~WIND_CLOSE(color_handle%)
+      ~WIND_DELETE(color_handle%)
+    ENDIF
+    '
+    IF status_handle%<>-1 THEN
+      ~WIND_CLOSE(status_handle%)
+      ~WIND_DELETE(status_handle%)
+    ENDIF
+    '
+    IF system_handle%<>-1 THEN
+      ~WIND_CLOSE(system_handle%)
+      ~WIND_DELETE(system_handle%)
+    ENDIF
+    '
+    IF stis_exists%>0 THEN
+      d%=GEMDOS(73,L:stis_exists%)  ! RELEASE MEMORY
+    ENDIF
+    '
+    IF stis_pattern%>0
+      d%=GEMDOS(73,L:stis_pattern%)   ! RELEASE MEMORY
+    ENDIF
+    '
+    @restore_colors
+    '
+    ~MENU_BAR(stis_menu%,0)
+    '
+    ~RSRC_FREE()
+    '
+    END
+    '
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE credits
+  '
+  IF credit_handle%=-1 THEN
+    ~WIND_CALC(0,&X1011,credit_x%,credit_y%,credit_width%,credit_height%,credit_ox%,credit_oy%,credit_ow%,credit_oh%)
+    credit_handle%=WIND_CREATE(&X1011,credit_ox%,credit_oy%,credit_ow%,credit_oh%)
+    '
+    IF credit_handle%<1 THEN
+      @window_error
+      '
+      IF wind_flag%=0 THEN
+        @window_alert
+      ELSE
+        credit_handle%=WIND_CREATE(&X1011,credit_ox%,credit_oy%,credit_ow%,credit_oh%)
+        ~WIND_OPEN(credit_handle%,credit_ox%,credit_oy%,credit_ow%,credit_oh%)
+      ENDIF
+      '
+    ELSE
+      ~WIND_OPEN(credit_handle%,credit_ox%,credit_oy%,credit_ow%,credit_oh%)
+      '
+    ENDIF
+    '
+    CHAR{credit_title%}="Credits"+CHR$(0)+CHR$(0)
+    ~WIND_SET(credit_handle%,2,CARD(SWAP(credit_title%)),CARD(credit_title%),0,0)
+    '
+  ELSE
+    ~WIND_SET(credit_handle%,10,0,0,0,0) ! WINDOW SET TO TOP
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE color_use
+  '
+  IF color_handle%=-1 THEN
+    ~WIND_CALC(0,&X1011,color_x%,color_y%,color_width%,color_height%,color_ox%,color_oy%,color_ow%,color_oh%)
+    color_handle%=WIND_CREATE(&X1011,color_ox%,color_oy%,color_ow%,color_oh%)
+    '
+    IF color_handle%<1 THEN
+      @window_error
+      '
+      IF wind_flag%=0 THEN
+        @window_alert
+      ELSE
+        color_handle%=WIND_CREATE(&X1011,color_ox%,color_oy%,color_ow%,color_oh%)
+        ~WIND_OPEN(color_handle%,color_ox%,color_oy%,color_ow%,color_oh%)
+      ENDIF
+      '
+    ELSE
+      ~WIND_OPEN(color_handle%,color_ox%,color_oy%,color_ow%,color_oh%)
+    ENDIF
+    '
+    CHAR{color_title%}="STIS color use"+CHR$(0)+CHR$(0)
+    ~WIND_SET(color_handle%,2,CARD(SWAP(color_title%)),CARD(color_title%),0,0)
+    '
+  ELSE
+    ~WIND_SET(color_handle%,10,0,0,0,0) ! WINDOW SET TO TOP
+  ENDIF
+  '
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE pattern_load
+  '
+  test%=RINSTR(pattern_name$,"\")
+  '
+  IF test% THEN
+    pattern_name$=MID$(pattern_name$,test%+1)
+  ENDIF
+  '
+  FILESELECT #"Load STIS pattern",pattern_path$+"*.*",pattern_name$,pattern_name$
+  '
+  @long_event
+  IF pattern_name$<>"" AND EXIST(pattern_name$) THEN
+    '
+    test%=RINSTR(pattern_name$,"\")
+    '
+    IF test% THEN
+      pattern_path$=MID$(pattern_name$,1,test%)
+    ELSE
+      pattern_path$="\"
+    ENDIF
+    '
+    OPEN "I",#2,pattern_name$
+    @pattern_get
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE pattern_get
+  '
+  IF LOF(#2)>127 THEN
+    test_file_id$=""
+    '
+    FOR headder_char%=0 TO 3
+      char=INP(#2)
+      test_file_id$=test_file_id$+CHR$(char)
+    NEXT headder_char%
+    '
+    IF test_file_id$=pnt$ THEN
+      '
+      version&=INP&(#2)
+      pat_palette_size&=INP&(#2)
+      '
+      hi%=INP(#2)
+      lo%=INP(#2)
+      pat_x_size%=hi%*256+lo%
+      '
+      hi%=INP(#2)
+      lo%=INP(#2)
+      pat_y_size%=hi%*256+lo%
+      '
+      pat_bits&=INP&(#2)
+      '
+      IF pat_bits&=screen_bits% THEN
+        '
+        compress&=INP&(#2)
+        '
+        IF compress&=0 THEN
+          '
+          pat_bytes%=INP%(#2)
+          SEEK #2,128
+          '
+          IF pat_palette_size&>0 THEN
+            '
+            FOR color%=0 TO pat_palette_size&-1
+              '
+              ' SET COLORS
+              red%=INP&(#2)
+              green%=INP&(#2)
+              blue%=INP&(#2)
+              CONTRL(0)=14
+              CONTRL(1)=0
+              CONTRL(3)=4
+              CONTRL(6)=my_handle&
+              INTIN(0)=color%
+              INTIN(1)=red%
+              INTIN(2)=green%
+              INTIN(3)=blue%
+              VDISYS
+              '
+            NEXT color%
+            '
+            system_colors%=0
+            ~MENU_IENABLE(stis_menu%,29,1)  ! ENABLE 'RESTORE'
+            '
+          ENDIF
+          '
+          stepy%=pat_y_size%
+          '
+          IF INT(pat_x_size%/16)=pat_x_size%/16 THEN
+            stepx%=pat_x_size%
+          ELSE
+            stepx%=INT(pat_x_size%/16)*16+16
+          ENDIF
+          '
+          IF stis_pattern%>0
+            d%=GEMDOS(73,L:stis_pattern%)   ! RELEASE MEMORY
+          ENDIF
+          '
+          stis_pattern%=GEMDOS(72,L:((stepx%*screen_bits%)/8)*stepy%)
+          '
+          IF stis_pattern%>0 THEN
+            '
+            pattern_title$=pattern_name$
+            BGET #2,stis_pattern%,pat_bytes%
+            '
+            ~MENU_IENABLE(stis_menu%,19,1)  ! ENABLE 'OPEN'
+            ~MENU_IENABLE(stis_menu%,32,1)  ! ENABLE 'VIEW'
+            '
+            pat_view_x%=0
+            pat_view_y%=0
+            '
+            IF pattern_handle%<>-1 THEN
+              @pattern_name
+              @repair_pattern
+            ENDIF
+            '
+            ~MENU_IENABLE(stis_menu%,32,1)  ! ENABLE 'VIEW'
+            '
+          ELSE
+            '
+            ~MENU_IENABLE(stis_menu%,19,0)    ! DISABLE 'LOAD'
+            ~MENU_IENABLE(stis_menu%,20,0)    ! DISABLE 'SAVE'
+            ~MENU_IENABLE(stis_menu%,21,0)    ! DISABLE 'CLEAR'
+            ~MENU_IENABLE(stis_menu%,32,0)    ! DISABLE 'VIEW'
+            '
+            txt$=" |Not enough free memory |to load this pattern. | "
+            @long_event
+            ALERT 1,txt$,1,"OK",d%
+            '
+            IF pattern_handle%<>-1 THEN
+              ~WIND_CLOSE(pattern_handle%)
+              ~WIND_DELETE(pattern_handle%)
+              pattern_handle%=-1
+            ENDIF
+            '
+          ENDIF
+          '
+        ELSE
+          txt$=" |Sorry, STIS cannot do  |compressed files. | "
+          @long_event
+          ALERT 1,txt$,1,"OK",d%
+        ENDIF
+        '
+      ELSE
+        txt$=" |Sorry, but this image does |not have the right number of |color planes for this screen. "
+        @long_event
+        ALERT 1,txt$,1,"OK",d%
+      ENDIF
+      '
+    ELSE
+      @tpi_error
+    ENDIF
+    '
+  ELSE
+    @tpi_error
+  ENDIF
+  '
+  CLOSE #2
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE pattern_init
+  '
+  SELECT screen_bits%
+  CASE 1
+    stis_data$="PAT_2."
+    '
+  CASE 2
+    stis_data$="PAT_4."
+    '
+  CASE 4
+    stis_data$="PAT_16."
+    '
+  CASE 8
+    stis_data$="PAT_256."
+    '
+  DEFAULT
+    stis_data$="PAT_"+STR$(screen_bits%)+"B."
+    '
+  ENDSELECT
+  '
+  ok%=0
+  '
+  IF EXIST(pattern_path$+stis_data$+"TPI")
+    ok%=1
+    stis_data$=stis_data$+"TPI"
+    '
+  ELSE
+    IF EXIST(pattern_path$+stis_data$+"PNT")
+      ok%=1
+      stis_data$=stis_data$+"PNT"
+    ENDIF
+    '
+  ENDIF
+  '
+  pattern_name$=pattern_path$+stis_data$
+  '
+  IF ok% THEN
+    '
+    OPEN "I",#2,pattern_name$
+    '
+    IF LOF(#2)>127 THEN
+      test_file_id$=""
+      '
+      FOR headder_char%=0 TO 3
+        char=INP(#2)
+        test_file_id$=test_file_id$+CHR$(char)
+      NEXT headder_char%
+      '
+      IF test_file_id$=pnt$ THEN
+        '
+        version&=INP&(#2)
+        pat_palette_size&=INP&(#2)
+        '
+        hi%=INP(#2)
+        lo%=INP(#2)
+        pat_x_size%=hi%*256+lo%
+        '
+        hi%=INP(#2)
+        lo%=INP(#2)
+        pat_y_size%=hi%*256+lo%
+        '
+        pat_bits&=INP&(#2)
+        '
+        IF pat_bits&=screen_bits% THEN
+          compress&=INP&(#2)
+          '
+          IF compress&=0 THEN
+            '
+            stepy%=pat_y_size%
+            '
+            IF INT(pat_x_size%/16)=pat_x_size%/16 THEN
+              stepx%=pat_x_size%
+            ELSE
+              stepx%=INT(pat_x_size%/16)*16+16
+            ENDIF
+            '
+            pat_bytes%=INP%(#2)
+            SEEK #2,128
+            '
+            IF pat_palette_size&>0 THEN
+              '
+              FOR color%=0 TO pat_palette_size&-1
+                '
+                ' SET COLORS
+                red%=INP&(#2)
+                green%=INP&(#2)
+                blue%=INP&(#2)
+                CONTRL(0)=14
+                CONTRL(1)=0
+                CONTRL(3)=4
+                CONTRL(6)=my_handle&
+                INTIN(0)=color%
+                INTIN(1)=red%
+                INTIN(2)=green%
+                INTIN(3)=blue%
+                VDISYS
+                '
+              NEXT color%
+              system_colors%=0
+              '
+            ENDIF
+            '
+            stis_pattern%=GEMDOS(72,L:((stepx%*pat_bits&)/8)*stepy%)
+            '
+            IF stis_pattern%>0 THEN
+              '
+              pattern_title$=pattern_name$
+              BGET #2,stis_pattern%,pat_bytes%
+              '
+            ENDIF
+            '
+          ENDIF
+          '
+        ENDIF
+        '
+      ENDIF
+      '
+    ENDIF
+    '
+    CLOSE #2
+    '
+  ENDIF
+  '
+  IF stis_pattern%<1 THEN
+    '
+    pattern_name$=pattern_path$+"DEFAULT"
+    '
+    stepx%=64
+    SELECT screen_bits%
+    CASE 1,2,4
+      stepy%=64
+    CASE 8
+      stepy%=48
+    CASE 16
+      stepy%=24
+    DEFAULT
+      stepy%=16
+    ENDSELECT
+    '
+    pat_bits&=screen_bits%
+    pat_bytes%=((stepx%*screen_bits%)/8)*stepy%
+    stis_pattern%=GEMDOS(72,L:pat_bytes%)
+    '
+    IF stis_pattern%>0 THEN
+      pattern_title$=pattern_name$
+      BMOVE default_pattern%,stis_pattern%,pat_bytes%
+    ENDIF
+    '
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE pattern_view
+  '
+  IF stis_pattern%>0 THEN
+    '
+    IF pattern_handle%=-1 THEN
+      pattern_handle%=WIND_CREATE(&X111111111111,window_maxx%,window_maxy%,window_maxw%,window_maxh%)
+      '
+      IF pattern_handle%<1 THEN
+        @window_error
+        '
+        IF wind_flag%=0 THEN
+          @window_alert
+        ELSE
+          '
+          pattern_handle%=WIND_CREATE(&X111111111111,window_maxx%,window_maxy%,window_maxw%,window_maxh%)
+          ~WIND_OPEN(pattern_handle%,pattern_x%,pattern_y%,pattern_w%,pattern_h%)
+        ENDIF
+        '
+      ELSE
+        ~WIND_OPEN(pattern_handle%,pattern_x%,pattern_y%,pattern_w%,pattern_h%)
+      ENDIF
+      '
+      @pattern_name
+      ~WIND_GET(pattern_handle%,4,pattern_ix%,pattern_iy%,pattern_iw%,pattern_ih%)
+      @pat_size_sliders
+      '
+    ELSE
+      ~WIND_SET(pattern_handle%,10,0,0,0,0) ! WINDOW SET TO TOP
+      '
+    ENDIF
+    '
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE pattern_name
+  '
+  pat_window_title$=MID$(pattern_title$,1,125)
+  CHAR{pattern_title%}=pat_window_title$+CHR$(0)+CHR$(0)
+  ~WIND_SET(pattern_handle%,2,CARD(SWAP(pattern_title%)),CARD(pattern_title%),0,0)
+  '
+  CHAR{pattern_infoline%}=STR$(stepx%)+"x"+STR$(stepy%)+" STIS pattern"+CHR$(0)+CHR$(0)
+  ~WIND_SET(pattern_handle%,3,CARD(SWAP(pattern_infoline%)),CARD(pattern_infoline%),0,0)
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE pat_sliders
+  '
+  SELECT arrow%
+  CASE 0                   ! TOP HALF OF SLIDER
+    pat_vert_pos=pat_vert_pos-((pattern_ih%/(stepy%-pattern_ih%))*1000)
+    IF pat_vert_pos<0 THEN
+      pat_vert_pos=0
+    ENDIF
+    ~WIND_SET(pattern_handle%,9,pat_vert_pos,0,0,0)
+    @repair_pattern
+    '
+  CASE 1                   ! BOTTOM HALF OF SLIDER
+    pat_vert_pos=pat_vert_pos+((pattern_ih%/(stepy%-pattern_ih%))*1000)
+    IF pat_vert_pos>1000 THEN
+      pat_vert_pos=1000
+    ENDIF
+    ~WIND_SET(pattern_handle%,9,pat_vert_pos,0,0,0)
+    @repair_pattern
+    '
+  CASE 2                   ! UP ARROW
+    IF pat_vert_pos<>0 AND pat_vert_slider_size<1000 THEN
+      pat_vert_pos=pat_vert_pos-((pattern_ih%/(stepy%-pattern_ih%))*100)
+      IF pat_vert_pos<0 THEN
+        pat_vert_pos=0
+      ENDIF
+      ~WIND_SET(pattern_handle%,9,pat_vert_pos,0,0,0)
+      @repair_pattern
+    ENDIF
+    '
+  CASE 3                  ! DOWN ARROW
+    IF pat_vert_pos<>1000 AND pat_vert_slider_size<1000 THEN
+      pat_vert_pos=pat_vert_pos+((pattern_ih%/(stepy%-pattern_ih%))*100)
+      IF pat_vert_pos>1000 THEN
+        pat_vert_pos=1000
+      ENDIF
+      ~WIND_SET(pattern_handle%,9,pat_vert_pos,0,0,0)
+      @repair_pattern
+    ENDIF
+    '
+  CASE 4                 ! LEFT OF SLIDER
+    pat_horz_pos=pat_horz_pos-((pattern_iw%/(stepx%-pattern_iw%))*1000)
+    IF pat_horz_pos<0 THEN
+      pat_horz_pos=0
+    ENDIF
+    ~WIND_SET(pattern_handle%,8,pat_horz_pos,0,0,0)
+    @repair_pattern
+    '
+  CASE 5                 ! RIGHT OF SLIDER
+    pat_horz_pos=pat_horz_pos+((pattern_iw%/(stepx%-pattern_iw%))*1000)
+    IF pat_horz_pos>1000 THEN
+      pat_horz_pos=1000
+    ENDIF
+    ~WIND_SET(pattern_handle%,8,pat_horz_pos,0,0,0)
+    @repair_pattern
+    '
+  CASE 6                 ! LEFT ARROW
+    IF pat_horz_pos<>0 AND pat_horz_slider_size<1000 THEN
+      pat_horz_pos=pat_horz_pos-((pattern_iw%/(stepx%-pattern_iw%))*100)
+      IF pat_horz_pos<0 THEN
+        pat_horz_pos=0
+      ENDIF
+      ~WIND_SET(pattern_handle%,8,pat_horz_pos,0,0,0)
+      @repair_pattern
+    ENDIF
+    '
+  CASE 7                ! RIGHT ARROW
+    IF pat_horz_pos<>1000 AND pat_horz_slider_size<1000 THEN
+      pat_horz_pos=pat_horz_pos+((pattern_iw%/(stepx%-pattern_iw%))*100)
+      IF pat_horz_pos>1000 THEN
+        pat_horz_pos=1000
+      ENDIF
+      ~WIND_SET(pattern_handle%,8,pat_horz_pos,0,0,0)
+      @repair_pattern
+    ENDIF
+    '
+  ENDSELECT
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE pat_size_sliders
+  '
+  pat_horz_slider_size=1000*(pattern_iw%/stepx%)
+  '
+  IF pat_horz_slider_size>1000 THEN
+    pat_horz_slider_size=1000
+  ENDIF
+  '
+  IF pat_horz_slider_size=1000 THEN
+    pat_horz_pos=0
+  ENDIF
+  '
+  pat_vert_slider_size=1000*(pattern_ih%/stepy%)
+  '
+  IF pat_vert_slider_size>1000 THEN
+    pat_vert_slider_size=1000
+  ENDIF
+  '
+  IF pat_vert_slider_size=1000 THEN
+    pat_vert_pos=0
+  ENDIF
+  '
+  ~WIND_SET(pattern_handle%,15,pat_horz_slider_size,0,0,0)
+  ~WIND_SET(pattern_handle%,16,pat_vert_slider_size,0,0,0)
+  ~WIND_SET(pattern_handle%,9,pat_vert_pos,0,0,0)
+  ~WIND_SET(pattern_handle%,8,pat_horz_pos,0,0,0)
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE repair_pattern
+  '
+  IF pat_horz_pos=0 THEN
+    pat_view_x%=0
+  ELSE
+    pat_view_x%=(pat_horz_pos/1000)*(stepx%-pattern_iw%)
+  ENDIF
+  '
+  IF pat_vert_pos=0 THEN
+    pat_view_y%=0
+  ELSE
+    pat_view_y%=(pat_vert_pos/1000)*(stepy%-pattern_ih%)
+  ENDIF
+  '
+  ~WIND_UPDATE(1)      ! TELL GEM WE ARE TAKING OVER
+  '
+  '                    GET FIRST RECTANGLE
+  ~WIND_GET(pattern_handle%,11,fix_x%,fix_y%,fix_width%,fix_height%)
+  '
+  @pat_copy
+  fix_done%=0
+  '
+  DO
+    '                  GET NEXT RECTANGLE
+    ~WIND_GET(pattern_handle%,12,fix_x%,fix_y%,fix_width%,fix_height%)
+    '
+    IF fix_width%+fix_height%=0 THEN   ! ANY MORE RECTANGLES ?
+      fix_done%=1
+    ELSE
+      @pat_copy
+    ENDIF
+    '
+  LOOP UNTIL fix_done%=1
+  '
+  ~WIND_UPDATE(0)          ! DONE!
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE pat_copy
+  '
+  ' FIND CORNERS OF BOX RECTANGLE TO REPAIR
+  blit_x_start%=pat_view_x%+fix_x%-pattern_ix%
+  blit_x_end%=pat_view_x%+fix_x%+fix_width%-(pattern_ix%+1)
+  blit_y_start%=pat_view_y%+fix_y%-pattern_iy%
+  blit_y_end%=pat_view_y%+fix_y%+fix_height%-(pattern_iy%+1)
+  '
+  fx%=fix_x%+fix_width%-1
+  fy%=fix_y%+fix_height%-1
+  '
+  pat_flag%=1
+  '
+  IF blit_x_start%>stepx% OR blit_y_start%>stepy% THEN
+    pat_flag%=0
+  ELSE
+    '
+    IF blit_x_end%>stepx%-1 THEN
+      blit_x_end%=stepx%-1
+      pat_flag%=2
+    ENDIF
+    '
+    IF blit_y_end%>stepy%-1 THEN
+      blit_y_end%=stepy%-1
+      pat_flag%=2
+    ENDIF
+    '
+  ENDIF
+  '
+  IF pat_flag% THEN
+    '
+    IF pat_flag%=2 THEN
+      PBOX fix_x%,fix_y%,fix_x%+fix_width%-1,fix_y%+fix_height%-1
+      '
+    ENDIF
+    '
+    IF blit_x_start%<blit_x_end% AND blit_y_start%<blit_y_end% THEN
+      '
+      ' ADDRESS, WIDTH, HEIGHT, WIDTH IN WORDS, # OF PLANES
+      source_mfdb%(0)=stis_pattern%
+      source_mfdb%(1)=stepx%
+      source_mfdb%(2)=stepy%
+      source_mfdb%(3)=stepx%/16
+      source_mfdb%(5)=screen_bits%
+      '
+      ' 0=SCREEN, FILLED IN BY COMMAND (NEEDS SAME INFO AS SOURCE)
+      destination_mfdb%(0)=0
+      '
+      ' CORNERS OF SOURCE/DEST.
+      parameters%(0)=blit_x_start%
+      parameters%(1)=blit_y_start%
+      parameters%(2)=blit_x_end%
+      parameters%(3)=blit_y_end%
+      parameters%(4)=fix_x%
+      parameters%(5)=fix_y%
+      parameters%(6)=fx%
+      parameters%(7)=fy%
+      '
+      BITBLT source_mfdb%(),destination_mfdb%(),parameters%()
+      '
+    ENDIF
+    '
+  ELSE
+    PBOX fix_x%,fix_y%,fix_x%+fix_width%-1,fix_y%+fix_height%-1
+    '
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE blank
+  '
+  IF stis_exists%>0 THEN ! IF STIS EXISTS THEN RELEASE MEMORY
+    d%=GEMDOS(73,L:stis_exists%)
+  ENDIF
+  '
+  stis_exists%=0
+  stis_x_size%=0
+  stis_x_plus%=0
+  stis_y_size%=0
+  stis_y_real%=0
+  '
+  @size_sliders
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE no_mem
+  '
+  @blank
+  txt$=" |Not enough free memory |to convert this image to STIS. | "
+  ALERT 1,txt$,1,"OK",d%
+  '
+  window_title$="No STIS image"
+  @title
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE stis_erase
+  '
+  txt$=" |Sure you want to |erase this STIS image ? | "
+  ALERT 2,txt$,1,"OK|Cancel",button%
+  '
+  IF button%=1 THEN
+    '
+    @blank
+    stis_saved%=1
+    window_title$="No STIS image"
+    @title
+    @info_line_set
+    '
+    ~MENU_IENABLE(stis_menu%,20,0)  ! DISABLE 'CLEAR'
+    ~MENU_IENABLE(stis_menu%,21,0)  ! DISABLE 'SAVE'
+    '
+    @repair_window
+    '
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE rsc_setup
+  '
+  IF EXIST(rsc$) THEN
+    rsc%=RSRC_LOAD(rsc$)
+    '
+  ELSE ! CAN'T FIND RSC FILE
+    txt$=" |STIS cannot find it's RSC file. |Do you want to look for it ? | "
+    ALERT 2,txt$,1,"OK|Cancel",button%
+    '
+    IF button%=1 THEN
+      rsc$="\STIS.RSC"
+      FILESELECT #"Find STIS RSC file",rsc$,"STIS.RSC",rsc$
+      '
+      IF rsc$<>"" AND EXIST(rsc$) THEN
+        rsc%=RSRC_LOAD(rsc$)
+        @path_setup2
+      ELSE
+        END
+      ENDIF
+      '
+    ELSE
+      END
+    ENDIF
+    '
+  ENDIF
+  '
+  IF rsc%=0 THEN ! STILL DIDN'T FIND RSC FILE
+    txt$=" |STIS aborted: |Error loading .RSC file. | "
+    ALERT 1,txt$,1,"OK",d%
+    END
+  ENDIF
+  '
+  ' GET ADDRESS OF EACH TREE OF RSC
+  ~RSRC_GADDR(0,0,stis_menu%)
+  ~RSRC_GADDR(0,1,info_dialog%)
+  ~RSRC_GADDR(0,2,credit_dialog%)
+  ~RSRC_GADDR(0,3,color_dialog%)
+  ~RSRC_GADDR(0,4,status_dialog%)
+  ~RSRC_GADDR(0,5,system_dialog%)
+  ~RSRC_GADDR(0,6,saving_dialog%)
+  '
+  ' CENTER OBJ. ON SCREEN
+  ~FORM_CENTER(info_dialog%,info_x%,info_y%,info_width%,info_height%)
+  ~FORM_CENTER(credit_dialog%,credit_x%,credit_y%,credit_width%,credit_height%)
+  ~FORM_CENTER(color_dialog%,color_x%,color_y%,color_width%,color_height%)
+  ~FORM_CENTER(status_dialog%,status_x%,status_y%,status_width%,status_height%)
+  ~FORM_CENTER(system_dialog%,system_x%,system_y%,system_width%,system_height%)
+  ~FORM_CENTER(saving_dialog%,saving_x%,saving_y%,saving_width%,saving_height%)
+  '
+  ' GET POSITION OF BOX USED TO DISPLAY STATUS
+  status_w%=OB_W(status_dialog%,2)
+  '
+  @system_text_init
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE system_info
+  '
+  IF system_handle%=-1 THEN
+    '
+    ~WIND_CALC(0,&X1011,system_x%,system_y%,system_width%,system_height%,system_ox%,system_oy%,system_ow%,system_oh%)
+    system_handle%=WIND_CREATE(&X1011,system_ox%,system_oy%,system_ow%,system_oh%)
+    '
+    IF system_handle%<1 THEN
+      @window_error
+      '
+      IF wind_flag%=0 THEN
+        @window_alert
+      ELSE
+        system_handle%=WIND_CREATE(&X1011,system_ox%,system_oy%,system_ow%,system_oh%)
+        @system_time
+        ~WIND_OPEN(system_handle%,system_ox%,system_oy%,system_ow%,system_oh%)
+      ENDIF
+      '
+    ELSE
+      '
+      @system_time
+      ~WIND_OPEN(system_handle%,system_ox%,system_oy%,system_ow%,system_oh%)
+      '
+    ENDIF
+    '
+    CHAR{system_title%}="System information"+CHR$(0)+CHR$(0)
+    ~WIND_SET(system_handle%,2,CARD(SWAP(system_title%)),CARD(system_title%),0,0)
+    '
+  ELSE
+    ~WIND_SET(system_handle%,10,0,0,0,0) ! WINDOW SET TO TOP
+    '
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE system_time
+  '
+  IF system_handle%<>-1 THEN ! <>-1 MEANS WINDOW IS OPEN
+    '
+    ' GET SIZE LARGEST BLOCK OF FREE MEMORY FROM GEMDOS
+    free_block%=GEMDOS(72,L:-1)
+    '
+    CHAR{{OB_SPEC(system_dialog%,2)}}=STR$(free_block%)
+    CHAR{{OB_SPEC(system_dialog%,12)}}=TIME$
+    CHAR{{OB_SPEC(system_dialog%,14)}}=DATE$
+    '
+    '
+    ~WIND_UPDATE(1)      ! TELL GEM WE ARE TAKING OVER
+    '
+    ' GET FIRST RECTANGLE TO REPAIR
+    ~WIND_GET(system_handle%,11,fix_x%,fix_y%,fix_width%,fix_height%)
+    '
+    IF fix_width%+fix_height%<>0 THEN   ! ANY MORE RECTANGLES ?
+      '
+      IF free_block%<>old_block% ! ONLY NEED TO UPDATE THIS IF MEMORY CHANGED
+        ~OBJC_DRAW(system_dialog%,2,1,fix_x%,fix_y%,fix_width%,fix_height%)
+      ENDIF
+      '
+      ' TIME/DATE
+      ~OBJC_DRAW(system_dialog%,12,1,fix_x%,fix_y%,fix_width%,fix_height%)
+      ~OBJC_DRAW(system_dialog%,14,1,fix_x%,fix_y%,fix_width%,fix_height%)
+      '
+    ENDIF
+    '
+    fix_done%=0
+    '
+    DO
+      '
+      ' GET NEXT RECTANGLE TO REPAIR
+      ~WIND_GET(system_handle%,12,fix_x%,fix_y%,fix_width%,fix_height%)
+      '
+      IF fix_width%+fix_height%=0 THEN   ! ANY MORE RECTANGLES ?
+        fix_done%=1
+        '
+      ELSE
+        IF free_block%<>old_block%
+          ~OBJC_DRAW(system_dialog%,2,1,fix_x%,fix_y%,fix_width%,fix_height%)
+        ENDIF
+        ~OBJC_DRAW(system_dialog%,12,1,fix_x%,fix_y%,fix_width%,fix_height%)
+        ~OBJC_DRAW(system_dialog%,14,1,fix_x%,fix_y%,fix_width%,fix_height%)
+      ENDIF
+      '
+    LOOP UNTIL fix_done%=1
+    '
+    ~WIND_UPDATE(0)          ! DONE!
+    '
+    old_block%=free_block%
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE system_text_init
+  '
+  SELECT screen_bits%
+  CASE 1 ! MONO
+    system_colors$="2"
+    '
+  CASE 2 ! 4 COLOR
+    system_colors$="4"
+    '
+  CASE 4 ! 16 COLOR
+    system_colors$="16"
+    '
+  CASE 8 ! 256 COLOR
+    system_colors$="256"
+    '
+  DEFAULT ! ?? BIT COLOR
+    '
+    system_colors$=STR$(screen_bits%)+" bit"
+  ENDSELECT
+  '
+  IF system_palette% THEN
+    system_palette$=STR$(system_palette%)
+  ELSE
+    system_palette$=">32767"
+  ENDIF
+  '
+  ' SIZE OF SCREEN IN BYTES
+  screen_bytes%=((screen_width%*screen_bits%)/8)*screen_height%
+  '
+  CHAR{{OB_SPEC(system_dialog%,4)}}=STR$(screen_width%)+"x"+STR$(screen_height%)
+  CHAR{{OB_SPEC(system_dialog%,6)}}=STR$(screen_bytes%)
+  CHAR{{OB_SPEC(system_dialog%,8)}}=system_palette$
+  CHAR{{OB_SPEC(system_dialog%,10)}}=system_colors$
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE store_colors
+  '
+  DIM palette%(screen_colors%,2)
+  '
+  FOR color%=0 TO screen_colors%-1
+    '
+    CONTRL(0)=26              ! VQ_COLOR
+    CONTRL(1)=0
+    CONTRL(3)=2
+    CONTRL(6)=my_handle&
+    INTIN(0)=color%               ! VDI COLOR INDEX
+    INTIN(1)=0                ! FLAG 0= ,1=
+    VDISYS
+    palette%(color%,0)=INTOUT(1)  ! RED VALUE 0-1000
+    palette%(color%,1)=INTOUT(2)  ! GREEN  "    "
+    palette%(color%,2)=INTOUT(3)  ! BLUE   "    "
+    '
+  NEXT color%
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE restore_colors
+  '
+  FOR color%=0 TO screen_colors%-1
+    '
+    CONTRL(0)=14                 ! VS_COLOR
+    CONTRL(1)=0
+    CONTRL(3)=4
+    CONTRL(6)=my_handle&
+    INTIN(0)=color%              ! COLOR INDEX
+    INTIN(1)=palette%(color%,0)  ! RED VALUE 0-1000
+    INTIN(2)=palette%(color%,1)  ! GREEN  "     "
+    INTIN(3)=palette%(color%,2)  ! BLUE   "     "
+    VDISYS
+    '
+  NEXT color%
+  '
+  system_colors%=1
+  ~MENU_IENABLE(stis_menu%,29,0)  ! DISABLE 'RESTORE'
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE c_restore
+  '
+  txt$=" |Restore default colors ? | "
+  ALERT 2,txt$,1,"OK|Cancel",button%
+  '
+  IF button%=1 THEN
+    @restore_colors
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE tpi_info
+  '
+  IF info_handle%=-1 THEN ! -1=NO WINDOW
+    @info_text
+    '
+    ' GET SIZE OF WINDOW TO FIT DIALOG INSIDE
+    ~WIND_CALC(0,&X1011,info_x%,info_y%,info_width%,info_height%,info_ox%,info_oy%,info_ow%,info_oh%)
+    info_handle%=WIND_CREATE(&X1011,info_ox%,info_oy%,info_ow%,info_oh%)
+    '
+    IF info_handle%<1 THEN ! <1=ERROR - NO WINDOW TO OPEN ?
+      @window_error
+      IF wind_flag%=0 THEN ! THERE WAS NO OTHER WINDOW TO CLOSE
+        @window_alert
+        '
+      ELSE
+        info_handle%=WIND_CREATE(&X1011,info_ox%,info_oy%,info_ow%,info_oh%)
+        ~WIND_OPEN(info_handle%,info_ox%,info_oy%,info_ow%,info_oh%)
+      ENDIF
+      '
+    ELSE
+      ~WIND_OPEN(info_handle%,info_ox%,info_oy%,info_ow%,info_oh%)
+    ENDIF
+    '
+    CHAR{info_title%}="File information"+CHR$(0)+CHR$(0)
+    ~WIND_SET(info_handle%,2,CARD(SWAP(info_title%)),CARD(info_title%),0,0)
+  ELSE
+    ~WIND_SET(info_handle%,10,0,0,0,0) ! WINDOW SET TO TOP
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE info_load
+  '
+  FILESELECT #"PNT/TPI file information",info_path$+"*.*",info_name$,info_name$
+  '
+  @long_event
+  '
+  IF info_name$<>"" AND EXIST(info_name$) THEN
+    '
+    ' EXTRACT PATH MINUS FILENAME
+    test%=RINSTR(info_name$,"\")
+    '
+    IF test% THEN
+      info_path$=MID$(info_name$,1,test%)
+    ELSE
+      info_path$="\"
+    ENDIF
+    '
+    OPEN "I",#4,info_name$
+    '
+    IF test% THEN
+      info_name$=MID$(info_name$,test%+1) ! EXTRACT FILENAME
+    ENDIF
+    '
+    ' GET FILE SIZE
+    info_size%=LOF(#4)
+    '
+    IF info_size%>128 THEN ! HEADDER=128 BYTES, FILE SIZE MUST BE >128 BYTES
+      '
+      ' FILE ID SHOULD = 'PNT'
+      test_file_id$=""
+      '
+      FOR headder_char%=0 TO 3
+        char=INP(#4)
+        test_file_id$=test_file_id$+CHR$(char)
+      NEXT headder_char%
+      '
+      IF test_file_id$=pnt$ THEN
+        '
+        d%=INP&(#4)
+        info_palette_size&=INP&(#4)
+        '
+        hi%=INP(#4)
+        lo%=INP(#4)
+        info_x_text%=lo%+256*hi%
+        '
+        hi%=INP(#4)
+        lo%=INP(#4)
+        info_y_text%=lo%+256*hi%
+        '
+        info_bits&=INP&(#4)
+        info_compress&=INP&(#4)
+        info%=1
+        @info_text
+        '
+        update%=2
+        @update
+        '
+      ELSE
+        '
+        @tpi_error
+      ENDIF
+      '
+    ELSE
+      '
+      @tpi_error
+    ENDIF
+    '
+  ENDIF
+  '
+  CLOSE #4
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE info_text
+  '
+  IF info%=1 THEN
+    '
+    ' FILENAME
+    CHAR{{OB_SPEC(info_dialog%,2)}}=info_name$
+    '
+    ' FILE SIZE
+    CHAR{{OB_SPEC(info_dialog%,4)}}=STR$(info_size%)
+    '
+    IF info_palette_size& THEN
+      '
+      ' SIZE OF PALETTE
+      CHAR{{OB_SPEC(info_dialog%,6)}}=STR$(info_palette_size&)
+    ELSE
+      '
+      ' BITS PER PIXEL
+      CHAR{{OB_SPEC(info_dialog%,6)}}=STR$(info_bits&)+" bit"
+    ENDIF
+    '
+    ' WIDTH
+    CHAR{{OB_SPEC(info_dialog%,8)}}=STR$(info_x_text%)
+    '
+    ' HEIGHT
+    CHAR{{OB_SPEC(info_dialog%,10)}}=STR$(info_y_text%)
+    '
+    SELECT info_compress&
+    CASE 0
+      '
+      ' NOT COMPRESSED
+      CHAR{{OB_SPEC(info_dialog%,12)}}="None"
+    CASE 1
+      '
+      ' RLE
+      CHAR{{OB_SPEC(info_dialog%,12)}}="RLE"
+    DEFAULT
+      '
+      ' DON'T KNOW TYPE
+      CHAR{{OB_SPEC(info_dialog%,12)}}=STR$(info_compress&)
+    ENDSELECT
+  ELSE
+    '
+    FOR text%=2 TO 12 STEP 2
+      '
+      ' ERASE EVERYTHING
+      CHAR{{OB_SPEC(info_dialog%,text%)}}=""
+    NEXT text%
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE update
+  '
+  ~WIND_UPDATE(1)      ! TELL GEM WE ARE TAKING OVER
+  '
+  com%=11              ! GET FIRST RECTANGLE
+  @rec_get
+  '
+  IF fix_width%+fix_height%<>0 THEN
+    @update_draw
+  ENDIF
+  '
+  fix_done%=0
+  '
+  DO
+    '
+    com%=12            ! GET NEXT RECTANGLE
+    @rec_get
+    '
+    IF fix_width%+fix_height%=0 THEN   ! ANY MORE RECTANGLES ?
+      fix_done%=1
+    ELSE
+      '
+      @update_draw
+    ENDIF
+    '
+  LOOP UNTIL fix_done%=1
+  '
+  ~WIND_UPDATE(0)          ! TELL GEM WE ARE DONE!
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE rec_get
+  '
+  SELECT update%
+  CASE 1 ! CREDITS
+    ~WIND_GET(credit_handle%,com%,fix_x%,fix_y%,fix_width%,fix_height%)
+    '
+  CASE 2,3 ! INFO, BUTTON
+    ~WIND_GET(info_handle%,com%,fix_x%,fix_y%,fix_width%,fix_height%)
+    '
+  CASE 4,5 ! COLOR, BUTTON
+    ~WIND_GET(color_handle%,com%,fix_x%,fix_y%,fix_width%,fix_height%)
+    '
+  CASE 7,9 ! STATUS
+    ~WIND_GET(status_handle%,com%,fix_x%,fix_y%,fix_width%,fix_height%)
+    '
+  CASE 8   ! SYSTEM INFO
+    ~WIND_GET(system_handle%,com%,fix_x%,fix_y%,fix_width%,fix_height%)
+    '
+  ENDSELECT
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE update_draw
+  '
+  ' SELECT OBJECT(S) TO REDRAW
+  '
+  SELECT update%
+  CASE 1 ! CREDITS
+    ~OBJC_DRAW(credit_dialog%,0,1,fix_x%,fix_y%,fix_width%,fix_height%)
+    '
+  CASE 2 ! INFO
+    ~OBJC_DRAW(info_dialog%,0,1,fix_x%,fix_y%,fix_width%,fix_height%)
+    '
+  CASE 3 ! INFO_BUTTON
+    ~OBJC_DRAW(info_dialog%,13,1,fix_x%,fix_y%,fix_width%,fix_height%)
+    '
+  CASE 4 ! COLOR
+    ~OBJC_DRAW(color_dialog%,0,2,fix_x%,fix_y%,fix_width%,fix_height%)
+    '
+  CASE 5 ! COLOR BUTTON
+    ~OBJC_DRAW(color_dialog%,button%,1,fix_x%,fix_y%,fix_width%,fix_height%)
+    '
+  CASE 7 ! STATUS
+    ~OBJC_DRAW(status_dialog%,0,2,fix_x%,fix_y%,fix_width%,fix_height%)
+    '
+  CASE 8 ! SYSTEM
+    ~OBJC_DRAW(system_dialog%,0,1,fix_x%,fix_y%,fix_width%,fix_height%)
+    '
+  CASE 9 ! STATUS
+    ~OBJC_DRAW(status_dialog%,3,1,fix_x%,fix_y%,fix_width%,fix_height%)
+    '
+  ENDSELECT
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE settings_save
+  '
+  OPEN "O",#5,inf_path$
+  OUT #5,rgb,vdi
+  CLOSE #5
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE settings_load
+  '
+  IF EXIST(inf_path$) THEN
+    OPEN "I",#5,inf_path$
+    rgb=INP(#5)
+    vdi=INP(#5)
+    CLOSE #5
+  ELSE
+    rgb=0
+    vdi=1
+    rgb_factor=1
+  ENDIF
+  IF rgb THEN
+    OB_STATE(color_dialog%,1)=BSET(OB_STATE(color_dialog%,1),0)
+  ELSE
+    OB_STATE(color_dialog%,1)=BCLR(OB_STATE(color_dialog%,1),0)
+  ENDIF
+  IF vdi THEN
+    OB_STATE(color_dialog%,2)=BSET(OB_STATE(color_dialog%,2),0)
+  ELSE
+    OB_STATE(color_dialog%,2)=BCLR(OB_STATE(color_dialog%,2),0)
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE tpi_error
+  '
+  txt$=" |STIS aborted process: |Not PNT/TPI image. | "
+  @long_event
+  ALERT 1,txt$,1,"OK",d%
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE long_event
+  '
+  ' GIVE GEM A LITTLE TIME TO UPDATE WINDOWS-N-OTHER STUFF
+  '
+  FOR long_update%=0 TO 9
+    @event
+  NEXT long_update%
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE window_error
+  '
+  ' NO WINDOW TO OPEN, SO TRY TO CLOSE AN UNIMPORTANT ONE
+  '
+  wind_flag%=0
+  '
+  IF credit_handle%<>-1 THEN
+    wind_flag%=credit_handle%
+    credit_handle%=-1
+  ENDIF
+  '
+  IF info_handle%<>-1 AND wind_flag%=0 THEN
+    wind_flag%=info_handle%
+    info_handle%=-1
+  ENDIF
+  '
+  IF pattern_handle%<>-1 AND wind_flag%=0 THEN
+    wind_flag%=pattern_handle%
+    pattern_handle%=-1
+  ENDIF
+  '
+  IF color_handle%<>-1 AND wind_flag%=0 THEN
+    wind_flag%=color_handle%
+    color_handle%=-1
+  ENDIF
+  '
+  IF system_handle%<>-1 AND wind_flag%=0 THEN
+    wind_flag%=system_handle%
+    system_handle%=-1
+  ENDIF
+  '
+  IF status_handle%<>-1 AND wind_flag%=0 THEN
+    wind_flag%=status_handle%
+    status_handle%=-1
+  ENDIF
+  '
+  IF wind_flag% THEN
+    ~WIND_CLOSE(wind_flag%)
+    ~WIND_DELETE(wind_flag%)
+  ENDIF
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE window_alert
+  '
+  txt$=" |No window to open. |Try closing a window . | "
+  ALERT 1,txt$,1,"OK",d%
+  '
+RETURN
+' ----------------------------------------------------------------------------
+> PROCEDURE parameters1
+  '
+  ' LEFT-TOP AND BOTTOM-RIGHT CORNERS OF SOURCE AND DEST.
+  ' FOR BITBLT COMMAND
+  '
+  parameters%(0)=trace_copy%
+  parameters%(1)=trace_line%
+  parameters%(2)=trace_copy%
+  parameters%(3)=trace_line%
+  parameters%(4)=trace_copy%-level%
+  parameters%(5)=trace_line%
+  parameters%(6)=trace_copy%-level%
+  parameters%(7)=trace_line%
+  '
+RETURN
+' ----------------------------------------------------------------------------
+' DATA TO CONVERT COLORS TO VDI ORDER
+' 2 PLANES
+DATA 0,2,3,1
+' 4 PLANES
+DATA 0,2,3,6,4,7,5,8,9,10,11,14,12,15,13,1

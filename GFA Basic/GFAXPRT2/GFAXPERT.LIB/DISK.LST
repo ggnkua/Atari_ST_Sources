@@ -1,0 +1,300 @@
+' ****************
+' *** DISK.LST ***
+' ****************
+'
+DEFWRD "a-z"
+'
+> PROCEDURE disk.name(drive$,VAR disk.name$)
+  ' *** search for name of disk on drive$ (usually "A")
+  LOCAL dta.adres%,stat,k
+  dta.adres%=FGETDTA()
+  stat=FSFIRST(drive$+":\*.*",8)         ! disk-name only (bit 3)
+  IF stat=0
+    disk.name$=CHAR{dta.adres%+30}
+  ELSE IF stat=-33
+    disk.name$=""                        ! no name on disk
+  ELSE
+    ALERT 3,"*** ERROR ***| |after FSFIRST",1,"EXIT",k
+    @exit
+  ENDIF
+RETURN
+' **********
+'
+> PROCEDURE dir.folders
+  ' *** put folders in main directory in array dir.folders$()
+  ' *** folders should not have an extension !!
+  ' *** (FSFIRST and FSNEXT find both folders and files with bit 4 set)
+  ' *** global :  DIR.FOLDERS$()  LAST.FOLDER
+  LOCAL n,dta.adres%,stat
+  n=0
+  ERASE dir.folders$()
+  DIM dir.folders$(20)               ! not more than 20 folders
+  dta.adres%=FGETDTA()
+  stat=FSFIRST("*",16)               ! 1st folder (bit 4 set)
+  IF stat=0
+    LET dir.folders$(1)=CHAR{dta.adres%+30}
+    n=1
+  ENDIF
+  REPEAT
+    stat=FSNEXT()                    ! next folder
+    IF stat=0
+      INC n
+      LET dir.folders$(n)=CHAR{dta.adres%+30}
+    ENDIF
+  UNTIL stat<>0
+  last.folder=n
+RETURN
+' **********
+'
+> PROCEDURE dir.files(path$,ext$)
+  ' *** put all files with path path$ and extension ext$ in array dir.files$()
+  ' *** global :  DIR.FILES$()  LAST.FILE
+  LOCAL n,search$,dta.adres%,stat
+  n=0
+  ERASE dir.files$()
+  DIM dir.files$(50)                    ! not more than 50 files
+  IF RIGHT$(path$)="\"
+    search$=path$+"*."+ext$
+  ELSE
+    search$=path$+"\*."+ext$
+  ENDIF
+  dta.adres%=FGETDTA()
+  stat=FSFIRST(search$,0)               ! 1st file
+  IF stat=0
+    LET dir.files$(1)=CHAR{dta.adres%+30}
+    n=1
+  ENDIF
+  REPEAT
+    stat=FSNEXT()                       ! next file
+    IF stat=0
+      INC n
+      LET dir.files$(n)=CHAR{dta.adres%+30}
+    ENDIF
+  UNTIL stat<>0
+  last.file=n
+RETURN
+' **********
+'
+> PROCEDURE disk.space(drive)
+  ' *** return data about disk-format from GEMDOS 54 (Dfree)
+  ' *** global : TOTAL.CLUSTERS  FREE.CLUSTERS  USED.CLUSTERS  FREE.BYTES
+  ' ***          USED.BYTES  SECTOR.BYTES  CLUSTER.BYTES  CLUSTER.SECTORS
+  ' ***          TOTAL.SECTORS
+  LOCAL buffer$,buffer%
+  buffer$=SPACE$(16)
+  buffer%=VARPTR(buffer$)
+  VOID GEMDOS(&H36,L:buffer%,drive)
+  free.clusters=LPEEK(buffer%)
+  total.clusters=LPEEK(buffer%+4)
+  used.clusters=total.clusters-free.clusters
+  sector.bytes=LPEEK(buffer%+8)
+  cluster.sectors=LPEEK(buffer%+12)
+  total.sectors=total.clusters*cluster.sectors
+  cluster.bytes=sector.bytes*cluster.sectors
+  free.bytes=free.clusters*cluster.bytes        ! same as DFREE(0)
+  used.bytes=used.clusters*cluster.bytes
+RETURN
+' **********
+'
+> PROCEDURE disk.parameter.block(drive)
+  ' *** return data about disk-format from DPB-buffer
+  ' *** global : SECTOR.BYTES  CLUSTER.SECTORS  CLUSTER.BYTES
+  ' ***          DIR.SECTORS  FAT.SECTORS  FAT2.START.SECTOR
+  ' ***          DATA.START.SECTOR  DIR.START.SECTOR  DATA.CLUSTERS
+  LOCAL dpb.adres%
+  dpb.adres%=BIOS(7,drive)
+  sector.bytes=DPEEK(dpb.adres%)
+  cluster.sectors=DPEEK(dpb.adres%+2)
+  cluster.bytes=DPEEK(dpb.adres%+4)
+  LET dir.sectors=DPEEK(dpb.adres%+6)
+  fat.sectors=DPEEK(dpb.adres%+8)
+  fat2.start.sector=DPEEK(dpb.adres%+10)
+  LET data.start.sector=DPEEK(dpb.adres%+12)
+  LET dir.start.sector=2*fat.sectors+1
+  LET data.clusters=DPEEK(dpb.adres%+14)
+RETURN
+' **********
+'
+> PROCEDURE boot.sector(drive)
+  ' *** return data about disk-format from Boot-sector
+  ' *** global :
+  '     BOOT.BRANCH% DISK.NR% SECTOR.BYTES% CLUSTER.SECTORS% RESERVED.SECTORS%
+  '     FATS% DIR.MAX% DISK.SECTORS% FAT.SECTORS% TRACK.SECTORS% DISK.SIDES%
+  '     DISK.TRACKS% COMMAND.FLAG% LOAD.MODE% FIRST.LOAD.SECTOR% LOAD.SECTORS%
+  '     LOAD.ADDRESS%  FAT.ADDRESS%  LOAD.FILE$  BOOT.CHECKSUM%
+  '     (all number-variables are 4-byte integers !)
+  LOCAL buffer$,buffer%,desktop.format!,p,sum%,n
+  buffer$=SPACE$(512)
+  buffer%=VARPTR(buffer$)
+  ~BIOS(4,0,L:buffer%,1,0,drive)            ! Boot-sector (0) in buffer
+  '
+  @word(buffer%,*boot.branch%)              ! branch to boot-code
+  disk.nr%=PEEK(buffer%+8)+256*PEEK(buffer%+9)+65536*PEEK(buffer%+10) ! serial no.
+  @word(buffer%+11,*sector.bytes%)          ! bytes/sector (512)
+  cluster.sectors%=PEEK(buffer%+13)         ! sectors/cluster (2)
+  @word(buffer%+14,*reserved.sectors%)      ! reserved sectors (1)
+  fats%=PEEK(buffer%+16)                    ! number of FATS (2)
+  @word(buffer%+17,*dir.max%)               ! maximum files in directory
+  @word(buffer%+19,*disk.sectors%)          ! total sectors
+  @word(buffer%+22,*fat.sectors%)           ! sectors/FAT
+  @word(buffer%+24,*track.sectors%)         ! sectors/track
+  @word(buffer%+26,*disk.sides%)            ! 1- of 2-sided disk
+  disk.tracks%=INT(disk.sectors%/(track.sectors%*disk.sides%)) ! tracks/disk
+  IF MID$(buffer$,31,30)=STRING$(30,"N")
+    desktop.format!=TRUE                    ! disk formatted from Desktop
+  ENDIF
+  IF desktop.format!
+    CLR command.flag%,load.mode%,first.load.sector%,load.sectors%
+    CLR load.address%,fat.address%,load.file$
+  ELSE
+    @word(buffer%+30,*command.flag%)        ! flag
+    @word(buffer%+32,*load.mode%)           ! 0 = load file ; or sectors
+    @word(buffer%+34,*first.load.sector%)   ! 1st sector (load.mode <> 0)
+    @word(buffer%+36,*load.sectors%)        ! number of sectors
+    @long.word(buffer%+38,*load.address%)   ! load-address for file or sectors
+    @long.word(buffer%+42,*fat.address%)    ! address for FAT-buffer
+    '
+    LET load.file$=MID$(buffer$,47,11)
+    IF LEFT$(load.file$)<>CHR$(0) AND load.mode%=0
+      p=INSTR(load.file$," ")
+      IF p=0
+        p=9
+      ENDIF
+      LET load.file$=LEFT$(load.file$,p-1)+"."+RIGHT$(load.file$,3)
+    ELSE
+      LET load.file$=""
+    ENDIF
+  ENDIF
+  sum%=0
+  FOR n=0 TO 255
+    ADD sum%,CARD{buffer%+n*2}
+  NEXT n
+  boot.checksum%=sum% AND &HFFFF  ! checksum = &H1234 : bootsector executable
+RETURN
+' ***
+> PROCEDURE word(adres%,p.word%)
+  *p.word%=PEEK(adres%)+256*PEEK(adres%+1)
+RETURN
+' ***
+> PROCEDURE long.word(adres%,p.long%)
+  *p.long%=PEEK(adres%)+256*PEEK(adres%+1)+65536*PEEK(adres%+2)+16777216*PEEK(adres%+3)
+RETURN
+' **********
+'
+> PROCEDURE read.sector(drive,sector)
+  ' *** put disk-sector in buffer sector$
+  ' *** global :  SECTOR$   OK!
+  LOCAL buffer%,flag,k
+  sector$=SPACE$(512)
+  buffer%=VARPTR(sector$)
+  flag=BIOS(4,0,L:buffer%,1,sector,drive)
+  IF flag<>0
+    ALERT 3,"sector is| |NOT loaded !!",1," OK ",k
+    ok!=FALSE
+  ELSE
+    ok!=TRUE
+  ENDIF
+RETURN
+' **********
+'
+> PROCEDURE get.cluster.pointers
+  ' *** put cluster- and sector-pointers in arrays
+  ' *** uses Procedures Disk.space and Disk.parameter.block
+  ' *** global :   CLUSTER.POINTER()   SECTOR.POINTER()
+  LOCAL drive,fat.buffer$,fat.buffer%,n,data.clus,cluster.byte.nr,cluster.byte
+  LOCAL cluster.byte$,previous.byte,previous.byte$,back.nibble$,clus.pointer$
+  LOCAL next.byte,next.byte$,front.nibble$,clus.pointer
+  drive=GEMDOS(&H19)
+  @disk.space(drive)
+  ERASE cluster.pointer(),sector.pointer()
+  DIM cluster.pointer(total.clusters),sector.pointer(total.clusters)
+  @disk.parameter.block(drive)
+  fat.buffer$=SPACE$(fat.sectors*512)
+  fat.buffer%=VARPTR(fat.buffer$)
+  FOR n=0 TO fat.sectors-1
+    VOID BIOS(4,0,L:fat.buffer%+n*512,1,n+1,drive)
+  NEXT n
+  FOR data.clus=1 TO total.clusters
+    cluster.byte.nr=TRUNC(data.clus*1.5)+3
+    cluster.byte=PEEK(fat.buffer%+cluster.byte.nr-1)
+    cluster.byte$=HEX$(cluster.byte)
+    IF LEN(cluster.byte$)=1
+      cluster.byte$="0"+cluster.byte$
+    ENDIF
+    IF EVEN(data.clus)
+      previous.byte=PEEK(fat.buffer%+cluster.byte.nr-2)
+      previous.byte$=HEX$(previous.byte)
+      IF LEN(previous.byte$)=1
+        previous.byte$="0"+previous.byte$
+      ENDIF
+      back.nibble$=LEFT$(previous.byte$)
+      clus.pointer$=cluster.byte$+back.nibble$
+    ELSE
+      LET next.byte=PEEK(fat.buffer%+cluster.byte.nr)
+      LET next.byte$=HEX$(next.byte)
+      IF LEN(next.byte$)=1
+        LET next.byte$="0"+next.byte$
+      ENDIF
+      front.nibble$=RIGHT$(next.byte$)
+      clus.pointer$=front.nibble$+cluster.byte$
+    ENDIF
+    clus.pointer=VAL("&H"+clus.pointer$)
+    cluster.pointer(data.clus)=clus.pointer
+    sector.pointer(data.clus)=(clus.pointer-2)*2+data.start.sector
+  NEXT data.clus
+RETURN
+' **********
+'
+> PROCEDURE get.file.sectors(fat.cluster)
+  ' *** call Procedure Get.cluster.pointers first
+  ' *** first FAT-pointer has to be extracted from directory !!
+  ' *** prints sectors of file
+  ' *** first FAT-cluster is no. 2 (pointer of "data-cluster" no. 1 !)
+  cluster=cluster.pointer(fat.cluster-1)
+  IF cluster<=&HFF8
+    sector=sector.pointer(fat.cluster-1)
+    PRINT sector'sector+1';
+    @get.file.sectors(cluster)
+  ENDIF
+RETURN
+' **********
+'
+> PROCEDURE force.mediach
+  ' *** a disk-change is not always noticed by GEMDOS
+  ' *** use this Procedure if in doubt
+  ' *** after (X)BIOS read-routines not necessary after pause of 1.5 second
+  ' *** (use PAUSE 75 before GEMDOS reads disk again)
+  LOCAL x$,old.vector%,a%
+  x$=SPACE$(12)
+  old.vector%=LPEEK(&H47E)
+  a%=V:x$
+  DPOKE a%,&H2B7C
+  LPOKE a%+2,old.vector%
+  DPOKE a%+6,&H47E
+  DPOKE a%+8,&H7002
+  DPOKE a%+10,&H4E75
+  SLPOKE &H47E,a%
+  ~DFREE(0)                 ! current drive
+RETURN
+' **********
+'
+> PROCEDURE check.boot
+  ' *** compute checksum of bootsector and warn user if bootsector executable
+  LOCAL drive,buffer$,buffer%,sum%,n,m$
+  PRINT " Checking boot-sector ..."
+  drive=GEMDOS(&H19)
+  buffer$=SPACE$(512)
+  buffer%=VARPTR(buffer$)
+  ~BIOS(4,0,L:buffer%,1,0,drive)    ! bootsector (0) of current drive in buffer
+  sum%=0
+  FOR n=0 TO 255
+    ADD sum%,CARD{buffer%+n*2}
+  NEXT n
+  sum%=sum% AND &HFFFF
+  IF sum%=&H1234
+    m$="Bootsector|executable :|this could be|a boot-virus"
+    ALERT 3,m$,2," OK |STOP",k
+  ENDIF
+RETURN
+' **********
+'

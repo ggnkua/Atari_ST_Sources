@@ -1,0 +1,1416 @@
+$m150000                                         ! Minimum memory consumption
+' RESERVE 4000000
+' HAVE-A-FIT
+@init_variables
+DO
+  @event ! JUST WAIT FOR THE USER TO DO SOMETHING
+LOOP
+> PROCEDURE event
+  '
+  event_type&=EVNT_MULTI(&X110111,3,256,3,0,boxx%,boxy%,boxw%,boxh%,0,0,0,0,0,buffer_address%,10,x_mouse&,y_mouse&,button_state&,key_state&,key_press&,num_clicks&)
+  IF event_type& AND &X10 THEN      ! BUTTON
+    @event_button
+  ENDIF
+  '
+  IF event_type& AND &X100 THEN    ! INSIDE BOX
+    show%=1
+    IF cshape%>-1 THEN
+      @show_shape
+    ENDIF
+  ELSE
+    IF show%=1 THEN
+      show%=0
+      old_cellx%=-1
+      old_celly%=-1
+      MAT CPY show()=area()
+      @reset_grid
+      IF pic_buffer%>0 THEN
+        @update_box
+      ENDIF
+    ENDIF
+    '
+  ENDIF
+  '
+  IF event_type& AND &X1 THEN      ! KEY
+    @event_key
+    '
+  ENDIF
+  '
+  IF event_type& AND &X10000 THEN   ! MENU OR WINDOW EVENT
+    '
+    command%=event_buffer&(0)       ! TYPE OF EVENT
+    '
+    IF command%=10 THEN             ! MENU ITEM
+      @event_menu
+    ELSE          ! WINDOW EVENT
+      '
+      which_window%=event_buffer&(3) ! HANDLE OF WINDOW
+      '
+      IF which_window%=window_handle% THEN
+        @event_window
+      ENDIF
+      '
+    ENDIF
+    '
+  ENDIF
+  '
+RETURN
+'
+> PROCEDURE init_variables
+  '
+  my_handle&=V~H  ! GET VDI HANDLE OF PROGRAMS WORKSTATION
+  ap_id&=APPL_INIT()
+  '
+  screen_colors%=WORK_OUT(13)  ! 2,4,16,256,256(TRUE COLOR)
+  screen_width%=WORK_OUT(0)+1
+  screen_height%=WORK_OUT(1)+1
+  pixel_width%=WORK_OUT(3)
+  pixel_height%=WORK_OUT(4)
+  screen_palette%=WORK_OUT(39)
+  '
+  raito=pixel_height%/pixel_width%
+  '
+  CONTRL(0)=102  ! 'VQ_EXTND' - GET EXTRA INFO ABOUT WORKSTATION
+  CONTRL(1)=0
+  CONTRL(3)=1
+  CONTRL(6)=my_handle&
+  INTIN(0)=1
+  VDISYS
+  screen_bits%=INTOUT(4)  ! GET # OF SCREEN PLANES
+  '
+  menu%=0
+  @check_for_mint
+  IF mint% THEN  ! IF MINT PRESENT THEN REGISTER PRG NAME UNDER MENU
+    me_id&=MENU_REGISTER(ap_id&,"  HAVE-A-FIT")   ! GIVE GEM ACC NAME
+    '
+  ELSE
+    @rsc
+    '
+  ENDIF
+  '
+  OPTION BASE 0
+  MAT BASE 0
+  DIM shapes(11,7,24),pos%(11),used(11),area(11,4),show(11,4)
+  MAT CLR used()
+  MAT SET area()=-1
+  MAT CPY show()=area()
+  '
+  DIM event_buffer&(7)  ! EVENT BUFFER FOR EVENT_MULTI CALL
+  buffer_address%=VARPTR(event_buffer&(0))
+  '
+  DIM my_event_buffer&(7)  ! EVENT BUFFER FOR EVENT_MULTI CALL
+  my_buffer_address%=VARPTR(my_event_buffer&(0))
+  '
+  DIM source_mfdb%(8),destination_mfdb%(8),parameters%(8)
+  '
+  FOR zero%=4 TO 8
+    source_mfdb%(zero%)=0
+    destination_mfdb%(zero%)=0
+  NEXT zero%
+  '
+  source_mfdb%(5)=screen_bits%
+  destination_mfdb%(5)=screen_bits%
+  parameters%(8)=3 ! REPLACE MODE
+  '
+  FOR loop%=0 TO 11
+    pos%(loop%)=0
+  NEXT loop%
+  '
+  @read_shapes
+  '
+  cshape%=-1
+  show%=0
+  old_cellx%=-1
+  old_celly%=-1
+  old_dx%=-1
+  old_dy%=-1
+  '
+  IF menu%>0 THEN
+    ~MENU_BAR(menu%,1)           ! TURN MENU ON
+  ENDIF
+  @window_setup
+  '
+  MODE 1
+  DEFFILL 0,2,8  ! COLOR 0 SOLID FILL PATTERN
+  DEFMOUSE 0
+  '
+RETURN
+'
+> PROCEDURE rsc
+  shell%=SHEL_READ(command_line$,tail$)
+  tail$=MID$(tail$,2)
+  test%=RINSTR(command_line$,"\")
+  IF test% THEN
+    command_line$=MID$(command_line$,1,test%)
+  ENDIF
+  '
+  current_drive%=GEMDOS(25)
+  current_path$=DIR$(current_drive%+1)+"\"
+  test%=RINSTR(current_path$,"\")
+  IF test% THEN
+    current_path$=MID$(current_path$,1,test%)
+  ENDIF
+  IF MID$(current_path$,2,1)<>":" THEN
+    current_path$=CHR$(current_drive%+65)+":"+current_path$
+  ENDIF
+  '
+  rsc$=command_line$+"HAVEAFIT.RSC"+CHR$(0)
+  IF EXIST(rsc$) THEN
+    rsc%=RSRC_LOAD(rsc$)
+    ~RSRC_GADDR(0,0,menu%)
+    '
+  ELSE
+    rsc$=current_path$+"HAVEAFIT.RSC"+CHR$(0)
+    IF EXIST(rsc$) THEN
+      rsc%=RSRC_LOAD(rsc$)
+      ~RSRC_GADDR(0,0,menu%)
+      '
+    ENDIF
+  ENDIF
+  '
+RETURN
+'
+> PROCEDURE copy_to_screen
+  blit_x%=fix_x%-window_ix%
+  blit_y%=fix_y%-window_iy%
+  blit_w%=fix_w%
+  blit_h%=fix_h%
+  '
+  source_mfdb%(0)=pic_buffer%
+  source_mfdb%(1)=pic_w%
+  source_mfdb%(2)=pic_h%
+  source_mfdb%(3)=pic_w%/16
+  source_mfdb%(5)=screen_bits%
+  '
+  destination_mfdb%(0)=0
+  '
+  parameters%(0)=blit_x%
+  parameters%(1)=blit_y%
+  parameters%(2)=blit_x%+blit_w%-1
+  parameters%(3)=blit_y%+blit_h%-1
+  parameters%(4)=fix_x%
+  parameters%(5)=fix_y%
+  parameters%(6)=fix_x%+fix_w%-1
+  parameters%(7)=fix_y%+fix_h%-1
+  BITBLT source_mfdb%(),destination_mfdb%(),parameters%()
+  '
+RETURN
+'
+> PROCEDURE copy_to_buffer
+  source_mfdb%(0)=0
+  '
+  destination_mfdb%(0)=pic_buffer%
+  destination_mfdb%(1)=pic_w%
+  destination_mfdb%(2)=pic_h%
+  destination_mfdb%(3)=pic_w%/16
+  destination_mfdb%(5)=screen_bits%
+  '
+  parameters%(0)=window_ix%
+  parameters%(1)=window_iy%
+  parameters%(2)=window_ix%+window_iw%-1
+  parameters%(3)=window_iy%+window_ih%-1
+  parameters%(4)=0
+  parameters%(5)=0
+  parameters%(6)=window_iw%-1
+  parameters%(7)=window_ih%-1
+  BITBLT source_mfdb%(),destination_mfdb%(),parameters%()
+  '
+RETURN
+'
+> PROCEDURE copy_buffer
+  source_mfdb%(0)=pic_buffer%
+  source_mfdb%(1)=pic_w%
+  source_mfdb%(2)=pic_h%
+  source_mfdb%(3)=pic_w%/16
+  source_mfdb%(5)=screen_bits%
+  '
+  destination_mfdb%(0)=pic_buffer%
+  destination_mfdb%(1)=pic_w%
+  destination_mfdb%(2)=pic_h%
+  destination_mfdb%(3)=pic_w%/16
+  destination_mfdb%(5)=screen_bits%
+  '
+  parameters%(0)=blit_x%
+  parameters%(1)=blit_y%
+  parameters%(2)=blit_x%+dx%-1
+  parameters%(3)=blit_y%+dy%-1
+  parameters%(4)=fix_x%
+  parameters%(5)=fix_y%
+  parameters%(6)=fix_x%+dx%-1
+  parameters%(7)=fix_y%+dy%-1
+  BITBLT source_mfdb%(),destination_mfdb%(),parameters%()
+  '
+RETURN
+'
+> PROCEDURE copy_screen
+  source_mfdb%(0)=0
+  '
+  destination_mfdb%(0)=0
+  '
+  parameters%(0)=blit_x%
+  parameters%(1)=blit_y%
+  parameters%(2)=blit_x%+dx%-1
+  parameters%(3)=blit_y%+dy%-1
+  parameters%(4)=fix_x%
+  parameters%(5)=fix_y%
+  parameters%(6)=fix_x%+dx%-1
+  parameters%(7)=fix_y%+dy%-1
+  BITBLT source_mfdb%(),destination_mfdb%(),parameters%()
+  '
+RETURN
+'
+> PROCEDURE window_setup
+  ~WIND_GET(0,4,mwx%,mwy%,mww%,mwh%)
+  ~WIND_CALC(1,&X101111,mwx%,mwy%,mww%,mwh%,window_ix%,window_iy%,window_iw%,window_ih%)
+  @size_window
+  '
+  offset%=INT((mww%-window_w%)/2)
+  window_x%=mwx%+offset%
+  offset%=INT((mwh%-window_h%)/2)
+  window_y%=mwy%+offset%
+  '
+  INLINE window_title%,10
+  window_handle%=0
+  @window_open
+  '
+RETURN
+'
+> PROCEDURE window_open
+  window_handle%=WIND_CREATE(&X101111,window_x%,window_y%,window_w%,window_h%)
+  window_title$="HAVE A FIT"
+  CHAR{window_title%}=window_title$
+  ~WIND_SET(window_handle%,2,CARD(SWAP(window_title%)),CARD(window_title%),0,0)
+  ~WIND_OPEN(window_handle%,window_x%,window_y%,window_w%,window_h%)
+  ~WIND_SET(window_handle%,5,window_x%,window_y%,window_w%,window_h%)
+  ~WIND_GET(window_handle%,4,window_ix%,window_iy%,window_iw%,window_ih%)
+  boxx%=window_ix%+14*dx%+1
+  boxy%=window_iy%+1
+  boxw%=5*dx%
+  boxh%=12*dy%
+  '
+RETURN
+'
+> PROCEDURE size_window
+  old_dx%=dx%
+  old_dy%=dy%
+  dx%=INT((window_iw%-2)/19)
+  dy%=INT((window_ih%-2)/12)
+  IF raito=1 THEN
+    dx%=MIN(dx%,dy%)
+    IF dx%<12 THEN
+      dx%=12
+    ENDIF
+    dy%=dx%
+  ELSE
+    dx%=MIN(INT(dx%/raito),dy%)
+    IF dx%<12 THEN
+      dx%=12
+    ENDIF
+    dy%=dx%
+    dx%=dx%*raito
+  ENDIF
+  ~WIND_CALC(0,&X101111,window_ix%,window_iy%,dx%*19+2,dy%*12+2,window_x%,window_y%,window_w%,window_h%)
+  ~WIND_CALC(1,&X101111,window_x%,window_y%,window_w%,window_h%,d%,d%,window_iw%,window_ih%)
+  pic_w%=(INT(window_iw%/16)+1)*16
+  pic_h%=window_ih%
+  '
+  IF pic_buffer%>0 THEN
+    d%=GEMDOS(73,L:pic_buffer%)
+  ENDIF
+  pic_size%=((pic_w%*screen_bits%)/8)*pic_h%
+  pic_buffer%=GEMDOS(72,L:pic_size%)
+  shape_ready%=0
+  '
+RETURN
+'
+> PROCEDURE event_key
+  scan_code&=SHR(key_press& AND &HFF00,8)  ! KEYBOARD SCAN CODE
+  ~WIND_GET(0,10,top%,d%,d%,d%)
+  SELECT scan_code&
+  CASE 16 ! (Q)UIT
+    @quit
+  CASE 17 ! (W)INDOW CLOSE
+    @quit
+  ENDSELECT
+  '
+RETURN
+'
+> PROCEDURE event_menu
+  menu_title%=event_buffer&(3)             ! OBJECT # OF TITLE
+  menu_item%=event_buffer&(4)              ! WHICH MENU ITEM WAS SELECTED
+  ~MENU_TNORMAL(menu%,menu_title%,1)  ! MAKE MENU TITLE NORMAL TEXT
+  SELECT menu_item%
+  CASE 6 ! PROGRAM CREDITS
+    ALERT 0," |HAVE A FIT  ½1995  |By Phillip O'Neal  | ",1,"OK",d%
+    ' ALERT 0,STR$(pixel_width%)+" "+STR$(pixel_height%)+" "+STR$(raito)+"  ",1,"OK",d%
+    '
+  ENDSELECT
+  '
+RETURN
+'
+> PROCEDURE event_button
+  ~WIND_GET(0,10,top%,d%,d%,d%) ! WINDOW SET TO TOP
+  wind_found%=WIND_FIND(x_mouse&,y_mouse&) ! WHICH WINDOW UNDER MOUSE
+  IF wind_found%=window_handle% AND top%=window_handle% AND button_state&>0 THEN
+    cellx%=INT((x_mouse&-window_ix%)/dx%)
+    celly%=INT((y_mouse&-window_iy%)/dy%)
+    IF cellx%<14 THEN
+      IF button_state&=1 THEN
+        flag%=1
+        cell%=cellx%+celly%*19
+        SELECT cell%
+        CASE 1,19 TO 21,39
+          cshape%=0
+        CASE 4 TO 6,24,43
+          cshape%=1
+        CASE 9,28,45 TO 47
+          cshape%=2
+        CASE 11,12,30,49,50
+          cshape%=3
+        CASE 77,78,95,96,115
+          cshape%=6
+        CASE 80,81,100,119,120
+          cshape%=4
+        CASE 83,84,103,104,123
+          cshape%=5
+        CASE 87,106,107,125,126
+          cshape%=7
+        CASE 155,174,193,194,212
+          cshape%=8
+        CASE 153,171,172,190,209
+          cshape%=9
+        CASE 157,158,177,196,215
+          cshape%=10
+        CASE 160 TO 164
+          cshape%=11
+        CASE 198
+          @reset
+          flag%=0
+        DEFAULT
+          flag%=0
+        ENDSELECT
+        IF flag%=1 THEN
+          IF used(cshape%)=1 THEN
+            used(cshape%)=0
+            FOR x%=0 TO 4
+              FOR y%=0 TO 11
+                col%=area(y%,x%)
+                IF col%=cshape% THEN
+                  area(y%,x%)=-1
+                ENDIF
+              NEXT y%
+            NEXT x%
+            @reset_grid
+          ENDIF
+          IF pic_buffer%>0 THEN
+            @update_box
+          ENDIF
+          MAT CPY show()=area()
+        ENDIF
+      ENDIF
+    ELSE
+      IF button_state&=1 THEN
+        IF cshape%>-1 THEN
+          cellx%=cellx%-14
+          @try_to_place
+        ENDIF
+      ELSE
+        IF button_state&=2 THEN
+          @turn
+        ENDIF
+      ENDIF
+    ENDIF
+  ENDIF
+  '
+RETURN
+'
+> PROCEDURE event_window
+  '
+  SELECT command%
+  CASE 20 ! WIND UPDATE
+    @repair_window
+    '
+  CASE 21 ! WINDOW CLICKED ON
+    ~WIND_SET(window_handle%,10,0,0,0,0) ! WINDOW SET TO TOP
+    DEFMOUSE 0
+    '
+  CASE 22 ! CLOSE
+    @quit
+    '
+  CASE 23 ! FULL
+    ~WIND_CALC(1,&X101111,window_x%,window_y%,mww%+1-window_x%,mwh%+1-window_y%,window_ix%,window_iy%,window_iw%,window_ih%)
+    @size_window
+    '
+    ~WIND_SET(window_handle%,5,window_x%,window_y%,window_w%,window_h%)             ! SIZE WINDOW
+    ~WIND_GET(window_handle%,4,window_ix%,window_iy%,window_iw%,window_ih%) ! WINDOW SET TO TOP
+    boxx%=window_ix%+14*dx%+1
+    boxy%=window_iy%+1
+    boxw%=5*dx%
+    boxh%=12*dy%
+    '
+    IF dx%<>old_dx% OR dy%<>old_dy% THEN
+      @update_window
+    ENDIF
+    '
+  CASE 27 ! WINDOW SIZED
+    window_w%=event_buffer&(6)      ! WIDTH OF WINDOW
+    window_h%=event_buffer&(7)      ! HEIGHT  "    "
+    '
+    ~WIND_SET(window_handle%,5,window_x%,window_y%,window_w%,window_h%)             ! SIZE WINDOW
+    ~WIND_GET(window_handle%,4,window_ix%,window_iy%,window_iw%,window_ih%) ! WINDOW SET TO TOP
+    '
+    @size_window
+    '
+    ~WIND_SET(window_handle%,5,window_x%,window_y%,window_w%,window_h%)             ! SIZE WINDOW
+    ~WIND_GET(window_handle%,4,window_ix%,window_iy%,window_iw%,window_ih%) ! WINDOW SET TO TOP
+    boxx%=window_ix%+14*dx%+1
+    boxy%=window_iy%+1
+    boxw%=5*dx%
+    boxh%=12*dy%
+    '
+    IF dx%<>old_dx% OR dy%<>old_dy% THEN
+      @update_window
+    ENDIF
+    '
+  CASE 28 ! WINDOW MOVED
+    window_x%=event_buffer&(4)      ! X POSITION OF WINDOW
+    window_y%=event_buffer&(5)      ! Y      "    "    "
+    '
+    IF window_x%+window_w%>mww% THEN
+      window_w%=mww%-window_x%
+    ENDIF
+    IF window_y%+window_h%>screen_height% THEN
+      window_h%=screen_height%-window_y%
+    ENDIF
+    '
+    ~WIND_SET(window_handle%,5,window_x%,window_y%,window_w%,window_h%)             ! SIZE WINDOW
+    ~WIND_GET(window_handle%,4,window_ix%,window_iy%,window_iw%,window_ih%) ! WINDOW SET TO TOP
+    @size_window
+    '
+    IF window_x%+window_w%>mww% THEN
+      window_x%=mww%-window_w%
+    ENDIF
+    IF window_y%+window_h%>screen_height% THEN
+      window_y%=screen_height%-window_h%
+    ENDIF
+    '
+    ~WIND_SET(window_handle%,5,window_x%,window_y%,window_w%,window_h%)             ! SIZE WINDOW
+    ~WIND_GET(window_handle%,4,window_ix%,window_iy%,window_iw%,window_ih%) ! WINDOW SET TO TOP
+    '
+    boxx%=window_ix%+14*dx%+1
+    boxy%=window_iy%+1
+    boxw%=5*dx%
+    boxh%=12*dy%
+    '
+    IF dx%<>old_dx% OR dy%<>old_dy% THEN
+      @update_window
+    ENDIF
+    '
+  ENDSELECT
+  '
+RETURN
+'
+> PROCEDURE repair_window
+  ~WIND_UPDATE(1)      ! TELL GEM WE ARE TAKING OVER
+  ~WIND_GET(window_handle%,11,fix_x%,fix_y%,fix_w%,fix_h%) ! GET FIRST RECTANGLE
+  IF shape_ready%=0 THEN
+    CLIP fix_x%,fix_y%,fix_w%,fix_h%
+    DEFFILL 0,2,8
+    PBOX fix_x%,fix_y%,fix_x%+fix_w%-1,fix_y%+fix_h%-1
+    FOR shape%=0 TO 11
+      @redraw_shapes
+    NEXT shape%
+    @reset_grid2
+    IF pic_buffer%>0 THEN
+      shape_ready%=1
+      @copy_to_buffer
+    ENDIF
+  ELSE
+    fix_wx%=event_buffer&(4)
+    fix_wy%=event_buffer&(5)
+    fix_ww%=event_buffer&(6)
+    fix_wh%=event_buffer&(7)
+    fix_flag%=RC_INTERSECT(fix_wx%,fix_wy%,fix_ww%,fix_wh%,fix_x%,fix_y%,fix_w%,fix_h%)
+    IF fix_flag% THEN
+      CLIP fix_x%,fix_y%,fix_w%,fix_h%
+      @copy_to_screen
+    ENDIF
+    fix_done%=0
+    DO
+      ~WIND_GET(window_handle%,12,fix_x%,fix_y%,fix_w%,fix_h%) ! GET FIRST RECTANGLE
+      IF fix_w%+fix_h%=0 THEN   ! ANY MORE RECTANGLES ?
+        fix_done%=1
+      ELSE
+        fix_wx%=event_buffer&(4)
+        fix_wy%=event_buffer&(5)
+        fix_ww%=event_buffer&(6)
+        fix_wh%=event_buffer&(7)
+        fix_flag%=RC_INTERSECT(fix_wx%,fix_wy%,fix_ww%,fix_wh%,fix_x%,fix_y%,fix_w%,fix_h%)
+        IF fix_flag% THEN
+          CLIP fix_x%,fix_y%,fix_w%,fix_h%
+          @copy_to_screen
+        ENDIF
+      ENDIF
+    LOOP UNTIL fix_done%=1
+  ENDIF
+  ~WIND_UPDATE(0)          ! DONE!
+  '
+RETURN
+'
+> PROCEDURE update_window
+  IF window_handle%>0 THEN
+    my_event_buffer&(0)=20
+    my_event_buffer&(3)=window_handle%
+    my_event_buffer&(4)=window_ix%
+    my_event_buffer&(5)=window_iy%
+    my_event_buffer&(6)=window_iw%
+    my_event_buffer&(7)=window_ih%
+    ~APPL_WRITE(handle&,16,my_buffer_address%)
+  ENDIF
+  '
+RETURN
+'
+> PROCEDURE update_box
+  IF window_handle%>0 THEN
+    my_event_buffer&(0)=20
+    my_event_buffer&(3)=window_handle%
+    my_event_buffer&(4)=boxx%
+    my_event_buffer&(5)=boxy%
+    my_event_buffer&(6)=boxw%
+    my_event_buffer&(7)=boxh%
+    ~APPL_WRITE(handle&,16,my_buffer_address%)
+  ENDIF
+  '
+RETURN
+'
+> PROCEDURE quit
+  IF pic_buffer%>0 THEN
+    d%=GEMDOS(73,L:pic_buffer%)
+  ENDIF
+  IF window_handle%>0 THEN
+    ~WIND_CLOSE(window_handle%)
+    ~WIND_DELETE(window_handle%)
+  ENDIF
+  IF menu%>0 THEN
+    ~MENU_BAR(menu%,0)
+  ENDIF
+  END
+  '
+RETURN
+'
+> PROCEDURE reset
+  MAT SET area()=-1
+  MAT CPY show()=area()
+  MAT CLR used()
+  @reset_grid
+  @update_box
+RETURN
+'
+> PROCEDURE try_to_place
+  good%=1
+  MAT CPY show()=area()
+  FOR box%=0 TO 24
+    IF shapes(cshape%,pos%(cshape%),box%) THEN
+      y%=INT(box%/5)
+      x%=box%-(y%*5)
+      tx%=cellx%+x%
+      ty%=celly%+y%
+      IF tx%>-1 AND tx%<5 AND ty%>-1 AND ty%<12 THEN
+        IF area(ty%,tx%)=-1 THEN
+          show(ty%,tx%)=cshape%
+        ELSE
+          good%=0
+        ENDIF
+      ELSE
+        good%=0
+      ENDIF
+    ENDIF
+  NEXT box%
+  IF good%=1 THEN
+    used(cshape%)=1
+    cshape%=-1
+    MAT CPY area()=show()
+    @update_box
+    @full
+  ENDIF
+RETURN
+'
+> PROCEDURE turn
+  shape%=cshape%
+  SELECT cshape%
+  CASE 1 TO 5
+    INC pos%(cshape%)
+    IF pos%(cshape%)=4 THEN
+      pos%(cshape%)=0
+    ENDIF
+  CASE 6 TO 10
+    INC pos%(cshape%)
+    IF pos%(cshape%)=8 THEN
+      pos%(cshape%)=0
+    ENDIF
+  CASE 11
+    INC pos%(cshape%)
+    IF pos%(cshape%)=2 THEN
+      pos%(cshape%)=0
+    ENDIF
+  ENDSELECT
+  old_cellx%=-1
+  old_celly%=-1
+  ~EVNT_TIMER(200)
+RETURN
+'
+> PROCEDURE full
+  did_it%=1
+  FOR x%=0 TO 4
+    FOR y%=0 TO 11
+      IF area(y%,x%)=-1 THEN
+        x%=6
+        y%=13
+        did_it%=0
+      ENDIF
+    NEXT y%
+  NEXT x%
+  IF did_it%=1 THEN
+    @did_it
+  ENDIF
+RETURN
+'
+> PROCEDURE redraw_shapes
+  SELECT shape%
+  CASE 0
+    px%=0
+    py%=0
+  CASE 1
+    px%=4
+    py%=0
+  CASE 2
+    px%=7
+    py%=0
+  CASE 3
+    px%=11
+    py%=0
+  CASE 4
+    px%=4
+    py%=4
+  CASE 5
+    px%=7
+    py%=4
+  CASE 6
+    px%=0
+    py%=4
+  CASE 7
+    px%=11
+    py%=4
+  CASE 8
+    px%=3
+    py%=8
+  CASE 9
+    px%=0
+    py%=8
+  CASE 10
+    px%=5
+    py%=8
+  CASE 11
+    px%=8
+    py%=8
+  ENDSELECT
+  FOR box%=0 TO 24
+    IF shapes(shape%,0,box%) THEN
+      y%=INT(box%/5)
+      x%=px%+box%-(y%*5)
+      y%=py%+y%
+      col%=shape%
+      @set_fill
+      PBOX window_ix%+x%*dx%+1,window_iy%+y%*dy%+1,window_ix%+(x%+1)*dx%,window_iy%+(y%+1)*dy%
+    ENDIF
+  NEXT box%
+  DEFFILL 1,0,0
+  PBOX window_ix%+8*dx%+1,window_iy%+10*dy%+1,window_ix%+9*dx%,window_iy%+11*dy%
+  DEFFILL 1,2,8
+  PBOX window_ix%+8*dx%+1,window_iy%+11*dy%+1,window_ix%+9*dx%,window_iy%+12*dy%
+  TEXT window_ix%+9*dx%+2,window_iy%+11*dy%,"Reset"
+RETURN
+'
+> PROCEDURE reset_grid
+  FOR x%=0 TO 4
+    FOR y%=0 TO 11
+      col%=area(y%,x%)
+      SELECT col%
+      CASE -1
+        px%=8
+        py%=10
+      CASE 0
+        px%=1
+        py%=0
+      CASE 1
+        px%=4
+        py%=0
+      CASE 2
+        px%=9
+        py%=0
+      CASE 3
+        px%=11
+        py%=0
+      CASE 4
+        px%=4
+        py%=4
+      CASE 5
+        px%=7
+        py%=4
+      CASE 6
+        px%=1
+        py%=4
+      CASE 7
+        px%=11
+        py%=4
+      CASE 8
+        px%=3
+        py%=8
+      CASE 9
+        px%=1
+        py%=8
+      CASE 10
+        px%=5
+        py%=8
+      CASE 11
+        px%=8
+        py%=8
+      ENDSELECT
+      blit_x%=px%*dx%+1
+      blit_y%=py%*dx%+1
+      fix_x%=(x%+14)*dx%+1
+      fix_y%=y%*dy%+1
+      IF pic_buffer%>0 THEN
+        @copy_buffer
+      ELSE
+        blit_x%=blit_x%+window_ix%
+        blit_y%=blit_y%+window_iy%
+        fix_x%=fix_x%+window_ix%
+        fix_y%=fix_y%+window_iy%
+        @copy_screen
+      ENDIF
+    NEXT y%
+  NEXT x%
+RETURN
+'
+> PROCEDURE reset_grid2
+  FOR x%=0 TO 4
+    FOR y%=0 TO 11
+      col%=area(y%,x%)
+      SELECT col%
+      CASE -1
+        px%=8
+        py%=10
+      CASE 0
+        px%=1
+        py%=0
+      CASE 1
+        px%=4
+        py%=0
+      CASE 2
+        px%=9
+        py%=0
+      CASE 3
+        px%=11
+        py%=0
+      CASE 4
+        px%=4
+        py%=4
+      CASE 5
+        px%=7
+        py%=4
+      CASE 6
+        px%=1
+        py%=4
+      CASE 7
+        px%=11
+        py%=4
+      CASE 8
+        px%=3
+        py%=8
+      CASE 9
+        px%=1
+        py%=8
+      CASE 10
+        px%=5
+        py%=8
+      CASE 11
+        px%=8
+        py%=8
+      CASE 12
+        px%=8
+        py%=11
+      ENDSELECT
+      blit_x%=window_ix%+px%*dx%+1
+      blit_y%=window_iy%+py%*dx%+1
+      fix_x%=window_ix%+(x%+14)*dx%+1
+      fix_y%=window_iy%+y%*dy%+1
+      @copy_screen
+    NEXT y%
+  NEXT x%
+RETURN
+'
+> PROCEDURE draw_grid
+  FOR x%=0 TO 4
+    FOR y%=0 TO 11
+      IF show(y%,x%)<>area(y%,x%) THEN
+        col%=show(y%,x%)
+        SELECT col%
+        CASE -1
+          px%=8
+          py%=10
+        CASE 0
+          px%=1
+          py%=0
+        CASE 1
+          px%=4
+          py%=0
+        CASE 2
+          px%=9
+          py%=0
+        CASE 3
+          px%=11
+          py%=0
+        CASE 4
+          px%=4
+          py%=4
+        CASE 5
+          px%=7
+          py%=4
+        CASE 6
+          px%=1
+          py%=4
+        CASE 7
+          px%=11
+          py%=4
+        CASE 8
+          px%=3
+          py%=8
+        CASE 9
+          px%=1
+          py%=8
+        CASE 10
+          px%=5
+          py%=8
+        CASE 11
+          px%=8
+          py%=8
+        CASE 12
+          px%=8
+          py%=11
+        ENDSELECT
+        blit_x%=px%*dx%+1
+        blit_y%=py%*dx%+1
+        fix_x%=(x%+14)*dx%+1
+        fix_y%=y%*dy%+1
+        IF pic_buffer%>0 THEN
+          @copy_buffer
+        ELSE
+          blit_x%=blit_x%+window_ix%
+          blit_y%=blit_y%+window_iy%
+          fix_x%=fix_x%+window_ix%
+          fix_y%=fix_y%+window_iy%
+          @copy_screen
+        ENDIF
+      ENDIF
+    NEXT y%
+  NEXT x%
+  IF pic_buffer%>0 THEN
+    @update_box
+  ENDIF
+RETURN
+'
+> PROCEDURE show_shape
+  IF wind_found%=window_handle% AND top%=window_handle% THEN
+    cellx%=INT((x_mouse&-boxx%)/dx%)
+    celly%=INT((y_mouse&-boxy%)/dy%)
+    IF old_cellx%<>cellx% OR old_celly%<>celly% THEN
+      @reset_grid
+      IF pic_buffer%>0 THEN
+        @update_box
+      ENDIF
+      MAT CPY show()=area()
+      FOR box%=0 TO 24
+        IF shapes(cshape%,pos%(cshape%),box%) THEN
+          y%=INT(box%/5)
+          x%=box%-(y%*5)
+          tx%=cellx%+x%
+          ty%=celly%+y%
+          IF tx%>-1 AND tx%<5 AND ty%>-1 AND ty%<12 THEN
+            IF area(ty%,tx%)=-1 THEN
+              show(ty%,tx%)=cshape%
+            ELSE
+              show(ty%,tx%)=12
+            ENDIF
+          ENDIF
+        ENDIF
+      NEXT box%
+      @draw_grid
+      old_cellx%=cellx%
+      old_celly%=celly%
+    ENDIF
+  ENDIF
+RETURN
+'
+> PROCEDURE set_fill
+  SELECT screen_colors%
+  CASE 16,256
+    DEFFILL col%+2,2,8
+  DEFAULT
+    DEFFILL 1,2,col%+9
+  ENDSELECT
+RETURN
+'
+> PROCEDURE did_it
+  ' title$=" EXIT"+SPACE$(5-(16*(rez%>0)))+"YOU DID IT"+SPACE$(5-(16*(rez%>0))-(rez%=2))+"RESET "+CHR$(0)+CHR$(0)
+  ' BMOVE V:title$,title%,LEN(title$)
+  ' flag%=WIND_SET(window_handle%,2,CARD(SWAP(title%)),CARD(title%),0,0)
+RETURN
+'
+> PROCEDURE fil_strings
+  intro$(1)="     HAVE-A-FIT"
+  intro$(2)="Just fit the shapes"
+  intro$(3)=" into the grid. The"
+  intro$(4)=" left mouse button"
+  intro$(5)="will choose or place"
+  intro$(6)=" a shape, the right "
+  intro$(7)=" button will rotate "
+  intro$(8)="      a shape."
+  intro$(9)="Public Domain - 1993"
+  intro$(10)="By Phillip W. O'Neal"
+  intro$(11)=""
+  intro$(12)="CLICK TO CONTINUE..."
+RETURN
+'
+> PROCEDURE check_for_mint
+  mint%=0
+  jar%=LPEEK(1440) ! ADDRESS OF COOKIE JAR
+  '
+  IF jar% THEN     ! IF JAR PRESENT THEN jar%=ADDRESS OF JAR
+    cookie_num%=0
+    DO
+      cookie%=LPEEK(jar%+cookie_num%*8)
+      cookie$=CHR$(SHR(cookie% AND &HFF000000,24))
+      cookie$=cookie$+CHR$(SHR(cookie% AND &HFF0000,16))
+      cookie$=cookie$+CHR$(SHR(cookie% AND &HFF00,8))
+      cookie$=cookie$+CHR$(cookie% AND &HFF)
+      IF cookie$="MiNT" THEN  ! IS MINT PRESENT
+        mint%=1
+      ENDIF
+      INC cookie_num%
+    LOOP UNTIL cookie%=0
+  ENDIF
+  '
+RETURN
+'
+> PROCEDURE read_shapes
+  RESTORE
+  FOR x%=0 TO 24
+    READ dat%
+    shapes(0,0,x%)=dat%
+  NEXT x%
+  '
+  FOR shape%=1 TO 5
+    FOR y%=0 TO 3
+      FOR x%=0 TO 24
+        READ dat%
+        shapes(shape%,y%,x%)=dat%
+      NEXT x%
+    NEXT y%
+  NEXT shape%
+  '
+  FOR shape%=6 TO 10
+    FOR y%=0 TO 7
+      FOR x%=0 TO 24
+        READ dat%
+        shapes(shape%,y%,x%)=dat%
+      NEXT x%
+    NEXT y%
+  NEXT shape%
+  '
+  FOR y%=0 TO 1
+    FOR x%=0 TO 24
+      READ dat%
+      shapes(11,y%,x%)=dat%
+    NEXT x%
+  NEXT y%
+  '
+RETURN
+' 1
+DATA 0,1,0,0,0
+DATA 1,1,1,0,0
+DATA 0,1,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+' 4
+DATA 1,1,1,0,0
+DATA 0,1,0,0,0
+DATA 0,1,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 0,0,1,0,0
+DATA 1,1,1,0,0
+DATA 0,0,1,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 0,1,0,0,0
+DATA 0,1,0,0,0
+DATA 1,1,1,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 1,0,0,0,0
+DATA 1,1,1,0,0
+DATA 1,0,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+' 4
+DATA 0,0,1,0,0
+DATA 0,0,1,0,0
+DATA 1,1,1,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 1,0,0,0,0
+DATA 1,0,0,0,0
+DATA 1,1,1,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 1,1,1,0,0
+DATA 1,0,0,0,0
+DATA 1,0,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 1,1,1,0,0
+DATA 0,0,1,0,0
+DATA 0,0,1,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+' 4
+DATA 1,1,0,0,0
+DATA 1,0,0,0,0
+DATA 1,1,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 1,1,1,0,0
+DATA 1,0,1,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 1,1,0,0,0
+DATA 0,1,0,0,0
+DATA 1,1,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 1,0,1,0,0
+DATA 1,1,1,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+' 4
+DATA 1,1,0,0,0
+DATA 0,1,0,0,0
+DATA 0,1,1,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 0,0,1,0,0
+DATA 1,1,1,0,0
+DATA 1,0,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 0,1,1,0,0
+DATA 0,1,0,0,0
+DATA 1,1,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 1,0,0,0,0
+DATA 1,1,1,0,0
+DATA 0,0,1,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+' 4
+DATA 1,1,0,0,0
+DATA 0,1,1,0,0
+DATA 0,0,1,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 0,0,1,0,0
+DATA 0,1,1,0,0
+DATA 1,1,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 1,0,0,0,0
+DATA 1,1,0,0,0
+DATA 0,1,1,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 0,1,1,0,0
+DATA 1,1,0,0,0
+DATA 1,0,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+' 8
+DATA 0,1,1,0,0
+DATA 1,1,0,0,0
+DATA 0,1,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 0,1,0,0,0
+DATA 1,1,1,0,0
+DATA 0,0,1,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 0,1,0,0,0
+DATA 0,1,1,0,0
+DATA 1,1,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 1,0,0,0,0
+DATA 1,1,1,0,0
+DATA 0,1,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 1,1,0,0,0
+DATA 0,1,1,0,0
+DATA 0,1,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 0,0,1,0,0
+DATA 1,1,1,0,0
+DATA 0,1,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 0,1,0,0,0
+DATA 1,1,0,0,0
+DATA 0,1,1,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 0,1,0,0,0
+DATA 1,1,1,0,0
+DATA 1,0,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+' 8
+DATA 1,0,0,0,0
+DATA 1,1,0,0,0
+DATA 1,1,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 1,1,1,0,0
+DATA 1,1,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 1,1,0,0,0
+DATA 1,1,0,0,0
+DATA 0,1,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 0,1,1,0,0
+DATA 1,1,1,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 0,1,0,0,0
+DATA 1,1,0,0,0
+DATA 1,1,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 1,1,0,0,0
+DATA 1,1,1,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 1,1,0,0,0
+DATA 1,1,0,0,0
+DATA 1,0,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 1,1,1,0,0
+DATA 0,1,1,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+' 8
+DATA 1,0,0,0,0
+DATA 1,0,0,0,0
+DATA 1,1,0,0,0
+DATA 1,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 1,1,1,1,0
+DATA 0,1,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 0,1,0,0,0
+DATA 1,1,0,0,0
+DATA 0,1,0,0,0
+DATA 0,1,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 0,0,1,0,0
+DATA 1,1,1,1,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 0,1,0,0,0
+DATA 0,1,0,0,0
+DATA 1,1,0,0,0
+DATA 0,1,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 0,1,0,0,0
+DATA 1,1,1,1,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 1,0,0,0,0
+DATA 1,1,0,0,0
+DATA 1,0,0,0,0
+DATA 1,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 1,1,1,1,0
+DATA 0,0,1,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+' 8
+DATA 0,1,0,0,0
+DATA 1,1,0,0,0
+DATA 1,0,0,0,0
+DATA 1,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 1,1,1,0,0
+DATA 0,0,1,1,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 0,1,0,0,0
+DATA 0,1,0,0,0
+DATA 1,1,0,0,0
+DATA 1,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 1,1,0,0,0
+DATA 0,1,1,1,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 1,0,0,0,0
+DATA 1,1,0,0,0
+DATA 0,1,0,0,0
+DATA 0,1,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 0,0,1,1,0
+DATA 1,1,1,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 1,0,0,0,0
+DATA 1,0,0,0,0
+DATA 1,1,0,0,0
+DATA 0,1,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 0,1,1,1,0
+DATA 1,1,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+' 8
+DATA 1,1,0,0,0
+DATA 0,1,0,0,0
+DATA 0,1,0,0,0
+DATA 0,1,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 0,0,0,1,0
+DATA 1,1,1,1,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 1,0,0,0,0
+DATA 1,0,0,0,0
+DATA 1,0,0,0,0
+DATA 1,1,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 1,1,1,1,0
+DATA 1,0,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 1,1,0,0,0
+DATA 1,0,0,0,0
+DATA 1,0,0,0,0
+DATA 1,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 1,1,1,1,0
+DATA 0,0,0,1,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 0,1,0,0,0
+DATA 0,1,0,0,0
+DATA 0,1,0,0,0
+DATA 1,1,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 1,0,0,0,0
+DATA 1,1,1,1,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+' 2
+DATA 1,1,1,1,1
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+DATA 0,0,0,0,0
+'
+DATA 1,0,0,0,0
+DATA 1,0,0,0,0
+DATA 1,0,0,0,0
+DATA 1,0,0,0,0
+DATA 1,0,0,0,0

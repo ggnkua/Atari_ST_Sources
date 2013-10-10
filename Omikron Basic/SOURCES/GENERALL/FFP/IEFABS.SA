@@ -1,0 +1,100 @@
+       TTL     IEEE FORMAT EQUIVALENT ABS AND NEG (IEFABS/IEFNEG)
+***************************************
+* (C) COPYRIGHT 1981 BY MOTOROLA INC. *
+***************************************
+ 
+*************************************************************
+*                     IEFABS                                *
+*  FAST FLOATING POINT IEEE FORMAT EQUIVALENT ABSOLUTE VALUE*
+*                                                           *
+*  INPUT:  D7 - IEEE FORMAT NUMBER ARGUMENT                 *
+*                                                           *
+*  OUTPUT: D7 - IEEE FORMAT NUMBER ABSOLUTE VALUE RESULT    *
+*                                                           *
+*      CONDITION CODES:                                     *
+*              N - CLEARED                                  *
+*              Z - SET IF RESULT IS ZERO                    *
+*              V - SET IF RESULT IS NAN (NOT-A-NUMBER)      *
+*                  (OCCURS ONLY IF INPUT ARGUMENT IS NAN)   *
+*              C - UNDEFINED                                *
+*              X - UNDEFINED                                *
+*                                                           *
+*               ALL REGISTERS TRANSPARENT                   *
+*                                                           *
+*            MAXIMUM STACK USED:   24 BYTES                 *
+*                                                           *
+*  NOTES:                                                   *
+*    1) THIS ROUTINE PROPERLY HANDLES ALL IEEE FLOATING     *
+*       POINT VALUES AND NUMBER TYPES.                      *
+*    2) IF THE INPUT ARGUMENT IS A NAN (NOT-A-NUMBER) THEN  *
+*       IT WILL BE RETURNED AS THE RESULT WITH THE "V" BIT  *
+*       SET IN THE CONDITION CODE REGISTER.                 *
+*                                                           *
+*************************************************************
+         PAGE
+IEFABS IDNT    1,1  IEEE FORMAT EQUIVALENT ABS AND NEG
+ 
+         OPT       PCS
+ 
+         XDEF      IEFABS    IEEE FORMAT ABSOLUTE VALUE
+ 
+         XREF      9:IEFSOP  SINGLE ARGUMENT CONVERSION ROUTINE
+         XREF      9:IEFRTOD7 RETURN CALLER'S ORIGINAL D7 AS RESULT
+       XREF    FFPCPYRT        COPYRIGHT NOTICE
+ 
+         SECTION  9
+ 
+******************************
+* ABSOLUTE VALUE ENTRY POINT *
+******************************
+IEFABS   BSR       IEFSOP    DIRECT RETURN TO CALLER IF NAN ENCOUNTERED
+         NOP                 +0 NORMALIZED RETURN (OR ZERO OR DENORMALIZED)
+*                                       +2 INFINITY RETURN
+ 
+* ALL VALUES MAY BE ABSOLUTIZED BY FORCING A PLUS SIGN ON THE ORIGINAL VALUE
+         BCLR.B    #7,16(SP)  CLEAR SIGN BIT OF ORIGINAL VALUE
+         BRA       IEFRTOD7   AND RETURN ORIGINAL VALUE ALTERED A WEE BIT
+         PAGE
+*************************************************************
+*                     IEFNEG                                *
+*  FAST FLOATING POINT IEEE FORMAT EQUIVALENT NEGATE        *
+*                                                           *
+*  INPUT:  D7 - IEEE FORMAT NUMBER ARGUMENT                 *
+*                                                           *
+*  OUTPUT: D7 - IEEE FORMAT NUMBER NEGATED RESULT           *
+*                                                           *
+*      CONDITION CODES:                                     *
+*              N - SET IF RESULT IS NEGATIVE                *
+*              Z - SET IF RESULT IS ZERO                    *
+*              V - SET IF RESULT IS NAN (NOT-A-NUMBER)      *
+*                  (OCCURS ONLY IF INPUT ARGUMENT IS NAN)   *
+*              C - UNDEFINED                                *
+*              X - UNDEFINED                                *
+*                                                           *
+*               ALL REGISTERS TRANSPARENT                   *
+*                                                           *
+*           MAXIMUM STACK USED:     24 BYTES                *
+*                                                           *
+*  NOTES:                                                   *
+*    1) THIS ROUTINE PROPERLY HANDLES ALL IEEE FLOATING     *
+*       POINT VALUES AND NUMBER TYPES.                      *
+*    2) IF THE INPUT ARGUMENT IS A NAN (NOT-A-NUMBER) THEN  *
+*       IT WILL BE RETURNED AS THE RESULT WITH THE "V" BIT  *
+*       SET IN THE CONDITION CODE REGISTER.                 *
+*                                                           *
+*************************************************************
+         PAGE
+         XDEF      IEFNEG    IEEE FORMAT NEGATE
+ 
+**********************
+* NEGATE ENTRY POINT *
+**********************
+IEFNEG   BSR       IEFSOP    DIRECT RETURN TO CALLER IF NAN ENCOUNTERED
+         NOP                 +0 NORMALIZED RETURN (OR ZERO OR DENORMALIZED)
+*                                       +6 BOTH INFINITY RETURN
+ 
+* ALL VALUES MAY BE NEGATED BY INVERTING THE SIGN BIT OF THE ORIGINAL VALUE
+         BCHG.B    #7,16(SP) NEGATE ORIGINAL SIGN BIT
+         BRA       IEFRTOD7  AND RETURN THIS MODIFIED ORIGINAL REGISTER
+ 
+         END
