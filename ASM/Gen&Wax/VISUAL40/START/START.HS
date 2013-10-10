@@ -1,0 +1,103 @@
+	; Indice du ressource pour START *
+
+MENU_PRINCIPAL = 0	; Arbre menu *
+MNU_FONTES = 5	; TITLE dans l'arbre MENU_PRINCIPAL *
+MNU_DESK_INFO = 8	; STRING dans l'arbre MENU_PRINCIPAL *
+MNU_FILE_WIND1 = 17	; STRING dans l'arbre MENU_PRINCIPAL *
+MNU_FILE_WIND2 = 18	; STRING dans l'arbre MENU_PRINCIPAL *
+MNU_FILE_WIND3 = 19	; STRING dans l'arbre MENU_PRINCIPAL *
+MNU_FILE_WIND4 = 20	; STRING dans l'arbre MENU_PRINCIPAL *
+MNU_FILE_WIND5 = 21	; STRING dans l'arbre MENU_PRINCIPAL *
+MNU_FILE_WIND6 = 22	; STRING dans l'arbre MENU_PRINCIPAL *
+MNU_FILE_WIND7 = 23	; STRING dans l'arbre MENU_PRINCIPAL *
+MNU_FILE_WIND8 = 24	; STRING dans l'arbre MENU_PRINCIPAL *
+MNU_FILE_WIND9 = 25	; STRING dans l'arbre MENU_PRINCIPAL *
+MNU_FILE_OPEN_WI = 26	; STRING dans l'arbre MENU_PRINCIPAL *
+MNU_FILE_QUIT = 27	; STRING dans l'arbre MENU_PRINCIPAL *
+MNU_FONTES_BITMP = 29	; STRING dans l'arbre MENU_PRINCIPAL *
+MNU_FONTES_SCALB = 30	; STRING dans l'arbre MENU_PRINCIPAL *
+MNU_FONTES_FLYIG = 31	; STRING dans l'arbre MENU_PRINCIPAL *
+
+FORM_BACKGROUND = 1	; FormulaireDialogue *
+FORM_BACKGROUND0 = 0	; BOX dans l'arbre FORM_BACKGROUND *
+FORM_BACKGROUND1 = 1	; BUTTON dans l'arbre FORM_BACKGROUND *
+
+FORM_TOOLBAR1 = 2	; FormulaireDialogue *
+TLOBJ_1 = 4   	; IMAGE dans l'arbre FORM_TOOLBAR1 *
+TLOBJ_2 = 5   	; IMAGE dans l'arbre FORM_TOOLBAR1 *
+TLOBJ_3 = 6   	; IMAGE dans l'arbre FORM_TOOLBAR1 *
+TLOBJ_4 = 7   	; IMAGE dans l'arbre FORM_TOOLBAR1 *
+TLOBJ_TXT = 31	; BOXTEXT dans l'arbre FORM_TOOLBAR1 *
+
+FORMULAIRE3 = 3	; FormulaireDialogue *
+TEXT_DESCRIPT = 3	; FTEXT dans l'arbre FORMULAIRE3 *
+TEXT_DESCRIPT2 = 4	; FTEXT dans l'arbre FORMULAIRE3 *
+TEXT_BANAL = 5	; TEXT dans l'arbre FORMULAIRE3 *
+RADIO_1 = 8   	; BOX dans l'arbre FORMULAIRE3 *
+BTON_YES = 9	; BUTTON dans l'arbre FORMULAIRE3 *
+BTON_NO = 10  	; BUTTON dans l'arbre FORMULAIRE3 *
+BTON_PERHAPS = 11	; BUTTON dans l'arbre FORMULAIRE3 *
+BTON_OPTION1 = 12	; BUTTON dans l'arbre FORMULAIRE3 *
+BTON_OPTION2 = 13	; BUTTON dans l'arbre FORMULAIRE3 *
+POP_QUALITY3D = 15	; BOXTEXT dans l'arbre FORMULAIRE3 *
+POP_QUALITY = 16	; BOXTEXT dans l'arbre FORMULAIRE3 *
+BTON_DESC_OK = 18	; BUTTON dans l'arbre FORMULAIRE3 *
+BTON_ANNULE_DESC = 20	; BUTTON dans l'arbre FORMULAIRE3 *
+
+FORM_TOOLBAR2 = 4	; FormulaireDialogue *
+
+FORM_TOOLBAR3 = 5	; FormulaireDialogue *
+
+FORM_TOOLBOX = 6	; FormulaireDialogue *
+
+ICONIFY_1 = 7	; FormulaireDialogue *
+
+POPUPS = 8   	; FormulaireDialogue *
+POPUP_QUALITY = 1	; BOX dans l'arbre POPUPS *
+POPUP_90 = 2	; STRING dans l'arbre POPUPS *
+POPUP_70 = 3	; STRING dans l'arbre POPUPS *
+POPUP_50 = 4	; STRING dans l'arbre POPUPS *
+POPUP_30 = 5	; STRING dans l'arbre POPUPS *
+POPUP_10 = 6	; STRING dans l'arbre POPUPS *
+POPUP_1 = 7   	; STRING dans l'arbre POPUPS *
+POPUP_100 = 8	; STRING dans l'arbre POPUPS *
+POPUP_QUALITY3D = 9	; BOX dans l'arbre POPUPS *
+POPUP_1003D = 16	; STRING dans l'arbre POPUPS *
+
+MENUS_ATTACHES = 9	; FormulaireDialogue *
+MENU_PERE1 = 1	; BOX dans l'arbre MENUS_ATTACHES *
+OBJ_MENU_PERE1 = 4	; STRING dans l'arbre MENUS_ATTACHES *
+MENU_PERE2 = 9	; BOX dans l'arbre MENUS_ATTACHES *
+OBJ_MENU_PERE2 = 16	; STRING dans l'arbre MENUS_ATTACHES *
+MNU_FATHER_WINDO = 17	; BOX dans l'arbre MENUS_ATTACHES *
+MNU_WINDOW1 = 18	; STRING dans l'arbre MENUS_ATTACHES *
+MNU_WINDOW2 = 19	; STRING dans l'arbre MENUS_ATTACHES *
+MNU_WINDOW3 = 20	; STRING dans l'arbre MENUS_ATTACHES *
+MNU_WINDOW4 = 21	; STRING dans l'arbre MENUS_ATTACHES *
+MNU_WINDOW6 = 22	; STRING dans l'arbre MENUS_ATTACHES *
+MNU_WINDOW5 = 23	; STRING dans l'arbre MENUS_ATTACHES *
+MNU_WINDOW7 = 24	; STRING dans l'arbre MENUS_ATTACHES *
+MNU_WINDOW9 = 25	; STRING dans l'arbre MENUS_ATTACHES *
+MNU_WINDOW8 = 26	; STRING dans l'arbre MENUS_ATTACHES *
+
+FORM_GENERAL = 10	; FormulaireDialogue *
+REDRAW_LVL1 = 1	; BOX dans l'arbre FORM_GENERAL *
+FGO_EDIT_TIMER = 4	; FTEXT dans l'arbre FORM_GENERAL *
+FGO_RADIO_INIT_S = 5	; IBOX dans l'arbre FORM_GENERAL *
+FGO_BTON_INIT_Y = 6	; BUTTON dans l'arbre FORM_GENERAL *
+FGO_BTON_INIT_N = 7	; BUTTON dans l'arbre FORM_GENERAL *
+FGO_BTON_INIT_A = 8	; BUTTON dans l'arbre FORM_GENERAL *
+FGO_BTON_AUTO_SA = 9	; BOXCHAR dans l'arbre FORM_GENERAL *
+FGO_TEXT_VOXPATH = 12	; TEXT dans l'arbre FORM_GENERAL *
+FGO_TEXT_LOGPATH = 13	; TEXT dans l'arbre FORM_GENERAL *
+FGO_TEXT_VOXCMD = 15	; TEXT dans l'arbre FORM_GENERAL *
+FGO_BTON_LOG_ACT = 16	; BOXCHAR dans l'arbre FORM_GENERAL *
+FGO_TEXT_SFAXPAT = 19	; TEXT dans l'arbre FORM_GENERAL *
+FGO_TEXT_SFAXCMD = 20	; TEXT dans l'arbre FORM_GENERAL *
+FGO_EDIT_FAX_ID = 22	; FTEXT dans l'arbre FORM_GENERAL *
+FGO_BTON_OK = 23	; BUTTON dans l'arbre FORM_GENERAL *
+FGO_BTON_SAVE = 25	; BUTTON dans l'arbre FORM_GENERAL *
+
+ALERT1 = 0   	; Chaine d'alerte *
+
+CAUTION = 1   	; Chaine d'alerte *

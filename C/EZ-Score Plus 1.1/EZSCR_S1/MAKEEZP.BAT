@@ -1,0 +1,10 @@
+compile.ttp structin.c
+compile.ttp remap09.c
+compile.ttp ezp.c
+compile.ttp newjust.c
+compile.ttp dialogs.c
+compile.ttp ptext.c
+compile.ttp remap24.c
+compile.ttp pdraw.c
+compile.ttp ezpsf.c
+compile.ttp print.c

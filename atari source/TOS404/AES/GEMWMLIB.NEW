@@ -1,0 +1,1805 @@
+/*
+ * Windows.c -	The Window Manager
+ *
+ * Oct 29 1990	ml.	Created this.
+ * Feb 14 1991	ml.	Really started working on this.
+ * Feb 28 1992	ml.	Started to add 3D look to window gadgets.
+ *			(routines affected: w_adjust(), w_clipdraw)
+ * Apr 21 1992	ml.	Fixed W_HSLSZ and W_VSLSZ bug
+ *
+ */
+#include <portab.h>
+#include <machine.h>
+#include <struct88.h>
+#include <baspag88.h>
+#include <obdefs.h>
+#include <taddr.h>
+#include <gemlib.h>
+#include <osbind.h>
+
+/* in GEMFLAG.C */
+EXTERN WORD     unsync();
+EXTERN WORD     tak_flag();
+
+/* in GSXIF.C */
+EXTERN WORD     gsx_gclip();
+EXTERN WORD     gsx_sclip();
+EXTERN VOID     gsx_mret();
+EXTERN VOID     gsx_moff();
+EXTERN VOID     gsx_mon();
+EXTERN VOID     gsx_attr();
+EXTERN VOID     gsx_1code();
+
+/* in GEMGRLIB.S */
+EXTERN	WORD	gr_stilldn();
+
+/* in GEMOBLIB.C */
+EXTERN VOID	ob_actxywh();
+EXTERN VOID     ob_add();
+EXTERN VOID     ob_draw();
+
+EXTERN LONG     ad_stdesk;
+EXTERN WORD     ml_ocnt;
+EXTERN PD       *ctl_pd;
+EXTERN PD       *gl_mowner;
+EXTERN LONG     gl_mntree;
+
+EXTERN WORD	gl_wchar, gl_hchar;	/* char size in pixels */
+EXTERN WORD	gl_wbox, gl_hbox;	/* char box size in pixels */
+EXTERN WORD	gl_width, gl_height;
+EXTERN GRECT	gl_rfull;
+EXTERN GRECT	gl_rscreen;
+
+EXTERN WORD	deskwind;		/* DESKTOP window handle */
+
+
+WORD	phanwind;		/* PHANTOM window handle */
+WORD	hparts, vparts;		/* window elements masks */
+WORD	wtcolor[MAXOBJ];	/* topped window object colors	*/
+WORD	wbcolor[MAXOBJ];	/* background window object colors */
+LONG	newdesk;		/* address of new DESKTOP */
+WORD	newroot;		/* root object of new DESKTOP */
+WINDOW	*hashtbl[NUMWIN];	/* window structures hash table */
+WORD	hhead;			/* ascending handle # linked list */
+WORD	topw, botw;		/* top and bottom window handles */
+MEMHDR	*wmhead, *wmtail;	/* window memory linked list */
+MEMHDR	*rmhead, *rmtail;	/* rect lists memory linked list */
+
+WORD	wind_msg[8];		/* buffer to store window messages */
+LONG	ad_windspb;
+
+
+/*
+ * Wm_init() -	initializes window colors, then start up the window
+ *		manager.
+ *	     -	this is called by geminit; only at boot time; so that
+ *		window color defaults don't get munched when apps are
+ *		launched; etc.
+ */
+VOID
+wm_init()
+{
+    REG	WORD	i;	/* counter */
+
+    for (i = 0; i < MAXOBJ; i++) {
+	wtcolor[i] = wbcolor[i] = 0x1101;
+    }
+    wtcolor[W_NAME] |= 0xa0;
+    wtcolor[W_VSLIDE] = wtcolor[W_HSLIDE] |= 0x10;
+    wbcolor[W_VSLIDE] = wbcolor[W_HSLIDE] |= 0x10;
+
+    wm_start();
+}
+
+
+/*
+ * Wm_start() - initializes internal variables and data structures
+ *		of the window manager.
+ *	      - returns TRUE (1) if successful, and FALSE (0) if not.
+ */
+WORD
+wm_start()
+{
+    REG WINDOW  *wp;	/* pointer to window structure */
+    REG RLIST   *rp;	/* pointer to RLIST structure */
+    REG int	i;	/* counter */
+    GRECT	windsiz;
+
+    /* Allocate memory for memory header and window structures */
+    if ((wmhead = (MEMHDR *)
+	    Malloc((LONG)(NUMWIN*sizeof(WINDOW)+sizeof(MEMHDR)))) == NULLPTR)
+	return FALSE;
+
+    wmtail = wmhead;		    /* init WINDOW memory linked list */
+    wmhead->mnext = NULLPTR;	    /* there is no next memory block */
+    wmhead->numused = 0;	    /* no slot is used yet */
+
+    /* init window structures and hash table entries */
+    for (wp = (WINDOW *)(wmhead+1), i = 0;
+	 i < NUMWIN;
+	 i++, wp++) {
+	wp->status.used = FALSE;    /* window structure is available */
+	wp->wwhere = wmhead;	    /* remember where it resides in */
+	hashtbl[i] = NULLPTR;	    /* initialize hash table entries */
+    }
+
+    topw = botw = NIL;	    	    /* no opened window yet */
+    hhead = NIL;		    /* init ascending handle # linked list */
+
+    /* Allocate memory for memory header and rectangle lists */
+    if ((rmhead = (MEMHDR *)
+	    Malloc((LONG)(NUMRECT*sizeof(RLIST)+sizeof(MEMHDR)))) == NULLPTR)
+	return FALSE;
+
+    rmtail = rmhead;		    /* init RLIST memory linked list */
+    rmhead->mnext = NULLPTR;	    /* there is no next memory block */
+    rmhead->numused = 0;	    /* no slot is used yet */
+
+    /* init RLIST structures as available */
+    for (rp = (RLIST *)(rmhead+1), i = 0; i < NUMRECT; i++, rp++) {
+	rp->rstatus.rused = FALSE;
+	rp->rwhere = rmhead;
+    }
+
+    newdesk = NULLPTR;		    /* no new DESKTOP */
+    newroot = 0;
+
+    windsiz.g_x = -1;
+    windsiz.g_y = gl_hbox - 1;
+    windsiz.g_w = gl_rfull.g_w + 2;
+    windsiz.g_h = gl_rfull.g_h + 2;
+
+    /* create DESKTOP window for now */
+    deskwind = wm_create(0, &windsiz);
+    wm_open(deskwind, &windsiz);
+
+    windsiz.g_x = -2;
+    windsiz.g_y += 2;
+    windsiz.g_w = windsiz.g_h = 0;
+
+    /* create PHANTOM window */
+    phanwind = wm_create(0, &windsiz);
+    wm_open(phanwind, &windsiz);
+
+    return TRUE;		    /* everything is fine */
+}
+
+
+/*
+ * Wm_create() - allocates the application's full-size window and 
+ *		 returns the window's handle.
+ *	       - returns FAILURE (-1) if no handle is available or
+ *		 if an error occurred.
+ */
+WORD
+wm_create(kind, rect)
+UWORD	    kind;	/* kind of window to be created */
+REG GRECT   *rect;	/* x, y, width and height of full size window */
+{
+    REG	int 	i;		/* counter */
+    REG	WORD	*tc, *bc;	/* pointers to color array */
+    REG WINDOW	*wp;		/* pointer to window structure */
+    WINDOW	*newwp();
+
+    /* find next available window structure and handle	*/
+    /* if none available, return with a FAILURE		*/
+    if ((wp = newwp()) == NULLPTR || newhndl(wp) == FAILURE)
+	return FAILURE;
+
+    wp->status.opened = FALSE;		/* window has not been opened yet */
+    wp->owner = rlr;		    	/* init owner of window */
+    wp->mowner = NIL;			/* no mouse owner FOR NOW */
+    wp->fxywh = wp->nxywh = NULLPTR;	/* no rectangle list yet */
+    wp->kind = kind;			/* save kind of window */
+
+    /* initialize window object colors */
+    for (i = 0; i < MAXOBJ; i++) {
+	wp->tcolor[i] = wtcolor[i];
+	wp->bcolor[i]= wbcolor[i];
+    }
+
+    /* initialize window coordinates and size */
+    w_rect(&(wp->prev), 0, 0, 0, 0);
+    *(GRECT *)&(wp->obj[W_WORK].ob_x) = wp->prev;
+    wp->curr = wp->prev;
+    wp->full = *rect;
+
+    /* initialize sliders positions and sizes */
+    wp->hslpos = wp->vslpos = 0;
+    wp->hslsz = wp->vslsz = -1;
+
+    /* the window has not been opened yet */
+    wp->ontop = wp->under = NIL;
+
+    /* assume no parent, child or sibling relationship FOR NOW */
+    wp->parent = wp->child = wp->sibling = NIL;
+
+    /* first object is the background, and it has a shadow */
+    w_bld(wp, W_BOX, G_IBOX, NIL, GBOX_OBS);
+    wp->obj[W_BOX].ob_state |= SHADOWED;;
+
+    hparts = kind & HPARTS;	/* mask for vertical slider elements */
+    vparts = kind & VPARTS;	/* mask for horizontal slider elements */
+
+    if (kind & TPARTS) {	/* any title bar elements? */
+	w_bld(wp, W_TITLE, G_BOX, W_BOX, GBOX_OBS);
+
+	if (kind & CLOSER) {
+	    w_bld(wp, W_CLOSER, A3DBOXCHAR, W_TITLE, 0x05010000);
+	}
+
+	if (kind & NAME) {
+	    w_bld(wp, W_NAME, A3DBOXTEXT, W_TITLE, &(wp->ttxt));
+	    w_ted(&(wp->ttxt), "Title Bar", 2, wtcolor[W_TITLE]);
+	} else if (kind & MOVER) {
+	    w_bld(wp, W_NAME, G_IBOX, W_BOX, 0L);
+	}
+
+	if (kind & FULLER) {
+	    w_bld(wp, W_FULLER, A3DBOXCHAR, W_TITLE, 0x07010000);
+	}
+    }
+
+    if (kind & INFO) {
+	w_bld(wp, W_INFO, G_BOXTEXT, W_BOX, &(wp->itxt));
+	w_ted(&(wp->itxt), "Info Line", 0, wtcolor[W_INFO]);
+    }
+
+    if (kind & MNBAR) {
+	w_bld(wp, W_MNBAR, G_BOXTEXT, W_BOX, &(wp->mtxt));
+	w_ted(&(wp->mtxt), " Desk  File  View  Options", 0, wtcolor[W_MNBAR]);
+    }
+
+    if (kind & SIZER) {
+	w_bld(wp, W_SIZER, A3DBOXCHAR, W_BOX, 0x06010000);
+
+	if (!hparts && !vparts) {
+	    w_bld(wp, W_VBAR, A3DBOX, W_BOX, GBOX_OBS);
+	    /* Taken out to expand work area by 1 line	    */
+	    /* w_bld(wp, W_HBAR, A3DBOX, W_BOX, GBOX_OBS);    */
+	}
+    } else if (hparts && vparts) {
+	w_bld (wp, W_SIZER, A3DBOX, W_BOX, GBOX_OBS);
+    }
+
+    if (vparts) {
+	w_bld(wp, W_VBAR, G_BOX, W_BOX, GBOX_OBS);
+
+	if (kind & UPARROW) {
+	    w_bld(wp, W_UPARROW, A3DBOXCHAR, W_VBAR, 0x01010000);
+	}
+
+	if (kind & DNARROW) {
+	    w_bld(wp, W_DNARROW, A3DBOXCHAR, W_VBAR, 0x02010000);
+	}
+
+	if (kind & VSLIDE) {
+	    w_bld(wp, W_VSLIDE, G_BOX, W_VBAR, 0x00020000);
+	    w_bld(wp, W_VELEV, A3DBOX, W_VSLIDE, GBOX_OBS);
+	}
+    }
+
+    if (hparts) {
+	w_bld(wp, W_HBAR, G_BOX, W_BOX, GBOX_OBS);
+
+	if (kind & LFARROW) {
+	    w_bld(wp, W_LFARROW, A3DBOXCHAR, W_HBAR, 0x04010000);
+	}
+
+	if (kind & RTARROW) {
+	    w_bld(wp, W_RTARROW, A3DBOXCHAR, W_HBAR, 0x03010000);
+	}
+
+	if (kind & HSLIDE) {
+	    w_bld(wp, W_HSLIDE, G_BOX, W_HBAR, 0x00020000);
+	    w_bld(wp, W_HELEV, A3DBOX, W_HSLIDE, GBOX_OBS);
+	}
+    }
+
+    storewp(wp);	/* store window structure into database */
+    return(wp->handle);	/* returns a handle */
+}
+
+
+/*
+ * Wm_open() - opens a window in its given size and location.
+ *	     - returns FALSE (0) if given handle is invalid,
+ *	       or if window has already been opened.
+ *	     - returns TRUE (1) if everything is fine.
+ */
+WORD
+wm_open(handle, rect)
+WORD	    handle;	    /* handle of window to be opened */
+REG GRECT   *rect;	    /* x, y, width and height of opened window */
+{
+    REG WINDOW  *wp;	    /* pointer to window structure */
+    WINDOW	*srchwp();
+    WORD	ret;	    /* return code */
+
+    /* if window structure can't be found or window already opened,
+       return error */
+    if ((wp = srchwp(handle)) == NULLPTR || wp->status.opened)
+	return FALSE;
+
+    wm_update(TRUE);
+    w_adjust(wp, rect);	    	    /* init window components */
+    wp->status.opened = TRUE;	    /* remember that this is opened */
+    ret = totop(handle, WMOPEN);    /* top it */
+    wm_update(FALSE);
+    return ret;
+}
+
+
+/*
+ * Wm_close() - closes an opened window
+ *	      - returns FALSE (0) if given handle is invalid,
+ *	        or if window has already been closed.
+ *	      - returns TRUE (1) if everything is fine.
+ *
+ */
+WORD
+wm_close(handle)
+WORD	handle;			/* handle of window to be closed */
+{
+    REG WINDOW	*wp, *wp1;	/* pointers to window structure */
+    GRECT	dirty;		/* rectangle of dirty area */
+
+    if ((wp = srchwp(handle)) == NULLPTR || !wp->status.opened)
+	return FALSE;
+
+    wm_update(TRUE);
+    /* save previous coords */
+    wp->prev = wp->curr;
+
+    /* reset current coords and work area coords */
+    w_rect(&(wp->curr), 0, 0, 0, 0);
+    *(GRECT *)&(wp->obj[W_WORK].ob_x) = wp->curr;
+
+    /* remember that window has been closed */
+    wp->status.opened = FALSE;
+
+    /* delete window's rectangle list if there is one */
+    if (wp->fxywh) {
+	delrect(0L, wp->fxywh);
+	wp->fxywh = wp->nxywh = NULLPTR;
+    }
+
+    dirty = wp->prev;
+    dirty.g_w += SHADOW;
+    dirty.g_h += SHADOW;
+    w_drawchange(&dirty, NIL);
+
+    /* maintain linked list of opened windows */
+    if (handle == topw) {
+	if ((topw = wp->under) != NIL) {
+	    totop(topw, WMCLOSE);
+	} else {
+	    botw = NIL;
+	}
+    } else if (handle == botw) {
+	botw = wp->ontop;
+	wp = srchwp(botw);
+	wp->under = NIL;
+    } else {
+	wp1 = srchwp(wp->under);
+	wp1->ontop = wp->ontop;
+	wp1 = srchwp(wp->ontop);
+	wp1->under = wp->under;
+    }
+    wm_update(FALSE);
+    return TRUE;
+}
+
+
+/*
+ * Wm_delete() - closes the window if it is not already closed,
+ *		 and frees the window structure.
+ *	       - returns FALSE (0) if given handle is invalid.
+ *	       - returns TRUE (1) if everything is fine.
+ *
+ */
+WORD
+wm_delete(handle)
+WORD	handle;		/* handle of window to be deleted */
+{
+    WINDOW	*srchwp();
+    REG	WINDOW  *wp, *wp1, *wp2;    /* pointers to window structures */
+    MEMHDR	*mp;		    /* pointer to memory header */
+    int		bucket;		    /* index into hash table */
+
+    if ((wp = srchwp(handle)) == NULLPTR)
+	return FALSE;
+
+    /* delete window's rectangle list if there is one */
+    if (wp->fxywh)
+	delrect(0L, wp->fxywh);
+
+#if	0
+    if (wp->status.opened)	/* if not already closed, */
+	wm_close(handle);	/* close the window first */
+#endif
+
+    /* Remove window structure of deleted window from database */
+    bucket = handle % NUMWIN;
+    if (hashtbl[bucket] == wp) {
+	hashtbl[bucket] = wp->wnext;
+    } else {
+	for (wp1 = hashtbl[bucket];
+	    wp1->wnext != wp;
+	    wp1 = wp1->wnext)
+	    ;
+	wp1->wnext = wp->wnext;
+    }
+
+    /* Maintain list of handle numbers */
+    if (handle == hhead) {
+	hhead = wp->nxthndl;
+    } else {
+	for (wp1 = srchwp(hhead);
+	    wp1->nxthndl != handle;
+	    wp1 = srchwp(wp1->nxthndl))
+	    ;
+	wp1->nxthndl = wp->nxthndl;
+    }
+
+    /*
+     * Check if window structure resides in last block of memory
+     * allocated, if not, fill the window structure with one from
+     * the last block, and free the last block if it then becomes
+     * empty.  Update the database with this _moved_ window structure.
+     */
+
+    if ((mp = wp->wwhere) != wmtail) {
+	for (wp1 = (WINDOW *)(wmtail+1); wp1->status.used == FALSE; wp1++)
+	    ;
+	*wp = *wp1;
+	wp->wwhere = mp;	/* restore address of memory block */
+				/* update internal pointers */
+	wp->obj[W_NAME].ob_spec = &(wp->ttxt);
+	wp->obj[W_INFO].ob_spec = &(wp->itxt);
+	bucket = wp1->handle % NUMWIN;
+	if (hashtbl[bucket] == wp1) {
+	    hashtbl[bucket] = wp;
+	} else {
+	    for (wp2 = hashtbl[bucket];
+		wp2->wnext != wp1;
+		wp2 = wp2->wnext)
+		;
+	    wp2->wnext = wp;
+	}
+	wp1->status.used = FALSE;
+    } else {
+	wp->status.used = FALSE;
+    }
+
+    wmtail->numused -= 1;
+
+    if (!wmtail->numused && wmhead != wmtail) {
+	Mfree(wmtail);
+	for (mp = wmhead; mp->mnext != wmtail; mp = mp->mnext)
+	    ;
+	mp->mnext = NULLPTR;
+	wmtail = mp;
+    }
+    return TRUE;
+}
+
+
+/*
+ * Wm_get() - returns information of window in the given array
+ *	    - returns FALSE (0) if given handle is invalid
+ *	    - returns TRUE (1) if everything is fine
+ *
+ */
+WORD
+wm_get(handle, field, ow)
+REG WORD    handle;	/* window handle */
+WORD	    field;	/* flag to identify what info to be returned */
+REG WORD    ow[];	/* return values */
+{
+    int		ret, i;
+    REG WINDOW	*wp;
+    REG	GRECT	*r;
+    WINDOW	*srchwp();
+    RLIST	*genrlist();
+
+    if ((wp = srchwp(handle)) == NULLPTR)
+	return FALSE;
+
+    ret = TRUE;
+
+    switch (field) {
+
+	case WF_WORKXYWH:
+	    r = (GRECT *)ow;
+	    *r = *(GRECT *)&(wp->obj[W_WORK].ob_x);
+ 	    break;
+
+	case WF_CURRXYWH:
+	    r = (GRECT *)ow;
+	    *r = wp->curr;
+	    break;
+
+	case WF_PREVXYWH:
+	    r = (GRECT *)ow;
+	    *r = wp->prev;
+	    break;
+
+	case WF_FULLXYWH:
+	    r = (GRECT *)ow;
+	    *r = wp->full;
+	    break;
+
+	case WF_HSLIDE:
+	    ow[0] = wp->hslpos;
+	    break;
+
+	case WF_VSLIDE:
+	    ow[0] = wp->vslpos;
+	    break;
+
+	case WF_HSLSIZE:
+	    ow[0] = wp->hslsz;
+	    break;
+
+	case WF_VSLSIZE:
+	    ow[0] = wp->vslsz;
+	    break;
+
+	case WF_TOP:
+	    ow[0] = topw;
+	    break;
+
+	case WF_FIRSTXYWH:
+	    r = (GRECT *)ow;
+	    /* delete old list if there is one */
+	    if (wp->fxywh) {
+		delrect(0L, wp->fxywh);
+		wp->fxywh = wp->nxywh = NULLPTR;
+	    }
+	    /* generate new list */
+	    if (wp->fxywh = genrlist(handle, WF_WORKXYWH)) {
+	    	wp->nxywh = (wp->fxywh)->rnext;
+		*r = (wp->fxywh)->rect;
+	    } else {
+		*r = wp->curr;
+		r->g_w = 0;
+		r->g_h = 0;
+	    }
+	    break;
+
+	case WF_NEXTXYWH:
+	    r = (GRECT *)ow;
+	    if (wp->nxywh) {
+		*r = (wp->nxywh)->rect;
+		wp->nxywh = (wp->nxywh)->rnext;
+	    } else {
+		*r = wp->curr;
+		r->g_w = 0;
+		r->g_h = 0;
+	    }
+	    break;
+
+	case WF_NEWDESK:
+	    *(LONG *)ow = newdesk;
+	    ow[2] = newroot;
+	    break;
+
+	case WF_COLOR:
+	    ow[1] = wp->tcolor[ow[0]];
+	    ow[2] = wp->bcolor[ow[0]];
+	    break;
+
+	case WF_DCOLOR:
+	    ow[1] = wtcolor[ow[0]];
+	    ow[2] = wbcolor[ow[0]];
+	    break;
+
+	case WF_SCREEN:
+	    gsx_mret(&ow[0], &ow[2]);
+	    break;
+
+	case WF_RESVD:
+	default:
+	    ret = FALSE;
+	    break;
+    }
+
+    return ret;
+}
+
+
+/*
+ * Wm_set() - changes information of a window
+ *	    - returns FALSE (0) if given handle is invalid
+ *	    - returns TRUE (1) if everything is fine
+ *
+ */
+WORD
+wm_set(handle, field, iw)
+REG WORD    handle;	    /* window handle */
+REG WORD    field;	    /* flag to identify what info to be changed */
+REG WORD    iw[];	    /* values to change to */
+{
+    REG WINDOW	*wp;	    /* pointer to window structure */
+    WINDOW	*srchwp();
+    int		ret, obj;
+    long	blen;
+    UWORD	sz;
+    REG	WORD	*r, *r1, i;
+    REG	OBJECT	*work;
+    GRECT	rect, rect1;
+
+    if ((wp = srchwp(handle)) == NULLPTR)
+	return FALSE;	
+
+    ret = TRUE;		    /* assume everything will be ok */
+
+    wm_update(TRUE);	    /* grab the window sync */
+
+    switch (field) {
+	case WF_NAME:
+	    wp->ttxt.te_ptext = *(LONG *)iw;
+	    if (wp->status.opened)
+		w_clipdraw(wp, W_TITLE, NULLPTR);
+	    break;
+
+	case WF_INFO:
+	    wp->itxt.te_ptext = *(LONG *)iw;
+	    if (wp->status.opened)
+		w_clipdraw(wp, W_INFO, NULLPTR);
+	    break;
+
+	case WF_CURRXYWH:
+	    rect = *(GRECT *)iw;
+	    w_adjust(wp, &rect);
+
+	    if (wp->status.opened) {
+		/* send redraw message to opened windows which */
+		/* intersect with the dirty area */
+		rect = wp->prev;
+		rect.g_w += SHADOW;
+		rect.g_h += SHADOW;
+
+		rect1 = wp->curr;
+		rect1.g_w += SHADOW;
+		rect1.g_h += SHADOW;
+
+		if ((handle != topw)
+		    || ((rect.g_x+rect.g_w > gl_width)&&(rect1.g_x < rect.g_x))
+		    || ((rect.g_y+rect.g_h > gl_height)&&(rect1.g_y < rect.g_y))
+		    || rect.g_w != rect1.g_w || rect.g_h != rect1.g_h
+		    || rect.g_x < gl_rfull.g_x) {
+
+		    w_clipdraw(wp, W_BOX, NULLPTR);
+		    if (rect1.g_x != rect.g_x || rect1.g_y != rect.g_y
+			|| rect1.g_w > rect.g_w || rect1.g_h > rect.g_h) {
+			ap_sendmsg(wind_msg, WM_REDRAW, wp->owner->p_pid, 
+			    handle, wp->curr.g_x, wp->curr.g_y, wp->curr.g_w, 
+			    wp->curr.g_h);
+		    }
+
+		} else {
+		    gsx_sclip(&gl_rfull);
+		    bb_screen(S_ONLY, rect.g_x, rect.g_y, rect1.g_x, 
+			rect1.g_y, rect.g_w, rect.g_h);
+		}
+
+		w_drawchange(&rect, handle);
+	    }
+	    break;
+
+	case WF_HSLIDE:
+	case WF_VSLIDE:
+	case WF_HSLSIZE:
+	case WF_VSLSIZE:
+
+	    if (iw[0] > 1000)
+		iw[0] = 1000;
+	    else if (iw[0] < -1)
+		iw[0] = -1;
+
+	    switch (field) {
+		case WF_HSLIDE:
+		    wp->hslpos = iw[0];
+		    break;
+
+		case WF_VSLIDE:
+		    wp->vslpos = iw[0];
+		    break;
+
+		case WF_HSLSIZE:
+		    wp->hslsz = iw[0];
+		    break;
+
+		case WF_VSLSIZE:
+		    wp->vslsz = iw[0];
+		    break;
+	    }
+
+	    if (field == WF_HSLIDE || field == WF_HSLSIZE) {
+		obj = W_HSLIDE;
+		blen = wp->obj[W_HSLIDE].ob_width;
+		if (wp->hslsz == -1 ||
+		    (sz = blen * wp->hslsz / 1000) < gl_wbox) {
+		    sz = gl_wbox;
+		}
+		wp->obj[W_HELEV].ob_x = (blen - sz) * wp->hslpos / 1000;
+		wp->obj[W_HELEV].ob_width = sz;
+
+	    } else {	/* field == WF_VSLIDE || field == WF_VSLSIZE */
+		obj = W_VSLIDE;
+		blen = wp->obj[W_VSLIDE].ob_height;
+		if (wp->vslsz == -1 ||
+		    (sz = blen * wp->vslsz / 1000) < gl_hbox) {
+		    sz = gl_hbox;
+		}
+		wp->obj[W_VELEV].ob_y = (blen - sz) * wp->vslpos / 1000;
+		wp->obj[W_VELEV].ob_height = sz;
+	    }
+
+	    /* if window is already opened, redraw it */
+	    if (wp->status.opened)
+		w_clipdraw(wp, obj, NULLPTR);
+	    break;
+
+	case WF_TOP:
+	    if (handle != topw)
+		ret = totop(handle, WMSET);
+	    break;
+
+	case WF_BOTTOM:
+	    ret = tobot(handle);
+	    break;
+
+	case WF_NEWDESK:
+	    newdesk = *(LONG *)&iw[0];
+	    newroot = iw[2];
+	    break;
+
+	case WF_COLOR:
+	    if (iw[1] != -1)
+		wp->tcolor[iw[0]] = iw[1];
+	    if (iw[2] != -1)
+		wp->bcolor[iw[0]] = iw[2];
+
+	    if (wp->handle == topw)
+		setcol(wp, iw[0], TRUE);
+	    else
+		setcol(wp, iw[0], FALSE);
+
+	    /* if window is already opened, redraw it */
+	    if (wp->status.opened)
+		w_clipdraw(wp, iw[0], NULLPTR);
+	    break;
+
+	case WF_DCOLOR:
+	    if (iw[1] != -1)
+		wtcolor[iw[0]] = iw[1];
+	    if (iw[2] != -1)
+		wbcolor[iw[0]] = iw[2];
+	    break;
+
+	case WF_RESVD:	    /* old WMLIB has code, but doc says RESERVED */
+	default:
+	    ret = FALSE;
+	    break;
+    }
+
+    wm_update(FALSE);	    /* give up the window sync */
+    return ret;
+}
+
+
+/*
+ * Wm_find() - finds which window is under the mouse's x, y position
+ *
+ */
+WORD
+wm_find(mx, my)
+int mx;		/* mouse's x position */
+int my;		/* mouse's y position */
+{
+    REG WINDOW  *wp;    /* pointer to window structure */
+
+    for (wp = srchwp(topw); wp; wp = srchwp(wp->under)) {
+	if (mx >= wp->curr.g_x && mx <= wp->curr.g_x + wp->curr.g_w
+	    && my >= wp->curr.g_y && my <= wp->curr.g_y + wp->curr.g_h)
+	    return (wp->handle);
+    }
+    return NIL;		/* return -1 if not on top of any window */
+}
+
+
+/*
+ * Wm_update() - locks or unlocks the current state of the window 
+ *		 tree while an application is responding to a 
+ *		 window update message in his message pipe or is 
+ *		 making some other direct screen update based on
+ *		 his current rectangle list.
+ *
+ */
+VOID
+wm_update(code)
+int code;	/* flag for the call's function */
+{
+    if (code < 2) {
+	if (code) {
+	    if (!tak_flag(&wind_spb))
+		ev_block(AMUTEX, ad_windspb);
+	    } else {
+		unsync(&wind_spb);
+	}
+    } else {
+	code -= 2;
+	take_ownership(code);
+    }
+    return(code);
+}
+
+
+/*
+ * Wm_calc() - calculates the x, y coordinates and width, height of a
+ *		window's border area or work area
+ *
+ */
+VOID
+wm_calc(type, kind, ix, iy, iw, ih, ox, oy, ow, oh)
+int type;	/* the type of calculation to perform */
+int kind;	/* components present in the window */
+int ix;		/* input x-coordinate of window */
+int iy;		/* input y-coordinate of window */
+int iw;		/* input width of window */
+int ih;		/* input height of window */
+int *ox;	/* output x-coordinate of work/border area */
+int *oy;	/* output y-coordinate of work/border area */
+int *ow;	/* output width of work/border area */
+int *oh;	/* output height of work/border area */
+{
+    REG WORD	tb, bb, lb, rb;
+    REG	WORD	yinc, xinc;
+    int		hparts, vparts;
+
+    tb = bb = rb = lb = 1;
+
+    xinc = gl_wbox - 1 + (ADJ3DPIX << 1);
+    yinc = gl_hbox - 1 + (ADJ3DPIX << 1);
+/*
+    yinc = ob_hbox - 1;
+/**/
+/* June 19 1992 - ml
+    yinc = ob_hbox;
+    xinc = ob_wbox;
+/**/
+	
+    if (kind & (NAME | CLOSER | FULLER))
+	tb += yinc;
+    if (kind & INFO)
+	tb += yinc;
+    if (kind & MNBAR)
+	tb += yinc;
+
+    vparts = kind & (UPARROW | DNARROW | VSLIDE);
+    hparts = kind & (LFARROW | RTARROW | HSLIDE);
+
+    if ((kind & SIZER) && (!vparts && !hparts))
+	rb += xinc;
+
+    if (vparts)
+	rb += xinc;
+
+    if (hparts)
+	bb += yinc;
+
+					/* negate values to calc*/
+					/*   Border Area	*/
+    if (type == WC_BORDER) {
+	lb = -lb;
+	tb = -tb;
+	rb = -rb;
+	bb = -bb;						
+    }
+
+    *ox = ix + lb;
+    *oy = iy + tb;
+    *ow = iw - lb - rb;
+    *oh = ih - tb - bb;
+}
+
+
+/*	
+ * Wm_new() - Delete all the window structures and clean 
+ *	      up the window update semaphore.  This 
+ *	      routine is very critical, so don't call 
+ *	      it when you are not sure.  You must call 
+ *	      this guy right after you return from the 
+ *	      child process.	Only at this moment the 
+ *	      system can be able to recover itself.
+ *
+ * Comments:
+ *	(Jul 23 91 ml.) This may need to be modified for
+ * future multitasking system.
+ *	
+ */
+VOID
+wm_new()
+{
+	REG SPB	*sy;
+	REG MEMHDR  *mp;	/* pointer to memory header */
+
+	/* Free all window structures */
+	for (mp = wmhead; mp; mp = mp->mnext)
+	    Mfree(mp);
+
+	/* Free all rectangle list structures */
+	for (mp = rmhead; mp; mp = mp->mnext)
+	    Mfree(mp);
+
+	wm_start();		/* reinit all data structures */
+
+	ml_ocnt = 0;		/* reset the semaphore */
+	gl_mntree = 0x0L;	/* reset menu tree */
+	gl_mowner = ctl_pd;	/* reset mouse owner */
+
+	sy = ad_windspb;
+
+	if ( !sy->sy_tas )	/* anybody owning the screen ? */
+	  return;		/* No ..		       */
+				
+	while( sy->sy_tas )	/* in gemflag.c	*/
+	  unsync( sy );
+}
+
+
+/*
+ * Allocate a window structure for a new window.
+ *
+ *     Returns a pointer to an available window 
+ * structure or NULLPTR if none is available.
+ *
+ */
+WINDOW*
+newwp()
+{
+    WINDOW  *wp;	/* pointer to window structure */
+    MEMHDR  *mp;	/* pointer to memory header */
+    int	    i;		/* count */
+	
+    if (wmtail->numused == NUMWIN) {
+	if ((mp = (MEMHDR *)
+		Malloc((LONG)(NUMWIN*sizeof(WINDOW)+sizeof(MEMHDR)))) 
+	    == NULLPTR) {
+	    return(NULLPTR);
+	} else {
+	    /* init window structures as available */
+	    for (wp = (WINDOW *)(mp+1), i = 0; i < NUMWIN; i++, wp++) {
+		wp->status.used = FALSE;
+		wp->wwhere = mp;
+	    }
+
+	    wmtail->mnext = mp;
+	    mp->mnext = NULLPTR;
+	    wmtail = mp;
+	    wmtail->numused = 1;
+	    wp = (WINDOW *)(wmtail+1);
+	}
+    } else {
+	for (wp = (WINDOW *)(wmtail+1); wp->status.used == TRUE; wp++)
+	    ;
+
+	wmtail->numused += 1;
+    }
+
+    wp->status.used = TRUE;
+    return(wp);
+}
+
+
+/*
+ * Allocate a window handle to a new window
+ *
+ *    Returns an available handle number, or FAILURE (-1) if
+ * none is available.
+ *
+ */
+WORD
+newhndl(nwp)
+REG WINDOW  *nwp;		    /* pointer to new window structure */
+{
+    REG	    WINDOW  *wp, *nxtwp;    /* pointers to window structure */
+    WINDOW  *srchwp();
+    int	    found;
+
+    /*
+     * Starting from head of linked list, search for non-
+     * consecutive handle numbers.  If two handle numbers
+     * are found to be non-consecutive, the new handle is
+     * the smaller number plus one.  If all handle numbers	
+     * are consecutive, the new handle is the biggest number
+     * plus one.
+     *
+     * Once an available handle number is found, insert the
+     * new window structure into the linked list.
+     */
+
+    if (hhead == NIL) {			/* no created window */
+	hhead = nwp->handle = 0;
+	nwp->nxthndl = NIL;
+    } else if (hhead) {			/* if head handle is not 0 */
+	nwp->nxthndl = hhead;
+	nwp->handle = hhead -= 1;
+    } else {				/* have to search through list */
+	wp = srchwp(hhead);
+	found = FALSE;
+	while (wp->nxthndl != NIL && !found) {
+	    nxtwp = srchwp(wp->nxthndl);
+	    if (nxtwp->handle - wp->handle > 1)
+		found = TRUE;
+	    else
+		wp = nxtwp;
+	}
+	nwp->nxthndl = wp->nxthndl;
+	wp->nxthndl = nwp->handle = wp->handle + 1;
+    }
+    return(nwp->handle);
+}
+
+
+/*
+ * Store the given window structure into the database
+ * of window structures.
+ *
+ */
+VOID
+storewp(wp)
+WINDOW	*wp;
+{
+    int	    bucket;		/* bucket number in hash table */
+	
+    bucket = wp->handle % NUMWIN;
+    wp->wnext = hashtbl[bucket];
+    hashtbl[bucket] = wp;
+}
+
+
+/*
+ * Search for the window structure that corresponds to the
+ * given handle.
+ *
+ *    Returns a pointer to the window structure of the given
+ * handle, or NULLPTR if the window structure is not found.
+ *
+ */
+WINDOW*
+srchwp(handle)
+int handle;
+{
+    WINDOW  *wp;		/* pointer to window structure */
+    int	    bucket;		/* bucket number in hash table */
+
+    wp = NULLPTR;		/* assume no window structure */
+
+    /* look for window structure only if handle is valid */
+    if (handle >= 0) {
+	bucket = handle % NUMWIN;
+	for(wp = hashtbl[bucket]; 
+	    wp != NULLPTR && wp->handle != handle; 
+	    wp = wp->wnext)
+	    ;
+    }
+
+    return(wp);
+}
+
+
+/*
+ * totop() - tops the given window, and untops the current top window
+ *	     (if there is one.)
+ *
+ */
+WORD
+totop(handle, caller)
+WORD	handle;		/* handle of window to be topped */
+WORD	caller;		/* WMOPEN: called by wm_open() */
+			/* WMCLOSE: called by wm_close()  */
+			/* WMSET: called by wm_set()  */
+{
+    REG WINDOW  *ntwp;
+    WINDOW	*onwp, *unwp, *twp;
+    WORD	nxtw, i;
+    GRECT	obscured, inter, ontop;
+
+    twp = NULLPTR;
+
+    /* search for window structure of the given handle */
+    if ((ntwp = srchwp(handle)) == NULLPTR
+	|| (caller == WMSET && !ntwp->status.opened))
+	return FALSE;
+
+/* For optimizing redraws 6-16-92 ml. */
+    for (nxtw = ntwp->ontop, i = 0; nxtw != NIL; nxtw = onwp->ontop) {
+	onwp = srchwp(nxtw);
+	ontop = onwp->curr;
+	ontop.g_w += SHADOW;
+	ontop.g_h += SHADOW;
+	inter = ntwp->curr;
+	inter.g_w += SHADOW;
+	inter.g_h += SHADOW;
+	if (rc_intersect(&ontop, &inter)) {
+	    if (!i) {
+		obscured = inter;
+		i++;
+	    } else {
+		rc_union(&inter, &obscured);
+	    }
+	}
+    }
+
+    /* maintain linked list of opened windows */
+    if (topw == NIL) {
+	botw = handle;
+    } else if (caller != WMCLOSE) {    /* orig. top window wasn't closed */
+	if (caller == WMSET) {
+	    onwp = srchwp(ntwp->ontop);
+	    if ((onwp->under = ntwp->under) != NIL) {
+		unwp = srchwp(ntwp->under);
+		unwp->ontop = ntwp->ontop;
+	    }
+	}
+	twp = srchwp(topw);
+	twp->ontop = handle;
+    	ntwp->under = topw;
+    }
+
+    ntwp->ontop = NIL;
+    topw = handle;
+
+    /* draw the untopped window if there is one */
+    if (twp) {
+	activate(twp, NO);
+    	w_clipdraw(twp, W_BOX, NULLPTR);
+    }
+
+    /* draw border of the newly topped window */
+    activate(ntwp, YES);
+    w_clipdraw(ntwp, W_BOX, NULLPTR);
+    w_setactive();
+
+    /* draw content of newly topped window if it's not the DESKTOP  */
+    if (handle != deskwind) {
+	if (caller == WMOPEN) {
+	    ap_sendmsg(wind_msg, WM_REDRAW, ntwp->owner->p_pid, handle,
+		ntwp->curr.g_x, ntwp->curr.g_y, ntwp->curr.g_w, ntwp->curr.g_h);
+	} else if (caller == WMSET) {
+	    ap_sendmsg(wind_msg, WM_REDRAW, ntwp->owner->p_pid, handle,
+		obscured.g_x, obscured.g_y, obscured.g_w, obscured.g_h);
+	}
+    }
+
+    return TRUE;
+}
+
+
+/*
+ * tobot() - make the given window to be the bottom window, and top
+ *	     the next one if necessary
+ *	   - the DESKTOP window is considered to be the "real" bottom
+ *	     window at all times, and does not count in this function
+ *
+ */
+WORD
+tobot(handle)
+WORD	handle;		/* handle of window to be bottmed */
+{
+    REG WINDOW  *nbwp, *onbwp, *unnbwp;
+    WINDOW	*bwp, *onnbwp;
+    GRECT	dirty;
+
+    /* search for window structure of the given handle */
+    if ((nbwp = srchwp(handle)) == NULLPTR || (!nbwp->status.opened))
+	return FALSE;
+
+    bwp = srchwp(deskwind);
+    onbwp = srchwp(bwp->ontop);
+    if (onbwp->handle == handle)	/* if already bottomed,	*/
+        return TRUE;			/*   return		*/
+
+    unnbwp = srchwp(nbwp->under);
+
+    /* need to top another window? */
+    if (handle == topw) {
+	topw = unnbwp->handle;
+
+	/* change border of newly bottomed window */
+	activate(nbwp, NO);
+	w_clipdraw(nbwp, W_BOX, NULLPTR);
+
+	/* draw border of the newly topped window */
+	activate(unnbwp, YES);
+	w_clipdraw(unnbwp, W_BOX, NULLPTR);
+	w_setactive();
+    } else {
+	onnbwp = srchwp(nbwp->ontop);
+	onnbwp->under = nbwp->under;
+    }
+
+    /* maintain linked list of opened windows */
+    unnbwp->ontop = nbwp->ontop;
+    nbwp->under = onbwp->under;
+    nbwp->ontop = bwp->ontop;
+    onbwp->under = bwp->ontop = handle;
+
+    dirty = nbwp->curr;
+    dirty.g_w += SHADOW;
+    dirty.g_h += SHADOW;
+    w_drawchange(&dirty, handle);
+
+    /* notify owner of newly topped window */
+    ap_sendmsg(wind_msg, WM_TOPPED, unnbwp->owner->p_pid, unnbwp->handle, 
+	unnbwp->curr.g_x, unnbwp->curr.g_y, unnbwp->curr.g_w, 
+	unnbwp->curr.g_h);
+
+    return TRUE;
+}
+
+
+/*
+ * Activate() - change appearance of window components depending on
+ *		whether it is active (topped) or not.
+ */
+VOID
+activate(wp, topped)
+REG WINDOW  *wp;    /* pointer to window structure to be modified */
+WORD	    topped; /* YES: activate window components */
+		    /* NO:  deactivate window components */
+{
+    REG	WORD	kind;		/* window kind */
+    WORD	hparts, vparts;
+
+    if (!(kind = wp->kind))
+	return;
+
+    setcol(wp, W_BOX, topped);
+
+    if (kind & TPARTS) {
+	if (kind & NAME) {
+	    setcol(wp, W_NAME, topped);
+	}
+
+	if (kind & CLOSER) {
+	    setcol(wp, W_CLOSER, topped);
+	}
+
+        if (kind & FULLER) {
+	    setcol(wp, W_FULLER, topped);
+	}
+    }
+
+    if (kind & INFO)
+	setcol(wp, W_INFO, topped);
+
+    hparts = kind & HPARTS;
+    vparts = kind & VPARTS;
+
+    if (kind & SIZER) {
+	setcol(wp, W_SIZER, topped);
+
+	if (!hparts && !vparts) {
+	    setcol(wp, W_VBAR, topped);
+	    setcol(wp, W_HBAR, topped);
+	}
+    }
+
+    if (vparts) {
+	setcol(wp, W_VBAR, topped);
+
+	if (kind & UPARROW) {
+	    setcol(wp, W_UPARROW, topped);
+	}
+
+	if (kind & DNARROW) {
+	    setcol(wp, W_DNARROW, topped);
+	}
+
+	if (kind & VSLIDE) {
+	    setcol(wp, W_VSLIDE, topped);
+	    setcol(wp, W_VELEV, topped);
+	}
+    }
+
+    if (hparts) {
+	setcol(wp, W_HBAR, topped);
+
+	if (kind & LFARROW) {
+	    setcol(wp, W_LFARROW, topped);
+	}
+
+	if (kind & RTARROW) {
+	    setcol(wp, W_RTARROW, topped);
+	}
+
+	if (kind & HSLIDE) {
+	    setcol(wp, W_HSLIDE, topped);
+	    setcol(wp, W_HELEV, topped);
+	}
+    }
+
+    if (kind & MNBAR)
+	setcol(wp, W_MNBAR, topped);
+}
+
+
+
+/*
+ * Setcol() - set the color of an object.
+ */
+VOID
+setcol(wp, ndx, topped)
+REG WINDOW  *wp;	/* pointer to window structure */
+WORD	    ndx;	/* index into object structure */
+WORD	    topped;	/* YES: top window color */
+{
+    if ((wp->obj[ndx].ob_type & 0x00ff) == G_BOXTEXT) {
+	if (topped)
+	    ((TEDINFO *)(wp->obj[ndx].ob_spec))->te_color = wp->tcolor[ndx];
+	else
+	    ((TEDINFO *)(wp->obj[ndx].ob_spec))->te_color = wp->bcolor[ndx];
+    } else {
+	wp->obj[ndx].ob_spec &= 0xffff0000L;
+	if (topped)
+	    wp->obj[ndx].ob_spec |= ((LONG)wp->tcolor[ndx] & 0x0000ffffL);
+	else
+	    wp->obj[ndx].ob_spec |= ((LONG)wp->bcolor[ndx] & 0x0000ffffL);
+    }
+}
+
+
+
+/*
+ * W_adjust() - adjust x, y, w and h of each component in the 
+ *		given window with the window's x, y, w and h.
+ */
+VOID
+w_adjust(wp, rect)
+REG WINDOW  *wp;	/* pointer to window structure */
+REG GRECT   *rect;	/* pointer to window's coords and dimensions */
+{
+    int		ulx;	    /* x offset from upper left corner */
+    int		uly;	    /* y offset from upper left corner */
+    int		urx;	    /* x offset from upper right corner */
+    int		ury;	    /* y offset from upper right corner */
+    int		llx;	    /* x offset from lower left corner */
+    int		lly;	    /* y offset from lower left corner */
+    int		lrx;	    /* x offset from lower right corner */
+    int		lry;	    /* y offset from lower right corner */
+    int		inx, iny;   /* x and y increments */
+    int		blen;	    /* length of base bar */
+    int		sz;	    /* slider size */
+    int		w3dbox, h3dbox;
+
+    /***
+     *
+     * In the old Window Library, after the first wm_open(), 
+     * prev_xywh = curr_xywh = rect;
+     *
+     ***/
+
+    /* init previous and current window dimensions */
+    wp->prev = wp->curr;
+    wp->curr = *rect;
+
+    /* init dimensions of window background */
+    w_obrect(wp, W_BOX, rect->g_x, rect->g_y, rect->g_w, rect->g_h);
+
+    /* reinit work area if it is just a move */
+    if (rect->g_w == wp->prev.g_w && rect->g_h == wp->prev.g_h) {
+	/* initialize window work area */
+	wp->obj[W_WORK].ob_x -= (wp->prev.g_x - rect->g_x);
+	wp->obj[W_WORK].ob_y -= (wp->prev.g_y - rect->g_y);
+	return;
+    }
+
+    /* init offsets from the four corners and the x and y increments */
+    ulx = uly = urx = ury = llx = lly = lrx = lry = 0;
+    w3dbox = gl_wbox + (ADJ3DPIX << 1);
+    h3dbox = gl_hbox + (ADJ3DPIX << 1);
+
+    inx = w3dbox - 1;
+    iny = h3dbox - 1;
+
+    if (wp->kind & TPARTS) {
+	w_obrect(wp, W_TITLE, 0, 0, rect->g_w, h3dbox);
+	uly = ury = iny;
+
+	if (wp->kind & CLOSER) {
+	    w_obrect(wp, W_CLOSER, ADJ3DPIX, ADJ3DPIX, gl_wbox, gl_hbox);
+	    ulx = inx;
+	}
+
+	if (wp->kind & FULLER) {
+	    w_obrect(wp, W_FULLER, (rect->g_w-w3dbox+1), ADJ3DPIX, gl_wbox, 
+		gl_hbox);
+	    urx = inx;
+	}
+
+	if (wp->kind & NAME || wp->kind & MOVER) {
+	    w_obrect(wp, W_NAME, (ulx+ADJ3DPIX), ADJ3DPIX, 
+		(rect->g_w-ulx-urx-(ADJ3DPIX << 1)), gl_hbox);
+	}
+    }
+
+    if (wp->kind & INFO) {
+	w_obrect(wp, W_INFO, 0, uly, rect->g_w, h3dbox);
+	uly = ury += iny;
+    }
+
+    if (wp->kind & MNBAR) {
+	w_obrect(wp, W_MNBAR, 0, uly, rect->g_w, h3dbox);
+	uly = ury += iny;
+    }
+
+    urx = 0;	/* reinitialize upper right x offset */
+
+    if ((hparts = wp->kind & HPARTS))
+	lry = iny;
+    if ((vparts = wp->kind & VPARTS))
+	lrx = inx;
+
+    if (wp->kind & SIZER) {
+	w_obrect(wp, W_SIZER, (rect->g_w-w3dbox+1), (rect->g_h-h3dbox+1),
+		gl_wbox, gl_hbox);
+	lry = iny;
+	lrx = inx;
+
+	if (!hparts && !vparts) {
+	    w_obrect(wp, W_VBAR, (rect->g_w-w3dbox+1), ury, w3dbox, 
+		(rect->g_h-ury-lry));
+	    urx = inx;
+	}
+    } else if (hparts && vparts) {
+	w_obrect(wp, W_SIZER, (rect->g_w-w3dbox+1), (rect->g_h-h3dbox+1),
+		gl_wbox, gl_hbox);
+	lry = iny;
+	lrx = inx;
+    }
+
+    if (vparts) {
+	blen = rect->g_h - ury - lry - 1;
+	urx = inx;
+	w_obrect(wp, W_VBAR, (rect->g_w-w3dbox), ury, w3dbox, blen);
+
+	if (wp->kind & UPARROW) {
+	    w_obrect(wp, W_UPARROW, ADJ3DPIX, ADJ3DPIX, gl_wbox, gl_hbox);
+	    ury += iny;
+	}
+
+	if (wp->kind & DNARROW) {
+	    w_obrect(wp, W_DNARROW, ADJ3DPIX, (blen-h3dbox+1), gl_wbox, 
+		gl_hbox);
+	    lry += iny;
+	}
+
+	if (wp->kind & VSLIDE) {
+	    sz = rect->g_h - ury - lry - (ADJ3DPIX << 1) - 1; 
+	    w_obrect(wp, W_VSLIDE, 0, (ury-uly+1), w3dbox, sz);
+
+	    /* Apr-21-92  ml. Use wp->hslsz to determine size of elevator */
+	    if (wp->vslsz == -1)
+		w_obrect(wp, W_VELEV, ADJ3DPIX, ADJ3DPIX, gl_wbox, gl_hbox);
+	    else
+		w_obrect(wp, W_VELEV, ADJ3DPIX, ADJ3DPIX, gl_wbox, 
+		    sz * wp->vslsz /1000);
+	}
+    }
+
+
+    if (hparts) {
+	blen = rect->g_w - lrx - 1;
+	lly = iny;
+	w_obrect(wp, W_HBAR, 0, (rect->g_h-h3dbox), blen, h3dbox);
+
+	if (wp->kind & LFARROW) {
+	    w_obrect(wp, W_LFARROW, ADJ3DPIX, ADJ3DPIX, gl_wbox, gl_hbox);
+	    llx = inx;
+	}
+
+	if (wp->kind & RTARROW) {
+	    w_obrect(wp, W_RTARROW, (blen-w3dbox+1), ADJ3DPIX, gl_wbox, 
+		gl_hbox);
+	    lrx += inx;
+	}
+
+	if (wp->kind & HSLIDE) {
+	    sz = rect->g_w - llx - lrx - (ADJ3DPIX << 1) - 1;
+	    w_obrect(wp, W_HSLIDE, (llx+ADJ3DPIX), 0, sz, h3dbox);
+
+	    /* Apr-21-92  ml. Use wp->hslsz to determine size of elevator */
+	    if (wp->hslsz == -1)
+		w_obrect(wp, W_HELEV, ADJ3DPIX, ADJ3DPIX, gl_wbox, gl_hbox);
+	    else
+		w_obrect(wp, W_HELEV, ADJ3DPIX, ADJ3DPIX, 
+		    sz * wp->hslsz /1000, gl_hbox);
+	}
+    }
+
+    /* initialize window work area */
+    w_rect((GRECT *)&(wp->obj[W_WORK].ob_x), (rect->g_x+1), 
+	    (rect->g_y+uly+1), (rect->g_w-urx-2), (rect->g_h-uly-lly-2));
+}
+
+
+
+/*
+ * W_clipdraw() - set clipping according to the rectangle list
+ *		  of the current size of the window, or the 
+ *		  clipping rectangle passed in, and draw the
+ *		  object specified.
+ */
+VOID
+w_clipdraw(wp, obj, pc)
+WINDOW	*wp;	    /* pointer to window structure */
+int	obj;	    /* object to be drawn */
+GRECT	*pc;	    /* pointer to clipping rectangle */
+{
+    REG RLIST	*rl;
+    GRECT	rclip;
+    RLIST	*genrlist(), *rlist;
+
+    gsx_moff();
+    wm_update(TRUE);
+    rlist = genrlist(wp->handle, WF_CURRXYWH);
+    for (rl = rlist; rl; rl = rl->rnext) {
+	/* if no clipping rectangle given, clip to screen and itself */
+	rclip = rl->rect;
+	if (!rc_intersect(&gl_rfull, &rclip))	/* clip to screen */
+	    rclip = gl_rfull;
+	if (!pc || rc_intersect(pc, &rclip)) {
+	    gsx_sclip(&rclip);
+	    ob_draw(wp->obj, obj, MAX_DEPTH);
+	}
+    }
+    wm_update(FALSE);
+    gsx_mon();
+
+    if (rlist)
+	delrect(0L, rlist);
+}
+
+
+
+/*
+ * W_drawchange() - draw the borders of opened windows which 
+ *		    intersects with the dirty area, and send
+ *		    redraw messages to those windows
+ */
+VOID
+w_drawchange(dirty, skip)
+GRECT	*dirty;		/* rectangle of dirty area */
+UWORD	skip;		/* window to be skipped */
+{
+    UWORD   handle;	/* window handle */
+    GRECT   exposed;	/* area to be drawn */
+    WINDOW  *wp;	/* pointer to window structure */
+
+    for (handle = botw; handle != NIL; handle = wp->ontop) {
+	wp = srchwp(handle);
+
+	if (handle == skip)
+	    continue;
+
+	exposed = wp->curr;
+	exposed.g_w += SHADOW;
+	exposed.g_h += SHADOW;
+
+	if (rc_intersect(dirty, &exposed)) {
+	    w_clipdraw(wp, W_BOX, &exposed);
+	    if (handle)
+		ap_sendmsg(wind_msg, WM_REDRAW, wp->owner->p_pid, handle, 
+		    exposed.g_x, exposed.g_y, exposed.g_w, exposed.g_h);
+	    else
+		ap_sendmsg(wind_msg, WM_REDRAW, ctl_pd->p_pid, handle, 
+		    exposed.g_x, exposed.g_y, exposed.g_w, exposed.g_h);
+	}
+    }
+}
+
+
+
+/*
+ * W_bld() - initialize a window component and add it to the object
+ *		tree of the window structure.
+ *
+ */
+VOID
+w_bld(wp, ob, type, parent, spec)
+WINDOW	*wp;
+REG int	ob;
+int	type, parent;
+long	spec;
+{
+    REG OBJECT  *obaddr;
+
+    /* initialize object */
+    obaddr = &(wp->obj[ob]);
+    obaddr->ob_next = obaddr->ob_head = obaddr->ob_tail = NIL;
+    obaddr->ob_flags = 0;
+    obaddr->ob_type = type;
+    obaddr->ob_state = NORMAL;
+    obaddr->ob_spec = spec;
+    if (type != G_BOXTEXT && type != A3DBOXTEXT)
+	obaddr->ob_spec |= ((LONG)wtcolor[ob] & 0x0000ffffL);
+
+    /* add object to tree */
+    if (parent != NIL)
+	ob_add(wp->obj, parent, ob);
+}
+
+
+VOID
+w_obrect(wp, ob, obx, oby, obw, obh)
+WINDOW	*wp;
+int	ob;
+int	obx, oby, obw, obh;
+{
+    REG OBJECT  *obaddr;
+
+    obaddr = &(wp->obj[ob]);
+    obaddr->ob_x = obx;
+    obaddr->ob_y = oby;
+    obaddr->ob_width = obw;
+    obaddr->ob_height = obh;
+}
+
+
+VOID
+w_rect(raddr, gx, gy, gw, gh)
+REG GRECT   *raddr;
+int	    gx, gy, gw, gh;
+{
+    raddr->g_x = gx;
+    raddr->g_y = gy;
+    raddr->g_w = gw;
+    raddr->g_h = gh;
+}
+
+
+VOID
+w_ted(tedaddr, ptext, just, color)
+REG TEDINFO *tedaddr;
+char	*ptext;
+int	just, color;
+{
+    tedaddr->te_ptext = ptext;
+    tedaddr->te_just = just;
+    tedaddr->te_color = color;
+    tedaddr->te_txtlen = strlen(ptext);
+    tedaddr->te_font = 3;
+    tedaddr->te_thickness = 1;
+    tedaddr->te_tmplen = 0;
+}
+
+
+/*
+ * W_setactive() - set control rectangle and mouse owner
+ */
+VOID
+w_setactive()
+{
+    GRECT   d;
+    WINDOW  *wp, *srchwp();
+
+    wp = srchwp(topw);
+    d = *(GRECT *)&(wp->obj[W_WORK].ob_x);
+    ct_chgown(wp->owner, &d);
+}
+
+
+/* 
+ * Ap_sendmsg() - send message to current process
+ */
+VOID
+ap_sendmsg(ap_msg, type, towhom, w3, w4, w5, w6, w7)
+REG WORD    ap_msg[];
+WORD	    type, towhom;
+WORD	    w3, w4, w5, w6, w7;
+{
+    ap_msg[0] = type;
+    ap_msg[1] = rlr->p_pid;
+    ap_msg[2] = 0;
+    ap_msg[3] = w3;
+    ap_msg[4] = w4;
+    ap_msg[5] = w5;
+    ap_msg[6] = w6;
+    ap_msg[7] = w7;
+    ap_rdwr(AQWRT, towhom, 16, ADDR(&ap_msg[0]));
+}
+
+
+/*
+ *  Draw highlights around a rectangle depending on its state
+ */
+VOID
+draw_hi(prect, state, clip, th, option)
+REG GRECT   *prect;	/* object rectangle */
+WORD	    state;	/* NORMAL or SELECTED */
+WORD	    clip;	/* 1: set clipping rect to object itself */
+WORD	    th;		/* thickness of rectangle */
+WORD	    option;	/* 3D object options */
+{
+    WORD	pts[12], col;
+    GRECT	r;
+
+    gsx_moff();
+    gsx_1code(15, 7);
+    gsx_1code(113, -1);			/* solid line style */
+
+    if (clip)
+	gsx_sclip(prect);
+
+    rc_copy(prect, &r);
+
+    if (th > 0) {			/* if border is inside,	    */
+	r.g_x += th;			/* object area is 1 pixel   */
+	r.g_y += th;			/* in all around	    */
+	r.g_w -= th<<1;
+	r.g_h -= th<<1;
+    }
+
+    pts[0] = pts[2] = r.g_x;
+    pts[3] = pts[5] = r.g_y;
+    pts[1] = pts[3] + r.g_h - 1;
+    pts[4] = pts[2] + r.g_w - 1;
+
+    if (state & SELECTED) {
+	if (option == OPT3 || option == OPT4) {
+	    gsx_attr(0, MD_REPLACE, BLACK);
+	} else {
+	    gsx_attr(0, MD_REPLACE, LBLACK);
+	}
+/*
+	gsx_attr(0, MD_REPLACE, LWHITE);
+/**/
+    } else { /* if not selected */
+	gsx_attr(0, MD_REPLACE, WHITE);
+    }
+
+    v_pline(3, pts);
+/*
+    if (option == OPT2 && state & SELECTED) {
+	pts[0] = pts[2] += 1;
+	pts[3] = pts[5] += 1;
+	pts[1] -= 1;
+	pts[4] -= 1;
+	v_pline(3, pts);
+    }
+/**/
+    /* pts 1, 4, 5 same as above */
+    pts[0] += 1;
+    pts[2] = pts[4];
+    pts[3] = pts[1];
+    pts[5] += 1;
+
+    if (state & SELECTED) {
+	switch (option) {
+	    case OPT5:
+		gsx_attr(0, MD_REPLACE, WHITE);
+		break;
+
+	    case OPT1:
+	    case OPT2:
+	    case OPT3:
+	    case OPT4:
+		gsx_attr(0, MD_REPLACE, LWHITE);
+		break;
+	}
+
+    } else { /* if not selected */
+	gsx_attr(0, MD_REPLACE, LBLACK);
+    }
+
+    v_pline(3, pts);
+
+    gsx_mon();
+}
+
+

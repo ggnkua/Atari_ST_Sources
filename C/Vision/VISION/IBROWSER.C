@@ -1,0 +1,852 @@
+#include <stdlib.h>
+#include <string.h>
+
+#include "..\tools\gwindows.h"
+#include "..\tools\imgmodul.h"
+#include "..\tools\frecurse.h"
+#include "..\tools\rasterop.h"
+#include "..\tools\rzoom.h"
+#include    "..\tools\print.h"
+
+#include     "defs.h"
+#include "visionio.h"
+#include "actions.h"
+#include "touches.h"
+#include "register.h"
+#include "protect.h"
+
+#include "forms\fbuyme.h"
+
+typedef struct
+{
+  INFO_IMAGE  inf_img ;
+  MFDB        raster ;    /* Raster image complet        */
+  MFDB        zoom ;      /* Image en cours de zoom      */
+
+  int  img_valid ;
+  int  load_err ;
+  int  loading_img ;
+  int  obj_notify ;
+  int  x1, y1 ;           /* Partie en cours de zoom     */
+  int  last_mx, last_my ;
+  int  moving ;
+  int  pczoom ;
+  int  pzoom_index ;
+  char nom[PATH_MAX] ;    /* Nom TOS complet         */
+
+  int mini_w ;
+
+  char base_path[PATH_MAX] ;
+  char **fimg_list ;
+  int  nb_files ;
+  char *buffer_list ;
+  int  pos ;
+}
+WBROWSER ;
+
+
+typedef struct
+{
+  OBJECT *popup_zoom ;
+}
+CMD_BROWSER ;
+
+#define NB_LABELS  10
+static char *popup_label[NB_LABELS] = {
+                               "Auto",
+                               "10%", "25%", "50%", "75%",
+                               "100%",
+                               "150%", "200%", "400%", "800%"
+                             } ;
+#define SEL_100PC    5
+
+typedef struct
+{
+  int nb_files, nfile ;
+  long nb_bytes_for_names ;
+  char *last_ptname ;
+  char **fimg_list ;
+}
+BROWSE_FILES ;
+
+
+/* Suite a possibilite de recursivite mutuelle entre DisplayImg et OnObjectNotifyIBrowser */
+/* Pour pouvoir gerer l'appui sur les touches <-- et --> durant un chargement */
+int OnObjectNotifyIBrowser(void *gw, int obj) ;
+
+#pragma warn -par
+void add_file_to_list(char *file, DTA *dta, void *user_data)
+{
+  BROWSE_FILES *browse_files = (BROWSE_FILES *) user_data ;
+  char         *slash ;
+
+  slash = strrchr( file, '\\' ) ;
+  if ( slash )
+  {
+    strcpy( browse_files->last_ptname, 1 + slash ) ;
+    if ( DImgGetIIDFromFile( file ) != 0 )
+    {
+      browse_files->fimg_list[browse_files->nfile++] = browse_files->last_ptname ;
+      browse_files->last_ptname += 1 + strlen( 1 + slash ) ;
+    }
+  }
+}
+
+void prepare_list(char *file, DTA *dta, void *user_data)
+{
+  BROWSE_FILES *browse_files = (BROWSE_FILES *) user_data ;
+  char         *slash ;
+
+  slash = strrchr(file, '\\' ) ;
+  if ( slash )
+  {
+    browse_files->nb_files++ ;
+    browse_files->nb_bytes_for_names += 1 + strlen( 1+ slash ) ;
+  }
+}
+#pragma warn +par
+
+int cmp_file(const void *e1, const void *e2)
+{
+  int  cmp, ret = 0 ;
+  char **f1, **f2 ;
+
+  f1 = (char **) e1 ;
+  f2 = (char **) e2 ;
+
+  cmp = strcmpi( *f1, *f2 ) ;
+  if ( cmp < 0 ) ret = -1 ;
+  else if ( cmp > 0) ret = 1 ;
+
+  return( ret ) ;
+}
+
+void build_flist(WBROWSER *wb)
+{
+  BROWSE_FILES browse_files ;
+  int          i, trouve ;
+  char         *slash ;
+
+  memset( &browse_files, 0, sizeof(browse_files) ) ;
+  strcpy( wb->base_path, wb->nom ) ;
+  slash = strrchr( wb->base_path, '\\' ) ;
+  if ( slash ) *slash = 0 ;
+
+  find_files( config.flags & FLG_LONGFNAME, wb->base_path, "*.*", prepare_list, &browse_files ) ;
+  wb->fimg_list = calloc( browse_files.nb_files, sizeof(char *) ) ;
+
+  if ( wb->fimg_list )
+  {
+    browse_files.nfile = 0 ;
+    wb->buffer_list = calloc( 1, browse_files.nb_bytes_for_names + 500 ) ; /* +500 si jamais des fichiers nouveaux sont apparus ... */
+    browse_files.last_ptname = wb->buffer_list ;
+    if ( wb->buffer_list )
+    {
+      browse_files.fimg_list = wb->fimg_list ;
+      find_files( config.flags & FLG_LONGFNAME, wb->base_path, "*.*", add_file_to_list, &browse_files ) ;
+      wb->nb_files = browse_files.nfile ;
+
+      /* Trier le dossier */
+      qsort( wb->fimg_list, wb->nb_files, sizeof(char**), cmp_file ) ;
+
+      /* Recherche de la position du fichier courant */
+      trouve = 0 ;
+      for ( i = 0; !trouve && ( i < wb->nb_files ) ; i++ )
+        if ( strcmpi( wb->fimg_list[i], 1 + slash ) == 0 ) trouve = 1 ;
+
+      if ( trouve ) wb->pos = i-1 ;
+      else          wb->pos = 0 ;
+    }
+  }
+}
+
+void free_current_img(WBROWSER *wb)
+{
+  if ( wb->inf_img.palette ) free( wb->inf_img.palette ) ;
+  wb->inf_img.palette = NULL ;
+  if ( wb->raster.fd_addr ) free( wb->raster.fd_addr ) ;
+  wb->raster.fd_addr = NULL ;
+  if ( wb->zoom.fd_addr ) free( wb->zoom.fd_addr ) ;
+  wb->zoom.fd_addr = NULL ;
+}
+
+void free_current_folder(WBROWSER *wb)
+{
+  if ( wb->fimg_list ) free( wb->fimg_list ) ;
+  wb->fimg_list = NULL ;
+  if ( wb->buffer_list ) free( wb->buffer_list ) ;
+  wb->buffer_list = NULL ;
+}
+
+void adapt_display(GEM_WINDOW *wnd)
+{
+  WBROWSER    *wb   = wnd->Extension ;
+  OBJECT      *bobj = wnd->DlgData->BaseObject ;
+  CMD_BROWSER *wdlg = wnd->DlgData->UserData ;
+  long       l ;
+  int        i, w, h ;
+  int        xo, yo, wo, ho ;
+  int        xco, yco, wco, hco ;
+
+  if ( wb->fimg_list == NULL ) return ;
+
+  wb->x1 = wb->y1 = 0 ;
+  /* Calcul du facteur de zoom */
+  if ( wb->pczoom < 0 )
+  {
+    wind_calc( WC_WORK, wnd->window_handle, xdesk, ydesk, wdesk, hdesk, &xo, &yo, &w, &h  ) ;
+    l = (long) w ;
+    i = (int) ( (l * 100L) / wb->raster.fd_w ) ;
+    l = (long) (h - bobj[0].ob_height) ;
+    wb->pczoom = (int) ( (l * 100L) / wb->raster.fd_h ) ;
+    if ( wb->pczoom > i ) wb->pczoom = i ;
+    if ( wb->pczoom > 100 ) wb->pczoom = 100 ;
+  }
+
+  wb->img_valid = 0 ;
+  if ( wb->zoom.fd_addr ) free( wb->zoom.fd_addr ) ;
+  wb->zoom.fd_addr = NULL ;
+  if ( wb->pczoom != 100 ) 
+  {
+    float ratio ;
+    
+    ratio         = (float)wb->pczoom / 100.0 ;
+    wb->zoom.fd_w = (int) ( 0.5 + (float)wb->raster.fd_w * ratio ) ;
+    wb->zoom.fd_h = (int) ( 0.5 + (float)wb->raster.fd_h * ratio ) ;
+/*    if ( raster_pczoom( &wb->raster, &wb->zoom, wb->pczoom, wb->pczoom, wnd ) != 0 )*/
+    if ( RasterZoom( &wb->raster, &wb->zoom, wnd ) != 0 )
+    {
+      wb->pczoom      = 100 ;
+      wb->pzoom_index = SEL_100PC ;
+    }
+  }
+  if ( wb->pczoom == 100 )
+  {
+    w = wb->inf_img.largeur ;
+    h = wb->raster.fd_h + bobj[0].ob_height ;
+  }
+  else
+  {
+    w = wb->zoom.fd_w ;
+    h = wb->zoom.fd_h + bobj[0].ob_height ;
+  }
+
+  if ( w < wb->mini_w ) w = wb->mini_w ;
+  else                  bobj[0].ob_width = w ;
+  open_where( wnd->window_kind, w, h, &xo, &yo, &wo, &ho ) ;
+  GWGetCurrXYWH( wnd, &xco, &yco, &wco, &hco ) ;
+  if ( ( xco + wo > Xmax ) || ( yco + ho > Ymax ) ) GWSetCurrXYWH( wnd, xo, yo, wo, ho ) ;
+  else                                              GWSetCurrXYWH( wnd, xco, yco, wo, ho ) ;
+
+  GWGetWorkXYWH( wnd, &bobj[0].ob_x, &bobj[0].ob_y, &w, &h ) ;
+  GWInvalidate( wnd ) ;
+  wb->img_valid = 1 ;
+  write_text( bobj, IMGB_TEXT, "" ) ;
+  xobjc_draw( wnd->window_handle, bobj, IMGB_TEXT ) ;
+
+  if ( wb->pzoom_index > 1 )
+    write_text( bobj, IMGB_SCALE, wdlg->popup_zoom[1+wb->pzoom_index].ob_spec.free_string ) ;
+  else
+    write_text( bobj, IMGB_SCALE, wdlg->popup_zoom[1].ob_spec.free_string ) ; /* AUTO */
+  xobjc_draw( wnd->window_handle, bobj, IMGB_SCALE ) ;
+}
+
+int DisplayImg(GEM_WINDOW *wnd, int create_open, int reload)
+{
+  WBROWSER   *wb   = wnd->Extension ;
+  OBJECT     *bobj = wnd->DlgData->BaseObject ;
+  int        ret, w, h ;
+  int        xo, yo, wo, ho ;
+  int        xco, yco, wco, hco ;
+  char       *slash ;
+
+  mouse_busy() ;
+  wb->img_valid   = 0 ;
+  wb->loading_img = 1 ;
+  wb->load_err    = 0 ;
+  wb->obj_notify  = 0 ;
+  free_current_img( wb ) ;
+  strcpy( wb->base_path, wb->nom ) ;
+  slash = strrchr( wb->base_path, '\\' ) ;
+  if ( slash ) *slash = 0 ;
+  if ( reload ) free_current_folder( wb ) ;
+  GWInvalidate( wnd ) ;
+  if ( ( config.color_protect != 0 ) && ( nb_colors == 256 ) ) img_analyse = 1 ;
+  else                                                         img_analyse = 0 ;
+  ret = img_format( wb->nom, &wb->inf_img ) ;
+  if ( ret == 0 )
+  {
+    w = wb->inf_img.largeur ;
+    h = wb->inf_img.hauteur + bobj[0].ob_height ;
+    if ( w < wb->mini_w ) w = wb->mini_w ;
+    else                  bobj[0].ob_width = w ;
+    open_where( wnd->window_kind, w, h, &xo, &yo, &wo, &ho ) ;
+    if ( reload ) build_flist( wb ) ;
+    if ( create_open ) GWOpenWindow( wnd, xo, yo, wo, ho ) ;
+    else
+    {
+      GWGetCurrXYWH( wnd, &xco, &yco, &wco, &hco ) ;
+      if ( ( xco + wo > Xmax ) || ( yco + ho > Ymax ) ) 
+        GWSetCurrXYWH( wnd, xo, yo, wo, ho ) ;
+      else
+        GWSetCurrXYWH( wnd, xco, yco, wo, ho ) ;
+    }
+    GWGetWorkXYWH( wnd, &bobj[0].ob_x, &bobj[0].ob_y, &w, &h  ) ;
+    wb->raster.fd_nplanes = nb_plane ;
+    if ( nb_plane == 16 ) Force16BitsLoad = 1 ;
+    else                  Force16BitsLoad = 0 ;
+    ret = load_picture( wb->nom, &wb->raster, &wb->inf_img, wnd ) ;
+    write_text( bobj, IMGB_TEXT, "" ) ;
+    xobjc_draw( wnd->window_handle, bobj, IMGB_TEXT ) ;
+    if ( ret == 0 )
+    {
+      if ( wb->pzoom_index == 0 ) wb->pczoom = -1 ;
+      else
+      {
+        wb->pczoom = 100 ;
+        wb->pzoom_index = SEL_100PC ;
+      }
+      adapt_display( wnd ) ;
+      set_imgpalette( (VXIMAGE*) wb ) ;
+    }
+    wb->img_valid = ( ret == 0 ) ;
+  }
+  mouse_restore() ;
+  wb->load_err    = ret ;
+  wb->loading_img = 0 ;
+  GWSetWindowCaption( wnd, wb->nom ) ;
+
+  if ( wb->obj_notify ) OnObjectNotifyIBrowser( wnd, wb->obj_notify ) ;
+
+  shareware_reminder( 8 ) ;
+
+  return( ret ) ;
+}
+
+void OnInitDialogIBrowser(void *w)
+{
+  GEM_WINDOW  *wnd = (GEM_WINDOW *) w ;
+  OBJECT      *bobj = wnd->DlgData->BaseObject ;
+  WBROWSER    *wb   = wnd->Extension ;
+  CMD_BROWSER *wdlg = wnd->DlgData->UserData ;
+  int         i ;
+  int         sel = SEL_100PC ; /* 100% */
+
+  wdlg->popup_zoom = popup_make( NB_LABELS, 3 + 1 + (int)strlen( popup_label[0] ) ) ;
+  if ( wdlg->popup_zoom == NULL ) return ;
+  for ( i = 0; i < NB_LABELS; i++ )
+   sprintf( wdlg->popup_zoom[1+i].ob_spec.free_string, "  %s ", popup_label[i] ) ;
+
+  write_text( bobj, IMGB_SCALE, wdlg->popup_zoom[1+sel].ob_spec.free_string ) ;
+  sscanf( wdlg->popup_zoom[1+sel].ob_spec.free_string, "%d%%", &wb->pczoom ) ;
+
+  write_text( bobj, IMGB_TEXT, "" ) ;
+
+  wb->mini_w = bobj[0].ob_width ;
+}
+
+void new_edit_vximage(WBROWSER *wb)
+{
+  GEM_WINDOW *new_wnd ;
+  VXIMAGE    *new_vimage ;
+  MFDB       *raster ;
+  int xy[8] ;
+  int w, h ;
+  int tpmx, tpmy ;
+  char name[50] ;
+
+  if ( wb->pczoom == 100 ) raster = &wb->raster ;
+  else                     raster = &wb->zoom ;
+
+  w    = raster->fd_w ;
+  h    = raster->fd_h ;
+  tpmx = (int) (27070.0/(double)wb->inf_img.lpix) ;
+  tpmy = (int) (27070.0/(double)wb->inf_img.hpix) ;
+  if ( Truecolor ) strcpy( name, "NEW.TIF" ) ;
+  else             strcpy( name, "NEW.IMG" ) ;
+
+  new_wnd = nouvelle_wimage( name, w, h, 1 << wb->inf_img.nplans, tpmx, tpmy ) ;
+  if ( new_wnd )
+  {
+    new_vimage = (VXIMAGE *) new_wnd->Extension ;
+
+    xy[0] = 0 ;     xy[1] = 0 ;
+    xy[2] = w - 1 ; xy[3] = h - 1 ;
+    xy[4] = 0 ;     xy[5] = 0 ;
+    xy[6] = w-1 ;   xy[7] = h-1 ;
+
+    vro_cpyfm( handle, S_ONLY, xy, raster, &new_vimage->raster ) ;
+  }
+  else form_error( 8 ) ;
+}
+
+void update_nav(GEM_WINDOW *wnd)
+{
+  WBROWSER *wb  = wnd->Extension ;
+  OBJECT   *bobj = wnd->DlgData->BaseObject ;
+  char     buf[20] ;
+
+  if ( wb->fimg_list )
+  {
+    bobj[IMGB_PREVIOUS].ob_state &= ~DISABLED ;
+    bobj[IMGB_NEXT].ob_state     &= ~DISABLED ;
+    bobj[IMGB_EDIT].ob_state     &= ~DISABLED ;
+    bobj[IMGB_DELETE].ob_state   &= ~DISABLED ;
+  }
+  else
+  {
+    bobj[IMGB_PREVIOUS].ob_state |= DISABLED ;
+    bobj[IMGB_NEXT].ob_state     |= DISABLED ;
+    bobj[IMGB_EDIT].ob_state     |= DISABLED ;
+    bobj[IMGB_DELETE].ob_state   |= DISABLED ;
+  }
+
+  if ( wb->pos == 0 ) bobj[IMGB_PREVIOUS].ob_state |= DISABLED ;
+  if ( wb->pos == wb->nb_files - 1 ) bobj[IMGB_NEXT].ob_state |= DISABLED ;
+
+  if ( wb->nom[0] ) sprintf( buf, "%d/%d", 1 + wb->pos, wb->nb_files ) ;
+  else              buf[0] = 0 ;
+  write_text( bobj, IMGB_TEXT2, buf ) ;
+
+  xobjc_draw( wnd->window_handle, bobj, IMGB_PREVIOUS ) ;
+  xobjc_draw( wnd->window_handle, bobj, IMGB_NEXT ) ;
+  xobjc_draw( wnd->window_handle, bobj, IMGB_TEXT2 ) ;
+  xobjc_draw( wnd->window_handle, bobj, IMGB_EDIT ) ;
+  xobjc_draw( wnd->window_handle, bobj, IMGB_DELETE ) ;
+}
+
+#pragma warn -par
+int OnObjectNotifyIBrowser(void *gw, int obj)
+{
+  GEM_WINDOW  *wnd  = (GEM_WINDOW *) gw ;
+  WBROWSER    *wb   = wnd->Extension ;
+  CMD_BROWSER *wdlg = wnd->DlgData->UserData ;
+  OBJECT      *bobj = wnd->DlgData->BaseObject ;
+  int         i, off_x, off_y ;
+  int         code = -1 ;
+  char        buf[PATH_MAX] ;
+
+  switch( obj )
+  {
+    case IMGB_OPEN     : if ( wb->base_path[0] ) sprintf( buf, "%s\\*.*", wb->base_path ) ;
+                         else                    sprintf( buf, "%s\\*.*", config.path_img ) ;
+                         if ( file_name( buf, "", buf ) == 1 )
+                         {
+                           strcpy( wb->nom, buf ) ;
+                           DisplayImg( wnd, 0, 1 ) ;
+                         }
+                         deselect( bobj, obj ) ;
+                         update_nav( wnd ) ;
+                         break ;
+
+    case IMGB_PREVIOUS : if ( wb->fimg_list )
+                         {
+                           if ( wb->pos > 0 )
+                           {
+                             wb->pos-- ;
+                             sprintf( wb->nom, "%s\\%s", wb->base_path, wb->fimg_list[wb->pos] ) ;
+                             DisplayImg( wnd, 0, 0 ) ;
+                           }
+                         }
+                         deselect( bobj, obj ) ;
+                         update_nav( wnd ) ;
+                         break ;
+
+    case IMGB_NEXT     : if ( wb->fimg_list )
+                         {
+                           if ( wb->pos < wb->nb_files - 1 )
+                           {
+                             wb->pos++ ;
+                             sprintf( wb->nom, "%s\\%s", wb->base_path, wb->fimg_list[wb->pos] ) ;
+                             DisplayImg( wnd, 0, 0 ) ;
+                           }
+                         }
+                         deselect( bobj, obj ) ;
+                         update_nav( wnd ) ;
+                         break ;
+
+    case IMGB_SCALE    : deselect( bobj, obj ) ;
+                         objc_offset( bobj, obj, &off_x, &off_y ) ;
+                         i = popup_formdo( &wdlg->popup_zoom, off_x, off_y, 1 + wb->pzoom_index, 0 ) ;
+                         if ( i > 0 )
+                         {
+                           wb->pzoom_index = i - 1 ;
+                           write_text( bobj, obj, wdlg->popup_zoom[i].ob_spec.free_string ) ;
+
+                           if ( i > 1 )
+                             sscanf( wdlg->popup_zoom[i].ob_spec.free_string, "%d%%", &wb->pczoom ) ;
+                           else
+                             wb->pczoom = -1 ;
+
+                           adapt_display( wnd ) ;
+                         }
+                         break ;
+
+    case IMGB_EDIT     : deselect( bobj, obj ) ;
+                         if ( wb->fimg_list ) new_edit_vximage( wb ) ;
+                         xobjc_draw( wnd->window_handle, bobj, obj ) ;
+                         break ;
+
+    case IMGB_DELETE   : deselect( bobj, obj ) ;
+                         if ( wb->fimg_list )
+                         {
+                           if ( form_interrogation( 2, msg[MSG_CONFIRMDEL] ) == 1 )
+                           {
+                             if ( Fdelete( wb-> nom ) ) form_stop( 1, msg[MSG_WRITEERROR] ) ;
+                           }
+                         }
+                         xobjc_draw( wnd->window_handle, bobj, obj ) ;
+                         break ;
+
+    case IMGB_PRINT   : deselect( bobj, obj ) ;
+                        switch( print_image( &wb->raster, &wb->inf_img ) )
+                        {
+                          case PNOGDOS   : form_stop(1, msg[MSG_PNOGDOS]) ;
+                                           break ;
+                          case PTIMEOUT  : form_stop(1, msg[MSG_PTIMEOUT]) ;
+                                           break ;
+                          case PWRITERR  : form_stop(1, msg[MSG_PWRITERR]) ;
+                                           break ;
+                          case PNOHANDLE : form_stop(1, msg[MSG_PNOHANDLE]) ;
+                                           break ;
+                          case PROTERR   : form_error(8) ;
+                                           break ;
+                          case PNODRIVER : form_stop(1, msg[MSG_PNODRIVER]) ;
+                                           break ;
+                        }
+                        xobjc_draw( wnd->window_handle, bobj, obj ) ;
+                        break ;
+  }
+
+  return( code ) ;
+}
+#pragma warn +par
+
+int OnCloseIBrowser(void *w)
+{
+  GEM_WINDOW  *wnd = (GEM_WINDOW *) w ;
+  WBROWSER    *wb  = wnd->Extension ;
+  CMD_BROWSER *wdlg = wnd->DlgData->UserData ;
+
+  free_current_img( wb ) ;
+  free_current_folder( wb ) ;
+
+  popup_kill( wdlg->popup_zoom, NB_LABELS ) ;
+
+  free( wdlg ) ;
+
+  return( GWCloseDlg( w ) ) ;
+}
+
+void OnImgDraw(GEM_WINDOW *wnd, int xywh[4])
+{
+  WBROWSER  *wb  = wnd->Extension ;
+  MFDB      *raster ;
+  int       w, h ;
+  int       off_x, off_y, xi, yi, wi, hi ;
+  int       xy[8] ;
+  int       posx, posy ;
+
+  /* Bug si mauvaise cle */
+  if ( IsRegistered && KeyDecrypt( ident.crypted_key ) > KEY_MAX ) wnd = NULL ; /* ANTI-CRACK */
+
+  wnd->GetWorkXYWH( wnd, &xi, &yi, &wi, &hi ) ;
+
+  if ( !wb->img_valid || wb->load_err )
+  {
+    GWOnDraw( wnd, xywh ) ;
+    if ( wb->load_err )
+    {
+      vsl_ends( handle, 0, 0 ) ;
+      vsl_width( handle, 3 ) ;
+      vsl_color( handle, 1 ) ;
+      line( xi + wi -1, yi, xi, yi + hi - 1  ) ;
+      line( xi, yi, xi + wi -1, yi + hi - 1 ) ;
+    }
+
+    return ;
+  }
+  
+  posx = wb->x1 ;
+  posy = wb->y1 ;
+  if ( wb->pczoom == 100 ) raster = &wb->raster ;
+  else                     raster = &wb->zoom ;
+
+  off_x = xywh[0] - xi ;
+  off_y = xywh[1] - yi ;
+  w = xywh[2] ;
+  if ( off_x + posx + w > raster->fd_w ) w -= off_x + posx + w - raster->fd_w ;
+  h = xywh[3] ;
+  xy[4] = xywh[0] ;         xy[5] = xywh[1] ;
+  xy[6] = xywh[0] + w - 1 ; xy[7] = xywh[1] + h - 1 ;
+
+  xy[0] = off_x + posx ; xy[1] = off_y + posy ;
+  xy[2] = xy[0] + w - 1 ;
+  xy[3] = xy[1] + h - 1 ;
+  
+  vro_cpyfm( handle, S_ONLY, xy, raster, &screen ) ;
+
+  if ( w != xywh[2] )
+  {
+    xy[0] = 1 + xy[6] ;
+    xy[2] = xywh[2] - w ;
+    xy[1] = xywh[1] ;
+    xy[3] = xywh[3] ;
+    GWOnDraw( wnd, xy ) ;
+  }
+}
+
+void OnDrawIBrowser(void *gw, int xywh[4])
+{
+  GEM_WINDOW  *wnd = (GEM_WINDOW *) gw ;
+  OBJECT      *bobj = wnd->DlgData->BaseObject ;
+  int         xy[4] ;
+  int         x, y, w ,h ;
+
+  objc_offset( bobj, 0, &x, &y ) ;
+  if ( intersect( x, y, bobj[0].ob_width, bobj[0].ob_height, xywh[0], xywh[1], xywh[2], xywh[3], xy ) )
+  {
+    xy[2] = 1 + xy[2] - xy[0] ;
+    xy[3] = 1 + xy[3] - xy[1] ;
+    OnDrawDlg( gw, xy ) ;
+  }
+
+  wnd->GetWorkXYWH( gw, &x, &y, &w, &h ) ;
+  if ( intersect( x, y, w, h, xywh[0], xywh[1], xywh[2], xywh[3], xy ) )
+  {
+    xy[2] = 1 + xy[2] - xy[0] ;
+    xy[3] = 1 + xy[3] - xy[1] ;
+    OnImgDraw( wnd, xy ) ;
+  }
+}
+
+void GetWorkXYWHIBrowser(void *gw, int *x, int *y, int *w, int *h)
+{
+  GEM_WINDOW  *wnd = (GEM_WINDOW *) gw ;
+  OBJECT      *bobj = wnd->DlgData->BaseObject ;
+
+  GWGetWorkXYWH( wnd, x, y, w, h ) ;
+  *y += bobj[0].ob_height ;
+  *h -= bobj[0].ob_height ;
+}
+
+#pragma warn -par
+int ProgPcIBrowser(void *w, int pc, char *txt)
+{
+  GEM_WINDOW  *wnd = (GEM_WINDOW *) w ;
+  OBJECT      *bobj = wnd->DlgData->BaseObject ;
+  int         stop ;
+  char        buf[20] ;
+
+  sprintf( buf, "(%d%%)", pc ) ;
+  write_text( bobj, IMGB_TEXT, buf ) ;
+  xobjc_draw( wnd->window_handle, bobj, IMGB_TEXT ) ;
+  stop = ( GWBasicModalHandler() == GW_EVTSTOPROUTING ) ;
+
+  return( stop ) ;
+}
+#pragma warn +par
+
+int OnTxtBubbleIBrowser(void *w, int mx, int my, char *txt)
+{
+  GEM_WINDOW *wnd = (GEM_WINDOW *) w ;
+  OBJECT     *adr_form =  wnd->DlgData->BaseObject ;
+  int        objet, trouve = 1 ;
+
+  objet = objc_find( adr_form, 0, MAX_DEPTH, mx, my ) ; 
+  switch( objet )
+  {
+    case IMGB_OPEN       : strcpy(txt, msg[MSG_HIBOPEN]) ;
+                           break ;
+
+    case IMGB_PREVIOUS   : strcpy(txt, msg[MSG_HIBPREV]) ;
+                           break ;
+
+    case IMGB_NEXT       : strcpy(txt, msg[MSG_HIBNEXT]) ;
+                           break ;
+
+    case IMGB_SCALE      : strcpy(txt, msg[MSG_HIBSCALE]) ;
+                           break ;
+
+    case IMGB_EDIT       : strcpy(txt, msg[MSG_HIBEDIT]) ;
+                           break ;
+
+    case IMGB_DELETE     : strcpy(txt, msg[MSG_HIBDELETE]) ;
+                           break ;
+
+    case IMGB_PRINT      : strcpy(txt, msg[MSG_HIBPRINT]) ;
+                           break ;
+
+    default              : trouve = 0 ;
+  }
+
+  return( trouve ) ; 
+}
+
+#pragma warn -par
+int OnMouseMoveIBrowser(void *gw, int button, int kstate, int mx, int my )
+{
+  GEM_WINDOW  *wnd = (GEM_WINDOW *) gw ;
+  WBROWSER    *wb  = wnd->Extension ;
+
+  if ( ( button & 1 ) == 0 )  wb->moving  = 0 ;
+  else                        wb->moving = 1 ;
+  wb->last_mx = mx ;
+  wb->last_my = my ;
+
+  return( 0 ) ;
+}
+#pragma warn +par
+
+int OnLButtonDownIBrowser(void *gw, int mk_state, int mx, int my)
+{
+  GEM_WINDOW  *wnd = (GEM_WINDOW *) gw ;
+  WBROWSER    *wb  = wnd->Extension ;
+  MFDB        *raster ;
+  int         w, h, dummy ;
+
+  if ( OnLButtonDownDlg( wnd, mk_state, mx, my ) == 0 )
+  {
+    if ( wb->pczoom == 100 ) raster = &wb->raster ;
+    else                     raster = &wb->zoom ;
+    /* Bouton gauche appuye sur l'image */
+    wb->x1 += wb->last_mx - mx ;
+    wb->y1 += wb->last_my - my ;
+
+    if ( wb->x1 < 0 ) wb->x1 = 0 ;
+    if ( wb->y1 < 0 ) wb->y1 = 0 ;
+    wnd->GetWorkXYWH( wnd, &dummy, &dummy, &w, &h ) ;
+    if ( wb->x1 + w > raster->fd_w ) wb->x1 = raster->fd_w - w ;
+    if ( wb->y1 + h > raster->fd_h ) wb->y1 = raster->fd_h - h ;
+    GWRePaint( wnd ) ;
+    wb->last_mx = mx ;
+    wb->last_my = my ;
+  }
+
+  return( 0 ) ;
+}
+
+int OnKeyPressedIBrowser(void *w, int key)
+{
+  GEM_WINDOW  *wnd = (GEM_WINDOW *) w ;
+  WBROWSER    *wb  = wnd->Extension ;
+  int code = GW_EVTCONTINUEROUTING ;
+
+  switch( key )
+  {
+    case CURSOR_RT  : if ( wb->loading_img ) wb->obj_notify = IMGB_NEXT ;
+                      else                   OnObjectNotifyIBrowser( w, IMGB_NEXT ) ;
+                      code = GW_EVTSTOPROUTING ;
+                      break ;
+
+    case CURSOR_SRT : if ( wb->fimg_list && !wb->loading_img )
+                      {
+                        wb->pos = wb->nb_files - 1 ;
+                        sprintf( wb->nom, "%s\\%s", wb->base_path, wb->fimg_list[wb->pos] ) ;
+                        DisplayImg( wnd, 0, 0 ) ;
+                        update_nav( wnd ) ;
+                      }
+                      code = GW_EVTSTOPROUTING ;
+                      break ;
+
+    case CURSOR_LT  : if ( wb->loading_img ) wb->obj_notify = IMGB_PREVIOUS ;
+                      else                   OnObjectNotifyIBrowser( w, IMGB_PREVIOUS ) ;
+                      code = GW_EVTSTOPROUTING ;
+                      break ;
+
+    case CURSOR_SLT : if (  wb->fimg_list && !wb->loading_img )
+                      {
+                        wb->pos = 0 ;
+                        sprintf( wb->nom, "%s\\%s", wb->base_path, wb->fimg_list[wb->pos] ) ;
+                        DisplayImg( wnd, 0, 0 ) ;
+                        update_nav( wnd ) ;
+                      }
+                      code = GW_EVTSTOPROUTING ;
+                      break ;
+
+	case STD_PAL    : traite_tab( wnd ) ;
+                      code = GW_EVTSTOPROUTING ;
+	                  break ;
+
+    case IMPRIMER   : OnObjectNotifyIBrowser( w, IMGB_PRINT ) ;
+                      code = GW_EVTSTOPROUTING ;
+                      break ;
+  }
+
+  return( code ) ;
+}
+
+int OnToppedIBrowser(void *w)
+{
+  GEM_WINDOW  *wnd = (GEM_WINDOW *) w ;
+  WBROWSER    *wb  = wnd->Extension ;
+
+  if ( !Truecolor && wb->inf_img.palette ) set_imgpalette( (VXIMAGE*) wb ) ;
+
+  return( OnToppedDlg( w ) ) ;
+}
+
+GEM_WINDOW *CreateImgBrowser(char *filename)
+{
+  GEM_WINDOW *wnd ;
+  OBJECT      *bobj ;
+  DLGDATA    dlg_data ;
+  WBROWSER   *wb ;
+  int        xo, yo, wo, ho, dummy ;
+
+  memset( &dlg_data, 0, sizeof(DLGDATA) ) ;
+  dlg_data.RsrcId         = FORM_IMGBROWSER ;
+  dlg_data.ExtensionSize  = sizeof(WBROWSER) ;
+  dlg_data.UserData       = calloc( 1, sizeof(CMD_BROWSER) ) ;
+  dlg_data.OnInitDialog   = OnInitDialogIBrowser ;
+  dlg_data.OnObjectNotify = OnObjectNotifyIBrowser ;
+  dlg_data.OnCloseDialog  = OnCloseIBrowser ;
+  dlg_data.WKind          = SMALLER ;
+  strcpy( dlg_data.ClassName, "Image Browser" ) ;
+  wnd = GWCreateWindowCmdBar( &dlg_data ) ;
+  if ( wnd == NULL )
+  {
+    free( dlg_data.UserData ) ;
+    return( NULL ) ;
+  }
+  bobj               = wnd->DlgData->BaseObject ;
+  wb                 = wnd->Extension ;
+  wnd->OnDraw        = OnDrawIBrowser ;
+  wnd->GetWorkXYWH   = GetWorkXYWHIBrowser ;
+  wnd->OnTxtBubble   = OnTxtBubbleIBrowser ;
+  wnd->ProgPc        = ProgPcIBrowser ;
+  wnd->OnLButtonDown = OnLButtonDownIBrowser ;
+  wnd->OnMouseMove   = OnMouseMoveIBrowser ;
+  wnd->OnKeyPressed  = OnKeyPressedIBrowser ;
+  wnd->OnTopped      = OnToppedIBrowser ;
+  wnd->flags        |= FLG_MUSTCLIP ;
+
+  GWSetWndRscIcon( wnd, FORM_ICONS, ICN_IBROWSER ) ;
+
+  if ( filename )
+  {
+    strcpy( wb->nom, filename ) ;
+    DisplayImg( wnd, 1, 1 ) ;
+  }
+  else
+  {
+    /* Fenetre sans fichier image */
+    open_where( wnd->window_kind, bobj[0].ob_width, bobj[0].ob_height, &xo, &yo, &wo, &ho ) ;
+    wind_calc( WC_WORK, wnd->window_handle, xo, yo, wo,ho, &bobj[0].ob_x, &bobj[0].ob_y, &dummy, &dummy  ) ;
+    GWOpenWindow( wnd, xo, yo, wo, ho ) ;
+    GWSetWindowCaption( wnd, "Image Browser" ) ;
+    update_nav( wnd ) ;
+    if ( haute_resolution )
+    {
+      xopen = xo ;
+      yopen = ydesk + ho ;
+    }
+    else
+    {
+      xopen  = xdesk ;
+      yopen += ho ;
+    }
+  }
+
+  return( wnd ) ;
+}

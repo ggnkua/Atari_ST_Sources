@@ -1,0 +1,76 @@
+#include "FIREICQ.h"
+/********************************************************************/
+/* check: Checks what happens                                       */
+/********************************************************************/
+void check(void)
+{
+  int exit=FALSE;
+  RESULT svar;
+  char temp[MAXSTRING];
+  do
+  {
+    svar=form_dialog();
+    switch(svar.type)
+    {
+      case MENU_CLICKED:
+        exit=!handle_menu(svar);
+        break;
+      case DIALOG_CLICKED:
+      case WINDOW_CLICKED:
+        exit=!handle_window(svar);
+        break;
+      case KEY_CLICKED:
+        exit=!handle_key(svar);
+        break;
+      case BUTTON_CLICKED:
+        exit=!handle_button(svar);
+        break;
+      case TIMER_EXIT:
+        exit=TRUE;
+        break;
+      default:
+        sprintf(temp,"[1][ Meddelande #%d][ OK ]",svar.type);
+        alertbox(1,temp);
+    }
+  }while(!exit);
+}
+
+/********************************************************************/
+/* Handling the Clicks of the button on the mouse                   */
+/********************************************************************/
+int handle_button(RESULT svar)
+{
+  return(TRUE);
+}
+
+/********************************************************************/
+/* Handling of the Keyboard                                         */
+/********************************************************************/
+int handle_key(RESULT svar)
+{
+  return(TRUE);
+}
+
+/********************************************************************/
+/* Handling of the Menu-row                                         */
+/********************************************************************/
+int handle_menu(RESULT svar)
+{
+  return(TRUE);
+}
+
+/********************************************************************/
+/* Handling of the Windows                                          */
+/********************************************************************/
+int handle_window(RESULT svar)
+{
+  if(svar.data[SVAR_WINDOW_ID]==info_win.ident)
+    return check_info_win(svar);
+  else if(svar.data[SVAR_WINDOW_ID]==register_win.ident)
+    return check_register_win(svar);
+//  else if(svar.data[SVAR_WINDOW_ID]==main_win.ident)
+//    return check_main_win(svar);
+//  else if(svar.data[SVAR_WINDOW_ID]==message_win.ident)
+//    return check_message_win(svar);    
+    return(TRUE);
+}

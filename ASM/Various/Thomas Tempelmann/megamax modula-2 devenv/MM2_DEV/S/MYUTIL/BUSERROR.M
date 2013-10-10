@@ -1,0 +1,10 @@
+MODULE BusError;
+(*$N+*)
+
+FROM SYSTEM IMPORT ASSEMBLER;
+
+BEGIN
+  ASSEMBLER
+        TST.W  $E1234568
+  END
+END BusError.

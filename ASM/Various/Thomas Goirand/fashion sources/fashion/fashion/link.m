@@ -1,0 +1,10 @@
+main.o
+routines.o
+wintype.o 
+disk.o
+rsrcload.o
+menu.o
+userdef.o
+messages.o
+dav.o
+system.o

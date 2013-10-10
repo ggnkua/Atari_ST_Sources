@@ -1,0 +1,15 @@
+iera	ds.b 1
+ierb	ds.b 1
+buf 	ds.l 800
+buf_2	ds.l 800*4
+buf_3	ds.l 800*8
+ancvbl	ds.l 1
+buf2 ds.l 100
+tampon2	ds.w 1
+tampon  ds.w 1
+choix	ds.w 1
+*palette	ds.w 200
+space   ds.w 200
+coul	ds.l 1
+ptr	ds.l 1
+cmpt_coul	ds.w 1

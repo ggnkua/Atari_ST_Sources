@@ -1,0 +1,4 @@
+IMPLEMENTATION MODULE TestImp2;
+(*$N+*)
+
+END TestImp2.

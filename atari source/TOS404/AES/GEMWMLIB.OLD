@@ -1,0 +1,1780 @@
+/*
+*************************************************************************
+*                       Revision Control System
+* =======================================================================
+*  $Revision: 2.2 $     $Source: /u2/MRS/osrevisions/aes/gemwmlib.c,v $
+* =======================================================================
+*  $Author: mui $       $Date: 89/04/26 18:27:16 $      $Locker: kbad $
+* =======================================================================
+*  $Log:        gemwmlib.c,v $
+* Revision 2.2  89/04/26  18:27:16  mui
+* TT
+* 
+* Revision 2.1  89/02/22  05:29:42  kbad
+* *** TOS 1.4  FINAL RELEASE VERSION ***
+* 
+* Revision 1.5  89/02/12  01:04:34  kbad
+* Saved around 238 bytes by cleaning up register var usage:
+* w_getxptr,w_strchg,w_bldactive,w_redraw,wm_start,wm_get,wm_set...
+* (wherever D.w_win[w_handle] was...)
+*
+* Revision 1.4  88/10/03  12:04:04  kbad
+* Fix a redraw annoyance - top window will ONLY get redrawn after FMD_FINISH
+* if it intersects the clip rect
+* 
+* Revision 1.3  88/07/01  16:22:21  mui
+* reg opt @ wm_new - unfix draw_change
+* 
+* Revision 1.1  88/06/02  12:35:16  lozben
+* Initial revision
+* 
+*************************************************************************
+*/
+/*      GEMWMLIB.C      4/23/84 - 02/17/85      Lee Lorenzen            */
+/*      Reg Opt         03/08/85 - 03/11/85     Derek Mui               */
+/*      1.1             03/21/85 - 04/05/85     Lowell Webster          */
+/*      Fix the no sizer problem        10/21/85        Derek Mui       */
+/*      At w_clipdraw, always draw the full top win 7/7/86 Derek Mui    */
+/*      wm_start returns a TRUE         2/2/88          Derek Mui       */
+/*      Don't redraw the top window unless it is necessary      2/9/88  */
+/*      fix at draw_change              D.Mui                           */
+/*      Add wm_new              3/10/88                 D.Mui           */
+/*	Add wm_init					900628 kbad	*/
+/*	Wind_get supports WF_NEWDESK		5/9/91	D.Mui		*/
+/*	Add 3D button 				7/7/92	D.Mui		*/
+/*	wm_get return window color and error code  7/9/92	D.Mui	*/
+
+/*
+*       -------------------------------------------------------------
+*       GEM Application Environment Services              Version 1.1
+*       Serial No.  XXXX-0000-654321              All Rights Reserved
+*       Copyright (C) 1985                      Digital Research Inc.
+*       -------------------------------------------------------------
+*/
+
+/* 900614 kbad
+ * Changed color settings by adding per-window topped AND background
+ * color arrays in the WINDOW struct.  Changed the wind_set call to set
+ * both topped and untopped color words simultaneously, with -1 as
+ * an 'ignore' value.  If you really want everything to be color 15,
+ * use 0xff7f.
+ *
+ * A corresponding wind_get call is not provided, because there should
+ * be no reason an application should need to read the window color
+ * settings.  In the handle case, the application sets the colors itself,
+ * and shouldn't need the AES to keep track of the colors for it. In
+ * the case that the application wants to set only part of the window
+ * object color word, it must set the rest of the colors as well, since
+ * the users could have set the default to a color that would render
+ * the application's partial change invisible.
+ */
+
+/* 900227 kbad
+ * Added window colors by adding an array of color words to the WINDOW
+ * struct in gemlib.h, and adding w_setcolor() call.  w_bldbar() modified
+ * to take WINDOW struct so that colors can be set.
+ * Added wm_set and wm_get cases to get/set the color words in WINDOW
+ */
+
+/* NOTES
+ * ================================================================
+ * For reference, the object color word looks like this:
+ *   aaaabbbb cdddeeee
+ *   ^^^^|||| ||||||||- a) border color
+ *       ^^^^ ||||||||- b) text color
+ *            ^|||||||- c) 1=replace 0=transparent text
+ *             ^^^||||- d) fill pattern (0=hollow 7=solid)
+ *                ^^^^- e) inside color
+ */
+
+#define FIX_WMNEW       1 /* reg opt @ wm_new */
+#define FIX_WCLIPDRAW   1 /* don't always redraw top window */
+
+#include <portab.h>
+#include <machine.h>
+#include <struct88.h>
+#include <baspag88.h>
+#include <obdefs.h>
+#include <taddr.h>
+#include <gemlib.h>
+
+                                                /* in GEMFLAG.C         */
+EXTERN WORD     unsync();
+EXTERN WORD     tak_flag();
+                                                /* in GSXIF.C           */
+EXTERN VOID     gsx_mchg();
+EXTERN WORD     gsx_gclip();
+EXTERN WORD     gsx_sclip();
+EXTERN VOID     gsx_mret();
+                                                /* in OBLIB.C           */
+EXTERN VOID     everyobj();
+EXTERN VOID     ob_add();
+EXTERN VOID     ob_delete();
+EXTERN VOID     ob_draw();
+EXTERN VOID     ob_offset();
+EXTERN VOID     ob_order();
+EXTERN WORD     ob_find();
+                                                /* in WRECT88.C         */
+EXTERN ORECT    *get_orect();
+EXTERN VOID     newrect();
+
+EXTERN LONG     ad_stdesk;
+EXTERN WORD     ml_ocnt;
+EXTERN PD       *ctl_pd;
+EXTERN PD       *gl_mowner;
+EXTERN LONG     gl_mntree;
+EXTERN ORECT    *rul;
+
+OBJECT  W_TREE[NUM_WIN];
+OBJECT  W_ACTIVE[NUM_ELEM];
+
+/* July 7 1992 - ml.  Changed to 3D object types */
+
+GLOBAL WORD     gl_watype[NUM_ELEM] =
+{
+        G_IBOX,         /* W_BOX        */
+        G_BOX,          /* W_TITLE      */
+        G_BOXCHAR,      /* W_CLOSER     */
+        G_BOXTEXT,      /* W_NAME       */
+        G_BOXCHAR,      /* W_FULLER     */
+        G_BOXTEXT,      /* W_INFO       */
+        G_IBOX,         /* W_DATA       */
+        G_IBOX,         /* W_WORK       */
+        G_BOXCHAR,      /* W_SIZER      */
+        G_BOX,          /* W_VBAR       */
+        G_BOXCHAR,      /* W_UPARROW    */
+        G_BOXCHAR,      /* W_DNARROW    */
+        G_BOX,          /* W_VSLIDE     */
+        G_BOX,          /* W_VELEV      */
+        G_BOX,          /* W_HBAR       */
+        G_BOXCHAR,      /* W_LFARROW    */
+        G_BOXCHAR,      /* W_RTARROW    */
+        G_BOX,          /* W_HSLIDE     */
+        G_BOX           /* W_HELEV      */
+};
+
+
+#if 0
+
+GLOBAL WORD     gl_watype[NUM_ELEM] =
+{
+        G_IBOX,         /* W_BOX        */
+        G_BOX,          /* W_TITLE      */
+        A3DBOXCHAR,     /* W_CLOSER     */
+        A3DBOXTEXT,     /* W_NAME       */
+        A3DBOXCHAR,     /* W_FULLER     */
+        G_BOXTEXT,      /* W_INFO       */
+        G_IBOX,         /* W_DATA       */
+        G_IBOX,         /* W_WORK       */
+        A3DBOXCHAR,     /* W_SIZER      */
+        A3DBOX,         /* W_VBAR       */
+        A3DBOXCHAR,     /* W_UPARROW    */
+        A3DBOXCHAR,     /* W_DNARROW    */
+        G_BOX,          /* W_VSLIDE     */
+        A3DBOX,         /* W_VELEV      */
+        A3DBOX,         /* W_HBAR       */
+        A3DBOXCHAR,     /* W_LFARROW    */
+        A3DBOXCHAR,     /* W_RTARROW    */
+        G_BOX,          /* W_HSLIDE     */
+        A3DBOX          /* W_HELEV      */
+};
+#endif
+
+GLOBAL LONG     gl_waspec[NUM_ELEM] =
+{
+        0x00011101L,    /* W_BOX	*/
+        0x00011101L,    /* W_TITLE	*/
+        0x05011101L,    /* W_CLOSER	*/
+        0x00000000L,    /* W_NAME	*/
+        0x07011101L,    /* W_FULLER	*/
+        0x00000000L,    /* W_INFO	*/
+        0x00001101L,    /* W_DATA   (no border) */
+        0x00001101L,    /* W_WORK   (no border) */
+        0x06011101L,    /* W_SIZER	*/
+        0x00011101L,    /* W_VBAR	*/
+        0x01011101L,    /* W_UPARROW	*/
+        0x02011101L,    /* W_DNARROW	*/
+        0x00021111L,    /* W_VSLIDE (2 pixel border) */
+        0x00011101L,    /* W_VELEV	*/
+        0x00011101L,    /* W_HBAR	*/
+        0x04011101L,    /* W_LFARROW	*/
+        0x03011101L,    /* W_RTARROW	*/
+        0x00021111L,    /* W_HSLIDE (2 pixel border) */
+        0x00011101L     /* W_HELEV	*/
+} ;
+
+static WORD wtcolor[NUM_ELEM];
+static WORD wbcolor[NUM_ELEM];
+
+static WORD sillycolor[] = {
+        0x2304, /* W_BOX        */
+        0x3405, /* W_TITLE      */
+        0x4506, /* W_CLOSER     */
+        0x56a7, /* W_NAME       */
+        0x6708, /* W_FULLER     */
+        0x7809, /* W_INFO       */
+        0x890a, /* W_DATA       */
+        0x9a0b, /* W_WORK       */
+        0xab0c, /* W_SIZER      */
+        0xbc0d, /* W_VBAR       */
+        0xcd0e, /* W_UPARROW    */
+        0xde0f, /* W_DNARROW    */
+        0x2314, /* W_VSLIDE     */
+        0x3405, /* W_VELEV      */
+        0x4506, /* W_HBAR       */
+        0x5607, /* W_LFARROW    */
+        0x6708, /* W_RTARROW    */
+        0x7819, /* W_HSLIDE     */
+        0x890a, /* W_HELEV      */
+        0x9a0b,
+        0xab0c,
+        0xbc0d,
+        0xcd0e,
+        0xde0f
+};
+
+GLOBAL TEDINFO  gl_aname;
+GLOBAL TEDINFO  gl_ainfo;
+
+GLOBAL TEDINFO  gl_asamp =
+{
+        0x0L, 0x0L, 0x0L, IBM, MD_REPLACE, TE_LEFT, SYS_FG, 0x0, 1, 80, 80
+};
+
+
+EXTERN WORD     gl_wchar;
+EXTERN WORD     gl_hchar;
+
+EXTERN WORD     gl_wbox;
+EXTERN WORD     gl_hbox;
+
+EXTERN WORD     gl_width;
+EXTERN WORD     gl_height;
+
+EXTERN GRECT    gl_rscreen;
+EXTERN GRECT    gl_rfull;
+EXTERN GRECT    gl_rzero;
+EXTERN WORD     ml_ocnt;
+
+EXTERN THEGLO   D;
+
+GLOBAL WORD     wind_msg[8];
+
+GLOBAL LONG     ad_windspb;
+
+GLOBAL WORD     gl_wtop;
+GLOBAL LONG     gl_wtree;
+GLOBAL LONG     gl_awind;
+GLOBAL WORD     gl_wasclr;
+GLOBAL WORD     gl_ignore;
+GLOBAL LONG     gl_newdesk;
+GLOBAL WORD     gl_newroot;
+
+        VOID
+w_nilit(num, olist)
+        REG WORD                num;
+        REG OBJECT              olist[];
+{
+        while( num-- )
+        {
+          olist[num].ob_next = olist[num].ob_head = olist[num].ob_tail = NIL;
+        }
+}
+
+/*
+*       Routine to add a child object to a parent object.  The child
+*       is added at the end of the parent's current sibling list.
+*       It is also initialized.
+*/
+        VOID
+w_obadd(olist, parent, child)
+        REG OBJECT              olist[];
+        REG WORD                parent, child;
+{
+        REG WORD                lastkid;
+
+        if ( (parent != NIL) &&
+             (child != NIL) )
+        {
+          olist[child].ob_next = parent;
+
+          lastkid = olist[parent].ob_tail;
+          if (lastkid == NIL)
+            olist[parent].ob_head = child;
+          else
+            olist[lastkid].ob_next = child;
+          olist[parent].ob_tail = child;
+        }
+}
+
+
+        VOID
+w_setup(ppd, w_handle, kind)
+        PD              *ppd;
+        WORD            w_handle;
+        WORD            kind;
+{
+        REG WINDOW              *pwin;
+        WORD            i;
+
+        pwin = &D.w_win[w_handle];
+        pwin->w_owner = ppd;
+        pwin->w_flags |= VF_INUSE;
+        pwin->w_kind = kind;
+        pwin->w_hslide = pwin->w_vslide = 0;    /* slider at left/top   */
+        pwin->w_hslsiz = pwin->w_vslsiz = -1;   /* use default size     */
+        for( i=0; i<NUM_ELEM; i++ )
+        {
+            pwin->w_tcolor[i] = wtcolor[i];
+            pwin->w_bcolor[i] = wbcolor[i];
+        }
+}
+
+
+        WORD
+*w_getxptr(which, w_handle)
+        WORD            which;
+        WORD            w_handle;
+{
+        REG WINDOW              *pwin;
+
+        pwin = &D.w_win[w_handle];
+        switch(which)
+        {
+          case WS_CURR:
+          case WS_TRUE:
+                return( &W_TREE[w_handle].ob_x );
+                break;
+          case WS_PREV:
+                return( &(pwin->w_xprev) );
+                break;
+          case WS_WORK:
+                return( &(pwin->w_xwork) );
+                break;
+          case WS_FULL:
+                return( &(pwin->w_xfull) );
+                break;
+        }
+}
+
+        VOID
+w_getsize(which, w_handle, pt)
+        REG WORD                which;
+        WORD            w_handle;
+        REG GRECT               *pt;
+{
+        rc_copy(w_getxptr(which, w_handle), pt);
+        if ( (which == WS_TRUE) && pt->g_w && pt->g_h)
+        {
+          pt->g_w += 2;
+          pt->g_h += 2;
+        }
+}
+
+
+        VOID
+w_setsize(which, w_handle, pt)
+        WORD            which;
+        WORD            w_handle;
+        GRECT           *pt;
+{
+        rc_copy(pt, w_getxptr(which, w_handle));
+}
+
+
+        VOID
+w_setcolor( obj, pwin, istop )
+        WORD        obj;
+        WINDOW      *pwin;
+        WORD        istop;
+{
+        REG WORD        color;
+        REG OBJECT      *o;
+
+        if (istop)
+            color = pwin->w_tcolor[obj];
+        else
+            color = pwin->w_bcolor[obj];
+
+        o = &W_ACTIVE[obj];
+        if( ( o->ob_type & 0x00FF ) == G_BOXTEXT )	/* 7/8/92 */
+            ((TEDINFO *)(o->ob_spec))->te_color = color;
+        else
+            o->ob_spec = (o->ob_spec & 0xffff0000L) |
+                         (((LONG)color) & 0x0000ffffL);
+}
+
+
+
+
+w_adjust(parent, obj, x, y, w, h)
+        WORD            parent;
+        REG WORD                obj;
+        WORD            x, y, w, h;
+{
+        REG OBJECT      *o;
+        o = &W_ACTIVE[obj];
+        rc_copy(&x, &o->ob_x);
+        o->ob_head = o->ob_tail = NIL;
+        w_obadd(&W_ACTIVE[ROOT], parent, obj);
+}
+
+
+        WORD
+w_hvassign(isvert, parent, obj, vx, vy, hx, hy, w, h)
+        WORD            isvert;
+        REG WORD                parent, obj;
+        WORD            vx, vy, hx, hy, w, h;
+{
+        if ( isvert )
+          w_adjust(parent, obj, vx, vy, gl_wbox, h);
+        else
+          w_adjust(parent, obj, hx, hy, w, gl_hbox);
+}
+
+
+/*
+*       Walk the list and draw the parts of the window tree owned by
+*       this window.
+*/
+
+do_walk(wh, tree, obj, depth, pc)
+        REG WORD                wh;
+        LONG            tree;
+        WORD            obj;
+        WORD            depth;
+        REG GRECT               *pc;
+{
+        REG ORECT               *po;
+        GRECT           t;
+
+        if ( (gl_ignore) ||
+             (wh == NIL) )
+          return(TRUE);
+                                                /* clip to screen       */
+        if (pc)
+          rc_intersect(&gl_rfull, pc);
+        else
+          pc = &gl_rfull;
+                                                /* walk owner rect list */
+        for(po=D.w_win[wh].w_rlist; po; po=po->o_link)
+        {
+          rc_copy(&po->o_x, &t);
+                                                /* intersect owner rect */
+                                                /*   with clip rect's   */
+          if ( rc_intersect(pc, &t) )
+          {
+            if( wh == gl_wtop )                 /* redraw the whole top wind*/
+              w_getsize( WS_TRUE, wh, &t );     /* 881001 kbad          */
+
+                                                /*  set clip and draw   */
+            gsx_sclip(&t);
+            ob_draw(tree, obj, depth);
+          }
+        }
+}
+
+
+/*
+*       Draw the desktop background pattern underneath the current
+*       set of windows.
+*/
+
+w_drawdesk(pc)
+        REG GRECT               *pc;
+{
+        REG LONG                tree;
+        REG WORD                depth;
+        REG WORD                root;
+
+        if (gl_newdesk)
+        {
+          tree = gl_newdesk;
+          depth = MAX_DEPTH;
+          root = gl_newroot;
+        }
+        else
+        {
+          tree = gl_wtree;
+          depth = 0;
+          root = ROOT;
+        }
+                                                /* account for drop     */
+                                                /*   shadow             */
+        pc->g_w += 2;
+        pc->g_h += 2;
+
+        do_walk(0, tree, root, depth, pc);
+}
+
+
+/*
+*       Build an active window and draw the all parts of it but clip
+*       these parts with the owner rectangles and the passed in
+*       clip rectangle.
+*/
+
+        WORD
+w_clipdraw(wh, obj, depth, usetrue)
+        REG WORD                wh;
+        WORD            obj;
+        WORD            depth;
+        WORD            usetrue;
+{
+        GRECT           c;
+                                                /* start with window's  */
+                                                /*   true size as clip  */
+
+        if( usetrue ) /* || ( wh == gl_wtop ) yanked, don't always redraw */ 
+                                        /* only redraw top wind if it   */
+                                        /* intersects clip rect (see    */
+                                        /* do_walk) 881001 kbad         */
+          w_getsize(WS_TRUE, wh, &c);
+        else
+        {
+                                                /* use global clip      */
+          gsx_gclip(&c);
+                                                /* add in drop shadow   */
+          c.g_w += 2;
+          c.g_h += 2;
+        }
+                                                /* build active tree    */
+        w_bldactive(wh);
+        do_walk(wh, gl_awind, obj, depth, &c);
+}
+
+
+        WORD
+w_strchg(w_handle, obj, pstring)
+        REG WORD                w_handle;
+        REG WORD                obj;
+        REG LONG                pstring;
+{
+        REG WINDOW              *pwin;
+
+        pwin = &D.w_win[w_handle];
+
+        if ( obj == W_NAME )
+          gl_aname.te_ptext = pwin->w_pname = pstring;
+        else
+          gl_ainfo.te_ptext = pwin->w_pinfo = pstring;
+        
+        w_clipdraw(w_handle, obj, MAX_DEPTH, TRUE);
+}
+
+
+        WORD
+w_barcalc(isvert, space, sl_value, sl_size, min_sld, ptv, pth)
+        WORD            isvert;
+        REG WORD                space;
+        REG WORD                sl_value, sl_size;
+        REG WORD                min_sld;
+        GRECT           *ptv, *pth;
+{
+        if (sl_size == -1)
+          sl_size = min_sld;
+        else
+          sl_size = max(min_sld, mul_div(sl_size, space, 1000) );
+
+        sl_value = mul_div(space - sl_size, sl_value, 1000);
+        if (isvert)
+          r_set(ptv, 0, sl_value, gl_wbox, sl_size);
+        else
+          r_set(pth, sl_value, 0, sl_size, gl_hbox);
+}
+
+
+        WORD
+w_bldbar(kind, istop, w_bar, pwin, x, y, w, h)
+        UWORD           kind;
+        WORD            istop;
+        WORD            w_bar;
+        REG WINDOW      *pwin;
+        REG WORD                x;
+        REG WORD                y, w, h;
+{
+        WORD            sl_value, sl_size;
+        WORD            isvert, obj;
+        UWORD           upcmp, dncmp, slcmp;            
+        REG WORD        w_up;
+        WORD            w_dn, w_slide, min_sld, w_el;
+        WORD            sl_amnt, space;
+        isvert = (w_bar == W_VBAR);
+        if ( isvert )
+        {
+          sl_value = pwin->w_vslide;
+          sl_size = pwin->w_vslsiz;
+          upcmp = UPARROW;
+          dncmp = DNARROW;
+          slcmp = VSLIDE;
+          w_up = W_UPARROW;
+          w_dn = W_DNARROW;
+          w_slide = W_VSLIDE;
+          min_sld = gl_hbox;
+          w_el = W_VELEV;
+        }
+        else
+        {
+          sl_value = pwin->w_hslide;
+          sl_size = pwin->w_hslsiz;
+          upcmp = LFARROW;
+          dncmp = RTARROW;
+          slcmp = HSLIDE;
+          w_up = W_LFARROW;
+          w_dn = W_RTARROW;
+          w_slide = W_HSLIDE;
+          min_sld = gl_wbox;
+          w_el = W_HELEV;
+        }
+
+	w_setcolor( w_bar, pwin, istop );
+        w_setcolor( w_up, pwin, istop );
+        w_setcolor( w_dn, pwin, istop );
+        w_setcolor( w_slide, pwin, istop );
+        w_setcolor( w_el, pwin, istop );
+
+        w_hvassign(isvert, W_DATA, w_bar, x, y, x, y, w, h);
+        x = y = 0;
+        if ( istop )
+        {
+          if (kind & upcmp)
+          {
+            w_adjust(w_bar, w_up, x, y, gl_wbox, gl_hbox);
+            if ( isvert )
+            {
+              y += (gl_hbox - 1);
+              h -= (gl_hbox - 1);
+            }
+            else
+            {
+              x += (gl_wbox - 1);
+              w -= (gl_wbox - 1);
+            }
+          }
+          if ( kind & dncmp )
+          {
+            w -= (gl_wbox - 1);
+            h -= (gl_hbox - 1);
+            w_hvassign(isvert, w_bar, w_dn, x, y + h - 1, 
+                        x + w - 1, y, gl_wbox, gl_hbox);
+          }
+          if ( kind & slcmp )
+          {
+            w_hvassign(isvert, w_bar, w_slide, x, y, x, y, w, h);
+            space = (isvert) ? h : w;
+
+            w_barcalc(isvert, space, sl_value, sl_size, min_sld, 
+                  &W_ACTIVE[W_VELEV].ob_x, &W_ACTIVE[W_HELEV].ob_x);
+
+            obj = (isvert) ? W_VELEV : W_HELEV;
+            W_ACTIVE[obj].ob_head = W_ACTIVE[obj].ob_tail = NIL;
+            w_obadd(&W_ACTIVE[ROOT], w_slide, obj);
+          }
+        }
+}
+
+        WORD
+w_setactive()
+{
+        GRECT           d;
+        REG WORD                wh;
+
+        wh = (gl_wtop != NIL) ? gl_wtop : 0;
+        w_getsize(WS_WORK, wh, &d);
+        ct_chgown(D.w_win[wh].w_owner, &d);
+}
+
+
+        WORD
+w_bldactive(w_handle)
+        REG WORD                w_handle;
+{
+        WORD            istop;
+        WORD            i;
+        REG WORD                kind;
+        REG WORD                havevbar;
+        REG WORD                havehbar;
+        GRECT           t;
+        REG GRECT       *pt;
+        REG WORD                tempw;
+        WORD            offx, offy;
+        REG WINDOW      *pwin;
+
+        pwin = &D.w_win[w_handle];
+
+        pt = &t;
+
+        if (w_handle == NIL)
+          return(TRUE);
+                                                /* set if it is on top  */
+        istop = (gl_wtop == w_handle);
+                                                /* get the kind of windo*/
+        kind = pwin->w_kind;
+        w_nilit(NUM_ELEM, &W_ACTIVE[0]);
+                                                /* start adding pieces  */
+                                                /*   & adjusting sizes  */
+        gl_aname.te_ptext = pwin->w_pname;
+        gl_ainfo.te_ptext = pwin->w_pinfo;
+        w_getsize(WS_CURR, w_handle, pt);
+        rc_copy(pt, &W_ACTIVE[W_BOX].ob_x);
+        offx = pt->g_x;
+        offy = pt->g_y;
+	w_setcolor( W_BOX, pwin, istop );
+
+                                                /* do title area        */
+        pt->g_x = pt->g_y = 0;
+        if ( kind & (NAME | CLOSER | FULLER) )
+        {
+          w_setcolor( W_TITLE, pwin, istop );
+          w_adjust(W_BOX, W_TITLE, pt->g_x, pt->g_y, pt->g_w, gl_hbox);
+          tempw = pt->g_w;
+          if ( (kind & CLOSER) &&
+               ( istop ) )
+          {
+            w_setcolor( W_CLOSER, pwin, istop );
+            w_adjust(W_TITLE, W_CLOSER, pt->g_x, pt->g_y, gl_wbox, gl_hbox);
+            pt->g_x += gl_wbox;
+            tempw -= gl_wbox;
+          }
+          if ( (kind & FULLER) &&
+               ( istop ) )
+          {
+            tempw -= gl_wbox;
+            w_setcolor( W_FULLER, pwin, istop );
+            w_adjust(W_TITLE, W_FULLER, pt->g_x + tempw, pt->g_y, 
+                        gl_wbox, gl_hbox);
+          }
+          if ( kind & NAME )
+          {
+            w_setcolor( W_NAME, pwin, istop );
+            w_adjust(W_TITLE, W_NAME, pt->g_x, pt->g_y, tempw, gl_hbox);
+          }
+          pt->g_x = 0;
+          pt->g_y += (gl_hbox - 1);
+          pt->g_h -= (gl_hbox - 1);
+        }
+                                                /* do info area         */
+        if ( kind & INFO )
+        {
+          w_setcolor( W_INFO, pwin, istop );
+          w_adjust(W_BOX, W_INFO, pt->g_x, pt->g_y, pt->g_w, gl_hbox);
+          pt->g_y += (gl_hbox - 1);
+          pt->g_h -= (gl_hbox - 1);
+        }
+                                                /* do data area         */
+        w_adjust(W_BOX, W_DATA, pt->g_x, pt->g_y, pt->g_w, pt->g_h);
+                                                /* do work area         */
+        pt->g_x++;
+        pt->g_y++;
+        pt->g_w -= 2;
+        pt->g_h -= 2;
+        havevbar = kind & (UPARROW | DNARROW | VSLIDE | SIZER); 
+        havehbar = kind & (LFARROW | RTARROW | HSLIDE | SIZER);
+        if ( havevbar )
+          pt->g_w -= (gl_wbox - 1);
+        if ( havehbar )
+          pt->g_h -= (gl_hbox - 1);
+
+        pt->g_x += offx;
+        pt->g_y += offy;
+
+        pt->g_x = pt->g_y = 1;
+        w_adjust(W_DATA, W_WORK, pt->g_x, pt->g_y, pt->g_w, pt->g_h);
+                                                /* do vert. area        */
+        if ( havevbar )
+        {
+          pt->g_x += pt->g_w;
+          w_bldbar(kind, istop, W_VBAR, pwin,
+                    pt->g_x, 0, pt->g_w + 2, pt->g_h + 2);
+        }
+                                                /* do horiz area        */
+        if ( havehbar )
+        {
+          pt->g_y += pt->g_h;
+          w_bldbar(kind, istop, W_HBAR, pwin,
+                    0, pt->g_y, pt->g_w + 2, pt->g_h + 2);
+        }
+                                                /* do sizer area        */
+        if ( (havevbar) &&
+             (havehbar) )
+        {
+          w_setcolor( W_SIZER, pwin, istop );
+          w_adjust(W_DATA, W_SIZER, pt->g_x, pt->g_y, gl_wbox, gl_hbox);
+          W_ACTIVE[W_SIZER].ob_spec &= 0xffffL;
+          W_ACTIVE[W_SIZER].ob_spec |= 
+                (istop && (kind & SIZER)) ? 0x06010000L: 0x00010000L;
+        }
+}
+
+
+        VOID
+ap_sendmsg(ap_msg, type, towhom, w3, w4, w5, w6, w7)
+        REG WORD                ap_msg[];
+        WORD            type, towhom;
+        WORD            w3, w4, w5, w6, w7;
+{
+        ap_msg[0] = type;
+        ap_msg[1] = rlr->p_pid;
+        ap_msg[2] = 0;
+        ap_msg[3] = w3;
+        ap_msg[4] = w4;
+        ap_msg[5] = w5;
+        ap_msg[6] = w6;
+        ap_msg[7] = w7;
+        ap_rdwr(AQWRT, towhom, 16, ADDR(&ap_msg[0]));
+}
+
+
+        VOID
+w_redraw(w_handle, pt)
+REG     WORD            w_handle;
+        GRECT           *pt;
+{
+        GRECT           t, d;
+        REG GRECT       *ppt;
+        REG WINDOW      *pwin;
+
+        pwin = &D.w_win[w_handle];
+                                                /* make sure work rect  */
+        ppt = &t;                               /*   and word rect      */
+                                                /*   intersect          */
+        rc_copy(pt, ppt);
+        w_getsize(WS_WORK, w_handle, &d);
+        if ( rc_intersect(ppt, &d) )
+        {
+                                                /* make sure window has */
+                                                /*   owns a rectangle   */
+          if ( w_union(pwin->w_rlist, &d) )
+          {
+                                                /* intersect redraw     */
+                                                /*   rect with union    */
+                                                /*   of owner rects     */
+            if ( rc_intersect(&d, ppt) )
+              ap_sendmsg(wind_msg, WM_REDRAW, 
+                        pwin->w_owner->p_pid, 
+                        w_handle, ppt->g_x, ppt->g_y, ppt->g_w, ppt->g_h);
+          }
+        }
+}
+
+
+/*
+*       Routine to fix rectangles in preparation for a source to
+*       destination blt.  If the source is at -1, then the source
+*       and destination left fringes need to be realigned.
+*/
+        WORD
+w_mvfix(ps, pd)
+        REG GRECT               *ps;
+        REG GRECT               *pd;
+{
+        REG WORD                tmpsx;
+
+        tmpsx = ps->g_x;
+        rc_intersect(&gl_rfull, ps);
+        if (tmpsx == -1)
+        {
+          pd->g_x++;
+          pd->g_w--;
+          return(TRUE);
+        }
+        return(FALSE);
+}
+
+/*
+*       Call to move top window.  This involves BLTing the window if
+*       none of it that is partially off the screen needs to be redraw,
+*       else the whole desktop to just updated.  All uncovered portions
+*       of the desktop are redrawn by later by calling w_update.
+*/
+        WORD    
+w_move(w_handle, pstop, prc)
+        REG WORD                w_handle;
+        REG WORD                *pstop;
+        GRECT           *prc;
+{
+        GRECT           s;                      /* source               */
+        GRECT           d;                      /* destination          */
+        REG GRECT               *pc;
+        REG WORD                sminus1, dminus1;
+
+        if (gl_ignore)
+          return;
+
+        w_getsize(WS_PREV, w_handle, &s);
+        s.g_w += 2;
+        s.g_h += 2;
+        w_getsize(WS_TRUE, w_handle, &d);
+                                                /* set flags for when   */
+                                                /*   part of the source */
+                                                /*   is off the screen  */
+        if ( ( (s.g_x + s.g_w > gl_width) && (d.g_x < s.g_x) )  ||
+             ( (s.g_y + s.g_h > gl_height) && (d.g_y < s.g_y) )   )
+        {
+          rc_union(&s, &d);
+          *pstop = 0;
+        }
+        else
+        {
+          *pstop = w_handle;
+        }
+                                                /* intersect with full  */
+                                                /*   screen and align   */
+                                                /*   fringes if -1 xpos */
+        sminus1 = w_mvfix(&s, &d);
+        dminus1 = w_mvfix(&d, &s);
+                                                /* blit what we can     */
+        if ( *pstop == w_handle )
+        {
+          gsx_sclip(&gl_rfull);
+          bb_screen(S_ONLY, s.g_x, s.g_y, d.g_x, d.g_y, s.g_w, s.g_h);
+                                                /* cleanup left edge    */
+          if (sminus1 != dminus1)
+          {
+            if (dminus1)
+              s.g_x--;
+            if (sminus1)
+            {
+              d.g_x--;
+              d.g_w = 1;
+              gsx_sclip(&d);
+              w_clipdraw(gl_wtop, 0, 0, FALSE);
+            }
+          }
+          pc = &s;
+        }
+        else
+        {
+          pc = &d;
+        }
+                                                /* clean up the rest    */
+                                                /*   by returning       */
+                                                /*   clip rect          */
+        rc_copy(pc, prc);
+        return( (*pstop == w_handle) );
+}
+
+
+/*
+*       Draw windows from top to bottom.  If top is 0, then start at
+*       the topmost window.  If bottom is 0, then start at the 
+*       bottomost windwo.  For the first window drawn, just do the
+*       insides, since DRAW_CHANGE has already drawn the outside
+*       borders.
+*/
+        VOID
+w_update(bottom, pt, top, moved)
+        REG WORD                bottom;
+        REG GRECT               *pt;
+        REG WORD                top;
+        WORD            moved;
+{
+        REG WORD                i, ni;
+        REG WORD                done;
+
+        if (gl_ignore)
+          return;
+                                                /* limit to screen      */
+        rc_intersect(&gl_rfull, pt);
+        gsx_moff();
+                                                /* update windows from  */
+                                                /*   top to bottom      */
+        if (bottom == 0)
+          bottom = W_TREE[ROOT].ob_head;
+                                                /* if there are windows */
+        if (bottom != NIL)
+        {
+                                                /* start at the top     */ 
+          if (top == 0) 
+            top = W_TREE[ROOT].ob_tail;
+                                                /* draw windows from    */
+                                                /*   top to bottom      */
+          do
+          {
+                                                
+            if ( !((moved) && (top == gl_wtop)) )
+            {
+                                                /* set clip and draw    */
+                                                /*   a window's border  */
+              gsx_sclip(pt);
+              w_clipdraw(top, 0, MAX_DEPTH, FALSE);
+                                                /* let appl. draw inside*/
+              w_redraw(top, pt);
+            }
+                                                /* scan to find prev    */
+            i = bottom;
+            done = (i == top);
+            while (i != top)
+            {
+              ni = W_TREE[i].ob_next;
+              if (ni == top)
+                top = i;
+              else
+                i = ni;
+            }
+          }
+          while( !done );
+        }
+        gsx_mon();
+}
+
+
+/*
+*       Draw the tree of windows given a major change in the some 
+*       window.  It may have been sized, moved, fulled, topped, or closed.
+*       An attempt should be made to minimize the amount of
+*       redrawing of other windows that has to occur.  The Control
+*       Manager will actually issue window redraw requests based on
+*       the rectangle that needs to be cleaned up.
+*/
+
+        WORD
+draw_change(w_handle, pt)
+        REG WORD                w_handle;
+        REG GRECT               *pt;
+{
+        GRECT           c;
+        REG GRECT       *pc;
+        REG GRECT               *pw;
+        REG WORD                start;
+        WORD            moved, aword, stop;
+        REG WORD                oldtop, clrold;
+        BYTE            *pbytes;
+
+        pc = &c;
+                                                /* save old size        */
+        w_getsize(WS_CURR, w_handle, pc);
+        w_setsize(WS_PREV, w_handle, pc);
+                                                /* set new size's       */
+        w_setsize(WS_CURR, w_handle, pt);
+
+        pw = (GRECT *) w_getxptr(WS_WORK, w_handle);
+        wm_calc(WC_WORK, D.w_win[w_handle].w_kind, 
+                        pt->g_x, pt->g_y, pt->g_w, pt->g_h, 
+                        &pw->g_x, &pw->g_y, &pw->g_w, &pw->g_h);
+                                                /* update rect. lists   */
+        everyobj(gl_wtree, ROOT, NIL, newrect, 0, 0, MAX_DEPTH);
+                                                /* remember oldtop      */
+        oldtop = gl_wtop;
+        gl_wtop = W_TREE[0].ob_tail;
+                                                /* set ctrl rect and    */
+                                                /*   mouse owner        */
+        w_setactive();
+                                                /* see if we should be  */
+                                                /*   ignoring what this */
+                                                /*   does to the screen */
+        if (gl_ignore)
+          return( TRUE );
+                                                /* init. starting window*/
+        start = w_handle;
+                                                /* stop at the top      */
+        stop = 0;
+                                                /* set flag to say we   */
+                                                /*   haven't moved      */
+                                                /*   the top window     */
+        moved = FALSE;
+                                                /* if same upper left   */
+                                                /*   corner             */
+        if ( (pt->g_x == pc->g_x) && (pt->g_y == pc->g_y) )
+        {
+                                                /* size or top request  */
+          if ( (pt->g_w == pc->g_w) && (pt->g_h == pc->g_h) )
+          {
+                                                /* return if this isn't */
+                                                /*   a top request      */
+            if ( (w_handle != W_TREE[0].ob_tail) ||
+                 (w_handle == oldtop) ) 
+              return(TRUE);
+                                                /* draw oldtop covered  */
+                                                /*   with deactivated   */
+                                                /*   borders            */
+            if (oldtop != NIL)
+            {
+              w_clipdraw(oldtop, 0, MAX_DEPTH, TRUE);
+              clrold = !(D.w_win[oldtop].w_flags & VF_BROKEN);
+            }
+            else
+              clrold = TRUE;
+                                                /* if oldtop isn't      */
+                                                /*   overlapped and new */
+                                                /*   top was clear then */
+                                                /*   just draw activated*/
+                                                /*   borders            */
+            if ( (clrold) && (gl_wasclr) )
+            {
+              w_clipdraw(gl_wtop, 0, MAX_DEPTH, TRUE);
+              return(TRUE);
+            }
+          }
+          else
+          {
+                                                /* stop before current  */
+                                                /*   window if shrink   */
+                                                /*   was a pure subset  */
+            if ( (pt->g_w <= pc->g_w) && (pt->g_h <= pc->g_h) )
+            {
+              stop = w_handle;
+              w_clipdraw(gl_wtop, 0, MAX_DEPTH, TRUE);
+              moved = TRUE;
+            }
+                                                /* start at bottom if   */
+                                                /*   a shrink occurred  */
+            if ( (pt->g_w < pc->g_w) || (pt->g_h < pc->g_h) )
+              start = 0;
+                                                /* update rect. is the  */
+                                                /*   union of two sizes */
+                                                /*   + the drop shadow  */
+            pc->g_w = max(pt->g_w, pc->g_w) + 2; 
+            pc->g_h = max(pt->g_h, pc->g_h) + 2; 
+          }
+        }
+        else
+        {
+                                                /* move or grow or open */
+                                                /*   or close           */
+          if ( !(pc->g_w && pc->g_h) ||
+                ( (pt->g_x <= pc->g_x) && 
+                  (pt->g_y <= pc->g_y) &&
+                  (pt->g_x+pt->g_w >= pc->g_x+pc->g_w) && 
+                  (pt->g_y+pt->g_h >= pc->g_y+pc->g_h)))
+          {
+                                                /* a grow that is a     */
+                                                /*  superset or an open */
+            rc_copy(pt, pc);
+          }
+          else
+          {
+                                                /* move, close or shrink*/
+                                                /* do a move of top guy */
+            if ( (pt->g_w == pc->g_w) && 
+                 (pt->g_h == pc->g_h) &&
+                 (gl_wtop == w_handle) )
+            {
+              moved = w_move(w_handle, &stop, pc);
+              start = 0;
+            }
+                                                /* check for a close    */
+            if ( !(pt->g_w && pt->g_h) )
+              start = 0;
+                                                /* handle other moves   */
+                                                /*   and shrinks        */
+            if ( start != 0 )
+            {
+              rc_union(pt, pc);
+              if ( !rc_equal(pt, pc) )
+                start = 0;
+            }
+          }
+        }
+                                                /* update gl_wtop       */
+                                                /*   after close,       */
+                                                /*   or open            */
+        if ( oldtop != W_TREE[0].ob_tail )
+        {
+          if (gl_wtop != NIL)
+          {
+                                                /* open or close with   */
+                                                /*   other windows open */
+            w_getsize(WS_CURR, gl_wtop, pt);    
+            rc_union(pt, pc);                   
+                                                /* if it was an open    */
+                                                /*   then draw the      */
+                                                /*   old top guy        */
+                                                /*   covered            */
+            if ( (oldtop != NIL ) &&
+                 (oldtop != w_handle) )
+              w_clipdraw(oldtop, 0, MAX_DEPTH, TRUE);
+          }
+        }
+                                                /* update the desktop   */
+                                                /*   background         */
+        if (start == 0)
+          w_drawdesk(pc);
+                                                /* start the redrawing  */
+        w_update(start, pc, stop, moved);
+}
+
+
+/*
+*       Walk down ORECT list looking for the next rect that still has
+*       size when clipped with the passed in clip rectangle.
+*/
+        VOID    
+w_owns(w_handle, po, pt, poutwds)
+        WORD            w_handle;
+        REG ORECT               *po;
+        GRECT           *pt;
+        REG WORD                *poutwds;
+{
+        while (po)
+        {
+          rc_copy(&po->o_x, &poutwds[0]);
+          D.w_win[w_handle].w_rnext = po = po->o_link;
+          if ( rc_intersect(pt, &poutwds[0]) )
+            return;
+        }
+        poutwds[2] = poutwds[3] = 0;
+}
+
+
+/*
+*       Walk down ORECT list and accumulate the union of all the owner
+*       rectangles.
+*/
+        VOID    
+w_union(po, pt)
+        REG ORECT               *po;
+        REG GRECT               *pt;
+{
+        if (!po)
+          return(FALSE);
+
+        rc_copy(&po->o_x, pt);
+
+        po = po->o_link;
+        while (po)
+        {
+          rc_union(&po->o_x, pt);
+          po = po->o_link;
+        }
+        return(TRUE);
+}
+
+
+/*
+*       Start the window manager up by initializing internal variables.
+*/
+        WORD
+wm_start()
+{
+        REG WORD                i;
+/*      REG WINDOW              *pwin;*/
+        REG THEGLO              *DGLO;
+        REG ORECT               *po;
+        REG LONG                tree;
+
+        DGLO = &D;
+                                                /* init owner rects.    */
+                                                /* or_start();          */
+        rul = (ORECT *) 0;
+        for( i = 0; i < NUM_ORECT; i++ )
+        {
+          DGLO->g_olist[i].o_link = rul;
+          rul = &DGLO->g_olist[i];
+        }
+
+                                                /* init window extent   */
+                                                /*   objects            */
+        bfill(NUM_WIN * sizeof(OBJECT), 0, &W_TREE[ROOT]);
+        w_nilit(NUM_WIN, &W_TREE[0]);
+
+
+        for(i=0; i<NUM_WIN; i++)
+        {
+          DGLO->w_win[i].w_flags = 0x0;
+          DGLO->w_win[i].w_rlist = (ORECT *) 0x0;
+          W_TREE[i].ob_type = G_IBOX;
+        }
+        W_TREE[ROOT].ob_type = G_BOX;
+        tree = ad_stdesk;
+        W_TREE[ROOT].ob_spec = LLGET(OB_SPEC(ROOT));
+                                                /* init window element  */
+                                                /*   objects            */
+        bfill(NUM_ELEM * sizeof(OBJECT), 0, &W_ACTIVE[ROOT]);
+        w_nilit(NUM_ELEM, &W_ACTIVE[0]);
+        for(i=0; i<NUM_ELEM; i++)
+        {
+          W_ACTIVE[i].ob_type = gl_watype[i];
+          W_ACTIVE[i].ob_spec = gl_waspec[i];
+        }
+        W_ACTIVE[ROOT].ob_state = SHADOWED;
+                                                /* init rect. list      */
+        DGLO->w_win[0].w_rlist = po = get_orect();
+        po->o_link = (ORECT *) 0x0;
+        po->o_x = XFULL;
+        po->o_y = YFULL;
+        po->o_w = WFULL;
+        po->o_h = HFULL;
+        w_setup(rlr, 0, NONE);
+        w_setsize(WS_CURR, 0, &gl_rscreen);
+        w_setsize(WS_PREV, 0, &gl_rscreen);
+        w_setsize(WS_FULL, 0, &gl_rfull);
+        w_setsize(WS_WORK, 0, &gl_rfull);
+                                                /* init global vars     */
+        gl_wtop = NIL;
+        gl_wtree = ADDR(&W_TREE[0]);
+        gl_awind = ADDR(&W_ACTIVE[0]);
+        gl_newdesk = 0x0L;
+        gl_ignore = FALSE;
+                                                /* init tedinfo parts   */
+                                                /*   of title and info  */
+                                                /*   lines              */
+        movs(sizeof(TEDINFO), &gl_asamp, &gl_aname);
+        movs(sizeof(TEDINFO), &gl_asamp, &gl_ainfo);
+        gl_aname.te_just = TE_CNTR;
+        W_ACTIVE[W_NAME].ob_spec = ADDR(&gl_aname);
+        W_ACTIVE[W_INFO].ob_spec = ADDR(&gl_ainfo);
+        return( TRUE );
+}
+
+
+/*
+ * Init window colors, then start up the window manager.
+ * This is called by geminit, only at boot time, so that window
+ * color defaults don't get munched when apps are launched, etc.
+ */
+wm_init()
+{
+	REG WORD i;
+
+        for( i=0; i<NUM_ELEM; i++ ) {
+          wtcolor[i] = wbcolor[i] = 0x1101;
+        }
+        wtcolor[W_NAME] |= 0xa0;
+        wtcolor[W_VSLIDE] |= 0x10;
+        wtcolor[W_HSLIDE] |= 0x10;
+
+	wm_start();
+}
+
+
+/*
+*       Allocates a window for the calling application of the appropriate
+*       size and returns a window handle.
+*
+*/
+
+        WORD
+wm_create(kind, pt)
+        WORD            kind;
+        GRECT           *pt;
+{
+        REG WORD                i;
+
+        for(i=0; (D.w_win[i].w_flags & VF_INUSE) && i<NUM_WIN; i++);
+        if ( i < NUM_WIN )
+        {
+          w_setup(rlr, i, kind);
+          w_setsize(WS_CURR, i, &gl_rzero);
+          w_setsize(WS_PREV, i, &gl_rzero);
+          w_setsize(WS_FULL, i, pt);
+          return(i);
+        }
+        return(-1);
+}
+
+
+/*
+*       Opens or closes a window.
+*/
+        VOID
+wm_opcl(wh, pt, isadd)
+        REG WORD                wh;
+        REG GRECT               *pt;
+        WORD            isadd;
+{
+        GRECT           t;
+
+        rc_copy(pt, &t);
+        wm_update(TRUE);
+        if (isadd)
+          w_obadd(&W_TREE[ROOT], 0, wh);
+        else
+          ob_delete(gl_wtree, wh);
+        draw_change(wh, &t);
+        if (isadd)
+          w_setsize(WS_PREV, wh, pt);
+        wm_update(FALSE);
+}
+
+/*
+*       Opens a window from a created but closed state.
+*/
+        VOID
+wm_open(w_handle, pt)
+        WORD            w_handle;
+        GRECT           *pt;
+{
+        wm_opcl(w_handle, pt, TRUE);
+}
+
+
+/*
+*       Closes a window from an open state.
+*/
+
+        VOID
+wm_close(w_handle)
+        WORD            w_handle;
+{
+        wm_opcl(w_handle, &gl_rzero, FALSE);
+}
+
+
+/*
+*       Frees a window and its handle up for use by 
+*       by another application or by the same application.
+*/
+
+        VOID
+wm_delete(w_handle)
+        WORD            w_handle;
+{
+        D.w_win[w_handle].w_flags &= ~VF_INUSE; 
+}
+
+
+/*
+*       Gives information about the current window to the application
+*       that owns it.
+*/
+        WORD
+wm_get(w_handle, w_field, poutwds, pinwds )
+        REG WORD        w_handle;
+        WORD            w_field;
+        REG WORD        *poutwds;
+	WORD		*pinwds;
+{
+        REG WORD	which;
+        GRECT           t;
+        REG ORECT	*po;
+        REG WINDOW      *pwin;
+	WORD		ret,i;
+
+	if ( w_field != WF_DCOLOR )
+          pwin = &D.w_win[w_handle];
+
+	ret = TRUE;
+        which = -1;
+        switch(w_field)
+        {
+          case WF_WXYWH:
+                which = WS_WORK;
+                break;
+          case WF_CXYWH:
+                which = WS_CURR;
+                break;
+          case WF_PXYWH:
+                which = WS_PREV;
+                break;
+          case WF_FXYWH:
+                which = WS_FULL;
+                break;
+          case WF_HSLIDE:
+                poutwds[0] = pwin->w_hslide;
+                break;
+          case WF_VSLIDE:
+                poutwds[0] = pwin->w_vslide;
+                break;
+          case WF_HSLSIZ:
+                poutwds[0] = pwin->w_hslsiz;
+                break;
+          case WF_VSLSIZ:
+                poutwds[0] = pwin->w_vslsiz;
+                break;
+          case WF_TOP:
+                poutwds[0] = (gl_wtop == -1) ? 0 : gl_wtop;
+                break;
+          case WF_FIRSTXYWH:
+          case WF_NEXTXYWH:
+                w_getsize(WS_WORK, w_handle, &t);
+                po = (w_field == WF_FIRSTXYWH) ? pwin->w_rlist : pwin->w_rnext;
+                w_owns(w_handle, po, &t, &poutwds[0]);
+                break;
+          case WF_SCREEN:
+                gsx_mret(&poutwds[0], &poutwds[2]);
+                break;
+          case WF_NEWDESK:
+		if ( gl_newdesk )
+		{
+		  *((LONG*)&poutwds[0]) = gl_newdesk;
+		  poutwds[2] = gl_newroot;
+		}
+		else
+		{
+		  *((LONG*)&poutwds[0]) = gl_wtree;
+		  poutwds[2] = 0;
+		}
+		break;
+
+          case WF_COLOR:		/* 7/8/92 */
+		poutwds[1] = pwin->w_tcolor[pinwds[0]];
+                poutwds[2] = pwin->w_bcolor[pinwds[0]];
+                break;
+
+          case WF_DCOLOR:		/* 7/8/92 */
+		poutwds[1] = wtcolor[pinwds[0]];
+                poutwds[2] = wbcolor[pinwds[0]];
+		break;
+
+	  case WF_OWNER:
+	       poutwds[0] = pwin->w_owner->p_pid;
+	       poutwds[1] = 0;	
+
+	       for ( i = 0; i < NUM_WIN; i++ )
+	       {
+		 if ( W_TREE[i].ob_next == NIL )
+		   break;
+
+		 if ( W_TREE[i].ob_next == w_handle )
+		 {
+		   poutwds[1] = 1;
+		   poutwds[3] = i;	/* window on bottom */
+		   poutwds[2] = W_TREE[w_handle].ob_next;/* window on top */	
+		   break;
+	         }
+	       }	 		
+		
+	       break;
+	  default:
+	       ret = FALSE;
+        }
+
+        if ( which != -1 )
+          w_getsize(which, w_handle, &poutwds[0]);
+	
+	return( ret );
+}
+
+
+/*
+*       Allows application to set the attributes of
+*       one of the windows that it currently owns.  Some of the
+*       information includes the name, and the scroll bar elevator
+*       positions. 
+*/
+
+	VOID
+wm_set(w_handle, w_field, pinwds)
+        REG WORD                w_handle;
+        REG WORD                w_field;
+        REG WORD                *pinwds;
+{
+        WORD            value, which;
+        REG WORD                sl, sz;
+        WORD            sp, mn, wsl;
+        GRECT           t;
+
+        REG WINDOW              *pwin;
+
+        pwin = &D.w_win[w_handle];
+        
+        which = -1;
+                                                /* grab the window sync */
+        wm_update(TRUE);
+        switch(w_field)
+        {
+          case WF_NAME:
+                which = W_NAME;
+                break;
+          case WF_INFO:
+                which = W_INFO;
+                break;
+          case WF_CXYWH:
+                draw_change(w_handle, &pinwds[0]);
+                break;
+          case WF_TOP:
+                if (w_handle != gl_wtop)
+                {
+                  gl_wasclr = !(pwin->w_flags & VF_BROKEN);
+                  ob_order(gl_wtree, w_handle, NIL);
+                  w_getsize(WS_CURR, w_handle, &t);
+                  draw_change(w_handle, &t);
+                }
+                break;
+          case WF_IGNORE:
+                if (w_handle)
+                {
+                                                /* no more redrawing    */
+                                                /*   for a while        */
+                  gl_ignore = TRUE;
+                }
+                else
+                {
+                                                /* start redrawing      */
+                                                /*   again given this   */
+                                                /*   update rectangle   */
+                  gl_ignore = FALSE;
+                  w_drawdesk(&pinwds[0]);
+                  w_update(0, &pinwds[0], 0, FALSE);
+                }
+                break;
+          case WF_NEWDESK:
+                gl_newdesk = *(LONG *) &pinwds[0];
+                gl_newroot = pinwds[2];
+                break;
+          case WF_HSLSIZ:
+          case WF_VSLSIZ:
+          case WF_HSLIDE:
+          case WF_VSLIDE:
+                pinwds[0] = max(-1, pinwds[0]);
+                pinwds[0] = min(1000, pinwds[0]);
+                if ( (w_field == WF_HSLSIZ) ||
+                     (w_field == WF_HSLIDE) )
+                {
+                  if (w_field == WF_HSLSIZ)
+                  {
+                    sz = pwin->w_hslsiz = pinwds[0];
+                    sl = pwin->w_hslide;
+                  }
+                  else
+                  {
+                    sl = pwin->w_hslide = pinwds[0];
+                    sz = pwin->w_hslsiz;
+                  }
+                  sp = W_ACTIVE[W_HSLIDE].ob_width;
+                  wsl = W_HSLIDE;
+                  mn = gl_wbox;
+                }
+                else
+                {
+                  if (w_field == WF_VSLSIZ)
+                  {
+                    sz = pwin->w_vslsiz = pinwds[0];
+                    sl = pwin->w_vslide;
+                  }
+                  else
+                  {
+                    sl = pwin->w_vslide = pinwds[0];
+                    sz = pwin->w_vslsiz;
+                  }
+                  sp = W_ACTIVE[W_VSLIDE].ob_height;
+                  wsl = W_VSLIDE;
+                  mn = gl_hbox;
+                }
+                if (w_handle == gl_wtop)
+                   w_clipdraw(w_handle, wsl, MAX_DEPTH, TRUE);
+                break;
+
+          case WF_COLOR:
+		if (pinwds[1] != -1)
+                  pwin->w_tcolor[pinwds[0]] = pinwds[1];
+		if (pinwds[2] != -1)
+                  pwin->w_bcolor[pinwds[0]] = pinwds[2];
+                w_clipdraw( w_handle, pinwds[0], MAX_DEPTH, TRUE );
+                break;
+          case WF_DCOLOR:
+		if (pinwds[1] != -1)
+                  wtcolor[pinwds[0]] = pinwds[1];
+		if (pinwds[2] != -1)
+                  wbcolor[pinwds[0]] = pinwds[2];
+                break;
+        }
+        if (which != -1)
+          w_strchg(w_handle, which, pinwds[0], pinwds[1]);
+                                                /* give up the sync     */
+        wm_update(FALSE);
+}
+
+
+/*
+*       Given an x and y location this call will figure out which window
+*       the mouse is in.
+*/
+
+        WORD
+wm_find(x, y)
+        WORD            x, y;
+{
+        return( ob_find(gl_wtree, 0, 2, x, y) );
+}
+
+
+/*
+*       Locks or unlocks the current state of the window tree while an 
+*       application is responding to a window update message in his message
+*       pipe or is making some other direct screen update based on his current
+*       rectangle list.
+*/
+        VOID
+wm_update(beg_update)
+        REG WORD                beg_update;
+{
+        if ( beg_update < 2)
+        {
+          if ( beg_update )
+          {
+            if ( !tak_flag(&wind_spb) )
+              ev_block(AMUTEX, ad_windspb);
+          }
+          else
+            unsync(&wind_spb);
+        }
+        else
+        {
+          beg_update -= 2;
+          take_ownership( beg_update );
+        }
+}
+
+/*
+*       Given a width and height of a Work Area and the Kind of window
+*       desired calculate the required window size including the 
+*       Border Area.  or...  Given the width and height of a window
+*       including the Border Area and the Kind of window desired, calculate
+*       the result size of the window Work Area.
+*/
+        VOID
+wm_calc(wtype, kind, x, y, w, h, px, py, pw, ph)
+        WORD            wtype;
+        REG UWORD               kind;
+        WORD            x, y, w, h;
+        WORD            *px, *py, *pw, *ph;
+{
+        REG WORD                tb, bb, lb, rb;
+
+        tb = bb = rb = lb = 1;
+        
+        if ( kind & (NAME | CLOSER | FULLER) )
+          tb += (gl_hbox - 1);
+        if ( kind & INFO )
+          tb += (gl_hbox - 1);
+
+        if ( kind & (UPARROW | DNARROW | VSLIDE | SIZER) )
+          rb += (gl_wbox - 1);
+        if ( kind & (LFARROW | RTARROW | HSLIDE | SIZER) )
+          bb += (gl_hbox - 1);
+                                                /* negate values to calc*/
+                                                /*   Border Area        */
+        if ( wtype == WC_BORDER )
+        {
+          lb = -lb;
+          tb = -tb;
+          rb = -rb;
+          bb = -bb;                                             
+        }
+        *px = x + lb;
+        *py = y + tb;
+        *pw = w - lb - rb;
+        *ph = h - tb - bb;
+}
+
+
+/*      Close all the windows and clean up the  */
+/*      window update semaphore                 */
+/*      This routine is very critical, so don't */
+/*      call it when you are not sure.          */
+/*      You must call this guy right after you  */
+/*      return from the child process.          */ 
+/*      Only at this moment the system can be   */
+/*      able to recover itself.                 */
+
+wm_new()
+{
+        REG SPB *sy;
+
+        wm_start();             /* clean up windows     */
+
+        ml_ocnt = 0;            /* reset the semaphore  */
+        gl_mntree = 0x0L;       /* reset menu tree      */
+        gl_mowner = ctl_pd;     /* reset mouse owner    */
+
+        sy = ad_windspb;
+
+        if ( !sy->sy_tas )      /* anybody owning the screen ?  */
+          return;               /* No ..                        */
+                                
+        while( sy->sy_tas )     /* in gemflag.c                 */
+
+          unsync( sy );
+}

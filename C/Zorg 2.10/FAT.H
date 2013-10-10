@@ -1,0 +1,26 @@
+/* fat.c */
+unsigned int	find_place( int drive, unsigned int size, unsigned int max );
+boolean		save_arbo_short( int drive );
+boolean		save_arbo_vfat( int drive );
+boolean		save_dir_short( dir_elt_short arbo[], long table[], long max, int drive );
+boolean		save_dir_vfat( dir_elt_vfat arbo[], long table[], long max, int drive );
+void		from_zorg_inf( boolean zorg );
+void		update_systeme( int drive );
+boolean		change_disque( int drive, boolean verbose );
+boolean		load_FAT( int drive );
+boolean		save_FAT( int drive );
+long		create_file_table( char nom[], long *(table[]), long *size);
+dir_elt_short	*find_file_short( char name[] );
+dir_elt_vfat	*find_file_vfat( char name[] );
+long		create_table( unsigned int first_cluster, long *(table[]), int drive);
+boolean		load_arbo_file( int drive, char *filename );
+boolean		load_dir_file_short( dir_elt_short *(arbo[]), long table[], long max, int drive, unsigned int first_cluster, char *filename );
+boolean		load_dir_file_vfat( dir_elt_vfat *(arbo[]), long table[], long max, int drive, unsigned int first_cluster, char *filename );
+boolean		load_arbo( int drive );
+boolean		load_dir_short( dir_elt_short *(arbo[]), long table[], long max, int drive, unsigned int first_cluster );
+boolean		load_dir_vfat( dir_elt_vfat *(arbo[]), long table[], long max, int drive, unsigned int first_cluster );
+void		free_arbo_short( dir_elt_short *dir );
+void		free_arbo_vfat( dir_elt_vfat *dir );
+BPB			my_getbpb( int drive );
+void		create_map_short( dir_elt_short *dir, dir_elt_short *cluster[], unsigned int fat[] );
+void		create_map_vfat( dir_elt_vfat *dir, dir_elt_vfat *cluster[], unsigned int fat[] );

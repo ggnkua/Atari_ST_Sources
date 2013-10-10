@@ -1,0 +1,74 @@
+;
+; Postchargement et lancement imm‚diat d'un programme
+; Assembleur         	PEXEC.S
+;
+
+gemdos         = 1
+
+crawcin        = 7
+cconws         = 9
+mshrink        = $4a
+pexec          = $4b
+
+
+               SECTION TEXT 
+
+               movea.l    4(sp),a5      ;Donner espace m‚moire
+               move.l     12(a5),d0     ;Longueur du code
+               add.l      20(a5),d0     ;+ Longueur du segment donn‚es
+               add.l      28(a5),d0     ;+ Longueur du segment BSS +
+               addi.l     #$1100,d0     ;Basepage (256 Bytes)+ pile (4KB)
+               move.l     d0,d1         ;Longueur plus
+               add.l      a5,d1         ;adresse
+               andi.l     #-2,d1        ;(arrondie)
+               movea.l    d1,sp         ;donne pointeur pile
+
+               move.l     d0,-(sp)      ;Longueur de l'espace m‚moire n‚cessaire
+               move.l     a5,-(sp)      ;Adresse de la zone m‚moire
+               clr.w      -(sp)         ;octet "dummy" sans importance
+               move.w     #mshrink,-(sp)
+               trap       #gemdos
+               adda.l     #12,sp
+
+               pea        text1         ;Affichage du message
+               move.w     #cconws,-(sp)
+               trap       #gemdos
+               addq.l     #6,sp
+
+               pea        environ       ;Postchargement du programme
+               pea        params
+               pea        filename
+               clr.w      -(sp)         ;Nul -> Charger et lancer imm‚diatement
+               move.w     #pexec,-(sp)
+               trap       #gemdos
+               adda.l     #16,sp
+
+               tst.w      d0            ;Erreur?
+               bmi.s      error
+
+               pea        text2         ;encore un message...
+               bra.s      fin
+
+error:         pea        errtext       ;Affichage du message d'erreur
+fin:           move.w     #cconws,-(sp)
+               trap       #gemdos
+               addq.l     #6,sp
+
+               move.w     #crawcin,-(sp)          ;Attendre appui touche...
+               trap       #gemdos
+               addq.l     #2,sp
+
+               clr.w      -(sp)         ;... et quitter le programme
+               trap       #gemdos
+
+
+               SECTION DATA 
+
+text1:         DC.b 'Ceci est le programme appelant.',13,10,10,0
+text2:         DC.b 'Et revoici le programme appelant.!',13,10,0
+errtext:       DC.b "Une erreur s'est produite!!!",13,10,10,0
+filename:      DC.b 'NOMPRG.TOS',0
+params:        DC.b 0    ;aucun paramŠtre et
+environ:       DC.b 0    ;aucun environnement
+
+               END 

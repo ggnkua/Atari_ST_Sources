@@ -1,0 +1,117 @@
+;
+; Player de modules au DSP - code DSP
+;
+
+; Host
+HSR	equ	$ffe9
+HRX	equ	$ffeb
+HTX	equ	$ffeb
+; SSI
+CRA	equ	$ffec
+CRB	equ	$ffed
+RX	equ	$ffef
+TX	equ	$ffef
+; Interruptions
+IPR	equ	$ffff
+
+
+	org	x:0
+curbuf:	ds	1	; Num‚ro du buffer courant de restitution
+numsam:	ds	1	; Num‚ro du sample
+periode:	ds	1	; P‚riode du sample … mixer
+taille:	ds	1	; Taille du sample … recevoir
+volume:	ds	1	; Volume
+sambuf:	ds	2000	; Buffer de r‚ception des samples
+
+	org	y:0
+mixbuf1:	ds	2000	; Buffers de mixage
+mixbuf2:	ds	2000
+mixbuf3:	ds	1
+
+	org	p:$0
+	jmp	debut
+
+	org	p:$10
+	movep	y:(r4)+,x:<<TX	; Emission SSI
+
+	org	p:$12
+	movep	y:(r4)+,x:<<TX	; Emission SSI avec erreur d'underrun
+
+	org	p:64
+
+debut:
+	move	#mixbuf1,r4
+	move	#mixbuf3-1,m4	; Mode modulo pour r4
+	move	#$ffff,m0
+	move	#$ffff,m5
+	movep	#$4100,x:<<CRA	; Configuration SSI
+	movep	#$5800,x:<<CRB	; Autorise l'envoi de donn‚es sous interruptions
+	movep	#$3000,x:<<IPR	; IPL 3 pour l'interruption SSI
+	clr	a
+	move	a0,x0
+	move	x0,x:curbuf	; Buffer courant en lecture : 0
+
+; R‚ception des samples
+rec_loop:
+	clr	a
+	move	a0,x0
+	move	x0,x:numsam	; Sample 0
+wait_cmd:
+	jclr	#0,x:HSR,*		; Attend une commande de la part du 030
+	move	x:HRX,a0		; a0 = Num‚ro de fonction
+	jset	#0,a0,receive	; Bit 0 : recevoir un sample
+	jset	#1,a0,rec_end	; Bit 1 : fin des samples
+	jmp	wait_cmd
+
+receive:
+	jclr	#0,x:HSR,*
+	movep	x:HRX,x:volume	; Volume
+	jclr	#0,x:HSR,*
+	movep	x:HRX,x:periode	; Re‡oit la p‚riode
+	jclr	#0,x:HSR,*
+	movep	x:HRX,x0		; x0 = Nombre de mots (2 samples) -1 … recevoir
+	jclr	#0,x:HSR,*
+	movep	x:HRX,x1		; Adresse paire ou impaire ?
+	move	#sambuf,r0		; r0 pointe le buffer de r‚ception
+	move	x1,a0
+	move	#$10000,x1
+	tst	a
+	jeq	paire
+	jclr	#0,x:HSR,*		; Adresse 030 impaire, on prend une
+	movep	x:HRX,x0		; donn‚e suppl‚mentaire
+	mpy	x0,x1,a
+	move	a0,x:(r0)+
+paire:				; L… on va vraiment transf‚rer...
+	jclr	#0,x:HSR,*		; Les 2 premiers samples
+	movep	x:HRX,x0
+	mpy	x0,x1,a		; a0 contient le sample 2 en 24 bits
+	move	a1,x0		; a1 sample 1 en 8 bits
+	mpy	x0,x1,b		; b0 sample 1 en 24 bits
+	move	b0,x:(r0)+		; Enregistre le sample 1
+	do	x0,transloop	; Les autres samples
+	jclr	#0,x:HSR,*
+	movep	x:HRX,x0		; 2 samples dans x0
+	mpy	x0,x1,a	a0,x:(r0)+	; // move : m‚morise le sample 2 de la boucle d'avant
+	move	a1,x0
+	mpy	x0,x1,b
+	move	b0,x:(r0)+
+transloop:
+	move	a0,x:(r0)+		; M‚morise le dernier sample...
+	jclr	#0,x:HSR,*
+	movep	x:HRX,a0		; Prend la balance
+
+; Ok c'est bon, on peut mixer !
+
+; Faire tests pour placer r5 sur bon buffer
+
+	clr	a	#>1000,n0	; C'est environ ce qu'il faut pour 1 vbl … 50KHz
+	move	#>0,x1
+	move	x:periode,x0	; x0 : p‚riode
+	move	#>vleft,r1
+	move	x:(r1)+,y1
+	move	#>sambuf,r0	; r0 pointe le buffer de r‚ception
+	do	n0,mixloop
+	move	x:(r0)+,y0		; y0 sample courant
+	mpy	y0,y1,b	x:(r1)-,y1	; b = ‚chantillon gauche
+	mpy	y0,y1,b	x:(r1)+,y1	b1,y:(r5)+
+mixloop:

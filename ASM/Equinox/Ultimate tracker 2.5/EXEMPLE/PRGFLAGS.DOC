@@ -1,0 +1,187 @@
+(Preliminary) documentation for memory protection in MiNT:
+
+Memory protection works on a per-process basis.  Unless it uses the special
+mode bits in Mxalloc, a process' entire text+data+bss and any memory it
+allocates will be of the same type.  There are four types of memory:
+
+	1. Private.  Only the process itself (and the OS) can use the memory.
+
+	2. Global.  This memory is totally unprotected.
+
+	3. Super.  This memory can be accessed by anybody from Super mode.
+
+	4. Private/readable.  Anybody can read, nobody else can write.
+
+By default, all processes load into private memory.  TSRs won't work in
+this kind of memory, but lots of other programs will.  A TSR should have
+its PRGFLAGS set to load into global or super memory.  There are other
+programs which need to grant wider access to their memory space: Gulam is
+one, because Gulam's children can call Gulam through a pointer found in the
+system variable space.  But Gulam is a bad choice of shell anyway, because
+you can't run more than one of them.  Current versions of STeno also must
+grant wider access, because it passes data to STalker using shared memory;
+private/readable is adequate for that.
+
+Programs that load before MiNT does (i.e. in the AUTO folder) will find
+themselves in global memory.  This is the easiest way to be sure that
+your TSRs will go on working: RAMdisks, FOLDR100, CACHE080, etc. all
+work when loaded that way.
+
+Notice that a process can grant wider access to its own address space, but
+it can't change the access permissions of any other process' space. If you
+set the PRGFLAGS of some process so it loads into global memory, that
+doesn't mean it can access anybody else's memory, it just means that
+anybody can access ITS memory.
+
+----------------------------------------------------------------------------
+
+PRGFLAGS for protection:
+
+	The second-least-significant nybble of PRGFLAGS is the default mode
+for your program's memory protection.
+
+	0x00: private memory.  Only you and the AES can touch it.
+	0x10: Global: anybody can touch it.
+	0x20: super: anybody who is supervisor can touch it.
+	0x30: private/readable: anybody can read, nobody else can write.
+
+	Other values are reserved for Atari use and/or future modes.
+
+You can use PRGFLAGS.PRG to change the PRGFLAGS value for any program. From
+the shell, say (for example) "prgflags 0xf0 0x10 myprog.prg" to set
+"myprog.prg" to "global" (0x10).  The way you use PRGFLAGS is to give it
+two numbers, then the program name(s) to operate on.  The first number is
+taken as a mask, and the second as a value: bits which are one in the mask
+will be set to the corresponding bits in the value; bits which are zero in
+the mask will not be changed.  Thus the example sets bits 4-7 to "0001"
+and leaves all other bits alone.
+
+You can specify the protection you want on a region when you Malloc it:
+call Mxalloc(size,mode), where the least-significant nybble of "mode"
+means what it always has, and the next four bits are the desired
+protection mode:
+
+	0x00	default (whatever's in your PRGFLAGS)
+	0x10	private
+	0x20	global
+	0x30	super
+	0x40	readable
+
+	0x4000	NO-FREE (see below)
+
+----------------------------------------------------------------------------
+
+You can use Fopen on u:\proc\*.<pid> to get a file handle to a process.
+Then you can use Fcntl to get and set things about that process.
+
+	#include <osbind.h>
+	#include <mintbind.h>
+	#include <filesys.h>	/* for PBASEADDR and other constants */
+	#include <uproc.h>	/* for struct PROCESS and other things */
+
+	long baseaddr;
+	long ctxtsize;
+	long procaddr;
+	long flags;
+	char buf[14];
+	int fd;
+	PROCESS proc;		/* structure from uproc.h */
+	CONTEXT ctxt;
+
+	sprintf(buf,"u:\\proc\\*.%03d",(int)Pgetpid());
+	fd = Fopen(buf,2);
+
+	Fcntl(fd,&baseaddr,PBASEADDR);
+	    Puts the basepage address of the process in arg.
+
+	Fcntl(fd,&ctxtsize,PCTXTSIZE)
+	    Puts the size of a MiNT context at arg.
+
+	Fcntl(fd,&procaddr,PPROCADDR)
+	    Puts the address of the MiNT process structure for the process
+	    in arg.  To read the process structure do this:
+
+		Fseek(procaddr,fd,0);
+		Fread(fd,sizeof(proc),&proc);
+
+	    To read the user context (registers, etc.) do this:
+
+		Fseek(procaddr-ctxtsize,fd,0);
+		Fread(fd,sizeof(ctxt),&ctxt);
+
+	    To read any part of the memory owned by the process, do this:
+
+		Fseek(addr,fd,0);
+		Fread(fd,size,buffer);
+
+	    This Fread will only work if the region you want to read is in
+	    fact owned by the process that 'fd' refers to.  If the process
+	    terminates, then the handle becomes invalid.
+
+	    If you Fopen process zero (MiNT itself) then you can Fseek to
+	    any address that is managed by MiNT and read or write there.
+	    This is for debuggers and similarly dangerous tools.
+
+	Fcntl(fd,&flags,PGETFLAGS)
+	    Puts the low 16 bits of a process' PRGFLAGS into 'flags'.
+
+	Fcntl(fd,&flags,PSETFLAGS)
+	    Sets the low 16 bits of a process' PRGFLAGS from 'flags'.
+
+----------------------------------------------------------------------------
+
+To review, here are all the defined bits in the PRGFLAGS field of PRG file
+headers, and what they mean:
+
+	BITS	MEANING
+	31-28	This number, plus one, times 128K, is the minimum amount
+		of alternative RAM that is acceptable.  Used when there
+		is more ST RAM than alternative RAM.
+
+	27-14	Reserved; currently unused.
+
+	15	Reserved for the OS. All programs should use zero here.
+
+	14-8	Reserved; currently unused.
+
+	7-4	This is the default memory-protection mode:
+		0=private, 1=global, 2=super, 3=world-readable.
+
+	3	Reserved; currently unused.
+
+	2	When 1, Malloc calls may be satisfied from alternative RAM.
+
+	1	When 1, the program may load into alternative RAM.
+
+	0	When 1, the program loads faster: the heap is not cleared.
+
+And in Mxalloc's "mode" argument...
+
+      	BITS	MEANING
+
+		ALTERNATIVE RAM ELIGIBILITY
+	0-2	0: ST RAM only
+		1: Alternative RAM only
+		2: Either, ST RAM preferred
+		3: Either, alternative RAM preferred
+
+	3:	When set, means "change the protection mode of a region to
+		the protection-mode field."  You may only do this if you
+		own the region; in this case the first argument to Mxalloc
+		is the starting address of the region, as returned from an
+		earlier Mxalloc or Malloc or Pexec (modes 3 and 5) call.
+
+		PROTECTION MODE
+	4-7	0: Default (from your PRGFLAGS)
+		1: Private
+		2: Global
+		3: Super
+		4: World-readable
+		other values are undefined and reserved.
+
+	14	NO-FREE MODE
+		When set, this bit means "if the owner of this region
+		terminates, don't free this region. Instead, let MiNT
+		inherit it, so it'll never be freed."  This is a special
+		mode meant for the OS only, and may not remain available
+		to user processes.

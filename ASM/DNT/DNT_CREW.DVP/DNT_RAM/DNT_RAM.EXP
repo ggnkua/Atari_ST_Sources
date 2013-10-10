@@ -1,0 +1,596 @@
+        Voici les principaux algorithmes utilis‚s pour DNT-RAM,et des d‚tails
+sur leur impl‚mantation.
+        Il peut paraitre bizarre de ne pas avoir mis ces infos dans le source.
+Je l'avais fait,mais le r‚sultat est un d‚sagr‚able encombrement du source.
+Je n'ai donc finalement laiss‚ qu'une seule chose dans le source : les
+commentaires en ligne d‚taillant le pourquoi des instructions.Ces indications
+permettent de faire des modifs plus facilement.Seule la routine copy_disk est
+bourr‚e de commentaires,car c'est une des deux routines les plus dangereuses
+avec reorg_disk (dangereuse pour le ram-disque,puisqu'il y a risque de perte
+des donn‚es en cas de bug).C'est aussi la routine qui m'a donn‚ le plus de
+fil … retordre (ne pas ‚craser les donn‚es que l'on d‚place en m‚moire est
+un art remarquable...que je ne connais pas !).
+
+        Voici donc les diff‚rentes indications de m‚thode:
+
+_La taille (4Ko) allou‚e … la pile pendant l'initialisation peut paraitre
+ d‚mesur‚e,mais c'est n‚cessaire pour pr‚venir certaines configurations
+ m‚moire rarissimes qui entraineraient un d‚bordement de pile dans la fonction
+ Memory_search.En fait,dans le pire des cas 1Ko serait suffisant,mais bon...
+ En effet,si la m‚moire est hyper-morcel‚e,la recherche du plus grand bloc
+ peut provoquer une boucle d'empilage.Mais c'est vraiment une situation
+ difficilement imaginable
+
+_Explication concernant les notations:
+ j'appelle descripteur la zone de variables contenant les infos sur le
+ ram-disque.DNTR correspond au cookie DNTR cr‚‚ par le programme.
+ On s'installe le plus haut possible en m‚moire,en g‚n‚ral sous _memtop si la
+ place est libre,afin de ne pas morceler la m‚moire,et dans l'ordre on trouve
+ le descripteur,les routines et le disque.
+ Lors d'un redimmensionnement,il y a un descripteur r‚sident,ou existant
+ correspondant … l'ancien disque,et un descripteur provisoire correspondant
+ au nouveau disque.L'ancien se trouve sous le ram-disque r‚sident,le
+ provisoire est dans les datas du programme et est recopi‚ ensuite sous
+ le nouveau disque.
+ Quand je dis que quelque chose est en _memtop,cela veut dire que cela
+ se trouve install‚ en haut de m‚moire avec le disque._memtop est
+ donc l'adresse limite de m‚moire utilisateur aprŠs l'installation,
+ Une fois install‚ en _memtop,le bloc utilis‚ a la structure suivante:
+        descripteur
+        my_bpb
+        my_rw
+        my_ch
+        my_reset
+        my_boot
+        disque
+ Ensuite le ram-disque est cet ensemble,le disque d‚signe les donn‚es.
+ 
+_Concernant le calcul de l'adresse du ram-disque:
+ il faut calculer cette adresse … la main,meme si on la connait
+ plus tard lors de l'installation des routines en m‚moire,parce
+ qu'il faut d‚placer les donn‚es du disque avant toute modification
+ m‚moire qui pourrait l'endommager.De meme,aprŠs ce d‚placement du
+ disque en m‚moire,il ne faut plus tenter d'acc‚der au header de l'ancien
+ ram-disque qui a pu etre ‚cras‚ dans le feu de l'action.
+ Ensuite,le disque se trouve 512 octets aprŠs le d‚but de la routine
+ my_boot,elle-meme d‚butant … une adresse situ‚e … k*512 octets en dessous
+ de Phystop.C'est cet arrondi … une adresse multiple de 512 qui est
+ la cause du addi.l #512+... … la ligne 151 (label size4_2)
+ Ce calcul est fait meme si le disque n'est pas r‚sident,parce que
+ on se sert du r‚sultat dans les deux cas.
+ Au moment du calcul,rien n'est install‚ en m‚moire,ce n'est fait que
+ just'aprŠs (pour la raison ‚voqu‚e au d‚but de ce trŠs long paragraphe)
+ Pour ceux qui restent dubitatifs,un sch‚ma pour comprendre.Lors de la 1Šre
+ installation on aura:
+ $0--------------------------------------------------------->$Phystop
+      [Header][my_bpb][my_rw][my_ch][my_reset][512 octets]
+    D7|                                 D0=A0|
+ *arrondi de D0 … 512 prŠs  *           D0=A0|
+ *Encore ‚gal … A0,Ok       *
+
+ *Non,donc rajouter 512     *         D0|  A0|  D0+512|
+ dans ce 2Šme cas,il faut faire ajouter 512 … l'adresse d‚sign‚e par
+ D0 pour rester … k*512 octets de Phystop tout se situant aprŠs my_reset.
+ Par la suite,la localisation totale sera:
+   [Header][my_bpb][my_rw][my_ch][my_reset][x octets][my_boot][disque]
+   |                                                 |       |       |            |
+ ancien Memtop                                                  nouveau Memtop  Phystop
+                                                     <---------k*512 octets------->
+                                                     <--512-->
+ Lors des installations suivantes,idem,mais "ancien Memtop" ne correspond
+ plus … ce qui est indiqu‚.
+ Une petite remarque.Il faut etre … k*512 de phystop.Mais qui dit que phystop
+ est une adresse multiple de 512 (ce que suppose ce calcul) ?.Et bien tout
+ simplement parce que phystop est TOUJOURS une adresse multiple de 512.
+ Pour une raison simple:dans le cas contraire,il y a un plantage total du ST
+ au reset (des tests sont faits par le systŠme pour les routines en soft-boot
+ qui plantent si phystop n'est pas multiple de 512).
+
+_Pour r‚server la m‚moire,on va chercher un bloc m‚moire se situant
+ sous l'ancien ram-disque (on procŠde en demandant le plus grand bloc memoire
+ actuel.On regarde s'il est sous la zone d‚sir‚e.Si c'est le cas on arrete,
+ sinon on reserve ce bloc aprŠs avoir empil‚ son adresse,et on recommence la
+ proc‚dure.On s'arrete s'il n'y a plus de m‚moire libre) OU BIEN le plus haut
+ possible en m‚moire si le disque n'est pas encore install‚ (l'algorithme
+ travaille alors en reservant tous les blocs m‚moire disponibles,et en
+ choisissant le plus haut parmi ceux qui sont assez grand).On prend ce bloc et
+ on le divise:
+      [.....bloc donn‚ par le Gemdos.....]
+  =>  [bloc dummy][..bloc du ram-disque..]
+ On calcul et on reserve le bloc dummy,puis le bloc d‚finitif,et on
+ libŠre le dummy (dont on a aucune utilit‚).
+ Ensuite,on joue sur la variable _run pour faire les r‚servations m‚moire.
+ On change la valeur de cette variable au moment de la r‚servation du bloc
+ contenant notre ram-disque.Et on la restitue aprŠs.En effet _run contient
+ l'adresse de la page de base du programme actif auquel sont attribu‚s les
+ r‚servations.Comme ‡a le Gemdos,qui identifie le propri‚taire d'un bloc
+ m‚moire par sa page de base,consid‚re qu'il n'est pas … vous.Donc le Pterm
+ en fin de programme ne libŠre pas ce bloc.
+ Pouquoi ne pas utiliser PtermRes, qui justement ne libŠre pas les blocs ?
+ Ben parce qu'une fois un bloc d‚clar‚ r‚sident par PtermRes,il n'est plus
+ accessible ! Et donc impossible de redimmensionner le disque.
+ A ce propos un gag fracassant:si vous etes un accessoire ou un programme
+ r‚sident,vous n'etes pas propri‚taire de la page de base.Il s'en suit que si
+ par m‚chancet‚ vous lib‚rez le bloc m‚moire contenant le programme (et com-
+ mencant justement … la page de base point‚ par _run),celui-ci s'auto-d‚truira
+ s'il reserve de la m‚moire,ou fera tout planter au Pterm....Amusant non ?
+
+ _C'est pas tout de reserver la m‚moire lors d'un (re)dimmensionnement,encore
+ faut-il le faire aussi au reset.L…,le problŠme est diff‚rent:il s'agit de
+ trouver le bloc de m‚moire qui contient DNT-RAM.On reserve encore une fois
+ tous les blocs m‚moire que le Gemdos peut donner.On choisi alors le bon
+ bloc de la maniŠre suivante:
+       _ce bloc doit avoir une taille suffisante ~~>D1=Delta(tailles)>=0
+       _son d‚but doit etre situ‚ moins haut (ou ‚gal …) que le decripteur
+        marquant le d‚but du ram-disque ~~>D2=Delta(adresses)>=0
+       _il faut D1-D2>=0 (la fin du ram-disque ne doit pas d‚passer celle du
+        bloc).
+ Le bloc rep‚r‚ est marque par une adresse n‚gative dans la pile.Donc une fois
+ rep‚r‚,il faut faire deux sessions successives de d‚pilement des adresses
+ (labels mb6 ET mb10).
+ En cas d'erreur (pas de bloc nous contenant),le message "DNT-RAM EN ECHEC"
+ apparait.Cela signifie qu'un programme en boot-sector (FDC ou DMA) a r‚serv‚
+ de la m‚moire dans la zone o— se trouve le ram-disque,le mettant en danger.
+ Il faut alors,dŠs l'arriv‚e sur le bureau Gem,tenter de sauvegarder les
+ fichiers pr‚sents dans le ram-disque pendant qu'il en est encore temps.
+ Cette erreur ne devrait JAMAIS se produire,le test n'est pr‚sent que par
+ soucis d'optimalit‚ (‡a se dit,‡a ?).Seul un virus ou un programme bugg‚ peut
+ cr‚er cette situation.
+
+ _Dans tous les cas (dimmensionnement,redimmensionnement,soft-boot),les algo-
+ rithmes employ‚s continuent de reserver de la m‚moire meme si un bloc a d‚j…
+ ‚t‚ choisi.Donc lorsque les processus s'achŠve,le Gemdos est … cours de m‚moi-
+ re.Ensuite,aprŠs que les tests concernant la validit‚ de la recherche se
+ soient r‚v‚l‚s positifs,le premier bloc lib‚r‚ est celui qui a ‚t‚ choisi et
+ not‚.Pourquoi op‚rer ainsi ?
+ Tout simplement pour s'assurer que les op‚rations suivantes,qui concernent la
+ r‚servation DEFINITIVE de la m‚moire pour le ram-disque, s'effectuerons bien
+ dans le bloc s‚lectionn‚,et non pas dans un autre bloc choisi en derniŠre
+ minute par le Gemdos (il ne peut pas le faire,aucun autre bloc n'est libre!).
+ Et donc pour renforcer la s‚curit‚ des processus.Ensuite seulement sont
+ lib‚r‚s les autres bloc (qui sont inutiles).Normalement c'est impossible,mais
+ on est jamais assez prudent.
+ Une autre raison est que l'on d‚termine ainsi la place totale dont dispose le
+ TOS avant le (re)dimmensionnement.Et ce parce que....
+ 
+ _....parce que pendant les reservations m‚moires,il faut regarder si on
+ laisse suffisament de m‚moire pour le systŠme.En effet,le programme ‚tant un
+ programme TTP,le GEM se "retire" avant son ex‚cution,lib‚rant la m‚moire dont
+ il disposait.Si nous formons un ram-disque trop grand,le GEM se retrouvera
+ sans un pet de m‚moire et en sera tout d‚sabus‚ (comprenez que le plantage de
+ votre Atari est imminent).Mieux vaut donc ne pas trop forcer la main et
+ toujours laisser un espace suppl‚mentaire … destination du GEM.
+ J'ai tout d'abord cru … une erreur dans DNT-RAM,mais depuis que j'ai inclu
+ cette limitation relative … la taille disponible pour le systŠme,ce genre de
+ situation a disparu,ce qui prouve que la faute en revient au GEM (incapable
+ de se rendre compte qu'il manque de m‚moire,et incapable de signaler au Gemdos
+ de ne pas donner trop de m‚moire aux applications TOS et TTP).On se rend
+ aussi compte que certains programmes (GENST2 par exemple) se comporte trŠs mal
+ en cas de m‚moire limit‚ (GENST2 ne detecte pas,apparament,que ses buffers
+ sont trop grands et balance des bombes).
+
+ _Pourquoi faut-il installer DNT-RAM en dernier si vous utilisez plusieurs Ram-
+ disques ?.Simplement parce que parmi eux certains se logent en abaissant la
+ variable PHYSTOP.Si DNT-RAM est d‚j… install‚,il va se retrouver au dessus de
+ PHYSTOP,et le TOS n'appelera plus la routine soft-boot qui le rend r‚sident.
+ Vous perdrez ainsi la possibilit‚ d'acc‚der aux fichiers stock‚s dans DNT-RAM.
+ DNT-RAM par contre ne les empechera pas de se rendre r‚sident s'il est instal-
+ l‚ en dernier.Le seul problŠme,c'est qu'il risque d'etre ‚cras‚ au moment du
+ reset (… cause de l'abaissement de PHYSTOP)...En gros,‚vitez ce genre de
+ programmes !!
+ Au contraire,si vous installez un ram-disque provisoirement,en compl‚ment de
+ DNT-RAM,en ayant l'intention de le d‚connecter une fois votre travail achev‚,
+ il vaut mieux installer DNT-RAM en premier lieu.En effet,il s'installe le +
+ haut possible en m‚moire.Si un ram-disque est d‚j… install‚ en haut,DNT-RAM
+ s'installera en dessous.Et lorsque le ram-disque compl‚mentaire sera enlev‚
+ (manuellement ou par un reset),DNT-RAM se retrouvera au milieu de la m‚moire,
+ la coupant en deux.Ca ne gene pas son fonctionnement,mais celui de programmes
+ ayant besoin de gros blocs de m‚moire (qui en trouveront deux moyens de chaque
+ cot‚ de DNT-RAM).
+
+ _Revenons en d‚tail sur les manips de _run.Cette variable systŠme pointe sur
+ la page de base de processus actuel.Il faut la changer pour que le Gemdos ne
+ d‚truise pas notre bloc lors d'un Pterm.Mais pendant ce changement,on fait
+ des appels … Gemdos,qui se sert de la page de base pour sauver des registres.
+ Donc contrairement … ce que je faisait dans la version 1.0,il ne faut pas
+ mettre n'importe quoi dans _run pendant le changement.Merci … JACQST de m'
+ avoir signal‚ cette erreur grossiŠre en constatant des bugs sur MegaSTE.
+ Il faut donc avoir une page de base qui n'est pas la notre.
+ DeuxiŠme chose,actuellement le Gemdos ne regarde pas (pendant les Mfree et
+ autres Mshrink) si vous etes propri‚taire du bloc que vous manipulez.Donc
+ on pourrait … la limite mettre une adresse variable comme page de base
+ fictive.Mais si un jour le Gemdos devient plus exigeant,DNT-RAM ne marcherait
+ plus.
+ Conclusion:aprŠs plusieurs recherches,j'ai choisi la zone $51E-$5A4 pour
+ servir de page de base (seuls les 128 premiers octets peuvent etre modifi‚s
+ par le Gemdos).C'est une zone de variables systŠme trŠs importantes,trŠs
+ utilis‚es aussi.Donc immuable.
+ Mais cela impose une gymnastique disgratieuse:sauvegarder la valeur des ces
+ variables,et surtout passer en IPL7 afin d'empecher quiconque de tenter un
+ accŠs aux fonctions I/O du TOS (qui sont vectoris‚es dans la zone choisie).
+ Voil… l'explication de la fonction swap_BIOS.C'est une manoeuvre l‚gale
+ tout en ‚tant un peu frauduleuse (l‚gale car les vecteurs du BIOS sont
+ r‚install‚s imm‚diatement,frauduleuse car cette manoeuvre est contraire au
+ fonctionnement multi-applications de l'AES).En gros,c'est une manoeuvre mal
+ polie envers le TOS,mais on s'excuse tout de suite et le TOS n'en tient pas
+ rigueur.Cette manoeuvre est inoffensive avec les versions actuelles du GEM
+ qui n'est pas multi-tache et n'est multi-applications que lors d'appels …
+ l'AES (ce qui n'a pas lieu dans DNT-RAM).Sur de futures versions multi-taches
+ du GEM,je ne peux par contre pas me prononcer (de toute facon,c'est pas
+ demain la veille qu'on verra un GEM multi-tache,et ce jour l… il faudra
+ reprogrammer tous les Ram-disque r‚sidents actuels qui manipulent soit _run
+ soit directement les listes Gemdos (encore plus dangereux !),car le Gemdos
+ sera lui aussi multi-tache...donc bon nombre de variables systŠme deviendront
+ interdites !!!.ArrŠtons-l… la science fiction concernant le GEM,et profitons
+ des facilit‚s du systŠme actuel)
+
+ _Continuons avec un poil de th‚orie sur les disques.Un disque comporte dans
+ l'ordre :      _Un secteur de boot
+                _2 FAT (plan de la disquette)
+                _1 r‚pertoire principal (sommaire de la disquette)
+                _Les donn‚es (fichiers,programmes,sous-r‚pertoires)
+ Les FATs sont le point le plus important d'un disque.Le catalogue indique en
+ effet pour chaque fichier le No de son 1er cluster (la premiŠre page du
+ chapitre) sur le disque.Ensuite,grace … la FAT,on sait quelle est la 2Šme
+ page,puis la 3Šme,etc...La FAT est un tableau dont les 2 premiers emplacement
+ sont r‚serv‚s au systŠme,et qui marche comme suit:
+        _Le cluster qui suit le cluster x dans un fichier est le cluster
+        FAT[x]
+ On connait donc les clusters de proche en proche.Ces infos sont si importantes
+ qu'elles sont doubl‚es (les deux FATs sont identiques,l'une secourant l'autre
+ en cas de d‚faillance du disque).
+ Comme dit plus haut,les 2 premiers emplacements sont r‚serv‚s.Donc les deux
+ premiers clusters sont inexistant,la num‚rotation commence … 2.D'ou les
+ manipulations dans le programme (addq #2,...).Ensuite,le cluster 2 correspond
+ au 1er secteur de donn‚es du disque.Donc il y a une diff‚rence (un offset) …
+ rajouter au No de cluster pour obtenir le No de secteur concern‚.Cet offset
+ est ‚gal …     (1+FAT_size*2+root_size)
+ (Nb:sur les disquettes habituelles,un cluster occupant deux secteurs,la
+ correspondance est secteur=2*cluster+offset).
+ Une derniŠre chose concernant les FATs.
+ Elles sont cod‚es sur 16 bits (ou 12 bits,au choix,mais lire et ‚crire au
+ format 12 bits est franchement p‚nible) au format Intel (c'est le Tos qui
+ code au format Intel,comme le Ms-dos).Le format Intel,c'est pour un mot (2
+ octets) d'abord le poids faible puis le poids fort (l'inverse du format
+ Motorola).D'ou certaines manips un peu gluantes … coup de ror.w #8  pour
+ faire les conversions.Une FAT en 16 bit permet l'utilisation de 2^15=16384
+ clusters,alors que du 12 bits est limit‚ … 2^11=2048 clusters.
+ Toutes ces structures sont identiques,que ce soit sur disquette,disque dur
+ ou Ram-disque (ces entit‚s sont identiques pour le Gemdos,seule la maniŠre de
+ les piloter change)
+ [Nb:vive les math‚matiques modernes !!!!!.Au derniŠres nouvelles 2^15=32768
+  Encore une fois j'ai honte]
+
+_Maintenant,regardons le fonctionnement de copy_disk.
+ Cette fonction se charge de d‚placer le disque en m‚moire et de changer les
+ FATs.Il faut d‚j… distinguer les cas mont‚e ou descente des donn‚es,histoire
+ d'‚viter les bugs primitifs...
+        _Pour le cas d'une descente des donn‚es,donc un agrandissement du
+        disque,les FATs sont forc‚ment conserv‚es/augment‚es en taille.On
+        commence par copier le boot-sector+la premiere FAT.Ceci fait,on
+        duplique cette nouvelle premiere FAT dans la deuxieme FAT du disque
+        en cours de cr‚ation:
+                [boot][FAT1][FAT2][......][boot][FAT1][FAT2][...]
+                |                        |
+            nouveau disque           ancien disque
+        Si l'ancien disque est trop pres du nouveau,et si on copiait old:FAT1
+        dans new:FAT2 et new:FAT1 … la fois,on risquerait de d‚truire old:FAT1
+        au passage.Donc old:FAT1->new:FAT1 puis new:FAT1->new:FAT2
+        AprŠs cela,on efface le reste de new:FAT1 et new:FAT2 (le nouveau
+        disque est plus grand que l'ancien,ses FAT sont donc >= en
+        taille).Cette op‚ration ne peut pas d‚truire de donn‚es du disque,
+        car il faudrait que les nouvelles FATs soient plus grandes que les
+        l'anciennes tout en d‚butant … la meme adresse,ce qui est impossible.
+        Puis on copie le contenu utilis‚ du disque,sans oublier le
+        root-dir (c'est … dire le r‚pertoire principal).
+        _Pour une mont‚e des donn‚es,on procŠde dans l'ordre inverse.
+        On commence par copier depuis sa fin utile le disque.Ensuite
+        on copie old:FAT1 dans new:FAT1&2.Comme les nouvelles FATs sont plus
+        petites,on se base sur leur taille (on sait que ce que l'on ignore
+        des anciennes FAT est inutilis‚,car il y  eu r‚organisation du disque)
+        pour la copie).Puis on termine par le boot-sector (… faire en dernier)
+ C'est tout pour le d‚placement du ram-disque.Un beau sch‚ma polychrome aurait
+ surement ‚clair‚ mes propos,mais bon...
+
+_Concernant la r‚organisation du disque virtuel.L'algorithme se d‚compose
+ en trois partie distincte,histoire d'etre plus clair et plus facile …
+ programmer:la technique utilis‚e consiste … prendre tous les fichiers
+ un par un,et de noter s‚quenciellement le cluster qu'ils occupent.Ensuite,
+ par permutations successives on va se d‚brouiller pour qu'un fichier soit
+ dans l'ordre sur le ram-disque.C'est assez brutal,mais comme on travaille
+ en m‚moire,ca va vite (120Ko/Sec environ si le disque est totalement d‚-
+ sorganis‚,et le code n'est pas optimis‚).Evidement,c'est inapplicable pour
+ un disque dur (enfin je pense),parce que bonjours le temps n‚cessaire (un
+ MEGAFILE30 remplit … rabord,cela nous fait donc a peu pres 30Mo=32000 clusters
+ donc 32000 permutations dans le cas d‚favorable,donc 64000 accŠs disque...hum,
+ prenez votre temps [Rectif:apparemment,le programme CHKDISK de ATARI Corp se
+ sert d'un algorithme ‚quivalent,donc c'est finalement pas si mauvais que ‡a
+ comme m‚thode,meme si ‡a rame un maximum]).
+ Voil… le d‚tail des trois passes:
+       _Lecture de la FAT pour cr‚er une table d'‚quivalence (nomm‚e new_FAT)
+        On procŠde comme suit:pour chaque entr‚e (fichier ou sous-r‚pertoire)
+        trouv‚e,on repŠre les clusters qu'elle occupe.On possŠde son cluster
+        start,la FAT du disque indique alors la liste des clusters occup‚s:
+        x=2;
+        POUR toutes les entr‚es
+                cluster_courant=start;
+                FAIRE
+                        new_FAT[x]=cluster_courant;
+                        cluster_courant=old_FAT[cluster_courant]; (=lecture de
+                                                                l'ancienne FAT)
+                        x++;
+                TANTQUE cluster_courant<>ffff;
+                Neg new_FAT[x-1];            (signale fin de l'entr‚e)
+        FINPOUR;
+        A la fin de ce processus,new_FAT contient donc … la case x un num‚ro
+        de cluster.
+       _Cr‚er la nouvelle FAT sur le disk … partir de new_FAT en faisant:
+        x=2;
+        FAIRE
+                SI new_FAT[x]<0 alors
+                      old_FAT[x]=$FFFF;
+                SI new_FAT[x]=0 alors
+                      old_FAT[x]=0;
+                SINON old_FAT[x]=x+1;
+                FINSI;
+                x++;
+        TANTQUE x<x_max;
+        Donc les fichiers sont,sur le disque,bel et bien r‚partis dans l'ordre
+        comme on le voulait.Cette r‚partition est pour le moment virtuelle.
+       _Proc‚der aux ‚changes de secteurs:Il faut que le cluster indiqu‚
+        dans new_FAT[x] se retrouve dans cluster x sur le disque.
+        x=2;
+        REPETE
+                y=new_FAT[x];
+                SI x<>y
+                        Echange les clusters x et y
+                        POUR z>x
+                                SI new_FAT[z]=x alors new_FAT[z]=y;
+                        FINPOUR;
+                FINSI;
+                x++;
+        TANTQUE x<=x_max;
+        Si x=y,y'a pas besoin de faire un ‚change.Si par contre x<>y,on va
+        ‚changer les clusters correpondants.Ensuite,on regarde si new_FAT
+        contient x.En effet,maintenant que les deux clusters sont ‚chang‚s,
+        x correspond … y.
+ Voil…,un fois ces trois ‚tapes achev‚es,le disque est r‚organis‚.
+
+ _Maintenant,le principe du soft-boot.Il s'agit d'une (ou plusieurs) routines
+ d‚tect‚es par le systŠme lors du reset,et qui sont ex‚cut‚es just'aprŠs les
+ routines en FDC-boot et ACSI-boot (boot disquette et disque dur respective-
+ ment).Pour etre ex‚cutables,il faut qu'elles repondent aux critŠres suivants:
+       _Situ‚es … une adresse multiples de 512 sous PHYSTOP ($42E)
+       _Comportant une entete constitu‚e d'un mot-long magique ($12123456),
+        suivi d'un pointeur sur le mot-long magique.Ensuite vient la routine
+        elle-meme
+       _La somme de controle 16 bits des 256 mots situ‚s … partir du mot-long
+        magique (inclu) doit etre ‚gale … $5678
+
+ _Maintenant,une petite pr‚cision concernant la sauvegarde de l'horloge
+ La m‚thode utilis‚e pour l'horloge est de demander l'heure au XBIOS,qui en
+ fait la demande au processeur-clavier.Celui ne r‚initialise pas son horloge
+ quand il recoit l'ordre reset,donc une fois fix‚e,elle est permanente.
+ De plus,le TOS ne la force pas au reset comme il le fait pour l'horloge
+ Gemdos.Ensuite,il suffit simplement de faire un appel … Tsetdate+Tsettime.
+ Une autre m‚thode consiste … demander l'heure au Gemdos pendant la routine
+ reset,alors que le Gemdos n'est pas initialis‚,et de la restituer dans
+ my_boot.
+ Ces 2 m‚thodes se valent,la deuxiŠme ‚tant ma pr‚f‚r‚e,plus sure d'un point
+ de vue compatibilit‚ avec de nouveaux TOS.Malheureusement elle est beaucoup
+ plus dangereuse (elle prend plus de place,et surtout l'heure Gemdos ou le
+ Gemdos lui meme peut etre d‚truit ou d‚tourn‚ au moment du reset).
+ Pour etre plus pr‚cis encore,lors du reset,le TOS initialise le Gemdos (ses
+ pointeurs internes,etc...) puis place comme date celle du systeme.Ensuite,il
+ regarde s'il y a une horloge permanente,si oui alors il initialise l'heure et
+ la date.Toutes ces modifications se font directement,sans passer par Tsetdate
+ ou Tsettime,donc sans ‚craser l'heure du clavier => la m‚thode employ‚e est
+ bonne.Et il est peu probable que cette s‚quence d'initialisation change,elle
+ est la meme depuis le TOS 1.0 jusqu'aux derniers TOS.Ensuite,si jamais l'heure
+ clavier ‚tait ‚cras‚e sur un nouveau TOS,l'option horloge serait simplement
+ inutile,mais DNT-RAM continuerait … marcher.
+
+ _Un petit d‚tour du cot‚ du reset:comme tout programme propre,DNT-RAM utilise
+ le chainage des routines reset,avec une restriction quand meme: AprŠs l'
+ installation de DNT-RAM,le reset est d‚tourn‚.Maintenant,modifions la taille
+ du disque.La routine change d'adresse.ProblŠme:si entre temps un autre
+ programme a chain‚ la 1Šre adresse reset,qui n'existe plus aprŠs le
+ redimmensionnement,le plantage est imminent!
+ Seul remŠde: ‚craser le chainage reset (=consid‚rer que l'on est la seule
+ routine en reset) pendant le redimmensionnement si on d‚tecte une routine
+ ne correspondant pas … notre 1ere adresse reset.Remarquez,seuls les programmes
+ installant un cookie-jar ont besoin d'une routine reset (… cause des TOS 1.0
+ et 1.2) pour l'‚craser,ce que fait justement celle de DNT-RAM.
+ Le meme problŠme se pose pour la d‚sactivation de DNT-RAM.
+
+ _Il peut sembler inutile de faire appel … FSFIRST avec un nom bizarre en d‚but
+ de la routine auto_install.Pourtant,c'est essentiel,afin de corriger un bug du
+ Gemdos.Pour une raison que j'ignore,si un programme appelle la fonction
+ DSETPATH (Gemdos $3B) dans certaines conditions,celle-ci refuse de marcher.
+ Plus pr‚cis‚ment,prenez une disquette A:\ comportant le dossier TOTO,et un
+ DESKTOP.INF ouvrant la fenetre A:\,votre programme ‚tant sur le r‚pertoire
+ principal (par ex. A:\DUMMY.PRG).Faite reset.Le bureau apparait avec la
+ fenetre A:\.Imm‚diatement lancez votre programme qui va tenter d'ouvrir le
+ dossier A:\TOTO.Refus du Gemdos !!.Par contre,si avant de lancer votre
+ programme vous faites [ESC] ou tout autre op‚ration disque,cela marchera.
+ Bizarre,non ???.Et pourtant..Justement,un appel de ce style avant les appels …
+ DSETPATH permet de passer outre ce bug.Si quelqu'un connait une solution plus
+ ‚l‚gante au problŠme,il sera le bienvenu !.Ce problŠme m'est apparu sur les
+ TOS 1.0 et 1.62,je suppose que les interm‚diaires comportent la meme erreur.
+
+ _Autre chose.Quand on change l'identificateur du ram-disque,ou bien quand on
+ le cr‚e (premiŠre installation,donc),il faut faire l… aussi un FSFIRST.Encore
+ une fois,c'est pour contourner une bizarrerie du Gemdos:il s'emmele les
+ p‚dales lors du premier DSETPATH sur un disque qui vient tout juste d'etre
+ d‚clar‚.Et c'est un remŠde que j'ai trouv‚.Je ne pense pas que ce soit une
+ erreur de ma part,car les memes manipulations marchent ou ne marchent pas
+ selon que le disque est d‚j… reconnu ou qu'il vient d'etre d‚clar‚.Ca,‡a
+ arrive sur TOS 1.62 (je sais pas pour les autres)
+
+ _Le fait de se servir de FSETDTA (au lieu de simplement lire l'adresse
+ actuelle du buffer DTA) permet de contourner un autre bug du Gemdos,qui a des
+ r‚actions bizarres dans de rares cas (merci Feroce Lapin).Quoiqu'en fait en
+ r‚fl‚chissant bien,c'est inutile vu que ca sert pour les accessoires (mais
+ bon,de toute facon ‡a me sert … autre chose,c'est-…-dire … ne pas ‚craser la
+ ligne de commande (sur laquelle est fix‚e la DTA par d‚faut)).
+
+ _Un dernier chapitre concernant les incompatibilit‚s: sont incompatibles avec
+ DNT-RAM,et meme dangereux,les programmes de style Soundtrackers ainsi que tout
+ ce qui ressemble … une d‚mo.Pourquoi ? Simplement parce que ces programmes ne
+ passent pas par le Gemdos pour g‚rer la m‚moire.Ils d‚tectent simplement le
+ type de machine,et effacent toute la m‚moire comme des grands.Conclusion:
+ tout programme r‚sident se trouvant entre eux et le sommet physique de la m‚-
+ moire est ‚cras‚,ce qui est le cas de DNT-RAM et de tous les ram-disques
+ r‚sidents j'ai pu tester (je parle entre autres de Mdisk et de Flexdisc qui
+ eux aussi se font virer comme des malpropres,ainsi que les ram-disques des
+ accessoires multi-fonctions).On peut penser que,puisqu'ils se servent de la
+ limite haute de la m‚moire,en modifiant la variable systŠme Phystop ($42E) on
+ puisse ‚viter le massacre.Et ben non,ils d‚terminent eux meme le sommet de la
+ m‚moire,donc modifier phystop ne sert … rien.En gros,plus mal programm‚s que
+ ce genre de choses,y'a pas !! (du point de vue compatibilit‚,je veux dire).
+ Donc comme je le dis ‚galement dans le fichier DNT-RAM.DOC,testez tous les
+ programmes qui vous semble suspects (c'est … dire les soundtrackers,les d‚mos,
+ et tous les "utilitaires" ressemblant … des d‚mos avec des animations et des
+ sprites dans tous les coins).Certains respectent le systŠme,d'autres pas !
+
+ _Maintenant,une petite le‡on … propos de PHYSTOP,utilis‚e (en ‚criture ou en
+ lecture) par certains programmes.Elle ne devrait pas avoir … etre utilis‚e
+ (le Gemdos est le seul autoris‚ … attribuer de la m‚moire) et ne devrait pas
+ etre modifi‚e.La modifier est d'ailleurs dangereux,… moins de la r‚tablir dans
+ une routine r‚set.Sinon on perd de la m‚moire (32 ko pr‚cis‚ment,la taille de
+ l'‚cran !),et les routines en soft-boot ne sont pas toutes ex‚cut‚es.
+ Signalons que Mdisk utilise ce proc‚d‚ pour etre r‚sident,donc 32Ko sont
+ perdus.Cela a aussi pour cons‚quence (GRAVE !) que si vous lui demandez une
+ taille trop importante,au reset le systŠme se retrouve sans m‚moire (0Ko!).
+ En effet,$42E sert au reset pour positionner l'‚cran (32Ko en dessous de
+ PHYSTOP).Si $42E (abaiss‚ par ces programmes et par Mdisk en particulier) est
+ trop baiss‚,la place entre le d‚but de la m‚moire TPA (_membot) et PHYSTOP
+ sera inf‚rieure aux 32Ko n‚cessaires … l'‚cran,donc le TOS n'aura pas un pet
+ de m‚moire libre et fera planter le Gemdos,ce qui entraine des bombes
+ malvenues en cas de lancement de programmes.
+ Une autre cons‚quence pour nous,si nous sommes install‚ (l‚galement!) en
+ dessous de tels programmes,… cause de l'abaissement de $42E aprŠs le
+ reset le TOS installe l'‚cran au beau milieu de DNT-RAM,ce qui pose des
+ problŠmes....
+ Alors,vous comprenez pourquoi il ne faut pas jouer avec PHYSTOP,maintenant ?
+
+ _Bon,ma gestion du cookie-jar dans les versions ant‚rieures … la 1.4 ayant
+ amen‚ Feroce Lapin au bord de l'appopl‚xie (vive l'orthographe...),je l'ai
+ revu de fond en comble.Il m'a repproch‚ d'imposer mon cookie-jar … moi meme
+ si y'avait assez de place dans l'ancien:maintenant,je ne le fais plus.
+ Il m'a aussi parl‚ d'1 bug stupide lors du reset sur TOS1.2 qui plante
+ le cookie DNTR.Corrig‚ !
+ Je noterai quand meme que j'avais eu la meme id‚e,pour ce qui est d'imposer
+ mon cookie-jar personnel,que le programmeur de Maccel (made in Atari).Et en
+ plus,lui aussi utilise un cookie-jar de 40 ‚l‚ments,comme moi !!.Comme quoi
+ le monde est petit.
+ Dis monsieur,moi aussi je veux devenir programmeur chez Atari...
+ A propos de cookie-jar,il faut,lors de la destruction de DNT-RAM,le conserver
+ car les autres programmes,eux,sont encore l….Donc il faut un petit espace
+ m‚moire pour le cookie-jar ainsi que la routine reset associ‚e.En tout cela
+ prend environ 340 octets.On peut aussi remarquer que si on installe,puis
+ on enleve,puis on remet,puis on installe,etc....DNT-RAM alors les cookie-jar
+ s'accumulent.Mais au premier reset,cela disparait.Et cela ne fait que 3Ko
+ aprŠs 10 aller-retours.
+
+ _Maintenant,concernant les conseils en cas d'utilisation de plusieurs ram-
+ disques en meme temps.Comme je le dis dans le fichier .DOC,il faut d‚connecter
+ les ram-disques dans l'ordre inverse o— ils ont ‚t‚ install‚s.De meme,DNT-RAM
+ ne doit pas etre redimmensionn‚ s'il n'est pas le dernier disque … avoir ‚t‚
+ install‚.Pourquoi?
+ Simplement car les routines de disque sont chain‚s entre les diff‚rents ram-
+ disque.Les 3 vecteurs utilis‚s (hdv_rw,hdv_bpb,hdv_mediach) sont d‚tourn‚ vers
+ les nouvelles routines du disque en cours d'installation.Les anciennes sont
+ conserv‚es et appel‚es si l'appel ne concerne pas le disque.
+ En gros,on place une routine qui appelle parfois l'ancienne.xaminons ce qui
+ se passe avec plusieurs ram-disques (RD1,RD2,...) install‚s:
+ RDn->..->RD2->RD1->SystŠme
+ Si on enlŠve RDn,il va restituer l'ancienne valeur,cad RD(n-1).Tout se passe
+ bien.Mais si on enlŠve RD2,celui-ci restitue ce qui est pour lui l'ancienne
+ valeur,donc RD1.Et hop,tous les autre RD sont expuls‚s de la liste !
+ Meme si RD2 detecte que RDn a ‚t‚ install‚,il ne peut pas le laisser dans la
+ liste,car comment expliquer … RD3 qu'il faut appeler RD1 et non plus RD2 qui
+ n'existe plus ???.
+ Donc en r‚sum‚,ca ne marche pas.Idem pour le redimmensionnement de DNT-RAM:
+ le chainage sera d‚truit,et des disques RDn situ‚s "au-dessus" de lui seront
+ inaccessibles.
+
+ La norme XBRA qui est utilis‚ depuis la version 1.4 permet d'‚viter ce genre
+ de problŠmes,mais … une condition assez contraignante:il faut que les autres
+ programmes soient aussi compatibles XBRA,ce qui est chose rare du cot‚ des
+ ram-disques (la preuve,les 4 premiŠres versions de DNT-RAM ne s'en servaient
+ pas).Donc c'est toujours ‡a de pris,mais c'est pas encore gagn‚.
+
+ _Passons … la fonction de copie de fichiers.Elle est assez classique dans les
+ algorithmes employ‚s (meme si la gestion des prototypes,de la r‚currence et
+ des masques sur les noms de fichiers alourdie un peu l'ensemble).Je signale
+ quand meme que la r‚currence est assur‚e par une sauvegarde des paramŠtres
+ de la DTA.
+ En effet si on entre dans la r‚currence sans sauvegarder la DTA actuelle,les
+ parametres de recherche de fichiers de la g‚n‚ration pr‚c‚dente seront ‚cras‚s
+ et le retour de r‚currence provoquera un arret de l'algorithme (vue que le
+ retour de r‚currence est due … FSNEXT qui ne trouve plus de fichiers,le
+ prochain appel … FSNEXT ne trouvera plus de fichiers/dossiers non plus).Il
+ suffit de sauver la DTA puis de la restituer en sortie de r‚currence pour
+ ‚viter le problŠme (le TOS sauve dans la DTA le prototype (=le critŠre de
+ recherche),le repertoire concern‚,etc... donc la totalit‚ des paramŠtres de
+ recherche).Je suis content de cette m‚thode,mais je crois qu'elle est assez
+ exp‚ditive vis-…-vis du TOS.
+
+ _Ceci s'adresse … ceux d‚sirant ‚tendre les possibilit‚s de DNT-RAM.
+ Par exemple,si cela vous manque,vous pouvez interfacer DNT-RAM avec le Gem,
+ afin d'avoir un truc avec plein de boutons et de machins … cliquer partout !
+ Il suffit de respecter certaines rŠgles de programmation qui sont les
+ suivantes:
+        _n'utilisez pas de code auto-modifi‚,sinon vous poserez des problŠmes
+ aux possesseurs de MegaSTE et de TT.Vous remarquerez que rien n'est auto-
+ modifi‚ dans la pr‚sente version,meme s'il serait localement plus court (et
+ encore...) d'employer cette technique.
+        _La fontion param_check sert … modifier l'affichage selon les options
+ choisies,selon la taille du disque,et enfin … placer les options dans le
+ descripteur du Ram-disque.Pour un interfacage Gem ou bien pour de nouvelles
+ options,ne pas oublier de modifier cette fonction
+        _Les variables sont index‚es sur le registre A6.Pendant une fonction
+ ind‚pendante,vous pourrez faire ce que vous voudrez,mais les fonctions d‚j…
+ existantes considŠrant A6 comme base des variables,il ne faut pas le modifier
+ avant leur appel.En gros,A6=PARAM(pc) est une constante du programme !!
+        _la variable descr_ad(a6) contient l'adresse du descripteur actuel
+ (EN CAS DE RESIDENCE,DONC SI RESIDENT(A6)=$FF,SINON CETTE VARIABLE VAUT ZERO).
+ La plupart des infos importantes pr‚sentes dans ce descripteur sont recopi‚es
+ dans les variables r‚f‚renc‚es en A6.Par exemple,la taille maxi utilisable
+ pour le ram-disque se trouve en  disk_size(a6) ainsi qu'en {descr_ad(a6)+4}.L
+ La seule exception est que pendant l'execution de size_disk,les variables
+ PARAM correspondent au FUTUR ram-disque,et descr_ad(a6) … l'ANCIEN ram-disque.
+        _les fonctions appel‚es depuis l'installation automatique recoivent
+ en A0 l'adresse de la ligne de commande (termin‚e par $0) et en D0 leur num‚ro
+ dans la liste des commandes disponibles.Elles ne peuvent pas renvoyer de
+ messages d'erreur,seulement elle peuvent provoquer un break du programme,
+ par un:
+        addq.l  #4,sp
+        pea     auto_exit(pc)
+        rts
+ … la place d'un simple rts,ce qui garantit un retour correct et propre (…
+ condition bien sur que la pile soit correcte,cad qu'elle est la meme valeur
+ qu'en entrant dans la fonction.Enfin,ceux qui programment m'ont compris)
+ {{{{ NB: y'avait erreur dans les docs pr‚c‚dentes, c'est bien auto_exit(pc)
+ et non pas auto_end(pc).Ca n'a pas d'importance,mais c'est plus logique}}}}
+        _Les fontions appel‚es depuis le "menu" (que cela soit le menu actuel
+ ou bien quoi que ce soit d'autre) attendent en paramŠtre,dans D0,leur num‚ro
+ (cela sert notament pour la gestion des options,afin de ne pas s'emmerder))
+        _je signale au passage que cette facon de passer des paramŠtres est
+ compatible avec le TurboC (en mode naturel).Ce qui facilite par exemple les
+ interfa‡ages avec le Gem,ou bien la confection de fonctions n‚cessitant l'
+ emploi du C .Une prochaine version comportera sans doute un fichier header
+ .H comportant les d‚clarations ANSI n‚cessaires … l'interfa‡age,ainsi que
+ les d‚claration d'exportation de labels pour cr‚er un fichier .O
+        _Un dernier petit d‚tail:tout se passe en superviseur,pour permettre
+ des manips sans jongler entre superviseur et utilsateur.Mais faut quand meme
+ pas oublier de repasser utilisateur lors d'hypoth‚tiques accŠs … l'AES (qui
+ n'appr‚cie pas sinon)
+
+
+
+
+
+
+NulloS//DNT 1991

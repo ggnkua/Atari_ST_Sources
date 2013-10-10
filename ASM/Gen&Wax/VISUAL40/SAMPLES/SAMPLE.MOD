@@ -1,0 +1,5 @@
+IMPLEMENTATION MODULE Sample;
+
+BEGIN
+END Sample.
+

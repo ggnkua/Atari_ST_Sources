@@ -1,0 +1,211 @@
+/***********************/
+/* Header de CATALOG.C */
+/***********************/
+#if !defined(__CATALOG)
+#define __CATALOG
+
+#if !defined (__IMAGE_IO)
+#include "..\tools\image_io.h"
+#endif
+
+#define MARKED_DELETED      '~'
+
+/* Respecter l'ordre alphab‚tique ! */
+#define F_ART         0
+#define F_BMP         1
+#define F_DEGAS       2
+#define F_GIF         3
+#define F_IFF         4
+#define F_IMG         5
+#define F_JPEG        6
+#define F_MAC         7
+#define F_NEO         8
+#define F_PCD         9
+#define F_PCX        10
+#define F_TARGA      11
+#define F_TIFF       12
+#define F_TINY       13
+#define F_XGA        14
+#define F_UNKNOWN    15
+
+#define MAX_CATEGORY        32
+#define CATEGORY_DIVERS      0
+#define CATEGORY_SIZE       16
+
+#define SIZE_COMMENT       100
+
+#define INFO_DATA_RECORD (PATH_MAX+SIZE_COMMENT)
+
+/* Erreurs du catalogue */
+#define ECAT_NOERR             0
+#define ECAT_FILENOTFOUND     -1
+#define ECAT_BADVERSION       -2
+#define ECAT_NOMEMORY         -3
+#define ECAT_SEEK             -4
+#define ECAT_READ             -5
+#define ECAT_WRITE            -6
+#define ECAT_BADINDEX         -7
+#define ECAT_ITEMEXIST        -21
+
+
+/* Entˆte du fichier catalogue */
+typedef struct
+{
+  int      header_size ;
+  int      version ;
+  int      index_record_size ;
+  int      width ;
+  int      height ;
+  long     nb_records ;
+  long     nb_deleted ;
+  char     catalog_name[16] ;
+  char     date[12] ;
+  char     comment[80] ;
+  char     category_names[MAX_CATEGORY][16] ;
+  char     cat_inifile[92] ; /* Extension de default_categorie */
+  char     rfu[900] ;
+  int      default_categorie ;
+  int      shift_start ;
+  int      shift_value ;
+  unsigned save_index:1 ;
+           rfu_flags :15 ;
+}
+CATALOG_HEADER ;
+
+typedef struct
+{
+  char name[16] ;
+  char comment[80] ;
+  char date[12] ;
+  long nb_records ;
+  long nb_deleted ;
+  long nb_1plane ;
+  long size_1p ;
+  long nb_2plane ;
+  long size_2p ;
+  long nb_4plane ;
+  long size_4p ;
+  long nb_8plane ;
+  long size_8p ;
+  long nb_tc ;
+  long size_tc ;
+}
+CATALOG_STATS ;
+
+/* Element du fichier index */
+typedef struct
+{
+  char     name[8] ;      /* Nom image sans l'extension, ni de z‚ro terminal ! */
+  unsigned nbplanes  :3 ; /* Nombre de plans                                   */
+  unsigned format    :4 ; /* Format de l'image                                 */
+  unsigned is_visible:1 ; /* Doit apparaitre dans la liste ?                   */
+           date_time :8 ; /* Encodage date et heure                            */
+  unsigned category_1:5 ; /* Cat‚gorie 1 de l'image                            */ 
+  unsigned category_2:5 ; /* Cat‚gorie 2 de l'image                            */ 
+  unsigned category_3:5 ; /* Cat‚gorie 3 de l'image                            */ 
+           rfu_2     :1 ; /* Usage futur                                       */
+  long     offset ;       /* Offset dans le fichier                            */
+}
+INDEX_RECORD ;
+
+/* Donn‚es sur le filtrage des ‚l‚ments */
+typedef struct
+{
+  unsigned show_all:1 ;    /* Pas de filtre */
+           rfu     :15 ;
+  unsigned long category ; /* Masque de bits pour cat‚gories  */
+  unsigned char planes ;   /* Masque de bits pour les plans   */
+  unsigned int  format ;   /* Masque de bits pour les formats */
+  long          nb_visibles ; /* Nombre d'‚l‚ment visibles aprŠs filtrage */
+}
+CATALOG_FILTER ;
+
+
+extern CATALOG_HEADER catalog_header ;            /* CATALOG_HEADER en cours       */
+extern CATALOG_FILTER catalog_filter ;            /* Filtre en cours               */
+extern INDEX_RECORD   *tab_index ;                /* Pointe le 1 er enregistrement */
+extern char           catalog_name[PATH_MAX+16] ; /* Nom complet du catalogue en cours */
+
+
+/**********************************************************************/
+/* Cr‚ation d'un nouveau catalogue                                    */
+/* En retour :  0 : OK                                                */
+/*             -1 : Impossible de cr‚er le r‚pertoire                 */
+/*             -2 : Impossible de cr‚er les fichiers                  */
+/*             -3 : M‚moire insuffisante                              */
+/**********************************************************************/
+int catalog_new(char *acess_path, char *cat_name) ;
+
+/**********************************************************************/
+/* Ouverture d'un nouveau catalogue                                   */
+/* En retour :  0 : OK                                                */
+/*             -1 : Catalogue introuvable                             */
+/*             -2 : Mauvaise version                                  */
+/*             -3 : M‚moire insuffisante                              */
+/**********************************************************************/
+int catalog_open(char *cat_name, GEM_WINDOW *wprog) ;
+
+/*********************************************************/
+/* Ajout d'une nouvelle image                            */
+/* filename pointe le nom de l'image … ajouter           */
+/* En retour :    0 : OK                                 */
+/*             != 0 : Code compatible avec celui de la   */
+/*                     bibliothŠque IMAGE_IO             */
+/*********************************************************/
+int catalog_add(char *filename, GEM_WINDOW *wprog) ;
+
+/****************************************************/
+/* Fermeture du catalogue pr‚c‚demment ouvert       */
+/* En retour :  0 : OK                              */
+/*             -1 : Impossible de sauver le fichier */
+/*                  d'index (erreur grave)          */
+/****************************************************/
+int catalog_close(void) ;
+
+int  catalog_remove(long index) ;
+void catalog_setrem(char *rem) ;
+void catalog_getstdinfos(long ind, char *nom, char *fmt, char *nplanes) ;
+int  catalog_loadicon(long index, MFDB *out, INFO_IMAGE *inf, char *comment) ;
+void catalog_getfullname(long num_index, char *name) ;
+void catalog_stats(CATALOG_STATS *stats) ;
+int  catalog_addcategory(char *category) ;
+void catalog_setimgcomment(long index, char *comment) ;
+void catalog_getimgcomment(long index, char *comment) ;
+int  catalog_setcategory(long index, int category_id, int category_no) ;
+void sort_index(void) ;
+void catalog_setsaveindex(int flag_save) ;
+void catalog_update(char *text) ;
+void encrypt_datetime(DTA *dta, INDEX_RECORD *rec) ;
+
+#define EH_LINKIMG    0x0001 /* Copier et lier les images  */
+#define EH_SHOWNAMES  0x0002 /* Afficher le nom des images */
+typedef struct
+{
+  /* Donnees sur les vignettes */
+  long first ;
+  long last ;
+
+  /* Donnees sur le tableau */
+  int pc ;
+  int nb_img_per_line ;
+  int nb_img_per_row ;
+  int border_width ;
+  int flags ; /* EH_... */
+
+  /* Donnees sur les pages */
+  char          back_file[PATH_MAX] ;
+  unsigned char back_color[3] ; /* RGB (0...255) */
+  char          page_title[50] ;
+  char          path[PATH_MAX] ; /* Les repertoires mini et img seront creees */
+  char          base_name[7] ;   /* Nom de base pour les pages suivantes %d   */
+  int           num ;            /* Numero de la page a suivre                */
+  char          previous_label[30] ;
+  char          next_label[30] ;
+  char          page_label[30] ;
+}
+CHTML_EXPORT ;
+
+int catalog_ehtml(CHTML_EXPORT *exp, GEM_WINDOW *wprog) ;
+int catalog_setcatini(int cat_ini) ;
+
+#endif

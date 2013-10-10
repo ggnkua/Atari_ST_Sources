@@ -1,0 +1,84 @@
+*
+* grabfont.s
+*
+
+	opt	o+,w-
+
+MAX_CHARS	equ	64
+
+
+	SECTION	TEXT
+
+start
+	lea	picture+34(pc),a0
+	lea	buffer,a1
+
+	moveq	#MAX_CHARS-1,d0
+	moveq	#40,d1
+.char
+OFF	set	0
+	REPT	5
+	move.b	OFF(a0),(a1)+
+OFF	set	OFF+160
+	ENDR
+	addq.w	#1,a0
+	move.w	a0,d2
+	and.w	#1,d2
+	bne.s	.no_bump
+	addq.w	#6,a0
+.no_bump
+	subq.w	#1,d1
+	bne.s	.same_line
+	lea	(7*160)(a0),a0
+	moveq	#40,d1
+.same_line
+	dbf	d0,.char
+
+	bsr	create_file
+	bsr	write_file
+	bsr	close_file
+
+	clr.w	-(sp)		; Exit.
+	trap	#1
+
+
+create_file
+	clr.w	-(sp)
+	pea	filename(pc)
+	move.w	#60,-(sp)
+	trap	#1
+	addq.w	#8,sp
+	move.w	d0,handle
+	rts
+
+write_file
+	pea	buffer
+	pea	(MAX_CHARS*5)
+	move.w	handle,-(sp)
+	move.w	#64,-(sp)
+	trap	#1
+	add.w	#12,sp
+	rts
+
+close_file
+	move.w	handle,-(sp)
+	move.w	#62,-(sp)
+	trap	#1
+	addq.w	#4,sp
+	rts
+
+
+	SECTION	DATA
+
+filename
+	dc.b	'FONT.DAT',0
+	even
+
+picture		incbin	"FONT.PI1"
+
+
+	SECTION	BSS
+
+handle	ds.w	1
+
+buffer	ds.b	(MAX_CHARS*5)

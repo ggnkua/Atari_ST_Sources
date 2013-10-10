@@ -1,0 +1,929 @@
+;NEW-FACE
+;	installation du vbl_replay sur le TRAP #4 !!!!!!
+;	compatible avec MACRO&CO.s
+;	v1.001
+reboucle_size	equ	3000
+dsp_base	equ	$fffffa200
+max_sample	equ	32
+max_pattern	equ	128
+max_voice	equ	8
+nb_max_pattjmp	equ	20
+nbr_bloc	equ	120		;le nombre d'instructions de la boucle
+nbr_saut	equ	1000		;le nbre max de sample/vbl
+color		equ	0
+
+	include	macro.lib
+
+;-----------------------------------------------
+;	initialise le module
+;-----------------------------------------------
+start_player
+	bra	reloc
+	bra	init_module	;et un module suivant. (vaut mieux que le volume soit a ZERO)
+	bra	init_first_time
+	bra	init_int
+	bra	end_player
+	bra	load_dsp_prg
+info_user
+	dc.l	0
+	dc.b	'HELLO GUYS!,thanks for using EXA SOUNDTRACK REPLAY ROUT !'
+	even
+
+Reloc
+	movem.l	d0-a6,-(sp)
+	lea	start_player-$1c(pc),a0	
+	MOVE.L	2(A0),D0
+	ADD.L	6(A0),D0
+	ADD.L	14(A0),D0
+	LEA	$1C(A0),A0
+	MOVE.L	A0,A1
+	MOVE.L	A0,A2
+	MOVE.L	A0,D1
+	ADD.L	D0,A1
+	MOVE.L	(A1)+,D0
+	ADD.L	D0,A2
+	ADD.L	D1,(A2)
+	MOVEQ.L	#0,D0
+.BOUCLE
+	MOVE.B	(A1),D0
+	CLR.B	(A1)+
+	TST.B	D0
+	BEQ.S	.FIN_RELOC
+	CMP.B	#1,D0
+	BEQ.S	.SPECIAL_BRANCH
+	ADD.L	D0,A2
+	ADD.L	D1,(A2)
+	BRA.S	.BOUCLE
+.SPECIAL_BRANCH
+	LEA	$FE(A2),A2
+	BRA.S	.BOUCLE
+.FIN_RELOC
+	movem.l	(sp)+,d0-a6
+	RTS	
+
+init_module	
+	moveq	#-1,d0
+	cmp.w	#'RS',header(a0)
+	beq.s	.noend
+	rts
+.noend
+	moveq	#-2,d0
+	cmp.l	#'1.00',version(a0)
+	beq.s	.noend2
+	rts
+.noend2
+	lea	var_player,a6
+	move.l	a0,ptr_module(a6)
+	bsr	init_themodule	;a1 en entree
+	move.l	ptr_module(a6),a0
+	move.l	#playing,info_user	;adresse_playing
+	st	playing		;arrete le player
+	move.w	vol_g(a0),volume_general	;met le volume maximum (en fonction du module)
+	pea	(a3)
+	bsr	init_chip
+	bsr	init_value
+	moveq	#0,d0
+	move.l	(sp)+,a3
+	rts
+init_first_time
+	bsr	calc_table_saut
+	bsr	init_freq_table
+	bsr	init_table_vitesse
+	bsr	init_sound_config
+	bsr	load_dsp_prog	
+	rts
+init_int
+	bsr save_mfp 
+	bsr run_timera
+	rts
+
+save_mfp
+	movem.l a0-a1,-(sp)
+	lea $fffffa00.w,a0
+	lea mfp_save,a1
+ 	move.l $134.w,(a1)+
+	move.l $70.w,(a1)+
+	move.b $7(a0),(a1)+
+	move.b $9(a0),(a1)+
+	move.b $13(a0),(a1)+
+	move.b $19(a0),(a1)+
+	move.b $1f(a0),(a1)+
+	move.w #$2300,sr
+	move.b	#$12,$fffffc02.w
+	movem.l (sp)+,a0-a1
+	rts
+
+run_timera
+	moveq #0,d0
+	lea $fffffa00.w,a0
+	;movep.w d0,7(a0)
+	move.b #$40,$fffffa17.w
+	bclr #3,$fffffa17.w
+	bset #5,$fffffa07.w
+	bset #5,$fffffa13.w
+	clr.b $fffffa19.w
+	move.b #246,$fffffa1f.w
+	move.b #$7,$fffffa19.w
+	move.l #timer_a,$134.w
+	move.l #vbl_replay,$90.w	;trap #4
+	rts
+
+restore_mfp
+	move.w #$2700,sr
+	lea $fffffa00.w,a0
+	lea mfp_save,a1
+	move.l (a1)+,$134.w
+	move.l (a1)+,$70.w
+	move.b (a1)+,$7(a0)
+	move.b (a1)+,$9(a0)
+	move.b (a1)+,$13(a0)
+	move.b (a1)+,$19(a0)
+	move.b (a1)+,$1f(a0)
+	bset #3,$fffffa17.w
+	bclr #5,$fffffa07.w
+	bclr #5,$fffffa13.w
+	move.W #20000,d0
+atte	nop
+	dbra d0,atte
+	move.w #$2300,sr
+	move.b	#$8,$fffffc02.w
+	rts
+
+;	les interuptions
+
+vbl_replay
+	tst.b	playing
+	bne.s	.no_playing
+	ifne	color
+	move.l	#$000000ff,$fffff9800.w
+	endc
+	bsr	mix_voice
+	ifne	color
+	move.l	#-1,$fffff9800.w
+	endc
+.no_playing
+	;addq.l	#1,$466.w	;inutil de le faire deux foix...
+	rte
+
+timer_a
+	tst.b	playing
+	bne.s	.no_playing
+	ifne	color
+	move.l	#$ff000000,$fffff9800.w
+	endc
+	pea	(a6)
+	lea	var_player,a6
+	subq.b	#1,divise_cpt(a6)
+	bpl.s	.no_read
+	move.b	divise_base(a6),divise_cpt(a6)
+	bsr module_player
+.no_read	
+	move.l	(sp)+,a6
+	ifne	color
+	move.l	#-1,$fffff9800.w
+	endc
+.no_playing
+	rte
+	
+
+
+
+;-----------------------------------------------
+init_value
+	move	#6,speed(a6)
+	move	#-1,sound_pos(a6)
+	move	speed(a6),counter(a6)
+	sf	pt_posbreak(a6)	;nouvelle_position
+	pea	return_from_init(pc)
+	movem.l	d0-a6,-(sp)
+	jmp	init_position(pc)
+return_from_init
+	clr.w	pt_pattdelaytime(a6)
+	clr.w	pt_pattdelaytime2(a6)
+	rts
+;-----------------------------------------------
+
+
+
+;-----------------------------------------------
+init_themodule	
+	lea	s_name(a0),a1
+	move	nb_sample(a0),d0
+	move	#16,d1	
+	btst	#2,info_mus(a0)
+	bne.s	.no_name_sample	
+	add	#22,d1
+.no_name_sample	
+	mulu	d0,d1
+	add.l	d1,a1
+	move.l	a1,_info_pattern(a6)
+;-----------------------------------------------
+	move	nb_pat(a0),d7
+	lea	(a1,d7*2),a2	;arrive sur les position
+	move.l	a2,_position(a6)
+;-----------------------------------------------
+	move	nb_pos(a0),d6
+	btst	#0,info_mus(a0)
+	beq.s	.donnes_8	
+	add	d6,d6	;pour pos 16 bits	
+.donnes_8	
+	lea	(a2,d6),a2
+	move.l	a2,d0
+	addq.l	#1,d0
+	bclr	#0,d0
+	move.l	d0,adresse_pattern(a6)
+	move.l	d0,a3
+;-----------------------------------------------
+	move.l	_info_pattern(a6),a1
+	lea	adresse_pattern(a6),a2
+	move.l	(a2),d2
+	moveq	#0,d1
+	moveq	#0,d0
+	move.b	nb_voix(a0),d0
+	mulu	#6,d0
+	move	d0,d3
+	move	d3,patt_lsize(a6)
+	move	d7,d6
+	subq	#1,d6
+.loop_count
+	move.l	d2,(a2)+
+	move	d3,d0
+	mulu	(a1,d6*2),d0
+	add.l	d0,d2
+	add.l	d0,d1
+	dbf	d6,.loop_count
+	move.l	d2,(a2)+	;fin du dernier pattern
+	add.l	d1,a3
+;-----------------------------------------------
+
+;	longeur de tout les samples.
+	moveq	#0,d0
+	pea	(a3)
+	move	nb_sample(a0),d7
+	ext	d7
+	subq	#1,d7
+	lea	s_name(a0),a1
+.loop_all_sample
+	btst	#2,info_mus(a0)
+	bne.s	.no_text_sample
+	lea	22(a1),a1
+.no_text_sample
+	add.l	4(a1),d0
+	lea	16(a1),a1
+	dbf	d7,.loop_all_sample
+;	d0	
+	move	nb_sample(a0),d7
+	ext	d7
+	mulu	#reboucle_size,d7
+	move.l	a3,a2
+	add.l	d0,a2
+	add.l	d0,a3
+	add.l	d7,a2
+	lsr.l	#1,d0
+	bcc.s	.no_pair
+	move.b	-(a3),-(a2)
+.no_pair
+	lsr.l	#1,d0
+	bcc.s	.no_2pair
+	move.w	-(a3),-(a2)
+.no_2pair
+	move.l	-(a3),-(a2)
+	subq.l	#1,d0
+	bne.s	.no_2pair
+	move.l	(sp)+,a3
+;-----------------------------------------------
+	move.l	a2,a4
+	lea	adresse_sample(a6),a2
+	moveq	#0,d7
+	move	nb_sample(a0),d7
+	subq	#1,d7
+	lea	s_name(a0),a1
+
+loop_all_sample
+	btst	#2,info_mus(a0)
+	bne.s	no_text_sample
+	lea	22(a1),a1
+no_text_sample
+	move.l	a1,(a2)+	;volume	;finet ;s_info...
+	move.l	a3,(a2)+	;debut_sample
+	move.l	a3,d0
+	add.l	d0,8(a1)	;reactualise adresse_restart
+	move.l	4(a1),d0
+	move.l	a3,a5
+	lsr.l	#1,d0
+.loop
+	move.w	(a4)+,(a3)+	;recopie les sample sur sa longeur
+	subq.l	#1,d0
+	bne.s	.loop
+
+	pea	(a4)	
+
+	move.l	8(a1),a5	;loop_start
+	move.l	12(a1),d1	;loop_lengt
+	
+	move.l	#(reboucle_size*2)/3,d2
+	cmp.l	d2,d1
+	blt.s	normal_cas
+
+;------------------------------------
+
+special_cas
+;	size_loop	=3000
+	move.l	a5,a4
+;	on tape le debut du repeat loop
+	tas	3(a1)
+	move.l	#reboucle_size/3,d2	;/3 reboucle size
+.loop	move	(a5)+,(a3)+
+	subq.l	#2,d2
+	bne.s	.loop
+;	on tape la fin du repeat loop
+	move.l	a4,a5
+	add.l	d1,a5	;pointe a la fin du repeat loop	
+	move.l	#reboucle_size/3,d2
+	sub.l	d2,a5
+.loop2	move	(a5)+,(a3)+
+	subq.l	#2,d2
+	bne.s	.loop2
+	move.l	#reboucle_size/3,d2
+	move.l	a4,a5
+.loop3	move	(a5)+,(a3)+
+	subq.l	#2,d2
+	bne.s	.loop3
+	bra.s	suite_copy
+
+;------------------------------------
+
+normal_cas
+	bclr	#7,3(a1)
+	move.l	a5,a4
+	move.l	d1,d2
+	move.l	#(reboucle_size*2)/3,d0		;2000
+.loop
+	move	(a5)+,(a3)+	
+	subq.l	#2,d0
+	beq.s	.next
+	subq.l	#2,d1
+	bne.s	.loop
+	move.l	a4,a5
+	move.l	d2,d1
+	bra.s	.loop
+.next
+suite_copy
+	move.l	(sp)+,a4	;pointeur source
+;------------------------------------
+	lea	16(a1),a1
+	dbf	d7,loop_all_sample
+	rts
+
+;------------------------------------------
+calc_table_saut
+	lea	table_saut(pc),a0
+	moveq	#2,d0
+	move.l	#nbr_bloc,d1
+	move.l	#nbr_saut,d6
+	divu	d1,d6
+	ext.l	d6
+	subq	#1,d6
+	moveq	#0,d3
+_nbr_saut_loop	
+	move	d1,d7
+	subq	#1,d7
+	moveq	#0,d2
+	move	d3,d2
+	swap	d2
+_all_bloc
+	swap	d2
+	move.l	d2,(a0)+
+	swap	d2
+	sub	d0,d2	
+	dbf	d7,_all_bloc
+	addq	#1,d3
+	dbf	d6,_nbr_saut_loop
+	rts
+;------------------------------------------
+
+
+
+
+
+;------------------------------------------------------------		
+;	init son et differente table
+;------------------------------------------------------------		
+
+init_sound_config
+	move.w	#1,-(A7)		protocol
+	move.w	#2,-(A7)		33210 HZ
+	move.w	#0,-(A7)		25175 KHZ
+	move.w	#8,-(A7)		dest=casque/HP
+	move.w	#1,-(A7)		source=emission DSP
+	move.w	#$8B,-(A7)
+	trap	#14
+	lea	12(sp),sp
+	move.w	#0,-(sp)		timer A
+	move.w	#1,-(sp)		playback
+	move.w	#135,-(sp)
+	trap	#14
+	addq.l	#6,sp
+	move.w	#0,-(A7)		;tristate disable dsprec
+	move.w	#1,-(A7)		;tristate enable dspxmit
+	move.w	#$89,-(A7)
+	trap	#14
+	addq	#6,sp
+	rts
+
+end_player	
+	bsr restore_mfp
+	lea	$ffffa200.w,a6
+	move.b	#$80+$13,1(a6)
+	move.w	#1000,d0		
+.loop	tst.b	1(a6)			;Attendre DSP
+	dbpl	d0,.loop		
+	clr.l	$fffffa204.w		
+	move.w	#1,-(A7)
+	move.w	#0,-(A7)
+	move.w	#0,-(A7)
+	move.w	#8,-(A7)
+	move.w	#0,-(A7)
+	move.w	#$8B,-(A7)
+	trap	#14
+	lea	12(sp),sp
+	move.w	#0,-(A7)
+	move.w	#$84,-(A7)
+	trap	#14
+	addq	#4,A7
+;*** keyboard flush
+.C	btst.b	#0,$fffffc00.w		! Keyboard flush ...
+	beq.s	.C1
+	move.b	$fffffc02.w,d0
+	bra.s	.C
+.C1
+	rts
+
+init_chip
+	movem.l d0-a6,-(sp)
+	lea	no_ins,a0
+	move.w	#99,d7
+.C	clr.l	(a0)+
+	dbra	d7,.C
+	lea chipx(pc),a0
+	lea no_ins,a1
+	lea 4(a1),a2
+	move 	#max_voice-1,d0
+.loop_chip
+	lea	4*8(a0),a3
+	clr.w	(a0)+	;volume =0
+	clr.w	(a0)+
+	clr.w	(a0)+
+	move.l a1,(a0)+ ;0
+	move.l #1,(a0)+ ;4
+	move.l a2,(a0)+ ;12
+	move.l #1,(a0)+ ;16
+	clr.l	(a0)+	;s_ptr_sample
+	clr.w	(a0)+	;s_flag_info
+	move.l	a3,a0
+	dbf	 d0,.loop_chip
+	lea	voicex(pc),a5
+	move	#(15*max_voice)-1,d1
+.loop_cls_voice
+	clr.l	(a5)+
+	dbf	d1,.loop_cls_voice
+	movem.l (sp)+,d0-a6
+	rts
+
+
+init_freq_table
+	movem.l d0-a6,-(sp)
+	lea	freq_table,a0
+	moveq	#$4F,d0
+.loop1:	clr.l	(a0)+
+	dbf	d0,.loop1
+	move.w	#900-1,d0
+	moveq	#$50,d1
+	move.l	#$3539d737,d2
+.loop2:	move.l	d2,d4
+	divul.l	d1,d4:d4
+	move.l	D4,(a0)+
+	addq	#1,d1
+	dbf	d0,.loop2
+;	initialiser vitesse entrelac‚e.
+	movem.l (sp)+,d0-a6
+	rts
+
+;*** pour les vitesses entrelac‚es
+init_table_vitesse
+	movem.l d0-a6,-(sp)
+	lea	table_vi,a0
+	clr.w	(a0)+
+	move.w	#254,d7
+	moveq	#1,d0
+.loop	move.l	d0,d1
+	mulu	#50*256,d1
+	divu.l	#$7d,d1
+	move.l	#12288*256,d2
+	divu.l	d1,d2
+	moveq	#0,d3
+.cc	cmp.w	#255,d2
+	ble	.ok
+	lsr.w	#1,d2
+	addq.w	#1,d3
+	bra.s	.cc
+.ok	move.b	d2,(a0)+
+	move.b	d3,(a0)+
+	addq.w	#1,d0
+	dbra	d7,.loop	
+	movem.l (sp)+,d0-a6
+	rts
+
+
+load_dsp_prog
+	pea	dsp_size/3.w	
+	pea	dsp_rout(pc)	
+	move.w	#$6d,-(sp)	
+	trap	#14		
+	lea	10(sp),sp		
+.wc	btst	#3,$fffffa202.w		;on attend la phase d'initialisation DSP
+	beq.s	.wc			
+	rts
+
+load_dsp_prg	;by NULLOS...
+	movem.l	d0-d1/a0,-(sp)	;
+	move.b	#$80+$14,$ffffa201.w	;declenche la host commande...
+.waiting
+	tst.b	$ffffa201.w	
+	bmi.s	.waiting		
+.send	subq.l	#1,a0		
+	move.l	(a0)+,d1	
+.loop	btst	#1,$ffffa202.w	
+	beq.s	.loop		
+	move.l	d1,$ffffa204.w	
+	moveq	#-1,d1		
+	subq.w	#1,d0		
+	beq.s	.loop		
+	bpl.s	.send		
+	movem.l	(sp)+,d0-d1/a0	
+	rts			;
+
+
+
+
+;------------------------------------------------------------		
+;	le MIXER DSP
+;------------------------------------------------------------		
+
+
+;-----------------------------------------
+mix_voice
+	movem.l	d0-a6,-(sp)
+	lea	dsp_base.w,a5
+	lea	6(a5),a3
+	save_host
+
+;------------------------------------------
+	lea	var_player(pc),a6
+	move.l	ptr_module(a6),a0
+	moveq	#0,d1
+	move	inc_volume,d0
+	beq.s	.no_inc
+	move.w	volume_general,d1
+	add.w	d0,d1
+	bpl.s	.no_neg
+	moveq	#0,d1
+	bra.s	.clr_inc_volume
+.no_neg
+	cmp	vol_g(a0),d1
+	ble.s	.no_depass
+	move	vol_g(a0),d1
+.clr_inc_volume
+	clr	inc_volume	
+.no_depass
+	move	d1,volume_general
+.no_inc
+;------------------------------------------
+
+	writhost	#$1	;demarre la routine
+	lea	freq_table,a2
+	clr.w	first_movel(a6)
+	lea	mix_voice_table,a1
+	lea	chipx,a4
+	move.b	nb_voix(a0),d7
+	ext	d7
+	subq	#1,d7
+.loop_all_voice	
+	moveq	#0,d0
+	move.b	(a1)+,d0
+	pea	(a1)
+	bmi	.no_voice_to_mix
+	bne.s	.right_voice
+.left_voice
+	tst.b	first_movel(a6)
+	bne.s	.add_voice	
+	seq	first_movel(a6)
+	bra.s	.move_voice
+.right_voice
+	tst.b	first_mover(a6)
+	bne.s	.add_voice	
+	 seq	first_mover(a6)
+.move_voice
+	or	#$2,d0
+.add_voice
+	writhost	d0	
+;	bit 0  0=>gauche	1=>droite
+;	bit 1  0=>add		1=>move
+;-----------------------------------------
+	moveq	#0,d1
+	move	volume(a4),d1
+	mulu	volume_general,d1	;(0<v<256)
+	writhost	d1
+;-----------------------------------------
+	move	s_period(a4),d1
+	env	2(a5)
+	move.l	(a2,d1*4),4(a5)		;pour la frequence
+;\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+	rec	2(a5)			;test r‚ception
+	move.l	4(a5),d0		;nombre_octet_a_transferer
+	tst.l	d0			
+	beq	.sample_nul	
+	cmp.b	#$fe,s_flag_info(a4)
+	bne.s	.no_start_sample
+	move.l	s_start(a4),s_ptr_sample(a4)
+	st	s_flag_info(a4)	;first_zone
+				; ce flag n'est pas util pour un sample 'normal'
+.no_start_sample
+	move.l	s_ptr_sample(a4),a1
+	add.l	d0,s_ptr_sample(a4)	; repointe EXACTEMENT pour le tour suivant du pointeur de sample
+	lsr.w	d0			;nbre_sample/2 (on envoi 2 par 2) 
+	move.w	a1,d1			;l'adresse de d‚but du sample
+	move.w	d1,6(a5)		;est transmise au DSP
+	btst	#0,d1			;adresse impaire ? 
+	beq.s	.no_impaire_addresse	;( le DSP fait aussi le test )
+	env	2(a5)
+	move.b	(a1)+,5(a5)		;envoie le sample
+	clr.w	6(a5)			;qui est a une adresse impaire
+.no_impaire_addresse
+	move.l	(table_saut+4.l,d0*4),d1	;} envoi le nbre de sample 
+	move	d1,d0				;} demand‚...
+	swap	d1				;} optimisation pour le
+	env	2(a5)				;} cache:
+	jmp	(.end_list.l,d1)		;} 
+.loop_next_bloc					;}
+	rept	nbr_bloc			;} valeur max=127
+	move	(a1)+,(a3)			;} ( 256=2*127+2 )
+	endr					;}
+.end_list					;}
+	dbf	d0,.loop_next_bloc		;}
+	bsr	gestion_one_sample
+.sample_nul
+.cont
+;-----------------------------------------
+.no_voice_to_mix
+	move.l	(sp)+,a1
+	lea	8*4(a4),a4
+	dbf	d7,.loop_all_voice	
+	writhost	#$1234
+	restore_host
+	movem.l	(sp)+,d0-a6
+	rts
+;-----------------------------------------
+gestion_one_sample
+	btst	#7,s_info(a4)	;type de sample.
+	beq	normal_sample_gestion
+	move.l	s_ptr_sample(a4),a0
+	tst.b	s_flag_info(a4)
+	bmi.s	test_firstzone
+	beq.s	test_secondzone
+	move.l	s_start(a4),d0
+	add.l	s_lengt(a4),d0
+	add.l	#(reboucle_size*2)/3,d0
+	sub.l	a0,d0	
+	bpl.s	.no_overflow
+	sf	s_flag_info(a4)	;on repart en seconde zone
+	move.l	s_loopstart(a4),d1
+	sub.l	d0,d1
+	move.l	d1,s_ptr_sample(a4)
+.no_overflow
+	rts
+test_secondzone
+	move.l	s_loopstart(a4),d0
+	add.l	s_looplengt(a4),d0
+	sub.l	#reboucle_size/3,d0
+	sub.l	a0,d0
+	bpl.s	.no_overflow
+	addq.b	#$1,s_flag_info(a4)
+	move.l	s_start(a4),d1
+	add.l	s_lengt(a4),d1
+	add.l	#reboucle_size/3,d1
+	sub.l	d0,d1
+	move.l	d1,s_ptr_sample(a4)
+.no_overflow
+	rts
+test_firstzone
+	move.L	s_start(a4),d0
+	add.l	s_lengt(a4),d0
+	sub.l	a0,d0
+	bpl.s	.no_overflow	
+	addq.b	#$1,s_flag_info(a4)
+	move.l	s_loopstart(a4),d1
+	sub.l	d0,d1
+	move.l	d1,s_ptr_sample(a4)
+.no_overflow
+	rts
+normal_sample_gestion		;compare prec. sample en reboucle_size/2
+	move.l	s_ptr_sample(a4),a0
+	move.L	s_start(a4),d0
+	add.l	s_lengt(a4),d0
+	sub.l	a0,d0
+	bpl.s	.no_overflow	
+	neg.l	d0
+	move.l	s_looplengt(a4),d2
+	divu	d2,d0
+	mulu	d2,d0
+	sub.l	d0,a0
+	move.l	a0,s_ptr_sample(a4)
+.no_overflow
+	rts
+
+
+
+
+
+
+
+
+
+;------------------------------------------------------------		
+;		REAL SOUND PLAYER v1.00			    ;
+;		  255 VOICES  8 bits			    ;
+;		CODE	:	NEW-FACE/EXA		    ;
+;------------------------------------------------------------		
+
+
+;\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+module_player
+	movem.l	d0-a6,-(sp)
+	lea	var_player(pc),a6
+	move.l	ptr_module(a6),a0
+	move	counter(a6),d0
+	addq	#1,d0
+	cmp	speed(a6),d0
+	bge.s	.cont1
+	move	d0,counter(a6)
+	bsr	no_new_channel
+	bra	end_of_player
+.cont1
+	clr.w	counter(a6)
+	tst.w	pt_pattdelaytime2(a6)
+	beq	read_pattern
+	bsr	no_new_channel
+	bra	avance_player
+;\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+
+;\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+no_new_channel
+;------------------------------------
+;	provoque les anciens effets
+;------------------------------------
+	lea	chipx,a5
+	lea	voicex,a4
+	moveq	#0,d7
+	move.b	nb_voix(a0),d7
+	subq	#1,d7
+loop_all_voice2
+	bsr	pt_UpdateFunk
+	move	n_period(a4),s_period(a5)	;envoi periode !!!!!!!!!!!!
+	moveq	#0,d0	
+	move.b	cmd(a4),d0
+	jsr	([pt_check_effects_table.l,d0*4])
+	move.w	n_volume(a4),volume(a5)		;envoi volume	;(sauter pour le tremolo)
+	lea	15*4(a4),a4
+	lea	8*4(a5),a5
+	dbf	d7,loop_all_voice2
+	rts
+
+;\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+
+;\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+;------------------------------------
+;	lit le pattern
+;------------------------------------
+read_pattern
+	move.l	_pattern(a6),a1
+	move	pt_patternposition(a6),d0
+	mulu	patt_lsize(a6),d0
+	add.l	d0,a1
+play_voice
+	lea	chipx,a5
+	lea	voicex,a4
+	moveq	#0,d7
+	move.b	nb_voix(a0),d7
+	subq	#1,d7
+loop_all_voice
+	move.l	(a1)+,cmd(a4)
+	move	(a1)+,i_period(a4)
+	pea	(a1)
+	moveq	#0,d0
+	move.b	inst(a4),d0
+	beq	.inst_nul	;instrument nul?
+;tape le sample
+	subq	#1,d0
+	movem.l	adresse_sample(a6,d0*8),a1-a2	;a2 sample debut
+	move.b	d0,n_samplenum(a4)	;tape le sample
+	move.l	a2,n_start(a4)		;debut sample
+	move.l	(a1)+,n_volume(a4)
+	move.l	(a1)+,n_lengt(a4)
+	move.l	(a1)+,d1
+	move.l	d1,n_loopstart(a4)
+	move.l	d1,n_wavestart(a4)
+	move.l	(a1)+,n_replen(a4)	
+;	voir PROTRACK	(c 1 bordel !!)
+.inst_nul
+	moveq	#0,d0
+	move.b	cmd(a4),d0
+	cmp.b	#$e,d0
+	bne.s	.no_eeffect
+	bsr		pt_filteronoff
+.no_eeffect
+	tst.w	i_period(a4)
+	beq	search_command1	;periode nul?
+;	commande 3 7 9
+	jsr	([pt_read_pattern_table1.l,d0*4])
+	bra.s	check_for_next
+search_command1
+	jsr	([pt_read_pattern_no_note.l,d0*4])
+check_for_next
+	move.l	n_volume(a4),volume(a5)	
+	move.l	n_loopstart(a4),s_loopstart(a5)
+	move.l	n_replen(a4),s_looplengt(a5)	
+	lea	15*4(a4),a4
+	lea	8*4(a5),a5
+	move.l	(sp)+,a1
+	dbf	d7,loop_all_voice
+;\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+
+
+;\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+avance_player
+;--------- pour avancer dans le pattern ----------
+	move	pt_patternposition(a6),d0
+	addq	#1,d0
+;-----------------------------------------
+	move	pt_pattdelaytime2(a6),d2
+	move.w	pt_pattdelaytime(a6),d1
+	beq.s	.pt_dskpc
+	move	d1,d2
+	clr.w	pt_pattdelaytime(a6)
+.pt_dskpc
+	tst	d2
+	beq.s	.no_ptdskpa
+	subq	#1,d2
+	beq.s	.no_ptdskpa
+	subq	#1,d0	
+.no_ptdskpa
+	move	d2,pt_pattdelaytime2(a6)
+	
+;-----------------------------------------
+;	d0=	pt_patternposition(a6)
+;-----------------------------------------
+	tst.b	pt_PBreakFlag(a6)
+	beq.s	.no_break
+	sf	pt_PBreakFlag(a6)
+	move.w	pt_PBreakPosition(a6),d0
+	clr.w	pt_pbreakposition(a6)
+.no_break
+;	fin_pattern?
+	move	d0,pt_patternposition(a6)
+	cmp	patt_size(a6),d0
+	bne.s	end_of_player
+init_position
+next_position
+	move.w	pt_pbreakPosition(a6),pt_PatternPosition(a6)
+	clr.w	pt_pbreakposition(a6)
+	sf	pt_posbreak(a6)
+	move	sound_pos(a6),d0
+	addq	#1,d0
+	move.l	ptr_module(a6),a0
+	cmp	nb_pos(a0),d0
+	bne.s	.no_end_mod
+	moveq	#0,d0
+.no_end_mod
+	move	d0,sound_pos(a6)	;;;
+	move.l	_position(a6),a1
+	moveq	#0,d1
+	move.b	(a1,d0),d1		;;pattern n0
+	move.l	_info_pattern(a6),a1
+	move	(a1,d1*2),patt_size(a6)	;longeur du pattern
+	move.l	(adresse_pattern.w,a6,d1*4),_pattern(a6)
+end_of_player
+	tst.b	pt_posbreak(a6)
+	bne.s	next_position
+	movem.l	(sp)+,d0-a6
+	rts
+
+;\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+
+return
+	rts
+
+mfp_save	ds.l 20
+
+	include	funct.lib	
+	include	var.lib

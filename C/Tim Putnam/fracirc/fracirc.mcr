@@ -1,0 +1,1 @@
+/whois н/version н/ping н/me ннннн/timeнн

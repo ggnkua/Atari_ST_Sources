@@ -1,0 +1,210 @@
+PBC	equ	$ffe0
+HSR	equ	$ffe9
+HTX	equ	$ffeb
+
+	org	p:$0
+	jmp	load
+
+	org	P:$40
+load
+	move	#$ffff,m0
+	move	#$ffff,m1
+	move	#$ffff,m2
+	move	#$ffff,m3
+	move	#$ffff,m4
+	move	#$ffff,m5
+	move	#$ffff,m6
+	move	#$ffff,m7
+	move	#$2,n0
+	jsr	load_palette
+	jsr	clear_ecran
+	move	#$37f,r0
+	move	#$12d45f,y0
+	move	y0,y:(r0)
+start	
+	move	#$1,n4
+	move	#$680,r6	;r6	pointe sur l ecran + 1 ligne
+	move	#$681,r7	;r7 	pointe sur l ecran + 1 pixel
+	move	#$200,r0
+	move	#$380,r1
+	move	#$500,r2
+	move	r1,r3
+	jsr	charge_a_ligne
+	move	r2,r3
+	jsr	charge_a_ligne
+
+	do	#77,fin_loop
+
+	move	r0,r3
+	move	r1,r0
+	move	r2,r1
+	move	r3,r2
+ 	jsr	charge_a_ligne
+	move	r0,r3
+	move	r1,r4
+	move	r2,r5
+	jsr	creer_ligne
+fin_loop	
+	jsr	rempli_aleat
+	jsr	send_data
+
+	jmp	start
+
+charge_a_ligne:
+;--------------
+	do	#322,fin_charge
+	move	p:(r6)+,x1
+	move	x1,y:(r3)+
+fin_charge
+	move	r6,a1
+	move	#0,a2
+	move	n0,x1
+	sub	x1,a
+	move	a1,r6	
+	rts
+
+creer_ligne:
+;-----------
+	move	y:(r3)+,a0
+	move	y:(r5)+,a0	
+	move	#0,a0
+	move	#0,b0
+	move	#0,a2
+	move	#0,b2
+	move	n4,x1			
+
+	do	#320,label2
+	move	y:(r4)+,a1
+	move	y:(r4+n4),b1
+	add	b,a	y:(r3)+,b1
+	add	b,a	y:(r5)+,b1
+	add	b,a		
+	bchg	#4,a1
+	lsr	a
+	lsr	a	
+	jeq	zero	
+	sub	x1,a	
+zero	move	a1,p:(r7)+
+label2
+	rts
+
+load_palette:
+;------------
+	move	#0,r7
+	do	#256,load_pal1
+load_pal2
+	movep	#1,X:PBC		
+	jclr	#0,x:HSR,load_pal2
+	move	x:HTX,a0
+	move	a0,y:(r7)+
+load_pal1
+	rts
+
+
+clear_ecran:
+;-----------
+	move	#$680,r6
+	move	#0,x0
+	do	#3200,fin_clr
+	move	x0,p:(r6)+
+	move	x0,p:(r6)+
+	move	x0,p:(r6)+
+	move	x0,p:(r6)+
+	move	x0,p:(r6)+
+	move	x0,p:(r6)+
+	move	x0,p:(r6)+
+	move	x0,p:(r6)+
+fin_clr
+	rts
+
+rempli_aleat:
+;------------
+	move	#$66c0,r6
+
+	move	#$f,b1
+	move	#$45,b0
+	move	b0,y1
+	move	b1,y0
+
+	do	#640,fin_rempli
+	jsr	nb_aleat
+	and	y0,a
+	add	y1,a
+	move	a1,p:(r6)+
+fin_rempli		
+
+	do	#320,fin_rempli1
+	jsr	nb_aleat
+	and	y0,a
+	add	y1,a
+	add	y1,a
+	move	a1,p:(r6)+
+fin_rempli1		
+	move	#0,b0
+	move	#0,b2
+	move	n4,b1	
+	jsr	nb_aleat
+	and	y0,a
+	add	b,a
+	move	#$ff,b1
+	move	b1,y0
+
+	do	a1,fin_pti_carre_blanc
+	move	#$66e0,r6
+	jsr	nb_aleat
+	and	y0,a
+
+	move	r6,y1
+	add	y1,a
+	move	a1,r6	
+	nop
+	move	y0,p:(r6)+
+	move	y0,p:(r6)+
+	move	y0,p:(r6)+
+	move	#320,y1
+	add	y1,a
+	move	a1,r6	
+	nop
+	move	y0,p:(r6)+
+	move	y0,p:(r6)+
+	move	y0,p:(r6)+
+	add	y1,a
+	move	a1,r6	
+	nop
+	move	y0,p:(r6)+
+	move	y0,p:(r6)+
+	move	y0,p:(r6)+
+fin_pti_carre_blanc
+	rts
+
+nb_aleat:
+;--------
+	move	#13017,r2
+	move	#$37f,r0
+	move	#$4b17f3,x0
+	move	y:(r0),x1
+	mpy	x0,x1,a
+	asr	a
+	move	r2,x0
+	add	x,a
+
+	move	a1,y:(r0)
+
+	move	a0,a1
+	move	#0,a0
+	move	#0,a2
+	rts
+	
+send_data:
+;---------
+	move	#$680,r6
+	move	#$0,r3
+	move	#24640,x0
+	do	x0,fin_send
+	move	p:(r6)+,n3
+wait_send	
+	jclr	#1,X:HSR,wait_send
+	move	y:(r3+n3),x1
+	move	x1,X:HTX
+fin_send
+	rts

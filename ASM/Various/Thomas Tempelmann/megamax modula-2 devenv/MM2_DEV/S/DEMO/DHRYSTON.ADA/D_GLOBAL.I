@@ -1,0 +1,2 @@
+IMPLEMENTATION MODULE D_Global (*$R-,S-*);
+END D_Global.

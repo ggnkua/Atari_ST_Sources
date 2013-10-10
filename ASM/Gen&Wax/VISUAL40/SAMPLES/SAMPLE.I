@@ -1,0 +1,32 @@
+(* Indice du ressource pour SAMPLE *)
+CONST
+
+    MENU_PRINCIPAL =   0; (* Arbre menu *)
+
+    TRIDI    =   1; (* Formulaire/Dialogue *)
+
+    BUTONS   =   2; (* Formulaire/Dialogue *)
+    FGO_RADIO_INIT_S =   1; (* IBOX dans l'arbre BUTONS *)
+    FGO_BTON_INIT_Y =   2; (* BUTTON dans l'arbre BUTONS *)
+    FGO_BTON_INIT_N =   3; (* BUTTON dans l'arbre BUTONS *)
+    FGO_BTON_INIT_A =   4; (* BUTTON dans l'arbre BUTONS *)
+    FGO_BTON_AUTO_SA =   5; (* BOXCHAR dans l'arbre BUTONS *)
+    FGO_BTON_OK =   6; (* BUTTON dans l'arbre BUTONS *)
+    FGO_BTON_LOAD =   8; (* BUTTON dans l'arbre BUTONS *)
+    FMS_OK   =  10; (* BUTTON dans l'arbre BUTONS *)
+    FMS_CANCEL =  11; (* BUTTON dans l'arbre BUTONS *)
+
+    TEXTS    =   3; (* Formulaire/Dialogue *)
+    FGO_TEXT_BBSPATH =   3; (* TEXT dans l'arbre TEXTS *)
+    FSXY_TEXT_WIDTH =   6; (* FBOXTEXT dans l'arbre TEXTS *)
+    FSO_CPOP_FLOW =   7; (* BOXTEXT dans l'arbre TEXTS *)
+
+    POPUPS   =   4; (* Formulaire/Dialogue *)
+    POPUP_HANDSHAKE =   1; (* BOX dans l'arbre POPUPS *)
+    SPOP_RTSCTS =   2; (* STRING dans l'arbre POPUPS *)
+    SPOP_XONXOFF =   3; (* STRING dans l'arbre POPUPS *)
+    SPOP_BOTH =   4; (* STRING dans l'arbre POPUPS *)
+
+    DRAW     =   5; (* Formulaire/Dialogue *)
+
+    ALERTE   =   0; (* Chaine d'alerte *)

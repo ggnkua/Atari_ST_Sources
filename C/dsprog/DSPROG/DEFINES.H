@@ -1,0 +1,29 @@
+#define PSG 0
+#define DMA 1
+#define CODEC 2
+
+#define LTATTEN 0
+#define RTATTEN 1
+#define LTGAIN 2
+#define RTGAIN 3
+#define ADDERIN 4
+#define ADCINPUT 5
+#define SETPRESCALE 6
+#define DMAPLAY 0
+#define DSPXMIT 1
+#define EXTINP 2
+#define ADC 3
+#define DMAREC 1
+#define DSPREC 2
+#define EXTOUT 4
+#define DAC 8
+
+#define CODECSTE 0
+#define CODEC49170 1
+#define CODEC33880 2
+#define CODEC24585 3
+#define CODEC20770 4
+#define CODEC16940 5
+#define CODEC12292 7
+#define CODEC9834 9
+#define CODEC8195 11
