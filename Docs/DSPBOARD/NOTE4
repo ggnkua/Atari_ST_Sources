@@ -1,0 +1,139 @@
+Building a DSP board, Part Four: Hooking up RAM & ROM
+-----------------------------------------------------
+
+This is the fourth in a series on how I went about building
+a dual Motorola DSP56000 sampling board.
+
+As I had no real high-speed (well, high for me) digital design
+experience, I wanted to keep this part as simple as possible.
+I chose to use static RAMs since the 56000 doesn't have a
+built in RAM refresh.  The only problem with this choice is
+that they are *expensive*, especially the fast ones.  Thankfully,
+Integrated Device Technologies came to my aid and gave me four
+64k x 16bit 70ns SRAMS.  Unfortunately, these are not quite
+fast enough to go with no wait states (<60 ns would do it).
+
+However, that is no big deal.  Wait states are metered out
+in terms of clock cycles, not instruction cycles.  Therefore,
+I only needed half an instruction cycle of wait time.  Besides,
+I mainly would use this part for storing data for delay effects.
+The 256 words of fast RAM (no wait states) maps into the first
+256 address spaces, with the rest taken by the external SRAM.
+The chip is smart enough to know not to wait on the internal
+RAM.  So, if I needed to do any fast calculations and memory
+stores, I would use the first 256 words.  Delay storage gets
+set above that 256 words.  Not only that, but in my case,
+the first 256 words are 24 bits and the rest of the 64k is
+16 bits (BTW, the address bus is 16 bits, the data register
+is 24 bits... kinda unusual to to the later greater than
+the former!).  64 k is enough to store 1 and 2/3rds seconds
+of audio at my 39kHz sampling rate (and remember, since I
+am using X and Y memory, it's in stereo!).  This is more than
+enough memory for most audio applications.
+
+[side note:  The separate X and Y memories make this chip ideal
+	     for stereo applications.  It makes it very easy to
+	     write routines - you simply duplicate the routine
+	     and make it work with the other address space instead.]
+
+Okay, where were we?  Oh yeah... I think I've covered most of the
+SRAM details.  One last thing.  Since we are not using the bottom
+8 bits of the external memory, we tie them to ground through a
+47k ohm resistor.  This is important!  If we don't ground these
+bits, they will probably be read as high and we will have to clear
+them in software every time we load from external RAM.  We have to
+use the resistor, as these are outputs, too, and if we just ground
+them, we'll short those pins if they are high.  Also, the ROM gets
+connected to these lower bits.
+
+Making a program ROM for this chip is very easy.  You can use
+off the shelf EPROMS (like the 2716) of only 8 bits wide.  There
+are two mode bits that you wire up on the chip that determine its
+bootup mode (there is a bootstrap ROM in the chip).  We select
+mode 1 (bootstrap mode) which boots a program that will load program
+data through the lower 8 bits of the data bus.  But first, we must
+tie the high bit of the data bus through a 47k ohm resistor to +5V.
+The bootstrap program checks the high data bit at program memory
+$C000 to check whether or not to load from the host port or from
+the data port.  The host port loading will make program loading
+easy for those of you with PCs.
+
+The program then loads the program from the ROM.  The 56000 boots
+in slow mode (15 wait states on all types of external memory), so
+we don't have to worry about speed on the 2716 (I think I used 250
+nsec).  Addresses $0000-$0002 hold the first word in LSB, MidSB,
+MSB order (Intel bassackwards format).  Remember that it is NOT
+MSB, MidSB, LSB!!!  It took me a couple hours to figure this one
+out, as I am used to the "correct" way of MSB, MidSB, LSB that
+Motorola uses in all of their products.  Internally, the 56000
+keeps things in MSB LSB order; it is just the external bootstrap
+ROM that has to be backwards (not sure why they did this...
+suspect that it has to do with some standard for PROM burning...).
+
+Now we have to do the external chip select decoding.  This is the
+*only* glue logic needed!  This is also the only part that I
+think Motorola screwed up on (although I'm sure they have their
+reasons).  There are three chip select outputs.  _PS_ (this is
+my notation for PS with a bar over it) is low for external program
+memory, _DS_ is low for external data memory, and X/_Y_ determines
+which external data memory is referenced.  Here's a chart:
+__ __   _
+PS DS X/Y	External Memory reference
+-----------------------------------------
+1  1  1		No activity
+1  0  1		X data memory on data bus
+1  0  0		Y data memory on data bus
+0  1  1		Program memory on data bus
+0  1  0		External exception fetch (development mode)
+0  0  X		Reserved
+1  1  0		Reserved
+
+I thought it would be difficult to decode the X, Y and P lines, but
+there is a simple solution: just use a three to eight decoder.
+I chose the 74138 because it uses negative logic (the SRAM lines
+are negative logic).  I just hooked up the enable lines to the
+decoder outputs that went low when the proper input pattern
+was selected.  The delay time that this chip adds is another
+thing you must account for if you want to use no wait state
+SRAMS.
+
+One thing I forgot to mention is that the bootstrap ROM is
+mapped from $C000 to $C5FF in the external program ROM.  I just
+ignore the upper bits of the address bus so that my EPROM is
+automatically selected.  Mode 1 maps the external program memory
+over the internal program memory for reading, but uses the internal
+program memory for writing.  After the internal bootstrap
+program has loaded the external program into the internal
+program RAM, it switches to mode 2 (maps internal program RAM for
+reading and writing) and starts executing at $0000.
+
+I forgot to mention that these IDT SRAMS are SIPS (single in-line
+packages).  I need two of them for (one for X mem, one for Y mem).
+They each have 40 pins.  Hookup is quite simple.
+
+First, I put 5 16-pin dips in a row like this:
+ ______  ______  ______  ______  ______
+/      \/      \/      \/      \/      \ <-- each one of this is a 16 pin dip
+oooooooooooooooooooooooooooooooooooooooo
+
+oooooooooooooooooooooooooooooooooooooooo
+
+This gives me two rows of sockets for the SIPS.  Basically, I just connect
+each of the adjacent pins like this:
+
+		    X
+		    |
+oooooooooooooooooooooooooooooooooooooooo
+|||||||||||||||||||| |||||||||||||||||||
+oooooooooooooooooooooooooooooooooooooooo
+		    |
+		    Y
+
+The X and Y are the individual chips selects.  The rest of the pins are
+power, control signals, address lines, and data lines, which are the same
+for both chips.
+
+This arangement takes very little board space and is quite easy to hook up.
+
+Next: Power supply considerations
+

@@ -1,0 +1,3167 @@
+***********************************************************************
+***********										***********
+***********										***********
+***********	3D Filaire True Color Light Source au DSP	***********
+***********		   avec Morphing d'Objets			***********
+***********										***********
+***********		   Par Simplet / ABSTRACT			***********
+***********										***********
+***********************************************************************
+
+KeyBD	EQU		1			; Si = 0, routine simple
+							; Si = 1, routine evoluÇe
+
+		OPT		O+,OW-
+
+		IncDir	'..\INITS\'
+		Include	'MACROS.AST'
+
+***********************************************************************
+***********				Inits GÇnÇrales			***********
+***********************************************************************
+
+		Section	TEXT
+
+		clr.l	-(sp)					; Passage en Mode Supervisor
+		move.w	#$20,-(sp)				; SUPER
+		trap		#1						; Gemdos
+		addq.l 	#6,sp
+
+***********************************************************************
+***********				Inits DSP					***********
+***********************************************************************
+
+		move.w	#113,-(sp)				; DSP_RequestUniqueAbility
+		trap		#14						; XBios
+		addq.l	#2,sp					; Correction Pile
+
+		move.w	d0,-(sp)					; No Ability
+		move.l	#DSP_Size,-(sp)			; Longueur en Mots DSP
+		pea.l	DSP_Code					; Adresse du code binaire
+		move.w	#109,-(sp)				; Dsp_ExecProg
+		trap		#14						; XBios
+		lea.l	12(sp),sp					; Correction Pile
+
+Connect	move.l	#87654321,$ffffa204.w
+		moveq.l	#0,d0
+
+Conct_Get	btst.b	#0,$ffffa202.w
+		bne.s	DSP_Test
+		addq.l	#1,d0
+		cmp.l	#100000,d0
+		beq		DSP_Error
+		bra.s	Conct_Get
+
+DSP_Test	move.l	$ffffa204.w,d0
+		cmp.l	#12345678,d0
+		bne		DSP_Error
+
+		lea.l	$ffffa204.w,a6
+		bsr		Envoie_Table_1_x
+		bsr		Envoie_Table_Sinus
+		bsr		Envoie_Objets
+		bsr		Envoie_Infos_3D
+
+***********************************************************************
+***********				Inits GÇnÇrales			***********
+***********************************************************************
+
+		move.w	#$2700,sr
+
+		bsr		Save_System
+		bsr		Init_System
+
+		lea.l	Videl320200True,a0
+		lea.l	Adr_Screen1,a1
+		lea.l	Screens,a2
+		moveq.l	#2-1,d0
+		bsr		Init_Video
+		bsr		Init_Falcon_Palette
+		bsr		Init_IT
+
+		IfNe	KeyBD
+			move.l	#KeyBoard_Mouse_and_JoySticks,$118.w
+		Else
+			move.l	#KeyBoard,$118.w
+		EndC
+		or.b		#$40,$fffffa09.w			; Autorise nouvelle
+		or.b		#$40,$fffffa15.w			; routine clavier
+
+***********************************************************************
+***********			Inits SpÇcifiques				***********
+***********************************************************************
+
+* Construction de la Table des multiples de 640 pour Offsets Verticaux
+
+		lea.l	Table_Y-400*4,a0
+		move.l	#-400*2*(320+100),d0
+
+		move.w	#1000-1,d7
+MakeTable	move.l	d0,(a0)+
+		add.l	#2*(320+100),d0
+		dbra		d7,MakeTable
+
+		move.l	#New_VBL,$70.w
+
+***********************************************************************
+***********		Boucle principale d'attente			***********
+***********************************************************************
+
+Main_Loop	clr.w	VBL_Cmpt
+
+VBL_Wait	tst.w	VBL_Cmpt					; Attend
+		beq.s	VBL_Wait					; prochaine VBL
+
+		bsr.s	VBL_Rout					; exÇcute routine
+
+		cmp.b	#$39,LastKey				; Touche Espace PressÇe ???
+		bne.s	Main_Loop
+
+***********************************************************************
+***********	C'est fini, on remet tout en place			***********
+***********************************************************************
+
+		bsr		Restore_System
+
+DSP_Error	clr.w 	-(sp)					; PTerm
+		trap 	#1						; Gemdos
+
+***********************************************************************
+***********		Routine tournant Ö chaque VBL			***********
+***********************************************************************
+
+VBL_Rout	SaveColor
+
+		move.l	Adr_Screen1(pc),d0			; Flipping
+		move.l	Adr_Screen2(pc),Adr_Screen1	; Ecrans
+		move.l	d0,Adr_Screen2				; Physique
+		lsr.w	#8,d0					; /
+		move.l	d0,$ffff8200.w				; Logique
+
+		move.l	Adr_Buffer1(pc),d0
+		move.l	Adr_Buffer2(pc),Adr_Buffer1
+		move.l	d0,Adr_Buffer2
+
+		CPUTimeColor		#$5f6f00ff
+
+		movea.l	Adr_Buffer1(pc),a5
+		move.w	(a5)+,-(sp)				; Nombre de Lignes
+
+Clear_Loop
+		move.w	(a5)+,d0					; XDep
+		move.w	(a5)+,d1					; YDep
+		move.w	(a5)+,d2					; XArr
+		move.w	(a5)+,d3					; YArr
+		moveq.l	#0,d4
+		movea.l	Adr_Screen1(pc),a0
+		bsr		Line
+
+		subq.w	#1,(sp)
+		bpl.s	Clear_Loop
+		addq.w	#2,sp
+
+		movea.l	Adr_Buffer1(pc),a4
+		lea.l	$ffffa206.w,a5
+
+
+		CPUTimeColor		#$ff8f002f
+
+		WaitDSPToGet					; Attend Calcul DSP
+
+		move.w	(a5),d0
+		subq.w	#1,d0
+		move.w	d0,(a4)+				; Nombre de Lignes
+		move.w	d0,-(sp)
+
+		CPUTimeColor		#$dd550088
+
+Lines_Loop
+		move.w	(a5),d0
+		move.w	d0,d4
+		swap.w	d4
+		move.w	d0,d4
+		move.w	(a5),d0					; XDep
+		move.w	d0,(a4)+
+		move.w	(a5),d1					; YDep
+		move.w	d1,(a4)+
+		move.w	(a5),d2					; XArr
+		move.w	d2,(a4)+
+		move.w	(a5),d3					; YArr
+		move.w	d3,(a4)+
+		movea.l	Adr_Screen1(pc),a0
+		bsr		Line
+
+		subq.w	#1,(sp)
+		bpl.s	Lines_Loop
+
+		addq.l	#2,sp
+
+
+; Controle Clavier
+
+KeyBoard_Control
+		cmp.b	#$63,LastKey
+		bne.s	No_Prev
+		clr.b	LastKey
+		tst.l	Objet(pc)
+		beq		Rotate
+		subq.l	#1,Objet
+No_Prev	cmp.b	#$64,LastKey
+		bne.s	No_Next
+		clr.b	LastKey
+		cmp.l	#2-1,Objet
+		beq		Rotate
+		addq.l	#1,Objet
+No_Next	
+		cmp.b	#$4e,LastKey
+		bne.s	No_Plus
+		add.l	#5*512,Trans_Z
+No_Plus	cmp.b	#$4a,LastKey
+		bne.s	No_Moins
+		sub.l	#5*512,Trans_Z
+No_Moins	cmp.b	#$6a,LastKey
+		bne.s	No_4
+		sub.l	#5*512,Trans_X
+No_4		cmp.b	#$6c,LastKey
+		bne.s	No_6
+		add.l	#5*512,Trans_X
+No_6		cmp.b	#$68,LastKey
+		bne.s	No_8
+		sub.l	#5*512,Trans_Y
+No_8		cmp.b	#$6e,LastKey
+		bne.s	No_2
+		add.l	#5*512,Trans_Y
+No_2
+		cmp.b	#$52,LastKey
+		bne.s	No_Insert
+		add.l	#360-1,Rot_Z
+No_Insert	cmp.b	#$47,LastKey
+		bne.s	No_Home
+		addq.l	#1,Rot_Z
+No_Home	cmp.b	#$48,LastKey
+		bne.s	No_Haut
+		addq.l	#1,Rot_X
+No_Haut	cmp.b	#$50,LastKey
+		bne.s	No_Bas
+		add.l	#360-1,Rot_X
+No_Bas	cmp.b	#$4b,LastKey
+		bne.s	No_Gauche
+		add.l	#360-1,Rot_Y
+No_Gauche	cmp.b	#$4d,LastKey
+		bne.s	No_Droite
+		addq.l	#1,Rot_Y
+No_Droite	
+
+; Effectue le mouvement de rotation
+
+		cmp.b	#$66,LastKey
+		beq		VBL_Ret
+
+
+Rotate	lea.l	Rot_X(pc),a0
+		lea.l	Increments(pc),a1
+		moveq.l	#3-1,d7
+Incremente_Rotations
+		move.l	(a0),d0
+		move.l	(a1)+,d1
+		bpl.s	Incr_Ok
+		add.l	#360,d1
+
+Incr_Ok	add.l	d1,d0
+		cmp.l	#360,d0
+		blo.s	Angle_Ok
+		sub.l	#360,d0
+Angle_Ok	move.l	d0,(a0)+
+		dbra		d7,Incremente_Rotations
+
+VBL_Ret	bsr		Envoie_Infos_3D
+		RestoreColor
+		rts
+
+******************************************************************
+***********									***********
+***********	   Routines de ligne en True Color		***********
+***********									***********
+***********	   CoordonÇes de DÇpart en d0/d1.w		***********
+***********	   CoordonÇes d'ArrivÇe en d2/d3.w		***********
+***********  Couleur dans mots fort et faible de d4.l	***********
+***********		Adresse de l'Çcran en a0.l		***********
+***********									***********
+******************************************************************
+
+Line		lea.l	Table_Y(pc),a1			; Table des Offsets Verticaux
+
+		cmp.w	d0,d2				; X1 = X2 ??
+		beq		V_Line				; Oui, alors Ligne verticale
+		cmp.w	d1,d3				; Y1 = Y2 ??
+		beq		H_Line				; Oui, alors Ligne horizontale
+
+		move.w	d2,d5				; dX = X2
+		sub.w	d0,d5				; - X1
+		bpl.s	dX_Ok				; on le veut
+		neg.w	d5					; en valeur absolue
+dX_Ok	move.w	d3,d6				; dY = Y2
+		sub.w	d1,d6				; - Y1
+		bpl.s	dY_Ok				; on le veut
+		neg.w	d6					; en valeur absolue
+dY_Ok
+		cmp.w	d5,d6
+		blt.s	X_Line				; |dX| > |dY|
+		bgt		Y_Line				; |dY| > |dX|
+
+***************
+* |dX| = |dY| *
+***************
+
+
+O_Line	move.w	#2*(320+100),d7				; Longueur d'une ligne
+		moveq.l	#2,d6				; Longueur d'une colonne
+
+		cmp.w	d0,d2				; X2 > X1 ??
+		bgt.s	O_Ok1				; Si non,
+		neg.w	d6					; on va vers la gauche
+
+O_Ok1	cmp.w	d1,d3				; Y2 > Y1 ??
+		bgt.s	O_Ok2				; Si non,
+		neg.w	d7					; on va vers le haut
+
+O_Ok2	add.w	d6,d7				; Offset entre 2 points
+
+		lea.l	(a0,d0.w*2),a0			; Offset Horizontal
+		adda.l	(a1,d1.w*4),a0			; Offset Vertical
+
+		subq.w	#1,d5				; Nb Points - 1
+
+		btst		#0,d5				; Si pair
+		beq.s	No_Odd_O				; n'affiche pas 1er point
+
+		move.w	d4,(a0)				; Affiche 1er Point
+		adda.w	d7,a0				; Ligne et colonne suivantes
+
+No_Odd_O	lsr.w	#1,d5				; divise par 2
+
+O_Line_Loop	
+		move.w	d4,(a0)				; Affiche un point
+		adda.w	d7,a0				; Ligne et colonne suivantes
+		move.w	d4,(a0)				; Affiche un point
+		adda.w	d7,a0				; Ligne et colonne suivantes
+		dbra		d5,O_Line_Loop	
+		rts
+
+***************
+* |dX| > |dY| *
+***************
+
+X_Line	move.w	#2*(320+100),d7				; Longueur d'une ligne
+
+		cmp.w	d0,d2				; X2 > X1 ??
+		bgt.s	X_Ok1				; Si non,
+		exg.l	d1,d3				; Çchanger les
+		exg.l	d0,d2				; deux points
+X_Ok1	cmp.w	d1,d3				; Y2 > Y1 ??
+		bgt.s	X_Ok2				; Si non,
+		neg.w	d7					; on va vers le haut
+
+X_Ok2	lea.l	(a0,d0.w*2),a0			; Offset Horizontal
+		adda.l	(a1,d1.w*4),a0			; Offset Vertical
+
+		addq.l	#1,d5				; On prend les
+		addq.l	#1,d6				; intervalles
+		swap.w	d6					; dY * 65536
+		clr.w	d6					; clear poids faible
+		divu.w	d5,d6				; pente * 65536
+		ext.l	d6					; dÇbarasse du reste
+		moveq.l	#0,d3				; et init compteur Ö 0
+
+		subq.w	#2,d5				; dX = dX - 1
+
+
+		btst		#0,d5				; dX impair ??
+		beq.s	No_Odd_X				; Si oui,
+
+		move.w	d4,(a0)+				; Affiche pt, colonne suivante
+		add.w	d6,d3				; additionne pente
+		bcc.s	No_Odd_X				; si retenue
+		adda.w	d7,a0				; Ligne suivante
+
+No_Odd_X	lsr.w	#1,d5				; divise par 2
+
+X_Line_Loop
+		move.w	d4,(a0)+				; Affiche pt, colonne suivante
+		add.w	d6,d3				; additionne pente
+		bcc.s	No_Y1				; si retenue
+		adda.w	d7,a0				; Ligne suivante
+
+No_Y1
+		move.w	d4,(a0)+				; Affiche pt, colonne suivante
+		add.w	d6,d3				; additionne pente
+		bcc.s	No_Y2				; si retenue
+		adda.w	d7,a0				; Ligne suivante
+No_Y2
+		dbra		d5,X_Line_Loop	
+		rts
+
+***************
+* |dY| > |dX| *
+***************
+
+Y_line	move.w	#2*(320+100),d7				; Longueur d'une ligne
+
+		cmp.w	d0,d2				; X2 > X1 ??
+		bgt.s	Y_Ok1				; Si non,
+		exg.l	d1,d3				; Çchanger les
+		exg.l	d0,d2				; deux points
+Y_Ok1	cmp.w	d1,d3				; Y2 > Y1 ??
+		bgt.s	Y_Ok2				; Si non,
+		neg.w	d7					; on va vers le haut
+
+Y_Ok2	lea.l	(a0,d0.w*2),a0			; Offset Horizontal
+		adda.l	(a1,d1.w*4),a0			; Offset Vertical
+
+		addq.l	#1,d5				; On prend les
+		addq.l	#1,d6				; intervalles
+		swap.w	d5					; dX * 65536
+		clr.w	d5					; clear poids faible
+		divu.w	d6,d5				; pente * 65536
+		ext.l	d5					; dÇbarasse du reste
+		moveq.l	#0,d3				; et init compteur Ö 0
+
+		subq.w	#2,d6				; dY = dY - 1
+
+		btst		#0,d6				; dY impair ??
+		beq.s	No_Odd_Y				; Si oui,
+
+		add.w	d5,d3				; additionne pente
+		move.w	d4,(a0)				; Affiche un 1er Point
+		adda.w	d7,a0				; Ligne suivante
+
+No_Odd_Y	lsr.w	#1,d6				; divise par 2
+
+Y_Line_Loop
+		add.w	d5,d3				; additionne pente
+		bcs.s	Go_X1				; si pas retenue
+		move.w	d4,(a0)				; Affiche point normalement
+		adda.w	d7,a0				; Ligne suivante
+
+		add.w	d5,d3				; additionne pente
+		bcs.s	Go_X2				; si pas retenue
+		move.w	d4,(a0)				; Affiche point normalement
+		adda.w	d7,a0				; Ligne suivante
+
+		dbra		d6,Y_Line_Loop	
+		rts
+
+Go_X1	move.w	d4,(a0)+				; Affiche point, Colonne et
+		adda.w	d7,a0				; Ligne suivante
+
+		add.w	d5,d3				; additionne pente
+		bcs.s	Go_X2				; si pas retenue
+		move.w	d4,(a0)				; Affiche point normalement
+		adda.w	d7,a0				; Ligne suivante
+
+		dbra		d6,Y_Line_Loop	
+		rts
+
+Go_X2	move.w	d4,(a0)+				; Affiche point, Colonne et
+		adda.w	d7,a0				; Ligne suivante
+
+		dbra		d6,Y_Line_Loop	
+		rts
+
+
+***********
+* X1 = X2 *
+***********
+
+V_Line	move.w	#2*(320+100),d7				; Longueur d'une ligne
+
+		cmp.w	d1,d3				; On
+		bgt.s	Ok_V					; veut
+		exg.l	d1,d3				; Y2 > Y1
+
+Ok_V		sub.w	d1,d3				; dY
+		beq.s	Line_Point
+
+		lea.l	(a0,d0.w*2),a0			; Offset Horizontal
+		adda.l	(a1,d1.w*4),a0			; Offset Vertical
+
+		subq.w	#1,d3				; dY - 1
+
+		btst		#0,d3				; dY impair ??
+		beq.s	No_Odd_V				; Si oui,
+		move.w	d4,(a0)				; Affiche un 1er Point
+		adda.w	d7,a0				; Ligne suivante
+
+No_Odd_V	lsr.w	#1,d3				; divise par 2
+V_Line_Loop
+		move.w	d4,(a0)				; Affiche Point
+		adda.w	d7,a0				; Ligne suivante
+		move.w	d4,(a0)				; Affiche Point
+		adda.w	d7,a0				; Ligne suivante
+		dbra		d3,V_Line_Loop
+		rts
+
+*********
+* Point *
+*********
+
+Line_Point
+		lea.l	(a0,d0.w*2),a0			; Offset Horizontal
+		adda.l	(a1,d1.w*4),a0			; Offset Vertical
+		move.w	d4,(a0)				; Affiche Point
+		rts
+
+***********
+* Y1 = Y2 *
+***********
+		
+H_Line	cmp.w	d0,d2				; On
+		bgt.s	Ok_H					; veut
+		exg.l	d0,d2				; X2 > X1
+
+Ok_H		sub.w	d0,d2				; dX
+
+		lea.l	(a0,d0.w*2),a0			; Offset Horizontal
+		adda.l	(a1,d1.w*4),a0			; Offset Vertical
+
+		subq.w	#1,d2				; dX - 1
+
+		btst		#0,d2				; dX impair ??
+		beq.s	No_Odd_H				: Si oui,
+		move.w	d4,(a0)+				; Affiche un 1er Point
+No_Odd_H	lsr.w	#1,d2				; divise par 2
+H_Line_Loop
+		move.l	d4,(a0)+				; Affiche deux Points
+		dbra		d2,H_Line_Loop
+		rts
+
+***********************************************************************
+***********		   Interruption VBL : compteur		***********
+***********************************************************************
+
+New_VBL	addq.w	#1,VBL_Cmpt
+		move.w	d7,-(sp)
+		move.w	#5700,d7
+		dbra		d7,*
+		move.w	(sp)+,d7
+		rte
+
+VBL_Cmpt	ds.w		1
+
+***********************************************************************
+***********				Sous-Programmes			***********
+***********************************************************************
+
+; Envoie Informations 3D
+
+Envoie_Infos_3D
+		lea.l	$ffffa204.w,a6				; Port Host
+		lea.l	Rot_X(pc),a0
+		moveq.l	#6-1,d7
+Envoie_Infos
+		move.l	(a0)+,(a6)
+		dbra		d7,Envoie_Infos
+
+; Gestion du Script
+		subq.w	#1,Script_Time
+		bpl.s	No_Script
+
+		movea.l	Adr_Script(pc),a0
+Script_Loop
+		move.w	(a0)+,d0					; Fonction
+		beq.s	Script_Display_Object
+		bpl.s	Script_Morphing
+
+		lea.l	Script(pc),a0
+		move.l	a0,Adr_Script
+		bra.s	Script_Loop
+
+Script_Morphing
+		move.l	#-1,(a6)					; Demande Morphing
+		moveq.l	#0,d0
+		move.w	(a0)+,d0
+		move.l	d0,(a6)					; Objet Destination
+		move.w	(a0)+,d0
+		move.w	d0,Script_Time				; Temps de Morphing
+		move.l	d0,(a6)
+		move.l	a0,Adr_Script
+		move.l	#-1,Objet
+		rts
+
+Script_Display_Object
+		clr.w	Objet
+		move.w	(a0)+,Objet+2
+		move.w	(a0)+,Script_Time
+		move.l	a0,Adr_Script
+
+No_Script	move.l	Objet(pc),d0
+		move.l	d0,(a6)
+		bpl.s	Script_Ok
+
+		move.l	#-1,(a6)		; ExÇcute Morphing
+
+Script_Ok	rts
+
+; Envoie Objets
+
+Envoie_Objets
+		lea.l	Objets(pc),a0
+		move.l	(a0)+,d7
+		move.l	d7,(a6)				; Nombre d'Objets
+		subq.w	#1,d7
+Envoie_Objet
+		move.l	(a0)+,(a6)			; Coefficient Light
+		move.l	(a0)+,d6
+		move.l	d6,(a6)				; Nombre de Lignes
+		mulu.w	#2*3,d6				; Nombre de CoordonnÇes
+		subq.w	#1,d6
+Envoie_Points
+		move.w	(a0)+,d0
+		muls.w	#512,d0
+		move.l	d0,(a6)
+		dbra		d6,Envoie_Points
+
+		dbra		d7,Envoie_Objet
+		rts
+
+; Envoie la table des 1/x
+
+Envoie_Table_1_x
+		move.w	#300-1,d7
+		move.l	#-300,d0
+
+Negatifs	move.l	#$7fffff,d6
+		divs.l	d0,d6
+		move.l	d6,(a6)
+		addq.l	#1,d0
+		dbra		d7,Negatifs
+
+Zero		move.l	#$7fffff,(a6)
+
+		move.w	#1700-1,d7
+		moveq.l	#1,d0
+
+Positifs	move.l	#$7fffff,d6
+		divs.l	d0,d6
+		move.l	d6,(a6)
+		addq.l	#1,d0
+		dbra		d7,Positifs
+		rts
+
+; Envoie la table de sinus/cosinus
+
+Envoie_Table_Sinus
+		lea.l	Sinus_Table(pc),a0
+		move.w	#360+90-1,d7
+Envoie_Sinus
+		move.l	(a0)+,d0
+		asr.l	#8,d0
+		move.l	d0,(a6)
+		dbra		d7,Envoie_Sinus
+		rts
+
+		Include	'INITSFAL.AST'
+
+***********************************************************************
+***********				Section DATA				***********
+***********************************************************************
+
+			Section	DATA
+
+Videl320200True
+		dc.l		(320+100)*200*16/8+256			* GÇnÇral
+		dc.w		100,320,0,$100
+		dc.w		0							* Flag Ordre
+
+		dc.w		254,203,39,46,143,216,0,0		* RVB
+		dc.w		625,613,47,127,527,619
+		dc.w		$181,%0000
+
+		dc.w		198,150,15,682,139,150,0,0		* VGA 48.9 Hz
+ 		dc.w		1287,1300,100,315,1115,1283
+		dc.w		$186,%0101
+
+Objet		dc.l		1-1
+Increments	dc.l		4,-4,0
+Rot_X		dc.l		0
+Rot_Y		dc.l		0
+Rot_Z		dc.l		0
+Trans_X		dc.l		0*512
+Trans_Y		dc.l		0*512
+Trans_Z		dc.l		50*512
+
+; Script de Morphing
+
+Adr_Script	dc.l		Script
+Script_Time	dc.w		-1
+
+
+Script		*dc.w		0,11-1,1000
+			*dc.w		-1
+
+			dc.w		0,3-1,48*5/2-1		; Greetings
+			dc.w		1,4-1,8*5/2-1		; Morphing
+			dc.w		1,1-1,8*5/2-1		; Cubes
+			dc.w		0,1-1,48*5/2-1		; Holocaust
+			dc.w		1,4-1,8*5/2-1		; Morphing
+			dc.w		1,2-1,8*5/2-1		; Cubes
+			dc.w		0,2-1,32*5/2-1		; NLC
+			dc.w		1,6-1,32-1
+			dc.w		0,6-1,32*5/2-32-1	; MJJ
+			dc.w		1,12-1,50-1
+			dc.w		0,12-1,32*5-50-1	; Adrenaline
+			dc.w		1,11-1,50-1
+			dc.w		0,11-1,32*5-50-1	; Hydroxid
+			dc.w		1,8-1,50-1
+			dc.w		0,8-1,32*5-50-1	; Sanity
+			dc.w		1,9-1,50-1
+			dc.w		0,9-1,32*5-50-1	; Dune
+			dc.w		1,10-1,50-1
+			dc.w		0,10-1,32*5-50-1	; Bill
+			dc.w		1,5-1,50-1
+			dc.w		0,5-1,32*5-50-1	; PassWords
+			dc.w		1,7-1,50-1
+			dc.w		0,7-1,32*5-50-1	; Positivity
+			dc.w		-1				; Rebouclage
+
+; Adresse Buffers
+Adr_Buffer1	dc.l		Buffer1
+Adr_Buffer2	dc.l		Buffer2
+
+DSP_Code		IncBin	'FIL-MORF.P56'
+DSP_Size		equ		(*-DSP_Code)/3
+
+Sinus_Table	IncBin	'COSIN32B.TAB'
+
+; Description des Objets
+
+Objets		dc.l		12				; Nombre d'objets
+
+; 1er Objet
+
+Holocaust		dc.l		$800000/2800*29	; Coefficient Lumiäre sur Z
+
+			dc.l		12+8+4+6+8+4+12+10+4+10+18+10	; Nombre de Lignes
+
+			dc.w		-79,-10,0			; le H : 12 lignes
+			dc.w		-79,+10,0
+			dc.w		-79,+10,0
+			dc.w		-75,+10,0
+			dc.w		-75,+10,0
+			dc.w		-75,+2,0
+			dc.w		-75,+2,0
+			dc.w		-69,+2,0
+			dc.w		-69,+2,0
+			dc.w		-69,+10,0
+			dc.w		-69,+10,0
+			dc.w		-65,+10,0
+			dc.w		-65,+10,0
+			dc.w		-65,-10,0
+			dc.w		-65,-10,0
+			dc.w		-69,-10,0
+			dc.w		-69,-10,0
+			dc.w		-69,-2,0
+			dc.w		-69,-2,0
+			dc.w		-75,-2,0
+			dc.w		-75,-2,0
+			dc.w		-75,-10,0
+			dc.w		-75,-10,0
+			dc.w		-79,-10,0
+
+			dc.w		-59,-10,0			; ExtÇrieur du O : 8 lignes
+			dc.w		-61,-8,0
+			dc.w		-61,-8,0
+			dc.w		-61,+8,0
+			dc.w		-61,+8,0
+			dc.w		-59,+10,0
+			dc.w		-59,+10,0
+			dc.w		-49,+10,0
+			dc.w		-49,+10,0
+			dc.w		-47,+8,0
+			dc.w		-47,+8,0
+			dc.w		-47,-8,0
+			dc.w		-47,-8,0
+			dc.w		-49,-10,0
+			dc.w		-49,-10,0
+			dc.w		-59,-10,0
+
+			dc.w		-57,-6,0			; IntÇrieur du O : 4 lignes
+			dc.w		-57,+6,0
+			dc.w		-57,+6,0
+			dc.w		-51,+6,0
+			dc.w		-51,+6,0
+			dc.w		-51,-6,0
+			dc.w		-51,-6,0
+			dc.w		-57,-6,0
+
+			dc.w		-43,-10,0			; le L : 6 lignes
+			dc.w		-43,+10,0
+			dc.w		-43,+10,0
+			dc.w		-29,+10,0
+			dc.w		-29,+10,0
+			dc.w		-29,+6,0
+			dc.w		-29,+6,0
+			dc.w		-39,+6,0
+			dc.w		-39,+6,0
+			dc.w		-39,-10,0
+			dc.w		-39,-10,0
+			dc.w		-43,-10,0
+
+			dc.w		-23,-10,0			; ExtÇrieur du O : 8 lignes
+			dc.w		-25,-8,0
+			dc.w		-25,-8,0
+			dc.w		-25,+8,0
+			dc.w		-25,+8,0
+			dc.w		-23,+10,0
+			dc.w		-23,+10,0
+			dc.w		-13,+10,0
+			dc.w		-13,+10,0
+			dc.w		-11,+8,0
+			dc.w		-11,+8,0
+			dc.w		-11,-8,0
+			dc.w		-11,-8,0
+			dc.w		-13,-10,0
+			dc.w		-13,-10,0
+			dc.w		-23,-10,0
+
+			dc.w		-21,-6,0			; IntÇrieur du O : 4 lignes
+			dc.w		-21,+6,0
+			dc.w		-21,+6,0
+			dc.w		-15,+6,0
+			dc.w		-15,+6,0
+			dc.w		-15,-6,0
+			dc.w		-15,-6,0
+			dc.w		-21,-6,0
+
+			dc.w		-5,-10,0			; le C : 12 lignes
+			dc.w		-7,-8,0
+			dc.w		-7,-8,0
+			dc.w		-7,+8,0
+			dc.w		-7,+8,0
+			dc.w		-5,+10,0
+			dc.w		-5,+10,0
+			dc.w		+5,+10,0
+			dc.w		+5,+10,0
+			dc.w		+7,+8,0
+			dc.w		+7,+8,0
+			dc.w		+5,+6,0
+			dc.w		+5,+6,0
+			dc.w		-3,+6,0
+			dc.w		-3,+6,0
+			dc.w		-3,-6,0
+			dc.w		-3,-6,0
+			dc.w		+5,-6,0
+			dc.w		+5,-6,0
+			dc.w		+7,-8,0
+			dc.w		+7,-8,0
+			dc.w		+5,-10,0
+			dc.w		+5,-10,0
+			dc.w		-5,-10,0
+
+			dc.w		+13,-10,0			; ExtÇrieur du A : 10 lignes
+			dc.w		+11,-8,0
+			dc.w		+11,-8,0
+			dc.w		+11,+10,0
+			dc.w		+11,+10,0
+			dc.w		+15,+10,0
+			dc.w		+15,+10,0
+			dc.w		+15,+4,0
+			dc.w		+15,+4,0
+			dc.w		+21,+4,0
+			dc.w		+21,+4,0
+			dc.w		+21,+10,0
+			dc.w		+21,+10,0
+			dc.w		+25,+10,0
+			dc.w		+25,+10,0
+			dc.w		+25,-8,0
+			dc.w		+25,-8,0
+			dc.w		+23,-10,0
+			dc.w		+23,-10,0
+			dc.w		+13,-10,0
+
+			dc.w		+15,-6,0			; IntÇrieur du A : 4 lignes
+			dc.w		+15,0,0
+			dc.w		+15,0,0
+			dc.w		+21,0,0
+			dc.w		+21,0,0
+			dc.w		+21,-6,0
+			dc.w		+21,-6,0
+			dc.w		+15,-6,0
+
+			dc.w		+29,-10,0			; le U : 10 lignes
+			dc.w		+29,+8,0
+			dc.w		+29,+8,0
+			dc.w		+31,+10,0
+			dc.w		+31,+10,0
+			dc.w		+41,+10,0
+			dc.w		+41,+10,0
+			dc.w		+43,+8,0
+			dc.w		+43,+8,0
+			dc.w		+43,-10,0
+			dc.w		+43,-10,0
+			dc.w		+39,-10,0
+			dc.w		+39,-10,0
+			dc.w		+39,+6,0
+			dc.w		+39,+6,0
+			dc.w		+33,+6,0
+			dc.w		+33,+6,0
+			dc.w		+33,-10,0
+			dc.w		+33,-10,0
+			dc.w		+29,-10,0
+
+			dc.w		+49,-10,0			; le S : 18 lignes
+			dc.w		+47,-8,0
+			dc.w		+47,-8,0
+			dc.w		+47,0,0
+			dc.w		+47,0,0
+			dc.w		+49,+2,0
+			dc.w		+49,+2,0
+			dc.w		+57,+2,0
+			dc.w		+57,+2,0
+			dc.w		+57,+6,0
+			dc.w		+57,+6,0
+			dc.w		+49,+6,0
+			dc.w		+49,+6,0
+			dc.w		+47,+8,0
+			dc.w		+47,+8,0
+			dc.w		+49,+10,0
+			dc.w		+49,+10,0
+			dc.w		+59,+10,0
+			dc.w		+59,+10,0
+			dc.w		+61,+8,0
+			dc.w		+61,+8,0
+			dc.w		+61,0,0
+			dc.w		+61,0,0
+			dc.w		+59,-2,0
+			dc.w		+59,-2,0
+			dc.w		+51,-2,0
+			dc.w		+51,-2,0
+			dc.w		+51,-6,0
+			dc.w		+51,-6,0
+			dc.w		+59,-6,0
+			dc.w		+59,-6,0
+			dc.w		+61,-8,0
+			dc.w		+61,-8,0
+			dc.w		+59,-10,0
+			dc.w		+59,-10,0
+			dc.w		+49,-10,0
+
+			dc.w		+67,-10,0			; le T : 10 lignes
+			dc.w		+65,-8,0
+			dc.w		+65,-8,0
+			dc.w		+67,-6,0
+			dc.w		+67,-6,0
+			dc.w		+70,-6,0
+			dc.w		+70,-6,0
+			dc.w		+70,+10,0
+			dc.w		+70,+10,0
+			dc.w		+74,+10,0
+			dc.w		+74,+10,0
+			dc.w		+74,-6,0
+			dc.w		+74,-6,0
+			dc.w		+77,-6,0
+			dc.w		+77,-6,0
+			dc.w		+79,-8,0
+			dc.w		+79,-8,0
+			dc.w		+77,-10,0
+			dc.w		+77,-10,0
+			dc.w		+67,-10,0
+
+; 2äme Objet
+
+NLC			dc.l		$800000/2400*29	; Coefficient Lumiäre sur Z
+
+			dc.l		3*(10+6+8)		; Nombre de Lignes
+
+			dc.w		-66,-22,-10		; le N : 10 lignes
+			dc.w		-66,+22,-10
+			dc.w		-66,+22,-10
+			dc.w		-54,+22,-10
+			dc.w		-54,+22,-10
+			dc.w		-54,+2,-10
+			dc.w		-54,+2,-10
+			dc.w		-42,+22,-10
+			dc.w		-42,+22,-10
+			dc.w		-30,+22,-10
+			dc.w		-30,+22,-10
+			dc.w		-30,-22,-10
+			dc.w		-30,-22,-10
+			dc.w		-42,-22,-10
+			dc.w		-42,-22,-10
+			dc.w		-42,-2,-10
+			dc.w		-42,-2,-10
+			dc.w		-54,-22,-10
+			dc.w		-54,-22,-10
+			dc.w		-66,-22,-10
+
+			dc.w		-18,-22,-10		; le L : 6 lignes
+			dc.w		-18,+22,-10
+			dc.w		-18,+22,-10
+			dc.w		+18,+22,-10
+			dc.w		+18,+22,-10
+			dc.w		+18,+10,-10
+			dc.w		+18,+10,-10
+			dc.w		-6,+10,-10
+			dc.w		-6,+10,-10
+			dc.w		-6,-22,-10
+			dc.w		-6,-22,-10
+			dc.w		-18,-22,-10
+
+			dc.w		+30,-22,-10		; le C : 8 lignes
+			dc.w		+30,+22,-10
+			dc.w		+30,+22,-10
+			dc.w		+66,+22,-10
+			dc.w		+66,+22,-10
+			dc.w		+66,+10,-10
+			dc.w		+66,+10,-10
+			dc.w		+42,+10,-10
+			dc.w		+42,+10,-10
+			dc.w		+42,-10,-10
+			dc.w		+42,-10,-10
+			dc.w		+66,-10,-10
+			dc.w		+66,-10,-10
+			dc.w		+66,-22,-10
+			dc.w		+66,-22,-10
+			dc.w		+30,-22,-10
+
+			dc.w		-66,-22,+10		; le N : 10 lignes
+			dc.w		-66,+22,+10
+			dc.w		-66,+22,+10
+			dc.w		-54,+22,+10
+			dc.w		-54,+22,+10
+			dc.w		-54,+2,+10
+			dc.w		-54,+2,+10
+			dc.w		-42,+22,+10
+			dc.w		-42,+22,+10
+			dc.w		-30,+22,+10
+			dc.w		-30,+22,+10
+			dc.w		-30,-22,+10
+			dc.w		-30,-22,+10
+			dc.w		-42,-22,+10
+			dc.w		-42,-22,+10
+			dc.w		-42,-2,+10
+			dc.w		-42,-2,+10
+			dc.w		-54,-22,+10
+			dc.w		-54,-22,+10
+			dc.w		-66,-22,+10
+
+			dc.w		-18,-22,+10		; le L : 6 lignes
+			dc.w		-18,+22,+10
+			dc.w		-18,+22,+10
+			dc.w		+18,+22,+10
+			dc.w		+18,+22,+10
+			dc.w		+18,+10,+10
+			dc.w		+18,+10,+10
+			dc.w		-6,+10,+10
+			dc.w		-6,+10,+10
+			dc.w		-6,-22,+10
+			dc.w		-6,-22,+10
+			dc.w		-18,-22,+10
+
+			dc.w		+30,-22,+10		; le C : 8 lignes
+			dc.w		+30,+22,+10
+			dc.w		+30,+22,+10
+			dc.w		+66,+22,+10
+			dc.w		+66,+22,+10
+			dc.w		+66,+10,+10
+			dc.w		+66,+10,+10
+			dc.w		+42,+10,+10
+			dc.w		+42,+10,+10
+			dc.w		+42,-10,+10
+			dc.w		+42,-10,+10
+			dc.w		+66,-10,+10
+			dc.w		+66,-10,+10
+			dc.w		+66,-22,+10
+			dc.w		+66,-22,+10
+			dc.w		+30,-22,+10
+
+			dc.w		-66,-22,-10		; le N : 10 lignes
+			dc.w		-66,-22,+10
+			dc.w		-66,+22,-10
+			dc.w		-66,+22,+10
+			dc.w		-54,+22,-10
+			dc.w		-54,+22,+10
+			dc.w		-54,+2,-10
+			dc.w		-54,+2,+10
+			dc.w		-42,+22,-10
+			dc.w		-42,+22,+10
+			dc.w		-30,+22,-10
+			dc.w		-30,+22,+10
+			dc.w		-30,-22,-10
+			dc.w		-30,-22,+10
+			dc.w		-42,-22,-10
+			dc.w		-42,-22,+10
+			dc.w		-42,-2,-10
+			dc.w		-42,-2,+10
+			dc.w		-54,-22,-10
+			dc.w		-54,-22,+10
+
+			dc.w		-18,-22,-10		; le L : 6 lignes
+			dc.w		-18,-22,+10
+			dc.w		-18,+22,-10
+			dc.w		-18,+22,+10
+			dc.w		+18,+22,-10
+			dc.w		+18,+22,+10
+			dc.w		+18,+10,-10
+			dc.w		+18,+10,+10
+			dc.w		-6,+10,-10
+			dc.w		-6,+10,+10
+			dc.w		-6,-22,-10
+			dc.w		-6,-22,+10
+
+			dc.w		+30,-22,-10		; le C : 8 lignes
+			dc.w		+30,-22,+10
+			dc.w		+30,+22,-10
+			dc.w		+30,+22,+10
+			dc.w		+66,+22,-10
+			dc.w		+66,+22,+10
+			dc.w		+66,+10,-10
+			dc.w		+66,+10,+10
+			dc.w		+42,+10,-10
+			dc.w		+42,+10,+10
+			dc.w		+42,-10,-10
+			dc.w		+42,-10,+10
+			dc.w		+66,-10,-10
+			dc.w		+66,-10,+10
+			dc.w		+66,-22,-10
+			dc.w		+66,-22,+10
+
+; 3äme Objet
+
+Greetings		dc.l		$800000/3200*29	; Coefficient Lumiäre sur Z
+
+			dc.l		15+8+9+9+5+4+9+11+10	; Nombre de Lignes
+
+			dc.w		-15*4,-2*5,0		; le G : 15 lignes
+			dc.w		-14*4,-3*5,0
+			dc.w		-14*4,-3*5,0
+			dc.w		-14*4,-4*5,0
+			dc.w		-14*4,-4*5,0
+			dc.w		-15*4,-5*5,0
+			dc.w		-15*4,-5*5,0
+			dc.w		-18*4,-5*5,0
+			dc.w		-18*4,-5*5,0
+			dc.w		-19*4,-4*5,0
+			dc.w		-19*4,-4*5,0
+			dc.w		-20*4,-2*5,0
+			dc.w		-20*4,-2*5,0
+			dc.w		-20*4,+2*5,0
+			dc.w		-20*4,+2*5,0
+			dc.w		-19*4,+4*5,0
+			dc.w		-19*4,+4*5,0
+			dc.w		-17*4,+5*5,0
+			dc.w		-17*4,+5*5,0
+			dc.w		-15*4,+5*5,0
+			dc.w		-15*4,+5*5,0
+			dc.w		-14*4,+4*5,0
+			dc.w		-14*4,+4*5,0
+			dc.w		-14*4,+2*5,0
+			dc.w		-14*4,+2*5,0
+			dc.w		-15*4,+1*5,0
+			dc.w		-17*4,+1*5,0
+			dc.w		-13*4,+1*5,0
+			dc.w		-14*4,+4*5,0
+			dc.w		-13*4,+5*5,0
+
+			dc.w		-13*4,+5*5,0		; le r : 8 lignes
+			dc.w		-12*4,+5*5,0
+			dc.w		-12*4,+5*5,0
+			dc.w		-11*4,+4*5,0
+			dc.w		-11*4,+4*5,0
+			dc.w		-11*4,+2*5,0
+			dc.w		-11*4,+2*5,0
+			dc.w		-12*4,+1*5,0
+			dc.w		-12*4,+1*5,0
+			dc.w		-8*4,+1*5,0
+			dc.w		-8*4,+1*5,0
+			dc.w		-9*4,+3*5,0
+			dc.w		-9*4,+3*5,0
+			dc.w		-9*4,+4*5,0
+			dc.w		-9*4,+4*5,0
+			dc.w		-8*4,+5*5,0
+
+			dc.w		-8*4,+5*5,0		; le e : 9 lignes
+			dc.w		-7*4,+4*5,0
+			dc.w		-7*4,+4*5,0
+			dc.w		-7*4,+2*5,0
+			dc.w		-7*4,+2*5,0
+			dc.w		-6*4,+1*5,0
+			dc.w		-6*4,+1*5,0
+			dc.w		-4*4,+1*5,0
+			dc.w		-4*4,+1*5,0
+			dc.w		-3*4,+2*5,0
+			dc.w		-3*4,+2*5,0
+			dc.w		-3*4,+3*5,0
+			dc.w		-3*4,+3*5,0
+			dc.w		-7*4,+3*5,0
+			dc.w		-7*4,+4*5,0
+			dc.w		-6*4,+5*5,0
+			dc.w		-6*4,+5*5,0
+			dc.w		-3*4,+5*5,0
+
+			dc.w		-3*4,+5*5,0		; le e : 9 lignes
+			dc.w		-2*4,+4*5,0
+			dc.w		-2*4,+4*5,0
+			dc.w		-2*4,+2*5,0
+			dc.w		-2*4,+2*5,0
+			dc.w		-1*4,+1*5,0
+			dc.w		-1*4,+1*5,0
+			dc.w		+1*4,+1*5,0
+			dc.w		+1*4,+1*5,0
+			dc.w		+2*4,+2*5,0
+			dc.w		+2*4,+2*5,0
+			dc.w		+2*4,+3*5,0
+			dc.w		+2*4,+3*5,0
+			dc.w		-2*4,+3*5,0
+			dc.w		-2*4,+4*5,0
+			dc.w		-1*4,+5*5,0
+			dc.w		-1*4,+5*5,0
+			dc.w		+2*4,+5*5,0
+
+			dc.w		+2*4,+5*5,0		; le t : 5 lignes
+			dc.w		+3*4,+4*5,0
+			dc.w		+3*4,+4*5,0
+			dc.w		+4*4,+5*5,0
+			dc.w		+4*4,+5*5,0
+			dc.w		+5*4,+5*5,0
+			dc.w		+3*4,+4*5,0
+			dc.w		+3*4,-3*5,0
+			dc.w		+3*5,0*5,0
+			dc.w		+5*5,0*5,0
+
+			dc.w		+5*4,+5*5,0		; le i : 4 lignes
+			dc.w		+6*4,+4*5,0
+			dc.w		+6*4,+4*5,0
+			dc.w		+6*4,+2*5,0
+			dc.w		+6*4,+4*5,0
+			dc.w		+7*4,+5*5,0
+			dc.w		+6*4,+1*5,0
+			dc.w		+6*4,+1*5,0
+
+			dc.w		+7*4,+5*5,0		; le n : 9 lignes
+			dc.w		+8*4,+4*5,0
+			dc.w		+8*4,+4*5,0
+			dc.w		+8*4,+2*5,0
+			dc.w		+8*4,+2*5,0
+			dc.w		+9*4,+1*5,0
+			dc.w		+9*4,+1*5,0
+			dc.w		+10*4,+2*5,0
+			dc.w		+10*4,+2*5,0
+			dc.w		+11*4,+1*5,0
+			dc.w		+11*4,+1*5,0
+			dc.w		+12*4,+2*5,0
+			dc.w		+12*4,+2*5,0
+			dc.w		+12*4,+4*5,0
+			dc.w		+12*4,+4*5,0
+			dc.w		+13*4,+5*5,0
+			dc.w		+10*4,+2*5,0
+			dc.w		+10*4,+5*5,0
+
+			dc.w		+13*4,+5*5,0		; le g : 11 lignes
+			dc.w		+14*4,+4*5,0
+			dc.w		+14*4,+4*5,0
+			dc.w		+14*4,+2*5,0
+			dc.w		+14*4,+2*5,0
+			dc.w		+15*4,+1*5,0
+			dc.w		+15*4,+1*5,0
+			dc.w		+17*4,+1*5,0
+			dc.w		+17*4,+1*5,0
+			dc.w		+18*4,+2*5,0
+			dc.w		+18*4,+2*5,0
+			dc.w		+18*4,+8*5,0
+			dc.w		+18*4,+8*5,0
+			dc.w		+17*4,+9*5,0
+			dc.w		+17*4,+9*5,0
+			dc.w		+15*4,+9*5,0
+			dc.w		+15*4,+9*5,0
+			dc.w		+14*4,+8*5,0
+			dc.w		+18*4,+5*5,0
+			dc.w		+15*4,+5*5,0
+			dc.w		+15*4,+5*5,0
+			dc.w		+14*4,+4*5,0
+
+			dc.w		+18*4,+5*5,0		; le s : 10 lignes
+			dc.w		+19*4,+4*5,0
+			dc.w		+19*4,+4*5,0
+			dc.w		+20*4,+5*5,0
+			dc.w		+20*4,+5*5,0
+			dc.w		+22*4,+5*5,0
+			dc.w		+22*4,+5*5,0
+			dc.w		+23*4,+4*5,0
+			dc.w		+23*4,+4*5,0
+			dc.w		+23*4,+3*5,0
+			dc.w		+23*4,+3*5,0
+			dc.w		+19*4,+3*5,0
+			dc.w		+19*4,+3*5,0
+			dc.w		+19*4,+2*5,0
+			dc.w		+19*4,+2*5,0
+			dc.w		+20*4,+1*5,0
+			dc.w		+20*4,+1*5,0
+			dc.w		+22*4,+1*5,0
+			dc.w		+22*4,+1*5,0
+			dc.w		+23*4,+2*5,0
+
+; 4äme Objet
+
+Cubes		dc.l		$800000/2200*29	; Coefficient Lumiäre sur Z
+
+			dc.l		9*12				; Nombre de Lignes
+
+			dc.w		-35,-35,-35
+			dc.w		+35,-35,-35
+			dc.w		+35,-35,-35
+			dc.w		+35,+35,-35
+			dc.w		+35,+35,-35
+			dc.w		-35,+35,-35
+			dc.w		-35,+35,-35
+			dc.w		-35,-35,-35
+
+			dc.w		-35,-35,+35
+			dc.w		+35,-35,+35
+			dc.w		+35,-35,+35
+			dc.w		+35,+35,+35
+			dc.w		+35,+35,+35
+			dc.w		-35,+35,+35
+			dc.w		-35,+35,+35
+			dc.w		-35,-35,+35
+
+			dc.w		-35,-35,-35
+			dc.w		-35,-35,+35
+			dc.w		-35,+35,-35
+			dc.w		-35,+35,+35
+			dc.w		+35,+35,-35
+			dc.w		+35,+35,+35
+			dc.w		+35,-35,-35
+			dc.w		+35,-35,+35
+
+			dc.w		-10,-10,-10
+			dc.w		+10,-10,-10
+			dc.w		+10,-10,-10
+			dc.w		+10,+10,-10
+			dc.w		+10,+10,-10
+			dc.w		-10,+10,-10
+			dc.w		-10,+10,-10
+			dc.w		-10,-10,-10
+
+			dc.w		-10,-10,+10
+			dc.w		+10,-10,+10
+			dc.w		+10,-10,+10
+			dc.w		+10,+10,+10
+			dc.w		+10,+10,+10
+			dc.w		-10,+10,+10
+			dc.w		-10,+10,+10
+			dc.w		-10,-10,+10
+
+			dc.w		-10,-10,-10
+			dc.w		-10,-10,+10
+			dc.w		-10,+10,-10
+			dc.w		-10,+10,+10
+			dc.w		+10,+10,-10
+			dc.w		+10,+10,+10
+			dc.w		+10,-10,-10
+			dc.w		+10,-10,+10
+
+			dc.w		-25,-25,-25
+			dc.w		+25,-25,-25
+			dc.w		+25,-25,-25
+			dc.w		+25,+25,-25
+			dc.w		+25,+25,-25
+			dc.w		-25,+25,-25
+			dc.w		-25,+25,-25
+			dc.w		-25,-25,-25
+
+			dc.w		-25,-25,+25
+			dc.w		+25,-25,+25
+			dc.w		+25,-25,+25
+			dc.w		+25,+25,+25
+			dc.w		+25,+25,+25
+			dc.w		-25,+25,+25
+			dc.w		-25,+25,+25
+			dc.w		-25,-25,+25
+
+			dc.w		-25,-25,-25
+			dc.w		-25,-25,+25
+			dc.w		-25,+25,-25
+			dc.w		-25,+25,+25
+			dc.w		+25,+25,-25
+			dc.w		+25,+25,+25
+			dc.w		+25,-25,-25
+			dc.w		+25,-25,+25
+
+			dc.w		-30,-30,-30
+			dc.w		+30,-30,-30
+			dc.w		+30,-30,-30
+			dc.w		+30,+30,-30
+			dc.w		+30,+30,-30
+			dc.w		-30,+30,-30
+			dc.w		-30,+30,-30
+			dc.w		-30,-30,-30
+
+			dc.w		-30,-30,+30
+			dc.w		+30,-30,+30
+			dc.w		+30,-30,+30
+			dc.w		+30,+30,+30
+			dc.w		+30,+30,+30
+			dc.w		-30,+30,+30
+			dc.w		-30,+30,+30
+			dc.w		-30,-30,+30
+
+			dc.w		-30,-30,-30
+			dc.w		-30,-30,+30
+			dc.w		-30,+30,-30
+			dc.w		-30,+30,+30
+			dc.w		+30,+30,-30
+			dc.w		+30,+30,+30
+			dc.w		+30,-30,-30
+			dc.w		+30,-30,+30
+
+			dc.w		-45,-45,-45
+			dc.w		+45,-45,-45
+			dc.w		+45,-45,-45
+			dc.w		+45,+45,-45
+			dc.w		+45,+45,-45
+			dc.w		-45,+45,-45
+			dc.w		-45,+45,-45
+			dc.w		-45,-45,-45
+
+			dc.w		-45,-45,+45
+			dc.w		+45,-45,+45
+			dc.w		+45,-45,+45
+			dc.w		+45,+45,+45
+			dc.w		+45,+45,+45
+			dc.w		-45,+45,+45
+			dc.w		-45,+45,+45
+			dc.w		-45,-45,+45
+
+			dc.w		-45,-45,-45
+			dc.w		-45,-45,+45
+			dc.w		-45,+45,-45
+			dc.w		-45,+45,+45
+			dc.w		+45,+45,-45
+			dc.w		+45,+45,+45
+			dc.w		+45,-45,-45
+			dc.w		+45,-45,+45
+
+			dc.w		-20,-20,-20
+			dc.w		+20,-20,-20
+			dc.w		+20,-20,-20
+			dc.w		+20,+20,-20
+			dc.w		+20,+20,-20
+			dc.w		-20,+20,-20
+			dc.w		-20,+20,-20
+			dc.w		-20,-20,-20
+
+			dc.w		-20,-20,+20
+			dc.w		+20,-20,+20
+			dc.w		+20,-20,+20
+			dc.w		+20,+20,+20
+			dc.w		+20,+20,+20
+			dc.w		-20,+20,+20
+			dc.w		-20,+20,+20
+			dc.w		-20,-20,+20
+
+			dc.w		-20,-20,-20
+			dc.w		-20,-20,+20
+			dc.w		-20,+20,-20
+			dc.w		-20,+20,+20
+			dc.w		+20,+20,-20
+			dc.w		+20,+20,+20
+			dc.w		+20,-20,-20
+			dc.w		+20,-20,+20
+
+			dc.w		-5,-5,-5
+			dc.w		+5,-5,-5
+			dc.w		+5,-5,-5
+			dc.w		+5,+5,-5
+			dc.w		+5,+5,-5
+			dc.w		-5,+5,-5
+			dc.w		-5,+5,-5
+			dc.w		-5,-5,-5
+
+			dc.w		-5,-5,+5
+			dc.w		+5,-5,+5
+			dc.w		+5,-5,+5
+			dc.w		+5,+5,+5
+			dc.w		+5,+5,+5
+			dc.w		-5,+5,+5
+			dc.w		-5,+5,+5
+			dc.w		-5,-5,+5
+
+			dc.w		-5,-5,-5
+			dc.w		-5,-5,+5
+			dc.w		-5,+5,-5
+			dc.w		-5,+5,+5
+			dc.w		+5,+5,-5
+			dc.w		+5,+5,+5
+			dc.w		+5,-5,-5
+			dc.w		+5,-5,+5
+
+			dc.w		-40,-40,-40
+			dc.w		+40,-40,-40
+			dc.w		+40,-40,-40
+			dc.w		+40,+40,-40
+			dc.w		+40,+40,-40
+			dc.w		-40,+40,-40
+			dc.w		-40,+40,-40
+			dc.w		-40,-40,-40
+
+			dc.w		-40,-40,+40
+			dc.w		+40,-40,+40
+			dc.w		+40,-40,+40
+			dc.w		+40,+40,+40
+			dc.w		+40,+40,+40
+			dc.w		-40,+40,+40
+			dc.w		-40,+40,+40
+			dc.w		-40,-40,+40
+
+			dc.w		-40,-40,-40
+			dc.w		-40,-40,+40
+			dc.w		-40,+40,-40
+			dc.w		-40,+40,+40
+			dc.w		+40,+40,-40
+			dc.w		+40,+40,+40
+			dc.w		+40,-40,-40
+			dc.w		+40,-40,+40
+
+			dc.w		-15,-15,-15
+			dc.w		+15,-15,-15
+			dc.w		+15,-15,-15
+			dc.w		+15,+15,-15
+			dc.w		+15,+15,-15
+			dc.w		-15,+15,-15
+			dc.w		-15,+15,-15
+			dc.w		-15,-15,-15
+
+			dc.w		-15,-15,+15
+			dc.w		+15,-15,+15
+			dc.w		+15,-15,+15
+			dc.w		+15,+15,+15
+			dc.w		+15,+15,+15
+			dc.w		-15,+15,+15
+			dc.w		-15,+15,+15
+			dc.w		-15,-15,+15
+
+			dc.w		-15,-15,-15
+			dc.w		-15,-15,+15
+			dc.w		-15,+15,-15
+			dc.w		-15,+15,+15
+			dc.w		+15,+15,-15
+			dc.w		+15,+15,+15
+			dc.w		+15,-15,-15
+			dc.w		+15,-15,+15
+
+; 5äme Objet
+
+Password		dc.l		$800000/3500*29	; Coefficient Lumiäre sur Z
+
+			dc.l		10+18+12+12+17+8+10+14+12	; Nombre de Lignes
+
+			dc.w		-44*2,-16*2,0			; le P : 10 lignes
+			dc.w		-50*2,-10*2,0
+			dc.w		-50*2,-10*2,0
+			dc.w		-48*2,-8*2,0
+			dc.w		-48*2,-8*2,0
+			dc.w		-44*2,-12*2,0
+			dc.w		-44*2,-12*2,0
+			dc.w		-36*2,-4*2,0
+			dc.w		-36*2,-4*2,0
+			dc.w		-44*2,+4*2,0
+			dc.w		-44*2,+4*2,0
+			dc.w		-50*2,+20*2,0
+			dc.w		-50*2,+20*2,0
+			dc.w		-48*2,+22*2,0
+			dc.w		-48*2,+22*2,0
+			dc.w		-42*2,+6*2,0
+			dc.w		-42*2,+6*2,0
+			dc.w		-32*2,-4*2,0
+			dc.w		-32*2,-4*2,0
+			dc.w		-44*2,-16*2,0
+
+			dc.w		-32*2,-2*2,0			; le a : 18 lignes
+			dc.w		-40*2,+6*2,0
+			dc.w		-40*2,+6*2,0
+			dc.w		-38*2,+8*2,0
+			dc.w		-38*2,+8*2,0
+			dc.w		-32*2,+2*2,0
+			dc.w		-32*2,+2*2,0
+			dc.w		-28*2,+8*2,0
+			dc.w		-28*2,+8*2,0
+			dc.w		-32*2,+6*2,0
+			dc.w		-32*2,+6*2,0
+			dc.w		-38*2,+12*2,0
+			dc.w		-38*2,+12*2,0
+			dc.w		-38*2,+18*2,0
+			dc.w		-38*2,+18*2,0
+			dc.w		-32*2,+20*2,0
+			dc.w		-32*2,+20*2,0
+			dc.w		-23*2,+16*2,0
+			dc.w		-23*2,+16*2,0
+			dc.w		-22*2,+18*2,0
+			dc.w		-22*2,+18*2,0
+			dc.w		-20*2,+16*2,0
+			dc.w		-20*2,+16*2,0
+			dc.w		-32*2,-2*2,0
+
+			dc.w		-26*2,+14*2,0
+			dc.w		-28*2,+10*2,0
+			dc.w		-28*2,+10*2,0
+			dc.w		-30*2,+10*2,0
+			dc.w		-30*2,+10*2,0
+			dc.w		-32*2,+12*2,0
+			dc.w		-32*2,+12*2,0
+			dc.w		-34*2,+14*2,0
+			dc.w		-34*2,+14*2,0
+			dc.w		-32*2,+16*2,0
+			dc.w		-32*2,+16*2,0
+			dc.w		-26*2,+14*2,0
+
+			dc.w		-16*2,-12*2,0			; le s : 12 lignes
+			dc.w		-24*2,-4*2,0
+			dc.w		-24*2,-4*2,0
+			dc.w		-16*2,+6*2,0
+			dc.w		-16*2,+6*2,0
+			dc.w		-18*2,+10*2,0
+			dc.w		-18*2,+10*2,0
+			dc.w		-22*2,+4*2,0
+			dc.w		-22*2,+4*2,0
+			dc.w		-24*2,+6*2,0
+			dc.w		-24*2,+6*2,0
+			dc.w		-18*2,+16*2,0
+			dc.w		-18*2,+16*2,0
+			dc.w		-12*2,+6*2,0
+			dc.w		-12*2,+6*2,0
+			dc.w		-20*2,-4*2,0
+			dc.w		-20*2,-4*2,0
+			dc.w		-16*2,-8*2,0
+			dc.w		-16*2,-8*2,0
+			dc.w		-12*2,-4*2,0
+			dc.w		-12*2,-4*2,0
+			dc.w		-10*2,-6*2,0
+			dc.w		-10*2,-6*2,0
+			dc.w		-16*2,-12*2,0
+
+			dc.w		-8*2,-6*2,0			; le s : 12 lignes
+			dc.w		-14*2,-0*2,0
+			dc.w		-14*2,-0*2,0
+			dc.w		-4*2,+12*2,0
+			dc.w		-4*2,+12*2,0
+			dc.w		-8*2,+16*2,0
+			dc.w		-8*2,+16*2,0
+			dc.w		-12*2,+12*2,0
+			dc.w		-12*2,+12*2,0
+			dc.w		-14*2,+14*2,0
+			dc.w		-14*2,+14*2,0
+			dc.w		-8*2,+20*2,0
+			dc.w		-8*2,+20*2,0
+			dc.w		0*2,+12*2,0
+			dc.w		0*2,+12*2,0
+			dc.w		-10*2,+0*2,0
+			dc.w		-10*2,+0*2,0
+			dc.w		-8*2,-2*2,0
+			dc.w		-8*2,-2*2,0
+			dc.w		-2*2,+2*2,0
+			dc.w		-2*2,+2*2,0
+			dc.w		0*2,0*2,0
+			dc.w		0*2,0*2,0
+			dc.w		-8*2,-6*2,0
+
+			dc.w		+4*2,-4*2,0			; le w : 17 lignes
+			dc.w		-2*2,+6*2,0
+			dc.w		-2*2,+6*2,0
+			dc.w		+2*2,+12*2,0
+			dc.w		+2*2,+12*2,0
+			dc.w		+6*2,+12*2,0
+			dc.w		+6*2,+12*2,0
+			dc.w		+8*2,+6*2,0
+			dc.w		+8*2,+6*2,0
+			dc.w		+10*2,+12*2,0
+			dc.w		+10*2,+12*2,0
+			dc.w		+14*2,+12*2,0
+			dc.w		+14*2,+12*2,0
+			dc.w		+18*2,+6*2,0
+			dc.w		+18*2,+6*2,0
+			dc.w		+10*2,-4*2,0
+			dc.w		+10*2,-4*2,0
+			dc.w		+8*2,-4*2,0
+			dc.w		+8*2,-4*2,0
+			dc.w		+14*2,+6*2,0
+			dc.w		+14*2,+6*2,0
+			dc.w		+12*2,+8*2,0
+			dc.w		+12*2,+8*2,0
+			dc.w		+10*2,+4*2,0
+			dc.w		+10*2,+4*2,0
+			dc.w		+6*2,+4*2,0
+			dc.w		+6*2,+4*2,0
+			dc.w		+4*2,+8*2,0
+			dc.w		+4*2,+8*2,0
+			dc.w		+2*2,+6*2,0
+			dc.w		+2*2,+6*2,0
+			dc.w		+6*2,-4*2,0
+			dc.w		+6*2,-4*2,0
+			dc.w		+4*2,-4*2,0
+
+			dc.w		+22*2,+4*2,0			; le o : 8 lignes
+			dc.w		+14*2,+12*2,0
+			dc.w		+14*2,+12*2,0
+			dc.w		+22*2,+20*2,0
+			dc.w		+22*2,+20*2,0
+			dc.w		+30*2,+12*2,0
+			dc.w		+30*2,+12*2,0
+			dc.w		+22*2,+4*2,0
+			dc.w		+22*2,+8*2,0
+			dc.w		+18*2,+12*2,0
+			dc.w		+18*2,+12*2,0
+			dc.w		+22*2,+16*2,0
+			dc.w		+22*2,+16*2,0
+			dc.w		+26*2,+12*2,0
+			dc.w		+26*2,+12*2,0
+			dc.w		+22*2,+8*2,0
+
+			dc.w		+28*2,-8*2,0			; le r : 10 lignes
+			dc.w		+26*2,-2*2,0
+			dc.w		+26*2,-2*2,0
+			dc.w		+24*2,-4*2,0
+			dc.w		+24*2,-4*2,0
+			dc.w		+22*2,-2*2,0
+			dc.w		+22*2,-2*2,0
+			dc.w		+32*2,+12*2,0
+			dc.w		+32*2,+12*2,0
+			dc.w		+34*2,+10*2,0
+			dc.w		+34*2,+10*2,0
+			dc.w		+26*2,+0*2,0
+			dc.w		+26*2,+0*2,0
+			dc.w		+28*2,-4*2,0
+			dc.w		+28*2,-4*2,0
+			dc.w		+30*2,-2*2,0
+			dc.w		+30*2,-2*2,0
+			dc.w		+32*2,-4*2,0
+			dc.w		+32*2,-4*2,0
+			dc.w		+28*2,-8*2,0
+
+			dc.w		+36*2,-16*2,0			; le d : 14 lignes
+			dc.w		+40*2,-4*2,0
+			dc.w		+40*2,-4*2,0
+			dc.w		+36*2,-6*2,0
+			dc.w		+36*2,-6*2,0
+			dc.w		+30*2,+2*2,0
+			dc.w		+30*2,+2*2,0
+			dc.w		+36*2,+10*2,0
+			dc.w		+36*2,+10*2,0
+			dc.w		+40*2,+6*2,0
+			dc.w		+40*2,+6*2,0
+			dc.w		+42*2,+8*2,0
+			dc.w		+42*2,+8*2,0
+			dc.w		+44*2,+6*2,0
+			dc.w		+44*2,+6*2,0
+			dc.w		+40*2,-18*2,0
+			dc.w		+40*2,-18*2,0
+			dc.w		+36*2,-16*2,0
+
+			dc.w		+36*2,-2*2,0
+			dc.w		+34*2,+2*2,0
+			dc.w		+34*2,+2*2,0
+			dc.w		+36*2,+6*2,0
+			dc.w		+36*2,+6*2,0
+			dc.w		+40*2,+4*2,0
+			dc.w		+40*2,+4*2,0
+			dc.w		+38*2,-2*2,0
+			dc.w		+38*2,-2*2,0
+			dc.w		+36*2,-2*2,0
+
+			dc.w		+50*2,-12*2,0			; le s : 12 lignes
+			dc.w		+42*2,-8*2,0
+			dc.w		+42*2,-8*2,0
+			dc.w		+50*2,+12*2,0
+			dc.w		+50*2,+12*2,0
+			dc.w		+46*2,+14*2,0
+			dc.w		+46*2,+14*2,0
+			dc.w		+44*2,+10*2,0
+			dc.w		+44*2,+10*2,0
+			dc.w		+42*2,+12*2,0
+			dc.w		+42*2,+12*2,0
+			dc.w		+46*2,+20*2,0
+			dc.w		+46*2,+20*2,0
+			dc.w		+54*2,+12*2,0
+			dc.w		+54*2,+12*2,0
+			dc.w		+46*2,-6*2,0
+			dc.w		+46*2,-6*2,0
+			dc.w		+50*2,-8*2,0
+			dc.w		+50*2,-8*2,0
+			dc.w		+54*2,-2*2,0
+			dc.w		+54*2,-2*2,0
+			dc.w		+56*2,-4*2,0
+			dc.w		+56*2,-4*2,0
+			dc.w		+50*2,-12*2,0
+
+; 6äme Objet
+
+MJJ			dc.l		$800000/3500*29	; Coefficient Lumiäre sur Z
+
+			dc.l		3*(12+12+12)			; Nombre de Lignes
+
+			dc.w		-100,-30,+20				; le M : 11 lignes
+			dc.w		-100,+30,+20
+			dc.w		-100,+30,+20
+			dc.w		-80,+30,+20
+			dc.w		-80,+30,+20
+			dc.w		-80,-10,+20
+			dc.w		-80,-10,+20
+			dc.w		-70,-0,+20
+			dc.w		-70,-0,+20
+			dc.w		-60,-10,+20
+			dc.w		-60,-10,+20
+			dc.w		-60,+30,+20
+			dc.w		-60,+30,+20
+			dc.w		-40,+30,+20
+			dc.w		-40,+30,+20
+			dc.w		-40,-30,+20
+			dc.w		-40,-30,+20
+			dc.w		-60,-30,+20
+			dc.w		-60,-30,+20
+			dc.w		-70,-20,+20
+			dc.w		-70,-20,+20
+			dc.w		-80,-30,+20
+			dc.w		-80,-30,+20
+			dc.w		-100,-30,+20
+
+			dc.w		-25,0,+20					; le J : 12 lignes
+			dc.w		-25,+20,+20
+			dc.w		-25,+20,+20
+			dc.w		-15,+30,+20
+			dc.w		-15,+30,+20
+			dc.w		+25,+30,+20
+			dc.w		+25,+30,+20
+			dc.w		+35,+20,+20
+			dc.w		+35,+20,+20
+			dc.w		+35,-30,+20
+			dc.w		+35,-30,+20
+			dc.w		+15,-30,+20
+			dc.w		+15,-30,+20
+			dc.w		+15,+5,+20
+			dc.w		+15,+5,+20
+			dc.w		+10,+15,+20
+			dc.w		+10,+15,+20
+			dc.w		0,+15,+20
+			dc.w		0,+15,+20
+			dc.w		-5,+5,+20
+			dc.w		-5,+5,+20
+			dc.w		-5,0,+20
+			dc.w		-5,0,+20
+			dc.w		-25,0,+20
+
+			dc.w		+40,0,+20					; le J : 12 lignes
+			dc.w		+40,+20,+20
+			dc.w		+40,+20,+20
+			dc.w		+50,+30,+20
+			dc.w		+50,+30,+20
+			dc.w		+90,+30,+20
+			dc.w		+90,+30,+20
+			dc.w		+100,+20,+20
+			dc.w		+100,+20,+20
+			dc.w		+100,-30,+20
+			dc.w		+100,-30,+20
+			dc.w		+80,-30,+20
+			dc.w		+80,-30,+20
+			dc.w		+80,+5,+20
+			dc.w		+80,+5,+20
+			dc.w		+75,+15,+20
+			dc.w		+75,+15,+20
+			dc.w		+65,+15,+20
+			dc.w		+65,+15,+20
+			dc.w		+60,+5,+20
+			dc.w		+60,+5,+20
+			dc.w		+60,0,+20
+			dc.w		+60,0,+20
+			dc.w		+40,0,+20
+
+			dc.w		-100,-30,-20				; le M : 12 lignes
+			dc.w		-100,+30,-20
+			dc.w		-100,+30,-20
+			dc.w		-80,+30,-20
+			dc.w		-80,+30,-20
+			dc.w		-80,-10,-20
+			dc.w		-80,-10,-20
+			dc.w		-70,-0,-20
+			dc.w		-70,-0,-20
+			dc.w		-60,-10,-20
+			dc.w		-60,-10,-20
+			dc.w		-60,+30,-20
+			dc.w		-60,+30,-20
+			dc.w		-40,+30,-20
+			dc.w		-40,+30,-20
+			dc.w		-40,-30,-20
+			dc.w		-40,-30,-20
+			dc.w		-60,-30,-20
+			dc.w		-60,-30,-20
+			dc.w		-70,-20,-20
+			dc.w		-70,-20,-20
+			dc.w		-80,-30,-20
+			dc.w		-80,-30,-20
+			dc.w		-100,-30,-20
+
+			dc.w		-25,0,-20					; le J : 12 lignes
+			dc.w		-25,+20,-20
+			dc.w		-25,+20,-20
+			dc.w		-15,+30,-20
+			dc.w		-15,+30,-20
+			dc.w		+25,+30,-20
+			dc.w		+25,+30,-20
+			dc.w		+35,+20,-20
+			dc.w		+35,+20,-20
+			dc.w		+35,-30,-20
+			dc.w		+35,-30,-20
+			dc.w		+15,-30,-20
+			dc.w		+15,-30,-20
+			dc.w		+15,+5,-20
+			dc.w		+15,+5,-20
+			dc.w		+10,+15,-20
+			dc.w		+10,+15,-20
+			dc.w		0,+15,-20
+			dc.w		0,+15,-20
+			dc.w		-5,+5,-20
+			dc.w		-5,+5,-20
+			dc.w		-5,0,-20
+			dc.w		-5,0,-20
+			dc.w		-25,0,-20
+
+			dc.w		+40,0,-20					; le J : 12 lignes
+			dc.w		+40,+20,-20
+			dc.w		+40,+20,-20
+			dc.w		+50,+30,-20
+			dc.w		+50,+30,-20
+			dc.w		+90,+30,-20
+			dc.w		+90,+30,-20
+			dc.w		+100,+20,-20
+			dc.w		+100,+20,-20
+			dc.w		+100,-30,-20
+			dc.w		+100,-30,-20
+			dc.w		+80,-30,-20
+			dc.w		+80,-30,-20
+			dc.w		+80,+5,-20
+			dc.w		+80,+5,-20
+			dc.w		+75,+15,-20
+			dc.w		+75,+15,-20
+			dc.w		+65,+15,-20
+			dc.w		+65,+15,-20
+			dc.w		+60,+5,-20
+			dc.w		+60,+5,-20
+			dc.w		+60,0,-20
+			dc.w		+60,0,-20
+			dc.w		+40,0,-20
+
+			dc.w		-100,-30,-20				; le M : 11 lignes
+			dc.w		-100,-30,+20
+			dc.w		-100,+30,-20
+			dc.w		-100,+30,+20
+			dc.w		-80,+30,-20
+			dc.w		-80,+30,+20
+			dc.w		-80,-10,-20
+			dc.w		-80,-10,+20
+			dc.w		-70,-0,-20
+			dc.w		-70,-0,+20
+			dc.w		-60,-10,-20
+			dc.w		-60,-10,+20
+			dc.w		-60,+30,-20
+			dc.w		-60,+30,+20
+			dc.w		-40,+30,-20
+			dc.w		-40,+30,+20
+			dc.w		-40,-30,-20
+			dc.w		-40,-30,+20
+			dc.w		-60,-30,-20
+			dc.w		-60,-30,+20
+			dc.w		-70,-20,-20
+			dc.w		-70,-20,+20
+			dc.w		-80,-30,-20
+			dc.w		-80,-30,+20
+
+			dc.w		-25,0,-20					; le J : 12 lignes
+			dc.w		-25,0,+20
+			dc.w		-25,+20,-20
+			dc.w		-25,+20,+20
+			dc.w		-15,+30,-20
+			dc.w		-15,+30,+20
+			dc.w		+25,+30,-20
+			dc.w		+25,+30,+20
+			dc.w		+35,+20,-20
+			dc.w		+35,+20,+20
+			dc.w		+35,-30,-20
+			dc.w		+35,-30,+20
+			dc.w		+15,-30,-20
+			dc.w		+15,-30,+20
+			dc.w		+15,+5,-20
+			dc.w		+15,+5,+20
+			dc.w		+10,+15,-20
+			dc.w		+10,+15,+20
+			dc.w		0,+15,-20
+			dc.w		0,+15,+20
+			dc.w		-5,+5,-20
+			dc.w		-5,+5,+20
+			dc.w		-5,0,-20
+			dc.w		-5,0,+20
+
+			dc.w		+40,0,-20					; le J : 12 lignes
+			dc.w		+40,0,+20
+			dc.w		+40,+20,-20
+			dc.w		+40,+20,+20
+			dc.w		+50,+30,-20
+			dc.w		+50,+30,+20
+			dc.w		+90,+30,-20
+			dc.w		+90,+30,+20
+			dc.w		+100,+20,-20
+			dc.w		+100,+20,+20
+			dc.w		+100,-30,-20
+			dc.w		+100,-30,+20
+			dc.w		+80,-30,-20
+			dc.w		+80,-30,+20
+			dc.w		+80,+5,-20
+			dc.w		+80,+5,+20
+			dc.w		+75,+15,-20
+			dc.w		+75,+15,+20
+			dc.w		+65,+15,-20
+			dc.w		+65,+15,+20
+			dc.w		+60,+5,-20
+			dc.w		+60,+5,+20
+			dc.w		+60,0,-20
+			dc.w		+60,0,+20
+
+; 7äme Objet
+
+Positivity	dc.l		$800000/3700*29	; Coefficient Lumiäre sur Z
+
+			dc.l		12+14+16+6+10+6+10+6+10+16	; Nombre de Lignes
+
+			dc.w		-102,-12,0			; le P : 8+4 lignes
+			dc.w		-102,+15,0
+			dc.w		-102,+15,0
+			dc.w		-87,+15,0
+			dc.w		-87,+15,0
+			dc.w		-87,+6,0
+			dc.w		-87,+6,0
+			dc.w		-81,+6,0
+			dc.w		-81,+6,0
+			dc.w		-78,+3,0
+			dc.w		-78,+3,0
+			dc.w		-78,-6,0
+			dc.w		-78,-6,0
+			dc.w		-81,-12,0
+			dc.w		-81,-12,0
+			dc.w		-102,-12,0
+
+			dc.w		-96,-6,0
+			dc.w		-96,0,0
+			dc.w		-96,0,0
+			dc.w		-84,0,0
+			dc.w		-84,0,0
+			dc.w		-84,-6,0
+			dc.w		-84,-6,0
+			dc.w		-96,-6,0
+
+			dc.w		-72,-12,0			; le O : 8+6 lignes
+			dc.w		-75,-6,0
+			dc.w		-75,-6,0
+			dc.w		-75,+12,0
+			dc.w		-75,+12,0
+			dc.w		-72,+15,0
+			dc.w		-72,+15,0
+			dc.w		-54,+15,0
+			dc.w		-54,+15,0
+			dc.w		-51,+12,0
+			dc.w		-51,+12,0
+			dc.w		-51,-9,0
+			dc.w		-51,-9,0
+			dc.w		-54,-12,0
+			dc.w		-54,-12,0
+			dc.w		-72,-12,0
+
+			dc.w		-69,-6,0
+			dc.w		-69,0,0
+			dc.w		-69,0,0
+			dc.w		-63,+3,0
+			dc.w		-63,+3,0
+			dc.w		-63,+9,0
+			dc.w		-63,+9,0
+			dc.w		-57,+9,0
+			dc.w		-57,+9,0
+			dc.w		-57,-6,0
+			dc.w		-57,-6,0
+			dc.w		-69,-6,0
+
+			dc.w		-48,-9,0			; le S : 16 lignes
+			dc.w		-48,+3,0
+			dc.w		-48,+3,0
+			dc.w		-45,+6,0
+			dc.w		-45,+6,0
+			dc.w		-39,+6,0
+			dc.w		-39,+6,0
+			dc.w		-39,+9,0
+			dc.w		-39,+9,0
+			dc.w		-48,+9,0
+			dc.w		-48,+9,0
+			dc.w		-48,+15,0
+			dc.w		-48,+15,0
+			dc.w		-27,+15,0
+			dc.w		-27,+15,0
+			dc.w		-24,+12,0
+			dc.w		-24,+12,0
+			dc.w		-24,0,0
+			dc.w		-24,0,0
+			dc.w		-27,-3,0
+			dc.w		-27,-3,0
+			dc.w		-42,-3,0
+			dc.w		-42,-3,0
+			dc.w		-42,-6,0
+			dc.w		-42,-6,0
+			dc.w		-24,-6,0
+			dc.w		-24,-6,0
+			dc.w		-24,-12,0
+			dc.w		-24,-12,0
+			dc.w		-45,-12,0
+			dc.w		-45,-12,0
+			dc.w		-48,-9,0
+
+			dc.w		-21,-12,0			; le I : 6 lignes
+			dc.w		-21,+15,0
+			dc.w		-21,+15,0
+			dc.w		-9,+15,0
+			dc.w		-9,+15,0
+			dc.w		-9,+3,0
+			dc.w		-9,+3,0
+			dc.w		-15,0,0
+			dc.w		-15,0,0
+			dc.w		-15,-12,0
+			dc.w		-15,-12,0
+			dc.w		-21,-12,0
+
+			dc.w		-12,-12,0			; le T : 10 lignes
+			dc.w		-12,-6,0
+			dc.w		-12,-6,0
+			dc.w		-3,-6,0
+			dc.w		-3,-6,0
+			dc.w		-3,+15,0
+			dc.w		-3,+15,0
+			dc.w		+9,+15,0
+			dc.w		+9,+15,0
+			dc.w		+9,+3,0
+			dc.w		+9,+3,0
+			dc.w		+3,0,0
+			dc.w		+3,0,0
+			dc.w		+3,-6,0
+			dc.w		+3,-6,0
+			dc.w		+12,-6,0
+			dc.w		+12,-6,0
+			dc.w		+12,-12,0
+			dc.w		+12,-12,0
+			dc.w		-12,-12,0
+
+			dc.w		6*6-21,-12,0		; le I : 6 lignes
+			dc.w		6*6-21,+15,0
+			dc.w		6*6-21,+15,0
+			dc.w		6*6-9,+15,0
+			dc.w		6*6-9,+15,0
+			dc.w		6*6-9,+3,0
+			dc.w		6*6-9,+3,0
+			dc.w		6*6-15,0,0
+			dc.w		6*6-15,0,0
+			dc.w		6*6-15,-12,0
+			dc.w		6*6-15,-12,0
+			dc.w		6*6-21,-12,0
+
+			dc.w		24,-12,0			; le V : 10 lignes
+			dc.w		24,-3,0
+			dc.w		24,-3,0
+			dc.w		36,+15,0
+			dc.w		36,+15,0
+			dc.w		48,+15,0
+			dc.w		48,+15,0
+			dc.w		48,-12,0
+			dc.w		48,-12,0
+			dc.w		42,-12,0
+			dc.w		42,-12,0
+			dc.w		42,0,0
+			dc.w		42,0,0
+			dc.w		33,0,0
+			dc.w		33,0,0
+			dc.w		30,-6,0
+			dc.w		30,-6,0
+			dc.w		30,-12,0
+			dc.w		30,-12,0
+			dc.w		24,-12,0
+
+			dc.w		12*6-12,-12,0			; le T : 10 lignes
+			dc.w		12*6-12,-6,0
+			dc.w		12*6-12,-6,0
+			dc.w		12*6-3,-6,0
+			dc.w		12*6-3,-6,0
+			dc.w		12*6-3,+15,0
+			dc.w		12*6-3,+15,0
+			dc.w		12*6+9,+15,0
+			dc.w		12*6+9,+15,0
+			dc.w		12*6+9,+3,0
+			dc.w		12*6+9,+3,0
+			dc.w		12*6+3,0,0
+			dc.w		12*6+3,0,0
+			dc.w		12*6+3,-6,0
+			dc.w		12*6+3,-6,0
+			dc.w		12*6+12,-6,0
+			dc.w		12*6+12,-6,0
+			dc.w		12*6+12,-12,0
+			dc.w		12*6+12,-12,0
+			dc.w		12*6-12,-12,0
+
+			dc.w		12*6-21,-12,0		; le I : 6 lignes
+			dc.w		12*6-21,+15,0
+			dc.w		12*6-21,+15,0
+			dc.w		12*6-9,+15,0
+			dc.w		12*6-9,+15,0
+			dc.w		12*6-9,+3,0
+			dc.w		12*6-9,+3,0
+			dc.w		12*6-15,0,0
+			dc.w		12*6-15,0,0
+			dc.w		12*6-15,-12,0
+			dc.w		12*6-15,-12,0
+			dc.w		12*6-21,-12,0
+
+			dc.w		87,-12,0			; le Y : 16 lignes
+			dc.w		87,0,0
+			dc.w		87,0,0
+			dc.w		90,3,0
+			dc.w		90,3,0
+			dc.w		102,3,0
+			dc.w		102,3,0
+			dc.w		102,6,0
+			dc.w		102,6,0
+			dc.w		99,9,0
+			dc.w		99,9,0
+			dc.w		87,9,0
+			dc.w		87,9,0
+			dc.w		87,15,0
+			dc.w		87,15,0
+			dc.w		102,15,0
+			dc.w		102,15,0
+			dc.w		108,9,0
+			dc.w		108,9,0
+			dc.w		108,-12,0
+			dc.w		108,-12,0
+			dc.w		102,-12,0
+			dc.w		102,-12,0
+			dc.w		102,-3,0
+			dc.w		102,-3,0
+			dc.w		96,-3,0
+			dc.w		96,-3,0
+			dc.w		93,-6,0
+			dc.w		93,-6,0
+			dc.w		93,-12,0
+			dc.w		93,-12,0
+			dc.w		87,-12,0
+
+; 8äme Objet
+
+Sanity		dc.l		$800000/4300*29	; Coefficient Lumiäre sur Z
+
+			dc.l		2*(14+14+11+9+13+12)
+
+			dc.w		-105,+10,-11		; le S : 14 lignes
+			dc.w		-80,+25,-11
+			dc.w		-80,+25,-11
+			dc.w		-60,+5,-11
+			dc.w		-60,+5,-11
+			dc.w		-75,-15,-11
+			dc.w		-75,-15,-11
+			dc.w		-70,-25,-11
+			dc.w		-70,-25,-11
+			dc.w		-55,-15,-11
+			dc.w		-55,-15,-11
+			dc.w		-42,-35,-11
+			dc.w		-42,-35,-11
+			dc.w		-50,-40,-11
+			dc.w		-50,-40,-11
+			dc.w		-57,-28,-11
+			dc.w		-57,-28,-11
+			dc.w		-70,-35,-11
+			dc.w		-70,-35,-11
+			dc.w		-83,-10,-11
+			dc.w		-83,-10,-11
+			dc.w		-70,+5,-11
+			dc.w		-70,+5,-11
+			dc.w		-75,+10,-11
+			dc.w		-75,+10,-11
+			dc.w		-95,-15,-11
+			dc.w		-95,-15,-11
+			dc.w		-105,+10,-11
+
+			dc.w		-55,-5,-11			; le a : 10+4 lignes
+			dc.w		-50,0,-11
+			dc.w		-50,0,-11
+			dc.w		-45,-10,-11
+			dc.w		-45,-10,-11
+			dc.w		-35,0,-11
+			dc.w		-35,0,-11
+			dc.w		-45,0,-11
+			dc.w		-45,0,-11
+			dc.w		-50,+10,-11
+			dc.w		-50,+10,-11
+			dc.w		-40,+20,-11
+			dc.w		-40,+20,-11
+			dc.w		-30,+20,-11
+			dc.w		-30,+20,-11
+			dc.w		-25,0,-11
+			dc.w		-25,0,-11
+			dc.w		-45,-20,-11
+			dc.w		-45,-20,-11
+			dc.w		-55,-5,-11
+
+			dc.w		-45,+10,-11
+			dc.w		-37,+15,-11
+			dc.w		-37,+15,-11
+			dc.w		-32,+5,-11
+			dc.w		-32,+5,-11
+			dc.w		-40,+5,-11
+			dc.w		-40,+5,-11
+			dc.w		-45,+10,-11
+
+			dc.w		-25,-5,-11			; le n : 11 lignes
+			dc.w		-20,0,-11
+			dc.w		-20,0,-11
+			dc.w		-25,+25,-11
+			dc.w		-25,+25,-11
+			dc.w		-20,+30,-11
+			dc.w		-20,+30,-11
+			dc.w		-15,+25,-11
+			dc.w		-15,+25,-11
+			dc.w		-10,0,-11
+			dc.w		-10,0,-11
+			dc.w		0,+10,-11
+			dc.w		0,+10,-11
+			dc.w		-5,+25,-11
+			dc.w		-5,+25,-11
+			dc.w		0,+30,-11
+			dc.w		0,+30,-11
+			dc.w		+10,+10,-11
+			dc.w		+10,+10,-11
+			dc.w		-15,-15,-11
+			dc.w		-15,-15,-11
+			dc.w		-25,-5,-11
+
+			dc.w		+5,-20,-11			; le i : 4+5 lignes
+			dc.w		+10,-15,-11
+			dc.w		+10,-15,-11
+			dc.w		+15,-20,-11
+			dc.w		+15,-20,-11
+			dc.w		+10,-25,-11
+			dc.w		+10,-25,-11
+			dc.w		+5,-20,-11
+
+			dc.w		+10,-10,-11
+			dc.w		+20,+20,-11
+			dc.w		+20,+20,-11
+			dc.w		+30,+20,-11
+			dc.w		+30,+20,-11
+			dc.w		+30,+12,-11
+			dc.w		+30,+12,-11
+			dc.w		+15,-15,-11
+			dc.w		+15,-15,-11
+			dc.w		+10,-10,-11
+
+			dc.w		+35,-30,-11			; le t : 13 lignes
+			dc.w		+28,0,-11
+			dc.w		+28,0,-11
+			dc.w		+35,+20,-11
+			dc.w		+35,+20,-11
+			dc.w		+45,+20,-11
+			dc.w		+45,+20,-11
+			dc.w		+60,0,-11
+			dc.w		+60,0,-11
+			dc.w		+50,-10,-11
+			dc.w		+50,-10,-11
+			dc.w		+40,+5,-11
+			dc.w		+40,+5,-11
+			dc.w		+37,0,-11
+			dc.w		+37,0,-11
+			dc.w		+39,-5,-11
+			dc.w		+39,-5,-11
+			dc.w		+50,-15,-11
+			dc.w		+50,-15,-11
+			dc.w		+47,-20,-11
+			dc.w		+47,-20,-11
+			dc.w		+40,-15,-11
+			dc.w		+40,-15,-11
+			dc.w		+43,-25,-11
+			dc.w		+43,-25,-11
+			dc.w		+35,-30,-11
+
+			dc.w		+60,-20,-11			; le y : 12 lignes
+			dc.w		+55,-10,-11
+			dc.w		+55,-10,-11
+			dc.w		+75,+10,-11
+			dc.w		+75,+10,-11
+			dc.w		+70,+20,-11
+			dc.w		+70,+20,-11
+			dc.w		+60,+10,-11
+			dc.w		+60,+10,-11
+			dc.w		+50,+20,-11
+			dc.w		+50,+20,-11
+			dc.w		+65,+35,-11
+			dc.w		+65,+35,-11
+			dc.w		+75,+35,-11
+			dc.w		+75,+35,-11
+			dc.w		+100,-20,-11
+			dc.w		+100,-20,-11
+			dc.w		+90,-25,-11
+			dc.w		+90,-25,-11
+			dc.w		+80,-5,-11
+			dc.w		+80,-5,-11
+			dc.w		+65,-20,-11
+			dc.w		+65,-20,-11
+			dc.w		+60,-20,-11
+
+			dc.w		-105,+10,+11		; le S : 14 lignes
+			dc.w		-80,+25,+11
+			dc.w		-80,+25,+11
+			dc.w		-60,+5,+11
+			dc.w		-60,+5,+11
+			dc.w		-75,-15,+11
+			dc.w		-75,-15,+11
+			dc.w		-70,-25,+11
+			dc.w		-70,-25,+11
+			dc.w		-55,-15,+11
+			dc.w		-55,-15,+11
+			dc.w		-42,-35,+11
+			dc.w		-42,-35,+11
+			dc.w		-50,-40,+11
+			dc.w		-50,-40,+11
+			dc.w		-57,-28,+11
+			dc.w		-57,-28,+11
+			dc.w		-70,-35,+11
+			dc.w		-70,-35,+11
+			dc.w		-83,-10,+11
+			dc.w		-83,-10,+11
+			dc.w		-70,+5,+11
+			dc.w		-70,+5,+11
+			dc.w		-75,+10,+11
+			dc.w		-75,+10,+11
+			dc.w		-95,-15,+11
+			dc.w		-95,-15,+11
+			dc.w		-105,+10,+11
+
+			dc.w		-55,-5,+11			; le a : 10+4 lignes
+			dc.w		-50,0,+11
+			dc.w		-50,0,+11
+			dc.w		-45,-10,+11
+			dc.w		-45,-10,+11
+			dc.w		-35,0,+11
+			dc.w		-35,0,+11
+			dc.w		-45,0,+11
+			dc.w		-45,0,+11
+			dc.w		-50,+10,+11
+			dc.w		-50,+10,+11
+			dc.w		-40,+20,+11
+			dc.w		-40,+20,+11
+			dc.w		-30,+20,+11
+			dc.w		-30,+20,+11
+			dc.w		-25,0,+11
+			dc.w		-25,0,+11
+			dc.w		-45,-20,+11
+			dc.w		-45,-20,+11
+			dc.w		-55,-5,+11
+
+			dc.w		-45,+10,+11
+			dc.w		-37,+15,+11
+			dc.w		-37,+15,+11
+			dc.w		-32,+5,+11
+			dc.w		-32,+5,+11
+			dc.w		-40,+5,+11
+			dc.w		-40,+5,+11
+			dc.w		-45,+10,+11
+
+			dc.w		-25,-5,+11			; le n : 11 lignes
+			dc.w		-20,0,+11
+			dc.w		-20,0,+11
+			dc.w		-25,+25,+11
+			dc.w		-25,+25,+11
+			dc.w		-20,+30,+11
+			dc.w		-20,+30,+11
+			dc.w		-15,+25,+11
+			dc.w		-15,+25,+11
+			dc.w		-10,0,+11
+			dc.w		-10,0,+11
+			dc.w		0,+10,+11
+			dc.w		0,+10,+11
+			dc.w		-5,+25,+11
+			dc.w		-5,+25,+11
+			dc.w		0,+30,+11
+			dc.w		0,+30,+11
+			dc.w		+10,+10,+11
+			dc.w		+10,+10,+11
+			dc.w		-15,-15,+11
+			dc.w		-15,-15,+11
+			dc.w		-25,-5,+11
+
+			dc.w		+5,-20,+11			; le i : 4+5 lignes
+			dc.w		+10,-15,+11
+			dc.w		+10,-15,+11
+			dc.w		+15,-20,+11
+			dc.w		+15,-20,+11
+			dc.w		+10,-25,+11
+			dc.w		+10,-25,+11
+			dc.w		+5,-20,+11
+
+			dc.w		+10,-10,+11
+			dc.w		+20,+20,+11
+			dc.w		+20,+20,+11
+			dc.w		+30,+20,+11
+			dc.w		+30,+20,+11
+			dc.w		+30,+12,+11
+			dc.w		+30,+12,+11
+			dc.w		+15,-15,+11
+			dc.w		+15,-15,+11
+			dc.w		+10,-10,+11
+
+			dc.w		+35,-30,+11			; le t : 13 lignes
+			dc.w		+28,0,+11
+			dc.w		+28,0,+11
+			dc.w		+35,+20,+11
+			dc.w		+35,+20,+11
+			dc.w		+45,+20,+11
+			dc.w		+45,+20,+11
+			dc.w		+60,0,+11
+			dc.w		+60,0,+11
+			dc.w		+50,-10,+11
+			dc.w		+50,-10,+11
+			dc.w		+40,+5,+11
+			dc.w		+40,+5,+11
+			dc.w		+37,0,+11
+			dc.w		+37,0,+11
+			dc.w		+39,-5,+11
+			dc.w		+39,-5,+11
+			dc.w		+50,-15,+11
+			dc.w		+50,-15,+11
+			dc.w		+47,-20,+11
+			dc.w		+47,-20,+11
+			dc.w		+40,-15,+11
+			dc.w		+40,-15,+11
+			dc.w		+43,-25,+11
+			dc.w		+43,-25,+11
+			dc.w		+35,-30,+11
+
+			dc.w		+60,-20,+11			; le y : 12 lignes
+			dc.w		+55,-10,+11
+			dc.w		+55,-10,+11
+			dc.w		+75,+10,+11
+			dc.w		+75,+10,+11
+			dc.w		+70,+20,+11
+			dc.w		+70,+20,+11
+			dc.w		+60,+10,+11
+			dc.w		+60,+10,+11
+			dc.w		+50,+20,+11
+			dc.w		+50,+20,+11
+			dc.w		+65,+35,+11
+			dc.w		+65,+35,+11
+			dc.w		+75,+35,+11
+			dc.w		+75,+35,+11
+			dc.w		+100,-20,+11
+			dc.w		+100,-20,+11
+			dc.w		+90,-25,+11
+			dc.w		+90,-25,+11
+			dc.w		+80,-5,+11
+			dc.w		+80,-5,+11
+			dc.w		+65,-20,+11
+			dc.w		+65,-20,+11
+			dc.w		+60,-20,+11
+
+; 9äme Objet
+
+Dune			dc.l		$800000/4000*29	; Coefficient Lumiäre sur Z
+
+			dc.l		2*(18+9+11+12)
+
+			dc.w		-60,-35,-11			; le D : 11+7 lignes
+			dc.w		-65,-30,-11
+			dc.w		-65,-30,-11
+			dc.w		-50,0,-11
+			dc.w		-50,0,-11
+			dc.w		-60,0,-11
+			dc.w		-60,0,-11
+			dc.w		-70,+10,-11
+			dc.w		-70,+10,-11
+			dc.w		-70,+20,-11
+			dc.w		-70,+20,-11
+			dc.w		-60,+30,-11
+			dc.w		-60,+30,-11
+			dc.w		-50,+30,-11
+			dc.w		-50,+30,-11
+			dc.w		-40,+20,-11
+			dc.w		-40,+20,-11
+			dc.w		-35,+30,-11
+			dc.w		-35,+30,-11
+			dc.w		-25,+25,-11
+			dc.w		-25,+25,-11
+			dc.w		-60,-35,-11
+
+			dc.w		-50,+5,-11
+			dc.w		-58,+5,-11
+			dc.w		-58,+5,-11
+			dc.w		-65,+12,-11
+			dc.w		-65,+12,-11
+			dc.w		-65,+18,-11
+			dc.w		-65,+18,-11
+			dc.w		-58,+25,-11
+			dc.w		-58,+25,-11
+			dc.w		-52,+25,-11
+			dc.w		-52,+25,-11
+			dc.w		-45,+15,-11
+			dc.w		-45,+15,-11
+			dc.w		-50,+5,-11
+
+			dc.w		-35,0,-11			; le u : 9 lignes
+			dc.w		-20,+30,-11
+			dc.w		-20,+30,-11
+			dc.w		-10,+30,-11
+			dc.w		-10,+30,-11
+			dc.w		+10,+5,-11
+			dc.w		+10,+5,-11
+			dc.w		-5,-15,-11
+			dc.w		-5,-15,-11
+			dc.w		-10,-5,-11
+			dc.w		-10,-5,-11
+			dc.w		0,+5,-11
+			dc.w		0,+5,-11
+			dc.w		-15,+20,-11
+			dc.w		-15,+20,-11
+			dc.w		-25,-5,-11
+			dc.w		-25,-5,-11
+			dc.w		-35,0,-11
+
+			dc.w		0,+25,-11			; le n : 11 lignes
+			dc.w		+5,+30,-11
+			dc.w		+5,+30,-11
+			dc.w		+20,+10,-11
+			dc.w		+20,+10,-11
+			dc.w		+30,+10,-11
+			dc.w		+30,+10,-11
+			dc.w		+20,+25,-11
+			dc.w		+20,+25,-11
+			dc.w		+25,+30,-11
+			dc.w		+25,+30,-11
+			dc.w		+40,+10,-11
+			dc.w		+40,+10,-11
+			dc.w		+35,0,-11
+			dc.w		+35,0,-11
+			dc.w		+25,0,-11
+			dc.w		+25,0,-11
+			dc.w		+27,-4,-11
+			dc.w		+27,-4,-11
+			dc.w		+20,-10,-11
+			dc.w		+20,-10,-11
+			dc.w		0,+25,-11
+
+			dc.w		+30,-20,-11			; le E : 12 lignes
+			dc.w		+55,+30,-11
+			dc.w		+55,+30,-11
+			dc.w		+80,+18,-11
+			dc.w		+80,+18,-11
+			dc.w		+75,+5,-11
+			dc.w		+75,+5,-11
+			dc.w		+60,+12,-11
+			dc.w		+60,+12,-11
+			dc.w		+55,+3,-11
+			dc.w		+55,+3,-11
+			dc.w		+65,-2,-11
+			dc.w		+65,-2,-11
+			dc.w		+60,-10,-11
+			dc.w		+60,-10,-11
+			dc.w		+50,-5,-11
+			dc.w		+50,-5,-11
+			dc.w		+45,-15,-11
+			dc.w		+45,-15,-11
+			dc.w		+60,-20,-11
+			dc.w		+60,-20,-11
+			dc.w		+55,-30,-11
+			dc.w		+55,-30,-11
+			dc.w		+30,-20,-11
+
+			dc.w		-60,-35,+11			; le D : 11+7 lignes
+			dc.w		-65,-30,+11
+			dc.w		-65,-30,+11
+			dc.w		-50,0,+11
+			dc.w		-50,0,+11
+			dc.w		-60,0,+11
+			dc.w		-60,0,+11
+			dc.w		-70,+10,+11
+			dc.w		-70,+10,+11
+			dc.w		-70,+20,+11
+			dc.w		-70,+20,+11
+			dc.w		-60,+30,+11
+			dc.w		-60,+30,+11
+			dc.w		-50,+30,+11
+			dc.w		-50,+30,+11
+			dc.w		-40,+20,+11
+			dc.w		-40,+20,+11
+			dc.w		-35,+30,+11
+			dc.w		-35,+30,+11
+			dc.w		-25,+25,+11
+			dc.w		-25,+25,+11
+			dc.w		-60,-35,+11
+
+			dc.w		-50,+5,+11
+			dc.w		-58,+5,+11
+			dc.w		-58,+5,+11
+			dc.w		-65,+12,+11
+			dc.w		-65,+12,+11
+			dc.w		-65,+18,+11
+			dc.w		-65,+18,+11
+			dc.w		-58,+25,+11
+			dc.w		-58,+25,+11
+			dc.w		-52,+25,+11
+			dc.w		-52,+25,+11
+			dc.w		-45,+15,+11
+			dc.w		-45,+15,+11
+			dc.w		-50,+5,+11
+
+			dc.w		-35,0,+11			; le u : 9 lignes
+			dc.w		-20,+30,+11
+			dc.w		-20,+30,+11
+			dc.w		-10,+30,+11
+			dc.w		-10,+30,+11
+			dc.w		+10,+5,+11
+			dc.w		+10,+5,+11
+			dc.w		-5,-15,+11
+			dc.w		-5,-15,+11
+			dc.w		-10,-5,+11
+			dc.w		-10,-5,+11
+			dc.w		0,+5,+11
+			dc.w		0,+5,+11
+			dc.w		-15,+20,+11
+			dc.w		-15,+20,+11
+			dc.w		-25,-5,+11
+			dc.w		-25,-5,+11
+			dc.w		-35,0,+11
+
+			dc.w		0,+25,+11			; le n : 11 lignes
+			dc.w		+5,+30,+11
+			dc.w		+5,+30,+11
+			dc.w		+20,+10,+11
+			dc.w		+20,+10,+11
+			dc.w		+30,+10,+11
+			dc.w		+30,+10,+11
+			dc.w		+20,+25,+11
+			dc.w		+20,+25,+11
+			dc.w		+25,+30,+11
+			dc.w		+25,+30,+11
+			dc.w		+40,+10,+11
+			dc.w		+40,+10,+11
+			dc.w		+35,0,+11
+			dc.w		+35,0,+11
+			dc.w		+25,0,+11
+			dc.w		+25,0,+11
+			dc.w		+27,-4,+11
+			dc.w		+27,-4,+11
+			dc.w		+20,-10,+11
+			dc.w		+20,-10,+11
+			dc.w		0,+25,+11
+
+			dc.w		+30,-20,+11			; le E : 12 lignes
+			dc.w		+55,+30,+11
+			dc.w		+55,+30,+11
+			dc.w		+80,+18,+11
+			dc.w		+80,+18,+11
+			dc.w		+75,+5,+11
+			dc.w		+75,+5,+11
+			dc.w		+60,+12,+11
+			dc.w		+60,+12,+11
+			dc.w		+55,+3,+11
+			dc.w		+55,+3,+11
+			dc.w		+65,-2,+11
+			dc.w		+65,-2,+11
+			dc.w		+60,-10,+11
+			dc.w		+60,-10,+11
+			dc.w		+50,-5,+11
+			dc.w		+50,-5,+11
+			dc.w		+45,-15,+11
+			dc.w		+45,-15,+11
+			dc.w		+60,-20,+11
+			dc.w		+60,-20,+11
+			dc.w		+55,-30,+11
+			dc.w		+55,-30,+11
+			dc.w		+30,-20,+11
+
+; 10äme Objet
+
+Bill	dc.l		$800000/4000*29	; Coefficient Lumiäre sur Z
+
+			dc.l		31+21+22+22
+
+	Dc.w	-90,10,-11
+	Dc.w	-75,25,-11
+	Dc.w	-75,25,-11
+	Dc.w	-65,20,-11
+	Dc.w	-65,20,-11
+	Dc.w	-60,20,-11
+	Dc.w	-60,20,-11
+	Dc.w	-55,22,-11
+	Dc.w	-55,22,-11
+	Dc.w	-50,28,-11
+	Dc.w	-50,28,-11
+	Dc.w	-45,35,-11
+	Dc.w	-45,35,-11
+	Dc.w	-25,5,-11
+	Dc.w	-25,5,-11
+	Dc.w	-45,-5,-11
+	Dc.w	-45,-5,-11
+	Dc.w	-30,-13,-11
+	Dc.w	-30,-13,-11
+	Dc.w	-35,-15,-11
+	Dc.w	-35,-15,-11
+	Dc.w	-50,-35,-11
+	Dc.w	-50,-35,-11
+	Dc.w	-63,-15,-11
+	Dc.w	-63,-15,-11
+	Dc.w	-65,-25,-11
+	Dc.w	-65,-25,-11
+	Dc.w	-73,-20,-11
+	Dc.w	-73,-20,-11
+	Dc.w	-60,0,-11
+	Dc.w	-60,0,-11
+	Dc.w	-65,0,-11
+	Dc.w	-65,0,-11
+	Dc.w	-65,5,-11
+	Dc.w	-65,5,-11
+	Dc.w	-50,5,-11
+	Dc.w	-50,5,-11
+	Dc.w	-60,-15,-11
+	Dc.w	-60,-15,-11
+	Dc.w	-55,-20,-11
+	Dc.w	-55,-20,-11
+	Dc.w	-45,-10,-11
+	Dc.w	-45,-10,-11
+	Dc.w	-55,-10,-11
+	Dc.w	-55,-10,-11
+	Dc.w	-35,5,-11
+	Dc.w	-35,5,-11
+	Dc.w	-45,23,-11
+	Dc.w	-45,23,-11
+	Dc.w	-50,17,-11
+	Dc.w	-50,17,-11
+	Dc.w	-55,15,-11
+	Dc.w	-55,15,-11
+	Dc.w	-70,15,-11
+	Dc.w	-70,15,-11
+	Dc.w	-73,10,-11
+	Dc.w	-73,10,-11
+	Dc.w	-70,5,-11
+	Dc.w	-70,5,-11
+	Dc.w	-80,-5,-11
+	Dc.w	-80,-5,-11
+	Dc.w	-90,10,-11
+;
+	Dc.w	-20,-10,-11
+	Dc.w	-25,-5,-11
+	Dc.w	-25,-5,-11
+	Dc.w	-15,-3,-11
+	Dc.w	-15,-3,-11
+	Dc.w	-25,25,-11
+	Dc.w	-25,25,-11
+	Dc.w	-20,35,-11
+	Dc.w	-20,35,-11
+	Dc.w	0,25,-11
+	Dc.w	0,25,-11
+	Dc.w	-5,10,-11
+	Dc.w	-5,10,-11
+	Dc.w	-12,15,-11
+	Dc.w	-12,15,-11
+	Dc.w	-5,-5,-11
+	Dc.w	-5,-5,-11
+	Dc.w	-20,-10,-11
+	Dc.w	-10,-25,-11	
+	Dc.w	-12,-22,-11
+	Dc.w	-12,-22,-11
+	Dc.w	-15,-22,-11
+	Dc.w	-15,-22,-11
+	Dc.w	-13,-20,-11
+	Dc.w	-13,-20,-11
+	Dc.w	-15,-18,-11
+	Dc.w	-15,-18,-11
+	Dc.w	-12,-18,-11
+	Dc.w	-12,-18,-11
+	Dc.w	-10,-15,-11
+	Dc.w	-10,-25,-11	
+	Dc.w	-8,-22,-11
+	Dc.w	-8,-22,-11
+	Dc.w	-5,-22,-11
+	Dc.w	-5,-22,-11
+	Dc.w	-7,-20,-11
+	Dc.w	-7,-20,-11
+	Dc.w	-5,-18,-11
+	Dc.w	-5,-18,-11
+	Dc.w	-8,-18,-11
+	Dc.w	-8,-18,-11
+	Dc.w	-10,-15,-11
+;
+	Dc.w	15,-30,-11
+	Dc.w	12,-20,-11
+	Dc.w	12,-20,-11
+	Dc.w	10,-23,-11
+	Dc.w	10,-23,-11
+	Dc.w	5,-20,-11
+	Dc.w	5,-20,-11
+	Dc.w	10,-15,-11
+	Dc.w	10,-15,-11
+	Dc.w	0,10,-11
+	Dc.w	0,10,-11
+	Dc.w	5,7,-11
+	Dc.w	5,7,-11
+	Dc.w	2,20,-11
+	Dc.w	2,20,-11
+	Dc.w	10,17,-11
+	Dc.w	10,17,-11
+	Dc.w	35,20,-11
+	Dc.w	35,20,-11
+	Dc.w	40,13,-11
+	Dc.w	40,13,-11
+	Dc.w	35,0,-11
+	Dc.w	35,0,-11
+	Dc.w	25,5,-11
+	Dc.w	25,5,-11
+	Dc.w	30,12,-11
+	Dc.w	30,12,-11
+	Dc.w	22,15,-11
+	Dc.w	22,15,-11
+	Dc.w	8,10,-11
+	Dc.w	8,10,-11
+	Dc.w	10,3,-11
+	Dc.w	10,3,-11
+	Dc.w	7,5,-11
+	Dc.w	7,5,-11
+	Dc.w	13,-15,-11
+	Dc.w	13,-15,-11
+	Dc.w	15,-10,-11
+	Dc.w	15,-10,-11
+	Dc.w	20,-15,-11
+	Dc.w	20,-15,-11
+	Dc.w	25,-27,-11
+	Dc.w	25,-27,-11
+	Dc.w	15,-30,-11
+;
+	Dc.w	60,-20,-11
+	Dc.w	57,-10,-11
+	Dc.w	57,-10,-11
+	Dc.w	55,-13,-11
+	Dc.w	55,-13,-11
+	Dc.w	50,-10,-11
+	Dc.w	50,-10,-11
+	Dc.w	55,-5,-11
+	Dc.w	55,-5,-11
+	Dc.w	45,0,-11
+	Dc.w	45,0,-11
+	Dc.w	50,17,-11
+	Dc.w	50,17,-11
+	Dc.w	47,30,-11
+	Dc.w	47,30,-11
+	Dc.w	55,27,-11
+	Dc.w	55,27,-11
+	Dc.w	80,30,-11
+	Dc.w	80,30,-11
+	Dc.w	95,23,-11
+	Dc.w	95,23,-11
+	Dc.w	80,10,-11
+	Dc.w	80,10,-11
+	Dc.w	70,15,-11
+	Dc.w	70,15,-11
+	Dc.w	75,22,-11
+	Dc.w	75,22,-11
+	Dc.w	67,25,-11
+	Dc.w	67,25,-11
+	Dc.w	53,20,-11
+	Dc.w	53,20,-11
+	Dc.w	55,13,-11
+	Dc.w	55,13,-11
+	Dc.w	52,15,-11
+	Dc.w	52,15,-11
+	Dc.w	58,-5,-11
+	Dc.w	58,-5,-11
+	Dc.w	60,-0,-11
+	Dc.w	60,-0,-11
+	Dc.w	65,-5,-11
+	Dc.w	65,-5,-11
+	Dc.w	70,-17,-11
+	Dc.w	70,-17,-11
+	Dc.w	60,-20,-11
+
+; 11äme Objet
+
+Hydroxid		dc.l		$800000/4300*29	; Coefficient Lumiäre sur Z
+
+			dc.l		11+8+6+9+8+8+6+6
+
+H:			DC.W		0*100/160-100,37*100/160-62,30
+			DC.W		0*100/160-100,129*100/160-62,30
+			DC.W		0*100/160-100,129*100/160-62,30
+			DC.W		17*100/160-100,129*100/160-62,30
+			DC.W		17*100/160-100,129*100/160-62,30
+			DC.W		17*100/160-100,90*100/160-62,30
+			DC.W		17*100/160-100,90*100/160-62,30
+			DC		35*100/160-100,90*100/160-62,30
+			DC		35*100/160-100,90*100/160-62,30
+			DC		10*100/160-100,170*100/160-62,30
+			DC		10*100/160-100,170*100/160-62,30
+			DC		65*100/160-100,20*100/160-62,30
+			DC		65*100/160-100,20*100/160-62,30
+			DC		24*100/160-100,0*100/160-62,30
+			DC		24*100/160-100,0*100/160-62,30
+			DC		46*100/160-100,28*100/160-62,30
+			DC		46*100/160-100,28*100/160-62,30
+			DC		31*100/160-100,74*100/160-62,30
+			DC		31*100/160-100,74*100/160-62,30
+			DC		15*100/160-100,74*100/160-62,30
+			DC		15*100/160-100,74*100/160-62,30
+			DC		0*100/160-100,37*100/160-62,30
+
+			
+Y:			DC		0*100/160-100,144*100/160-62,30
+			DC		9*100/160-100,199*100/160-62,30
+			DC		9*100/160-100,199*100/160-62,30
+			DC		147*100/160-100,55*100/160-62,30
+			DC		147*100/160-100,55*100/160-62,30
+			DC		57*100/160-100,103*100/160-62,30
+			DC		57*100/160-100,103*100/160-62,30
+			DC		64*100/160-100,59*100/160-62,30
+			DC		64*100/160-100,59*100/160-62,30
+			DC		36*100/160-100,125*100/160-62,30
+			DC		36*100/160-100,125*100/160-62,30
+			DC		93*100/160-100,98*100/160-62,30
+			DC		93*100/160-100,98*100/160-62,30
+			DC		12*100/160-100,187*100/160-62,30
+			DC		12*100/160-100,187*100/160-62,30
+			DC		0*100/160-100,144*100/160-62,30
+
+
+D:			DC		92*100/160-100,26*100/160-62,30
+			DC		116*100/160-100,177*100/160-62,30
+			DC		116*100/160-100,177*100/160-62,30
+			DC		157*100/160-100,81*100/160-62,30
+			DC		157*100/160-100,81*100/160-62,30
+			DC		92*100/160-100,26*100/160-62,30
+
+			DC		110*100/160-100,56*100/160-62,30
+			DC		122*100/160-100,95*100/160-62,30
+			DC		122*100/160-100,95*100/160-62,30
+			DC		137*100/160-100,82*100/160-62,30
+			DC		137*100/160-100,82*100/160-62,30
+			DC		110*100/160-100,56*100/160-62,30
+
+
+R:			DC		89*100/160-100,133*100/160-62,30
+			DC		180*100/160-100,23*100/160-62,30
+			DC		180*100/160-100,23*100/160-62,30
+			DC		204*100/160-100,86*100/160-62,30
+			DC		204*100/160-100,86*100/160-62,30
+			DC		172*100/160-100,74*100/160-62,30
+			DC		172*100/160-100,74*100/160-62,30
+			DC		154*100/160-100,163*100/160-62,30
+			DC		154*100/160-100,163*100/160-62,30
+			DC		162*100/160-100,71*100/160-62,30
+			DC		162*100/160-100,71*100/160-62,30
+			DC		89*100/160-100,133*100/160-62,30
+
+			DC		175*100/160-100,45*100/160-62,30
+			DC		186*100/160-100,64*100/160-62,30
+			DC		186*100/160-100,64*100/160-62,30
+			DC		170*100/160-100,55*100/160-62,30
+			DC		170*100/160-100,55*100/160-62,30
+			DC		175*100/160-100,45*100/160-62,30
+
+
+O:			DC		183*100/160-100,92*100/160-62,30
+			DC		212*100/160-100,156*100/160-62,30
+			DC		212*100/160-100,156*100/160-62,30
+			DC		242*100/160-100,75*100/160-62,30
+			DC		242*100/160-100,75*100/160-62,30
+			DC		202*100/160-100,64*100/160-62,30
+			DC		202*100/160-100,64*100/160-62,30
+			DC		183*100/160-100,92*100/160-62,30
+
+			DC		194*100/160-100,91*100/160-62,30
+			DC		212*100/160-100,126*100/160-62,30
+			DC		212*100/160-100,126*100/160-62,30
+			DC		224*100/160-100,96*100/160-62,30
+			DC		224*100/160-100,96*100/160-62,30
+			DC		209*100/160-100,81*100/160-62,30
+			DC		209*100/160-100,81*100/160-62,30
+			DC		194*100/160-100,91*100/160-62,30
+
+X:			DC		208*100/160-100,17*100/160-62,30
+			DC		235*100/160-100,76*100/160-62,30
+			DC		235*100/160-100,76*100/160-62,30
+			DC		192*100/160-100,130*100/160-62,30
+			DC		192*100/160-100,130*100/160-62,30
+			DC		246*100/160-100,89*100/160-62,30
+			DC		246*100/160-100,89*100/160-62,30
+			DC		271*100/160-100,126*100/160-62,30
+			DC		271*100/160-100,126*100/160-62,30
+			DC		252*100/160-100,75*100/160-62,30
+			DC		252*100/160-100,75*100/160-62,30
+			DC		302*100/160-100,21*100/160-62,30
+			DC		302*100/160-100,21*100/160-62,30
+			DC		242*100/160-100,61*100/160-62,30
+			DC		242*100/160-100,61*100/160-62,30
+			DC		208*100/160-100,17*100/160-62,30
+
+I:			DC		260*100/160-100,57*100/160-62,30
+			DC		263*100/160-100,33*100/160-62,30
+			DC		263*100/160-100,33*100/160-62,30
+			DC		276*100/160-100,52*100/160-62,30
+			DC		276*100/160-100,52*100/160-62,30
+			DC		260*100/160-100,57*100/160-62,30
+
+			DC		263*100/160-100,71*100/160-62,30
+			DC		289*100/160-100,132*100/160-62,30
+			DC		289*100/160-100,132*100/160-62,30
+			DC		278*100/160-100,71*100/160-62,30
+			DC		278*100/160-100,71*100/160-62,30
+			DC		263*100/160-100,71*100/160-62,30
+
+D2:			DC		281*100/160-100,106*100/160-62,30
+			DC		319*100/160-100,75*100/160-62,30
+			DC		319*100/160-100,75*100/160-62,30
+			DC		295*100/160-100,45*100/160-62,30
+			DC		295*100/160-100,45*100/160-62,30
+			DC		281*100/160-100,106*100/160-62,30
+
+			DC		300*100/160-100,63*100/160-62,30
+			DC		306*100/160-100,77*100/160-62,30
+			DC		306*100/160-100,77*100/160-62,30
+			DC		296*100/160-100,85*100/160-62,30
+			DC		296*100/160-100,85*100/160-62,30
+			DC		300*100/160-100,63*100/160-62,30
+
+; 13äme Objet
+
+Adrenaline	dc.l		$800000/4300*29	; Coefficient Lumiäre sur Z
+
+			dc.l		$fe/2
+
+			IncBin	'ADRENALI.NE'
+
+
+***********************************************************************
+***********				Section BSS				***********
+***********************************************************************
+
+		Section	BSS
+
+; Adresses Ecrans
+Adr_Screen1	ds.l		1
+Adr_Screen2	ds.l		1
+
+; Place pour Table des offsets verticaux (multiples de 640)
+			ds.l		400
+Table_Y		ds.l		200
+			ds.l		400
+
+; Buffers
+Buffer1		ds.w		4*300
+Buffer2		ds.w		4*300
+
+; Place pour Ecrans
+			ds.b		(320+100)*200*2
+Screens		ds.b		2*(((320+100)*200)*2+256)
+ 	

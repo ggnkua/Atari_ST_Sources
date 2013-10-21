@@ -1,0 +1,809 @@
+***********************************************************************
+***********										***********
+***********										***********
+***********				Space-Cut					***********
+***********										***********
+***********										***********
+***********		   Par Simplet / ABSTRACT			***********
+***********										***********
+***********************************************************************
+
+Face_Par_Face	EQU		0
+
+KeyBD	EQU		0			; Si = 0, routine Simple
+							; Si = 1, routine Touches Sp‚ciales
+							; Si = 2, routine Souris, Joysticks
+
+		OPT		O+,OW-
+
+		IncDir	'..\INITS\'
+		Include	'MACROS.AST'
+
+***********************************************************************
+***********				Inits G‚n‚rales			***********
+***********************************************************************
+
+		Section	TEXT
+
+		clr.l	-(sp)					; Passage en Mode Supervisor
+		move.w	#$20,-(sp)				; SUPER
+		trap		#1						; Gemdos
+		addq.l 	#6,sp
+
+***********************************************************************
+***********				Inits DSP					***********
+***********************************************************************
+
+		move.w	#113,-(sp)				; DSP_RequestUniqueAbility
+		trap		#14						; XBios
+		addq.l	#2,sp
+
+		move.w	d0,-(sp)					; No Ability
+		move.l	#DSP_Size,-(sp)			; Longueur en Mots DSP
+		pea.l	DSP_Code					; Adresse du code binaire
+		move.w	#109,-(sp)				; Dsp_ExecProg
+		trap		#14						; XBios
+		lea.l	12(sp),sp
+
+
+Connect	move.l	#87654321,$ffffa204.w
+		moveq.l	#0,d0
+
+Conct_Get	btst.b	#0,$ffffa202.w
+		bne.s	DSP_Test
+		addq.l	#1,d0
+		cmp.l	#100000,d0
+		beq		DSP_Error
+		bra.s	Conct_Get
+
+DSP_Test	move.l	$ffffa204.w,d0
+		cmp.l	#12345678,d0
+		bne.s	DSP_Error
+
+		lea.l	$ffffa204.w,a6
+		bsr		Envoie_Table_1_x
+		bsr		Envoie_Table_Sinus
+
+***********************************************************************
+***********				Inits G‚n‚rales			***********
+***********************************************************************
+
+		move.w	#$2700,sr
+
+		bsr		Save_System
+		bsr		Init_System
+
+		lea.l	Videl_320_200_True,a0
+		lea.l	Adr_Screen1,a1
+		lea.l	Screens,a2
+		moveq.l	#2-1,d0
+		bsr		Init_Video
+		bsr		Init_Falcon_Palette
+		bsr		Init_IT
+
+		move.l	#New_VBL,$70.w
+
+		IfEq	KeyBD
+			move.l	#KeyBoard,$118.w
+		ElseIf
+		IfEq	KeyBD-1
+			move.l	#KeyBoard_Rout,$118.w
+		ElseIf
+			move.l	#KeyBoard_Mouse_and_JoySticks,$118.w
+		EndC
+		EndC
+		or.b		#$40,$fffffa09.w			; Autorise nouvelle
+		or.b		#$40,$fffffa15.w			; routine clavier
+
+***********************************************************************
+***********			Inits Sp‚cifiques				***********
+***********************************************************************
+
+***********************************************************************
+***********		Boucle principale d'attente			***********
+***********************************************************************
+
+Main_Loop	clr.w	VBL_Cmpt
+
+VBL_Wait	tst.w	VBL_Cmpt					; Attend
+		beq.s	VBL_Wait					; prochaine VBL
+
+		bsr.s	VBL_Rout					; ex‚cute routine
+
+		cmp.b	#$39,LastKey				; Touche Espace Press‚e ???
+		bne.s	Main_Loop
+
+***********************************************************************
+***********	C'est fini, on remet tout en place			***********
+***********************************************************************
+
+		bsr		Restore_System
+
+DSP_Error	clr.w 	-(sp)					; PTerm
+		trap 	#1						; Gemdos
+
+***********************************************************************
+***********		Routine tournant … chaque VBL			***********
+***********************************************************************
+
+VBL_Rout	SaveColor
+
+		move.l	Adr_Zone1,d0				; Flipping
+		move.l	Adr_Zone2,Adr_Zone1			; Ecrans
+		move.l	d0,Adr_Zone2				; Physique
+
+		move.l	Adr_Screen1,d0				; Flipping
+		move.l	Adr_Screen2,Adr_Screen1		; Ecrans
+		move.l	d0,Adr_Screen2				; Physique
+		lsr.w	#8,d0					; /
+		move.l	d0,$ffff8200.w				; Logique
+
+; Envoie Translations, Rotations des Objets
+
+		lea.l	First_Object(pc),a1
+		bsr		Envoie_Informations
+		lea.l	Second_Object(pc),a1
+		bsr		Envoie_Informations
+
+; Effacement de l'‚cran par zones
+
+		CPUTimeColor		#$dd550088
+
+		movea.l	Adr_Zone1(pc),a3
+		lea.l	First_Zone1-Nombre_Zones1(a3),a1
+		lea.l	Second_Zone1-First_Zone1(a1),a2
+		lea.l	Zones1-Second_Zone1(a2),a0
+
+		move.w	(a3),d7
+		beq.s	No_Clear_Zones
+
+		moveq.l	#0,d4
+		movea.l	a1,a4		; Deux zones de Base par d‚faut
+
+		cmp.b	#2-1,d7
+		beq.s	Clear_Zones
+
+		movea.l	a0,a4		; Non, trois zones intersect‚es
+
+Clear_Zones
+		IfNe		Face_Par_Face
+		bsr		Wait_VBLs
+		move.l	#$ff000000,$ffff9800.w
+		move.w	#10000,d0
+		dbra		d0,*
+		clr.w	$ffff9800.w
+		EndC
+
+		move.w	(a4)+,d0		; XMin
+		IfNe		Face_Par_Face
+		lea.l	([Adr_Screen2,pc],d0.w*2),a5
+		ElseIf
+		lea.l	([Adr_Screen1,pc],d0.w*2),a5
+		EndC
+		move.w	(a4)+,d1		; YMin
+		move.w	(a4)+,d2		; XMax
+		sub.w	d0,d2		; Largeur - 1
+		move.w	(a4)+,d3		; YMax
+		sub.w	d1,d3		; Hauteur - 1
+		muls.w	#320*2,d1		; Offset Y
+		adda.l	d1,a5		; Adresse de d‚part
+		lsr.w	#3,d2
+Clear_Hauteur
+		movea.l	a5,a6
+		move.w	d2,d6
+Clear_Largeur
+		move.l	d4,(a6)+
+		move.l	d4,(a6)+
+		move.l	d4,(a6)+
+		move.l	d4,(a6)+
+		dbra		d6,Clear_Largeur
+		adda.w	#320*2,a5
+		dbra		d3,Clear_Hauteur
+		dbra		d7,Clear_Zones		
+
+No_Clear_Zones
+
+; Port Host
+		lea.l	$ffffa204.w,a6
+		lea.l	2(a6),a5
+
+*		CPUTimeColor		#$558800dd
+
+; Recoit les 2 zones … effacer
+		WaitDSPToGet
+		movea.l	a1,a4
+		moveq.l	#8-1,d7
+Receive_Zones
+		move.w	(a5),(a4)+
+		dbra		d7,Receive_Zones
+
+		move.w	#2-1,(a3)
+		movem.w	(a1),d0-3
+		movem.w	(a2),d4-7
+
+		cmp.w	d1,d5			; YMin1 ? YMin2
+		bhs.s	Y_Mini_Ok
+		exg.l	a1,a2
+		movem.w	(a1),d0-3
+		movem.w	(a2),d4-7
+Y_Mini_Ok
+		cmp.w	d3,d5			; YMax1 ? YMin2
+		bhs.s	Two_Zones
+
+		move.w	d0,(a0)+			; XMin1
+		move.w	d1,(a0)+			; YMin1
+		move.w	d2,(a0)+			; XMax1
+		move.w	d5,(a0)+			; YMin2
+
+		cmp.w	d0,d4			; XMin1 ? XMin2
+		bhs.s	X_Mini_Ok
+		exg.l	d0,d4
+		exg.l	d2,d6
+X_Mini_Ok
+		cmp.w	d2,d4			; XMax1 ? XMin2
+		bhi.s	Two_Zones
+
+		move.w	#3-1,(a3)
+
+		cmp.w	d2,d6			; XMax1 ? XMax2
+		bhs.s	X_Maxi_Ok
+
+		move.w	d2,d6
+
+X_Maxi_Ok	cmp.w	d3,d7			; YMax1 ? YMax2
+		bhs.s	Y_Maxi_Ok
+
+		exg.l	d3,d7
+		move.w	(a1),d2
+		move.w	d2,(a2)
+		move.w	4(a1),d2
+		move.w	d2,4(a2)
+
+Y_Maxi_Ok	move.w	d0,(a0)+			; XMin1
+		move.w	d5,(a0)+			; YMin2
+		move.w	d6,(a0)+			; XMax2
+		move.w	d3,(a0)+			; YMax1
+
+		move.w	(a2),(a0)+		; XMin2
+		move.w	d3,(a0)+			; YMax1
+		move.w	4(a2),(a0)+		; XMax2
+		move.w	d7,(a0)+			; YMax2
+
+Two_Zones
+
+; Envoie Adresse de l'‚cran
+		IfNe		Face_Par_Face
+		move.l	Adr_Screen2,(a6)
+		ElseIf
+		move.l	Adr_Screen1,(a6)
+		EndC
+
+Routs_Choice
+		IfNe		Face_Par_Face
+		bsr		Wait_VBLs
+		move.l	#$ff000000,$ffff9800.w
+		move.w	#10000,d0
+		dbra		d0,*
+		clr.w	$ffff9800.w
+		EndC
+
+		WaitDSPToGet						; Le DSP nous envoie
+		moveq.l	#0,d0					; le num‚ro de
+		move.w	(a5),d0					; routine solicit‚e
+		beq.s	VBL_Ret
+
+		subq.b	#1,d0
+		beq		Polygone_Rout
+*		subq.b	#1,d0
+*		beq		Gouraud_Rout
+*		bra		Mapping_Rout
+
+
+VBL_Ret	RestoreColor
+
+		move.w	Force_VBL(pc),d0
+		beq.s	No_Force
+
+Force_Wait
+		cmp.w	VBL_Cmpt,d0
+		bhi.s	Force_Wait
+
+No_Force	rts
+
+***********************************************************************
+***********				Routine de Polygone			***********
+***********************************************************************
+
+Polygone_Rout
+*		CPUTimeColor		#$5f6f00ff
+
+		move.w	(a5),d1					; Couleur
+		move.w	d1,d0					; dans word
+		swap.w	d0						; faible et
+		move.w	d1,d0					; word fort
+
+		WaitDSPToGet
+		move.w	(a5),d7					; Nombre de Lignes
+		subq.w	#1,d7					; horizontales … tracer
+
+*		CPUTimeColor		#$50500050
+
+Polygone_Lines_Loop
+		WaitDSPToGet
+		move.w	(a5),d6					; Nombre de Pixels
+		beq.s	Polygone_Next_Line
+		movea.l	(a6),a1					; Adresse de d‚part
+
+		lsr.w	d6						; Si nombre impair
+		bcc.s	Polygone_Line				; de pixels
+		
+		move.w	d0,(a1)+					; affiche un premier
+
+Polygone_Line
+		subq.w	#1,d6
+		bmi.s	Polygone_Next_Line
+
+Polygone_Line_Loop
+		move.l	d0,(a1)+					; Affiche deux Pixels
+		dbra		d6,Polygone_Line_Loop
+
+Polygone_Next_Line
+		dbra		d7,Polygone_Lines_Loop
+		bra		Routs_Choice
+
+***********************************************************************
+***********		   Interruption VBL : compteur		***********
+***********************************************************************
+
+New_VBL	addq.w	#1,VBL_Cmpt
+
+		movem.l	d0-a6,-(sp)
+
+		movea.l	Adr_First_Script(pc),a0
+		lea.l	First_Time(pc),a1
+		subq.w	#1,(a1)
+		bsr		Script
+		move.l	a0,Adr_First_Script
+
+		movea.l	Adr_Second_Script(pc),a0
+		lea.l	Second_Time(pc),a1
+		subq.w	#1,(a1)
+		bsr		Script
+		move.l	a0,Adr_Second_Script
+
+		cmp.b	#$66,LastKey
+		beq.s	VBLRet
+
+		lea.l	First_Rotations(pc),a0
+		lea.l	First_Rot_Incr(pc),a1
+		bsr		Translate_Rotate
+		lea.l	Second_Rotations(pc),a0
+		lea.l	Second_Rot_Incr(pc),a1
+		bsr		Translate_Rotate
+
+VBLRet	movem.l	(sp)+,d0-a6
+		rte
+
+VBL_Cmpt	ds.w		1
+
+Wait_VBLs	clr.w	VBL_Cmpt
+WaitVBLs	cmp.w	#30,VBL_Cmpt
+		bne.s	WaitVBLs
+		rts
+
+***********************************************************************
+***********				Sous-Programmes			***********
+***********************************************************************
+
+Script	tst.w	(a1)
+		bpl.s	Script_Return
+
+		move.w	(a0)+,d0
+		bpl.s	Script_Ok
+
+		movea.l	(a0)+,a0
+		bra.s	Script
+
+Script_Ok	beq.s	Script_Pos
+		subq.b	#1,d0
+		beq.s	Script_Increments
+
+Script_Picture
+		movea.l	(a0)+,a3
+		move.l	(a0)+,d0
+		lea.l	([Adr_Screen1,pc],d0.l),a4
+		lea.l	([Adr_Screen2,pc],d0.l),a5
+
+		move.w	(a0)+,d5		; Largeur
+		move.w	#160,d4
+		sub.w	d5,d4		; Offset entre 2 lignes
+		asl.w	#2,d4
+		move.w	(a0)+,d7		; Hauteur - 1
+		subq.w	#1,d5
+
+Script_Trace_Picture
+		move.w	d5,d6		; Largeur - 1
+Script_Trace_Line
+		move.l	(a3)+,d0
+		move.l	d0,(a4)+
+		move.l	d0,(a5)+
+		dbra		d6,Script_Trace_Line
+		adda.w	d4,a4
+		adda.w	d4,a5
+		dbra		d7,Script_Trace_Picture
+		bra.s	Script
+
+Script_Pos
+		lea.l	2(a1),a2
+		move.w	(a0)+,(a2)+			; Objet
+		moveq.l	#6-1,d7
+Script_Copy_Pos
+		move.l	(a0)+,(a2)+
+		dbra		d7,Script_Copy_Pos
+		bra.s	Script
+
+Script_Increments
+		move.w	(a0)+,Force_VBL
+		move.w	(a0)+,(a1)+		; Temps
+		move.w	(a0)+,(a1)+		; Objet
+		adda.w	#6*4,a1
+		moveq.l	#6-1,d7
+Script_Copy_Incr
+		move.l	(a0)+,(a1)+
+		dbra		d7,Script_Copy_Incr
+
+Script_Return
+		rts
+
+Envoie_Informations
+		moveq.l	#0,d0
+		move.w	(a1)+,d0		; Objet
+		move.l	d0,(a6)
+		moveq.l	#6-1,d7
+Envoie_Translations_Rotations
+		move.l	(a1)+,(a6)
+		dbra		d7,Envoie_Translations_Rotations
+		rts
+
+
+Translate_Rotate
+		moveq.l	#3-1,d7
+Incremente_Rotations
+		move.l	(a0),d0
+		move.l	(a1)+,d1
+		bpl.s	Incr_Ok
+		add.l	#360,d1
+
+Incr_Ok	add.l	d1,d0
+		cmp.l	#360,d0
+		blo.s	Angle_Ok
+		sub.l	#360,d0
+Angle_Ok	move.l	d0,(a0)+
+		dbra		d7,Incremente_Rotations
+
+		moveq.l	#3-1,d7
+Incremente_Translations
+		move.l	(a1)+,d0
+		add.l	d0,(a0)+
+		dbra		d7,Incremente_Translations
+		rts
+
+; Envoie la table des 1/x
+
+Envoie_Table_1_x
+		move.w	#500-1,d7
+		move.l	#-500,d0
+
+Negatifs	move.l	#$7fffff,d6
+		divs.l	d0,d6
+		move.l	d6,(a6)
+		addq.l	#1,d0
+		dbra		d7,Negatifs
+
+Zero		move.l	#$7fffff,(a6)
+
+		move.w	#3000-1,d7
+		moveq.l	#1,d0
+
+Positifs	move.l	#$7fffff,d6
+		divs.l	d0,d6
+		move.l	d6,(a6)
+		addq.l	#1,d0
+		dbra		d7,Positifs
+		rts
+
+; Envoie la table de sinus/cosinus
+
+Envoie_Table_Sinus
+		lea.l	Sinus_Table(pc),a0
+		move.w	#360+90-1,d7
+Envoie_Sinus
+		move.l	(a0)+,d0
+		asr.l	#8,d0
+		move.l	d0,(a6)
+		dbra		d7,Envoie_Sinus
+		rts
+
+		Include	'INITSFAL.AST'
+
+***********************************************************************
+***********				Section DATA				***********
+***********************************************************************
+
+				Section	DATA
+
+Force_VBL			dc.w		0
+
+Adr_Zone1			dc.l		Nombre_Zones1
+Adr_Zone2			dc.l		Nombre_Zones2
+Adr_First_Script	dc.l		First_Script
+Adr_Second_Script	dc.l		Second_Script
+
+First_Time		dc.w		-1
+First_Object		dc.w		1-1
+First_Rotations	dc.l		0,0,0
+First_Translat		dc.l		0*512,0*512,0*512
+First_Rot_Incr		dc.l		0,0,0
+First_Trans_Incr	dc.l		0*512,0*512,0*512
+
+Second_Time		dc.w		-1
+Second_Object		dc.w		2-1
+Second_Rotations	dc.l		0,0,0
+Second_Translat	dc.l		0*512,0*512,0*512
+Second_Rot_Incr	dc.l		0,0,0
+Second_Trans_Incr	dc.l		0*512,0*512,0*512
+
+First_Script	
+
+; 1er Objet
+				dc.w		0,1-1							; 0=Pos, 1=Mvmt, 2=Picture, -1=End
+				dc.l		50,0,90
+				dc.l		-400*512,0*512,-155*512
+
+				dc.w		1,0,100-1,1-1
+				dc.l		0,-1,0
+				dc.l		+4*512,0*512,0*512
+
+				dc.w		1,0,60-1,1-1
+				dc.l		1,-2,-1
+				dc.l		0*512,0*512,2*512
+
+				dc.w		1,0,60-1,1-1
+				dc.l		1,-2,-1
+				dc.l		0*512,0*512,-2*512
+
+				dc.w		1,0,100-1,1-1
+				dc.l		1,2,2
+				dc.l		+4*512,0*512,0*512
+
+; 2em Objet
+				dc.w		0,1-1							; 0=Pos, 1=Mvmt, 2=Picture, -1=End
+				dc.l		50,0,90
+				dc.l		-300*512,150*512,-90*512
+
+				dc.w		1,2,150-1,6-1
+				dc.l		0,-1,0
+				dc.l		+2*512,-1*512,256
+
+				dc.w		1,2,340-1,6-1
+				dc.l		1,0,2
+				dc.l		0*512,0*512,0*512
+
+				dc.w		1,2,150-1,6-1
+				dc.l		1,2,1
+				dc.l		+2*512,-1*512,-256
+
+; 3em Objet
+				dc.w		0,1-1							; 0=Pos, 1=Mvmt, 2=Picture, -1=End
+				dc.l		50,0,90
+				dc.l		-400*512,0*512,0*512
+
+				dc.w		1,2,200-1,7-1
+				dc.l		0,-1,0
+				dc.l		+2*512,0*512,256
+
+				dc.w		1,2,240-1,7-1
+				dc.l		1,-2,1
+				dc.l		0*512,0*512,0*512
+
+				dc.w		1,2,200-1,7-1
+				dc.l		1,2,1
+				dc.l		+2*512,0*512,0
+
+; 4em Objet
+				dc.w		0,1-1							; 0=Pos, 1=Mvmt, 2=Picture, -1=End
+				dc.l		50,0,90
+				dc.l		-300*512,0*512,-140*512
+
+				dc.w		1,2,150-1,5-1
+				dc.l		1,-1,0
+				dc.l		+2*512,0*512,256
+
+				dc.w		1,2,340-1,5-1
+				dc.l		1,1,0
+				dc.l		0*512,0*512,0*512
+
+				dc.w		1,2,150-1,5-1
+				dc.l		1,2,1
+				dc.l		+2*512,0*512,-256
+
+; 5em Objet
+				dc.w		0,1-1							; 0=Pos, 1=Mvmt, 2=Picture, -1=End
+				dc.l		50,0,90
+				dc.l		-330*512,0*512,-100*512
+
+				dc.w		1,0,150-1,4-1
+				dc.l		1,-1,0
+				dc.l		+2*512,0*512,0*512
+
+; Img
+				dc.w		2
+				dc.l		Logo_2Obj+18,(320-80)*2
+				dc.w		80/2,80-1
+
+				dc.w		1,0,230-1,4-1
+				dc.l		1,2,1
+				dc.l		+0*512,0*512,492
+
+; Img
+*				dc.w		2
+*				dc.l		Logo_26Faces+18,(320-40)*2+16*640
+*				dc.w		40/2,16-1
+
+
+				dc.w		1,0,320-1,4-1
+				dc.l		1,1,0
+				dc.l		0*512,0*512,0*512
+
+; Img
+*				dc.w		2
+*				dc.l		Logo_Each+18,(320-40)*2+32*640
+*				dc.w		40/2,16-1
+
+				dc.w		1,0,110-1,4-1
+				dc.l		1,1,0
+				dc.l		0*512,0*512,-2*512
+
+				dc.w		1,0,150-1,4-1
+				dc.l		1,2,1
+				dc.l		+2*512,1*512,0
+
+				dc.w		-1
+				dc.l		First_Script
+
+Second_Script
+
+;1er objet
+				dc.w		0,2-1								; 0=Pos, 1=Mvmt, 2=Picture, -1=End
+				dc.l		0,0,0
+				dc.l		+400*512,0*512,-155*512
+
+				dc.w		1,0,100-1,2-1
+				dc.l		-1,1,0
+				dc.l		-4*512,0*512,0*512
+
+				dc.w		1,0,60-1,2-1
+				dc.l		-1,-1,0
+				dc.l		0*512,0*512,2*512
+
+				dc.w		1,0,60-1,2-1
+				dc.l		-1,-1,0
+				dc.l		0*512,0*512,-2*512
+
+				dc.w		1,0,100-1,2-1
+				dc.l		-1,-1,2
+				dc.l		-4*512,0*512,0*512
+
+;2em objet
+				dc.w		0,2-1								; 0=Pos, 1=Mvmt, 2=Picture, -1=End
+				dc.l		0,0,0
+				dc.l		+300*512,-150*512,-90*512
+
+				dc.w		1,2,150-1,8-1
+				dc.l		-1,1,0
+				dc.l		-2*512,1*512,256
+
+				dc.w		1,2,340-1,8-1
+				dc.l		-1,1,-1
+				dc.l		0*512,0*512,0*512
+
+				dc.w		1,2,150-1,8-1
+				dc.l		1,-1,2
+				dc.l		-2*512,1*512,-256
+
+;3em objet
+				dc.w		0,2-1								; 0=Pos, 1=Mvmt, 2=Picture, -1=End
+				dc.l		0,30,0
+				dc.l		+400*512,0*512,0*512
+
+				dc.w		1,2,200-1,9-1
+				dc.l		2,2,-1
+				dc.l		-2*512,0*512,256
+
+				dc.w		1,2,240-1,9-1
+				dc.l		-2,1,-1
+				dc.l		0*512,0*512,0*512
+
+				dc.w		1,2,200-1,9-1
+				dc.l		1,-1,2
+				dc.l		-2*512,0*512,0
+
+;4em objet
+				dc.w		0,2-1								; 0=Pos, 1=Mvmt, 2=Picture, -1=End
+				dc.l		90,0,0
+				dc.l		+300*512,0*512,-140*512
+
+				dc.w		1,2,150-1,3-1
+				dc.l		1,2,0
+				dc.l		-2*512,0*512,256
+
+				dc.w		1,2,340-1,3-1
+				dc.l		-0,1,-1
+				dc.l		0*512,0*512,0*512
+
+				dc.w		1,2,150-1,3-1
+				dc.l		1,-1,2
+				dc.l		-2*512,0*512,-256
+
+
+;5em objet
+				dc.w		0,2-1								; 0=Pos, 1=Mvmt, 2=Picture, -1=End
+				dc.l		0,50,0
+				dc.l		+290*512,0*512,-100*512
+
+				dc.w		1,0,150-1,5-1
+				dc.l		2,1,0
+				dc.l		-2*512-68,0*512,0
+
+				dc.w		1,0,230-1,5-1
+				dc.l		-0,1,-1
+				dc.l		0*512,0*512,492
+
+				dc.w		1,0,320-1,5-1
+				dc.l		-0,1,-1
+				dc.l		0*512,0*512,0
+
+				dc.w		1,0,110-1,5-1
+				dc.l		-0,1,-1
+				dc.l		0*512,0*512,-2*512
+
+				dc.w		1,0,150-1,5-1
+				dc.l		1,-1,2
+				dc.l		-2*512,-1*512,0
+
+				dc.w		-1
+				dc.l		Second_Script
+
+DSP_Code		IncBin	'SPACECU2.P56'
+DSP_Size		equ		(*-DSP_Code)/3
+			Even
+
+Sinus_Table	IncBin	'COSIN32B.TAB'
+
+*Logo_2Obj		IncBin	'2-OBJ.TG1'
+Logo_2Obj		IncBin	'SPACECUT.TG1'
+Logo_26Faces	IncBin	'26-FACES.TG1'
+Logo_Each		IncBin	'EACH.TG1'
+ 
+***********************************************************************
+***********				Section BSS				***********
+***********************************************************************
+
+			Section	BSS
+
+; Adresses Ecrans
+Adr_Screen1	ds.l		1
+Adr_Screen2	ds.l		1
+
+Nombre_Zones1	ds.w		1
+First_Zone1	ds.w		4
+Second_Zone1	ds.w		4
+Zones1		ds.w		4*3
+
+Nombre_Zones2	ds.w		1
+First_Zone2	ds.w		4
+Second_Zone2	ds.w		4
+Zones2		ds.w		4*3
+
+; Place pour Ecrans
+Screens		ds.b		2*((320*200*2)+256)

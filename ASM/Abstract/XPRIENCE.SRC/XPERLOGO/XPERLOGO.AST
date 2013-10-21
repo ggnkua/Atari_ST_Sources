@@ -1,0 +1,479 @@
+***********************************************************************
+***********										***********
+***********										***********
+***********	3D Gouraud True Color au DSP sur une Image	***********
+***********										***********
+***********										***********
+***********		   Par Simplet / ABSTRACT			***********
+***********										***********
+***********************************************************************
+
+; ParamŠtres de la courbe quadruple sinus
+
+XFact1	equ		45
+XFact2	equ		65
+YFact1	equ		35
+YFact2	equ		10
+XIncrAng1	equ		$0280*3/2
+XIncrAng2	equ		$01a8*3/2
+YIncrAng1	equ		$0345*3/2
+YIncrAng2	equ		$0830*3/2
+
+KeyBD	EQU		1			; Si = 0, routine simple
+							; Si = 1, routine evolu‚e
+
+		OPT		O+,OW-
+
+		IncDir	'..\INITS\'
+		Include	'MACROS.AST'
+
+***********************************************************************
+***********				Inits G‚n‚rales			***********
+***********************************************************************
+
+		Section	TEXT
+
+		clr.l	-(sp)					; Passage en Mode Supervisor
+		move.w	#$20,-(sp)				; SUPER
+		trap		#1						; Gemdos
+		addq.l 	#6,sp
+
+***********************************************************************
+***********				Inits DSP					***********
+***********************************************************************
+
+		move.w	#113,-(sp)				; DSP_RequestUniqueAbility
+		trap		#14						; XBios
+		addq.l	#2,sp					; Correction Pile
+
+		move.w	d0,-(sp)					; No Ability
+		move.l	#DSP_Size,-(sp)			; Longueur en Mots DSP
+		pea.l	DSP_Code					; Adresse du code binaire
+		move.w	#109,-(sp)				; Dsp_ExecProg
+		trap		#14						; XBios
+		lea.l	12(sp),sp					; Correction Pile
+
+Connect	move.l	#87654321,$ffffa204.w
+		moveq.l	#0,d0
+
+Conct_Get	btst.b	#0,$ffffa202.w
+		bne.s	DSP_Test
+		addq.l	#1,d0
+		cmp.l	#100000,d0
+		beq		DSP_Error
+		bra.s	Conct_Get
+
+DSP_Test	move.l	$ffffa204.w,d0
+		cmp.l	#12345678,d0
+		bne		DSP_Error
+
+		lea.l	$ffffa204.w,a6
+		bsr		Envoie_Table_1_x
+		bsr		Envoie_Table_Sinus
+
+***********************************************************************
+***********				Inits G‚n‚rales			***********
+***********************************************************************
+
+		move.w	#$2700,sr
+
+		bsr		Save_System
+		bsr		Init_System
+
+		lea.l	Videl_384_240_True,a0
+		lea.l	Adr_Screen1,a1
+		lea.l	Screens,a2
+		moveq.l	#2-1,d0
+		bsr		Init_Video
+		bsr		Init_Falcon_Palette
+		bsr		Init_IT
+
+		IfNe	KeyBD
+			move.l	#KeyBoard_Mouse_and_JoySticks,$118.w
+		Else
+			move.l	#KeyBoard,$118.w
+		EndC
+		or.b		#$40,$fffffa09.w			; Autorise nouvelle
+		or.b		#$40,$fffffa15.w			; routine clavier
+
+***********************************************************************
+***********			Inits Sp‚cifiques				***********
+***********************************************************************
+
+		lea.l	Image+18(pc),a0
+		movea.l	Adr_Screen1,a1
+		movea.l	Adr_Screen2,a2
+		move.w	#384*240*2/8-1,d7
+Copy_Screens
+		movem.l	(a0)+,d0/d1
+		move.l	d0,(a1)+
+		move.l	d0,(a2)+
+		move.l	d1,(a1)+
+		move.l	d1,(a2)+
+		dbra		d7,Copy_Screens
+		move.l	#New_VBL,$70.w
+
+***********************************************************************
+***********		Boucle principale d'attente			***********
+***********************************************************************
+
+Main_Loop	clr.w	VBL_Cmpt
+
+VBL_Wait	tst.w	VBL_Cmpt					; Attend
+		beq.s	VBL_Wait					; prochaine VBL
+
+		bsr.s	VBL_Rout					; ex‚cute routine
+
+		cmp.b	#$80+$39,LastKey			; Touche Espace Relach‚e ???
+		bne.s	Main_Loop
+
+***********************************************************************
+***********	C'est fini, on remet tout en place			***********
+***********************************************************************
+
+		bsr		Restore_System
+
+DSP_Error	clr.w 	-(sp)					; PTerm
+		trap 	#1						; Gemdos
+
+***********************************************************************
+***********		Routine tournant … chaque VBL			***********
+***********************************************************************
+
+VBL_Rout	SaveColor
+
+		move.l	Adr_Screen1,d0				; Flipping
+		move.l	Adr_Screen2,Adr_Screen1		; Ecrans
+		move.l	d0,Adr_Screen2				; Physique
+		lsr.w	#8,d0					; /
+		move.l	d0,$ffff8200.w				; Logique
+
+		CPUTimeColor		#$dd550088
+
+		bsr		Calcule_Courbe
+
+; Port Host
+		lea.l	$ffffa204.w,a6
+		lea.l	2(a6),a5
+
+; Envoie Informations globales
+		move.l	Adr_Screen1,(a6)			; Adresse de l'‚cran
+
+		lea.l	Rot_X(pc),a0
+		moveq.l	#6-1,d7
+Envoie_Infos
+		move.l	(a0)+,(a6)
+		dbra		d7,Envoie_Infos
+
+; Attend que le DSP soit prˆt
+		WaitDSPToGet
+		move.w	(a5),d0
+
+Routs_Choice
+*		bsr		Wait_VBLs
+
+		WaitDSPToGet						; Le DSP nous envoie
+		moveq.l	#0,d0					; le num‚ro de
+		move.w	(a5),d0					; routine solicit‚e
+		beq.s	Clear_Borders_Rout
+		bra		Gouraud_Rout
+
+Clear_Borders_Rout
+		movea.l	Adr_Screen1,a0
+		lea.l	Image+18,a2
+		CPUTimeColor		#$dd550088
+
+Clear_Borders
+		WaitDSPToGet
+		move.w	(a5),d6
+		beq.s	KeyBoard_Control
+		move.l	(a6),d0
+		lea.l	(a0,d0.l),a1				; Adresse sur ‚cran
+		lea.l	(a2,d0.l),a3				; et dans image
+
+		lsr.w	d6						; Si nombre impair
+		bcc.s	Clear_Borders_				; de pixels
+		
+		move.w	(a3)+,(a1)+				; affiche un premier
+
+Clear_Borders_
+		subq.w	#1,d6
+		bmi.s	Clear_Borders
+
+Clear_Borders_Loop
+		move.l	(a3)+,(a1)+				; Affiche deux Pixels
+		dbra		d6,Clear_Borders_Loop
+		bra.s	Clear_Borders
+		
+
+; Controle Clavier
+
+KeyBoard_Control
+*		bsr		Wait_VBLs
+
+		cmp.b	#$4e,LastKey
+		bne.s	No_Plus
+		add.l	#5*512,Trans_Z
+No_Plus	cmp.b	#$4a,LastKey
+		bne.s	No_Moins
+		sub.l	#5*512,Trans_Z
+No_Moins	cmp.b	#$6a,LastKey
+		bne.s	No_4
+		sub.l	#5*512,Trans_X
+No_4		cmp.b	#$6c,LastKey
+		bne.s	No_6
+		add.l	#5*512,Trans_X
+No_6		cmp.b	#$68,LastKey
+		bne.s	No_8
+		sub.l	#5*512,Trans_Y
+No_8		cmp.b	#$6e,LastKey
+		bne.s	No_2
+		add.l	#5*512,Trans_Y
+No_2
+		cmp.b	#$52,LastKey
+		bne.s	No_Insert
+		addq.l	#1,Rot_Z
+No_Insert	cmp.b	#$47,LastKey
+		bne.s	No_Home
+		add.l	#360-1,Rot_Z
+No_Home	cmp.b	#$48,LastKey
+		bne.s	No_Haut
+		add.l	#360-1,Rot_X
+No_Haut	cmp.b	#$50,LastKey
+		bne.s	No_Bas
+		addq.l	#1,Rot_X
+No_Bas	cmp.b	#$4b,LastKey
+		bne.s	No_Gauche
+		add.l	#360-1,Rot_Y
+No_Gauche	cmp.b	#$4d,LastKey
+		bne.s	No_Droite
+		addq.l	#1,Rot_Y
+No_Droite	
+
+; Effectue le mouvement de rotation
+
+		cmp.b	#$66,LastKey
+		beq		VBL_Ret
+
+Rotate	lea.l	Rot_X(pc),a0
+		lea.l	Increments(pc),a1
+		moveq.l	#3-1,d7
+Incremente_Angles
+		move.l	(a0),d0
+		add.l	(a1)+,d0
+		cmp.l	#360,d0
+		blo.s	Angle_Ok
+		sub.l	#360,d0
+Angle_Ok	move.l	d0,(a0)+
+		dbra		d7,Incremente_Angles
+
+VBL_Ret	RestoreColor
+		rts
+
+***********************************************************************
+***********				Routine de Gouraud			***********
+***********************************************************************
+
+Gouraud_Rout
+		CPUTimeColor		#$5f6f00ff
+
+		WaitDSPToGet
+		move.w	(a5),d7					; Nombre de Lignes
+		subq.w	#1,d7					; horizontales … tracer
+
+		CPUTimeColor		#$ff8f002f
+
+Gouraud_Lines_Loop
+		WaitDSPToGet
+		move.w	(a5),d6					; Nombre de Pixels
+		beq.s	Gouraud_Next_Line
+		WaitDSPToGet
+		movea.l	(a6),a1					; Adresse de d‚part
+
+		lsr.w	d6						; Si nombre impair
+		bcc.s	Gouraud_Line1				; de pixels
+		
+		move.w	(a5),(a1)+				; affiche un premier
+
+Gouraud_Line1
+		tst.w	d6
+		beq.s	Gouraud_Next_Line
+
+		lsr.w	d6
+		bcc.s	Gouraud_Line2
+		
+		move.w	(a5),(a1)+				; Affiche
+		move.w	(a5),(a1)+				; deux pixels
+
+Gouraud_Line2
+		subq.w	#1,d6
+		bmi.s	Gouraud_Next_Line
+
+Gouraud_Line_Loop
+		move.w	(a5),(a1)+				; Affiche
+		move.w	(a5),(a1)+				; quatre
+		move.w	(a5),(a1)+				; pixels
+		move.w	(a5),(a1)+
+		dbra		d6,Gouraud_Line_Loop
+
+Gouraud_Next_Line
+		dbra		d7,Gouraud_Lines_Loop
+		bra		Routs_Choice
+
+***********************************************************************
+***********		   Interruption VBL : compteur		***********
+***********************************************************************
+
+Wait_VBLs	move.w	#-10,VBL_Cmpt
+WaitVBLs	tst.w	VBL_Cmpt(pc)
+		bne.s	WaitVBLs
+		rts
+
+New_VBL	addq.w	#1,VBL_Cmpt
+		rte
+
+VBL_Cmpt	ds.w		1
+
+***********************************************************************
+***********				Sous-Programmes			***********
+***********************************************************************
+
+; Calcule les translations en fonction d'une courbe quadruple sinus
+
+Calcule_Courbe
+		addq.w	#1,Compteur
+		cmp.w	#80,Compteur
+		bhi.s	Quadruple_Sinus
+
+Loop		sub.l	#(700+XFact1+XFact2)*512/80,Trans_X
+		sub.l	#(-700+65)*512/80,Trans_Z
+		rts
+
+Cassos	sub.l	#20*512,Trans_X
+		rts
+
+Quadruple_Sinus
+		cmp.w	#3*160+48*5/2,Compteur
+		bhi.s	Cassos
+
+		lea.l	XAng1,a0
+		movem.w	(a0),d0-3
+		add.w	#XIncrAng1,d0
+		move.w	d0,(a0)+
+		add.w	#YIncrAng1,d1
+		move.w	d1,(a0)+
+		add.w	#XIncrAng2,d2
+		move.w	d2,(a0)+
+		add.w	#YIncrAng2,d3
+		move.w	d3,(a0)+
+
+		move.w	#360,d4
+		mulu.w	d4,d0
+		mulu.w	d4,d1
+		mulu.w	d4,d2
+		mulu.w	d4,d3
+		swap.w	d0
+		swap.w	d1
+		swap.w	d2
+		swap.w	d3
+
+		lea.l	Sinus_Table(pc),a0
+
+		move.w	(a0,d0.w*4),d4
+		muls.w	#XFact1,d4
+		asr.l	#6,d4
+		move.l	d4,Trans_X
+		move.w	(a0,d1.w*4),d4
+		muls.w	#YFact1,d4
+		asr.l	#6,d4
+		move.l	d4,Trans_Y
+
+		move.w	(a0,d2.w*4),d4
+		muls.w	#XFact2,d4
+		asr.l	#6,d4
+		add.l	d4,Trans_X
+		move.w	(a0,d3.w*4),d4
+		muls.w	#YFact2,d4
+		asr.l	#6,d4
+		add.l	d4,Trans_Y
+		rts
+
+; Envoie la table des 1/x
+
+Envoie_Table_1_x
+		move.w	#500-1,d7
+		move.l	#-500,d0
+
+Negatifs	move.l	#$7fffff,d6
+		divs.l	d0,d6
+		move.l	d6,(a6)
+		addq.l	#1,d0
+		dbra		d7,Negatifs
+
+Zero		move.l	#$7fffff,(a6)
+
+		move.w	#3000-1,d7
+		moveq.l	#1,d0
+
+Positifs	move.l	#$7fffff,d6
+		divs.l	d0,d6
+		move.l	d6,(a6)
+		addq.l	#1,d0
+		dbra		d7,Positifs
+		rts
+
+; Envoie la table de sinus/cosinus
+
+Envoie_Table_Sinus
+		lea.l	Sinus_Table(pc),a0
+		move.w	#360+90-1,d7
+Envoie_Sinus
+		move.l	(a0)+,d0
+		asr.l	#8,d0
+		move.l	d0,(a6)
+		dbra		d7,Envoie_Sinus
+		rts
+
+		Include	'INITSFAL.AST'
+
+***********************************************************************
+***********				Section DATA				***********
+***********************************************************************
+
+		Section	DATA
+
+Increments	dc.l		3,360-4,2
+Rot_X		dc.l		0
+Rot_Y		dc.l		0
+Rot_Z		dc.l		0
+Trans_X		dc.l		700*512
+Trans_Y		dc.l		0*512
+Trans_Z		dc.l		-700*512
+
+XAng1		dc.w		$c000
+YAng1		dc.w		$0000
+XAng2		dc.w		$c000
+YAng2		dc.w		$0000
+
+DSP_Code		IncBin	'XPERLOGO.P56'
+DSP_Size		equ		(*-DSP_Code)/3
+
+Sinus_Table	IncBin	'COSIN32B.TAB'
+
+Image		IncBin	'XPERIENC.TG1'
+
+***********************************************************************
+***********				Section BSS				***********
+***********************************************************************
+
+		Section	BSS
+
+; Adresses Ecrans
+Adr_Screen1	ds.l		1
+Adr_Screen2	ds.l		1
+
+Compteur		ds.w		1
+
+; Place pour Ecrans
+Screens		ds.b		2*((384*240*2)+256)
+	

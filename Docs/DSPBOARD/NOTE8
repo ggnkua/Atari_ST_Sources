@@ -1,0 +1,239 @@
+Building a DSP board, Part Eight: Initializing the Hardware
+-----------------------------------------------------------
+
+This is the eighth in a series on how I went about building
+a dual Motorola DSP56000 sampling board.
+
+We left off with a program bootstrapped into memory from the
+serial port and all ready to run.  But before we begin execution,
+we must make sure that the DSP registers and ports are full
+initialized.
+
+At this point, I will insert a file that I include at the top
+of all of my programs called SETUP.ASM.  I will be adding my
+comments to the file.  The extra stuff will be set off by the
+`#' character.
+
+; setup.asm
+; setup the SRAMS
+; setup the ssi port to talk to the 5805s
+; setup the sci port to talk to host
+
+# The first thing we must do is make sure that no interrupts are running.
+# Actually, at this point, the interrupts should already be masked, but
+# I never take any chances.
+
+; set up mode register
+; LF  **  TM  **  S1  S0  I1  I0
+;  0   0   0   0   0   0   1   1
+;	No loop flag (LF)
+#		^		This should be obvious
+;	No trace mode (TR)
+#		^		Ever the cautious one!
+;	No scaling (Sn)
+#		^		Don't want automatic scaling done.
+#				(Mainly used for floating point.)
+;	Mask Interrupts (In)
+#		^		Set bits for masking.
+
+	ori	#$03,mr
+# If you think about it, the above is pointless because of the `or' except
+# for the masking of the interrrupts.  I really should put
+# 	andi	#$03,mr
+# before it.
+
+# Now we must set the wait states for the SRAMS.  Remember that we need
+# only one wait state.  Also, we can have a max of 15 wait states (4 bits
+# per type of memory).
+
+; set bus control register for one wait state for X and Y mem (SRAMS)
+; XMEM YMEM PMEM EXIO
+;  $1   $1   $0   $0
+;	Number of wait states for each type of memory
+
+	movep	#$1100,x:m_bcr
+
+# Now we must assign priority levels to the types of interrupts.
+# Remember that we hooked up the serial ADCs and DACs to the
+# synchronous serial ports.  We want to start processing audio data
+# the nanosecond it gets in.  Therefore, we'll assign it the highest
+# priority.  As far as the asynchronous serial port goes, we won't
+# generally be using while we are doing DSP work.  However, it is
+# handy to be able to send changes to the chip on the fly.  But, do
+# we really want to use interrupts to read the asynch serial port?
+# Interrupts will already be servicing the audio data, so the main
+# loop of the processing programs will simply be an infinite loop.
+# Why not have the main loop of the program be on the lookout for
+# asynch serial data?  I think it's a good idea, so I don't assign
+# any interrupts to the asynch port.
+
+; set interrupt priority levels
+; SCL1 SCL0 SSL1 SSL0 HPL1 HPL0 **** ****
+;   0    0    1    1    0    0    0    0
+; **** **** IBL2 IBL1 IBL0 IAL2 IAL1 IAL0
+;   0    0    0    0    0    0    0    0
+;	No SCI interrupts {we'll poll} (SCLn=0)
+;	Priority 2 for SSI (SSLn=1)
+;	No Host interrrupts (HPLn=0)
+#		^			Not using the host port here.  If
+#					you build a card into the IBMPC, you
+#					might want to read from host port
+#					instead of asynch port.
+;	No IRQx interrups (IxLn=0)
+
+	movep	#$3000,x:m_ipr
+
+# One of the wonderful things about the synchronous serial port is that
+# you can set it to accept word lengths of 24, 16, 12, and 8 bits.  If
+# you hook into the data stream of a CD player, you'll need to use 24
+# bits.  (Surprise!  This is the standard, even though the bottom 8 bits
+# are zeros.  I don't think these are actually encoded on the disc, just
+# inserted by the circuitry.)  Remember, we are using an external clock,
+# so no scaling is required.
+
+; initialize ssi port
+; setup Control Register A (CRA)
+; PSR WL1 WL0 DC4 DC3 DC2 DC1 DC0 PM7 PM6 PM5 PM4 PM3 PM2 PM1 PM0
+;  0   1   0   0   0   0   0   0   0   0   0   0   0   0   0   0
+;	No prescaler (PMn)
+#		^			We use external clock.
+;	No frame rate (DCn)
+#		^			We use external clock.
+;	Word length = 16 (WL1=1, WL0=0)
+;	No prescaler range (PSR)
+#		^			We use external clock.
+
+	movep	#$4000,x:m_cra
+
+# There are a lot of fancy ways to set up external and internal data
+# clocks for the SSI.  I just put zeros here 'cause I'm not using them.
+
+; setup Control Register B (CRB)
+; RIE TIE RE TE MOD GCK SYN FSL *** *** SCKD SCD2 SCD1 SCD0 OF1 OF0
+;  0   0   1  1  0   0   1   0   0   0   0    0    0    0    0   0
+;	No output flags (OFn)
+;	SCn and SCK are all inputs (SCxx=0)
+#					SC0 is our L/R clock
+#					SC2 is data fram clock
+;	Frame length = data word (FSL=0)
+#					Use Word length, not Bit length
+;	Synchronous (SYN=1)
+#					We're all running off the same
+#					clock, so better use synchronous
+#					input and output frames.
+;	No gated glock (GCK=0)
+#					That's gated CLOCK!  The clock is
+#					continously running, not gated.
+;	Normal Mode (MOD=0)
+#					We're not using network mode.
+;	Transmit on Frame Sync (TE=1)
+;	Receive on Frame Sync (RE=1)
+#		^			Sync with frames.
+;	No transmit interrupt (TIE=0)
+#					We don't need this, as we know
+#					it will be clear when we are
+#					ready to write to it.  This is
+#					because we are not generating
+#					more data than we are provided with.
+;	No receive interrupt, yet (RIE=0)
+#					Hey!  No interrupts yet!  Later!
+
+	movep	#$3200,x:m_crb
+
+# Now we set up the asynchronous serial port.  We'll do standard N81
+# and 4800 baud (because 9600 doesn't divide down from 20MHz by integers
+# very well.
+
+; initialize SCI port
+; setup SCI Interface Control Register (SCR)
+; **** **** TMIE  TIE  RIE ILIE  TE   RE
+;   0    0    0    0    0    0    1    1
+; WOMS  RWU WAKE  SBK **** WDS2 WDS1 WDS0
+;   0    0    0    0    0    0    1    0
+;	1 start-8 data-1 stop (WDS2,WDS1,WDS0=0,1,0)
+;	No send break (SBK=0)
+;	No wake-up (WAKE,RWU=0)
+#					??? Something to do will idle line?
+;	No open-collector output (WOMS=0)
+;	Enable receiver (RE=1)
+;	Enable transmitter (TE=1)
+;	No idle line interrupt (ILIE=0)
+#					??? See above?
+;	No receive interrupt {we'll poll} (RIE=0)
+;	No transmit interrupt (TIE=0)
+#					We'll make sure it's ready
+;	No timer interrupt (TMIE=0)
+
+	movep	#$0302,x:m_scr
+
+; setup SCI Clock Control Register (SCCR)
+;  TCM  RCM  SCP  COD CD11 CD10  CD9  CD8
+;   0    0    0    0    0    0    0    0
+;  CD7  CD6  CD5  CD4  CD3  CD2  CD1  CD0
+;   0    1    0    0    0    0    0    1
+;	We need a baud rate of 4800
+#					For fun, let's try 9600
+;	Divider = 20,000,000 / (2*1*2*16*4800) = 65
+#					 9600  = 32 or 33
+;	Baud rate really is 4808 (< 0.2% error)
+#			    9766 (1.7% err) or 9470 (1.4% err)
+;	CD11-CD0 = 000001000001
+#					This is 65 binary
+;	No clock output (COD=0)
+#					We need no output clock
+;	No prescaler (SCP=0)
+#					This puts a 1 instead of 8 in
+#					the divider equation
+;	Use internal clock for receive (RCM=0)
+;	Use internal clock for transmit (TCM=0)
+
+	movep	#$0041,x:m_sccr
+
+# Now we have to enable all of the input and output pins for
+# our serial interfaces.
+
+; enable SSI and SCI pins (Port C Control Register - PCC)
+; CC8 CC7 CC6 CC5 CC4 CC3 CC2 CC1 CC0
+;  1   1   1   1   0   1   0   1   1
+;	STD enable (CC8=1)
+#				Asynch transmit data
+;	SRD enable (CC7=1)
+#				Asynch receive data
+;	SCK enable (CC6=1)
+#				Synch bit clock
+;	SC2 enable (CC5=1)
+#				Synch word clock
+;	No SC1 (CC4=0)
+;	SC0 enable (CC3=1)
+#				Synch L/R clock
+;	No SCLK (CC2=0)
+#				No clock output
+;	TXD enable (CC1=1)
+#				Synch transmit data
+;	RXD enable (CC0=1)
+#				Synch receive data
+
+	movep	#$01EB,x:m_pcc
+
+Now, to use the above file, you'd put this into the top
+of your program:
+
+	include	'defs.inc'
+	include	'ioequ.inc'
+	include	'intequ.inc'
+
+	org	p:pgmram
+	include	'setup.asm'
+
+The above top three files are available via my archive server
+and include all the definitions used in 'setup.asm'.
+
+Then, you do all your initialization and add
+
+; start interrupts
+	movep	#$b200,x:m_crb
+	andi	#$00,mr
+
+The first line starts enables the synchronous serial interrupts and the
+second line enables all interrupts.
+

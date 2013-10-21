@@ -1,0 +1,634 @@
+***********************************************************************
+***********										***********
+***********										***********
+***********			3D-Dots en Morphing				***********
+***********										***********
+***********										***********
+***********		   Par Simplet / ABSTRACT			***********
+***********										***********
+***********************************************************************
+
+Nb_Tx	EQU		32			; Nb offsets transmis par VBL
+Nb_Steps	EQU		32			; Nb de VBL pour 'morpher'
+
+Nb_Wait	EQU		160-32		; 4096/Nb_Tx minimum
+
+KeyBD	EQU		1			; Si = 0, routine simple
+							; Si = 1, routine evolu‚e
+
+		OPT		O+,OW-
+
+		IncDir	'..\INITS\'
+		Include	'f:\xperienc\inits\MACROS.AST'
+
+***********************************************************************
+***********				Inits G‚n‚rales			***********
+***********************************************************************
+
+		Section	TEXT
+
+		clr.l	-(sp)					; Passage en Mode Supervisor
+		move.w	#$20,-(sp)				; SUPER
+		trap		#1						; Gemdos
+		addq.l 	#6,sp
+
+***********************************************************************
+***********				Inits DSP					***********
+***********************************************************************
+
+		move.w	#113,-(sp)				; DSP_RequestUniqueAbility
+		trap		#14						; XBios
+		addq.l	#2,sp					; Correction Pile
+
+		move.w	d0,-(sp)					; No Ability
+		move.l	#DSP_Size,-(sp)			; Longueur en Mots DSP
+		pea.l	DSP_Code					; Adresse du code binaire
+		move.w	#109,-(sp)				; Dsp_ExecProg
+		trap		#14						; XBios
+		lea.l	12(sp),sp					; Correction Pile
+
+Connect	move.l	#87654321,$ffffa204.w
+		moveq.l	#0,d0
+
+Conct_Get	btst.b	#0,$ffffa202.w
+		bne.s	DSP_Test
+		addq.l	#1,d0
+		cmp.l	#100000,d0
+		beq		DSP_Error
+		bra.s	Conct_Get
+
+DSP_Test	move.l	$ffffa204.w,d0
+		cmp.l	#12345678,d0
+		bne		DSP_Error
+
+		lea.l	$ffffa204.w,a6
+		bsr		Envoie_Table_1_x
+		bsr		Envoie_Table_Sinus
+
+***********************************************************************
+***********				Inits G‚n‚rales			***********
+***********************************************************************
+
+		move.w	#$2700,sr
+
+		bsr		Save_System
+		bsr		Init_System
+
+		lea.l		Videl384256True,a0
+		lea.l	Adr_Screen1,a1
+		lea.l	Screens,a2
+		moveq.l	#2-1,d0
+		bsr		Init_Video
+		bsr		Init_Falcon_Palette
+		bsr		Init_IT
+
+		move.l	#New_VBL,$70.w
+
+		IfNe	KeyBD
+			move.l	#KeyBoard_Mouse_and_JoySticks,$118.w
+		Else
+			move.l	#KeyBoard,$118.w
+		EndC
+		or.b		#$40,$fffffa09.w			; Autorise nouvelle
+		or.b		#$40,$fffffa15.w			; routine clavier
+
+***********************************************************************
+***********			Inits Sp‚cifiques				***********
+***********************************************************************
+
+		lea.l	Adresses1,a1
+		lea.l	Adresses2,a2
+		move.l	Adr_Screen1,d0
+		move.w	#4096-1,d7
+Init_Adresses
+		move.l	d0,(a1)+
+		move.l	d0,(a2)+
+		dbra		d7,Init_Adresses
+
+		bsr		Genere_Objets
+		movea.l	([Ptr_Objet]),a0
+		bsr		Envoie_Objet
+
+***********************************************************************
+***********		Boucle principale d'attente			***********
+***********************************************************************
+
+Main_Loop	clr.w	VBL_Cmpt
+
+VBL_Wait	tst.w	VBL_Cmpt					; Attend
+		beq.s	VBL_Wait					; prochaine VBL
+
+		bsr.s	VBL_Rout					; ex‚cute routine
+
+		cmp.b	#$39,LastKey				; Touche Espace Press‚e ???
+		bne.s	Main_Loop
+
+***********************************************************************
+***********	C'est fini, on remet tout en place			***********
+***********************************************************************
+
+		bsr		Restore_System
+
+DSP_Error	clr.w 	-(sp)					; PTerm
+		trap 	#1						; Gemdos
+
+***********************************************************************
+***********		Routine tournant … chaque VBL			***********
+***********************************************************************
+
+VBL_Rout	SaveColor
+
+		move.l	Adr_Adresses1(pc),d0			; Swapping
+		move.l	Adr_Adresses2(pc),Adr_Adresses1	; Buffers
+		move.l	d0,Adr_Adresses2				; de Sauvegarde
+
+		move.l	Adr_Screen1,d0				; Flipping Ecrans
+		move.l	Adr_Screen2,Adr_Screen1		; Logique
+		move.l	d0,Adr_Screen2				; Physique
+		lsr.w	#8,d0
+		move.l	d0,$ffff8200.w
+
+		clr.l	Morph_Flag
+
+		addq.w	#1,Morph_Cmpt
+		move.w	NbWait,d0
+		cmp.w	Morph_Cmpt,d0
+		bge.s	No_Morph
+		add.w	#Nb_Steps,d0
+		cmp.w	Morph_Cmpt,d0
+		bge.s	Morph
+
+		clr.w	Morph_Cmpt
+		clr.l	Morph_Transmit
+		move.w	#Nb_Wait,NbWait
+		bra.s	No_Morph
+
+Morph	move.l	#'GATO',Morph_Flag
+
+No_Morph
+		lea.l	Rot_X(pc),a0
+		lea.l	Increments(pc),a1
+		moveq.l	#3-1,d7
+Incremente_Angles
+		move.l	(a0),d0
+		add.l	(a1)+,d0
+		cmp.l	#360,d0
+		blo.s	Angle_Ok
+		sub.l	#360,d0
+Angle_Ok	move.l	d0,(a0)+
+		dbra		d7,Incremente_Angles
+
+
+		CPUTimeColor	#$00000000
+
+		movea.l	Adr_Adresses1(pc),a1	; Buffer Sauvegarde Adresses
+		move.w	#4096/2-1,d7
+
+Efface	move.l	(a1)+,a0
+		clr.w	(a0)
+		move.l	(a1)+,a0
+		clr.w	(a0)
+		dbra		d7,Efface
+
+
+		CPUTimeColor	#$ffff00ff
+
+; Base des registres du port Host
+		lea.l	$ffffa204.w,a6
+
+; Signale au DSP qu'on veut lui causer
+; 0 = Pas de Morphing
+		move.l	Morph_Flag,(a6)
+
+		move.l	Morph_Transmit,d0
+		bmi.s	No_Morph_Transmit
+
+		move.l	d0,(a6)
+
+		move.l	d0,d1
+		add.l	#3*Nb_Tx,d1
+		cmp.l	#3*4096,d1
+		ble.s	No_Morph_End_Transmit
+
+		moveq.l	#-1,d1
+		addq.l	#4,Ptr_Objet
+		cmp.l	#'****',([Ptr_Objet],4)
+		bne.s	No_Morph_End_Transmit
+
+		move.l	#Adr_Objet,Ptr_Objet
+
+No_Morph_End_Transmit
+		move.l	d1,Morph_Transmit
+
+		movea.l	([Ptr_Objet]),a0
+		movea.l	([Ptr_Objet],4),a1
+		lea.l	(a0,d0.w*4),a0
+		lea.l	(a1,d0.w*4),a1
+
+		move.w	#Nb_Tx*3-1,d7
+Morph_Transmit_Loop
+		move.l	(a1)+,d0
+		sub.l	(a0)+,d0
+		divs.l	#Nb_Steps,d0
+		move.l	d0,(a6)
+		dbra		d7,Morph_Transmit_Loop
+
+		bra.s	Envoie_Infos
+
+No_Morph_Transmit
+		move.l	d0,(a6)
+
+
+; Envoie Informations
+
+Envoie_Infos
+		movea.l	Adr_Screen1,a0				; Adresse Ecran
+		adda.l	#2*(192+120*384),a0			; Centrage
+		move.l	a0,(a6)
+
+		lea.l	Rot_X(pc),a0
+		moveq.l	#3-1,d7
+Envoie_Infos_Loop
+		move.l	(a0)+,(a6)
+		dbra		d7,Envoie_Infos_Loop
+
+
+; Attend le calcul du premier point
+		WaitDSPToGet
+
+		CPUTimeColor	#$a06000ff
+
+		movea.l	Adr_Adresses1(pc),a1	; Buffer Sauvegarde Adresses
+		move.w	#4096-1,d7
+
+		move.w	#$ffff,d1				; Couleur
+		move.w	#$0020,d2
+		nop
+		nop
+
+DSPGet	move.l	(a6),a0				; r‚cupŠre l'Adresse
+		move.w	d1,(a0)				; et affiche le point
+		move.l	a0,(a1)+				; Sauvegarde Adresse
+		sub.w	d2,d1				; Change Couleur
+		dbra		d7,DSPGet
+
+; Efface le point en haut … gauche
+		clr.w	(a0)
+
+VBL_Ret	RestoreColor
+		rts
+
+***********************************************************************
+***********		   Interruption VBL : compteur		***********
+***********************************************************************
+
+New_VBL	addq.w	#1,VBL_Cmpt
+		rte
+		
+VBL_Cmpt	ds.w		1
+
+***********************************************************************
+***********				Sous-Programmes			***********
+***********************************************************************
+
+Genere_Objets
+		lea.l	Cube,a0
+		move.l	#10*512,d4
+		move.l	#-75*512,d0
+		moveq.l	#16-1,d7
+Genere_Cube
+		move.l	#-75*512,d1
+		moveq.l	#16-1,d6
+Genere_Carre
+		move.l	#-75*512,d2
+		moveq.l	#16-1,d5
+Genere_Ligne
+		move.l	d0,(a0)+
+		move.l	d1,(a0)+
+		move.l	d2,(a0)+
+		add.l	d4,d2
+		dbra		d5,Genere_Ligne
+		add.l	d4,d1
+		dbra		d6,Genere_Carre
+		add.l	d4,d0
+		dbra		d7,Genere_Cube
+
+
+		lea.l	Sinus_Table(pc),a3
+		lea.l	4*90(a3),a4
+		moveq.l	#10,d4
+
+		lea.l	Hasard1(pc),a1
+		lea.l	Hasard2(pc),a2
+		move.w	#4096-1,d5
+
+Genere_Sphere
+		move.w	(a1)+,d6
+		move.w	(a2)+,d7
+		move.l	(a3,d6.w*4),d0
+		muls.l	(a4,d7.w*4),d1:d0
+		asl.l	d1
+		muls.l	#80,d0:d1
+		asl.l	d4,d0
+		move.l	d0,(a0)+			; x = 80 * sin a * cos b
+		move.l	(a4,d6.w*4),d0
+		muls.l	(a4,d7.w*4),d1:d0
+		asl.l	d1
+		muls.l	#80,d0:d1
+		asl.l	d4,d0
+		move.l	d0,(a0)+			; y = 80 * cos a * cos b
+		move.l	(a3,d7.w*4),d1
+		muls.l	#80,d0:d1
+		asl.l	d4,d0
+		move.l	d0,(a0)+			; z = 80 * sin b
+		dbra		d5,Genere_Sphere		
+
+		lea.l	Hasard1(pc),a1
+		lea.l	Hasard2(pc),a2
+		move.w	#4096-1,d5
+
+Genere_Ovoide
+		move.w	(a1)+,d6
+		move.w	(a2)+,d7
+		move.l	(a3,d6.w*4),d0
+		muls.l	(a4,d7.w*4),d1:d0
+		asl.l	d1
+		muls.l	#120,d0:d1
+		asl.l	d4,d0
+		move.l	d0,(a0)+			; x = 120 * sin a * cos b
+		move.l	(a4,d6.w*4),d0
+		muls.l	(a4,d7.w*4),d1:d0
+		asl.l	d1
+		muls.l	#40,d0:d1
+		asl.l	d4,d0
+		move.l	d0,(a0)+			; y = 40 * cos a * cos b
+		move.l	(a3,d7.w*4),d1
+		muls.l	#100,d0:d1
+		asl.l	d4,d0
+		move.l	d0,(a0)+			; z = 100 * sin b
+		dbra		d5,Genere_Ovoide
+
+		lea.l	Hasard1(pc),a1
+		lea.l	Hasard2(pc),a2
+		move.w	#4096-1,d5
+
+Genere_Trigo1
+		move.w	(a1)+,d6
+		move.w	(a2)+,d7
+		move.l	(a3,d7.w*4),d0
+		muls.l	(a4,d6.w*4),d1:d0
+		asl.l	d1
+		muls.l	#40,d0:d1
+		asl.l	d4,d0
+		move.l	d0,(a0)+			; x = 40 * cos a * sin b
+		move.l	(a4,d7.w*4),d1
+		muls.l	#80,d0:d1
+		asl.l	d4,d0
+		move.l	d0,(a0)+			; y = 80 * cos b
+		move.l	(a3,d6.w*4),d1
+		muls.l	#80,d0:d1
+		asl.l	d4,d0
+		move.l	d0,(a0)+			; z = 80 * sin a
+		dbra		d5,Genere_Trigo1
+
+		lea.l	Hasard1(pc),a1
+		lea.l	Hasard2(pc),a2
+		move.w	#4096-1,d5
+
+Genere_Trigo2
+		move.w	(a1)+,d6
+		move.w	(a2)+,d7
+		move.l	(a4,d6.w*4),d1
+		muls.l	#50,d0:d1
+		move.l	d0,a5			; 50 * cos a
+		move.l	(a3,d7.w*4),d1
+		muls.l	#40,d0:d1			; 40 * sin b
+		add.l	a5,d0
+		asl.l	d4,d0
+		move.l	d0,(a0)+			; x = 50 * cos a + 40 * sin b
+		move.l	(a4,d7.w*4),d1
+		muls.l	#70,d0:d1
+		move.l	d0,a5			; 70 * cos b
+		move.l	(a3,d6.w*4),d1
+		muls.l	#10,d0:d1			; 10 * sin a
+		add.l	a5,d0
+		asl.l	d4,d0
+		move.l	d0,(a0)+			; y = 70 * cos b + 10 * sin a
+		move.l	(a3,d6.w*4),d1
+		muls.l	#70,d0:d1
+		move.l	d0,a5			; 70 * sin a
+		move.l	(a3,d7.w*4),d1
+		muls.l	#30,d0:d1			; 30 * sin b
+		add.l	a5,d0
+		asl.l	d4,d0
+		move.l	d0,(a0)+			; x = 70 * sin a + 30 * sin b
+		dbra		d5,Genere_Trigo2
+
+		lea.l	Hasard1(pc),a1
+		lea.l	Hasard2(pc),a2
+		move.w	#4096-1,d5
+
+Genere_Trigo3
+		move.w	(a1)+,d6
+		move.w	(a2)+,d7
+		move.l	(a3,d6.w*4),d1
+		muls.l	#80,d0:d1
+		asl.l	d4,d0
+		move.l	d0,(a0)+			; x = 80 * sin a
+		move.l	(a4,d6.w*4),d0
+		muls.l	(a4,d7.w*4),d1:d0
+		asl.l	d1
+		muls.l	#80,d0:d1
+		asl.l	d4,d0
+		move.l	d0,(a0)+			; y = 80 * cos a * cos b
+		move.l	(a3,d6.w*4),d0
+		muls.l	(a3,d7.w*4),d1:d0
+		asl.l	d1
+		muls.l	#80,d0:d1
+		asl.l	d4,d0
+		move.l	d0,(a0)+			; z = 80 * sin a * sin b
+		dbra		d5,Genere_Trigo3
+
+		lea.l	Hasard1(pc),a1
+		lea.l	Hasard2(pc),a2
+		move.w	#4096-1,d5
+
+Genere_Trigo4
+		move.w	(a1)+,d6
+		move.w	(a2)+,d7
+		move.l	(a3,d6.w*4),d0
+		muls.l	(a3,d7.w*4),d1:d0
+		asl.l	d1
+		muls.l	(a4,d6.w*4),d0:d1
+		asl.l	d0
+		muls.l	(a4,d7.w*4),d1:d0
+		asl.l	d1
+		muls.l	#180,d0:d1
+		asl.l	d4,d0
+		move.l	d0,(a0)+	; x = 180 * sin a * sin b * cos a * cos b
+		move.l	(a4,d6.w*4),d0
+		muls.l	(a4,d7.w*4),d1:d0
+		asl.l	d1
+		muls.l	#100,d0:d1
+		asl.l	d4,d0
+		move.l	d0,(a0)+			; y = 100 * cos a * cos b
+		move.l	(a3,d6.w*4),d0
+		muls.l	(a3,d7.w*4),d1:d0
+		asl.l	d1
+		muls.l	#100,d0:d1
+		asl.l	d4,d0
+		move.l	d0,(a0)+			; z = 100 * sin a * sin b
+		dbra		d5,Genere_Trigo4
+
+		lea.l	Hasard1(pc),a1
+		lea.l	Hasard2(pc),a2
+		move.w	#4096-1,d5
+
+Genere_Trigo5
+		move.w	(a1)+,d6
+		move.w	(a2)+,d7
+		move.l	(a3,d6.w*4),d0
+		muls.l	(a4,d7.w*4),d1:d0
+		asl.l	d1
+		muls.l	#80,d0:d1
+		asl.l	d4,d0
+		move.l	d0,(a0)+			; x = 80 * sin a * cos b
+		move.l	(a4,d6.w*4),d0
+		muls.l	(a4,d7.w*4),d1:d0
+		asl.l	d1
+		muls.l	#80,d0:d1
+		asl.l	d4,d0
+		move.l	d0,(a0)+			; y = 80 * cos a * cos b
+		move.l	(a3,d6.w*4),d1
+		muls.l	#80,d0:d1
+		asl.l	d4,d0
+		move.l	d0,(a0)+			; z = 80 * sin a
+		dbra		d5,Genere_Trigo5
+
+		rts
+
+; Envoie les coordonn‚es des Points de l'objet
+
+Envoie_Objet
+		move.w	#3*4096-1,d7
+Send_A_Coord
+		move.l	(a0)+,(a6)
+		dbra		d7,Send_A_Coord
+		rts
+
+; Envoie la table des 1/x
+
+Envoie_Table_1_x
+		move.w	#200-1,d7
+		move.l	#-200,d0
+
+Negatifs	move.l	#$7fffff,d6
+		divs.l	d0,d6
+		move.l	d6,(a6)
+		addq.l	#1,d0
+		dbra		d7,Negatifs
+
+Zero		move.l	#$7fffff,(a6)
+
+		move.w	#900-1,d7
+		moveq.l	#1,d0
+
+Positifs	move.l	#$7fffff,d6
+		divs.l	d0,d6
+		move.l	d6,(a6)
+		addq.l	#1,d0
+		dbra		d7,Positifs
+		rts
+
+; Envoie la table de sinus/cosinus
+
+Envoie_Table_Sinus
+		lea.l	Sinus_Table(pc),a0
+		move.w	#360+90-1,d7
+Envoie_Sinus
+		move.l	(a0)+,d0
+		asr.l	#8,d0
+		move.l	d0,(a6)
+		dbra		d7,Envoie_Sinus
+		rts
+
+		Include	'f:\xperienc\inits\INITSFAL.AST'
+
+***********************************************************************
+***********				Section DATA				***********
+***********************************************************************
+
+		Section	DATA
+
+Videl384256True
+		dc.l		384*(256+30)*2+256				* G‚n‚ral
+		dc.w		0,384,0,$100
+		dc.w		0							* Flag Ordre
+
+		dc.w		254,203,39,14,175,216,0,0		* RVB
+		dc.w		625,613,47,71,583,619
+		dc.w		$181,%0000
+
+		dc.w		240,160,0,714,151,200,0,0		* VGA 50 Hz
+ 		dc.w		1257,1300,0,131,1155,1253
+		dc.w		$186,%0101
+
+Adr_Adresses1	dc.l		Adresses1
+Adr_Adresses2	dc.l		Adresses2
+
+; 3D
+Increments	dc.l		3,360-2,360-1
+Rot_X		dc.l		0
+Rot_Y		dc.l		0
+Rot_Z		dc.l		0
+
+NbWait		dc.w		160
+Morph_Cmpt	dc.w		0
+Morph_Flag	dc.l		0
+Morph_Transmit	dc.l		0
+
+Ptr_Objet		dc.l		Adr_Objet
+
+Adr_Objet		dc.l		Sphere
+			dc.l		Trigo_5
+			dc.l		Trigo_1
+			dc.l		Trigo_2
+			dc.l		Trigo_3
+			dc.l		Trigo_4
+			dc.l		Sphere
+			dc.l		'****'
+
+DSP_Code		IncBin	'MORPH.P56'
+DSP_Size		equ		(*-DSP_Code)/3
+			Even
+
+Sinus_Table	IncBin	'COSIN32B.TAB'
+
+Hasard1		IncBin	'HASARD1.TAB'
+Hasard2		IncBin	'HASARD2.TAB'
+
+***********************************************************************
+***********				Section BSS				***********
+***********************************************************************
+
+		Section	BSS
+
+; Adresses Ecrans
+Adr_Screen1	ds.l		1
+Adr_Screen2	ds.l		1
+; Buffers
+Adresses1		ds.l		4096
+Adresses2		ds.l		4096
+
+; Place pour Ecrans
+			ds.b		2*384*30*2
+Screens		ds.b		2*(384*(256+30)*2+256)
+
+Cube			ds.l		3*4096
+Sphere		ds.l		3*4096
+Ovoide		ds.l		3*4096
+Trigo_1		ds.l		3*4096
+Trigo_2		ds.l		3*4096
+Trigo_3		ds.l		3*4096
+Trigo_4		ds.l		3*4096
+Trigo_5		ds.l		3*4096

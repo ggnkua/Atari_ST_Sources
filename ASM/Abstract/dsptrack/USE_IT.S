@@ -27,7 +27,10 @@ VBL_Timer	EQU		1
 		move.w	#$20,-(sp)				; SUPER
 		trap		#1						; Gemdos
 		addq.l 	#6,sp
-
+		
+		move.l	module,a0
+		bsr	ice
+		
 		bsr.s	Init_Music
 		bmi.s	Error
 
@@ -77,6 +80,7 @@ New_VBL	move.w	#25000,d7
 
 		Include	'TRACKER.S'
 
+		include	'e:\ice.s'
 ***********************************************************************
 ***********				DATA Section				***********
 ***********************************************************************

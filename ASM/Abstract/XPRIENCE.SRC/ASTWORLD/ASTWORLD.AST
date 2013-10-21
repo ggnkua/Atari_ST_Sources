@@ -1,0 +1,1483 @@
+***********************************************************************
+***********																	***********
+***********		 Tridi codes by SKYNET From ABSTRACT			***********
+***********																	***********
+***********				Version DSP										***********
+***********																	***********
+***********************************************************************
+
+; VERSION 1.0 THE 20/06/94
+
+***** VARIABLE POUR LE DSP *******
+Pt_Fuite	equ		$6d3a				*
+C_X		equ		160				*
+C_Y		equ		100				*
+DX			equ		320				*
+DY			equ		200				*
+NB_Inter	equ		32					*
+Lim_ZP	equ		280*512			*
+Lim_ZM	equ		-1400*512		*
+Lim_XP	equ		300				*
+Lim_XM	equ		-300				*
+Lim_YP	equ		130				*
+Lim_YM	equ		-130				*
+**********************************
+
+VBL_Number		equ	1			; Si 1, montre le nombre de vbl
+
+View_State		equ	1
+
+Nbr_Screen		equ	2
+
+Size_Screen		equ	32000					; Taille de l'ecran en octet
+Line_Widh		equ	160					; Largeur d'une ligne en octets
+
+HTX				Equ		$ffffa204		; Host Transmit Data
+HRX				Equ		$ffffa204		; Host Receive Data
+IVR				Equ		$ffffa203		; Interrupt Vector Register
+CVR				Equ		$ffffa201		; Command Vector Register
+HCP				Equ		7					; Host Command Pending
+HCR				Equ		$ffffa200		; Host Control Register
+HF1				Equ		4					; Host Flag 1 control‚ par le 030
+HF0				Equ		3					; Host Flag 0 control‚ par le 030
+HTIE				Equ		1					; Host Transmit Interrupt Enable
+HRIE				Equ		0					; Host Receive Interrupt Enable
+HSR				Equ		$ffffa202		; Host Status Register
+HF3				Equ		3					; Host Flag 3 control‚ par le DSP
+HF2				Equ		2					; Host Flag 2 control‚ par le DSP
+HTDE				Equ		1					; Host Transmit Data Empty
+HRDF				Equ		0					; Host Receive Data Full
+
+DSPType			EQU		1					; Si = 0, fichier externe .LOD
+													; Si = 1, code binaire .P56 inclus
+
+KeyBD				EQU		1					; Si = 0, routine simple
+													; Si = 1, routine evolu‚e
+
+; D‚finition des Macros
+
+Host_Send_Data		Macro
+.Host_Request\@
+		btst		#HTDE,HSR
+		beq.s		.Host_Request\@
+		move.l	\1,HTX
+	EndM
+
+Host_Get_Data		Macro
+.Host_Request\@
+		btst		#HRDF,HSR
+		beq.s		.Host_Request\@
+		move.l	HTX,\1
+	EndM
+
+		OPT		O+
+
+		IncDir	'..\INITS\'
+		Include	'MACROS.AST'
+
+***********************************************************************
+***********						Inits G‚n‚rales						***********
+***********************************************************************
+
+		Section	TEXT
+
+
+		move.l	sp,Save_Stack			; Ancienne Pile restaur‚e
+
+		clr.l		-(sp)						; Passage en Mode Supervisor
+		move.w	#$20,-(sp)				; SUPER
+		trap		#1							; Gemdos
+		addq.l 	#6,sp
+
+***********************************************************************
+***********							Inits DSP							***********
+***********************************************************************
+
+		move.w	#113,-(sp)				; DSP_RequestUniqueAbility
+		trap		#14						; XBios
+		addq.l	#2,sp
+
+		IfEq		DSPType
+
+		pea.l		DSP_Buffer				; Buffer pour code binaire
+		move.w	d0,-(sp)					; No Ability
+		pea.l		DSP_Lod					; Chemin d'accŠs du Prog
+		move.w	#108,-(sp)				; Dsp_LoadProg
+		trap		#14						; XBios
+		lea.l		12(sp),sp
+
+		Else
+
+		move.w	d0,-(sp)					; No Ability
+		move.l	#End_DSP_Code,d0		; Adresse de fin du fichier contenant le Code DSP binaire
+		sub.l		#DSP_Code,d0			; Moins adr de d‚part = Longueur en octets
+		divu.l	#3,d0						; /3 = Longueur en mots DSP
+		move.l	d0,-(sp)					; Longueur en mot DSP du code DSP binaire
+		pea.l		DSP_Code					; Adresse du code binaire
+		move.w	#109,-(sp)				; Dsp_ExecProg
+		trap		#14						; XBios
+		lea.l		12(sp),sp
+
+		EndC
+
+Connect	
+		move.l	#$4321,HTX.w			; On se connect avec le DSP
+		moveq.l	#0,d0
+
+Conct_Get	
+		btst.b	#HRDF,HSR.w				; On test pour savoir si on a recu une donn‚ de la part du DSP
+		bne.s		DSP_Test					; yep, c'est bon
+		addq.l	#1,d0
+		cmp.l		#100000,d0
+		beq		DSP_Error				; Les DSP est sourd, on s'arrete l… !
+		bra.s		Conct_Get
+
+DSP_Test	
+		move.l	HRX.w,d0					; Valeur transmise par le DSP
+		cmp.l		#12345678,d0			; On compare le Magic Number
+		bne		DSP_Error				; Le DSP nous a renvoier n'importe quoi, on quitte
+
+***********************************************************************
+***********						Inits G‚n‚rales						***********
+***********************************************************************
+
+		move.w	#$2700,sr
+
+		bsr		Save_System
+		bsr		Init_System
+
+		lea		Videl_320_200_16,a0			; 16 Couleurs
+		lea.l	Adr_Screen1,a1
+		lea.l	Screens,a2
+		move.w	#2-1,d0							; Deux ecrans
+		bsr		Init_Video
+
+		bsr		Init_Falcon_Palette
+		bsr		Init_IT
+
+		lea		$ffff9800.w,a0
+
+		move.l	#$0,(a0)+
+
+		move.l	#$70400050,(a0)+
+		move.l	#$a0700080,(a0)+
+		move.l	#$c0a000b0,(a0)+
+
+		move.l	#$70500090,(a0)+
+		move.l	#$a08000b0,(a0)+
+		move.l	#$d0b000e0,(a0)+
+
+		move.l	#$40600080,(a0)+
+		move.l	#$709000b0,(a0)+
+		move.l	#$a0c000e0,(a0)+
+
+		move.l	#$40800070,(a0)+
+		move.l	#$70b000a0,(a0)+
+		move.l	#$a0e000d0,(a0)+
+
+		move.l	#$f09000a0,(a0)+
+		move.l	#$f0b000a0,(a0)+
+		move.l	#$f0d000c0,(a0)+
+
+
+	IfNe	KeyBD
+		move.l	#KeyBoard_Mouse_and_JoySticks,$118.w
+	Else
+		move.l	#KeyBoard,$118.w
+	EndC
+		or.b		#$40,$fffffa09.w			; Autorise nouvelle
+		or.b		#$40,$fffffa15.w			; routine clavier
+
+***********************************************************************
+***********					Inits Sp‚cifiques							***********
+***********************************************************************
+
+		bsr		Make_Precalc					; on precalc les tables consernant la rout de poly
+		bsr		Create_Convert_Number
+
+		bsr		Send_Table_1_X					; on envoie la table de 1/x au DSP
+		bsr		Send_Table_Cosin				; one nvoie une table de cosinus au DSP plus precise !
+		bsr		Send_variables					; Envoie les diverses variables de la 3D
+
+		bsr		Send_All_Objects_Descriptor
+
+	Host_Send_Data		#$1212
+	
+	Host_Get_Data		d0							; Test de synchro 030/DSP
+		cmpi.w	#$2121,d0
+		beq.s		.No_PB
+		move.l	#$ff000000,$ffff9800.w
+		bra		DSP_Error
+.No_PB
+
+		lea		Pic+34,a0
+		move.l	Adr_Screen1,a1
+		move.l	Adr_Screen2,a2
+		move.w	#60-1,d7
+.Cop
+	Rept		12
+		move.l	(a0)+,d0
+		move.l	d0,(a1)+			
+		move.l	d0,(a2)+			
+	EndR
+		add.w		#112,a0
+		add.w		#112,a1
+		add.w		#112,a2
+		dbf		d7,.Cop
+	
+	
+		stop		#$2300
+		move.l	#New_VBL,$70.w
+		bra.s		Session_3D						; Routine de 3D
+
+; Fin de la session 3D, on restore l'etat du falcon, et on quitte
+End_Session
+		bsr		Restore_System
+		move.w	Cache,d0
+		movec		d0,cacr
+		
+		movea.l	Save_Stack,sp			; Ancienne Pile restaur‚e
+
+DSP_Error	
+		clr.w 	-(sp)						; PTerm
+		trap 		#1							; Gemdos
+
+***********************************************************************
+***********		   		Interruption VBL : compteur			***********
+***********************************************************************
+
+New_VBL	
+				
+		addq.w	#1,VBL_Cmpt
+		rte
+VBL_Cmpt	ds.w		1
+
+***********************************************************************
+***********				Routine tournant … chaque VBL				***********
+***********************************************************************
+
+Session_3D
+
+		clr.w		VBL_Cmpt
+		cmpi.b	#$66,$fffffc02.w
+		beq.s		Session_3D
+
+	SaveColor
+
+		move.l	Adr_Screen1,d0					; Flipping d'ecran
+		move.l	Adr_Screen2,Adr_Screen1
+		move.l	d0,Adr_Screen2
+
+		lea		Line_adr_Tab,a0				; Flipping de tablo pour la routine de poly
+		move.l	(a0),d0
+		move.l	4(a0),d1
+		move.l	d1,(a0)+
+		move.l	d0,(a0)+
+		move.l	d0,Current_Line
+
+		CPUTimeColor	#$80004070
+
+* SYNCHRO VBL/030
+	Host_Send_Data		#$3210					; POUR LA SYNCHRO VBL/DSP
+
+* RECEPTION DES FACES A AFFICHER
+		lea		Big_Tab,a0						; On recoie les faces a afficher
+Get_Faces
+	Host_Get_Data	d0
+		cmpi.w	#$4321,d0
+		beq.s		.Fin_Copy
+		move.w	d0,(a0)+							; on inscrit le numero de la couleur
+		move.w	HRX+2,d7							; nombre de point de la face
+		subq.w	#1,d7								; -1
+		move.w	d7,(a0)+							; Yop, dans le tablo
+.Copy_Pts
+		move.w	HRX+2,(a0)+						; coord X
+		move.w	HRX+2,(a0)+						; coord Y
+		dbf		d7,.Copy_Pts					; On receptionne tout les points de la face
+		bra		Get_Faces						; On va recevoir la suivante
+.Fin_Copy		
+		move.w	d0,(a0)+							; Flag de fin du tablo
+		
+*		CPUTimeColor	#$00ff0090
+		
+* CONTROLE DE LA CAMERA
+		bsr		Control_World_Evolution		
+		
+* CONTROLE L'EVOLUTION DES OBJETS DANS LE TEMPS
+Control_Objects_Evolution
+		lea		Scene_Descriptor,a0			; Etat de la scene
+		move.l	(a0)+,d7
+		subq.w	#1,d7
+		move.l	#360*64,d6						; Valeur Clip Angle
+.Control_1_Obj
+		addq.l	#4,a0								; On pointe sur l'adr du tablo de l'etat de l'obj
+		move.l	(a0)+,a1							; Adresse du tablo
+		move.l	24(a1),a2						; Adresse du script
+		tst.l		32(a1)							; Le mouvement est fini?
+		bne.s		.No_Nxt_Mvt						; Ben non...
+		add.l		#28,24(a1)						; On passe au mouvement suivant
+		move.l	24(a1),d5
+		cmp.l		28(a1),d5
+		bne.s		.No_Reset_Cmpt
+		lea		36(a1),a3
+		move.l	a3,24(a1)
+.No_Reset_Cmpt		
+		move.l	24(a1),a2						; Nouvelle adr du script
+		move.l	(a2),32(a1)
+.No_Nxt_Mvt		
+		subq.l	#1,32(a1)						; Une VBL en moins
+		addq.w	#4,a2
+		moveq		#3-1,d5							; On clip trois angles
+.Clip_Angles
+		move.l	(a2)+,d0							; increment de l'angle
+		add.l		(a1),d0							; Nouvelle valeur
+		cmp.l		d6,d0								; Clip?
+		blt.s		.No_Clip
+		sub.l		d6,d0
+.No_Clip
+		move.l	d0,(a1)+
+		dbf		d5,.Clip_Angles
+
+		moveq		#3-1,d5							; 3 Translations a reactualiser
+.Inc_T
+		move.l	(a2)+,d0
+		add.l		d0,(a1)+							; Nouvelle translation
+		dbf		d5,.Inc_T
+
+		lea		-24(a1),a1
+
+		moveq		#3-1,d5
+.Tfr_Rot
+		move.l	(a1)+,d0
+		lsr.l		#6,d0
+	Host_Send_Data		d0
+		dbf		d5,.Tfr_Rot
+
+		moveq		#3-1,d5
+.Tfr_Trans
+	Host_Send_Data		(a1)+
+		dbf		d5,.Tfr_Trans
+
+		dbf		d7,.Control_1_Obj		
+
+*		CPUTimeColor	#$00ff0000
+
+Control_Morph_Objects
+		lea		Scene_Descriptor,a0			; Description de la scene
+		move.l	(a0)+,d7							; Nombre d'objet
+		subq.w	#1,d7
+.Control_1_Morph
+		move.l	(a0)+,a1							; a1 = Adresse du tablo des timing morph
+		addq.l	#4,a0								; On pointe sur la desc suivante
+		tst.l		(a1)+								; Doit on morpher l'objet ?
+		beq.s		.Morph_It						; Ouaip let's go
+	Host_Send_Data		#0							; On signale au DSP ke l'on ne morph pas encore
+		subq.l	#1,-4(a1)						; On decremente le compteur c fait pour ca
+		dbf		d7,.Control_1_Morph
+		bra.s		Yopu
+.Morph_It
+		addq.l	#8,-8(a0)						; On pointe sur la sequence suivante
+		move.l	(a1),a2							; Adr de l'objet
+		move.w	(a2)+,d6							; Nombre de point
+		ext.l		d6
+	Host_Send_Data		d6							; On envoie au DSP le nombre de points de l'objet
+		move.w	d6,d5
+		lsl.w		#1,d5
+		add.w		d5,d6								; Fois 3
+		subq.w	#1,d6
+.Send_Pts
+	Host_Send_Data		(a2)+						; On l'envoie au DSP
+		dbf		d6,.Send_Pts
+		dbf		d7,.Control_1_Morph			; On controle tout le objets
+
+*		CPUTimeColor	#$80af0040
+
+yopu
+		move.l	Adr_Screen2,a6
+		add.l		#32000,a6
+		move.w	#21900/104,d7
+		movem.l	Vide,d0-6/a0-a5
+.Clear_Screen
+		movem.l	d0-6/a0-a5,-(a6)
+		movem.l	d0-6/a0-a5,-(a6)
+		dbf		d7,.Clear_Screen
+
+**************************************
+******* ROUTINES PRINCIPALES *********
+**************************************
+
+		lea		Big_Tab,a0						; Tablo ou l'on stocke toutes les donnees du DSP
+Trace_Faces
+		move.w	(a0)+,d0
+		cmpi.w	#$4321,d0						; si d0 = $4321, c la fin du tbalo
+		beq.s		Fin
+		move.w	d0,Num_Coul						; sinon c le numero de la couleur de la face
+		move.w	(a0)+,d7							; nombre de point-1 du poly
+		move.w	d7,Nb_Point
+		lea		Co_Point,a1						; tablo des coords.
+.TfrPts
+		move.l	(a0)+,(a1)+						; on transfert la coord non clippee du points
+		dbf		d7,.TfrPts
+
+*		CPUTimeColor	#$2000008f
+		move.l	a0,-(sp)
+		bsr		Polygone							; tout les points sont transferes, on trace le poly
+		move.l	(sp)+,a0
+*		CPUTimeColor	#$ff00000f
+
+		bra.s		Trace_Faces						; on reboucle...
+Fin
+	IfNe			View_State
+		bsr.s		Aff_State_Camera 
+	EndC
+		RestoreColor
+
+End_of_object
+		move.l	Adr_Screen2,d0					; on va enfin Valide l'adresse de l'ecran courant
+		lsr.w		#8,d0
+  		move.l	d0,$ffff8200.w					; C'est fait
+
+		move.w	VBL_Cmpt,d0						; Numero de VBL actuel
+		cmpi.w	#0,d0
+		bne.s		.No_Force
+		moveq		#1,d0
+.No_Force
+				
+	Ifne		VBL_Number
+		cmpi.w	#10,d0
+		blt.s		.OK_Number
+		lea		Warning_Time,a1
+		bra.s		.Warning
+.OK_Number		
+		lea		Table_Number,a1
+		move.l	4(a1,d0.w*4),a1
+.Warning
+		move.l	Adr_Screen2,a0
+		move.w	#Line_Widh,d1
+		moveq		#8-1,d7
+.Draw_Number
+		move.w	(a1)+,d2
+		move.w	d2,(a0)
+		lea		(a0,d1.w),a0
+		dbf		d7,.Draw_Number
+	EndC
+		
+.wait_end_vbl
+		cmpi.b	#$39,$fffffc02.w				; On teste l'appuie de la touche espace
+		beq		End_Session						; Si la touche est appuier, on quite la session
+		cmp.w		VBL_Cmpt,d0						; Sinon on attend la VBL suivante
+		bhs.s		.wait_end_vbl
+		bra		Session_3D						; Nouvelle VBL, on recommence la session 3D
+
+	IfNe			View_State
+Aff_State_Camera	
+		move.w	#Line_Widh,d0
+		lea		Camera_State+2,a0				; Position courante de la camera
+		lea		Number_To_Digit,a1			; Conversion Nombres--->Chiffres
+		move.l	Adr_Screen2,a4
+		lea		12(a4),a2						; on se met sur la deuxieme colonne
+		lea		Rot,a3							; on affiche le sprite Rot
+		bsr		.Draw_Sprite
+
+		lea		26(a4),a2
+		lea		X,a3
+		bsr		.Draw_Sprite
+		lea		50(a4),a2
+		lea		Y,a3
+		bsr		.Draw_Sprite
+		lea		74(a4),a2
+		lea		Z,a3
+		bsr		.Draw_Sprite
+		
+		move.l	(a0)+,d2							; Rot X
+		asr.w		#4,d2
+		move.l	4(a1,d2.w*4),a3					; Adr du 1er chiffre du nombre
+		lea		36(a4),a2
+		bsr		.Draw_Sprite
+		move.l	8(a1,d2.w*4),a3					; Adr du 1er chiffre du nombre
+		lea		36(a4),a2
+		bsr		.Draw_Sprite2
+		move.l	12(a1,d2.w*4),a3					; Adr du 1er chiffre du nombre
+		lea		44(a4),a2
+		bsr		.Draw_Sprite
+
+		move.l	(a0)+,d2							; Rot Y
+		asr.w		#4,d2
+		move.l	4(a1,d2.w*4),a3					; Adr du 1er chiffre du nombre
+		lea		60(a4),a2
+		bsr		.Draw_Sprite
+		move.l	8(a1,d2.w*4),a3					; Adr du 1er chiffre du nombre
+		lea		60(a4),a2
+		bsr		.Draw_Sprite2
+		move.l	12(a1,d2.w*4),a3					; Adr du 1er chiffre du nombre
+		lea		68(a4),a2
+		bsr		.Draw_Sprite
+
+		move.l	(a0)+,d2							; Rot X
+		asr.w		#4,d2
+		move.l	4(a1,d2.w*4),a3					; Adr du 1er chiffre du nombre
+		lea		84(a4),a2
+		bsr		.Draw_Sprite
+		move.l	8(a1,d2.w*4),a3					; Adr du 1er chiffre du nombre
+		lea		84(a4),a2
+		bsr		.Draw_Sprite2
+		move.l	12(a1,d2.w*4),a3					; Adr du 1er chiffre du nombre
+		lea		92(a4),a2
+		bsr		.Draw_Sprite
+
+		lea		Line_Widh*10(a4),a4
+		lea		12(a4),a2
+		lea		Tran,a3
+		bsr		.Draw_Sprite
+
+		lea		24(a4),a2
+		lea		X,a3
+		bsr		.Draw_Sprite
+		lea		56(a4),a2
+		lea		Y,a3
+		bsr		.Draw_Sprite
+		lea		88(a4),a2
+		lea		Z,a3
+		bsr		.Draw_Sprite
+		
+		move.l	(a0)+,d2							; Rot X
+		asr.l		#7,d2
+		tst.w		d2
+		bpl.s		.Pos_X
+		neg.w		d2
+		lea		NegT,a3
+		lea		38(a4),a2
+		bsr		.Draw_Sprite
+.Pos_X
+		move.l	(a1,d2.w*4),a3					; Adr du 1er chiffre du nombre
+		lea		38(a4),a2
+		bsr		.Draw_Sprite2
+		move.l	4(a1,d2.w*4),a3					; Adr du 1er chiffre du nombre
+		lea		46(a4),a2
+		bsr		.Draw_Sprite
+		move.l	8(a1,d2.w*4),a3					; Adr du 1er chiffre du nombre
+		lea		46(a4),a2
+		bsr		.Draw_Sprite2
+		move.l	12(a1,d2.w*4),a3					; Adr du 1er chiffre du nombre
+		lea		54(a4),a2
+		bsr.s		.Draw_Sprite
+
+		move.l	(a0)+,d2							; Rot Y
+		asr.l		#7,d2
+		tst.w		d2
+		bpl.s		.Pos_Y
+		neg.w		d2
+		lea		NegT,a3
+		lea		70(a4),a2
+		bsr.s		.Draw_Sprite
+.Pos_Y
+		move.l	(a1,d2.w*4),a3					; Adr du 1er chiffre du nombre
+		lea		70(a4),a2
+		bsr.s		.Draw_Sprite2
+		move.l	4(a1,d2.w*4),a3					; Adr du 1er chiffre du nombre
+		lea		78(a4),a2
+		bsr.s		.Draw_Sprite
+		move.l	8(a1,d2.w*4),a3					; Adr du 1er chiffre du nombre
+		lea		78(a4),a2
+		bsr.s		.Draw_Sprite2
+		move.l	12(a1,d2.w*4),a3					; Adr du 1er chiffre du nombre
+		lea		86(a4),a2
+		bsr.s		.Draw_Sprite
+
+		move.l	(a0)+,d2							; Rot X
+		asr.l		#7,d2
+		tst.w		d2
+		bpl.s		.Pos_Z
+		neg.w		d2
+		lea		NegT,a3
+		lea		102(a4),a2
+		bsr.s		.Draw_Sprite
+.Pos_Z
+		move.l	(a1,d2.w*4),a3					; Adr du 1er chiffre du nombre
+		lea		102(a4),a2
+		bsr.s		.Draw_Sprite2
+		move.l	4(a1,d2.w*4),a3					; Adr du 1er chiffre du nombre
+		lea		110(a4),a2
+		bsr.s		.Draw_Sprite
+		move.l	8(a1,d2.w*4),a3					; Adr du 1er chiffre du nombre
+		lea		110(a4),a2
+		bsr.s		.Draw_Sprite2
+		move.l	12(a1,d2.w*4),a3					; Adr du 1er chiffre du nombre
+		lea		118(a4),a2
+		bsr.s		.Draw_Sprite
+	Rts		
+		
+.Draw_Sprite
+		moveq		#8-1,d7
+.Draw
+		move.w	(a3)+,d1
+		clr.w		(a2)
+		move.w	d1,(a2)
+		lea		(a2,d0.w),a2
+		dbf		d7,.Draw
+	Rts
+.Draw_Sprite2
+		moveq		#8-1,d7
+.Draw2
+		move.w	(a3)+,d1
+		lsr.w		#8,d1
+		or.w		d1,(a2)
+		lea		(a2,d0.w),a2
+		dbf		d7,.Draw2
+	Rts
+	EndC
+
+
+Send_Table_1_x
+		lea		$ffffa200.w,a2
+		move.w	#350-1,d7
+		move.l	#-350,d0
+Negatifs
+		move.l	#$7fffff,d6
+		divs.l	d0,d6
+		move.l	d6,4(a2)
+		addq.l	#1,d0
+		dbf		d7,Negatifs
+
+Zero	move.l	#$7fffff,4(a2)
+
+		move.w	#3000-1,d7
+		moveq.l	#1,d0
+Positifs
+		move.l	#$7fffff,d6
+		divs.l	d0,d6
+		move.l	d6,4(a2)
+		addq.l	#1,d0
+		dbf		d7,Positifs
+	Rts
+
+Send_Table_Cosin
+		lea		Tab_Cosin,a0
+		move.w	#720-1,d7
+.Send_Tab
+	Host_Send_Data	(a0)+
+		dbf		d7,.Send_Tab
+	Rts
+
+Send_Variables
+		Host_Send_Data		#Pt_Fuite
+		Host_Send_Data		#C_X
+		Host_Send_Data		#C_Y	
+		Host_Send_Data		#DX
+		Host_Send_Data		#DY
+		Host_Send_Data		#Nb_Inter
+		Host_Send_Data		#Lim_ZP
+		Host_Send_Data		#Lim_ZM
+		Host_Send_Data		#Lim_XP
+		Host_Send_Data		#Lim_XM
+		Host_Send_Data		#Lim_YP
+		Host_Send_Data		#Lim_YM
+	Rts
+
+Send_All_Objects_Descriptor
+		lea		Start_Objects,a0				; Tableau pointant sur les adresses des objets
+		move.l	(a0)+,d7							; Nombre d'objets
+	Host_Send_Data		d7							; Zyva je te balance la sauce
+		subq.w	#1,d7								; -1 pour le dbf de notre cher 030 (ya pas de Loop)
+.Send_1_Obj
+		move.l	(a0)+,a1							; Adr de la definition de la structure de l'objet
+		move.w	(a1)+,d6							; Nombre de points definis
+		ext.l		d6
+	Host_Send_Data		d6							; On envoie le nombre de points a receptionner
+		subq.w	#1,d6
+.Send_Pts				
+	Rept			3
+	Host_Send_Data		(a1)+
+	EndR
+		dbf		d6,.Send_Pts
+		
+		move.w	(a1)+,d6							; Nombre de faces definies
+		ext.l		d6
+	Host_Send_Data		d6
+		subq.w	#1,d6								; -1 a cause du dbf
+.Send_Face
+		move.w	(a1)+,d0
+		ext.l		d0
+	Host_Send_Data		d0							; Numero de la couleur
+		move.w	(a1)+,d5							; Nombre de points
+		ext.l		d5
+	Host_Send_Data		d5							; On envoie au DSP le nombre de points a receptionner
+		subq.w	#1,d5
+.Send_Num_Pts
+		move.w	(a1)+,d0
+		ext.l		d0
+	Host_Send_Data		d0
+		dbf		d5,.Send_Num_Pts
+		dbf		d6,.Send_Face
+		dbf		d7,.Send_1_Obj
+	Rts
+
+***********************************************************************
+*********** ROUTINE DE CONTROLE DE L'EVOLUTION DU MONDE 3D  ***********
+***********************************************************************
+Control_World_Evolution
+		lea		Camera_State,a0				; Evolution courante de la cam‚ra
+		move.l	Camera_Current_Mvt,a1		; Point sur la partie actuelle du script	
+		tst.w		(a0)								; Doit-on chang‚ de mouvement ?
+		bne.s		.Same_Mvt						; Non, on continue sur le Mvt courant
+		add.l		#28,Camera_Current_Mvt
+		lea		28(a1),a1						; on pointe sur le Mvt suivant
+		move.l	a1,d0
+		cmpi.l	#End_Script,d0					; On est … la fin ?
+		bne.s		.Cmpt_Ok
+		lea		Camera_Script,a1				; On repointe sur le debut du script
+		move.w	2(a1),(a0)
+		move.l	a1,Camera_Current_Mvt		; Pareille
+.Cmpt_Ok
+		tst.w		(a1)								; Changement de cam‚ra ou suite de l'‚volution
+		beq.s		.No_Camera_Change				; on ne change pas de vue de cam‚ra
+		movem.l	2(a1),d0-d5
+		movem.l	d0-d5,2(a0)						; on installe la nouvelle position de la cam‚ra
+		add.l		#28,Camera_Current_Mvt		; ***** LA DES D'UN CHANGEMENT DE CAMERA OQP 26 OCTETS
+		lea		28(a1),a1						; on pointe sur le Mvt suivant
+		move.l	a1,d0
+		cmpi.l	#End_Script,d0					; On est … la fin ?
+		bne.s		.Transfert_Inc
+		lea		Camera_Script,a1				; On repointe sur le debut du script
+		move.l	a1,Camera_Current_Mvt		; Pareille
+		move.w	2(a1),(a0)
+		bra.s		.Transfert_Inc					; on va directement transferer les valeurs courantes
+.No_Camera_Change
+		move.w	2(a1),(a0)						; Nombre de VBL du nouveau Mvt
+.Same_Mvt
+		subq.w	#1,(a0)							; une VBL en moins … faire
+		addq.l	#2,a0								; On pointe sur les angles + translations
+		addq.l	#4,a1
+
+		move.l	(a1)+,d0
+		add.l		d0,(a0)							; On incr‚mente les angles
+		cmpi.l	#360*64,(a0)					; Une revolution en trop ?
+		blt.s		.OK_X
+		sub.l		#360*64,(a0)
+.OK_X
+		move.l	(a1)+,d0
+		add.l		d0,4(a0)
+		cmpi.l	#360*64,4(a0)					; Une revolution en trop ?
+		blt.s		.OK_Y
+		sub.l		#360*64,4(a0)
+.OK_Y
+		move.l	(a1)+,d0
+		add.l		d0,8(a0)
+		cmpi.l	#360*64,8(a0)					; Une revolution en trop ?
+		blt.s		.OK_Z
+		sub.l		#360*64,8(a0)
+.OK_Z
+		move.l	(a1)+,d0							; On incr‚mente les translations
+		add.l		d0,12(a0)
+		move.l	(a1)+,d0
+		add.l		d0,16(a0)
+		move.l	(a1)+,d0
+		add.l		d0,20(a0)
+.Transfert_Inc		
+		move.w	#6-1,d7
+.Tfr_Pos		
+	Host_Send_Data		(a0)+						; Angles X,Y et Z ; TX,TY,TZ
+		dbf		d7,.Tfr_Pos
+
+	Rts
+
+Create_Convert_Number
+		lea		Number_To_Digit,a0
+		lea		Table_Number,a1
+		moveq		#4-1,d7
+.Mile	lea		Table_Number,a2
+		moveq		#10-1,d6
+.Cent	lea		Table_Number,a3
+		moveq		#10-1,d5
+.Dix	lea		Table_Number,a4
+		moveq		#10-1,d4
+.Unit	move.l	(a1),(a0)+
+		move.l	(a2),(a0)+
+		move.l	(a3),(a0)+
+		move.l	(a4)+,(a0)+
+		dbf		d4,.Unit
+		addq.l	#4,a3
+		dbf		d5,.Dix
+		addq.l	#4,a2
+		dbf		d6,.Cent
+		addq.l	#4,a1
+		dbf		d7,.Mile
+	Rts
+		
+
+***********************************************************************
+***********							Sous-Programmes					***********
+***********************************************************************
+
+Installe_Palette
+		move.w	#256-1,d7
+		lea.l		Palette_Videl,a0
+		lea.l		$ffff9800.w,a1
+InstallePalette
+		move.l	(a0)+,(a1)+
+		dbra		d7,InstallePalette
+		rts
+
+		Include	POLY15X.AST
+
+		Include	'INITSFAL.AST'
+		
+***********************************************************************
+***********						Section DATA							***********
+***********************************************************************
+
+		Section	DATA
+
+Tab_Cosin		incbin		'DSP_COSIN.DAT'
+		EVEN
+		
+		IfEq		DSPType
+DSP_Lod	DC.b		'D:\DSP_TOOL\SOURCES.DSP\3D_DSP\TEST.LOD',0
+		Else
+DSP_Code	IncBin	'ASTWORLD.P56'
+End_DSP_Code
+		EndC
+		Even
+
+Coef_Dep				dc.l		1
+
+***********************************************************************
+***********              Description des objets             ***********
+***********************************************************************
+
+
+***************************************
+*    TIMING DE MORPHING DES OBJETS    *
+***************************************
+
+Timing_Objects1
+		dc.l		160
+		dc.l		CROIX_2
+		dc.l		40
+		dc.l		CROIX_3
+		dc.l		40
+		dc.l		CROIX_4
+		dc.l		40
+		dc.l		CROIX_1
+		dc.l		40
+		dc.l		CROIX_2
+		dc.l		40
+		dc.l		CROIX_3
+		dc.l		40
+		dc.l		CROIX_4
+		dc.l		40
+		dc.l		CROIX_1
+		dc.l		40
+		dc.l		CROIX_2
+		dc.l		40
+		dc.l		CROIX_3
+		dc.l		40
+		dc.l		CROIX_4
+		dc.l		40
+		dc.l		CROIX_1
+		dc.l		40
+		dc.l		CROIX_2
+		dc.l		40
+		dc.l		CROIX_3
+		dc.l		40
+		dc.l		CROIX_4
+		dc.l		40
+		dc.l		CROIX_1
+		dc.l		100000
+		dc.l		CROIX_3
+
+Timing_Objects2
+		dc.l		100000
+		dc.l		Roue
+		
+Timing_Objects3
+		dc.l		100000
+		dc.l		Cube_1
+
+Timing_Objects4
+		dc.l		100000
+		dc.l		Cube_1
+
+Timing_Objects5
+		dc.l		100000
+		dc.l		Cube_1
+		
+Timing_Objects6
+		dc.l		160
+		dc.l		Cube_2
+		dc.l		40
+		dc.l		Cube_3
+		dc.l		40
+		dc.l		Cube_4
+		dc.l		40
+		dc.l		Cube_1
+		dc.l		40
+		dc.l		Cube_2
+		dc.l		40
+		dc.l		Cube_3
+		dc.l		40
+		dc.l		Cube_4
+		dc.l		40
+		dc.l		Cube_1
+		dc.l		40
+		dc.l		Cube_2
+		dc.l		40
+		dc.l		Cube_3
+		dc.l		40
+		dc.l		Cube_4
+
+		dc.l		40
+		dc.l		Cube_1
+		dc.l		100000
+
+Timing_Objects7
+		dc.l		160
+		dc.l		Hexaedre_2
+		dc.l		40
+		dc.l		Hexaedre_1
+		dc.l		40
+		dc.l		Hexaedre_2
+		dc.l		40
+		dc.l		Hexaedre_1
+		dc.l		40
+		dc.l		Hexaedre_2
+		dc.l		40
+		dc.l		Hexaedre_1
+		dc.l		40
+		dc.l		Hexaedre_2
+		dc.l		40
+		dc.l		Hexaedre_1
+		dc.l		40
+		dc.l		Hexaedre_2
+		dc.l		40
+		dc.l		Hexaedre_1
+		dc.l		40
+		dc.l		Hexaedre_2
+		dc.l		40
+		dc.l		Hexaedre_1
+		dc.l		40
+		dc.l		Hexaedre_2
+		dc.l		40
+		dc.l		Hexaedre_1
+		dc.l		40
+		dc.l		Hexaedre_2
+		dc.l		40
+		dc.l		Hexaedre_1
+		dc.l		40
+		dc.l		Hexaedre_2
+		dc.l		40
+		dc.l		Hexaedre_1
+		dc.l		40
+		dc.l		Hexaedre_2
+		dc.l		40
+		dc.l		Hexaedre_1
+		dc.l		40
+		dc.l		Hexaedre_2
+		dc.l		40
+		dc.l		Hexaedre_1
+		dc.l		40
+		dc.l		Hexaedre_2
+		dc.l		40
+		dc.l		Hexaedre_1
+		dc.l		40
+		dc.l		Hexaedre_2
+		dc.l		40
+		dc.l		Hexaedre_1
+		dc.l		40
+		dc.l		Hexaedre_2
+		dc.l		40
+		dc.l		Hexaedre_1
+		dc.l		40
+		dc.l		Hexaedre_2
+		dc.l		40
+		dc.l		Hexaedre_1
+		dc.l		40
+		dc.l		Hexaedre_2
+		dc.l		40
+		dc.l		Hexaedre_1
+		dc.l		100000
+		dc.l		Hexaedre_2
+
+Timing_Objects8
+		dc.l		160
+		dc.l		Gato_2
+		dc.l		40
+		dc.l		Gato_3
+		dc.l		40
+		dc.l		Gato_4
+		dc.l		40
+		dc.l		Gato_1
+		dc.l		40
+		dc.l		Gato_2
+		dc.l		40
+		dc.l		Gato_3
+		dc.l		40
+		dc.l		Gato_4
+		dc.l		40
+		dc.l		Gato_1
+		dc.l		40
+		dc.l		Gato_2
+		dc.l		40
+		dc.l		Gato_3
+		dc.l		40
+		dc.l		Gato_4
+		dc.l		40
+		dc.l		Gato_1
+		dc.l		40
+		dc.l		Gato_2
+		dc.l		40
+		dc.l		Gato_3
+		dc.l		40
+		dc.l		Gato_4
+		dc.l		40
+		dc.l		Gato_1
+		dc.l		40
+		dc.l		Gato_2
+		dc.l		40
+		dc.l		Gato_3
+		dc.l		40
+		dc.l		Gato_4
+		dc.l		40
+		dc.l		Gato_1
+		dc.l		40
+		dc.l		Gato_2
+		dc.l		40
+		dc.l		Gato_3
+		dc.l		40
+		dc.l		Gato_4
+		dc.l		40
+		dc.l		Gato_1
+		dc.l		40
+		dc.l		Gato_2
+		dc.l		40
+		dc.l		Gato_3
+		dc.l		40
+		dc.l		Gato_4
+		dc.l		10000
+		
+***************************************
+* EVOLUTION DANS L'ESPACE DES OBJETS  *
+***************************************
+Move_Objects1
+		dc.l		0*64,0*64,0*64					; Rotation State
+		dc.l		200*512,40*512,-200*512				; Translations State
+		dc.l		P_Obj1-28
+		dc.l		End_Obj1
+		dc.l		0
+P_Obj1		
+		dc.l		80									; Duree du mouvement en VBL
+		dc.l		2*64,1*64,3*64					; Incrementations constantes des rotations
+		dc.l		0*512,0*512,0*512				; Incrementations constatnes des translations
+		dc.l		80
+		dc.l		360*64-2*64,360*64-3*64,1*64
+		dc.l		0*512,0*512,0*512
+		dc.l		80									; Duree du mouvement en VBL
+		dc.l		2*64,1*64,3*64					; Incrementations constantes des rotations
+		dc.l		0*512,0*512,0*512				; Incrementations constatnes des translations
+		dc.l		80
+		dc.l		360*64-2*64,360*64-3*64,1*64
+		dc.l		0*512,0*512,0*512
+End_Obj1
+
+Move_Objects2
+		dc.l		0,90*64,0								; Rotation State
+		dc.l		0*512,30*512,0*512		; Translations State
+		dc.l		P_Obj2-28
+		dc.l		End_Obj2
+		dc.l		0
+P_Obj2
+		dc.l		40
+		dc.l		0*64,0*64,4*64+32
+		dc.l		0*512,0*512,0*512
+		dc.l		20000
+		dc.l		0*64,0*64,0*64
+		dc.l		0*512,0*512,0*512
+
+End_Obj2
+
+Move_Objects3
+		dc.l		0,0,0								; Rotation State
+		dc.l		-440*512,40*512,0*512		; Translations State
+		dc.l		P_Obj3-28
+		dc.l		End_Obj3
+		dc.l		0
+P_Obj3
+		dc.l		20000
+		dc.l		0*64,0*64,0*64
+		dc.l		0*512,0*512,0*512
+End_Obj3
+
+Move_Objects4
+		dc.l		0,0,0								; Rotation State
+		dc.l		360*512,40*512,0*512		; Translations State
+		dc.l		P_Obj4-28
+		dc.l		End_Obj4
+		dc.l		0
+P_Obj4
+		dc.l		160
+		dc.l		0*64,0*64,360*64-(2*64+16)
+		dc.l		-4*512-256,0*512,0*512
+
+		dc.l		160
+		dc.l		0*64,0*64,2*64+16
+		dc.l		+4*512+256,0*512,0*512
+End_Obj4
+
+Move_Objects5
+		dc.l		0,0,0								; Rotation State
+		dc.l		440*512,40*512,0*512		; Translations State
+		dc.l		P_Obj5-28
+		dc.l		End_Obj5
+		dc.l		0
+P_Obj5
+		dc.l		20000
+		dc.l		0*64,0*64,0*64
+		dc.l		0*512,0*512,0*512
+End_Obj5
+
+Move_Objects6
+		dc.l		0,0,0								; Rotation State
+		dc.l		0*512,40*512,200*512		; Translations State
+		dc.l		P_Obj6-28
+		dc.l		End_Obj6
+		dc.l		0
+P_Obj6
+		dc.l		80
+		dc.l		0*64,0*64,0*64
+		dc.l		0*512,0*512,0*512
+		dc.l		80
+		dc.l		0*64,0*64,0*64
+		dc.l		0*512,0*512,0*512
+End_Obj6
+
+Move_Objects7
+		dc.l		0,0,0								; Rotation State
+		dc.l		00*512,40*512,200*512		; Translations State
+		dc.l		P_Obj7-28
+		dc.l		End_Obj7
+		dc.l		0
+P_Obj7
+		dc.l		80
+		dc.l		3*64,2*64,3*64
+		dc.l		0*512,0*512,0*512
+		dc.l		80
+		dc.l		360*64-2*64,0*64,3*64
+		dc.l		0*512,0*512,0*512
+End_Obj7
+
+Move_Objects8
+		dc.l		0,0,0								; Rotation State
+		dc.l		-200*512,40*512,-200*512		; Translations State
+		dc.l		P_Obj8-28
+		dc.l		End_Obj8
+		dc.l		0
+P_Obj8
+		dc.l		80
+		dc.l		3*64,2*64,3*64
+		dc.l		0*512,0*512,0*512
+		dc.l		80
+		dc.l		360*64-1*64,0*64,2*64
+		dc.l		0*512,0*512,0*512
+End_Obj8
+
+		
+***************************************
+*      description de la scene        *
+***************************************
+
+Scene_Descriptor
+		dc.l		7									; Nombre d'objet a l'ecran
+
+		dc.l		Timing_Objects1				; Tablo de timing de morphing
+		dc.l		Move_Objects1					; tablo de position de l'objet
+
+		dc.l		Timing_Objects2
+		dc.l		Move_Objects2
+		
+		dc.l		Timing_Objects3
+		dc.l		Move_Objects3
+		
+		dc.l		Timing_Objects8
+		dc.l		Move_Objects8
+
+		dc.l		Timing_Objects5
+		dc.l		Move_Objects5
+
+		dc.l		Timing_Objects4
+		dc.l		Move_Objects4
+
+		dc.l		Timing_Objects7
+		dc.l		Move_Objects7
+
+		dc.l		Timing_Objects4
+		dc.l		Move_Objects4
+
+Start_Objects
+		dc.l		7									; Nombre d'objets a l'ecran
+		dc.l		Croix_1							; Objets de depart de l'objet numero 1
+		dc.l		Roue
+		dc.l		Cube_1
+		dc.l		Gato_1
+		dc.l		Cube_1
+		dc.l		CubeS_1
+		dc.l		Hexaedre_1
+		dc.l		Cube_1
+		
+		
+***********************************************************************
+***********         Script de la cam‚ra de la scŠne         ***********
+***********************************************************************
+
+Camera_State
+		dc.w		0									; Nbr de VBL restantes pour passer au prochain MVT
+		dc.l		0*64,90*64,0*64					; Etat actuel des angles de la cam‚ra
+		dc.l		0*512,-320*512,485*512			; Etat actuel des translations de la cam‚ra
+Camera_Current_Mvt
+		dc.l		Camera_Script-28				; Pointe sur le mouvement courant
+Camera_Script
+		dc.w		0							
+		dc.w		160								; 2 pat			
+		dc.l		0*64,0*64,0*4			
+		dc.l		0*512,2*512,512		
+
+		dc.w		0							
+		dc.w		160								; 2 pat			
+		dc.l		0*64,2*64,0*4			
+		dc.l		0*512,0*512,0*512		
+
+		dc.w		0							
+		dc.w		160								; 2 pat			
+		dc.l		0*64,2*64,0*4			
+		dc.l		0*512,0*512,-2*512		
+
+		dc.w		0							
+		dc.w		30								; 1 pat			
+		dc.l		0*64,360*64-4*64,0*4			
+		dc.l		0*512,0*512,0*512		
+
+		dc.w		0							
+		dc.w		130							; 1 pat			
+		dc.l		0*64,0*64,0*4			
+		dc.l		0*512,0*512,0*512		
+
+		dc.w		0							
+		dc.w		80							; 1 pat			
+		dc.l		0*64,3*64,0*4			
+		dc.l		0*512,-1*512,3*512		
+
+		dc.w		0							
+		dc.w		80							; 1 pat			
+		dc.l		0*64,3*64,0*4			
+		dc.l		0*512,0,3*512		
+
+		dc.w		0				
+		dc.w		32000								; 2 pat			
+		dc.l		0*64,0*64,0*4			
+		dc.l		0*512,0*512,0*512		
+
+End_Script										; FIN DE LA DESCRIPTION DU SCRIPT
+
+***********************************************************************
+***********  Description des objets appartenant … la scŠne  ***********
+***********************************************************************
+; Les objets qui vont suivre sont fixes, donc ils n'ont aucunes ‚volutions
+			
+			Include		'..\Objects\Volume.ast'
+			Include		'..\Objects\AST_Obj.ast'
+			Include		'..\Objects\AST2_Obj.ast'
+
+Pic		IncBin		'ASTWORLD.PI1'
+						
+Table_Number
+		dc.l		Nul,One,Two,Three,Four,Five,Six,Seven,Eight,Nine
+
+Nul	dc.w		%0001100000000000
+		dc.w		%0010010000000000
+		dc.w		%0010011000000000
+		dc.w		%0010110000000000
+		dc.w		%0011010000000000
+		dc.w		%0110010000000000
+		dc.w		%0010010000000000
+		dc.w		%0001100000000000
+		
+One	dc.w		%0000100000000000
+		dc.w		%0001100000000000
+		dc.w		%0010100000000000
+		dc.w		%0000100000000000
+		dc.w		%0000100000000000
+		dc.w		%0000100000000000
+		dc.w		%0000100000000000
+		dc.w		%0011111000000000
+
+Two	dc.w		%0001100000000000
+		dc.w		%0010010000000000
+		dc.w		%0000010000000000
+		dc.w		%0000010000000000
+		dc.w		%0000100000000000
+		dc.w		%0001000000000000
+		dc.w		%0010000000000000
+		dc.w		%0011110000000000
+
+Three	dc.w		%0011100000000000
+		dc.w		%0000010000000000
+		dc.w		%0000010000000000
+		dc.w		%0001100000000000
+		dc.w		%0000010000000000
+		dc.w		%0000010000000000
+		dc.w		%0000010000000000
+		dc.w		%0011100000000000
+		
+Four	dc.w		%0001000000000000
+		dc.w		%0001000000000000
+		dc.w		%0010000000000000
+		dc.w		%0010100000000000
+		dc.w		%0011111000000000
+		dc.w		%0000100000000000
+		dc.w		%0000100000000000
+		dc.w		%0000100000000000
+		
+Five	dc.w		%0011110000000000
+		dc.w		%0010000000000000
+		dc.w		%0010000000000000
+		dc.w		%0001100000000000
+		dc.w		%0000010000000000
+		dc.w		%0000010000000000
+		dc.w		%0000010000000000
+		dc.w		%0011100000000000
+
+Six	dc.w		%0001110000000000
+		dc.w		%0010000000000000
+		dc.w		%0010000000000000
+		dc.w		%0010000000000000
+		dc.w		%0011110000000000
+		dc.w		%0010010000000000
+		dc.w		%0010010000000000
+		dc.w		%0011110000000000
+
+Seven	dc.w		%00111110000000000
+		dc.w		%00000010000000000
+		dc.w		%00000100000000000
+		dc.w		%00000100000000000
+		dc.w		%00001000000000000
+		dc.w		%00001000000000000
+		dc.w		%00010000000000000
+		dc.w		%00010000000000000
+		
+Eight
+		dc.w		%00011000000000000
+		dc.w		%00100100000000000
+		dc.w		%00100100000000000
+		dc.w		%00011000000000000
+		dc.w		%00100100000000000
+		dc.w		%00100100000000000
+		dc.w		%00100100000000000
+		dc.w		%00011000000000000
+Nine
+		dc.w		%00011000000000000
+		dc.w		%00100100000000000
+		dc.w		%00100100000000000
+		dc.w		%00011000000000000
+		dc.w		%00000100000000000
+		dc.w		%00000100000000000
+		dc.w		%00000100000000000
+		dc.w		%00111000000000000
+
+Warning_Time
+		dc.w		%0001000000110000
+		dc.w		%0001000000110000
+		dc.w		%0010100000110000
+		dc.w		%0010100000110000
+		dc.w		%0100010000110000
+		dc.w		%0101010000110000
+		dc.w		%1000001000000000
+		dc.w		%1111111000110000
+
+Rot	dc.w		%0110001100111110
+		dc.w		%1001010010001000
+		dc.w		%1001010010001000
+		dc.w		%1110010010001000
+		dc.w		%1010010010001000
+		dc.w		%1001010010001000
+		dc.w		%1001010010001000
+		dc.w		%1001001100001000
+
+Tran	dc.w		%1110111011101001
+		dc.w		%0100101010101101
+		dc.w		%0100101010101101
+		dc.w		%0100111011101101
+		dc.w		%0100110010101011
+		dc.w		%0100101010101011
+		dc.w		%0100101010101011
+		dc.w		%0100101010101001
+
+X		dc.w		%0000000000000000
+		dc.w		%1000001000000000
+		dc.w		%0100010000000000
+		dc.w		%0010100000110000
+		dc.w		%0001000000000000
+		dc.w		%0010100000000000
+		dc.w		%0100010000110000
+		dc.w		%1000001000000000
+		
+Y		dc.w		%1000010000000000
+		dc.w		%1000010000000000
+		dc.w		%1000010000000000
+		dc.w		%0111100000110000
+		dc.w		%0000010000000000
+		dc.w		%0000010000000000
+		dc.w		%0000010000110000
+		dc.w		%0111100000000000
+
+Z		dc.w		%1111111000000000
+		dc.w		%0000010000000000
+		dc.w		%0000100000000000
+		dc.w		%0001000000110000
+		dc.w		%0010000000000000
+		dc.w		%0100000000000000
+		dc.w		%1000000000110000
+		dc.w		%1111111000000000
+
+NegT	dc.w		%0000000000000000
+		dc.w		%0000000000000000
+		dc.w		%0000000000000000
+		dc.w		%0011110000000000		
+		dc.w		%0011110000000000
+		dc.w		%0000000000000000
+		dc.w		%0000000000000000
+		dc.w		%0000000000000000
+
+***********************************************************************
+***********							Section BSS							***********
+***********************************************************************
+
+		Section	BSS
+
+Big_Tab		ds.w		4000
+
+Number_To_Digit
+		ds.l		4000*4
+
+; Buffers
+			IfEq		DSPType
+DSP_Buffer	ds.b		2000
+			EndC
+
+Vide					ds.l		15
+Line_Number			ds.w		1
+Start_Up_Seq		ds.w		1
+; Variables diverses
+; Adresses Ecrans
+
+Adr_Screen1			ds.l		1
+Adr_Screen2			ds.l		1
+
+Cache					ds.w		1
+; Pile
+Save_Stack			ds.l		1
+End_Stack			ds.l		256
+New_Stack
+; Palettes en tout genre
+Palette_Videl		ds.l		256
+; Buffers
+; Place pour Ecrans
+Screens				ds.b		Nbr_Screen*(Size_Screen+256)

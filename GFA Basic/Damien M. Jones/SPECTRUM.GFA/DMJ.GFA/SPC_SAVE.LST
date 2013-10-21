@@ -1,0 +1,125 @@
+' This procedure compresses and saves a Spectrum image.
+' F$ is the filename.
+' Source% is the address of the image.
+' Palette% is the address of the palette.
+' Work% is the address of a 64K buffer used during picture compression.
+' (Actually, it's the address of two 32K buffers, but who's asking?)
+'
+' The process of compressing the image in no way affects the original data.
+'
+' This routine would be MUCH faster in assembly, but I haven't written ANY
+' compression routines in assembly.  Not that it would be hard, just that
+' I haven't done it yet.  As it is, this routine runs fairly quickly.
+'
+> procedure Save_spectrum_compressed(F$,Source%,Palette%,Work%)
+Local T%,Offset&,Store&,Count&,P$,P%,X&,Y&,Pstore&,Pstore2&,B1|,B2|,B3|,Work2%
+'
+' Step 1.  Reorder image so each bitplane is separated.
+'          Moves image into work buffer 1.
+'
+T%=Work%    ! Address of first work buffer.
+Offset&=160 ! And the offset starts at 160
+Store&=0    ! Offset in storage area
+'
+Repeat
+  Int{T%+Store&}=Int{Source%+Offset&} ! Move word
+  Add Offset&,8       ! Shift to next word.
+  Add Store&,2        ! In the storage area also
+  If Offset&>=32000   ! Past the end of the picture
+    Sub Offset&,31838 ! Move to start of next bitplane, line 1
+  Endif
+Until Store&>=31840   ! All bitplanes are done.
+'
+' Step 2.  Compress bitmap data.
+'          Stores compressed data in work buffer 1.
+'
+Work2%=Work%+32000    ! Address of work buffer 2.
+Bmove T%,Work2%,32000 ! Move reordered image to work buffer 2.
+Source%=Work2%        ! Use it as the source.
+'
+Offset&=0             ! Offset in work buffer 2 (reordered image).
+Store&=0              ! Offset in work buffer 1 (compressed image).
+Count&=0              ! Number of copied bytes.
+'
+For X&=1 To 4         ! Do four bitplanes.
+  Repeat
+    '
+    B1|=Byte{Source%+Offset&}    ! Get next three bytes.
+    B2|=Byte{Source%+Offset&+1}
+    B3|=Byte{Source%+Offset&+2}
+    Inc Offset&                  ! And now move to the next byte.
+    '
+    If B1|=B2| And B2|=B3| And Offset&<7958 ! Three repeated bytes.
+      If Count&>0                ! There's some non-repeat bytes to handle.
+        Byte{T%+Store&}=Count&-1 ! Store the header byte.
+        Bmove Source%+Offset&-Count&-1,T%+Store&+1,Count&+1 ! Move non-repeat bytes.
+        Add Store&,Count&+1      ! Bytes have been stored.
+      Endif
+      Add Offset&,2 ! Move past what we know are already repeat bytes.
+      Count&=3      ! Set this to repeat 3 times (so far).
+      While Byte{Source%+Offset&}=B1| And Offset&<7960 And Count&<130 ! Same byte...
+        Inc Offset& ! Move to the next one.
+        Inc Count&  ! And record!
+      Wend
+      Byte{T%+Store&}=2-Count& ! Store the header byte.
+      Byte{T%+Store&+1}=B1|    ! And the repeated byte.
+      Add Store&,2             ! Next storage location.
+      Count&=0                 ! Zero this.
+      '
+    Else ! Not a repeat, keep counting non-repeat bytes
+      Inc Count&                    ! Another byte.
+      If Count&=128 Or Offset&=7960 ! Must store these bytes.
+        Byte{T%+Store&}=Count&-1    ! Store the header byte.
+        Bmove Source%+Offset&-Count&,T%+Store&+1,Count& ! Move non-repeat bytes.
+        Add Store&,Count&+1         ! Bytes have been stored
+        Count&=0                    ! Zero this.
+      Endif
+    Endif
+    '
+  Until Offset&>=7960               ! All done with this bitplane.
+  Offset&=0                         ! Reset offset.
+  Add Source%,7960                  ! Move source to next bitplane.
+Next X&                             ! Do next bitplane.
+'
+' Step 3.  Compress palettes.
+'          Stores compressed palette in work buffer 2.
+'
+Pstore&=0        ! Offset in storage area.
+Offset&=0        ! Offset in palette area.
+P%=Work%+32768   ! Address of work buffer 2.
+'
+For X&=0 To 596  ! Compress 597 palettes.
+  Vector&=0      ! Assume no palettes are present.
+  Pstore2&=2     ! Offset for storing colors.
+  Add Offset&,2  ! Skip color 0, which isn't used.
+  For Y&=1 To 14 ! Process this palette (SPC's don't have colors 0 and 15).
+    Rgb&=Int{Palette%+Offset&}      ! Read the RGB value.
+    Add Offset&,2                   ! Move to next RGB value.
+    If Rgb&<>0                      ! Something here.
+      Vector&=Bset(Vector&,Y&)      ! Set the appropriate bit.
+      Int{P%+Pstore&+Pstore2&}=Rgb& ! Store RGB.
+      Add Pstore2&,2                ! And move on.
+    Endif
+  Next Y&                 ! Finish up the palette.
+  Add Offset&,2           ! Skip color 15, which isn't used.
+  Int{P%+Pstore&}=Vector& ! Store the color vector.
+  Add Pstore&,Pstore2&    ! And move past compressed palette.
+Next X&
+'
+If Odd(Store&) ! Must end on a word boundary.
+  Inc Store&   ! So make it even!
+Endif
+'
+' Step 4.  Write compressed file to disk.
+'
+Open "O",#1,F$              ! Open file.
+Out& #1,&H5350              ! "SP" (ID bytes).
+Out& #1,0                   ! Reserved by Spectrum.
+Out% #1,Store&              ! Length of the compressed bitmap.
+Out% #1,Pstore&             ! Length of the compressed palettes.
+Bput #1,Work%,Store&        ! Compressed bitmap.
+Bput #1,Work%+32768,Pstore& ! Compressed palettes.
+Close #1                    ! All done.
+'
+Return
+'

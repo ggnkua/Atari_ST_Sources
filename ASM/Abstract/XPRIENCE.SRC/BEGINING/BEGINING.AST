@@ -1,0 +1,1413 @@
+***********************************************************************
+***********																	***********
+***********              X-PERIENCE Part 1 (0-8)            ***********
+***********																	***********
+***********************************************************************
+
+***** VARIABLE POUR LE DSP *******
+Pt_Fuite	equ		$6d3a				*
+C_X		equ		160				*
+C_Y		equ		100				*
+DX			equ		320				*
+DY			equ		200				*
+**********************************
+
+VBL_Number		equ	0			; Si 1, montre le nombre de vbl
+
+Nbr_Screen		equ	2
+
+Size_Screen		equ	32000					; Taille de l'ecran en octet
+Line_Widh		equ	160					; Largeur d'une ligne en octets
+
+HTX				Equ		$ffffa204		; Host Transmit Data
+HRX				Equ		$ffffa204		; Host Receive Data
+HCR				Equ		$ffffa200		; Host Control Register
+HTIE				Equ		1					; Host Transmit Interrupt Enable
+HRIE				Equ		0					; Host Receive Interrupt Enable
+HSR				Equ		$ffffa202		; Host Status Register
+HTDE				Equ		1					; Host Transmit Data Empty
+HRDF				Equ		0					; Host Receive Data Full
+
+DSPType			EQU		1					; Si = 0, fichier externe .LOD
+													; Si = 1, code binaire .P56 inclus
+
+KeyBD				EQU		1					; Si = 0, routine simple
+													; Si = 1, routine evolu‚e
+
+; D‚finition des Macros
+
+Host_Send_Data		Macro
+.Host_Request\@
+		btst		#HTDE,HSR
+		beq.s		.Host_Request\@
+		move.l	\1,HTX
+	EndM
+
+Host_Get_Data		Macro
+.Host_Request\@
+		btst		#HRDF,HSR
+		beq.s		.Host_Request\@
+		move.l	HTX,\1
+	EndM
+
+		OPT		O+
+
+		IncDir	'..\INITS\'
+		Include	'MACROS.AST'
+
+***********************************************************************
+***********						Inits G‚n‚rales						***********
+***********************************************************************
+
+		Section	TEXT
+
+
+		move.l	sp,Save_Stack			; Ancienne Pile restaur‚e
+
+		clr.l		-(sp)						; Passage en Mode Supervisor
+		move.w	#$20,-(sp)				; SUPER
+		trap		#1							; Gemdos
+		addq.l 	#6,sp
+
+***********************************************************************
+***********							Inits DSP							***********
+***********************************************************************
+
+		move.w	#113,-(sp)				; DSP_RequestUniqueAbility
+		trap		#14						; XBios
+		addq.l	#2,sp
+
+		IfEq		DSPType
+
+		pea.l		DSP_Buffer				; Buffer pour code binaire
+		move.w	d0,-(sp)					; No Ability
+		pea.l		DSP_Lod					; Chemin d'accŠs du Prog
+		move.w	#108,-(sp)				; Dsp_LoadProg
+		trap		#14						; XBios
+		lea.l		12(sp),sp
+
+		Else
+
+		move.w	d0,-(sp)					; No Ability
+		move.l	#End_DSP_Code,d0		; Adresse de fin du fichier contenant le Code DSP binaire
+		sub.l		#DSP_Code,d0			; Moins adr de d‚part = Longueur en octets
+		divu.l	#3,d0						; /3 = Longueur en mots DSP
+		move.l	d0,-(sp)					; Longueur en mot DSP du code DSP binaire
+		pea.l		DSP_Code					; Adresse du code binaire
+		move.w	#109,-(sp)				; Dsp_ExecProg
+		trap		#14						; XBios
+		lea.l		12(sp),sp
+
+		EndC
+
+Connect	
+		move.l	#$4321,HTX.w			; On se connect avec le DSP
+		moveq.l	#0,d0
+
+Conct_Get	
+		btst.b	#HRDF,HSR.w				; On test pour savoir si on a recu une donn‚ de la part du DSP
+		bne.s		DSP_Test					; yep, c'est bon
+		addq.l	#1,d0
+		cmp.l		#100000,d0
+		beq		DSP_Error				; Les DSP est sourd, on s'arrete l… !
+		bra.s		Conct_Get
+
+DSP_Test	
+		move.l	HRX.w,d0					; Valeur transmise par le DSP
+		cmp.l		#12345678,d0			; On compare le Magic Number
+		bne		DSP_Error				; Le DSP nous a renvoier n'importe quoi, on quitte
+
+***********************************************************************
+***********						Inits G‚n‚rales						***********
+***********************************************************************
+
+		move.w	#$2700,sr
+
+		bsr		Save_System
+		bsr		Init_System
+
+		lea		Videl_768_240_True,a0			; 16 Couleurs
+		moveq		#2-1,d0								; Deux ecrans
+		lea.l	Adr_Screen1,a1
+		lea.l	Screens,a2
+		bsr		Init_Video
+
+		bsr		Init_Falcon_Palette
+		bsr		Init_IT
+
+		lea		$ffff9800.w,a0					; On inititalise les couleurs
+		move.l	#$00000000,(a0)+
+		move.l	#$66660066,(a0)+
+		move.l	#$bbbb00bb,(a0)+
+		move.l	#$ffff00ff,(a0)+
+		move.l	#$60500070,(a0)+
+		move.l	#$70300060,(a0)+
+		move.l	#$5c4c0070,(a0)+
+		move.l	#$5848006c,(a0)+
+		move.l	#$54440068,(a0)+
+		move.l	#$50400064,(a0)+
+		move.l	#$4c3c0060,(a0)+
+		move.l	#$4838005c,(a0)+
+		move.l	#$44340058,(a0)+
+		move.l	#$40300054,(a0)+
+		move.l	#$3c2c0050,(a0)+
+		move.l	#$3824004c,(a0)+
+
+	IfNe	KeyBD
+		move.l	#KeyBoard_Mouse_and_JoySticks,$118.w
+	Else
+		move.l	#KeyBoard,$118.w
+	EndC
+		or.b		#$40,$fffffa09.w			; Autorise nouvelle
+		or.b		#$40,$fffffa15.w			; routine clavier
+
+***********************************************************************
+***********					Inits Sp‚cifiques							***********
+***********************************************************************
+
+		bsr		Make_Precalc					; on precalc les tables consernant la rout de poly
+
+		bsr		Send_Table_1_X					; on envoie la table de 1/x au DSP
+		bsr		Send_Table_Cosin				; on envoie une table de cosinus au DSP plus precise !
+		bsr		Send_variables					; Envoie les diverses variables de la 3D
+
+Send_All_Objects_Descriptor
+		lea		Tab_Objects,a0					; Tableau pointant sur les adresses des objets
+		move.w	(a0)+,d7							; Nombre d'objets
+		ext.l		d7
+	Host_Send_Data		d7							; Zyva je te balance la sauce
+		subq.w	#1,d7								; -1 pour le dbf de notre cher 030 (ya pas de Loop)
+.Send_1_Obj
+		move.l	(a0)+,a1							; Adr de la definition de la structure de l'objet
+	Host_Send_Data		a1							; On envoie l'adr de l'objet
+		move.w	(a1)+,d6							; Nombre de points definis
+		ext.l		d6
+	Host_Send_Data		d6							; On envoie le nombre de points a receptionner
+		subq.w	#1,d6
+.Send_Pts				
+	Rept			3
+		move.w	(a1)+,d0							; corrdonn‚e du points
+		ext.l		d0
+	Host_Send_Data		d0
+	EndR
+		dbf		d6,.Send_Pts
+		
+		move.w	(a1)+,d6							; Nombre de faces definies
+		ext.l		d6
+	Host_Send_Data		d6
+		subq.w	#1,d6								; -1 a cause du dbf
+.Send_Face
+		move.w	(a1)+,d0
+		ext.l		d0
+	Host_Send_Data		d0							; Numero de la couleur
+		move.w	(a1)+,d5							; Nombre de points
+		ext.l		d5
+	Host_Send_Data		d5							; On envoie au DSP le nombre de points a receptionner
+		subq.w	#1,d5
+.Send_Num_Pts
+		move.w	(a1)+,d0
+		ext.l		d0
+	Host_Send_Data		d0
+		dbf		d5,.Send_Num_Pts
+		dbf		d6,.Send_Face
+		dbf		d7,.Send_1_Obj
+
+		lea		Scene_Descriptor,a0
+		moveq		#10-1,d6							; On envoie la description de l'obj
+.Send_Header
+	Host_Send_Data		(a0)+
+		dbf		d6,.Send_Header
+
+	Host_Send_Data		#$1212
+	
+	Host_Get_Data		d0							; Test de synchro 030/DSP
+		cmpi.w	#$2121,d0
+		beq.s		.No_PB
+		move.l	#$ff000000,$ffff9800.w
+		bra.s	DSP_Error
+.No_PB
+
+************************************************************************
+* DEROULEMENT DE LA PARTIE *********************************************
+************************************************************************
+
+Pic_ABSTRACT
+		lea		Videl_768_240_True,a0
+		btst.b	#7,$ffff8006.w
+		beq.s		.RGB
+		lea		Videl_384_240_True,a0		; VGA
+.RGB	move.w	#-1,d0							; Auncuns ecrans
+		bsr		Init_Video
+	bsr			Draw_Pic_AST_N_Present
+
+.Wait_VBL
+		cmpi.w	#100,VBL_Cmpt				; 319
+		bne.s		.Wait_VBL
+		
+Pic_PRESENT
+		clr.l		$ffff9800.w
+		bsr		Show_Pic_Present
+.Wait_VBL
+		cmpi.w	#100,VBL_Cmpt				; 249
+		bne.s		.Wait_VBL
+
+X_Logo_Anim
+		lea		Videl_320_200_16,a0
+		move.w	#-1,d0							; Aucuns ecrans
+		bsr		Init_Video
+	bsr.s			Session_3D						; Routine de 3D
+		
+; Fin de la session 3D, on restore l'etat du falcon, et on quitte
+End_Session
+		bsr		Restore_System
+		move.w	Cache,d0
+		movec		d0,cacr
+		
+		movea.l	Save_Stack,sp			; Ancienne Pile restaur‚e
+
+DSP_Error	
+		clr.w 	-(sp)						; PTerm
+		trap 		#1							; Gemdos
+
+***********************************************************************
+***********		   		Interruption VBL : compteur			***********
+***********************************************************************
+
+New_VBL	
+		
+		addq.w	#1,VBL_Cmpt
+		rte
+VBL_Cmpt	ds.w		1
+
+***********************************************************************
+***********				Routine tournant … chaque VBL				***********
+***********************************************************************
+
+Session_3D
+
+		clr.w		VBL_Cmpt
+		cmpi.b	#$66,$fffffc02.w
+		beq.s		Session_3D
+
+	SaveColor
+
+
+		move.l	Adr_Screen1,d0
+		move.l	Adr_Screen2,Adr_Screen1
+		move.l	d0,Adr_Screen2
+
+		move.l	Tab_Eff1,d0
+		move.l	Tab_Eff3,d1
+		move.l	Tab_Eff2,Tab_Eff3
+		move.l	d0,Tab_Eff2
+		move.l	d1,Tab_Eff1
+		
+		lea		Line_adr_Tab,a0
+		move.l	(a0),d0
+		move.l	4(a0),d1
+		move.l	d1,(a0)+
+		move.l	d0,(a0)+
+		move.l	d0,Current_Line
+
+		CPUTimeColor	#$20200080
+
+	Host_Send_Data		#$3210				; POUR LA SYNCHRO VBL/DSP
+
+		move.l	Tab_Eff1,a0
+		moveq		#16,d1
+		move.w	#$fff0,d2
+	Host_Get_Data		d0
+		subq.w	#1,d0
+		and.w		d2,d0
+		move.w	d0,(a0)+
+	Host_Get_Data		d0
+		addq.w	#1,d0
+		and.w		d2,d0
+		add.w		d1,d0
+		move.w	d0,(a0)+
+	Host_Get_Data		d0
+		subq.w	#1,d0
+		and.w		d2,d0
+		move.w	d0,(a0)+
+	Host_Get_Data		d0
+		addq.w	#1,d0
+		and.w		d2,d0
+		add.w		d1,d0
+		move.w	d0,(a0)+
+
+		lea		Big_Tab,a0
+Get_Faces
+	Host_Get_Data	d0
+		cmpi.w	#$4321,d0
+		beq.s		.Fin_Copy
+		move.w	d0,(a0)+						; on inscrit le numero de la couleur
+		move.w	HRX+2,d7						; nombre de point de la face
+		subq.w	#1,d7							; -1
+		move.w	d7,(a0)+						; Yop, dans le tablo
+.Copy_Pts
+		move.w	HRX+2,(a0)+					; coord X
+		move.w	HRX+2,(a0)+					; coord Y
+		dbf		d7,.Copy_Pts				; On receptionne tout les points de la face
+		bra		Get_Faces					; On va recevoir la suivante
+.Fin_Copy		
+		move.w	d0,(a0)+						; Flag de fin du tablo
+		
+		lea		Script,a0
+		move.w	(a0),d0
+		tst.w		d0
+		bne.s		.No_Nxt_Script
+		add.l		#14,2(a0)
+		move.l	2(a0),a1
+		move.w	(a1),(a0)
+.No_Nxt_Script
+		subq.w	#1,(a0)
+		cmp.w		#2000,(a0)
+		bhi		End_Xlogo
+		move.l	2(a0),a1
+		addq.l	#2,a1
+		
+		moveq		#6-1,d7
+.Send_State
+		move.w	(a1)+,d0
+		ext.l		d0
+	Host_Send_Data		d0
+		dbf		d7,.Send_State
+				
+; On efface l'ecran au 030
+
+		move.l	Adr_Screen2,a6
+		move.l	Tab_Eff3,a0
+		move.w	(a0)+,d0
+		bpl.s		.NoNeg
+		moveq		#0,d0
+.NoNeg		
+		move.w	(a0)+,d1
+		sub.w		d0,d1							; Nombre de pixL (multiple de 16) a effacer
+		move.w	#320,d3
+		sub.w		d1,d3							; Nombre de pixL pour sauter a la prochaine ligne
+		lsr.w		#1,d3							; Offset de saut en octets
+		lsr.w		#4,d1							; Nombre de deux longs a effacer
+		lsr.w		#1,d0							; Nombre d'octets depuis le depart
+		move		(a0)+,d2
+		move		(a0)+,d7
+		sub.w		d2,d7							; d7 = nombre de ligne a effacer
+		mulu.w	#160,d2
+		add.w		d0,d2
+		lea		(a6,d2.w),a6				; Adresse de depart
+		moveq		#0,d0
+		subq.w	#8,d3
+.Clear_Zone_Obj
+		move		d1,d2
+.Clear_Line
+		move.l	d0,(a6)+		
+		move.l	d0,(a6)+		
+		dbf		d2,.Clear_Line
+		lea		(a6,d3.w),a6
+		dbf		d7,.Clear_Zone_Obj
+		
+**************************************
+******* ROUTINES PRINCIPALES *********
+**************************************
+
+		move.l	Clear_Credits,a0
+		tst.w		(a0)+
+		bne.s		.Nxt
+		addq.l	#4,Clear_Credits
+		move.w	(a0)+,d0
+		move.l	Adr_Screen2,a1
+		lea		(a1,d0.w),a1
+		move.w	#96-1,d7
+		moveq		#0,d0
+		move.w	#104,d1
+.Clear_Zone
+	Rept			7
+		move.l	d0,(a1)+
+		addq.l	#4,a1
+	EndR
+		lea		(a1,d1.w),a1
+		dbf		d7,.Clear_Zone
+
+.Nxt	move.l	Clear_Credits,a0
+		subq.w	#1,(a0)
+
+		lea		Cmpt,a0
+		tst.w		(a0)
+		bne.s		.Loop
+		add.l		#2,Cmpt+2
+		move.l	2(a0),a1
+		move.w	(a1),(a0)
+		add.l		#6,Tab_Credits
+		bsr		Draw_Credits
+		addq.w	#1,C_Rhone
+.Loop			
+		subq.w	#1,Cmpt
+		cmpi.w	#24,C_Rhone
+		bne.s		.Argh
+		move.l	Adr_Screen2,a0
+		move.w	#160*167+72,d0
+		lea		(a0,d0.w),a0
+		lea		Picture+34+160*160,a1
+		moveq		#32-1,d7
+.Cop_RH
+		move.l	(a1)+,(a0)+
+		addq.w	#4,a1		
+		addq.w	#4,a0		
+		move.l	(a1)+,(a0)+
+		addq.w	#4,a1		
+		addq.w	#4,a0		
+		lea		144(a1),a1
+		lea		144(a0),a0
+		dbf		d7,.Cop_RH
+.Argh		
+		
+		lea		Big_Tab,a0						; Tablo ou l'on stocke toutes les donnees du DSP
+Trace_Faces
+		move.w	(a0)+,d0
+		cmpi.w	#$4321,d0						; si d0 = $4321, c la fin du tbalo
+		beq.s		Fin
+		move.w	d0,Num_Coul						; sinon c le numero de la couleur de la face
+		move.w	(a0)+,d7							; nombre de point-1 du poly
+		move.w	d7,Nb_Point
+		lea		Co_Point,a1						; tablo des coords.
+.TfrPts
+		move.l	(a0)+,(a1)+						; on transfert la coord non clippee du points
+		dbf		d7,.TfrPts
+
+		move.l	a0,-(sp)
+		bsr		Polygone							; tout les points sont transferes, on trace le poly
+		move.l	(sp)+,a0
+
+		bra.s		Trace_Faces						; on reboucle...
+Fin
+
+		RestoreColor
+
+End_of_object
+		move.l	Adr_Screen2,d0					; on va enfin Valide l'adresse de l'ecran courant
+		lsr.w		#8,d0
+  		move.l	d0,$ffff8200.w					; C'est fait
+		clr.w		$ffff8240.w						; On remet en noir la couleur du fond en mode St
+		clr.l		$ffff9800.w						; pareille en mode falcon
+
+		move.w	VBL_Cmpt,d0						; Numero de VBL actuel
+		
+	Ifne		VBL_Number
+		cmpi.w	#10,d0
+		blt.s		.OK_Number
+		lea		Warning_Time,a1
+		bra.s		.Warning
+.OK_Number		
+		lea		Table_Number,a1
+		move.l	4(a1,d0.w*4),a1
+.Warning
+		move.l	Adr_Screen2,a0
+		move.w	#Line_Widh,d1
+		moveq		#8-1,d7
+.Draw_Number
+		move.w	(a1)+,d2
+		move		d2,(a0)
+		lea		(a0,d1.w),a0
+		dbf		d7,.Draw_Number
+	EndC
+		
+.wait_end_vbl
+		cmp.w		VBL_Cmpt,d0						; Sinon on attend la VBL suivante
+		beq.s		.wait_end_vbl
+		bra		Session_3D						; Nouvelle VBL, on recommence la session 3D
+End_Xlogo
+	RestoreColor
+		rts
+Draw_Credits
+		move.l	Tab_Credits,a1
+		move.l	Adr_Screen2,a2
+
+		lea		Picture+34,a0
+		move.w	(a1)+,d0
+		lea		(a0,d0.w),a0
+		move.w	(a1)+,d5
+		move.l	Adr_Screen2,a2
+		move.w	(a1)+,d0
+		lea		(a2,d0.w),a2
+		moveq		#32-1,d7		
+		moveq		#19,d4
+		sub.w		d5,d4
+.Copy_Credits
+		move.w	d5,d6
+.Copy_Block
+		move.l	(a0)+,(a2)+
+		addq.w	#4,a0		
+		addq.w	#4,a2
+		dbf		d6,.Copy_Block
+		lea		(a0,d4.w*8),a0
+		lea		(a2,d4.w*8),a2
+		dbf		d7,.Copy_Credits
+		
+		rts
+
+
+Send_Table_1_x
+		lea		$ffffa200.w,a2
+		move.w	#350-1,d7
+		move.l	#-350,d0
+Negatifs
+		move.l	#$7fffff,d6
+		divs.l	d0,d6
+		move.l	d6,4(a2)
+		addq.l	#1,d0
+		dbf		d7,Negatifs
+
+Zero	move.l	#$7fffff,4(a2)
+
+		move.w	#3000-1,d7
+		moveq.l	#1,d0
+Positifs
+		move.l	#$7fffff,d6
+		divs.l	d0,d6
+		move.l	d6,4(a2)
+		addq.l	#1,d0
+		dbf		d7,Positifs
+	Rts
+
+Send_Table_Cosin
+		lea		Tab_Cosin,a0
+		move.w	#720-1,d7
+.Send_Tab
+	Host_Send_Data	(a0)+
+		dbf		d7,.Send_Tab
+	Rts
+
+Send_Variables
+		Host_Send_Data	#Pt_Fuite
+		Host_Send_Data	#C_X
+		Host_Send_Data	#C_Y	
+		Host_Send_Data	#DX
+		Host_Send_Data	#DY
+	Rts
+
+***********************************************************************
+***********************************************************************
+******    AFFICHAGE DE L'IMAGE RAYTRACE ABSTRACT ET PRESENT  **********
+***********************************************************************
+***********************************************************************
+Draw_Pic_AST_N_Present
+		move.l	Adr_Screen2,d0
+		lsr.w		#8,d0
+  		move.l	d0,$ffff8200.w					; C'est fait
+		
+		btst.b	#7,$ffff8006.w
+		bne.s		.VGA
+		
+		move.l	Abstract_Picture,a1
+		lea		18(a1),a1
+		move.l	Adr_Screen1,a3
+		lea		(a3,(768*240*2).l),a2
+		
+		bsr		Aff_Convert
+
+		jmp		.End_Draw
+.VGA
+		move.l	Abstract_Picture,a0
+		lea		18(a0),a0
+		move.l	Adr_Screen1,a1
+		move.w	#(384*120)-1,d7
+.Draw_VGA
+		moveq		#0,d0
+		move.b	(a0)+,d2
+		move.b	(a0)+,d1
+		move.b	(a0)+,d0
+		lsr.w		#3,d2
+		lsr.w		#2,d1
+		lsr.w		#3,d0
+
+		lsl.w		#6,d0
+		or.b		d1,d0
+		lsl.w		#5,d0
+		or.b		d2,d0
+		move.w	d0,(a1)+
+
+		moveq		#0,d0
+		move.b	(a0)+,d2
+		move.b	(a0)+,d1
+		move.b	(a0)+,d0
+		lsr.w		#3,d2
+		lsr.w		#2,d1
+		lsr.w		#3,d0
+
+		lsl.w		#6,d0
+		or.b		d1,d0
+		lsl.w		#5,d0
+		or.b		d2,d0
+		move.w	d0,(a1)+
+
+		dbf		d7,.Draw_VGA
+		
+.End_Draw		
+
+		move.l	Adr_Screen1,d0
+		lsr.w		#8,d0
+  		move.l	d0,$ffff8200.w					; C'est fait
+
+		clr.w		VBL_Cmpt
+		stop		#$2300
+		move.l	#New_VBL,$70.w
+
+Present
+		btst.b	#7,$ffff8006.w
+		bne.s		.VGA
+		
+		move.l	Present_Picture,a1
+		lea		18(a1),a1
+		move.l	Adr_Screen2,a3
+		lea		(a3,(768*240*2).l),a2
+		
+		bsr		Aff_Convert
+
+		jmp		.End_Draw
+.VGA
+		move.l	Present_Picture,a0
+		lea		18(a0),a0
+		move.l	Adr_Screen2,a1
+		move.w	#(384*120)-1,d7
+.Draw_VGA
+		moveq		#0,d0
+		move.b	(a0)+,d2
+		move.b	(a0)+,d1
+		move.b	(a0)+,d0
+		lsr.w		#3,d2
+		lsr.w		#2,d1
+		lsr.w		#3,d0
+
+		lsl.w		#6,d0
+		or.b		d1,d0
+		lsl.w		#5,d0
+		or.b		d2,d0
+		move.w	d0,(a1)+
+
+		moveq		#0,d0
+		move.b	(a0)+,d2
+		move.b	(a0)+,d1
+		move.b	(a0)+,d0
+		lsr.w		#3,d2
+		lsr.w		#2,d1
+		lsr.w		#3,d0
+
+		lsl.w		#6,d0
+		or.b		d1,d0
+		lsl.w		#5,d0
+		or.b		d2,d0
+		move.w	d0,(a1)+
+		dbf		d7,.Draw_VGA
+
+.End_Draw
+	Rts
+
+Show_Pic_Present
+		move.l	Adr_Screen2,d0
+		lsr.w		#8,d0
+  		move.l	d0,$ffff8200.w					; C'est fait
+
+		clr.w		VBL_Cmpt
+
+		move.l	Abstract_Picture,d0
+		add.l		#256,d0
+		clr.b		d0
+		move.l	d0,Abstract_Picture
+
+		btst.b	#7,$ffff8006.w
+		bne.s		.VGA
+
+		move.l	Couloir_Picture,a1
+		lea		18(a1),a1
+		move.l	Abstract_Picture,a3
+		lea		(a3,(768*240*2).l),a2
+		
+		bsr.s		Aff_Convert
+
+		jmp		.End_Draw
+.VGA
+		move.l	Couloir_Picture,a0
+		lea		18(a0),a0
+		move.l	Abstract_Picture,a1
+		move.w	#(384*120)-1,d7
+.Draw_VGA
+		moveq		#0,d0
+		move.b	(a0)+,d2
+		move.b	(a0)+,d1
+		move.b	(a0)+,d0
+		lsr.w		#3,d2
+		lsr.w		#2,d1
+		lsr.w		#3,d0
+
+		lsl.w		#6,d0
+		or.b		d1,d0
+		lsl.w		#5,d0
+		or.b		d2,d0
+		move.w	d0,(a1)+
+
+		moveq		#0,d0
+		move.b	(a0)+,d2
+		move.b	(a0)+,d1
+		move.b	(a0)+,d0
+		lsr.w		#3,d2
+		lsr.w		#2,d1
+		lsr.w		#3,d0
+
+		lsl.w		#6,d0
+		or.b		d1,d0
+		lsl.w		#5,d0
+		or.b		d2,d0
+		move.w	d0,(a1)+
+		dbf		d7,.Draw_VGA
+
+.End_Draw
+		move.l	Abstract_Picture,Couloir_Picture
+
+	Rts
+
+***********************************************************************
+***********							Sous-Programmes					***********
+***********************************************************************
+Aff_Convert
+	lea		vide,a4			; Pour vider TRES rapidement les registres
+.loop	
+	movem.l	(a4),d0-d5		; On vide les registres
+				
+	move.b	(a1)+,d0			; Bleu	(entre 0 et 255)
+	lsr.b		#3,d0				; divis‚ par 8	(-> entre 0 et 63)
+	addx.b	d0,d3				; plus 1 si retenue
+	
+	move.b	(a1)+,d1			; Vert
+	lsr.b		#2,d1				; divis‚ par 4
+	addx.b	d1,d4				; plus 1 si retenue
+
+	move.b	(a1)+,d2			; Rouge
+	lsr.b		#3,d2				; divis‚ par 8
+	addx.b	d2,d5				; plus 1 si retenue
+
+	cmpi.b	#31,d3			; On v‚rifie que d3,d4,d5
+	bls.s		.ok1				; ne d‚passe pas respectivement
+	move.b	#31,d3			; 31,63,31
+.ok1	
+	cmpi.b	#63,d4
+	bls.s		.ok2
+	move.b	#63,d4
+.ok2	
+	cmpi.b	#31,d5
+	bls.s		.ok3
+	move.b	#31,d5
+.ok3	
+	move.w	d2,d6				; On forme un mot au format
+	lsl.w		#6,d6				; TRUE COLORS, a partir
+	or.b		d1,d6				; de trois registres, contenant
+	lsl.w		#5,d6				; le taux de rouge, vert et bleu.
+	or.b		d0,d6
+	move.w	d6,(a3)+
+	
+	move.w	d5,d6				; Idem	
+	lsl.w		#6,d6
+	or.b		d4,d6
+	lsl.w		#5,d6
+	or.b		d3,d6
+	move.w	d6,(a3)+
+	
+	cmp.l		a2,a3				; On sort si on est ariv‚ … la fin 
+	bls.s		.loop				; du buffer
+
+	Rts
+
+Installe_Palette
+		move.w	#256-1,d7
+		lea.l		Palette_Videl,a0
+		lea.l		$ffff9800.w,a1
+InstallePalette
+		move.l	(a0)+,(a1)+
+		dbra		d7,InstallePalette
+		rts
+
+		Include	'POLY51+.AST'
+
+		Include	'INITSFAL.AST'
+		
+***********************************************************************
+***********						Section DATA							***********
+***********************************************************************
+
+		Section	DATA
+
+Abstract_Picture
+		dc.l		Abstract
+Present_Picture
+		dc.l		Presents
+Couloir_Picture
+		dc.l		Couloir
+		
+Tab_Cosin		IncBin		'DSP_COSIN.DAT'
+Picture			IncBin		'CREDITS.PI1'
+
+		IfEq		DSPType
+DSP_Lod	DC.b		'D:\DSP_TOOL\SOURCES.DSP\3D_DSP\TEST.LOD',0
+		Else
+DSP_Code	IncBin	'BEGINING.P56'
+End_DSP_Code
+		EndC
+		Even
+
+
+***********************************************************************
+***********              Description des objets             ***********
+***********************************************************************
+		
+Scene_Descriptor
+
+		dc.l		0,0,0
+		dc.l		360-20,17,19								; Increment de rotations
+		dc.l		0*512,0*512,-280*512			; Etat translations
+		dc.l		X_Logo							; Adresse de l'objet
+
+Script
+		dc.w		0
+		dc.l		Start-14
+Start	dc.w		14*5
+		dc.w		5,0,0
+		dc.w		-1*512,0,4*512
+
+		dc.w		14*5
+		dc.w		5,2,360-2
+		dc.w		0,0,0*512
+		dc.w		2*5
+		dc.w		5,2,360-2
+		dc.w		0,0,0*512
+		dc.w		16*5
+		dc.w		360-5,360-2,2
+		dc.w		0,0,0*512
+
+		dc.w		14*5
+		dc.w		3,4,360-2
+		dc.w		0,0,0
+		dc.w		2*5
+		dc.w		3,4,360-2
+		dc.w		0,0,0
+		dc.w		16*5
+		dc.w		360-3,360-4,2
+		dc.w		0,0,0
+
+		dc.w		14*5
+		dc.w		4,360-2,3
+		dc.w		0,0,-1*512
+		dc.w		2*5
+		dc.w		4,360-2,3
+		dc.w		0,0,-1*512
+		dc.w		16*5
+		dc.w		360-4,2,360-3
+		dc.w		0,0,-2*512
+
+		dc.w		16*5
+		dc.w		360-4,4,2
+		dc.w		0,0,3*512+256
+
+		dc.w		-1
+		dc.w		0,0,0
+		dc.w		0,0,0
+
+Cmpt	dc.w		14*5
+		dc.l		Cmpt_VBL
+Cmpt_VBL
+		dc.w		1,1
+		dc.w		14*5-2
+		dc.w		1
+		dc.w		2*5-1
+		dc.w		1
+		dc.w		16*5-1
+
+		dc.w		1
+		dc.w		14*5-1
+		dc.w		1
+		dc.w		2*5-1
+		dc.w		1
+		dc.w		16*5-1
+
+		dc.w		1
+		dc.w		14*5-1
+		dc.w		1
+		dc.w		2*5-1
+		dc.w		1
+		dc.w		16*5-1
+
+		dc.w		1
+		dc.w		4-1
+		dc.w		1
+		dc.w		1
+		dc.w		1
+		dc.w		60000
+
+Tab_Credits
+		dc.l		Credits-6
+Credits
+
+		dc.w		0,5-1							; Coordonnee du logo 'Code:'
+		dc.w		104
+
+		dc.w		0,5-1							; Coordonnee du logo 'Code:'
+		dc.w		104
+
+		dc.w		160*32,6-1					; Logo 'Skynet'
+		dc.w		160*32+104					; Offset a l'ecran
+
+		dc.w		160*32,6-1					; Logo 'Skynet'
+		dc.w		160*32+104					; Offset a l'ecran
+
+		dc.w		160*64,7-1					; Logo 'Simplet'
+		dc.w		160*64+104					; Offset a l'ecran
+
+		dc.w		160*64,7-1					; Logo 'Simplet'
+		dc.w		160*64+104					; Offset a l'ecran
+		
+		dc.w		56,4-1						; Logo 'GFX'
+		dc.w		160*102+104
+
+		dc.w		56,4-1						; Logo 'GFX'
+		dc.w		160*102+104
+
+		dc.w		160*32+56,7-1				; Logo 'Haltero'
+		dc.w		160*134+104					; Offset a l'ecran
+
+		dc.w		160*32+56,7-1				; Logo 'Haltero'
+		dc.w		160*134+104					; Offset a l'ecran
+
+		dc.w		160*64+56,4-1				; Logo 'Zack'
+		dc.w		160*167+104					; Offset a l'ecran
+
+		dc.w		160*64+56,4-1				; Logo 'Zack'
+		dc.w		160*167+104					; Offset a l'ecran
+
+		dc.w		160*96,6-1					; Logo 'Music:'
+		dc.w		104
+
+		dc.w		160*96,6-1					; Logo 'Music:'
+		dc.w		104
+
+		dc.w		160*96+48,6-1				; Logo 'Jester'
+		dc.w		160*32+104					; Offset a l'ecran
+
+		dc.w		160*96+48,6-1				; Logo 'Jester'
+		dc.w		160*32+104					; Offset a l'ecran
+
+		dc.w		160*96+96,7-1				; Logo '/SANITY'
+		dc.w		160*64+104					; Offset a l'ecran
+
+		dc.w		160*96+96,7-1				; Logo '/SANITY'
+		dc.w		160*64+104					; Offset a l'ecran
+
+		dc.w		160*128,7-1					; Logo 'Design:'
+		dc.w		160*102+104
+
+		dc.w		160*128,7-1					; Logo 'Design:'
+		dc.w		160*102+104
+
+		dc.w		160*128+56,8-1				; Logo 'ABSTRACT'
+		dc.w		160*134+96					; Offset a l'ecran
+
+		dc.w		160*128+56,8-1				; Logo 'ABSTRACT'
+		dc.w		160*134+96					; Offset a l'ecran
+
+		dc.w		160*160,11-1				; Logo 'Rhone-Alpes'
+		dc.w		160*167+72					; Offset a l'ecran
+
+		dc.w		160*160,11-1				; Logo 'Rhone-Alpes'
+		dc.w		160*167+72					; Offset a l'ecran
+
+Clear_Credits
+		dc.l		Pos_Clear
+Pos_Clear
+		dc.w		14*5+32*5-10
+		dc.w		104
+		dc.w		1
+		dc.w		104
+		
+		dc.w		32*5-1
+		dc.w		160*103+104
+		dc.w		1
+		dc.w		160*103+104
+		
+		dc.w		32*5-1
+		dc.w		104
+		dc.w		1
+		dc.w		104
+
+
+***********************************************************************
+***********  Description des objets appartenant … la scŠne  ***********
+***********************************************************************
+; Les objets qui vont suivre sont fixes, donc ils n'ont aucunes ‚volutions
+
+; Ce tableau sert a envoier tout les objets au DSP
+Tab_Objects									
+		dc.w		1        						; Nombre d'objets d‚finis
+		dc.l		X_Logo
+
+X_logo		
+				DC.W		56						; NOMBRE DE POINTS
+				DC.W		-30*2,-30*2,5*2			; POINT 0
+				DC.W		-10*2,-30*2,5*2			; POINT 1
+				DC.W		-10*2,-20*2,5*2			; POINT 2
+				DC.W		-20*2,-10*2,5*2			; POINT 3
+				DC.W		-30*2,-10*2,5*2			; POINT 4
+				DC.W		10*2,-30*2,5*2				; POINT 5
+				DC.W		30*2,-30*2,5*2				; POINT 6
+				DC.W		30*2,-10*2,5*2				; POINT 7
+				DC.W		20*2,-10*2,5*2				; POINT 8
+				DC.W		10*2,-20*2,5*2				; POINT 9
+				DC.W		20*2,10*2,5*2				; POINT 10
+				DC.W		30*2,10*2,5*2				; POINT 11
+				DC.W		30*2,30*2,5*2				; POINT 12
+				DC.W		10*2,30*2,5*2				; POINT 13
+				DC.W		10*2,20*2,5*2				; POINT 14
+				DC.W		-10*2,20*2,5*2				; POINT 15
+				DC.W		-10*2,30*2,5*2				; POINT 16
+				DC.W		-30*2,30*2,5*2				; POINT 17
+				DC.W		-30*2,10*2,5*2				; POINT 18
+				DC.W		-20*2,10*2,5*2				; POINT 19
+				DC.W		0*2,-10*2,6*2				; POINT 20
+				DC.W		10*2,0*2,6*2				; POINT 21
+				DC.W		0*2,10*2,6*2				; POINT 22
+				DC.W		-10*2,0*2,6*2				; POINT 23
+	
+				DC.W		-30*2,-30*2,-5*2			; POINT 24
+				DC.W		-10*2,-30*2,-5*2			; POINT 25
+				DC.W		-10*2,-20*2,-5*2			; POINT 26
+				DC.W		-20*2,-10*2,-5*2			; POINT 27
+				DC.W		-30*2,-10*2,-5*2			; POINT 28
+				DC.W		10*2,-30*2,-5*2			; POINT 29
+				DC.W		30*2,-30*2,-5*2			; POINT 30
+				DC.W		30*2,-10*2,-5*2			; POINT 31
+				DC.W		20*2,-10*2,-5*2			; POINT 32
+				DC.W		10*2,-20*2,-5*2			; POINT 33
+				DC.W		20*2,10*2,-5*2				; POINT 34
+				DC.W		30*2,10*2,-5*2				; POINT 35
+				DC.W		30*2,30*2,-5*2				; POINT 36
+				DC.W		10*2,30*2,-5*2				; POINT 37
+				DC.W		10*2,20*2,-5*2				; POINT 38
+				DC.W		-10*2,20*2,-5*2			; POINT 39
+				DC.W		-10*2,30*2,-5*2			; POINT 40
+				DC.W		-30*2,30*2,-5*2			; POINT 41
+				DC.W		-30*2,10*2,-5*2			; POINT 42
+				DC.W		-20*2,10*2,-5*2			; POINT 43
+				DC.W		0*2,-10*2,-6*2				; POINT 44
+				DC.W		10*2,0*2,-6*2				; POINT 45
+				DC.W		0*2,10*2,-6*2				; POINT 46
+				DC.W		-10*2,0*2,-6*2				; POINT 47
+
+				DC.W		5*2,-5*2,5*2				; POINT 48
+				DC.W		5*2,5*2,5*2					; POINT 49
+				DC.W		-5*2,5*2,5*2				; POINT 50
+				DC.W		-5*2,-5*2,5*2				; POINT 51
+				DC.W		5*2,-5*2,-5*2				; POINT 52
+				DC.W		5*2,5*2,-5*2				; POINT 53
+				DC.W		-5*2,5*2,-5*2				; POINT 54
+				DC.W		-5*2,-5*2,-5*2				; POINT 55
+				
+				DC.W		40						; NOMBRE DE FACES
+				
+				DC.W		3
+				DC.W		5
+				DC.W		0,1,2,3,4
+				DC.W		3
+				DC.W		5
+				DC.W		5,6,7,8,9
+				DC.W		3
+				DC.W		5
+				DC.W		10,11,12,13,14
+				DC.W		3
+				DC.W		5
+				DC.W		15,16,17,18,19
+				DC.W		3
+				DC.W		4
+				DC.W		9,8,49,51
+				DC.W		3
+				DC.W		4
+				DC.W		51,49,15,19
+				DC.W		3
+				DC.W		4
+				DC.W		48,50,3,2
+				DC.W		3
+				DC.W		4
+				DC.W		10,14,50,48
+
+				DC.W		4
+				DC.W		5
+				DC.W		28,27,26,25,24
+				DC.W		4
+				DC.W		5
+				DC.W		33,32,31,30,29
+				DC.W		4
+				DC.W		5
+				DC.W		38,37,36,35,34
+				DC.W		4
+				DC.W		5
+				DC.W		43,42,41,40,39
+				DC.W		4
+				DC.W		4
+				DC.W		43,39,53,55
+				DC.W		4
+				DC.W		4
+				DC.W		55,53,32,33
+				DC.W		4
+				DC.W		4
+				DC.W		54,52,26,27
+				DC.W		4
+				DC.W		4
+				DC.W		38,34,52,54
+
+				DC.W		5
+				DC.W		4
+				DC.W		24,25,1,0
+
+				DC.W		6
+				DC.W		4
+				DC.W		1,25,26,2
+
+				DC.W		7
+				DC.W		4
+				DC.W		2,26,44,20
+
+				DC.W		8
+				DC.W		4
+				DC.W		20,44,33,9
+
+				DC.W		9
+				DC.W		4
+				DC.W		33,29,5,9
+
+				DC.W		10
+				DC.W		4
+				DC.W		29,30,6,5
+
+				DC.W		11
+				DC.W		4
+				DC.W		7,6,30,31
+
+				DC.W		12
+				DC.W		4
+				DC.W		31,32,8,7
+
+				DC.W		13
+				DC.W		4
+				DC.W		21,8,32,45
+
+				DC.W		14
+				DC.W		4
+				DC.W		10,21,45,34
+
+				DC.W		13
+				DC.W		4
+				DC.W		34,35,11,10
+
+				DC.W		12
+				DC.W		4
+				DC.W		12,11,35,36
+
+				DC.W		11
+				DC.W		4
+				DC.W		36,37,13,12
+
+				DC.W		10
+				DC.W		4
+				DC.W		37,38,14,13
+
+				DC.W		9
+				DC.W		4
+				DC.W		38,46,22,14
+
+				DC.W		8
+				DC.W		4
+				DC.W		46,39,15,22
+
+				DC.W		7
+				DC.W		4
+				DC.W		16,15,39,40
+
+				DC.W		6
+				DC.W		4
+				DC.W		40,41,17,16
+
+				DC.W		5
+				DC.W		4
+				DC.W		41,42,18,17
+
+				DC.W		6
+				DC.W		4
+				DC.W		42,43,19,18
+
+				DC.W		7
+				DC.W		4
+				DC.W		23,19,43,47
+
+				DC.W		8
+				DC.W		4
+				DC.W		3,23,47,27
+
+				DC.W		9
+				DC.W		4
+				DC.W		27,28,4,3
+
+				DC.W		10
+				DC.W		4
+				DC.W		28,24,0,4
+
+
+Table_Number
+		dc.l		Nul,One,Two,Three,Four,Five,Six,Seven,Eight,Nine
+
+Nul	dc.w		%0001100000000000
+		dc.w		%0010010000000000
+		dc.w		%0010011000000000
+		dc.w		%0010110000000000
+		dc.w		%0011010000000000
+		dc.w		%0110010000000000
+		dc.w		%0010010000000000
+		dc.w		%0001100000000000
+		
+One	dc.w		%0000100000000000
+		dc.w		%0001100000000000
+		dc.w		%0010100000000000
+		dc.w		%0000100000000000
+		dc.w		%0000100000000000
+		dc.w		%0000100000000000
+		dc.w		%0000100000000000
+		dc.w		%0011111000000000
+
+Two	dc.w		%0001100000000000
+		dc.w		%0010010000000000
+		dc.w		%0000010000000000
+		dc.w		%0000010000000000
+		dc.w		%0000100000000000
+		dc.w		%0001000000000000
+		dc.w		%0010000000000000
+		dc.w		%0011110000000000
+
+Three	dc.w		%0011100000000000
+		dc.w		%0000010000000000
+		dc.w		%0000010000000000
+		dc.w		%0001100000000000
+		dc.w		%0000010000000000
+		dc.w		%0000010000000000
+		dc.w		%0000010000000000
+		dc.w		%0011100000000000
+		
+Four	dc.w		%0001000000000000
+		dc.w		%0001000000000000
+		dc.w		%0010000000000000
+		dc.w		%0010100000000000
+		dc.w		%0011111000000000
+		dc.w		%0000100000000000
+		dc.w		%0000100000000000
+		dc.w		%0000100000000000
+		
+Five	dc.w		%0011110000000000
+		dc.w		%0010000000000000
+		dc.w		%0010000000000000
+		dc.w		%0001100000000000
+		dc.w		%0000010000000000
+		dc.w		%0000010000000000
+		dc.w		%0000010000000000
+		dc.w		%0011100000000000
+
+Six	dc.w		%0001110000000000
+		dc.w		%0010000000000000
+		dc.w		%0010000000000000
+		dc.w		%0010000000000000
+		dc.w		%0011110000000000
+		dc.w		%0010010000000000
+		dc.w		%0010010000000000
+		dc.w		%0011110000000000
+
+Seven	dc.w		%00111110000000000
+		dc.w		%00000010000000000
+		dc.w		%00000100000000000
+		dc.w		%00000100000000000
+		dc.w		%00001000000000000
+		dc.w		%00001000000000000
+		dc.w		%00010000000000000
+		dc.w		%00010000000000000
+		
+Eight
+		dc.w		%00011000000000000
+		dc.w		%00100100000000000
+		dc.w		%00100100000000000
+		dc.w		%00011000000000000
+		dc.w		%00100100000000000
+		dc.w		%00100100000000000
+		dc.w		%00100100000000000
+		dc.w		%00011000000000000
+Nine
+		dc.w		%00011000000000000
+		dc.w		%00100100000000000
+		dc.w		%00100100000000000
+		dc.w		%00011000000000000
+		dc.w		%00000100000000000
+		dc.w		%00000100000000000
+		dc.w		%00000100000000000
+		dc.w		%00111000000000000
+
+Warning_Time
+		dc.w		%0001000000110000
+		dc.w		%0001000000110000
+		dc.w		%0010100000110000
+		dc.w		%0010100000110000
+		dc.w		%0100010000110000
+		dc.w		%0101010000110000
+		dc.w		%1000001000000000
+		dc.w		%1111111000110000
+
+C_Rhone		dc.w		0
+Tab_Eff1		dc.l		Shape1
+Tab_Eff2		dc.l		Shape2
+Tab_Eff3		dc.l		Shape3
+Tab_Eff4		dc.l		Shape4
+Shape1		dc.w		10,20,10,20
+Shape2		dc.w		10,20,10,20
+Shape3		dc.w		10,20,10,20
+Shape4		dc.w		10,20,10,20
+
+Abstract
+		IncBin	'X_ABSTRA.TGA'
+	Even
+Presents
+		IncBin	'Presents.tga'
+	Even
+Couloir
+		IncBin	'COULOIR.TGA'
+	Even
+	
+***********************************************************************
+***********							Section BSS							***********
+***********************************************************************
+
+		Section	BSS
+
+Big_Tab		ds.w		4000
+
+; Buffers
+			IfEq		DSPType
+DSP_Buffer	ds.b		2000
+			EndC
+
+Vide					ds.l		20
+Line_Number			ds.w		1
+Start_Up_Seq		ds.w		1
+; Variables diverses
+; Adresses Ecrans
+
+Adr_Screen1			ds.l		1
+Adr_Screen2			ds.l		1
+
+Cache					ds.w		1
+; Pile
+Save_Stack			ds.l		1
+End_Stack			ds.l		256
+New_Stack
+; Palettes en tout genre
+Palette_Videl		ds.l		256
+; Buffers
+; Place pour Ecrans
+Screens				ds.b		Nbr_Screen*(768*240*2+256)
