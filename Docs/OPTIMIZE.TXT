@@ -1,0 +1,337 @@
+
+---------------------------------------------------------------------------
+
+Optimizing your source code from ST News v5.2 by Stefan Posthuma
+
+---------------------------------------------------------------------------
+
+ Being  a  demo coder these days ain't easy.  There  is  so  much
+competition and some of this competition is bloody good.  If  you
+want  to  make  a  screen  that  impresses  the  modern-day  demo
+beholder, you have to be one hell of a coder.
+ It all comes down to speed.  The faster your code, the more time
+you have to do things.  The first thing you need if you want fast
+code is to optimize your programs.  Eliminate loops,  preprogram,
+write self-modifying code,  whatever.  The second thing is to use
+better algorithms.  If you want to sort a piece of memory,  there
+are dozens of algorithms to be used and for your particular case,
+one of them will be the fastest. Do you remember the 'Red Sector'
+screen  from the MindBomb demo?  Tim used bubblesort to sort  the
+sprites in the Z-axis.  I wrote a quicksort (nice and  recursive)
+and when I was in Manchester,  we put that into the demo. My God,
+some of the objects were 50% faster!!
+ The  thirds thing is that you can use 'dirty'  hardware  tricks.
+Like the sync-scrolling everybody is so exited about.  I wrote  a
+screen once using it (the Ah Yeah screen from MindBomb) and I can
+tell you, it's one hell of a job doing it! The problem is that it
+is ST-dependent. If it works on one ST, does not mean it works on
+another.  I spent a whole night at Thalion software,  going  from
+computer to computer,  trying to get it to work. Tim had the same
+problems  with  his main menu,  but we are  quite  sure  MindBomb
+syncrouts work on all ST's.  Unlike some demos by most crews that
+use Sync.  Remembering Cuddly's (the first one to use it, so they
+couldn't  know)  but  also recent ones.  Like the  one  by  Inner
+Circle.  You  should  see it on my ST.  It's amusing.  Why  am  I
+mentioning them?  Well,  they seem to have something against  the
+Lost Boys,  and since I am one,  I am a bit pissed off.  I  think
+they  should spend more time trying to get their syncrouts  right
+and  less time writing childish things  in  scrollines.  (there's
+even  supposed to be a hidden 'anti Lost Boys' screen  in  there.
+Ludicrous!)
+
+ But back to the software.  Let's start with a simple one,  loop-
+elimination.  Fancy  a  routine that puts a block on  the  screen
+which  is 16 pixels high and 1 word wide.  The  traditional  code
+will look like this:
+
+     LEA       DATA(PC),A0
+     MOVE.L    SCREENPOS,A1
+     MOVEQ     #15,D0
+loop MOVE.W    (A0)+,(A1)     12
+     LEA       160(A1),A1     8
+     DBRA      D0,loop
+     RTS
+
+ A few remarks.  As you can see, I use LEA DATA(PC),A0 instead of
+the more obvious MOVE.L #DATA,A0.  Simple, LEA is faster. Also, I
+use MOVEQ wherever possible. And I used LEA 160(A1),A1 instead of
+ADD.W #160,A1. Faster again.
+ But  the  real trick is in the DBRA.  If you take  a  clockcycle
+sheet,  you  will see that DBRA takes 10 cycles if the branch  is
+taken and 12 if it isn't. So that makes 15*10+12=162 cycles. Plus
+the  320 cycles of the other instructions,  the whole  loop  will
+take 482 cycles.
+ Imagine  loosing  the DBRA and the LEA  instruction,  saving  18
+cycles per loop.  Just repeat the MOVE.W (A0)+,(A1) 16 times!  Of
+course,  we need the scanline displacement of 160 bytes in A1. So
+we  use MOVE.W (A0)+,x(A1) where x is a multitude  of  160.  This
+will  take 16 cycles per instruction,  reducing the whole to  256
+cycles. Yeah, that's almost half!!
+ Fortunately,  the  programmer of GENST has  foreseen  this,  and
+included some nice facilities for it.  Using these, the code will
+look like this:
+
+     LEA       DATA(PC),A0
+     MOVE.L    SCREENPOS,A1
+
+VAL  SET       0
+     REPT      16
+     MOVE.W    (A0)+,VAL(A1)
+VAL  SET       VAL+160
+     ENDR
+
+     RTS
+
+ First of all,  we set an assembly-variable. I called it VAL, but
+you  can  call  it  what you want.  It is  set  to  zero  in  the
+beginning.  Then,  we use the directive 'REPT x' to indicate that
+the following block of code up to the 'ENDR' is to be repeated  x
+times.  In  the loop,  we add 160 to VAL and that's it!  You  can
+guess the resulting code:
+
+     MOVE.W    (A0)+,0(A1)
+     MOVE.W    (A0)+,160(A1)
+     MOVE.W    (A0)+,320(A1)
+
+ And  so  on.  If we turn on optimization  (OPT  O+),  the  first
+instruction will be changed to a normal MOVE,  saving some  more.
+ Now  this is a much-used thing.  Most Lost Boy products  do  not
+have  any loops if memory allows us to.  I mean it  always  saves
+time!  The drawback of this is that you cannot use labels  inside
+the  loop.  The  assembler  will not allow it.  There  is  a  way
+however, which is a bit tricky. Let's say you want to repeat this
+code (which is not meant to be functional):
+
+     REPT      20
+     MOVE.W    (A0)+,(A1)
+     CMP.W     #17,D0
+     BNE.S     SKIP
+     MOVE.W    #1,D0
+SKIP MOVE.W    D0,(A2)+
+     ENDR
+
+ What you do is,  you assemble this without the REPT,  and take a
+look  at  the  code with a  disassembler.  The  BNE.S  SKIP  will
+assemble to hex $6604.  So the code that will be accepted by  the
+assembler is:
+
+     REPT      20
+     MOVE.W    (A0)+,(A1)
+     CMP.W     #17,D0
+     DC.W      $6604          ; BNE.S     SKIP
+     MOVE.W    #1,D0
+;SKIP
+     MOVE.W    D0,(A2)+
+     ENDR
+
+ Nice huh?  It works,  but you have to take care.  If you  change
+anything between the DC.W and the MOVE.W D0,(A2)+, the size of it
+in bytes will probably change and you have to recompute the value
+of the BNE, and thus the DC.W.
+
+ Right,  that's one of the tricks used. A variant of this is pre-
+programming.  This is where the computer makes up its own code at
+the beginning of the demo.  Imagine the big scrollines you see in
+so many demos.  They're so popular since they're easy to program,
+use relatively little processor time and look impressive.  If you
+take  a  closer look at one of them,  you will  notice  that  the
+resolution  of the font is very low.  No fancy pixel  work,  just
+blocks  which  are  normally 8 pixels  wide  (sometimes  even  16
+pixels!),  and something like 10-16 pixels high. The way it works
+is  (at  least,  the way I do it) that there is  a  buffer  which
+contains the scrolline in compressed format, only $ff where there
+needs  to be a block and $00 where there doesn't need to be  one.
+This  buffer  will be small (in our example we could have  a  16-
+block  high scrolline filling the entire screen,  thus  16*20=320
+words=640  bytes  buffer,  the  time needed  to  scroll  that  is
+almost  trivial) A fragment of the code that puts the  buffer  on
+the screen might look like this (for 10 pixel high blocks):
+
+     LEA       BUFFER(PC),A0
+     MOVE.L    SCR_ADR,A1
+
+     MOVE.W    (A0)+,D0       GET BUFFER VALUE
+VAL  SET       0
+     REPT      10             PUT IT 10 TIMES ON SCREEN
+     MOVE.W    D0,VAL(A0)
+VAL  SET       VAL+160
+     ENDR
+     MOVE.W    (A0)+,D0       GET NEXT VALUE
+     REPT      10             10 TIMES AGAIN
+     MOVE.W    D0,VAL(A0)
+VAL  SET       VAL+160
+     ENDR
+     MOVE.W    (A0)+,D0
+
+ This will repeat itself for all the blocks needed to make up one
+column  of  the  scrolline.  Then  the  screen  address  will  be
+increased by 8 and the whole process will repeat itself.  To make
+this  as  fast  as possible,  the whole thing  needs  to  be  put
+somewhere in memory. Putting this in your source and thus in the
+final  demo  code file on disk (wasting valuable disk  space)  is
+nonsense. It takes lots of typing, assembling etc.
+ A better way is to have the computer make up the code. I mean it
+is  mostly the same anyway,  so a small and a  relatively  simple
+routine  can make it up somewhere in memory at the  beginning  of
+the demo.  The demo then calls it with a JSR,  filling  registers
+before that etc.  etc. The super-duper fast line routines used in
+Lost Boys 3D demos are also constructed this way, it's simply the
+fastest way there is!
+
+ The  next thing is the usage of tables.  Let's take  an  obvious
+example,  a  sine  table needed for 3D calculations.  Now  it  is
+possible to calculate let's say the sine of 10 degrees,  but that
+will take lots of multiplications and floating point  operations.
+Why not have a Basic program calculate the values for you and put
+them in a table so all you need to do is look them up. Of course,
+there is the problem of floating points. I mean the sine of 10 is
+0.1736481...  How the hell are we going to store that? The answer
+is simple.  If we multiply 0.1736481 by 32768,  we get 5690.1009,
+rounded to 5690.  Now sines range from -1 to 1, so by multiplying
+by 32768 we get nice, signed word values. Now do all calculations
+with these large values and at the very end, divide the result by
+32768  and you will get a nice approximation of what it will  be.
+For screen-oriented 3D calculations (320-200 pixels),  this  does
+just fine.
+ Of course,  you can use tables for a lot more that just  storing
+of numbers.  Pre-worked out addresses,  shift  values,  whatever.
+Think carefully about what kind of thing you are working out.  If
+there is any way of putting it in a table,  do it. If you have to
+move a sprite from left to right on the screen,  you could use an
+X  coordinate and work out the plane and shift offset every  time
+you  put  down  the sprite,  or you can work  these  out  at  the
+beginning of the demo and put them in a table and simply get  the
+values from that table. If you have memory for it, use tables!!
+ Also,  avoid long instructions whenever you can. Especially MULU
+and DIVU are time-guzzling. Take a look at this:
+
+     MULU      #10,d0   48 clockcyles
+
+ Now multiplying by 10 is the same as multiplying by 8 and adding
+the  value  twice.  Multiplying by powers of two can be  done  by
+left-shifts:
+
+     MOVE.W    D0,D1     4  cycles
+     LSL.W     #3,D0    12
+     ADD.W     D1,D0     4
+     ADD.W     D1,D0     4
+                        --
+                        24  cycles
+
+ The difference is considerable. Like twice as fast.
+
+ The  last  trick  I'll talk about is the  great  Horror  of  the
+professional programmer.  Code that modifies itself.  The guys at
+work are lucky that the languages we use (Informix 4GL and C)  do
+not really allow self-modifying code.  Also, the operating system
+(Unix) does not really support it.  Anyway,  we have to take good
+care  with  this.  I mean how the hell are you going to  debug  a
+program  that  changes  itself?  Self  modifying  code  is  great
+sometimes,  but  it has to be used with  great  care.  Also,  the
+latest microprocessors have instruction caches and prefetch. This
+means that the processor fetches the next instruction(s) while it
+is  executing  another,  and  keeps a little buffer  in  its  own
+memory. So if you have a small loop which fits into the processor
+cache,  it will be FAST. But if you modify code in memory that is
+also  in  the cache,  the changes will not come through  and  the
+whole thing doesn't work.
+ So code that really changes entire instructions and stuff  might
+not be such a good idea, but consider this:
+
+ Remember the wobbling logo from the ST NEWS 5.1 demo? I mean the
+one that waved horizontally as well as vertically?  This trick is
+done with self-modifying code.  Now vertical waving is easy.  You
+store 16 copies of the block, each shifted one pixel, just like a
+sprite.  Then you create a table of X-coordinates (preworked into
+plane  and  shift offset if you wish) and just put lines  of  the
+block on the screen from the appropriate buffer.  A routine  that
+puts (a simple one-plane) line of the block on screen might  look
+like this:
+
+     A0 CONTAINS ADDRESS OF BLOCKLINE IN APPROPRIATE BUFFER
+     A1 CONTAINS SCREEN ADDRESS
+
+VAL  SET  0
+     REPT 10                     A 10 WORD WIDE BLOCK
+     MOVE.W    (A0)+,VAL(A1)
+VAL  SET       VAL+8
+     ENDR
+
+ Nice loop elimination,  but if you want to wave horizontally  as
+well,  this doesn't work. You need to have a sine table with 160-
+byte  values,  varying from -x to 0 to x,  x a multitude of  160,
+depending on how large you want the wave to be.  You need to read
+the  table and add offsets to the screen address for  every  word
+you put on the screen. The routine might look like this:
+
+     A0 CONTAINS ADDRESS OF BLOCKLINE IN APPROPRIATE BUFFER
+     A1 CONTAINS SCREEN ADDRESS
+     A2 POINTS TO Y OFFSET TABLE
+
+     REPT      10
+     MOVE.W    (A2)+,D0       GET Y OFFSET
+     LEA       0(A1,D0.W),A3  A1+Y OFFSET IN A3
+     MOVE.W    (A0)+,A3       PUT WORD
+     ADDQ.W    #8,A1          INCREASE SCREEN ADDRESS
+     ENDR
+
+ As you can see, a lot more code and thus, a lot slower. Now here
+comes  the trick,  every line of the block will have the  same  y
+offsets,  but you calculate the screen addresses every  line,  so
+you waste time calculating the same thing over and over again. If
+you  use self-modifying code,  you only have to calculate  screen
+addresses  once,  speeding it up considerably.  The routine  that
+will be modified will look like this:
+
+PUTLINE:
+     REPT      10
+     MOVE.W    (A0)+,$1234(A1)
+     ENDR
+
+ Nice and compact. But $1234(A1)??? Huh???
+ Smart  ones  will get it.  Before you display  your  block,  you
+simply fill in the right offsets in the code! Consider this code,
+assuming A2 points to the Y offset table again:
+
+     LEA       PUTLINE+2(PC),A3    GET ADDRESS OF FIRST OFFSET
+     MOVEQ     #0,D0               INITIAL SCREEN OFFSET
+     REPT      10
+     MOVE.W    D0,D1               GET SCREEN OFFSET IN D1
+     ADD.W     (A2)+,D1            ADD Y OFFSET
+     MOVE.W    D1,(A3)             PUT IN CODE!
+     ADDQ.W    #4,A3               GO TO NEXT INSTRUCTION
+     ADDQ.W    #8,D0               INCREASE SCREEN OFFSET
+     ENDR
+
+ Geddit? This dramatically speeds up the putblock routine, almost
+by a 50%.  Great stuff.  I have to admit that I learned this from
+the greatest speedcode freak (and the best) there is:  Nick  from
+the  CareBears.  I had a pre-version of the 5.1 demo where I  did
+the wobbling block without self-modifying code.  He looked at  it
+with his usual blank face and murmured: 'How did you do it?'
+ 'Well...er...I...',  I responded, not really sure how to explain
+it.
+ 'Never mind,  I would do it by filling in offsets in a piece  of
+code, and call that for every line of the block', he stated.
+ After  a few moments of pondering,  I grasped the idea  and  sat
+down and did it. Smart, very smart.
+
+ I  think you get the general idea now.  There is a lot  more  to
+tell  about  optimized  coding,  and I could  go  on  for  hours.
+The  hot thing today is 3D,  and there is no other  subject  that
+allows  so much fiddling and optimizing  and  algorithm-fr”beling
+that  people  probably never stop speeding things up.  A  lot  of
+people have asked me how Tim did his superfast 3D objects in  the
+Life's  a  bitch demo.  CLF it is called,  Cheat  Like  Fuck.  Or
+Deltacompression to the professionals.  Hidden-face  elimination,
+line-drawing (in the States, I found a 300-page book about bitmap
+line drawing),  polygon filling, lightshading, etc. etc. There is
+still megabytes of stuff to write about it.
+ The latest thing is fractals.  After the 3D wave has crashed  on
+the shore of the demo-world,  people will turn to  fractals.  Tim
+and I did a program to create a fractal-land.  Lakes,  mountains,
+riverbeds,  whatever.  Stunning really. Wait until we make a demo
+of THAT!!
+
+          Stefan
+---------------------------------------------------------------------------

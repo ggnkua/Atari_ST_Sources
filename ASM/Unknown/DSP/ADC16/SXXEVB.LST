@@ -1,0 +1,199 @@
+Motorola DSP56000 Macro Cross Assembler  Version 2.03  89-08-04  15:59:11  sxxevb.asm  Page 1
+
+
+
+1                        ;************************************************************
+2                        ; file:sxxevb.asm                                           *
+3                        ;                                                           *
+4                        ; Read DSP56ADC16, correct for sin(x)/x of DAC, and write     *
+5                        ; the PCM-56 D/A via the SSI TX register.  This is a        *
+6                        ;  polled looping routine.                                  *
+7                        ;                                                           *
+8                        ;************************************************************
+9      
+10                       ; Written by Charlie Thompson 9/27/88 - Rev 1.0 11/1/88
+11     
+12                                 opt     nomd,nocex,nocm,nomex
+13     
+14                                 page    132
+15     
+16                                 include '48compeq'                        ;FIR filter coefficient file
+21     
+23     
+24                                 opt     nocex,nocm
+25     
+80     
+81                       ;  ---------------Constants and memory allocation------------------
+82     
+83        000032         ntaps     equ     50
+84     
+85        X:0000                   org     x:0
+86     
+87        X:0000         firdata   dsm     ntaps                             ;FIR shift register storage
+88     
+89     
+90     
+91                       ;------------------------------------------------------------------
+92     
+93                       ; FIR coefficient macro places the coefficients of the included file
+94                       ; in y memory at location 'fircoef'
+95     
+96        Y:0000                   org     y:0
+97     
+98                       fircoef   filtcoeff                                 ;invoke the coefficient macro
+149    
+150    
+151                      ; Program start address
+152    
+153       P:0040                   org     p:$40
+154    
+155                      ; Set up ADS board in case of force break instead of force reset
+156    
+157       P:0040 08F4BE            movep             #0,x:$FFFE              ;set bcr to zero
+                 000000
+158       P:0042 0500BB            movec             #0,sp                   ;init stack pointer
+159       P:0043 0500B9            movec             #0,sr                   ;clear loop flag
+160    
+161                      ;       set up register useage for FIR filter 
+162    
+163       P:0044 300000            move              #firdata,r0             ;point to filter data shift register 
+164       P:0045 0531A0            move              #ntaps-1,m0             ;mod(ntaps) 
+165       P:0046 340000            move              #fircoef,r4             ;point to filter coefficients 
+166       P:0047 0531A4            move              #ntaps-1,m4             ;mod(ntaps) 
+167    
+168                      ; Set up the SSI to get data from the 
+169                      ; The following code sets port C to function as SCI/SSI
+170    
+Motorola DSP56000 Macro Cross Assembler  Version 2.03  89-08-04  15:59:11  sxxevb.asm  Page 2
+
+
+
+171       P:0048 280000            move              #$0,a0                  ;zero PCC to cycle it
+172       P:0049 08C821            movep             a0,x:$FFE1
+173    
+174       P:004A 50F400            move              #$0001ff,a0
+                 0001FF
+175       P:004C 08C821            movep             a0,x:$FFE1              ;write PCC
+176    
+177                      ; The following code sets the SSI CRA and CRB control registers for external
+178                      ; continuous clock, synchronous, normal mode.
+179    
+180       P:004D 50F400            move              #$004000,a0             ;CRA pattern for word length=16 bits
+                 004000
+181       P:004F 08C82C            movep             a0,x:$FFEC
+182    
+183       P:0050 50F400            move              #$003200,a0             ;CRB pattern for continous ck,sych,normal mode
+                 003200
+184       P:0052 08C82D            movep             a0,x:$FFED              ;word long frame sync: FSL=0;ext ck/fs 
+185    
+186                      ; Sample rate is controlled by DSP56ADC16 board.   
+187    
+188       P:0053 44F400  poll      move              #$ffff00,x0             ;mask for zeroing out lower 8 bits              
+                 FFFF00
+189    
+190                      ;**********************************************************************
+191                      ; Actual read A/D and write D/A loop  with sin(x)/x compensation FIR  *
+192                      ;**********************************************************************
+193    
+194                      ; The following routine reads the DSP56ADC16 and processes samples through
+195                      ; a sin(x)/x compensation FIR (for D/A zero order hold correction) and
+196                      ; writes the result to the PCM-56 D/A.
+197    
+198                      ; The following code polls the RDF flag in the SSI-SR and waits for RDF=1
+199                      ; and then reads the RX register to retrieve the data from the A/D converter.
+200    
+201       P:0055 0AAE87            jclr    #7,x:$FFEE,poll                   ;loop until RDF bit = 1
+                 000053
+202       P:0057 084E2F            movep             x:$FFEF,a               ;get A/D converter data
+203    
+204       P:0058 200046            and     x0,a                              ;mask off lower 8 bits of 24 bit word
+205    
+206    
+207                      ;----------FIR sin(x)/x correction filter routine------------
+208    
+209                      ;This routine provides compensation for sin(x)/x droop of the D/A 
+210                      ;zero order hold effects.  The coefficients are set up for 48 KHz 
+211                      ;output sampling rate. Therefore the DSP56ADC16 should output data at 48 KHz
+212                      ;This filter gives approximately 3dB of boost near Fs/2.
+213    
+214                                                                          ; FIR filter iteration for one input sample point 
+215                                                                          ; Should leave pointer in correct position in modulo bu
+ffer 
+216    
+217       P:0059 218400            move              a1,x0                   ;move sample to x0
+218       P:005A F01813            clr     a         x0,x:(r0)+  y:(r4)+,y0  ;save first sample, get 1st coeff 
+219       P:005B 0631A0            rep     #ntaps-1                          ;do all but last tap 
+220       P:005C F098D2            mac     x0,y0,a   x:(r0)+,x0  y:(r4)+,y0
+221    
+222                                                                          ; do the last tap based on data from parallel move abov
+e 
+223    
+224       P:005D 2050D3            macr    x0,y0,a   (r0)-                   ;back up r0 by one due to post inc 
+225    
+Motorola DSP56000 Macro Cross Assembler  Version 2.03  89-08-04  15:59:11  sxxevb.asm  Page 3
+
+
+
+226    
+227                      ; Write the FIR output to the PCM-56 DAC
+228    
+229       P:005E 567000            move              a,x:$FFEF               ;write the PCM-56 D/A via SSI xmt reg.
+                 00FFEF
+230       P:0060 0C0053            jmp     poll                              ;loop indefinitely
+231                                end
+0    Errors
+0    Warnings
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

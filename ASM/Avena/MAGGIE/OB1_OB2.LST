@@ -1,0 +1,512 @@
+' Object calculator
+'
+' Converts the simple OB1 files to OB2 files, which contain
+' such things as normal data for shading and so on
+'
+' The sharp-eyed will notice the embryonic version of a bsp-tree
+'   generator, which in fact doesn't work...
+'
+' (C) Steve Tattersall 1995
+'
+'
+RESERVE 600000
+vector_scale=&H7FFFFF                !SQR(&H7FFFFF)
+object_count%=0
+number_of_points=1400
+number_of_polys=1400
+DIM polysize%(number_of_polys)
+DIM polypt%(number_of_polys,20)
+DIM normal%(number_of_polys,3)
+DIM colour%(number_of_polys)
+'
+DIM pt%(number_of_points,3)
+DIM frontchild%(number_of_polys),backchild%(number_of_polys)
+DIM root%(number_of_polys+1),frontlist%(number_of_polys+1),backlist%(number_of_polys+1)
+DIM gour%(number_of_points,3)
+DIM object_name$(60)
+'
+CLS
+FILESELECT "f:\data\tdf\*.OB1","",f$
+IF f$=""
+  END
+ENDIF
+OPEN "i",#1,f$
+' -------------------------------------------------------
+WHILE com$<>"END"
+  INPUT #1,com$
+  IF com$="OBJECT"
+    GOSUB start_new_object
+  ENDIF
+  IF com$="POINTS"
+    GOSUB receive_points
+  ENDIF
+  IF com$="POLYS"
+    GOSUB receive_polys
+  ENDIF
+  IF com$="COLOURS"
+    GOSUB receive_colours
+  ENDIF
+WEND
+CLOSE #1
+PRINT
+GOSUB calculate
+GOSUB print_stats
+output:
+FILESELECT "f:\data\tdf\*.OB2","",f2$
+IF f2$<>""
+  GOSUB output_file
+ENDIF
+END
+' -------------------------------------------------------
+PROCEDURE start_new_object
+  INPUT #1,object_name$(object_count%)
+  PRINT AT(1,1);"New Object:";object_name$(object_count%)
+  INC object_count%
+RETURN
+'
+'
+PROCEDURE receive_colours
+  PRINT "Receiving Colours...."
+  FOR x%=0 TO number_of_polys-1
+    INPUT #1,colour%(x%)
+  NEXT x%
+RETURN
+'
+PROCEDURE receive_points
+  PRINT "Receiving Points...."
+  INPUT #1,number_of_points
+  FOR x=0 TO number_of_points-1
+    FOR y=1 TO 3
+      INPUT #1,pt%(x,y)
+    NEXT y
+    PLOT 320+pt%(x,1)/5000,(200+pt%(x,2)/5000)/2
+  NEXT x
+  '  PRINT number_of_points
+RETURN
+PROCEDURE receive_polys
+  PRINT "Receiving Polygons...."
+  INPUT #1,number_of_polys
+  FOR x%=0 TO number_of_polys-1
+    INPUT #1,z
+    polysize%(x%)=z
+    FOR y%=1 TO z
+      INPUT #1,a%
+      polypt%(x%,y%)=a%
+      IF y%>1
+        DRAW (320+pt%(a%,1)/5000),(200+pt%(a%,2)/5000)/2 TO (320+pt%(polypt%(x%,y%-1),1)/5000),(200+pt%(polypt%(x%,y%-1),2)/5000)/2
+      ENDIF
+    NEXT y%
+  NEXT x%
+  '  PRINT number_of_polys
+RETURN
+'
+'
+'
+'
+'
+' ------------------------------------------------------
+PROCEDURE calculate
+  '
+  GOSUB calc_normals
+  norm_flag%=FORM_ALERT(2,"[2][ Include | Flat Shade Normals ? ][ Yes | No ]")
+  '
+  q%=FORM_ALERT(2,"[2][ Calculate | BSP Tree ? ][ Yes | No ]")
+  IF q%=1
+    GOSUB calc_bsp
+  ENDIF
+  '
+  gour_flag%=FORM_ALERT(2,"[2][ Calculate | Gouraud ? ][ Yes | No ]")
+  IF gour_flag%=1
+    GOSUB calc_gouraud
+  ENDIF
+RETURN
+' ----------------------------------
+PROCEDURE calc_normals
+  PRINT "Calculating Normals ";
+  FOR x=0 TO number_of_polys-1
+    poly1%=polypt%(x,1)
+    poly2%=polypt%(x,2)
+    poly3%=polypt%(x,3)
+    a=pt%(poly2%,1)-pt%(poly1%,1)
+    b=pt%(poly2%,2)-pt%(poly1%,2)
+    c=pt%(poly2%,3)-pt%(poly1%,3)
+    l=pt%(poly3%,1)-pt%(poly1%,1)
+    m=pt%(poly3%,2)-pt%(poly1%,2)
+    n=pt%(poly3%,3)-pt%(poly1%,3)
+    p=b*n-c*m
+    q=c*l-a*n
+    r=a*m-b*l
+    normalsize=SQR(p*p+q*q+r*r)/vector_scale
+    IF normalsize<>0
+      p=p/normalsize
+      q=q/normalsize
+      r=r/normalsize
+    ENDIF
+    normal%(x,1)=p
+    normal%(x,2)=q
+    normal%(x,3)=r
+    PRINT ".";
+  NEXT x
+  PRINT
+RETURN
+' ------------------------------------------------------------------------------
+PROCEDURE calc_gouraud
+  PRINT "Calculating gouraud normals ";
+  FOR x%=0 TO number_of_points-1
+    '    PRINT ".";
+    found%=0
+    p=q=r=0
+    FOR y%=0 TO number_of_polys-1
+      FOR z%=1 TO polysize%(y%)
+        IF polypt%(y%,z%)=x%
+          '     PRINT ".";
+          ADD p,normal%(y%,1)
+          ADD q,normal%(y%,2)
+          ADD r,normal%(y%,3)
+          INC found%
+        ENDIF
+      NEXT z%
+    NEXT y%
+    IF found%<>0
+      '      PRINT found%;
+      PRINT ".";
+      DIV p,found%
+      DIV q,found%
+      DIV r,found%
+      normalsize=SQR(p*p+q*q+r*r)/vector_scale
+      p=p/normalsize
+      q=q/normalsize
+      r=r/normalsize
+      gour%(x%,1)=p
+      gour%(x%,2)=q
+      gour%(x%,3)=r
+    ENDIF
+  NEXT x%
+RETURN
+' ------------------------------------------------------------------------------
+PROCEDURE calc_bsp
+  pos%=0
+  neg%=0
+  this%=0
+  PRINT "Calculating BSP Tree ";
+  '
+  routine_level%=0
+  level%=0
+  laddress%=MALLOC(2048)
+  IF laddress%=0
+    PRINT "Mem error."
+    END
+  ENDIF
+  '
+  FOR x%=0 TO number_of_polys-1
+    POKE laddress%+x%,1
+  NEXT x%
+  '
+  newpoly%=-500
+  basepoly%=-500
+  GOSUB bsp_maketree(laddress%)
+  '
+  FOR x=0 TO number_of_polys-1
+    z1=MFREE(frontlist%(x))             ! Free everything up j.i.c.
+    z2=MFREE(backlist%(x))
+  NEXT x
+  '
+  PRINT "Neg: ";neg%
+  PRINT "Pos: ";pos%
+RETURN
+' -------------------------------
+PROCEDURE bsp_maketree(laddress%)
+  VOID FRE(0)
+  PRINT AT(1,11);"Remaining:";number_of_polys-this%;"  ";
+  PRINT AT(1,12);"Level:";level%;"  ";
+  '
+  ' Check if there are any polys left
+  xflag%=0
+  FOR x%=0 TO number_of_polys-1
+    ADD xflag%,(PEEK(laddress%+x%))
+  NEXT x%
+  '
+  IF xflag%=0
+    retval%=-1
+    PRINT "    Back         ";
+  ELSE                  ! Yes, we have polys
+    '
+    PRINT "Checking ";xflag%;" polys"
+    GOSUB select_poly(laddress%)
+    '
+    INC level%
+    IF basepoly%<0
+      basepoly%=newpoly%
+    ENDIF
+    root%=newpoly%
+    root%(level%)=newpoly%
+    backlist%(level%)=MALLOC(2048)
+    frontlist%(level%)=MALLOC(2048)
+    '
+    IF backlist%(level%)=0 OR frontlist%(level%)=0
+      PRINT "Memory error."
+      END
+    ENDIF
+    '
+    FOR x%=0 TO number_of_polys-1
+      POKE backlist%(level%)+x%,0
+      POKE frontlist%(level%)+x%,0
+    NEXT x%
+    '
+    GOSUB init_find_vars(root%)
+    FOR pcount%=0 TO number_of_polys-1
+      ' Decide here whether poly is in front or behind root
+      IF PEEK(laddress%+pcount%)<>0
+        GOSUB find_side(pcount%,1)
+        IF p>=0
+          POKE frontlist%(level%)+pcount%,1
+          INC pos%
+        ELSE
+          POKE backlist%(level%)+pcount%,1
+          INC neg%
+        ENDIF
+      ENDIF
+      '
+    NEXT pcount%
+    '
+    '
+    GOSUB bsp_maketree(frontlist%(level%))
+    frontchild%(root%(level%))=retval%
+    z1=MFREE(frontlist%(level%))
+    '
+    GOSUB bsp_maketree(backlist%(level%))
+    backchild%(root%(level%))=retval%
+    z2=MFREE(backlist%(level%))
+    '
+    retval%=root%(level%)
+    DEC level%
+  ENDIF
+RETURN
+' ------------------------------------
+PROCEDURE select_poly(addy%)
+  '  PRINT "Chosing,            ";
+  testpoly%=0
+  minsplits%=10000
+  '
+  REPEAT
+    IF PEEK(addy%+testpoly%)<>0
+      GOSUB count_splits(testpoly%)
+      IF splits%<minsplits%
+        minsplits%=splits%
+        bestpoly%=testpoly%
+      ENDIF
+    ENDIF
+    INC testpoly%
+  UNTIL testpoly%=number_of_polys OR minsplits%=0
+  '
+  IF minsplits%=10000
+    PRINT "Error occurred somehow..."
+    END
+  ENDIF
+  '
+  PRINT "Best:";bestpoly%;"(";minsplits%;")   "
+  newpoly%=bestpoly%
+  POKE addy%+newpoly%,0
+  INC this%
+RETURN
+'
+' ============================ DEBUG THIS ====================
+PROCEDURE count_splits(testpoly%)
+  pa%=pt%(polypt%(testpoly%,1),1)
+  pb%=pt%(polypt%(testpoly%,1),2)
+  pc%=pt%(polypt%(testpoly%,1),3)
+  splits%=0
+  '
+  FOR pcount%=0 TO number_of_polys-1
+    IF PEEK(addy%+pcount%)<>0
+      '
+      ' See how many splits are caused:
+      num%=0
+      ne%=0
+      po%=0
+      REPEAT
+        INC num%
+        pd=(pt%(polypt%(pcount%,num%),1)-pa%)
+        pe=(pt%(polypt%(pcount%,num%),2)-pb%)
+        pf=(pt%(polypt%(pcount%,num%),3)-pc%)
+        p=normal%(testpoly%,1)*pd
+        ADD p,normal%(testpoly%,2)*pe
+        ADD p,normal%(testpoly%,3)*pf
+        IF p>0
+          po%=1
+        ELSE IF p<0
+          ne%=1
+        ENDIF
+      UNTIL num%=polysize%(pcount%) OR (po%+ne%)>1
+      '
+      IF (po%+ne%)>1
+        INC splits%
+      ENDIF
+      '
+    ENDIF
+  NEXT pcount%
+RETURN
+'
+' ----------------------------------------------------------------
+'
+' Fetches the first point of the polygon
+PROCEDURE init_find_vars(pq%)
+  pa=pt%(polypt%(pq%,1),1)
+  pb=pt%(polypt%(pq%,1),2)
+  pc=pt%(polypt%(pq%,1),3)
+RETURN
+'
+' Side determined by angle between root's normal and line between poly + root
+PROCEDURE find_side(poly%,num%)
+  po%=0
+  ne%=0
+  '  IF splits%>0
+  '  testpoly%=root%
+  '  find_split(poly%,0)
+  ' ENDIF
+  num%=0                                      !not a split poly
+  REPEAT
+    INC num%
+    pd=(pt%(polypt%(poly%,num%),1)-pa)
+    pe=(pt%(polypt%(poly%,num%),2)-pb)
+    pf=(pt%(polypt%(poly%,num%),3)-pc)
+    p=normal%(root%,1)*pd
+    ADD p,normal%(root%,2)*pe
+    ADD p,normal%(root%,3)*pf
+  UNTIL p<>0 OR num%=polysize%(poly%)
+RETURN
+'
+'
+' ------------------------------------
+PROCEDURE print_stats
+  poly_size%=0
+  FOR x%=0 TO number_of_polys-1
+    poly_size%=poly_size%+4+polysize%(x%)
+  NEXT x%
+  IF norm_flag%=1
+    norm_size%=number_of_polys*3
+  ELSE
+    norm_size%=0
+  ENDIF
+  vert_size%=number_of_points*3
+  IF gour_flag%=1
+    gour_size%=number_of_points*3
+  ELSE
+    gour_size%=0
+  ENDIF
+  PRINT
+  PRINT
+  PRINT "Output Stats:"
+  PRINT "-------------"
+  PRINT "Normal data size: ";norm_size%
+  PRINT "Vertex data size: ";vert_size%
+  PRINT "Poly data size: ";poly_size%
+  PRINT "Gouraud data size: ";gour_size%
+  PRINT
+  total_size%=norm_size%+vert_size%+poly_size%+gour_size%+8
+  PRINT "Total size: ";total_size%*4;" bytes."
+RETURN
+' -----------------------------------------------------------------------
+PROCEDURE output_file
+  offsets%=FORM_ALERT(2,"[2][ Select own | poly offsets ? ][ Yes | No ]")
+  IF offsets%=1
+    INPUT "Input new offset:";myoff%
+  ELSE
+    myoff%=3
+  ENDIF
+  OPEN "o",#1,f2$
+  tab$=CHR$(9)
+  '
+  PRINT #1,"; ---- OB2 File produced at ";
+  PRINT #1,TIME$;" on ";DATE$
+  PRINT #1,"; ---- by TaT's file producer v0.1"
+  '
+  PRINT #1,tab$;"dc.l";tab$;total_size%;
+  PRINT #1,tab$;"; Total file size (longs)"
+  PRINT #1,tab$;"dc.l";tab$;number_of_points;tab$;"; Vertices"
+  PRINT #1,tab$;"dc.l";tab$;number_of_polys;tab$;"; Polygons"
+  PRINT #1,tab$;"dc.l";tab$;basepoly%;tab$;"; BSP root (unfinished)"
+  '
+  offset%=8
+  PRINT #1,tab$;"dc.l";tab$;offset%;tab$;"; .vertex_offset"
+  ADD offset%,vert_size%
+  PRINT #1,tab$;"dc.l";tab$;offset%;tab$;"; .normal_offset"
+  ADD offset%,norm_size%
+  PRINT #1,tab$;"dc.l";tab$;offset%;tab$;"; .poly data"
+  ADD offset%,poly_size%
+  PRINT #1,tab$;"dc.l";tab$;offset%;tab$;"; .texture_offset"
+  ADD offset%,0
+  PRINT #1,tab$;"dc.l";tab$;offset%;tab$;"; .gouraud_offset"
+  ADD offset%,gour_size%
+  '
+  PRINT #1,";Vertex Data:";
+  GOSUB output_vertices
+  IF norm_flag%=1
+    PRINT #1
+    PRINT #1,";Normal Data:";
+    GOSUB output_normals
+  ENDIF
+  PRINT #1
+  PRINT #1,";Polygon Data:"
+  GOSUB output_polys
+  IF gour_flag%=1
+    PRINT #1
+    PRINT #1,";Gouraud Data:"
+    GOSUB output_gouraud
+  ENDIF
+  CLOSE #1
+RETURN
+' ----------------------------
+PROCEDURE output_vertices
+  a%=0
+  FOR x%=0 TO number_of_points-1
+    IF a%=0
+      PRINT #1
+      PRINT #1,tab$;"dc.l";tab$;
+    ELSE
+      PRINT #1,",";
+    ENDIF
+    PRINT #1,(pt%(x%,1));",";(pt%(x%,2));",";(pt%(x%,3));
+    a%=(a%+1) MOD 2
+  NEXT x%
+RETURN
+' ----------------------------
+PROCEDURE output_normals
+  a%=0
+  FOR x%=0 TO number_of_polys-1
+    IF a%=0
+      PRINT #1
+      PRINT #1,tab$;"dc.l";tab$;
+    ELSE
+      PRINT #1,",";
+    ENDIF
+    PRINT #1,(normal%(x%,1));",";(normal%(x%,2));",";(normal%(x%,3));
+    a%=(a%+1) MOD 2
+  NEXT x%
+RETURN
+' ----------------------------
+PROCEDURE output_gouraud
+  a%=0
+  FOR x%=0 TO number_of_points-1
+    IF a%=0
+      PRINT #1
+      PRINT #1,tab$;"dc.l";tab$;
+    ELSE
+      PRINT #1,",";
+    ENDIF
+    PRINT #1,(gour%(x%,1));",";(gour%(x%,2));",";(gour%(x%,3));
+    a%=(a%+1) MOD 2
+  NEXT x%
+RETURN
+' ----------------------------
+PROCEDURE output_polys
+  FOR x%=0 TO number_of_polys-1
+    PRINT #1,tab$;"dc.l";tab$;frontchild%(x%);",";backchild%(x%);",";
+    PRINT #1,colour%(x%);",";             !Poly colour
+    PRINT #1,polysize%(x%);
+    FOR y%=1 TO polysize%(x%)
+      PRINT #1,",";polypt%(x%,y%)*myoff%;
+    NEXT y%
+    PRINT #1,tab$;";";x%
+  NEXT x%
+RETURN
