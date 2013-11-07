@@ -1,0 +1,32 @@
+MASKMAKER       CLR.L   D1              TEMP MASK STORE WHILE BEING MADE
+                MOVE.W  (A0)+,D1
+                OR.W    (A0)+,D1
+                OR.W    (A0)+,D1
+                OR.W    (A0)+,D1
+                NOT.W   D1
+                MOVE.W  D1,D2
+                SWAP    D2
+                MOVE.W  D1,D2
+                MOVE.L  D2,(A1)+
+                CLR.L   D1
+                MOVE.W  (A0)+,D1
+                OR.W    (A0)+,D1
+                OR.W    (A0)+,D1
+                OR.W    (A0)+,D1
+                NOT.W   D1
+                MOVE.W  D1,D2
+                SWAP    D2
+                MOVE.W  D1,D2
+                MOVE.L  D2,(A1)+
+                CLR.W   D1
+                MOVE.W  (A0)+,D1
+                OR.W    (A0)+,D1
+                OR.W    (A0)+,D1
+                OR.W    (A0)+,D1
+                NOT.W   D1
+                MOVE.W  D1,D2
+                SWAP    D2
+                MOVE.W  D1,D2
+                MOVE.L  D2,(A1)+
+                DBF     D0,MASKMAKER            
+                RTS

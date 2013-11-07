@@ -1,0 +1,40 @@
+SLUMP:
+                dc.w $F3B4,$EF6B,$D24B,$FE9F,$2BF8,$9FD9,$F967,$9E3E,$A12F,$1F72,$D9B3
+                dc.w $97F0,$DE04,$5672,$2DBC,$7E4F,$CFE4,$08D7,$D0CE,$25B8,$72FA,$125B
+                dc.w $4AF4,$4046,$3E34,$627B,$1CFC,$B9D7,$4F3C,$B873,$CC70,$D405,$567F
+                dc.w $1F3E,$AF9D,$022D,$4329,$299A,$798E,$856A,$AF25,$EE01,$8610,$C89A
+                dc.w $0B20,$C2AF,$E5AF,$7C57,$8A86,$B9A2,$29B7,$72FE,$CF83,$DC94,$F034
+                dc.w $3CAA,$5702,$2902,$2FF1,$8339,$A4B0,$4C28,$447B,$2645,$2EF9,$1F01
+                dc.w $BA1E,$172B,$0B09,$E24A,$D9E6,$F506,$58CB,$3A7F,$F59E,$68B4,$6EEC
+                dc.w $EBDC,$73D3,$40CF,$C6D8,$565D,$9BD1,$4DB4,$A8BB,$B1BD,$21A3,$FD7E
+                dc.w $9781,$0979,$7217,$B80B,$7CD5,$F8CD,$BEB7,$FAF5,$9524,$26B4,$C9CF
+                dc.w $3598,$1B99,$81EB,$726D,$6512,$B622,$3CEE,$005B,$703D,$A169,$89F9
+                dc.w $3026,$43B7,$9CDB,$1708,$FF1A,$ADD9,$96A3,$49D6,$3743,$FAC2,$17AF
+                dc.w $3BE0,$BB6C,$504C,$6FA9,$7661,$9322,$CA14,$A0FE,$6E57,$B6B1,$5576
+                dc.w $0CDA,$C07C,$9B24,$4D8E,$DF28,$2D4D,$7E49,$D737,$3A95,$5506,$72AA
+                dc.w $FD0E,$248D,$33A2,$2B93,$8B6F,$313C,$5CDF,$8912,$AC76,$EF8D,$F837
+                dc.w $E3F1,$43FE,$152D,$7CE6,$19BD,$0BA4,$6A88,$2DEA,$58C2,$6EC4,$76CA
+                dc.w $55FD,$AC0C,$267A,$EBDE,$439C,$4766,$95A1,$D272,$0503,$935D,$E4D6
+                dc.w $75F0,$E42D,$F93D,$DE75,$1084,$A2D7,$6F11,$8A9A,$371C,$767D,$C3A7
+                dc.w $8B20,$0562,$C45B,$AA89,$37A4,$09C3,$9D6D,$8803,$7982,$F16A,$FA6E
+                dc.w $FD23,$67D6,$F445,$B7DB,$33B3,$A37B,$00FE,$51F0,$EA40,$730E,$A902
+                dc.w $60A8,$4016,$9EEB,$CC7D,$D3C0,$4141,$0D2E,$065A,$EEB4,$328C,$1DB2
+                dc.w $D846,$04C0,$9D84,$C614,$96AD,$F4E0,$1C75,$6DB0,$14BB,$65CF,$E66A
+                dc.w $89A2,$105B,$C20A,$1B31,$F8C5,$5E3A,$F3CD,$CF54,$1FB6,$D5C4,$E113
+                dc.w $D820,$C4D1,$FD25,$A799,$57A0,$AC32,$7548,$98DB,$08A1,$F3B4,$25DB
+                dc.w $F615,$4AAF,$2EF4,$2947,$6C42,$EE16,$434E,$78BB,$5020,$BFE2,$03DD
+                dc.w $5822,$9A29,$D5DE,$8D7F,$8227,$A299,$9A97,$62CE,$1437,$9D6E,$9959
+                dc.w $4827,$3A7D,$D662,$0A2F,$DFA5,$9BE7,$ACF2,$1DE7,$0526,$861F,$505A
+                dc.w $0A0B,$EA44,$D992,$3B95,$D4E8,$F25C,$B56C,$7161,$E189,$4E89,$E398
+                dc.w $7838,$3BBB,$59A9
+ENDSLUMP:                               ; FOLLOWED BY SAFTY SLUMP NUMBERS
+                dc.w $F3B4,$EF6B,$D24B,$FE9F,$2BF8,$9FD9,$F967,$9E3E,$A12F,$1F72,$D9B3
+                dc.w $97F0,$DE04,$5672,$2DBC,$7E4F,$CFE4,$08D7,$D0CE,$25B8,$72FA,$125B
+                dc.w $4AF4,$4046,$3E34,$627B,$1CFC,$B9D7,$4F3C,$B873,$CC70,$D405,$567F
+                dc.w $1F3E,$AF9D,$022D,$4329,$299A,$798E,$856A,$AF25,$EE01,$8610,$C89A
+                dc.w $0B20,$C2AF,$E5AF,$7C57,$8A86,$B9A2,$29B7,$72FE,$CF83,$DC94,$F034
+                dc.w $3CAA,$5702,$2902,$2FF1,$8339,$A4B0,$4C28,$447B,$2645,$2EF9,$1F01
+                dc.w $BA1E,$172B,$0B09,$E24A,$D9E6,$F506,$58CB,$3A7F,$F59E,$68B4,$6EEC
+                dc.w $EBDC,$73D3,$40CF,$C6D8,$565D,$9BD1,$4DB4,$A8BB,$B1BD,$21A3,$FD7E
+                dc.w $9781,$0979,$7217,$B80B,$7CD5,$F8CD,$BEB7,$FAF5,$9524,$26B4,$C9CF
+                endpart

@@ -1,0 +1,525 @@
+                OPT P+
+;************************************************************
+;****              LISTING => FDCINTER.S                 ****
+;************************************************************
+
+;*****************************************************************
+;*******               FDC/BASIC INTERFACE                ********
+;*****************************************************************
+
+;Hardware registers
+
+A_DMAMODE       EQU $FFFF8606
+A_DMASCNT       EQU $FFFF8604
+A_DMALOW        EQU $FFFF860D
+A_DMAMID        EQU $FFFF860B
+A_DMAHIGH       EQU $FFFF8609
+A_GISELECT      EQU $FFFF8800
+A_GIWRITE       EQU $FFFF8802
+A_MFP           EQU $FFFFFA01
+
+;Control words for the DMA controller (DMA data direction => READ)
+
+D_SRCMD         EQU $80                           ; select command register
+D_SRTRK         EQU $82                           ; select track register
+D_SRSEC         EQU $84                           ; select sector register
+D_SRDAT         EQU $86                           ; select data register
+D_SRCNT         EQU $90                           ; select DMA sector-count register
+
+;control words for the DMA controller (DMA data direction => WRITE)
+
+D_SWCMD         EQU $0180                         ; same as for => READ
+D_SWTRK         EQU $0182
+D_SWSEC         EQU $0184
+D_SWDAT         EQU $0186
+D_SWCNT         EQU $0190
+
+;*****************************************************************
+s:              bra.s   RUN                       ; to start of program
+
+;************************ Kommando-Worte *************************
+
+REST:           DC.W $01                          ; Restore      MO, 3ms Step rate
+SEE:            DC.W $11                          ; Seek         MO, 3ms Step rate
+STP:            DC.W $31                          ; Step         MO, 3ms Step rate, update track reg.
+STPI:           DC.W $51                          ; Step-in      MO, 3ms Step rate, update track reg.
+STPO:           DC.W $71                          ; Step-out     MO, 3ms Step rate, update track reg.
+
+RSEC:           DC.W $90                          ; Read-Sector  MO, multiple
+WSEC:           DC.W $B0                          ; Write-Sector MO, multiple, write precompensation
+
+RADR:           DC.W $C0                          ; Read-Address MO,
+RTRK:           DC.W $E0                          ; Read-Track   MO,
+WTRK:           DC.W $F0                          ; Write-Track  MO, write precompensation
+
+FORC:           DC.W $D0                          ; Force-Interrupt
+
+;*******************   Parameters  ***********************
+
+PRM:            DC.W 0                            ; function number
+                DC.W 0                            ; drive number
+                DC.W 0                            ; track number
+                DC.W 0                            ; sector number
+                DC.W 0                            ; number of bytes to transfer
+                DC.W 0                            ; number of ID fields to read
+                DC.W 0                            ; FDC status
+                DC.W 0                            ; DMA status
+                DC.W 0                            ; timeout? (1=timeout)
+                DC.W 0                            ; number of bytes to transfer
+                DC.L 0                            ; DMA start address
+                DC.L 0                            ; DMA end address
+                DC.L 0                            ; address of the track buffer
+                DC.L 0                            ; address of the sector buffer
+                DC.L 0                            ; address of the ID buffer
+                DC.L 0                            ; address of the ID status buffer
+
+;****************    Here we go    *****************
+
+RUN:
+
+;Since the source can only be addressed PC relative, we use A3
+;as the program counter.
+
+                movem.l d0-a6,-(a7)
+                lea     s(pc),a3                  ; PROGRAM RT IN ADDRESS REG. 3
+                movem.l d0-a6,SAVREG-s(a3)        ; E REGISTERS
+
+
+;*** Clear some flags and calculate absolute address of the ***
+;*** desired function.                                      ***
+
+                lea     PRM-s(a3),a5              ; POINTER PARAMETER BLOCK
+
+                move.w  #1,$043E                  ; disable floppy VBL
+                move.w  #0,16(a5)                 ; clear timeout flag
+                move.w  #0,DMA-s(a3)              ; CLEAR DMLAG
+                move.w  #0,VBLFLAG-s(a3)          ; CLEAR VBESET FLAG
+
+                move.w  0(a5),d0                  ; get function number
+                and.l   #$0F,d0                   ; there are only 16 functions (0-15)
+                lsl.l   #2,d0                     ; times 4 = functab offset
+
+                lea     FUNCTAB-s(a3),a4          ; FUNC-TABADDRESS
+                move.l  0(a4,d0.w),d0             ; relative start address of the routine
+
+                jsr     0(a3,d0.w)                ; +program start=abs. addr. of routine
+
+                tst.w   VBLFLAG-s(a3)             ; VBL ON (ER DESELECTING)?
+                beq.s   LETOFF                    ; no
+                move.w  #0,$043E                  ; turn on
+
+LETOFF:
+
+                movem.l (a7)+,d0-a6
+                rts                               ; back to BASIC
+
+
+; That was it!  (All) we have left are the following routines
+
+
+;***********************  Restore FDC ****************************
+
+RESTORE:
+
+                move.w  #D_SRCMD,A_DMAMODE.w      ; select command reg
+                move.w  REST-s(a3),d7             ; COMMAND RESTORE
+                bsr     WRT1772                   ; pass command
+                bsr     FDCWAIT                   ; wait until FDC is ready
+                rts
+
+;***********************  SEEK TRACK  ****************************
+
+SEEK:
+
+                move.w  #D_SRDAT,A_DMAMODE.w      ; select data reg
+                move.w  4(a5),d7                  ; track number in d7
+                bsr     WRT1772                   ; write track number
+                move.w  #D_SRCMD,A_DMAMODE.w      ; select command reg
+                move.w  SEE-s(a3),d7              ; COMMAND SEEK
+                bsr     WRT1772                   ; write command
+                bsr     FDCWAIT                   ; wait until FDC ready
+                rts
+
+
+;************************  Step  *********************************
+
+STEP:
+
+                move.w  #D_SRCMD,A_DMAMODE.w      ; select FDC command reg
+                move.w  STP-s(a3),d7              ; COMMAND STEP
+                bsr     WRT1772                   ; write command
+                bsr     FDCWAIT                   ; wait until FDC ready
+                rts
+
+;*************************  Step in  *****************************
+
+STEPIN:
+
+                move.w  #D_SRCMD,A_DMAMODE.w      ; select FDC command reg
+                move.w  STPI-s(a3),d7             ; COMMAND STEP IN
+                bsr     WRT1772                   ; write command
+                bsr     FDCWAIT                   ; wait until FDC is ready
+                rts
+
+;************************  Step out  *****************************
+
+STEPOUT:
+
+                move.w  #D_SRCMD,A_DMAMODE.w      ; select FDC command reg
+                move.w  STPO-s(a3),d7             ; COMMAND STEP OUT
+                bsr     WRT1772                   ; write command
+                bsr     FDCWAIT                   ; wait until FDC is ready
+                rts
+
+;***********************  Force Interrupt  ***********************
+
+FORCE:
+
+                move.w  FORC-s(a3),d7             ; COMMAND FORCE INTERRUPT
+                bsr     WRT1772                   ; write command
+                move.w  #$0100,d7                 ; delay loop
+WTFRC:
+                dbra    d7,WTFRC
+                rts
+
+;*********************  READ SECTOR(S)  **************************
+
+READSECTOR:
+
+                move.l  32(a5),d7                 ; DMA address to sector buffer
+                bsr     SETDMA
+                move.w  #1,DMA-s(a3)              ; SET DMA G
+                move.w  #D_SRCNT,A_DMAMODE.w      ; toggle DMA R/W
+                move.w  #D_SWCNT,A_DMAMODE.w
+                move.w  #D_SRCNT,A_DMAMODE.w      ; select DMA sector count
+                move.w  #$0C,d7                   ; load with 12 (corresponds to 6kB)
+                bsr     WRT1772                   ; load DMA scnt
+
+                move.w  #D_SRSEC,A_DMAMODE.w      ; select sector reg
+                move.w  6(a5),d7                  ; sector number in d7
+                bsr     WRT1772                   ; write sector number
+
+                move.w  #D_SRCMD,A_DMAMODE.w      ; select command reg
+                move.w  RSEC-s(a3),d7             ; COMMAND READ MULTIPLE SECTORS
+                bsr     WRT1772                   ; write command
+
+                bsr     FDCWAIT                   ; wait until FDC is ready
+                bsr     READSTAT                  ; read status and number of bytes
+                rts
+
+;**********************  Read Address  ***************************
+
+READADDRESS:
+
+                movea.l 40(a5),a4                 ; load address of the status buffer
+                move.l  36(a5),d7                 ; DMA address to ID field buffer
+                bsr     SETDMA
+                move.w  #D_SRCNT,A_DMAMODE.w      ; toggle DMA R/W
+                move.w  #D_SWCNT,A_DMAMODE.w
+                move.w  #D_SRCNT,A_DMAMODE.w      ; select DMA sector count
+                move.w  #$01,d7                   ; load with 1 (corresponds to 512 bytes)
+                bsr     WRT1772
+                move.w  #D_SRCMD,A_DMAMODE.w      ; select FDC command reg
+                move.w  10(a5),d4                 ; #ID fields in D4
+                and.w   #$7F,d4                   ; but only max. 128
+
+IDLOOP:
+                move.w  RADR-s(a3),d7             ; COMMAND READ ADDRESS
+                bsr     WRT1772                   ; write command
+                bsr     FDCWAIT                   ; wait until FDC is ready
+                move.b  d0,(a4)+                  ; save status in buffer
+                tst.w   16(a5)                    ; timeout ?
+                dbne    d4,IDLOOP                 ; no, read next ID field
+                bsr     READSTAT                  ; read status and number of bytes
+                rts
+
+;***********************  READ TRACK  ****************************
+
+READTRACK:
+
+                move.l  28(a5),d7                 ; DMA address to track buffer
+                bsr     SETDMA
+                move.w  #1,DMA-s(a3)              ; SET DMA G
+                move.w  #D_SRCNT,A_DMAMODE.w      ; toggle DMA R/W
+                move.w  #D_SWCNT,A_DMAMODE.w
+                move.w  #D_SRCNT,A_DMAMODE.w      ; select DMA sector count
+                move.w  #$0E,d7                   ; load with 14 (corresponds to 7kB)
+                bsr     WRT1772
+                move.w  #D_SRCMD,A_DMAMODE.w      ; select command reg
+                move.w  RTRK-s(a3),d7             ; COMMAND READ TRACK
+                bsr     WRT1772                   ; write command
+                bsr     FDCWAIT                   ; wait until FDC is ready
+                bsr     READSTAT                  ; read status and number of bytes
+                rts
+
+;*********************  WRITE SECTOR(S)  *************************
+
+WRITESECTOR:
+
+                move.l  32(a5),d7                 ; DMA address to sector buffer
+                bsr     SETDMA
+                move.w  #1,DMA-s(a3)              ; SET DMA G
+                move.w  #D_SWCNT,A_DMAMODE.w      ; toggle DMA R/W
+                move.w  #D_SRCNT,A_DMAMODE.w
+                move.w  #D_SWCNT,A_DMAMODE.w      ; select DMA sector count
+                move.w  #$0C,d7                   ; load with 12 (corresponds to 6kB)
+                bsr     WRT1772                   ; write DMA scnt
+                move.w  #D_SWSEC,A_DMAMODE.w      ; select sector reg
+                move.w  6(a5),d7                  ; sector number in d7
+                bsr     WRT1772                   ; write sector reg
+
+                move.w  #D_SWCMD,A_DMAMODE.w      ; select command reg
+                move.w  WSEC-s(a3),d7             ; COMMAND WRITE MULTIPLE SECTORS
+                bsr     WRT1772                   ; write command
+                bsr     FDCWAIT                   ; wait until FDC is ready
+                bsr     READSTAT                  ; read status and number of bytes
+                rts
+
+;**********************  WRITE TRACK  ****************************
+
+WRITETRACK:
+
+                move.l  28(a5),d7                 ; DMA address to track buffer
+                bsr     SETDMA
+                move.w  #1,DMA-s(a3)              ; SET DMA G
+                move.w  #D_SWCNT,A_DMAMODE.w      ; toggle DMA R/W
+                move.w  #D_SRCNT,A_DMAMODE.w
+                move.w  #D_SWCNT,A_DMAMODE.w      ; select DMA sector count
+                move.w  #$0E,d7                   ; load with 14 (corresponds to 7kB)
+                bsr     WRT1772                   ; write DMA scnt
+                move.w  #D_SWCMD,A_DMAMODE.w      ; select command reg
+                move.w  WTRK-s(a3),d7             ; COMMAND WRITE TRACK
+                bsr     WRT1772                   ; write command
+                bsr     FDCWAIT                   ; wait until FDC is ready
+                bsr     READSTAT                  ; read status and number of bytes
+                rts
+
+;*****************************************************************
+;*****************************************************************
+
+;Those were the routines that access the WD1772 commands
+;We now have more subroutines, which are called partially from the
+;main routines and partially directly from BASIC (such as setdrive)
+
+;******************  REad sector register  ***********************
+
+RSECREG:
+
+                move.w  #D_SRSEC,A_DMAMODE.w      ; select sector reg
+                bsr     READ1772                  ; and read
+                and.w   #$FF,d0                   ; only lower byte
+                move.w  d0,6(a5)                  ; into FDC array
+                move.w  #D_SRCMD,A_DMAMODE.w      ; select command reg
+                rts
+
+;*******************  read track register  **********************
+
+RTRKREG:
+
+                move.w  #D_SRTRK,A_DMAMODE.w      ; select track reg
+                bsr     READ1772                  ; and read
+                and.w   #$FF,d0                   ; lower byte only
+                move.w  d0,4(a5)                  ; into FDC array
+                move.w  #D_SRCMD,A_DMAMODE.w      ; Command-Reg. selektieren
+                rts
+
+;*********************  read status reg  ***********************
+
+RSTAREG:
+
+                move.w  #D_SRCMD,A_DMAMODE.w      ; select status reg
+                bsr     READ1772                  ; and read
+                and.w   #$FF,d0                   ; status in lower byte
+                move.w  d0,12(a5)                 ; into FDC array
+                rts
+
+;********************  write track reg  **********************
+
+WTRKREG:
+
+                move.w  #D_SRTRK,A_DMAMODE.w      ; select track reg
+                move.w  4(a5),d7                  ; get track number
+                and.w   #$FF,d7
+                bsr.s   WRT1772                   ; and write
+                move.w  #D_SRCMD,A_DMAMODE.w      ; select command reg
+                rts
+
+;********************  Set DMA transfer address  *****************
+
+SETDMA:
+
+                move.l  d7,20(a5)                 ; save start address in FDC array
+                move.b  d7,A_DMALOW               ; first the low byte
+                lsr.l   #8,d7
+                move.b  d7,A_DMAMID               ; then the middle byte
+                lsr.l   #8,d7
+                move.b  d7,A_DMAHIGH              ; and last the high byte
+
+                move.l  20(a5),d7                 ; get start address back
+                moveq   #0,d6
+                move.w  8(a5),d6                  ; number of bytes to transfer
+                add.l   d6,d7                     ; add the two
+                move.l  d7,24(a5)                 ; =expected end address
+                rts
+
+;*** Read DMA status; calculate number of transferred bytes ***
+
+READSTAT:
+
+                move.w  A_DMAMODE.w,d0            ; read DMA status
+                and.w   #$07,d0                   ; take lower 3 bit only
+                move.w  d0,14(a5)                 ; to fdcout
+
+                moveq   #0,d1                     ; read DMA end address
+                move.b  A_DMAHIGH.w,d1
+                lsl.l   #8,d1
+                move.b  A_DMAMID.w,d1
+                lsl.l   #8,d1
+                move.b  A_DMALOW.w,d1
+
+                move.l  d1,24(a5)                 ; end address into array
+                sub.l   20(a5),d1                 ; end addr minus start addr
+                move.w  d1,18(a5)                 ; =number of bytes
+                rts
+
+;*****************    Write FDC register   *******************
+
+WRT1772:
+
+                bsr     WAIT
+                move.w  d7,A_DMASCNT              ; write FDC reg or DMA sector count reg
+                bsr     WAIT
+                rts
+
+;*****************     Read FDC register     ********************
+
+READ1772:
+
+                bsr     WAIT
+                move.w  A_DMASCNT.w,d0            ; read FDC reg or DMA sector-count reg
+                bsr     WAIT
+                rts
+
+;****************    Wait until FDC is ready    *******************
+
+FDCWAIT:
+
+                move.l  #$0180,d5                 ; wait until Busy is set
+LITLWT:
+                dbra    d5,LITLWT
+
+                move.l  #$040000,d5               ; d5 as timeout counter
+                cmpi.w  #$09,0(a5)                ; READ-ADDRESS command?
+                bne.s   READMFP
+                move.l  #$028000,d5               ; yes, shorter timeout
+
+READMFP:
+
+                btst    #5,A_MFP.w                ; is command done?
+                beq.s   FDCREADY                  ; yes
+
+                subq.l  #1,d5                     ; no, decrement timeout counter
+                beq.s   TIMEOUT                   ; if timedout
+
+                tst.w   DMA-s(a3)                 ; COMMAND H DATA TRANSFER?
+                beq.s   READMFP                   ; no, keep testing
+
+                move.b  A_DMAHIGH.w,TEMP+1-s(a3)  ; EXPED END DMA ADDRESS
+                move.b  A_DMAMID.w,TEMP+2-s(a3)   ; REAC?
+                move.b  A_DMALOW.w,TEMP+3-s(a3)
+                move.l  TEMP-s(a3),d7
+                cmp.l   24(a5),d7
+                blt.s   READMFP                   ; no, keep testing
+
+                bsr     FORCE                     ; if so, then terminate command
+                move.w  #0,DMA-s(a3)              ; CLEAR DMLAG
+                bra.s   FDCREADY                  ; and end routine normally
+
+TIMEOUT:
+
+                move.w  A_DMASCNT.w,d0            ; read status before termination
+                and.w   #$FF,d0                   ; mask out top byte
+                move.w  d0,12(a5)                 ; and into array
+                bsr     FORCE                     ; terminate fommand
+                move.w  #1,16(a5)                 ; set timeout flag
+                rts
+
+FDCREADY:
+
+                move.w  A_DMASCNT.w,d0            ; read status
+                and.w   #$FF,d0                   ; mask out top byte
+                move.w  d0,12(a5)                 ; and into FDC array
+                rts
+
+;************  Wait until motor is off  *****************
+
+MOTOROFF:
+
+                move.w  #D_SRCMD,A_DMAMODE.w      ; select status reg
+TEST:
+                bsr     READ1772                  ; and read
+                btst    #7,d0                     ; Motor on set?
+                bne.s   TEST                      ; yes, keep waiting
+                rts
+
+;*************************    Wait   *****************************
+
+WAIT:
+
+                move    sr,-(a7)                  ; save status
+                move.w  #$20,d5                   ; d5 as counter
+WT2:
+                dbra    d5,WT2
+                move    (a7)+,sr                  ; get status back
+                rts
+
+;*****************  Select drive and side  ****************
+
+SETDRIVE:
+
+                moveq   #0,d7
+                move.w  2(a5),d7                  ; get drive number
+                bne.s   SET
+                bsr.s   MOTOROFF                  ; if 0, delselect when motor off
+                move.w  #1,VBLFLAG-s(a3)          ; SET VBL ET FLAG
+SET:
+                eori.b  #7,d7                     ; invert bits for hardware
+                and.b   #7,d7                     ; only the lower 4 bits are affected
+                move    sr,-(a7)                  ; save status
+                ori     #$0700,sr                 ; turn off interrupts
+                move.b  #$0E,A_GISELECT.w         ; select port A of the sound chip
+                move.b  A_GISELECT.w,d0           ; read port A
+                and.b   #$F8,d0                   ; clear bits 0-2
+                or.b    d0,d7                     ; set new bits
+                move.b  d7,A_GIWRITE              ; write to port A
+                move    (a7)+,sr                  ; restore status
+                rts
+
+;***************************************************************
+;*******************  Variables and tables  ********************
+;***************************************************************
+
+                EVEN
+
+SAVREG:         DS.L 16
+SAVPRM:         DC.L 0
+SAVSTACK:       DC.L 0
+
+VBLFLAG:        DC.W 0
+DMA:            DC.W 0
+TEMP:           DC.L 0
+
+FUNCTAB:        DC.L RESTORE-s,SEEK-s
+                DC.L STEP-s,STEPIN-s
+                DC.L STEPOUT-s,READSECTOR-s
+                DC.L WRITESECTOR-s,READTRACK-s
+                DC.L WRITETRACK-s,READADDRESS-s
+                DC.L FORCE-s,SETDRIVE-s
+                DC.L RSECREG-s,RTRKREG-s
+                DC.L RSTAREG-s,WTRKREG-s
+
+                EVEN
+
+;***************************** END ******************************
+
+                END

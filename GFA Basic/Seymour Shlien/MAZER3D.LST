@@ -1,0 +1,1655 @@
+' mazer3d          june 27 1992
+' Three dimensional maze
+' Programmed by Seymour Shlien in GFA Basic 3.5
+' 624 Courtenay Avenue
+' Ottawa, Ontario
+' Canada K2A 3B5
+'
+' The maze program plays an *.XBS file as background music if one
+' or several files exists. The *.XBS file is loaded into memory
+' and executed as a xbios dosound command.
+'
+rez%=XBIOS(4)
+IF rez%<>0
+  ALERT 3," Please switch   to | low  resolution! ",1,"Oops",b%
+  STOP
+ENDIF
+DEFMOUSE 0
+DIM deskcolors%(16),style%(5)
+DIM maze%(600),frontier!(600),neighbour_list%(6),prune_list%(6)
+DIM path&(600)
+DIM pathconnect%(20)
+DIM linkcell%(50)
+DIM full_maze|(2700)
+' jump_cell has the destination when we take an elevator.
+DIM jump_cell|(2700)
+DIM hide!(2700),cover!(2700)
+' cover! array keeps track of all cells passed through by explorer.
+' hide! array keeps track of which cells to display when difficulty%=2
+DIM okdir!(8)
+DIM difficulty$(4)
+DIM xbs_files$(30)
+DIM cell_set%(8),cell_used!(24)
+DIM monsters%(3),monsters_dir%(3)
+DIM help$(10)
+' Most of the drawing is done on mapscreen%. Gets and puts display
+' mapscreen% onto the logical screen = physical screen. This allows
+' us to do special effects like horizontal scrolling.
+DIM mapscreen%(8500)
+help$(0)="Select option with mouse pointer"
+help$(1)="Hit mouse button for instructions"
+help$(2)="Width of the maze"
+help$(3)="Height of the maze"
+help$(4)="Number of floors"
+help$(5)="Various levels of difficulty"
+help$(6)="The next maze to do"
+help$(7)="The controller "
+help$(8)="Joystick delay time"
+help$(9)="Lets go."
+help$(10)="I am fed up."
+' specifies one of the fill styles (deffill) for difficulty%=4
+style%(0)=1
+style%(1)=11
+style%(2)=13
+style%(3)=15
+style%(4)=18
+num_monsters%=1
+map_ptr%=VARPTR(mapscreen%(0))
+map_ptr%=(map_ptr%+256) AND &HFFFFFF00
+logbase%=XBIOS(2)
+' remember deskcolors so we can restore them on exit.
+@get_deskcolors
+' my own pallette
+VSETCOLOR 0,12,12,12
+VSETCOLOR 1,0,0,0
+VSETCOLOR 2,15,0,0
+VSETCOLOR 3,0,15,0
+VSETCOLOR 4,0,0,15
+VSETCOLOR 5,0,15,15
+VSETCOLOR 6,12,12,0
+VSETCOLOR 7,12,0,12
+VSETCOLOR 8,7,11,7
+VSETCOLOR 9,8,8,0
+VSETCOLOR 10,8,8,8
+VSETCOLOR 11,7,7,7
+VSETCOLOR 12,6,8,6
+VSETCOLOR 13,4,8,8
+VSETCOLOR 14,8,6,4
+x_ok%=200
+y_ok%=100
+width%=9
+height%=6
+depth%=4
+block_size%=12
+' dimensions of map revealed in difficulty%=4
+map_width%=10
+map_height%=8
+' default to most difficult level
+difficulty%=4
+difficulty$(1)="one    "
+difficulty$(2)="two    "
+difficulty$(3)="three  "
+difficulty$(4)="four   "
+' There are four levels of difficulty.
+' One - the entire floor of a maze is visible
+' Two - you must explore the floor to make the maze visible
+' Three - avoid the monsters.
+' Four - only part of the maze is visible around the explorer.
+joystick!=TRUE
+joy_stick_response=0.18
+DIM cellpat$(24),treasures$(4)
+DIM monstpat$(3)
+@read_cellpat
+DIM patterns%(250)
+quit%=0
+@dir_xbs_files
+@read_sound
+'
+maze_number%=1
+REPEAT
+  @select_parameters
+  IF quit%=0
+    DEFFILL 0
+    PBOX 0,0,319,199
+    @make_maze
+    @run_maze
+  ENDIF
+UNTIL quit%=1
+@restore_deskcolors
+> PROCEDURE get_deskcolors
+  ' remember the color pallette so we can restore them when we are finished
+  LOCAL i%
+  FOR i%=0 TO 15
+    deskcolors%(i%)=XBIOS(7,i%,-1)
+  NEXT i%
+RETURN
+> PROCEDURE restore_deskcolors
+  ' restore the color pallette before we exit.
+  LOCAL i%
+  FOR i%=0 TO 15
+    SETCOLOR i%,deskcolors%(i%)
+  NEXT i%
+RETURN
+> PROCEDURE show_parameter(num%)
+  ' show the current parameter in the menu .
+  GRAPHMODE 2
+  SELECT num%
+  CASE 1
+    TEXT 25,20,"Instructions"
+  CASE 2
+    TEXT 25,30,"Width"
+    PBOX 100,22,150,30
+    TEXT 100,30,STR$(width%)
+  CASE 3
+    TEXT 25,40,"Height"
+    PBOX 100,32,150,40
+    TEXT 100,40,STR$(height%)
+  CASE 4
+    TEXT 25,50,"Depth"
+    PBOX 100,42,150,50
+    TEXT 100,50,STR$(depth%)
+  CASE 5
+    TEXT 25,60,"Level"
+    PBOX 70,52,160,62
+    TEXT 70,60,difficulty$(difficulty%)
+  CASE 6
+    TEXT 25,70,"Maze number "
+    PBOX 120,62,150,70
+    TEXT 120,70,STR$(maze_number%)
+  CASE 7
+    PBOX 25,72,120,82
+    IF joystick!=FALSE
+      TEXT 25,80,"Arrow keys"
+    ELSE
+      TEXT 25,80,"Joystick "
+    ENDIF
+  CASE 8
+    TEXT 25,90,"response"
+    PBOX 100,82,130,90
+    TEXT 100,90,STR$(joy_stick_response)
+  CASE 9
+    TEXT 25,100,"OK"
+  CASE 10
+    TEXT 25,110,"quit"
+  ENDSELECT
+  GRAPHMODE 1
+RETURN
+> PROCEDURE show_all_parameters
+  ' display the menu with all its parameters.
+  LOCAL i%,x1%,y1%,r%
+  DEFTEXT 4,0,0,6
+  DEFFILL 1
+  PRBOX 10,10,160,120
+  RANDOMIZE 0
+  FOR i%=0 TO 8
+    x1%=180+(i% MOD 3)*14
+    y1%=80+(i% DIV 3)*14
+    r%=RANDOM(20)
+    PUT x1%,y1%,cellpat$(r%)
+  NEXT i%
+  FOR i%=1 TO 10
+    @show_parameter(i%)
+  NEXT i%
+RETURN
+> PROCEDURE select_parameters
+  ' select and modify parameter using mouse.
+  LOCAL choice%,highlight%
+  DEFFILL 0
+  ' select character height
+  DEFTEXT 1,0,0,6
+  ' clear screen
+  PBOX 0,0,319,199
+  highlight%=0
+  @show_all_parameters
+  ' play music if any.
+  @dosound
+  SETMOUSE 10,185,0
+  REPEAT
+    REPEAT
+      SHOWM
+      choice%=(MOUSEY-10)/10+1
+      ' highlight if mouse moved to a new parameter
+      IF highlight%<>choice%
+        DEFTEXT 4,0
+        show_parameter(highlight%)
+        DEFTEXT 5,0
+        show_parameter(choice%)
+        highlight%=choice%
+        show_help(choice%)
+      ENDIF
+      IF MOUSEK=0
+        tim%=TIMER
+      ENDIF
+    UNTIL MOUSEK<>0
+    ' left mouse button increases parameter value, right button decreases
+    IF MOUSEK=1
+      modify_parameter(choice%,1)
+    ENDIF
+    IF MOUSEK=2
+      modify_parameter(choice%,-1)
+    ENDIF
+    show_parameter(choice%)
+    PAUSE 20
+    IF choice%=1
+      @instructions
+    ENDIF
+  UNTIL choice%=9 OR choice%=10
+  DEFTEXT 1,0
+RETURN
+> PROCEDURE modify_parameter(num%,dir%)
+  ' raise or lower selected parameter withen limits.
+  SELECT num%
+  CASE 2
+    width%=width%+dir%
+    IF width%>12
+      width%=12
+    ENDIF
+    IF width%<5
+      width%=5
+    ENDIF
+  CASE 3
+    height%=height%+dir%
+    IF height%>6
+      height%=6
+    ENDIF
+    IF height%<4
+      height%=4
+    ENDIF
+  CASE 4
+    depth%=depth%+dir%
+    IF depth%>8
+      depth%=8
+    ENDIF
+    IF depth%<2
+      depth%=2
+    ENDIF
+  CASE 5
+    difficulty%=difficulty%+dir%
+    IF difficulty%>4
+      difficulty%=4
+    ENDIF
+    IF difficulty%<1
+      difficulty%=1
+    ENDIF
+  CASE 6
+    ' jump by fives if mouse button held down long enough
+    IF (TIMER-tim%)>1000
+      maze_number%=maze_number%+dir%*5
+    ELSE
+      maze_number%=maze_number%+dir%
+    ENDIF
+  CASE 7
+    joystick!=-1-joystick!
+  CASE 8
+    joy_stick_response=joy_stick_response+dir%*0.02
+    IF joy_stick_response<0
+      joy_stick_response=0
+    ELSE IF joy_stick_response>0.4
+      joy_stick_response=0.4
+    ENDIF
+  CASE 10
+    quit%=1
+  ENDSELECT
+RETURN
+> PROCEDURE show_help(num%)
+  ' show running commentary on bottom of screen for menu.
+  DEFFILL 1
+  PBOX 10,160,310,190
+  GRAPHMODE 2
+  IF num%>0 AND num%<11
+    TEXT 10,170,help$(num%)
+  ELSE
+    TEXT 10,170,help$(0)
+  ENDIF
+  TEXT 10,180,"Click left or right button."
+  GRAPHMODE 1
+RETURN
+> PROCEDURE instructions
+  DEFFILL 0
+  PBOX 0,0,319,199
+  LOCATE 15,1
+  PRINT "3 D Maze"
+  PRINT
+  PRINT "The object is to collect the treasures"
+  PRINT "purple circles, diamonds, keys, faces."
+  PRINT "Use either arrow keys or the joystick"
+  PRINT "to move the red box along the"
+  PRINT "maze. To go to other floors, move"
+  PRINT "the red box to one of the stairs and"
+  PRINT "use the Cir Home key or the joy stick"
+  PRINT "button."
+  PRINT
+  PRINT "When running in difficult mode,"
+  PRINT "you may use the Help key."
+  PRINT
+  PRINT "Use the Undo button to abort."
+  PRINT
+  PRINT "...hit space bar to continue"
+  REPEAT
+  UNTIL INKEY$<>""
+  PBOX 0,0,319,199
+  @show_all_parameters
+RETURN
+'
+> PROCEDURE maze_documentation
+  '
+  ' The maze is made by expanding a tree from a root.
+  ' Each time we connect a new node, we look at its neighbours
+  ' and tag all the unconnected nodes which are neighbours as frontier
+  ' nodes. The next node to connect is chosen from the frontier
+  ' list. The algorithm requires some additional heuristics to
+  ' get a useful maze.
+  ' We build a maze level by level. Each level may have more
+  ' than one maze. The maze number is specified by the variable
+  ' path& associated with each maze element.
+  ' Afterwards we connect the mazes with special elevators.
+  '
+  ' The maze has width% * height% * depth nodes which must be
+  ' linked up in a tree structure. A node can be linked to one or
+  ' more of its six neighbouring nodes. These links are indicated
+  ' for every node by setting one or more of the low six bits in
+  ' each of the elements of the maze%(*) array. Though the maze
+  ' is three dimensional we store everything in one dimensional
+  ' arrays and compute the index of the desired element.
+  '
+  ' Once the connectivity of all the nodes has been established
+  ' we must map the nodes and connections into a map called
+  ' fullmaze|(*). The map is four times as large as the maze
+  ' since we now include the connections as well as the nodes.
+  ' The fullmaze|(*) array is created from the maze%(*) array by
+  ' function @expand_maze.
+  '
+  ' Each byte element of fullmaze|(*) indicates whether the spot
+  ' on the screen is a wall (0), a path (1), an up elevator (2)
+  ' a down elevator (3), an up or down elevator (4) or treasures (5
+  ' and up). The movement of the explorer is controlled by this
+  ' array.
+  '
+  ' In addition we use an other array hide!(*) in the hard level which
+  ' is used to conceal the paths in the maze and reveal them as the
+  ' explorer comes in the neighbourhood.
+  '
+RETURN
+> PROCEDURE make_maze
+  ' reset the random number generator for the next maze.
+  RANDOMIZE 10000+maze_number%
+  INC maze_number%
+  ' compute maze dimensions
+  fwidth%=width%*2+1
+  layer%=width%*height%
+  fheight%=height%*2+1
+  flayer%=fwidth%*fheight%
+  size%=layer%*depth%
+  ' put explorer at top left corner of ground floor.
+  i_explorer%=1
+  j_explorer%=1
+  k_explorer%=0
+  unused%=size%
+  xlength%=fwidth%*block_size%
+  yheight%=fheight%*block_size%
+  numpeek%=0
+  IF difficulty%=2
+    @clear_maze(TRUE)
+  ELSE
+    @clear_maze(FALSE)
+  ENDIF
+  ' build maze network.
+  @grow_maze
+  ' put additional paths if difficulty%=3 so you can sometimes escape the
+  ' monsters.
+  IF difficulty%=3
+    @make_alternates
+  ENDIF
+  ' convert maze network to map which will be displayed on screen.
+  @expand_maze
+  @drop_treasures
+  IF difficulty%=3
+    @place_monsters
+  ENDIF
+  level%=0
+  hide!(@ijk_to_index(i_explorer%,j_explorer%,k_explorer%))=FALSE
+  GRAPHMODE 0
+  @random_set
+  k_explorer%=0
+  xshift%=0
+  yshift%=0
+  @draw_full_level(level%,0)
+  ' @draw_concealed_data(level%)
+  treasures_found%=0
+RETURN
+> PROCEDURE clear_maze(hide_status!)
+  LOCAL i%
+  FOR i%=0 TO size%-1
+    maze%(i%)=0
+    frontier!(i%)=FALSE
+  NEXT i%
+  FOR i%=0 TO flayer%*depth%-1
+    full_maze|(i%)=0
+    jump_cell|(i%)=0
+    hide!(i%)=hide_status!
+    cover!(i%)=FALSE
+  NEXT i%
+RETURN
+> PROCEDURE connect(cell1%,cell2%)
+  LOCAL neigh%
+  neigh%=cell2%-cell1%
+  '  PRINT "connecting ";cell1%;" to ";cell2%;" neigh%=";neigh%
+  path&(cell1%)=path&(cell2%)
+  SELECT neigh%
+  CASE 1
+    maze%(cell1%)=BSET(maze%(cell1%),0)
+    maze%(cell2%)=BSET(maze%(cell2%),3)
+  CASE width%
+    maze%(cell1%)=BSET(maze%(cell1%),1)
+    maze%(cell2%)=BSET(maze%(cell2%),4)
+  ENDSELECT
+  SELECT -neigh%
+  CASE 1
+    maze%(cell1%)=BSET(maze%(cell1%),3)
+    maze%(cell2%)=BSET(maze%(cell2%),0)
+  CASE width%
+    maze%(cell1%)=BSET(maze%(cell1%),4)
+    maze%(cell2%)=BSET(maze%(cell2%),1)
+  ENDSELECT
+RETURN
+> PROCEDURE make_neighbour_list(cell%)
+  ' makes a list of all the four neighbours of a node in the maze.
+  LOCAL celln%
+  n_size%=0
+  celln%=cell%+1
+  IF (cell% DIV layer%)=(celln% DIV layer%)
+    IF (cell% DIV width%)=(celln% DIV width%)
+      neighbour_list%(n_size%)=celln%
+      INC n_size%
+    ENDIF
+  ENDIF
+  celln%=cell%-1
+  IF (cell% DIV layer%)=(celln% DIV layer%) AND celln%>=0
+    IF (cell% DIV width%)=(celln% DIV width%)
+      neighbour_list%(n_size%)=celln%
+      INC n_size%
+    ENDIF
+  ENDIF
+  celln%=cell%+width%
+  IF (cell% DIV layer%)=(celln% DIV layer%)
+    neighbour_list%(n_size%)=celln%
+    INC n_size%
+  ENDIF
+  celln%=cell%-width%
+  IF (cell% DIV layer%)=(celln% DIV layer%) AND celln%>=0
+    neighbour_list%(n_size%)=celln%
+    INC n_size%
+  ENDIF
+RETURN
+> PROCEDURE prune_neighbour_list(cell%)
+  ' the prune_list only includes the neighbouring nodes which
+  ' are already connected.
+  LOCAL i%
+  p_size%=0
+  FOR i%=0 TO n_size%-1
+    IF maze%(neighbour_list%(i%))<>0
+      prune_list%(p_size%)=neighbour_list%(i%)
+      INC p_size%
+    ENDIF
+  NEXT i%
+  ' a stray bug caused the program to stop here.
+  IF p_size%=0
+    PRINT cell%
+    FOR i%=0 TO n_size%-1
+      PRINT maze%(neighbour_list%(i%));" ";neighbour_list%(i%);" ";
+    NEXT i%
+  ENDIF
+RETURN
+> PROCEDURE extend_frontier(cell%)
+  ' This procedure adds the neighbours of a new node (which are
+  ' not already connected) to the set of frontier nodes.
+  LOCAL i%,cell_layer%
+  cell_layer%=cell% DIV layer%
+  FOR i%=0 TO n_size%-1
+    IF maze%(neighbour_list%(i%))=0
+      frontier!(neighbour_list%(i%))=TRUE
+    ENDIF
+  NEXT i%
+RETURN
+> PROCEDURE link_frontier(cell%)
+  LOCAL i%
+  make_neighbour_list(cell%)
+  prune_neighbour_list(cell%)
+  i%=RANDOM(p_size%)
+  connect(cell%,prune_list%(i%))
+  extend_frontier(cell%)
+  last_cell%=prune_list%(i%)
+RETURN
+> FUNCTION get_frontier_cell(level%)
+' More heuristics. We search for frontier nodes only in a specified
+' level so we can control the expansion of the maze to a particular
+' level.
+LOCAL i%,start%
+start%=level%*layer%
+FOR i%=0 TO layer%
+  IF frontier!(i%+start%)=TRUE
+    RETURN i%+start%
+  ENDIF
+  IF frontier!(start%+layer%-i%)=TRUE
+    RETURN start%+layer%-i%
+  ENDIF
+NEXT i%
+RETURN -1
+ENDFUNC
+> PROCEDURE grow_maze
+' more heuristics. We try to expand the maze at all levels
+' at the same time rather than doing the first level, second level
+' etc.
+LOCAL i%,cell%
+pathnum%=1
+FOR i%=0 TO size%-1
+  path&(i%)=0
+NEXT i%
+FOR i%=0 TO depth%-1
+  cell%=i%*layer%+RANDOM(layer%)
+  path&(cell%)=pathnum%
+  @make_neighbour_list(cell%)
+  connect(neighbour_list%(0),cell%)
+  extend_frontier(cell%)
+  DEC unused%
+  DEC unused%
+  INC pathnum%
+  cell%=i%*layer%+RANDOM(layer%)
+  path&(cell%)=pathnum%
+  @make_neighbour_list(cell%)
+  connect(neighbour_list%(0),cell%)
+  extend_frontier(cell%)
+  DEC unused%
+  DEC unused%
+  INC pathnum%
+NEXT i%
+TEXT 20,100,"Computing maze ..."
+FOR level%=0 TO depth%-1
+  FOR i%=0 TO layer%-1
+    cell%=@get_frontier_cell(level%)
+    IF cell%>=0
+      DEC unused%
+      frontier!(cell%)=FALSE
+      link_frontier(cell%)
+      TEXT 140,100,SPACE$(5)
+      TEXT 140,100,STR$(unused%)
+    ENDIF
+  NEXT i%
+NEXT level%
+@putelevators
+RETURN
+> PROCEDURE putelevators
+' The function puts stairs to join the paths together.
+' Initially pathconnect% is set to the path number. When
+' two paths are connected, their path numbers are set to
+' the minimum path number of the two paths. Eventually when
+' all the paths are connected, the path numbers should all
+' be one. When we connect a path we record from bit 6 to 32
+' in maze% array, the address in linkcell% where the cell
+' numbers linking the two ends of the stairs. This information
+' will also be copied into the jump_cell array when we expand
+' the maze.
+LOCAL i%,j%,k%
+LOCAL m1%,m2%
+linkcount%=0
+FOR k%=1 TO pathnum%
+  pathconnect%(k%)=k%
+NEXT k%
+'  FOR k%=1 TO size%-1
+' PRINT path&(k%);" ";
+' NEXT k%
+FOR j%=0 TO size%-1
+  i%=j%*41 MOD size%
+  m1%=i%
+  m2%=RANDOM(size%)
+  IF path&(m1%)<>path&(m2%)
+    IF pathconnect%(path&(m1%))<>pathconnect%(path&(m2%))
+      IF BTST(maze%(m1%),5)=FALSE AND BTST(maze%(m2%),5)=FALSE
+        join_paths(m1%,m2%)
+      ENDIF
+    ENDIF
+  ENDIF
+NEXT j%
+'  FOR k%=1 TO pathnum%
+' PRINT pathconnect%(k%);" ";
+' NEXT k%
+'  STOP
+RETURN
+> PROCEDURE join_paths(m1%,m2%)
+' places links between the two stops of the elevator.
+LOCAL small%,large%
+LOCAL xf%,zf%,yf%
+maze%(m1%)=BSET(maze%(m1%),5)
+maze%(m2%)=BSET(maze%(m2%),5)
+INC linkcount%
+xf%=(m2% MOD width%)*2+1
+yf%=((m2% MOD layer%) DIV width%)*2+1
+zf%=(m2% DIV layer%)
+linkcell%(linkcount%)=@ijk_to_index(xf%,yf%,zf%)
+maze%(m1%)=maze%(m1%)+linkcount%*64
+INC linkcount%
+xf%=(m1% MOD width%)*2+1
+yf%=((m1% MOD layer%) DIV width%)*2+1
+zf%=(m1% DIV layer%)
+linkcell%(linkcount%)=@ijk_to_index(xf%,yf%,zf%)
+maze%(m2%)=maze%(m2%)+linkcount%*64
+small%=MIN(pathconnect%(path&(m1%)),pathconnect%(path&(m2%)))
+large%=MAX(pathconnect%(path&(m1%)),pathconnect%(path&(m2%)))
+FOR k%=1 TO pathnum%
+  IF pathconnect%(k%)=large%
+    pathconnect%(k%)=small%
+  ENDIF
+NEXT k%
+RETURN
+> PROCEDURE expand_maze
+' copy maze% data into full_maze|
+' full_maze| contains the maze nodes as well as the paths joining them.
+LOCAL i%,xf%,yf%,zf%,index%
+FOR i%=0 TO size%-1
+  xf%=(i% MOD width%)*2+1
+  yf%=((i% MOD layer%) DIV width%)*2+1
+  zf%=(i% DIV layer%)
+  IF maze%(i%)<>0
+    index%=xf%+yf%*fwidth%+flayer%*zf%
+    full_maze|(index%)=1
+  ENDIF
+  IF BTST(maze%(i%),0)=TRUE
+    full_maze|(1+index%)=1
+  ENDIF
+  IF BTST(maze%(i%),3)=TRUE
+    full_maze|(index%-1)=1
+  ENDIF
+  IF BTST(maze%(i%),1)=TRUE
+    full_maze|(index%+fwidth%)=1
+  ENDIF
+  IF BTST(maze%(i%),4)=TRUE
+    full_maze|(index%-fwidth%)=1
+  ENDIF
+  IF BTST(maze%(i%),2)=TRUE
+    jump_cell|(index%)=maze%(i%) DIV 64
+    '     PRINT jump_cell|(index%)
+    full_maze|(index%)=2
+  ENDIF
+  IF BTST(maze%(i%),5)=TRUE
+    jump_cell|(index%)=maze%(i%) DIV 64
+    '      PRINT jump_cell|(index%)
+    IF full_maze|(index%)=2
+      full_maze|(index%)=4
+    ELSE
+      full_maze|(index%)=3
+    ENDIF
+  ENDIF
+NEXT i%
+RETURN
+> PROCEDURE drop_treasures
+' we drop treasures at random putting proportionally fewer treasures
+' for larger mazes.
+LOCAL i%,top%,level%
+ntreasures%=0
+top%=0.05*size%+8
+FOR i%=0 TO size%*4
+  IF full_maze|(i%)==1 AND ntreasures%<26
+    IF RANDOM(top%)<1
+      full_maze|(i%)=5+RANDOM(4)
+      INC ntreasures%
+    ENDIF
+  ENDIF
+NEXT i%
+RETURN
+> PROCEDURE make_alternates
+LOCAL i%,j%,xf%,yf%
+LOCAL nalt%
+nalt%=0
+REPEAT
+  DO
+    i%=RAND(size%)
+    xf%=(i% MOD width%)*2+1
+    yf%=((i% MOD layer%) DIV width%)*2+1
+  LOOP UNTIL xf%>1 AND xf%<fwidth%-2 AND yf%>1 AND yf%<fheight%-2
+  j%=RAND(4)
+  IF BTST(maze%(i%),j)=FALSE
+    maze%(i%)=BSET(maze%(i%),j)
+    INC nalt%
+  ENDIF
+UNTIL nalt%=10
+RETURN
+> PROCEDURE place_monsters
+' place the monsters in random places in the maze.
+LOCAL index%,size4%
+size4%=flayer%*depth%
+FOR i%=0 TO num_monsters%
+  REPEAT
+    index%=RANDOM(size4%)
+  UNTIL full_maze|(index%)=1
+  monsters%(i%)=index%
+  monsters_dir%(i%)=1
+NEXT i%
+RETURN
+> PROCEDURE send_explorer
+' if the explorer hits the monster, the explorer it sent to a random
+' spot in the maze.
+LOCAL index%,size4%
+size4%=flayer%*depth%
+REPEAT
+  index%=RANDOM(size4%)
+UNTIL full_maze|(index%)=1
+k_explorer%=index% DIV flayer%
+j_explorer%=(index% DIV fwidth%) MOD fheight%
+i_explorer%=index% MOD fwidth%
+draw_full_level(k_explorer%,1)
+RETURN
+'
+> PROCEDURE draw_block_outline(i%,j%,code|)
+x%=block_size%*i%+10
+y%=block_size%*j%+10
+SELECT code|
+CASE 0
+  DEFFILL 0
+  GOTO draw_outline_exit
+CASE 1,5
+  DEFFILL 1,1
+CASE 2
+  DEFFILL 1,2,4
+CASE 3
+  DEFFILL 1,2,3
+CASE 4
+  DEFFILL 1,2,5
+ENDSELECT
+BOX x%,y%,x%+block_size%-1,y%+block_size%-1
+IF code|>5
+  DEFFILL 3
+  BOX x%+2,y%+2,x%+block_size%-3,y%+block_size%-3
+ENDIF
+draw_outline_exit:
+RETURN
+> PROCEDURE draw_block(i%,j%,code|,index%)
+x%=block_size%*i%+10
+y%=block_size%*j%+10
+SELECT code|
+CASE 0
+  DEFFILL 0
+  PUT x%,y%,cellpat$(cell_set%(k_explorer%))
+  GOTO draw_block_exit
+CASE 1,5
+  DEFFILL 1,1
+  COLOR 5
+  PLOT x%+6,y%+6
+CASE 2
+  DEFFILL 1,3,4
+CASE 3
+  DEFFILL 1,3,5
+CASE 4
+  DEFFILL 1,3,12
+ENDSELECT
+PBOX x%,y%,x%+block_size%-1,y%+block_size%-1
+IF cover!(index%)=FALSE
+  COLOR 5
+  PLOT x%+6,y%+6
+ENDIF
+IF code|>4
+  DEFFILL 3
+  PUT x%,y%,treasures$(code|-5)
+  '    PBOX x%+2,y%+2,x%+block_size%-3,y%+block_size%-3
+ENDIF
+draw_block_exit:
+RETURN
+> PROCEDURE draw_shifted_block(i%,j%,code|,index%)
+x%=block_size%*i%+10+xshift%
+y%=block_size%*j%+10+yshift%
+SELECT code|
+CASE 0
+  DEFFILL 0
+  PUT x%,y%,cellpat$(cell_set%(k_explorer%))
+  GOTO draw_shifted_block_exit
+CASE 1,5
+  DEFFILL 1,1
+  COLOR 5
+  PLOT x%+6,y%+6
+CASE 2
+  DEFFILL 1,3,4
+CASE 3
+  DEFFILL 1,3,5
+CASE 4
+  DEFFILL 1,3,12
+ENDSELECT
+PBOX x%,y%,x%+block_size%-1,y%+block_size%-1
+IF cover!(index%)=FALSE
+  COLOR 5
+  PLOT x%+6,y%+6
+ENDIF
+IF code|>4
+  DEFFILL 3
+  PUT x%,y%,treasures$(code|-5)
+  '    PBOX x%+2,y%+2,x%+block_size%-3,y%+block_size%-3
+ENDIF
+draw_shifted_block_exit:
+RETURN
+> PROCEDURE draw_concealed_data(num%)
+LOCAL shift%,i%,ix%,iy%
+shift%=flayer%*num%
+FOR i%=0 TO flayer%-1
+  ix%=i% MOD fwidth%
+  iy%=i% DIV fwidth%
+  IF hide!(i%+shift%)=TRUE
+    draw_block_outline(ix%,iy%,full_maze|(shift%+i%))
+  ENDIF
+NEXT i%
+RETURN
+> PROCEDURE draw_full_level(num%,manner%)
+LOCAL shift%,i%,ix%,iy%
+~XBIOS(5,L:map_ptr%,L:-1,-1)
+DEFFILL 10
+PBOX 0,0,fwidth%*12+20,fheight%*12+20
+shift%=flayer%*num%
+FOR i%=0 TO flayer%-1
+  ix%=i% MOD fwidth%
+  iy%=i% DIV fwidth%
+  IF hide!(i%+shift%)=FALSE
+    draw_block(ix%,iy%,full_maze|(shift%+i%),shift%+i%)
+  ELSE
+    draw_block(ix%,iy%,0,shift%+i%)
+  ENDIF
+NEXT i%
+IF difficulty%=3
+  @draw_monsters
+ENDIF
+IF difficulty%<4
+  @reveal(0,0,319,180,manner%)
+  '    GET 0,0,319,180,section$
+  '   ~XBIOS(5,L:logbase%,L:-1,-1)
+  '    PUT 0,0,section$
+ELSE
+  ~XBIOS(5,L:logbase%,L:-1,-1)
+ENDIF
+RETURN
+> PROCEDURE display_map(x%,y%)
+~XBIOS(5,L:map_ptr%,L:-1,-1)
+GET x%,y%,120+x%,96+y%,section$
+~XBIOS(5,L:logbase%,L:-1,-1)
+PUT 50,50,section$
+RETURN
+> PROCEDURE save_map(x%,y%)
+GET 50,50,170,146,section$
+~XBIOS(5,L:map_ptr%,L:-1,-1)
+PUT x%,y%,section$
+~XBIOS(5,L:logbase%,L:-1,-1)
+RETURN
+> PROCEDURE slide_map(new%,manner%)
+' scrolls map of maze around explorer when explorer moves more
+' than one step from the center. (difficulty%=4)
+' The variable new% indicates whether we have just started or
+' taken an elevator a new level. If new%=1, then we do not save
+' the displayed portion of the screen. The variable manner% passes
+' to the function reveal(manner%) how to reveal the screen using
+' special effects.
+LOCAL dif%,xb%,yb%,i%,f
+xcen%=i_explorer%
+ycen%=j_explorer%
+IF xcen%<xcen_min%
+  xcen%=xcen_min%
+ENDIF
+IF xcen%>xcen_max%
+  xcen%=xcen_max%
+ENDIF
+IF ycen%<ycen_min%
+  ycen%=ycen_min%
+ENDIF
+IF ycen%>ycen_max%
+  ycen%=ycen_max%
+ENDIF
+dif%=ABS(xcen%-xcen_old%)+ABS(ycen%-ycen_old%)
+IF (dif%>1 OR new%=1)
+  IF new%=0
+    @save_map(xbase%,ybase%)
+    xb%=xbase%
+    yb%=ybase%
+    xbase%=(xcen%-map_width%/2)*block_size%
+    ybase%=(ycen%-map_height%/2)*block_size%
+    FOR i%=1 TO 10
+      f=i%/10
+      @display_map(xb%*(1-f)+f*xbase%+0.1,yb%*(1-f)+f*ybase%+0.1)
+    NEXT i%
+  ELSE
+    xbase%=(xcen%-map_width%/2)*block_size%
+    ybase%=(ycen%-map_height%/2)*block_size%
+    @reveal(xbase%,ybase%,xbase%+120,ybase%+96,manner%)
+  ENDIF
+  xshift%=50-xbase%
+  yshift%=50-ybase%
+  xcen_old%=xcen%
+  ycen_old%=ycen%
+ENDIF
+RETURN
+> PROCEDURE blacken(x1%,y1%,x2%,y2%,m%)
+' The function blackens a rectangle in the screen in one of
+' four manners selected by the variable m%  The screen is
+' blackened with a series of expanding rectangles.
+LOCAL i%,a%,b%,c%,d%
+DEFFILL 1
+SELECT m%
+CASE 1
+  FOR i%=1 TO 10
+    a%=i%/10*(y2%-y1%)+y1%
+    VSYNC
+    PBOX x1%,y1%,x2%,a%
+  NEXT i%
+CASE 2
+  FOR i%=1 TO 10
+    a%=i%/10*(y2%-y1%)+y1%
+    b%=i%/10*(x2%-x1%)+x1%
+    VSYNC
+    PBOX x1%,y1%,b%,a%
+  NEXT i%
+CASE 3
+  a%=(x1%+x2%) DIV 2
+  b%=(y1%+y2%) DIV 2
+  c%=(x2%-x1%) DIV 24
+  d%=(y2%-y1%) DIV 24
+  FOR i%=1 TO 12
+    VSYNC
+    PBOX a%-c%*i%,b%-d%*i%,a%+c%*i%,b%+d%*i%
+  NEXT i%
+  PBOX x1%,y1%,x2%,y2%
+DEFAULT
+  FOR i%=1 TO 10
+    a%=i%/10*(x2%-x1%)+x1%
+    VSYNC
+    PBOX x1%,y1%,a%,y2%
+  NEXT i%
+ENDSELECT
+RETURN
+> PROCEDURE reveal(x1%,y1%,x2%,y2%,m%)
+' Reveals the map of the next level. To make things interesting,
+' the map is revealed gradually in one of five manners chosen
+' by the variable m%. x1%,y1%,x2%,y2% are the coordinates of the
+' rectangle to be displayed. To reveal a map, we must grab the
+' portion from mapscreen% and put it in the logical screen.
+LOCAL i%,a%,b%
+SELECT m%
+  ' left to right
+CASE 1
+  FOR i%=1 TO 24
+    ~XBIOS(5,L:map_ptr%,L:-1,-1)
+    a%=i%/24*(x2%-x1%)+x1%
+    GET x1%,y1%,a%,y2%,section$
+    ~XBIOS(5,L:logbase%,L:-1,-1)
+    IF difficulty%=4
+      PUT 50,50,section$
+    ELSE
+      PUT 0,0,section$
+    ENDIF
+  NEXT i%
+  ' expanding rectangle
+CASE 2
+  FOR i%=1 TO 24
+    ~XBIOS(5,L:map_ptr%,L:-1,-1)
+    a%=i%/24*(x2%-x1%)+x1%
+    b%=i%/24*(y2%-y1%)+y1%
+    GET x1%,y1%,a%,b%,section$
+    ~XBIOS(5,L:logbase%,L:-1,-1)
+    IF difficulty%=4
+      PUT 50,50,section$
+    ELSE
+      PUT 0,0,section$
+    ENDIF
+  NEXT i%
+  ' expanding rectangle with moving map.
+CASE 3
+  FOR i%=1 TO 24
+    ~XBIOS(5,L:map_ptr%,L:-1,-1)
+    a%=x2%-i%/24*(x2%-x1%)
+    b%=y2%-i%/24*(y2%-y1%)
+    GET a%,b%,x2%,y2%,section$
+    ~XBIOS(5,L:logbase%,L:-1,-1)
+    IF difficulty%=4
+      PUT 50,50,section$
+    ELSE
+      PUT 0,0,section$
+    ENDIF
+  NEXT i%
+  ' top to bottom with moving map
+CASE 4
+  FOR i%=1 TO 24
+    ~XBIOS(5,L:map_ptr%,L:-1,-1)
+    b%=y2%-i%/24*(y2%-y1%)
+    GET x1%,b%,x2%,y2%,section$
+    ~XBIOS(5,L:logbase%,L:-1,-1)
+    IF difficulty%=4
+      PUT 50,50,section$
+    ELSE
+      PUT 0,0,section$
+    ENDIF
+  NEXT i%
+  ' top to bottom
+DEFAULT
+  FOR i%=1 TO 24
+    ~XBIOS(5,L:map_ptr%,L:-1,-1)
+    a%=i%/24*(y2%-y1%)+y1%
+    GET x1%,y1%,x2%,a%,section$
+    ~XBIOS(5,L:logbase%,L:-1,-1)
+    IF difficulty%=4
+      PUT 50,50,section$
+    ELSE
+      PUT 0,0,section$
+    ENDIF
+  NEXT i%
+ENDSELECT
+RETURN
+'
+> PROCEDURE draw_monsters
+LOCAL n%
+FOR n%=0 TO num_monsters%
+  draw_monster(n%)
+NEXT n%
+RETURN
+> PROCEDURE draw_monster(n%)
+' draws all monsters visible at level k%
+LOCAL i%,j%,k%
+LOCAL ind%,x%,y%
+ind%=monsters%(n%)
+k%=ind% DIV flayer%
+j%=(ind% DIV fwidth%) MOD fheight%
+i%=ind% MOD fwidth%
+IF k%=k_explorer%
+  x%=block_size%*i%+10
+  y%=block_size%*j%+10
+  PUT x%,y%,monstpat$(0)
+ENDIF
+RETURN
+> PROCEDURE move_monsters
+LOCAL n%
+FOR n%=0 TO num_monsters%
+  @move_monster(n%)
+NEXT n%
+RETURN
+> PROCEDURE move_monster(num%)
+' the monster keeps on going in the same direction until it
+' hits a barrier. If it hits a barrier it chooses a new direction
+' at random. Also monster checks whether it encounters the explorer
+' and sends him somewhere else.
+LOCAL n%,i%,j%,k%,i_to%,j_to%,k_to%
+LOCAL ind%,x%,y%
+ind%=monsters%(num%)
+k%=ind% DIV flayer%
+j%=(ind% DIV fwidth%) MOD fheight%
+i%=ind% MOD fwidth%
+i_to%=i%
+j_to%=j%
+SELECT monsters_dir%(num%)
+CASE 0
+  i_to%=i%-1
+CASE 1
+  j_to%=j%-1
+CASE 2
+  i_to%=i%+1
+CASE 3
+  j_to%=j%+1
+ENDSELECT
+IF @ok_to_move(i_to%,j_to%,k%)
+  monsters%(num%)=@ijk_to_index(i_to%,j_to%,k%)
+  IF k_explorer%=k%
+    draw_block(i%,j%,full_maze|(ind%),ind%)
+    draw_monster(num%)
+    IF j_explorer%=j_to% AND i_explorer%=i_to%
+      SOUND 0,15,1,2,20
+      SOUND 0,0,1,4,0
+      @send_explorer
+      @draw_explorer
+    ENDIF
+  ENDIF
+ELSE
+  monsters_dir%(num%)=RAND(4)
+ENDIF
+RETURN
+> PROCEDURE erase_monster(num%)
+LOCAL ind%,i%,j%,k%
+ind%=monsters%(num%)
+k%=ind% DIV flayer%
+j%=(ind% DIV fwidth%) MOD fheight%
+i%=ind% MOD fwidth%
+IF k_explorer%=k%
+  draw_block(i%,j%,full_maze|(ind%),ind%)
+ENDIF
+RETURN
+> PROCEDURE erase_monsters
+LOCAL n%
+FOR n%=0 TO num_monsters%
+  @erase_monster(n%)
+NEXT n%
+RETURN
+'
+> PROCEDURE run_maze
+LOCAL i%,x%
+xcen_min%=map_width%/2
+ycen_min%=map_height%/2
+xcen_max%=fwidth%-xcen_min%+1
+ycen_max%=fheight%-ycen_min%+1
+' bx1%...by2% specify the rectangle to blacken out.
+IF difficulty%<4
+  bx1%=10
+  by1%=10
+  bx2%=bx1%+fwidth%*block_size%
+  by2%=by1%+fheight%*block_size%
+ELSE
+  bx1%=50
+  by1%=50
+  bx2%=bx1%+map_width%*block_size%
+  by2%=by1%+map_height%*block_size%
+ENDIF
+HIDEM
+SETMOUSE 0,199
+exit%=0
+x%=12*ntreasures%
+IF x%>319
+  x%=319
+ENDIF
+' draw a black rectangle where we put our treasures.
+DEFFILL 1,1
+PBOX 0,185,x%,199
+step=0
+' put an interesting background on the screen for difficulty%=4
+IF difficulty%=4
+  DEFFILL 12+RANDOM(3)
+  PBOX 0,0,319,199
+  GRAPHMODE 2
+  DEFFILL 2+RANDOM(6),2,style%(RANDOM(5))
+  PBOX 0,0,319,199
+  GRAPHMODE 1
+  DEFFILL 12,2,8
+  PBOX 40,40,180,156
+  DEFFILL 1
+  PBOX 0,185,x%,199
+  @slide_map(1,1)
+  TEXT 170,20,"Press Undo to quit"
+ENDIF
+@draw_explorer
+'
+'
+'  main loop
+'
+REPEAT
+  IF joystick!=FALSE
+    t$=INKEY$
+    IF t$<>""
+      scancode%=CVI(t$)
+      @shift_explorer(scancode%)
+      IF difficulty%=3
+        ' every 20 moves, the monster goes to some other place in the maze.
+        IF (step MOD 20)=0
+          @erase_monsters
+          @place_monsters
+        ELSE
+          @move_monsters
+        ENDIF
+      ENDIF
+    ENDIF
+  ELSE
+    '
+    scancode%=@stick_handler
+    IF scancode%<>0
+      ' dont use pause or else problems with joystick handler
+      @shift_explorer(scancode%)
+      DELAY joy_stick_response
+      IF difficulty%=3
+        IF (step MOD 20)=0
+          @erase_monsters
+          @place_monsters
+        ELSE
+          @move_monsters
+        ENDIF
+      ENDIF
+    ENDIF
+    STICK 0
+  ENDIF
+  '
+  ' rem to press the F1 key for cheating
+  IF scancode%=59
+    level%=level%+1
+    IF level%>=depth%
+      level%=0
+    ENDIF
+    k_explorer%=level%
+    @draw_full_level(level%,1)
+    IF difficulty%=4
+      slide_map(1,last_index% MOD 5)
+    ENDIF
+    @draw_explorer
+    scancode%=0
+  ENDIF
+  '
+UNTIL (treasures_found%=ntreasures%) OR exit%=1
+GRAPHMODE 0
+PAUSE 15
+RETURN
+> PROCEDURE draw_explorer
+' draws a red rectangle representing the explorer.
+x%=block_size%*i_explorer%+10+xshift%
+y%=block_size%*j_explorer%+10+yshift%
+DEFFILL 2,1
+PBOX x%+2,y%+2,x%+block_size%-3,y%+block_size%-3
+IF difficulty%=2
+  unhide(i_explorer%,j_explorer%,k_explorer%)
+ENDIF
+RETURN
+> FUNCTION ijk_to_index(i%,j%,k%)
+' converts maze coordinates to address in the full_maze| array.
+RETURN k%*flayer%+j%*fwidth%+i%
+ENDFUNC
+> FUNCTION ok_to_move(i%,j%,k%)
+' ok for explorer to move to i%,j%,k% coordinates ?
+LOCAL index%,last_index%
+IF k%<0 OR k%>=depth%
+RETURN FALSE
+ENDIF
+IF j%<0 OR j%>=fheight%
+RETURN FALSE
+ENDIF
+IF i%<0 OR i%>=fwidth%
+RETURN FALSE
+ENDIF
+index%=@ijk_to_index(i%,j%,k%)
+IF full_maze|(index%)<1
+RETURN FALSE
+ENDIF
+'  last_index%=@ijk_to_index(i_explorer%,j_explorer%,k_explorer%)
+' IF k%<k_explorer%
+' IF full_maze|(last_index%)=3 OR full_maze|(last_index%)=4
+RETURN TRUE
+' ELSE
+' RETURN FALSE
+' ENDIF
+' ENDIF
+'  IF k%>k_explorer%
+' IF full_maze|(last_index%)=2 OR full_maze|(last_index%)=4
+' RETURN TRUE
+' ELSE
+' RETURN FALSE
+' ENDIF
+' ENDIF
+RETURN TRUE
+ENDFUNC
+> FUNCTION stick_handler
+' returns status of joystick.
+LOCAL i%
+move%=STICK(1)
+SELECT move%
+CASE 1
+RETURN 72
+CASE 2
+RETURN 80
+CASE 4
+RETURN 75
+CASE 8
+RETURN 77
+DEFAULT
+FOR i%=0 TO 20
+IF STRIG(1)=TRUE
+RETURN 71
+ENDIF
+t$=INKEY$
+IF t$<>""
+scancode%=CVI(t$)
+RETURN scancode%
+ENDIF
+NEXT i%
+ENDSELECT
+RETURN 0
+ENDFUNC
+> PROCEDURE shift_explorer(scancode%)
+LOCAL i%,j%,k%,m%,index%,last_index%,code|
+i%=i_explorer%
+j%=j_explorer%
+k%=k_explorer%
+last_index%=@ijk_to_index(i%,j%,k%)
+cover!(last_index%)=TRUE
+'
+SELECT scancode%
+CASE 71
+' take elevator (or transporter)
+IF full_maze|(last_index%)=3 OR full_maze|(last_index%)=4
+index%=linkcell%(jump_cell|(last_index%))
+k%=index% DIV flayer%
+j%=(index% MOD flayer%) DIV fwidth%
+i%=index% MOD fwidth%
+k_explorer%=k%
+i_explorer%=i%
+j_explorer%=j%
+@blacken(bx1%,by1%,bx2%,by2%,last_index% MOD 4)
+draw_full_level(k%,last_index% MOD 5)
+IF difficulty%=4
+slide_map(1,last_index% MOD 5)
+ENDIF
+ENDIF
+'
+CASE 72
+DEC j%
+CASE 75
+DEC i%
+CASE 77
+INC i%
+CASE 80
+INC j%
+CASE 97
+exit%=1
+CASE 98
+INC numpeeks%
+IF difficulty%=2
+draw_concealed_data(k%)
+ENDIF
+ENDSELECT
+' if legal move, move the explorer.
+IF k%>=0 AND k%<depth%
+IF j%>=0 AND j%<fheight%
+IF i%>=0 AND i%<fwidth%
+index%=@ijk_to_index(i%,j%,k%)
+'
+' picked treasure ?
+IF full_maze|(last_index%)>4
+  DEFFILL 3
+  code|=full_maze|(last_index%)
+  PUT treasures_found%*12,186,treasures$(code|-5)
+  full_maze|(last_index%)=1
+  INC treasures_found%
+  SOUND 0,10,1,7,5
+  SOUND 0,0,1,4,0
+ENDIF
+IF difficulty%=3
+  '
+  ' hit monster?
+  FOR m%=0 TO num_monsters%
+    IF monsters%(m%)=index%
+      SOUND 0,15,1,2,20
+      SOUND 0,0,1,4,0
+      @send_explorer
+      index%=@ijk_to_index(i_explorer%,j_explorer%,k_explorer%)
+    ENDIF
+  NEXT m%
+ENDIF
+'
+' draw block uncovered by explorer
+IF full_maze|(index%)<>0
+  IF difficulty%=4
+    draw_shifted_block(i_explorer%,j_explorer%,full_maze|(last_index%),last_index%)
+  ELSE
+    draw_block(i_explorer%,j_explorer%,full_maze|(last_index%),last_index%)
+  ENDIF
+  i_explorer%=i%
+  j_explorer%=j%
+  IF difficulty%=4
+    @slide_map(0,0)
+  ENDIF
+  @draw_explorer
+  INC step
+ENDIF
+ENDIF
+ENDIF
+ENDIF
+shift_exit:
+RETURN
+> PROCEDURE unhide(i%,j%,k%)
+' for difficulty%=2 this function reveals the neighbourhood around
+' the explorer.
+LOCAL i1%,j1%,shift%,index%
+hide!(@ijk_to_index(i%,j%,k%))=FALSE
+i1%=i%-1
+IF i1%>=0
+index%=@ijk_to_index(i1%,j%,k%)
+hide!(index%)=FALSE
+draw_block(i1%,j%,full_maze|(index%),index%)
+ENDIF
+i1%=i%+1
+IF i1%<fwidth%
+index%=@ijk_to_index(i1%,j%,k%)
+hide!(index%)=FALSE
+draw_block(i1%,j%,full_maze|(index%),index%)
+ENDIF
+j1%=j%-1
+IF j1%>=0
+index%=@ijk_to_index(i%,j1%,k%)
+hide!(index%)=FALSE
+draw_block(i%,j1%,full_maze|(index%),index%)
+ENDIF
+j1%=j%+1
+IF j1%<fheight%
+index%=@ijk_to_index(i%,j1%,k%)
+hide!(@ijk_to_index(i%,j1%,k%))=FALSE
+draw_block(i%,j1%,full_maze|(index%),index%)
+ENDIF
+RETURN
+> PROCEDURE read_cellpat
+' the wall textures are read from data statements and put
+' into the strings for cellpat$ so that they can be painted
+' on the screen using PUT.
+LOCAL num%,i%,j%
+numcells%=21
+FOR j%=0 TO numcells%-1
+cellpat$(j%)=""
+FOR i%=1 TO 102
+READ num%
+cellpat$(j%)=cellpat$(j%)+CHR$(num%)
+NEXT i%
+NEXT j%
+FOR j%=0 TO 3
+treasures$(j%)=""
+FOR i%=1 TO 102
+READ num%
+treasures$(j%)=treasures$(j%)+CHR$(num%)
+NEXT i%
+NEXT j%
+j%=0
+monstpat$(j%)=""
+FOR i%=1 TO 102
+READ num%
+monstpat$(j%)=monstpat$(j%)+CHR$(num%)
+NEXT i%
+' window
+DATA 0,11,0,11,0,4,255,240,255,240,0,0,0,0,255,240,255,240,0,0,0,0,255,240,255
+DATA 240,127,192,127,192,255,240,255,240,127,192,127,192,255,240,255,240,127,192,127,192,255,240,255,240
+DATA 127,192,127,192,255,240,255,240,127,192,127,192,255,240,255,240,127,192,127,192,255,240,255,240,127
+DATA 192,127,192,255,240,255,240,127,192,127,192,255,240,255,240,127,192,127,192,255,240,255,240,0,0
+DATA 0,0
+' hooks
+DATA 0,11,0,11,0,4,255,246,245,244,243,254,241,244,255,252,245,248,243,246,241,244,255,254,245
+DATA 244,243,246,241,248,255,246,246,118,241,248,240,122,255,252,243,60,240,254,240,62,255,254,253,220
+DATA 252,50,252,16,255,126,134,110,134,26,134,14,255,240,187,108,131,28,131,10,255,250,69,108,57
+DATA 28,1,6,127,186,82,44,60,20,16,10,255,252,187,206,124,54,56,6,255,246,185,156,126,122
+DATA 56,16
+' grating
+DATA 0,11,0,11,0,4,10,6,14,4,10,14,10,4,21,6,31,8,21,6,17,6,42,136,59
+DATA 138,46,140,32,140,85,78,117,206,95,78,68,76,174,162,238,224,187,174,138,46,95,90,223,126
+DATA 113,208,17,28,175,172,239,186,184,234,136,140,87,92,119,118,93,218,69,28,42,164,58,234,47
+DATA 172,34,46,21,70,29,198,23,70,16,76,10,138,15,128,10,140,8,138,5,6,7,14,5,10
+DATA 5,10
+' checkers
+DATA 0,11,0,11,0,4,255,246,252,4,255,254,252,4,143,246,140,8,142,22,140,6,143,56,140
+DATA 10,142,28,140,12,143,62,140,14,142,30,140,12,255,242,252,0,254,30,252,14,255,250,252,14
+DATA 255,240,252,12,255,252,3,250,255,250,3,252,255,252,3,246,135,250,3,252,207,20,3,26,135
+DATA 28,3,30,207,22,3,22,135,22,3,28,255,26,3,16,135,28,3,26,255,246,3,254,255,250
+DATA 3,250
+' flower
+DATA 0,11,0,11,0,4,255,254,255,254,255,254,255,252,255,242,255,240,255,254,255,254,255,250,227
+DATA 254,227,240,227,252,255,252,224,250,228,250,224,252,255,252,224,54,228,58,224,60,255,244,230,58
+DATA 225,188,224,62,255,246,224,54,228,54,128,60,207,250,240,240,196,252,0,250,223,246,241,254,209
+DATA 250,1,250,159,254,255,248,159,248,15,248,191,244,255,248,191,254,15,248,127,254,255,248,127,244
+DATA 63,248
+' cheese
+DATA 0,11,0,11,0,4,0,0,207,240,253,240,0,0,0,0,255,240,127,208,0,0,0,0,198
+DATA 48,255,240,0,0,0,0,230,48,255,240,0,0,0,0,255,48,191,208,0,0,0,0,63,224
+DATA 251,240,0,0,0,0,127,96,255,240,0,0,0,0,231,48,255,240,0,0,0,0,231,240,191
+DATA 240,0,0,0,0,255,240,253,208,0,0,0,0,254,112,247,240,0,0,0,0,206,80,127,224
+DATA 0,0
+' spiral
+DATA 0,11,0,11,0,4,255,240,255,240,255,240,0,0,255,240,255,240,255,240,255,224,255,240,255
+DATA 240,255,240,128,32,255,240,255,240,255,240,191,160,255,240,255,240,255,240,160,160,255,240,255,240
+DATA 255,240,174,160,255,240,255,240,255,240,174,160,255,240,255,240,255,240,168,160,255,240,255,240,255
+DATA 240,175,160,255,240,255,240,255,240,160,32,255,240,255,240,255,240,191,224,255,240,255,240,255,240
+DATA 128,0
+' stripes
+DATA 0,11,0,11,0,4,135,224,25,128,225,240,1,128,15,192,51,0,195,240,3,0,31,128,102
+DATA 16,135,224,6,0,63,0,204,48,15,192,12,0,126,16,152,96,31,128,24,0,252,48,48,192
+DATA 63,0,48,0,248,112,97,144,126,16,96,16,240,240,195,48,252,48,192,48,225,240,134,96,248
+DATA 112,128,96,195,240,12,192,240,240,0,192,135,224,25,128,225,240,1,128,15,192,51,0,195,240
+DATA 3,0
+' grass
+DATA 0,11,0,11,0,4,0,0,49,0,0,0,0,0,0,0,38,128,0,0,0,0,0,0,32
+DATA 128,4,0,0,0,0,0,96,224,3,0,0,0,0,0,16,144,13,0,0,0,0,0,20,0
+DATA 1,0,0,0,0,0,70,32,0,128,0,0,0,0,2,32,28,128,0,0,0,0,2,144,32
+DATA 64,0,0,0,0,81,0,8,0,0,0,0,0,96,192,8,0,0,0,0,0,16,64,0,0
+DATA 0,0
+' rocks
+DATA 0,11,0,11,0,4,0,0,0,0,0,8,0,6,0,6,63,140,63,134,0,0,0,8,127
+DATA 200,127,204,0,0,0,12,127,232,127,230,0,2,0,0,125,232,127,224,0,8,0,0,122,104
+DATA 127,230,0,12,0,6,119,108,127,224,0,6,0,8,121,230,127,224,0,8,0,8,123,236,127
+DATA 224,0,12,0,4,63,232,63,230,0,2,0,0,31,200,31,192,0,8,0,0,0,8,0,6
+DATA 0,12
+' dots
+DATA 0,11,0,11,0,4,255,248,255,248,255,244,255,248,221,222,221,216,255,254,221,216,136,132,170
+DATA 168,255,254,136,136,221,222,221,218,255,250,221,208,255,242,255,252,255,246,255,252,221,214,221,216
+DATA 255,252,221,222,136,142,170,174,255,254,136,140,221,220,221,212,255,248,221,212,255,252,255,252,255
+DATA 244,255,252,221,212,221,216,255,244,221,220,136,140,170,172,255,254,136,136,221,216,221,212,255,248
+DATA 221,218
+' blanket
+DATA 0,11,0,11,0,4,60,8,3,200,192,52,0,8,60,14,3,200,192,62,0,8,60,4,3
+DATA 200,192,62,0,8,60,14,3,202,192,58,0,0,3,194,192,60,60,6,0,12,3,198,192,56
+DATA 60,12,0,14,3,206,192,62,60,14,0,12,3,204,192,52,60,8,0,4,192,60,60,12,3
+DATA 196,0,12,192,52,60,8,3,196,0,12,192,60,60,12,3,206,0,8,192,56,60,4,3,200
+DATA 0,10
+' umbrella
+DATA 0,11,0,11,0,4,255,248,255,248,255,244,255,248,255,254,255,248,255,254,248,120,255,244,255
+DATA 248,255,254,224,56,255,254,255,250,255,250,192,16,255,242,255,252,255,246,254,252,255,246,255,248
+DATA 255,252,254,254,255,254,255,254,255,254,254,252,255,252,255,244,255,248,254,244,255,252,255,252,255
+DATA 244,236,252,255,244,255,248,255,244,243,252,255,252,255,252,255,254,255,248,255,248,255,244,255,248
+DATA 255,250
+' cones
+DATA 0,11,0,11,0,4,192,0,0,0,255,240,0,0,240,0,0,0,255,240,0,0,248,0,0
+DATA 0,255,240,0,0,252,0,0,0,127,240,0,0,255,0,0,0,127,240,0,0,255,128,0,0
+DATA 63,240,0,0,255,240,0,0,63,240,0,0,255,240,0,16,63,240,0,16,255,240,0,48,31
+DATA 240,0,48,255,240,0,112,31,240,0,112,255,240,0,240,15,240,0,240,255,240,3,240,15,240
+DATA 3,240
+' floor 1
+DATA 0,11,0,11,0,4,255,240,255,248,0,8,0,12,255,240,255,252,127,232,127,230,255,242,255
+DATA 240,64,40,64,32,255,248,255,240,95,168,95,166,255,252,255,246,80,172,80,160,249,246,249,248
+DATA 80,166,80,160,249,248,249,248,80,172,80,160,255,252,255,244,80,168,80,166,255,242,255,240,95
+DATA 168,95,160,255,248,255,240,64,40,64,38,255,252,255,246,127,236,127,224,255,246,255,248,0,6
+DATA 0,10
+' L
+DATA 0,11,0,11,0,4,255,248,255,246,255,250,0,0,207,252,255,252,207,252,0,12,207,244,255
+DATA 248,207,246,0,12,207,246,255,250,207,240,0,12,207,254,255,252,207,252,0,12,207,252,255,244
+DATA 207,248,0,10,207,244,255,246,207,252,0,6,207,248,255,248,207,248,0,2,192,48,255,246,192
+DATA 50,0,6,192,54,255,242,192,52,0,6,255,248,255,246,255,250,0,10,255,250,255,244,255,252
+DATA 0,12
+' oblate
+DATA 0,11,0,11,0,4,255,240,255,240,255,240,1,240,255,240,255,240,255,240,1,240,255,240,255
+DATA 240,255,240,1,240,255,240,240,16,255,240,0,16,255,240,240,16,255,240,0,16,255,240,240,240
+DATA 255,16,0,16,255,240,240,240,255,16,240,16,255,240,240,240,255,16,240,16,255,240,255,240,240
+DATA 16,240,16,255,240,255,240,240,16,240,16,255,240,255,240,240,16,240,16,255,240,255,240,255,240
+DATA 255,240
+' fence
+DATA 0,11,0,11,0,4,32,72,160,86,224,124,32,70,16,140,80,160,240,246,16,136,137,22,169
+DATA 80,249,248,137,24,70,44,86,160,127,236,70,32,32,72,41,70,63,194,32,64,16,136,22,128
+DATA 31,136,16,128,16,136,22,134,31,140,16,134,32,76,41,64,63,198,32,72,70,38,86,170,127
+DATA 224,70,44,137,28,169,92,249,252,137,20,16,136,80,166,240,252,16,134,32,74,160,80,224,124
+DATA 32,78
+' moon
+DATA 0,11,0,11,0,4,255,240,255,240,255,240,0,0,227,240,255,240,224,240,0,0,207,240,255
+DATA 240,192,112,0,0,159,240,255,240,128,48,0,0,159,240,255,240,128,16,0,0,159,240,255,240
+DATA 128,16,0,0,159,240,255,240,128,16,0,0,159,240,255,240,128,16,0,0,223,240,255,240,192
+DATA 48,0,0,207,240,255,240,192,112,0,0,247,240,255,240,240,240,0,0,255,240,255,240,255,240
+DATA 0,0
+' chicken wire fence
+DATA 0,11,0,11,0,4,0,0,14,70,31,194,0,6,0,6,96,18,248,84,0,6,0,8,1
+DATA 166,137,234,0,10,0,10,2,4,70,44,0,12,0,0,24,10,124,40,0,14,0,10,16,12
+DATA 50,50,0,14,0,6,192,6,242,16,0,8,0,0,128,8,145,16,0,8,0,0,128,104,145
+DATA 112,0,10,0,8,1,14,9,138,0,12,0,2,6,14,14,134,0,6,0,0,4,12,12,134
+DATA 0,4
+' wall paper
+DATA 0,11,0,11,0,4,3,132,32,6,0,8,0,6,2,10,96,10,0,10,0,4,2,28,224
+DATA 12,0,0,0,10,3,56,0,14,0,10,0,12,3,226,0,14,0,6,0,6,1,192,0,8
+DATA 0,0,0,8,0,0,0,8,0,0,0,8,0,0,1,250,0,8,0,14,0,10,1,252,0
+DATA 2,0,14,224,6,1,150,0,0,0,12,96,6,1,196,0,4,0,4,32,4,0,202,0,0
+DATA 0,8
+' smarty
+DATA 0,11,0,11,0,4,255,252,255,240,255,252,255,240,255,248,255,246,255,242,255,240,255,248,224
+DATA 112,255,248,224,112,255,248,192,54,255,252,192,54,255,252,128,16,255,246,128,24,255,246,128,26
+DATA 255,240,128,28,255,252,128,28,255,252,128,20,255,248,128,22,255,252,128,22,255,250,128,16,255
+DATA 252,128,30,255,252,192,60,255,252,192,60,255,244,224,120,255,250,224,116,255,246,255,252,255,246
+DATA 255,248
+' diamond
+DATA 0,11,0,11,0,4,253,248,253,246,255,250,253,240,248,252,253,252,255,252,248,252,240,116,253
+DATA 248,255,246,240,124,224,54,253,250,255,240,224,60,192,30,249,252,251,252,192,28,132,12,240,244
+DATA 242,248,128,10,2,4,2,6,255,252,2,6,128,24,252,216,254,216,128,18,224,48,253,246,255
+DATA 242,224,54,240,118,253,242,255,244,240,118,248,248,252,246,254,250,248,250,253,250,253,244,255,252
+DATA 253,252
+' key
+DATA 0,11,0,11,0,4,255,240,255,240,241,240,241,240,255,240,255,240,228,240,228,240,255,240,255
+DATA 240,238,240,238,240,255,240,255,240,228,240,228,240,255,240,255,240,241,240,241,240,255,240,255,240
+DATA 251,240,251,240,255,240,255,240,251,240,251,240,255,240,255,240,251,240,251,240,255,240,255,240,227
+DATA 240,227,240,255,240,255,240,251,240,251,240,255,240,255,240,227,240,227,240,255,240,255,240,255,240
+DATA 255,240
+' happy face
+DATA 0,11,0,11,0,4,255,240,255,240,255,240,255,240,255,240,255,240,240,112,240,112,255,240,255
+DATA 240,192,48,192,48,230,112,255,240,153,144,128,16,230,112,238,240,153,144,128,16,255,240,255,240
+DATA 128,16,128,16,255,240,255,240,128,16,128,16,255,240,239,112,128,16,128,16,255,240,246,240,192
+DATA 48,192,48,255,240,249,240,224,240,224,240,255,240,255,240,251,240,251,240,255,240,255,240,255,240
+DATA 255,240
+' monster 1
+DATA 0,11,0,11,0,4,255,252,255,254,255,248,255,248,255,244,255,248,255,250,255,254,128,54,128
+DATA 48,128,58,128,58,191,188,191,182,191,190,191,190,181,176,181,186,181,190,181,180,191,188,191,188
+DATA 191,178,191,186,155,60,155,62,155,52,155,50,191,180,191,188,191,188,191,186,181,188,181,190,181
+DATA 176,181,184,160,188,160,186,160,184,160,184,191,184,191,186,191,188,191,178,255,244,255,250,255,254
+DATA 255,248
+RETURN
+> PROCEDURE random_set
+' makes a random subset of a set.
+LOCAL i%,j%,r%
+FOR i%=0 TO numcells%
+cell_used!(i%)=FALSE
+NEXT i%
+FOR j%=0 TO depth%-1
+DO
+r%=RAND(numcells%)
+LOOP UNTIL cell_used!(r%)=FALSE
+cell_set%(j%)=r%
+cell_used!(r%)=TRUE
+NEXT j%
+RETURN
+'
+> PROCEDURE dosound
+LOCAL i%
+SPOKE &H484,PEEK(&H484) AND NOT 1
+IF number_of_xbs_files%>0
+addr%=V:music_data&(0)
+~XBIOS(32,L:addr%)
+ENDIF
+RETURN
+> PROCEDURE dir_xbs_files
+' makes a list of all the *.XBS files in the directory XBS.
+number_of_xbs_files%=0
+~FSETDTA(BASEPAGE+128)
+e%=FSFIRST("\XBS\*.XBS",-1)
+DO UNTIL e%
+xbs_files$(number_of_xbs_files%)=CHAR{BASEPAGE+158}
+e%=FSNEXT()
+INC number_of_xbs_files%
+LOOP
+RETURN
+> PROCEDURE read_sound
+' reads a particular .XBS file from the directory \xbs.
+LOCAL a%,i%
+LOCAL name$
+IF number_of_xbs_files%>0
+i%=RANDOM(number_of_xbs_files%)
+name$="\xbs\"+xbs_files$(i%)
+OPEN "i",#1,name$
+a%=LOF(#1)
+DIM music_data&(a%/2)
+BLOAD name$,VARPTR(music_data&(0))
+CLOSE #1
+ENDIF
+RETURN
+' for debugging
+' PROCEDURE tracer
+' LOCATE 1,1
+' PRINT TRACE$
+' INPUT a$
+' RETURN
