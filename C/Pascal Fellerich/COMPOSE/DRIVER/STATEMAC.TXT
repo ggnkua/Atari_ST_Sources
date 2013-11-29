@@ -1,0 +1,200 @@
+
+	CKBD Tastatur Interrupt
+	-----------------------
+
+StateMachine: Bei jedem Tastaturinterrupt wird die State Machine 
+aufgerufen. Wenn nichts angegeben wird, wird das aktuelle Zeichen 
+unver„ndert gelassen. Es gibt 3 Grundoperationen, die auf den 
+Tastaturpuffer wirken:
+
+	remove_from_buffer
+			Das zuletzt eingegebene Zeichen wird aus dem 
+			Tastaturpuffer gel”scht.
+
+	replace_in_buffer char
+			Das zuletzt eingegebene Zeichen wird mit 'char' 
+			berschrieben.
+
+	insert_in_buffer char
+			'char' wird hinter dem letzten Zeichen in den 
+			Tastaturpuffer eingefgt.
+
+Der Befehl 'GOTO' bestimmt, welcher Zustand als n„chster angenommen 
+wird.
+Das State Diagramm ist so auch als Assemblercode in CKBD 
+implementiert worden.
+
+
+
+1. DEC-MODE COMPOSE CHARACTERS:
+-------------------------------
+* Die Funktion arbeitet exakt wie das Vorbild auf den VT2xx Terminals 
+der Firma Digital Equipment Corporation (DEC).
+
+* Wenn die 'Composed Chars' nicht 'order sensitive' sind, ist es 
+egal, ob  e^ oder ^e eingegeben wird. Raus kommt immer ˆ.
+
+* Wenn 'order sensitive'eingeschaltet ist muž die Reihenfolge 
+beachtet werden: nur noch e^ ergibt ˆ
+
+* W„hrend einer 'Compose'-Sequenz sind die Zeichen nicht sichtbar. 
+Somit mssen vor dem Senden des definitiven Zeichens keine 'falschen' 
+Zeichen mittels Backspace korrigiert werden.
+
+* Laufende Sequenzen k”nnen zu jedem Zeitpunkt mit ESC oder BackSpace
+abgebrochen werden.
+
+
+2. MULTICHAR-MODE COMPOSED CHARACTERS:
+--------------------------------------
+
+* Die Funktion arbeitet „hnlich EXTKEY: Nach Einleiten einer Compose 
+Sequenz werden die zwischendurch eingegebenen Zeichen geechoed. Die 
+laufende Applikation muž also mit schnellen Backspace-Folgen klarkommen.
+
+* Wenn die 'Composed Chars' nicht 'order sensitive' sind, ist es 
+egal, ob  e^ oder ^e eingegeben wird. Raus kommt immer ˆ.
+
+* Wenn 'order sensitive'eingeschaltet ist muž die Reihenfolge 
+beachtet werden: nur noch e^ ergibt ˆ
+
+* Laufende Sequenzen k”nnen zu jedem Zeitpunkt mit ESC oder BackSpace 
+abgebrochen werden.
+
+
+3. Deadkeys:
+------------
+
+* Der Code einer als Deadkey definierten Taste wird abgefangen und 
+mit dem n„chsten eingegebenen Zeichen kombiniert. Ist die Kombination 
+gltig, wird das zusammengesetzte Zeichen ausgegeben. Andernfalls 
+werden die beiden Zeichen unver„ndert ausgegeben.
+
+* Laufende Sequenzen k”nnen zu jedem Zeitpunkt mit ESC oder BackSpace 
+abgebrochen werden.
+
+
+4. Extkey:
+----------
+
+* Wenn ein Zeichen mit gedrckter Control-Taste eingegeben wird, 
+versucht CKBD, dieses Zeichen mit dem vorigen zu kombinieren. Wenn 
+das klappt wird das vorige Zeichen auf dem Bildschirm mit 'BackSpace' 
+gel”scht und das zusammengesetzte Zeichen ausgegeben.
+
+
+5. ALT_nnn:
+-----------
+
+* Bei gedrckter Alternate-Taste werden auf dem Ziffernblock 
+eingegebene Zifferntasten zu ASCII-Codes zusammengezogen.
+
+
+6. Das komplette Statusdiagramm von CKBD:
+-----------------------------------------
+
+STATE_DIAGRAM CKBD_statemachine:
+
+    STATE Normal_operation:
+        IF (Alt_pressed)        	GOTO Prepare_CC
+        ELSE IF (Alt_released)  	GOTO Normal_operation
+        ELSE IF (Control_pressed)	GOTO Extkey
+        ELSE IF (Is_a_deadkey)
+        	remove_char_from_buffer
+        	Store_this_char
+        	GOTO Deadkeys
+        ENDIF
+
+    STATE Prepare_CC:
+    	IF (Alt_released) THEN
+    		IF (time_out OR other_key_pressed) THEN
+    			GOTO Normal_operation
+    		ELSE
+	            IF (DEC_mode) 		GOTO Compose_1
+    	        ELSE 				GOTO Compose_3
+    		ENDIF
+    	ELSE
+    		IF (Numeric_keypad_digit) THEN
+    			compchar=0
+    			GOTO Alt_nnn
+    		ENDIF
+    	ENDIF
+
+    STATE Compose_1:
+        remove_char_from_buffer
+        Store_this_char
+        IF (char==ESC OR char==BS) THEN
+            GOTO Normal_operation
+        ELSE
+            GOTO Compose_2
+        ENDIF
+
+    STATE Compose_2:
+        IF (char==ESC OR char==BS) THEN
+            GOTO Normal_operation
+        ELSE IF (sequence_is_valid) THEN
+            replace_in_buffer Composed_char
+        ELSE
+            remove_char_from_buffer
+            Bell_sound
+            GOTO Normal_operation
+        ENDIF
+
+    STATE Compose_3:
+        IF (char==ESC OR char==BS) THEN
+            GOTO Normal_operation
+        ELSE IF (sequence_is_valid) THEN
+            Store_this_char
+            GOTO Compose_multi
+        ELSE
+            GOTO Normal_operation
+        ENDIF
+
+    STATE Compose_multi:
+        IF (char==ESC OR char==BS) THEN
+            GOTO Normal_operation
+        ELSE IF (sequence_is_valid) THEN
+            replace_in_buffer BackSpace
+            insert_in_buffer Composed_char
+            Store_this_char
+            GOTO Compose_multi
+        ELSE
+            GOTO Normal_operation
+        ENDIF
+       
+	STATE Extkey:
+		IF (Control_released) GOTO Normal_operation
+		IF (sequence_is_valid) THEN
+			replace_in_buffer BackSpace
+			insert_in_buffer Composed_char
+		ENDIF
+
+	STATE Deadkeys:
+		IF (char==SPACE OR char==previous_char) THEN
+			replace_in_buffer char
+			GOTO Normal_operation
+		ELSE IF (sequence_is_valid)
+			replace_in_buffer Composed_char
+		ELSE
+			replace_in_buffer previous_char
+			insert_in_buffer char
+		ENDIF
+	
+	STATE Alt_nnn:
+		IF (Alt_released) THEN
+			insert_in_buffer compchar
+			GOTO Normal_operation
+		ENDIF
+		compchar = 10*compchar + VALUE_OF(char)
+		IF (compchar>255 OR more_than_3_chars_entered THEN
+			insert_in_buffer compchar
+		ENDIF
+
+END_DIAGRAM CKBD_statemachine.
+
+
+
+-----------------------------------------------------------------------
+(c) 1992, 1994 by P. Fellerich
+-----------------------------------------------------------------------
+
