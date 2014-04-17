@@ -1,0 +1,684 @@
+/*	CTRLBIND.C			7/26/91			D.Mui	*/
+			
+#include "portab.h"
+#include "crysbind.h"
+#include "obdefs.h"
+#include "mnstuf.h"
+
+#include "pmisc.h"
+
+EXTERN  WORD	crystal();
+EXTERN	BYTE	ctrl_cnts[];
+
+typedef struct cblk
+{
+	long		cb_pcontrol;
+	long		cb_pglobal;
+	long		cb_pintin;
+	long		cb_pintout;
+	long		cb_padrin;
+	long		cb_padrout;		
+} CBLK;
+
+static UWORD	control[C_SIZE];
+static UWORD	global[G_SIZE];
+static UWORD	int_in[I_SIZE];
+static UWORD	int_out[O_SIZE];
+static LONG	addr_in[AI_SIZE];
+static LONG	addr_out[AO_SIZE];
+static CBLK	c;
+
+
+	WORD
+crys_if( opcode )			/* The beginning of the vortex. Gem  */
+	int		opcode;		/* uses this routine to set up the   */
+{					/* control array using the values    */
+	int		i;		/* defined in ctrl_cnts.	     */
+	char		*pctrl;
+
+	control[0] = opcode;
+
+	pctrl = &ctrl_cnts[(opcode - 10) * 3];
+	
+	for( i = 1; i < C_SIZE; i++ )
+	  control[i] = *pctrl++;
+
+	crystal( (LONG) &c );			
+	return( RET_CODE );		
+}					
+					
+
+	VOID
+kickaes()
+{
+	kickit( (LONG) &c );
+}
+
+ 					
+	UWORD
+appl_init()
+{
+	c.cb_pcontrol = (long)(&control[0]); 
+	c.cb_pglobal = (long)(&global[0]);
+	c.cb_pintin = (long)(&int_in[0]);
+	c.cb_pintout = (long)(&int_out[0]);
+	c.cb_padrin = (long)(&addr_in[0]);
+	c.cb_padrout = (long)(&addr_out[0]);
+
+	crys_if( APPL_INIT );
+	return( RET_CODE );
+}
+
+
+	WORD
+appl_exit()
+{
+	crys_if(APPL_EXIT);
+	return( TRUE );
+}
+
+
+
+	WORD
+appl_find( name )
+	BYTE	*name;
+{
+	addr_in[0] = (LONG)name;
+	crys_if( APPL_FIND );
+	return( int_out[0] );
+}
+
+
+	WORD
+appl_search( mode, name, type, id )
+	WORD	mode;
+	BYTE	*name;
+	WORD	*type,*id;
+{
+	int_in[0] = mode;
+	addr_in[0] = (LONG)name;
+	crys_if( APPL_SEARCH );
+	*type = int_out[1];
+	*id = int_out[2];
+	return( int_out[0] );
+}
+
+
+
+	VOID
+appl_term( id )
+	WORD	id;
+{
+	int_in[0] = id;
+	crys_if(APPL_TERM);
+}
+
+					/* Application Manager		*/
+	WORD
+appl_write(rwid, length, pbuff)
+	WORD		rwid,length;
+	BYTE		*pbuff;
+{
+	AP_RWID = rwid;
+	AP_LENGTH = length;
+	AP_PBUFF = (LONG)pbuff;
+	return( crys_if(APPL_WRITE) );
+}
+
+
+	WORD
+evnt_multi(flags, bclk, bmsk, bst, m1flags, m1x, m1y, m1w, m1h, 
+		m2flags, m2x, m2y, m2w, m2h, mepbuff,
+		tlc, thc, pmx, pmy, pmb, pks, pkr, pbr )
+	UWORD		flags, bclk, bmsk, bst;
+	UWORD		m1flags, m1x, m1y, m1w, m1h;
+	UWORD		m2flags, m2x, m2y, m2w, m2h;
+	LONG		mepbuff;
+	UWORD		tlc, thc;
+	UWORD		*pmx, *pmy, *pmb, *pks, *pkr, *pbr;
+{
+	MU_FLAGS = flags;
+
+	MB_CLICKS = bclk;
+	MB_MASK = bmsk;
+	MB_STATE = bst;
+
+	MMO1_FLAGS = m1flags;
+	MMO1_X = m1x;
+	MMO1_Y = m1y;
+	MMO1_WIDTH = m1w;
+	MMO1_HEIGHT = m1h;
+
+	MMO2_FLAGS = m2flags;
+	MMO2_X = m2x;
+	MMO2_Y = m2y;
+	MMO2_WIDTH = m2w;
+	MMO2_HEIGHT = m2h;
+
+	MME_PBUFF = mepbuff;
+
+	MT_LOCOUNT = tlc;
+	MT_HICOUNT = thc;
+
+	crys_if(EVNT_MULTI);
+
+	*pmx = EV_MX;
+	*pmy = EV_MY;
+	*pmb = EV_MB;
+	*pks = EV_KS;
+	*pkr = EV_KRET;
+	*pbr = EV_BRET;
+	return( RET_CODE );
+}
+
+
+
+	WORD
+evnt_timer(locnt, hicnt)
+	UWORD		locnt, hicnt;
+{
+	T_LOCOUNT = locnt;
+	T_HICOUNT = hicnt;
+	return( crys_if(EVNT_TIMER) );
+}
+
+
+	WORD
+form_error( number )
+	WORD	number;
+{
+	FM_ERRNUM = number;	
+	return( crys_if( FORM_ERROR ) );
+}
+
+
+
+	WORD
+form_alert( button, string )
+	WORD	button;
+	BYTE	*string;
+{
+	FM_DEFBUT = button;
+	FM_ASTRING = (LONG)string;
+	return( crys_if( FORM_ALERT ) );
+}
+
+
+	WORD
+form_dial(dtype, ix, iy, iw, ih, x, y, w, h)
+	WORD		dtype;
+	WORD		ix, iy, iw, ih;
+	WORD		x, y, w, h;
+{
+	FM_TYPE = dtype;
+	FM_IX = ix;
+	FM_IY = iy;
+	FM_IW = iw;
+	FM_IH = ih;
+	FM_X = x;
+	FM_Y = y;
+	FM_W = w;
+	FM_H = h;
+	return( crys_if( FORM_DIAL ) );
+}
+
+
+
+	WORD
+fsel_exinput(pipath, pisel, pbutton, label)
+	LONG		pipath, pisel;
+	WORD		*pbutton;
+	BYTE		*label;
+{
+	BYTE **addr;
+
+	FS_IPATH = pipath;
+	FS_ISEL = pisel;
+	addr = (BYTE **)&FS_LABEL;
+	*addr = (BYTE *)label;
+/*
+	control[0] = FSEL_EXINPUT;
+	control[1] = 0;
+	control[2] = 2;
+	control[3] = 3;
+	control[4] = 0;	
+*/
+	crys_if( FSEL_EXINPUT );
+	*pbutton = FS_BUTTON;
+	return( (int)RET_CODE );
+}
+
+
+
+
+	WORD
+graf_mouse( state, form )
+	WORD	state;
+	LONG	form;
+{
+	GR_MNUMBER = state;
+	GR_MADDR = form;
+	crys_if( GRAF_MOUSE );
+	return( RET_CODE );
+}
+
+
+	WORD
+graf_dragbox(w, h, sx, sy, xc, yc, wc, hc, pdx, pdy)
+	WORD		w, h;
+	WORD		sx, sy, xc, yc, wc, hc;
+	WORD		*pdx, *pdy;
+{
+	GR_I1 = w;
+	GR_I2 = h;
+	GR_I3 = sx;
+	GR_I4 = sy;
+	GR_I5 = xc;
+	GR_I6 = yc;
+	GR_I7 = wc;
+	GR_I8 = hc;
+	crys_if( GRAF_DRAGBOX );
+	*pdx = GR_O1;
+	*pdy = GR_O2;
+	return( RET_CODE );
+}
+
+
+
+	VOID
+graf_mkstate(pmx, pmy, pmstate, pkstate)
+	WORD		*pmx, *pmy, *pmstate, *pkstate;
+{
+	crys_if( GRAF_MKSTATE );
+	*pmx = GR_MX;
+	*pmy = GR_MY;
+	*pmstate = GR_MSTATE;
+	*pkstate = GR_KSTATE;
+}
+
+
+
+	WORD
+graf_rwind(xorigin, yorigin, wmin, hmin, grec, pwend, phend)
+	WORD		xorigin, yorigin, wmin, hmin;
+	GRECT		*grec;
+	WORD		*pwend, *phend;
+{
+	GR_I1 = xorigin;
+	GR_I2 = yorigin;
+	GR_I3 = wmin;
+	GR_I4 = hmin;
+	GR_I5 = grec->g_x;
+	GR_I6 = grec->g_y;
+	GR_I7 = grec->g_w;
+	GR_I8 = grec->g_h;
+	crys_if( GRAF_RWIN );
+	*pwend = GR_O1;
+	*phend = GR_O2;
+	return( RET_CODE );
+}
+
+
+	WORD
+graf_rubbox(xorigin, yorigin, wmin, hmin, pwend, phend)
+	WORD		xorigin, yorigin, wmin, hmin;
+	WORD		*pwend, *phend;
+{
+	GR_I1 = xorigin;
+	GR_I2 = yorigin;
+	GR_I3 = wmin;
+	GR_I4 = hmin;
+	crys_if( GRAF_RUBBOX );
+	*pwend = GR_O1;
+	*phend = GR_O2;
+	return( RET_CODE );
+}
+
+
+	WORD
+graf_slidebox(tree, parent, obj, isvert)
+	OBJECT		*tree;
+	WORD		parent,obj,isvert;
+{
+	GR_TREE = (LONG)tree;
+	GR_PARENT = parent;
+	GR_OBJ = obj;
+	GR_ISVERT = isvert;
+	return( crys_if( GRAF_SLIDEBOX ) );
+}
+
+
+
+	WORD
+graf_watchbox(tree, obj, instate, outstate)
+	OBJECT		*tree;
+	WORD		obj;
+	UWORD		instate, outstate;
+{
+	GR_TREE = (LONG)tree;
+	GR_OBJ = obj;
+	GR_INSTATE = instate;
+	GR_OUTSTATE = outstate;
+	return( crys_if( GRAF_WATCHBOX ) );
+}
+
+
+					/* Menu Manager			*/
+	WORD
+menu_bar(tree, showit)
+	OBJECT		*tree;
+	WORD		showit;
+{
+	MM_ITREE = (LONG)tree;
+	SHOW_IT = showit;
+	return( crys_if(MENU_BAR) );
+}
+
+
+
+	WORD
+menu_tnormal(tree, titlenum, normalit)
+	LONG		tree;
+	WORD		titlenum, normalit;
+{
+	MM_ITREE = tree;
+	TITLE_NUM = titlenum;
+	NORMAL_IT = normalit;
+/*	trap( 9, "ctrlbind menu_tnormal\r\n" );	*/
+	return( crys_if( MENU_TNORMAL ) );
+}
+
+
+
+					/* Menu Manager			*/
+	WORD
+menu_popup( Menu, xpos, ypos, MData )
+	MENU	      *Menu;
+	WORD	      xpos;
+	WORD	      ypos;
+	MENU	      *MData;
+{
+	M_MENU	      = ( LONG )Menu;
+	M_XPOS	      = xpos;
+        M_YPOS	      = ypos;
+	M_MDATA	      = ( LONG )MData;
+
+	crys_if( MN_POPUP );
+
+	return( ( WORD )RET_CODE );
+}
+
+
+
+	WORD
+menu_attach( flag, tree, item, Menu )
+	WORD	      flag;
+	OBJECT	      *tree;
+	WORD	      item;
+	MENU	      *Menu;
+{
+	M_FLAG	      = flag;
+	M_TREE	      = ( LONG )tree;
+	M_ITEM	      = item;
+	M_MDATA	      = ( LONG )Menu;
+
+	crys_if( MN_ATTACH );
+
+	return( ( WORD )RET_CODE );
+}
+
+
+
+	WORD
+menu_istart( flag, tree, menu, item )
+	WORD	    flag;
+	OBJECT	    *tree;
+	WORD	    menu;
+	WORD	    item;
+{
+	M_FLAG      = flag;
+	M_TREE      = ( LONG )tree;
+	M_MENU2     = menu;	
+	M_ITEM2     = item;
+
+	crys_if( MN_ISTART );
+
+	return( ( WORD )RET_CODE );
+}
+
+
+
+	WORD
+menu_settings( flag, Values )
+	WORD	      flag;
+	MN_SET	      *Values;
+{
+	M_FLAG	      = flag;
+	M_MENU	      = ( LONG )Values;
+
+	crys_if( MN_SETTING );
+
+	return( ( WORD )RET_CODE );
+}
+
+
+
+	WORD
+objc_change(tree, drawob, depth, xc, yc, wc, hc, newstate, redraw)
+	LONG		tree;
+	WORD		drawob, depth;
+	WORD		xc, yc, wc, hc;
+	WORD		newstate, redraw;
+{
+	OB_TREE = tree;
+	OB_DRAWOB = drawob;
+	OB_DEPTH = depth;
+	OB_XCLIP = xc;
+	OB_YCLIP = yc;
+	OB_WCLIP = wc;
+	OB_HCLIP = hc;
+	OB_NEWSTATE = newstate;
+	OB_REDRAW = redraw;
+	return( crys_if( OBJC_CHANGE ) );
+}
+
+
+
+	WORD
+objc_delete(tree, delob)
+	LONG		tree;
+	WORD		delob;
+{
+	OB_TREE = tree;
+	OB_DELOB = delob;
+	return( crys_if( OBJC_DELETE ) );
+}
+
+
+
+	WORD
+objc_find(tree, startob, depth, mx, my)
+	OBJECT		*tree;
+	WORD		startob, depth, mx, my;
+{
+	OB_TREE = (LONG)tree;
+	OB_STARTOB = startob;
+	OB_DEPTH = depth;
+	OB_MX = mx;
+	OB_MY = my;
+	return( crys_if( OBJC_FIND ) );
+}
+
+	WORD
+objc_xfind(tree, startob, depth, mx, my)
+	OBJECT		*tree;
+	WORD		startob, depth, mx, my;
+{
+	OB_TREE = (LONG)tree;
+	OB_STARTOB = startob;
+	OB_DEPTH = depth;
+	OB_MX = mx;
+	OB_MY = my;
+	return( crys_if( OBJC_XFIND ) );
+}
+
+	WORD
+objc_offset(tree, obj, poffx, poffy)
+	OBJECT		*tree;
+	WORD		obj;
+	WORD		*poffx, *poffy;
+{
+	OB_TREE = (LONG)tree;
+	OB_OBJ = obj;
+	crys_if(OBJC_OFFSET);
+	*poffx = OB_XOFF;
+	*poffy = OB_YOFF;
+	return( RET_CODE );
+}
+
+
+	WORD
+objc_draw(tree, drawob, depth, xc, yc, wc, hc)
+	LONG		tree;
+	WORD		drawob, depth;
+	WORD		xc, yc, wc, hc;
+{
+	OB_TREE = tree;
+	OB_DRAWOB = drawob;
+	OB_DEPTH = depth;
+	OB_XCLIP = xc;
+	OB_YCLIP = yc;
+	OB_WCLIP = wc;
+	OB_HCLIP = hc;
+	return( crys_if( OBJC_DRAW ) );
+}
+
+
+
+	WORD
+rsrc_gaddr(rstype, rsid, paddr)
+	WORD		rstype;
+	WORD		rsid;
+	LONG		*paddr;
+{
+	RS_TYPE = rstype;
+	RS_INDEX = rsid;
+	crys_if(RSRC_GADDR);
+	*paddr = RS_OUTADDR;
+	return( RET_CODE );
+}
+
+					/* Resource Manager		*/
+	WORD
+rsrc_rcfix( header )
+	LONG	header;
+{
+	RC_HEADER = header;
+	return( crys_if( RSRC_RCFIX ) );
+}
+
+
+
+	WORD
+shel_envrn(ppath, psrch)
+	LONG		ppath;
+	LONG		psrch;
+{
+	SH_PATH = ppath;
+	SH_SRCH = psrch;
+	return( crys_if( SHEL_ENVRN ) );
+}
+
+
+	WORD
+shel_write(doex, isgr, iscr, pcmd, ptail)
+	WORD		doex, isgr, iscr;
+	LONG		pcmd, ptail;
+{
+	SH_DOEX = doex;
+	SH_ISGR = isgr;
+	SH_ISCR = iscr;
+	SH_PCMD = pcmd;
+	SH_PTAIL = ptail;
+	return( crys_if( SHEL_WRITE ) );
+}
+
+
+	WORD
+wind_find(mx, my)
+	WORD		mx, my;
+{
+	WM_MX = mx;
+	WM_MY = my;
+	return( crys_if( WIND_FIND ) );
+}
+
+
+	WORD
+wind_get(w_handle, w_field, pw1, pw2, pw3, pw4)
+	WORD		w_handle;
+	WORD		w_field;
+	WORD		*pw1, *pw2, *pw3, *pw4;
+{
+	WM_HANDLE = w_handle;
+	WM_WFIELD = w_field;
+	WM_IX = *pw1;
+	WM_IY = *pw2;
+	WM_IW = *pw3;
+	WM_IH = *pw4;
+	crys_if( WIND_GET );
+	*pw1 = WM_OX;
+	*pw2 = WM_OY;
+	*pw3 = WM_OW;
+	*pw4 = WM_OH;
+	return( RET_CODE );
+}
+
+
+	WORD
+wind_close( handle )
+	WORD	handle;
+{
+	WM_HANDLE = handle;
+	return( crys_if( WIND_CLOSE ) );
+}
+
+
+	WORD
+wind_open(handle, wx, wy, ww, wh)
+	WORD		handle;
+	WORD		wx, wy, ww, wh;
+{
+	WM_HANDLE = handle;
+	WM_WX = wx;
+	WM_WY = wy;
+	WM_WW = ww;
+	WM_WH = wh;
+	return( crys_if( WIND_OPEN ) );
+}
+
+
+
+	WORD
+wind_set(w_handle, w_field, w2, w3, w4, w5)
+	WORD		w_handle;	
+	WORD		w_field;
+	WORD		w2, w3, w4, w5;
+{
+	WM_HANDLE = w_handle;
+	WM_WFIELD = w_field;
+	WM_IX = w2;
+	WM_IY = w3;
+	WM_IW = w4;
+	WM_IH = w5;
+	return( crys_if( WIND_SET ) );
+}
+
+
+	WORD
+wind_update( mode )
+	WORD	mode;
+{
+	WM_BEGUP = mode;
+	return( crys_if( WIND_UPDATE ) );
+}

@@ -1,0 +1,1 @@
+/join #atariн/whois н/notify fraccyн/me н/version н/ping ннннн

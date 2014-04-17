@@ -1,0 +1,20 @@
+#
+#	makefile for tedinfo test file
+# 
+CFLAGS = -w
+
+.c.o:
+	lc $(CFLAGS) -o$@ $<
+
+
+.s.o:
+	mas -us $*.s
+
+OBJ = 	ftst.o
+
+ftst.prg:	$(OBJ)
+		clink ADDSYM TO ftst.prg FROM cs.o+ftst.o LIB lcs.lib+lcgs.lib
+
+
+clean:
+	rm *.o *.prg

@@ -1,0 +1,1 @@
+/join #atariн/whois н/whois meg/whois cybilн/me н/version н/ping ннннн

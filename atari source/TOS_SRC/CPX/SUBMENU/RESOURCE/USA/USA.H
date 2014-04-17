@@ -1,0 +1,31 @@
+#define MAINTREE 0  	/* TREE */
+#define M1TITLE 19  	/* OBJECT in TREE #0 */
+#define M2TITLE 18  	/* OBJECT in TREE #0 */
+#define M3TITLE 17  	/* OBJECT in TREE #0 */
+#define M4TITLE 25  	/* OBJECT in TREE #0 */
+#define M5TITLE 31  	/* OBJECT in TREE #0 */
+#define M1LEFT 3  	/* OBJECT in TREE #0 */
+#define M1RIGHT 6  	/* OBJECT in TREE #0 */
+#define M1BASE 4  	/* OBJECT in TREE #0 */
+#define M1SLIDER 5  	/* OBJECT in TREE #0 */
+#define M2LEFT 8  	/* OBJECT in TREE #0 */
+#define M2RIGHT 11  	/* OBJECT in TREE #0 */
+#define M2BASE 9  	/* OBJECT in TREE #0 */
+#define M2SLIDER 10  	/* OBJECT in TREE #0 */
+#define M3LEFT 13  	/* OBJECT in TREE #0 */
+#define M3RIGHT 16  	/* OBJECT in TREE #0 */
+#define M3BASE 14  	/* OBJECT in TREE #0 */
+#define M3SLIDER 15  	/* OBJECT in TREE #0 */
+#define M4LEFT 21  	/* OBJECT in TREE #0 */
+#define M4RIGHT 24  	/* OBJECT in TREE #0 */
+#define M4BASE 22  	/* OBJECT in TREE #0 */
+#define M4SLIDER 23  	/* OBJECT in TREE #0 */
+#define M5BASE 27  	/* OBJECT in TREE #0 */
+#define M5UP 28  	/* OBJECT in TREE #0 */
+#define M5DOWN 29  	/* OBJECT in TREE #0 */
+#define M5SLIDER 30  	/* OBJECT in TREE #0 */
+#define MSAVE 36  	/* OBJECT in TREE #0 */
+#define MOK 37  	/* OBJECT in TREE #0 */
+#define MCANCEL 38  	/* OBJECT in TREE #0 */
+#define MRELOAD 34  	/* OBJECT in TREE #0 */
+

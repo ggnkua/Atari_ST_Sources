@@ -1,0 +1,916 @@
+/* viewer.c		text file viewer
+ *=======================================================================
+ * 920603 kbad
+ * 961119 ersmith  Added "exit_on_close" option.
+ * 05/04/93	C.Gee	-Exit by clicking on the icon and CTRL
+ *			-Fix the non-display of upper-byte characters
+ *			 by compiling all C files with unsigned char as 
+ *			 the default.
+ *			-Use the loser's bindings and AES4 stuff...
+ *			 I don't see how this compiled in the first place...:)
+ * 06/24/93	C.Gee	-If no file, don't hang around, exit!!!!
+ *			-If AES < 4.10, don't do Iconify...
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <tos.h>
+
+#include "gemutil.h" /* includes vdi, aes, portab */
+#include "textwind.h"
+#include "iconwind.h"
+
+#define SEARCHCODE 0
+
+char *menuname(void);
+
+/* Constants & macros
+ *=======================================================================
+ */
+#define WM_ONTOP	31
+#define WM_UNTOPPED	30
+
+#define TW_KIND (NAME|INFO|CLOSER|FULLER|MOVER|SIZER|\
+				 UPARROW|DNARROW|VSLIDE|LFARROW|RTARROW|HSLIDE)
+/* Add in SMALLER later....cjg 06/24/93*/
+
+
+
+/* Variables & data structures
+ *=======================================================================
+ */
+
+/* GEM stuff */
+typedef struct {
+	WORD	font;
+	WORD	color;
+	WORD	rot;
+	WORD	halign, valign;
+	WORD	wmode;
+	WORD	wchar, hchar;
+	WORD	wcell, hcell;
+} T_ATTR;
+
+MFORM	mauspokr = {
+		5, 0, 1, 0, 1,
+		{ 0x0600, 0x0F00, 0x0F00, 0x0F00, 0x0F00, 0x0FC0, 0x1FF0, 0x3FF8, 
+		  0x3FFC, 0x3FFE, 0x3FFE, 0x1FFE, 0x1FFC, 0x0FFC, 0x0FF8, 0x07F8 },
+		{ 0x0600, 0x0900, 0x0900, 0x0900, 0x0900, 0x09C0, 0x1930, 0x3928, 
+		  0x282C, 0x280A, 0x2002, 0x1002, 0x1004, 0x0804, 0x0808, 0x0408 }
+};
+
+WORD	mauspokl[] = {
+		10, 0, 1, 0, 1,
+		/*{*/ 0x0060, 0x00F0, 0x00F0, 0x00F0, 0x00F0, 0x03F0, 0x0FF8, 0x1FFC,
+		  0x3FFC, 0x7FFC, 0x7FFC, 0x7FF8, 0x3FF8, 0x3FF0, 0x1FF0, 0x1FE0 /*}*/,
+		/*{*/ 0x0060, 0x0090, 0x0090, 0x0090, 0x0090, 0x0390, 0x0C98, 0x149C,
+		  0x3414, 0x5014, 0x4004, 0x4008, 0x2008, 0x2010, 0x1010, 0x1020 /*)*/
+};
+
+WORD	def_font=1, def_pts, def_tabs=4;
+
+WORD	aesid, wsid, wsout[57];
+WORD	wchar, hchar, wbox, hbox;
+T_ATTR	aes_t_attr;
+GRECT	desk;
+
+char	ap_fname[] = "*VIEWER "; /* appl_find() name - must be uppercase */
+char	ap_wname[] = "Viewer";	/* ap name for windows */
+
+/* should we exit when our window is closed? */
+int exit_on_close = 0;
+
+/* Icon windows */
+#include "eye.icn"
+#undef ICON_W
+#undef ICON_H
+#undef DATASIZE
+#include "viewfile.icn"
+#undef ICON_W
+#undef ICON_H
+#undef DATASIZE
+
+WIND	iw0;
+
+/* File stuff */
+char	filename[128];
+#if SEARCHCODE
+char	findinfo[] = " Find: ";
+char	findtail[] = "_";
+#endif
+char	mtinfo[] = "";
+
+int	AES_Version;		/* No Iconify if AES < 4.10 */
+int	IconFlag;		
+int	MultiFlag;		/* if -1, We're in MULTITOS */
+
+
+
+/* Functions
+ *=======================================================================
+ */
+/* GEM utility functions */
+void	gem_exit(int code);
+void	gem_init(void);
+
+/* Event handlers */
+WORD	iw_button __PROTO((WIND w, int mx, int my, int mb,
+									int kstate, int nclicks));
+WORD	iw_key __PROTO((WIND w, int kstate, int key));
+WORD	tw_key __PROTO((WIND w, int kstate, int key));
+MLOCAL  void	i_draw( WIND w, GRECT *rclip );
+
+int		do_button(int mx, int my, int mb, int ks, int br);
+int		do_key(int ks, int kr);
+int		do_msg(WORD *msg);
+
+/* Viewer functions */
+#if SEARCHCODE
+WORD	findchar(WIND w, int key);
+#endif
+WORD	open_file(const char *fn);
+void	main(int argc, char *argv[]);
+
+
+/* GEM utility functions
+ *=======================================================================
+ */
+
+/*-----------------------------------------------------------------------
+ * Shut down GEM application.
+ */
+void
+gem_exit(int code)
+{
+	WIND w;
+/* Close, delete & free all open windows */
+	while (w = w_lookup(W_HEAD))
+		w->free(w);
+
+/* Shut down screen workstation & quit */
+	if (wsid)
+		v_clsvwk(wsid);
+
+	appl_exit();
+	exit(code);
+}
+
+/*-----------------------------------------------------------------------
+ * Initialize GEM application:
+ * open virtual workstation and get desktop extent.
+ */
+void
+gem_init(void)
+{
+	WORD	i, wsin[11], hch;
+
+	appl_init();
+	if (!isAES4())
+	{
+		form_alert(1, "[3][ |Viewer can't run on |this TOS version.][ Quit ]");
+		gem_exit(-1);
+	}
+
+	AES_Version = _AESglobal[0];
+	MultiFlag   = _AESglobal[1];	/* -1 == MULTITOS, else single tasking */
+
+	if( AES_Version >= 0x0410 )		/* CJG 06/24/93 */
+	    IconFlag = SMALLER;
+	else
+	    IconFlag = 0;
+
+	shel_grok(G_AP_TERM);
+	wsid = aesid = graf_handle(&wchar, &hchar, &wbox, &hbox);
+	wsin[0] = Getrez()+2;
+	for (i = 1; i < 10; i++)
+		wsin[i] = 1;
+	wsin[i] = 2;
+
+	v_opnvwk(wsin, &wsid, wsout);
+	if (!wsid)
+	{
+		form_error(8); /* not enough memory */
+		gem_exit(-1);
+	}
+
+/* Get default AES point size */
+	vqt_attributes(aesid, &aes_t_attr.font);
+	vst_font(wsid, 1);
+	hch = def_pts = 0;
+	while (hch < aes_t_attr.hchar)
+		vst_point(wsid, ++def_pts, &i, &hch, &i, &i);
+
+	wind_grect(0, WF_WORKXYWH, &desk);
+}
+
+
+/* Icon window handlers
+ *=======================================================================
+ */
+
+void
+iw_xdraw(ICONWIND iw)
+{
+	WORD	xy[4], bxy[10];
+
+	wind_update(BEG_UPDATE);
+	graf_mouse(M_OFF, NULL);
+
+	rc_getpts(&iw->w.rwind, xy);
+	vs_clip(iw->w.wsid, 1, xy);
+	vswr_mode(iw->w.wsid, MD_XOR);
+
+	vsl_color(iw->w.wsid, BLACK);
+	vsl_ends(iw->w.wsid, 0, 0);
+	vsl_type(iw->w.wsid, 1);
+	vsl_width(iw->w.wsid, 1);
+	rc_boxpts(&iw->w.rwind, bxy);
+	bxy[9]--;
+	v_pline(iw->w.wsid, 5, bxy);
+
+	vsf_color(iw->w.wsid, BLACK);
+	vsf_interior(iw->w.wsid, FIS_SOLID);
+	vsf_perimeter(iw->w.wsid, 0);
+	xy[0]++, xy[2]--;
+	xy[3] = xy[1]++ + 7;
+	v_bar(iw->w.wsid, xy);
+
+	graf_mouse(M_ON, NULL);
+	wind_update(END_UPDATE);
+}
+
+void
+iw_drag(ICONWIND iw, WORD xoff, WORD yoff)
+{
+	UWORD	e;
+	WORD	mx, my, mb, i;
+
+	wind_update(BEG_MCTRL);
+	graf_mkstate(&mx, &my, &mb, &i);
+	do {
+		iw->w.rwind.g_x = min(max(mx + xoff, desk.g_x),
+							  desk.g_x + desk.g_w - iw->w.rwind.g_w);
+		iw->w.rwind.g_y = min(max(my + yoff, desk.g_y),
+							  desk.g_y + desk.g_h - iw->w.rwind.g_h);
+		iw_xdraw(iw);
+		e = evnt_multi(MU_BUTTON|MU_M1, 1,1,!mb,
+						1,mx,my,1,1,  0,0,0,0,0,
+						NULL, 0,0, &mx, &my, &i, &i, &i, &i);
+		iw_xdraw(iw);
+	} while (!(e & MU_BUTTON));
+	wind_update(END_MCTRL);
+	iw->w.sizecalc(&iw->w, &iw->w.rwind);
+}
+
+void
+iconize(WIND w)
+{
+	char	*s, name[9];
+	ICONWIND iw;
+	WORD	e, i, msg[8];
+
+	s = strrchr(w->name, '\\');
+	if (!s) s = w->name;
+	strncpy(name, s+1, 8);
+	name[8] = '\0';
+	if ((s = strchr(name, '.'))
+	||  (s = strchr(name, ' ')))
+		*s = 0;
+	i = iw_new(wsid, w->rwind.g_x, w->rwind.g_y, name,
+				viewfile, BLACK, WHITE, w);
+	if (i > 0)
+	{
+		iw = (ICONWIND)w_lookup(i);
+		iw->w.do_button = iw_button;
+		w_closed(w, msg);
+		w->info[0] = 0;
+		wind_sstr(w->id, WF_INFO, w->info);
+		for(;;) {
+			e = evnt_multi(MU_MESAG|MU_TIMER, 0,0,0,
+							0,0,0,0,0, 0,0,0,0,0,
+							msg, 100,0, &i, &i, &i, &i, &i, &i);
+			if (e & MU_MESAG)
+				do_msg(msg);
+			else if ((e & MU_TIMER) && wind_update(TRY_UPDATE))
+				break;
+		}
+		wind_update(END_UPDATE);
+
+		graf_mouse(M_OFF, NULL);
+		iw_drag(iw, 0, 0);
+		graf_mouse(M_ON, NULL);
+
+		wind_open(iw->w.id, iw->w.rwind.g_x, iw->w.rwind.g_y,
+				  iw->w.rwind.g_w, iw->w.rwind.g_h);
+	}
+}
+
+
+/* Window event handlers
+ *=======================================================================
+ */
+
+/*-----------------------------------------------------------------------
+ * Handle click in icon window.
+ * If inside name part of window, top or drag window.
+ * If inside icon part of window, select icon.
+ */
+MLOCAL WORD
+iw_button(w, mx, my, mb, kstate, nclicks)
+	WIND	w;
+{
+	WIND	wind;
+	GRECT	r, ri, *rp;
+	WORD	e, colors[2], *icolors, mout, msg[8];
+
+	/* Set up to invert icon */
+	ri = w->rwork;
+	ri.g_y += 8;
+	ri.g_h -= 8;
+	*(GRECT *)&msg[4] = ri;
+	icolors = ((ICONWIND)w)->colors;
+	colors[0] = icolors[0];
+	icolors[0] = colors[1] = icolors[1];
+	icolors[1] = colors[0];
+
+	rp = &w->rwind;
+	r = *rp;
+	r.g_h = 10;
+
+	e = 0;
+	if (rc_inside(mx, my, &r))
+	{
+	/* Inside name part of window */
+		evnt_timer(100, 0);
+		graf_mkstate(&mx, &my, &mb, &kstate);
+		if (!mb)
+		{
+			wind_set(w->id, WF_TOP);
+			*(GRECT *)&msg[4] = r; /* redraw icon "mover" */
+		}
+		else
+		{
+			w_msg(w, WM_REDRAW, msg);
+			graf_mouse(FLAT_HAND, NULL);
+			iw_drag((ICONWIND)w, rp->g_x - mx, rp->g_y - my);
+			graf_mouse(ARROW, NULL);
+			wind_set(w->id, WF_CURRXYWH, rp->g_x, rp->g_y, rp->g_w, rp->g_h);
+			*(GRECT *)&msg[4] = *rp; /* redraw full icon wind */
+		}
+	}
+	else
+	{
+		wind_update(BEG_MCTRL);
+		graf_mouse(USER_DEF, &mauspokl);
+		do {
+			if (mout = rc_inside(mx, my, &ri))
+				icolors[0] = colors[1], icolors[1] = colors[0];
+			else
+				icolors[0] = colors[0], icolors[1] = colors[1];
+			w_msg(w, WM_REDRAW, msg);
+
+			e = evnt_multi(MU_BUTTON|MU_M1, 1,1,0,
+							mout, ri.g_x, ri.g_y, ri.g_w, ri.g_h,
+							0,0,0,0,0, NULL, 0, 0,
+							&mx, &my, &mb, &kstate, &nclicks, &nclicks);
+
+		} while (!(e & MU_BUTTON));
+		graf_mouse(ARROW, NULL);
+		wind_update(END_MCTRL);
+	}
+	icolors[0] = colors[0];
+	icolors[1] = colors[1];
+	w_msg(w, WM_REDRAW, msg);
+
+	if (e == 0 || !rc_inside(mx, my, &ri))
+		return 1;
+
+	wind = ((ICONWIND)w)->wind;
+	if (wind)
+	{
+		w->free(w);
+		w_open(wind, NULL);
+	}
+	else open_file(NULL);
+
+	return 1;
+}
+
+
+WORD
+iw_key(w, kstate, key)
+	WIND	w;
+{
+	switch (key & 0x00ff)
+	{
+		case '\x04': /* ^D: hide - ignore */
+		return 1;
+		case 0:
+		break;
+	}
+	return 0;
+}
+
+#if SEARCHCODE
+WORD
+findchar(w, key)
+	WIND	w;
+{
+	WORD	len = (WORD)strlen(w->info);
+	WORD	dofind = 0;
+	char	c = key & 0x00ff;
+
+	switch (c)
+	{
+		case '\x06': /* ^F: find */
+			/* if len == 0, this is start of find, else it's find-next */
+			if (--len < 0)
+				len = (WORD)strlen(strcpy(w->info, findinfo));
+			dofind = 1;
+		break;
+		case '\x07': /* ^G: again */
+			if (w->info[1])
+			{
+				w->info[0] = ' ';
+				len = (WORD)strlen(w->info) - 1;
+				dofind = 1;
+			}
+		break;
+		case '\x08': /* ^H: backspace */
+			if (len > strlen(findinfo) + 1)
+			{
+				len -= 2;
+				dofind = 1;
+			}
+		break;
+		case '\x0d': /* Ret: end find */
+			w->info[0] = len = 0;
+			dofind = 1;
+		break;
+		case '\x1b': /* Esc: clear find */
+			if (len)
+			{
+				len = (WORD)strlen(strcpy(w->info, findinfo));
+				dofind = 1;
+			}
+		break;
+		default:
+			if (len && isprint(c))
+			{
+				w->info[len-1] = c;
+				dofind = 1;
+			}
+	}
+
+	if (dofind)
+	{
+		if (len) strcpy(&w->info[len], findtail);
+		wind_sstr(w->id, WF_INFO, w->info);
+	}
+
+	return dofind;
+}
+#endif /* SEARCHCODE */
+
+WORD
+tw_key(w, kstate, key)
+	WIND	w;
+{
+	switch (key & 0x00ff)
+	{
+		case '\x04': /* ^D: hide */
+			iconize(w);
+		return 1;
+		case '\x17': /* ^W: close */
+			w->free(w);
+		return 1;
+	}
+#if SEARCHCODE
+	return findchar(w, key);
+#else
+	return 0;
+#endif
+}
+
+WORD
+iw0_close(WIND w, WORD *msg)
+{
+	return 0; /* quit the program */
+}
+
+WORD
+tw_closed(WIND w, WORD *msg)
+{
+	WORD	i, ks;
+
+	graf_mkstate(&i, &i, &i, &ks);
+	if (ks & K_CTRL)
+		iconize(w);
+	else
+		w->free(w);
+#if 0
+	return 1;
+#else
+	if (ks & K_CTRL) return 1;
+	return !exit_on_close;
+#endif
+}
+
+WORD
+tw_topped(WIND w, WORD *msg)
+{
+	wind_sstr(w->id, WF_INFO, w->info);
+	return w_topped(w, msg);
+}
+
+WORD
+tw_ontop(WIND w, WORD *msg)
+{
+	wind_sstr(w->id, WF_INFO, w->info);
+	return w_ontop(w, msg);
+}
+
+WORD
+tw_untop(WIND w, WORD *msg)
+{
+	wind_set(w->id, WF_INFO, ADDR(mtinfo));
+	return 1;
+}
+
+/* Event handlers
+ *=======================================================================
+ */
+
+int
+do_button(int mx, int my, int mb, int ks, int br)
+{
+	WIND w = w_lookup(wind_find(mx, my));
+	if( w && w->do_button )
+	{
+	   if( ks & 0x0004 )	/* Exit if clicking on ICON and CTRL */
+	      return( FALSE );
+	   else
+	      return w->do_button(w, mx, my, mb, ks, br);
+	}
+	return 1;
+}
+
+
+int
+do_key(int ks, int kr)
+{
+extern WORD scroll_chunk;
+	WIND	w;
+	WORD	i, msg[8];
+
+	w = w_lookup(wind_gword(0, WF_TOP));
+
+	if ( w && w->do_key && (i = w->do_key(w, ks, kr)) )
+		return i;
+
+	switch (kr & 0x00ff)
+	{
+		case '1': case '2': case '3': case '4':
+		case '5': case '6': case '7': case '8': case '9':
+			scroll_chunk = (kr & 0x00ff) - '0';
+		break;
+
+		case '\x11': /* ^Q: quit */
+		return 0;
+
+		case '\x17': /* ^W: close */
+			if (w)
+			{
+				msg[0] = WM_CLOSED;
+				msg[3] = w->id;
+				return w_msg(w, WM_CLOSED, msg);
+			}
+		break;
+
+#if 0
+		case '\x1a': /* ^Z: suspend */
+		break;
+
+		case 0:
+		break;
+#endif
+	}
+
+	return 1;
+}
+
+int
+do_msg(WORD *msg)
+{
+#if 0
+static	ACK_MSG nak = { AP_ACK, 0, 0, AP_ACK_NAK };
+#endif
+	WIND	w;
+	WORD	fd;
+	WORD	iconified;
+	WORD	dummy;
+	GRECT   rect;
+	GRECT	r, rdirt;
+	GRECT   chrect;
+	char	*s, name[9];
+
+	switch (msg[0])
+	{
+		case MN_SELECTED:
+		break;
+
+		case WM_REDRAW: if( w = w_lookup( msg[3] ) ) {
+				  wind_get( msg[3], WF_ICONIFY, &iconified, &dummy, &dummy, &dummy );
+				 
+				  if( iconified ) {
+
+				    rect.g_x = msg[4];
+				    rect.g_y = msg[5];
+				    rect.g_w = msg[6];
+				    rect.g_h = msg[7];
+
+				    wind_update(1);
+
+				    graf_mouse(M_OFF, NULL);
+				    wind_grect( w->id, WF_FIRSTXYWH, &r);
+				    while(r.g_w && r.g_h) {
+				      if (rc_intersect( &rect, &r)
+					 && rc_intersect(&w_rmax, &r)) {  /* window rect may be off screen! */
+				      
+					   rdirt = r;
+				           w_erase( w, &rdirt );
+					   i_draw( w, &rdirt );
+		   		      }
+				      wind_grect(w->id, WF_NEXTXYWH, &r);
+				    }
+			  	    graf_mouse(M_ON, NULL);
+			  	    wind_update(0);
+				     
+				  } else {
+				     if ((w = w_lookup(msg[3])) && w_windfp(w,msg[0]))
+				        return w_msg(w, msg[0], msg);
+				  }
+				}
+				break;
+
+		case WM_MOVED:  if( w = w_lookup( msg[3] ) ) {
+				  wind_get( msg[3], WF_ICONIFY, &iconified, &dummy, &dummy, &dummy );
+				 
+				  if( iconified ) {
+				    wind_set( msg[3], WF_CURRXYWH, msg[4], msg[5], msg[6], msg[7] ); /* REDRAW? need rectangle list */
+				     
+				  } else {
+				     if ((w = w_lookup(msg[3])) && w_windfp(w,msg[0]))
+				        return w_msg(w, msg[0], msg);
+				  }
+				}
+				break;
+
+		case WM_TOPPED:	 case WM_CLOSED:
+		case WM_FULLED:	case WM_ARROWED: case WM_HSLID:
+		case WM_VSLID:	case WM_SIZED:
+		case WM_NEWTOP:
+		case 30: /* WM_UNTOPPED */
+		case 31: /* WM_ONTOP */
+			if ((w = w_lookup(msg[3])) && w_windfp(w,msg[0]))
+				return w_msg(w, msg[0], msg);
+		break;
+
+		case WM_ICONIFY:   if( w = w_lookup( msg[3] ) ) {
+				   
+				       wind_set( msg[3], WF_ICONIFY, msg[4], msg[5], msg[6], msg[7] );
+
+				       s = strrchr(w->name, '\\');
+				       if( !s )
+					  s = w->name;
+				      
+				       strncpy(name, s+1, 8);
+				       name[8] = '\0';
+				       if ((s = strchr(name, '.'))
+					  ||  (s = strchr(name, ' ')))
+						*s = 0;
+				       wind_set( msg[3], WF_NAME, name );
+				   }
+				   break;
+
+		case WM_UNICONIFY: if( w = w_lookup( msg[3] ) ) {
+				       wind_set( msg[3], WF_UNICONIFY, msg[4], msg[5], msg[6], msg[7] );
+				       rc_chrect(&w->rdraw, w->rdraw.g_x, w->rdraw.g_y,
+			  			 w->wchar, w->hchar, &chrect);
+			   	       wind_set(w->id, WF_VSLIDE, wsl_position(&w->vy, chrect.g_h, w->vh));				
+				       wind_set(w->id, WF_HSLIDE, wsl_position(&w->vx, chrect.g_w, w->vw));
+				       wind_set( msg[3], WF_NAME, w->name );
+				   }
+				   break;
+
+		case AC_OPEN:
+		case AC_CLOSE:
+		break;
+
+		case AP_TERM:
+			return 0;
+		break;
+
+		case AP_DD:
+		break;
+
+	}
+
+	return 1;
+}
+
+/* Viewer functions
+ *=======================================================================
+ */
+
+WORD
+open_file(fn)
+const char	*fn;
+{
+struct FILEINFO fi;
+	WORD	id, f, ret = 1;
+	WIND	w;
+	char	*buf, wn[130];
+
+	if (fn)
+		pn_full(fn, filename);
+	else if (fsel_name("Select file to view", "*.*", filename) < 1)
+		return ret;
+
+	graf_mouse(BUSYBEE, NULL);
+	f = dfind(&fi, filename, 0);
+	if (f)
+	{
+		form_error(3); /* file not found */
+		ret = 0;
+		goto err;
+	}
+	id = 0;
+
+	/*
+	 * Allocate a buffer 1 byte bigger than the file size.
+	 * If the last line of the file doesn't end in a newline,
+	 * tw_new() will have to add one.
+	 */
+	if ((buf = malloc(fi.size + 1)) != NULL)
+	{
+		f = (WORD)Fopen(filename, 0);
+		Fread(f, fi.size, buf);
+		Fclose(f);
+
+		/* Add in IconFlag to see if SMALLER is available. cjg 06/24/93 */
+		id = tw_new(TW_KIND| IconFlag, wsid, def_font, def_pts, buf, fi.size, def_tabs);
+	}
+
+	if (id <= 0)
+	{
+		if (buf)
+			free(buf);
+		form_error((id == -33) ? 8 : 4); /* no memory : no room */
+		ret = 0;
+		goto err;
+	}
+
+	w = w_lookup(id);
+	w->do_key = tw_key;
+	w_windfp(w, WM_CLOSED) = tw_closed;
+	w_windfp(w, WM_NEWTOP) =
+	w_windfp(w, WM_ONTOP) = tw_ontop;
+	w_windfp(w, WM_UNTOPPED) = tw_untop;
+	w_windfp(w, WM_TOPPED) = tw_topped;
+
+	if (wsout[4] < 0x200 && def_font == 1 && def_pts < 10)
+	{
+	/* Small pixels, leave space around small system fonts for legibility */
+		w->wchar += (def_pts == 9) + 1;
+	}
+
+	wn[0] = ' ';
+	strcat(strcpy(&wn[1], filename), " ");
+	w_nameinfo(w, wn, NULL);
+	w_open(w, NULL);
+
+err:
+	graf_mouse(ARROW, NULL);
+	return ret;
+}
+
+/************************************************************************/
+
+void
+main(argc, argv)
+	char	*argv[];
+{
+	int i;
+	EMU	e;
+	int	flag;
+
+extern int dd_command(const char *,int,const char *,int,const char **);
+
+	gem_init();
+	appl_register(menuname());
+
+#if 0	/* drag & drop doesn't exist yet */
+/*
+ * If we're already running, send a drag & drop message with our args
+ * to the existing copy of us.
+ */
+	--argc, ++argv;
+	if ((i = appl_find(ap_fname)) != -1 && argc
+	&&	dd_command(ap_wname, i, ap_fname, argc, argv))
+		gem_exit(-1);
+#else
+/* if we're already running, we don't want our windows sticking
+ * around
+ */
+	--argc, ++argv;
+# if 0
+	if (appl_find(ap_fname) != -1 && argc) {
+		exit_on_close = 1;
+	}
+# else
+        if (argc) exit_on_close = 1;
+# endif
+#endif
+
+/*
+ * If dd_command() failed, or we weren't running, crank 'er up.
+ */
+	appl_name(ap_fname);
+
+	if (!exit_on_close) {
+		i = iw_new(wsid, desk.g_x + desk.g_w - ICONWIND_W, desk.g_y,
+				ap_wname, eye, BLACK, WHITE, NULL);
+		if (i < 0)
+		{
+		    form_error(4); /* no room */
+		    gem_exit(i);
+		}
+		iw0 = w_lookup(i);
+		iw0->do_button = iw_button;
+		w_windfp(iw0, WM_CLOSED) = iw0_close;
+		w_open(iw0, NULL);
+	}
+
+	flag = FALSE;
+	while (*argv && open_file(*argv++))
+	   flag = TRUE;
+	;
+
+	/* Enter this if NOT MultiTOS mode, or a file was present */
+	if( ( MultiFlag != -1 ) || flag ) {
+	   e.flags = MU_KEYBD|MU_BUTTON|MU_MESAG;
+	   e.bclicks = e.bmask = e.bstate = 1;
+	   do {
+		evnt_emu(&e);
+
+		if ((e.events & MU_BUTTON)
+		&&	!do_button(e.mx, e.my, e.mb, e.ks, e.br))
+			e.events = 0;
+
+		if ((e.events & MU_KEYBD)
+		&&	!do_key(e.ks, e.kr))
+			e.events = 0;
+
+		if ((e.events & MU_MESAG)
+		&&	!do_msg(e.msg))
+			e.events = 0;
+
+	   } while (e.events);
+
+	}
+	gem_exit(0);
+}
+
+
+
+MLOCAL void
+i_draw( w, rclip)
+	WIND	w;
+	GRECT	*rclip;
+{
+	static FDB	screen_fd, icon_fd = { NULL, 32, 32, 2, 0, 1 };
+	GRECT	r;
+	WORD	tfill, i, txy[4], bxy[4], ixy[8];
+	WORD	colors[2];
+
+	colors[0] = BLACK;
+	colors[1] = WHITE;
+
+	wind_get( w->wsid, WF_WORKXYWH, &r.g_x, &r.g_y, &r.g_w, &r.g_h );
+
+	/* icon */
+	icon_fd.fd_addr = viewfile;
+	ixy[0] = ixy[1] = 0;
+	ixy[2] = ixy[3] = 31;
+
+	r.g_x += ( r.g_w - 32 )/2;
+	r.g_y += ( r.g_h - 32 )/2;
+	r.g_w = 31;
+	r.g_h = 31;
+	rc_getpts(&r, &ixy[4]);
+
+	/* draw icon box */
+	vrt_cpyfm( w->wsid, MD_REPLACE, ixy, &icon_fd, &screen_fd, colors );
+}

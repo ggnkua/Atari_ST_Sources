@@ -1,0 +1,438 @@
+head	1.10;
+access;
+symbols;
+locks
+	ersmith:1.10;
+comment	@ * @;
+
+
+1.10
+date	93.06.15.22.53.36;	author ersmith;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	93.06.14.23.48.02;	author ersmith;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	93.06.09.23.47.00;	author ersmith;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	93.05.12.15.50.18;	author ersmith;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	93.04.27.23.00.14;	author ersmith;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	93.04.14.22.19.54;	author ersmith;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	93.03.12.19.51.12;	author ersmith;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	93.03.10.20.12.42;	author ersmith;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	93.03.08.20.07.02;	author ersmith;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	93.02.24.23.52.46;	author ersmith;	state Exp;
+branches;
+next	1.0;
+
+1.0
+date	93.02.03.21.26.46;	author ersmith;	state Exp;
+branches;
+next	;
+
+
+desc
+@GEM AES application queue code
+@
+
+
+1.10
+log
+@Minor resource editing, elclean ups, etc.
+@
+text
+@/*	GEMQUEUE.C	1/27/84 - 01/07/85	Lee Jay Lorenzen	*/
+/*	Reg Opt		03/09/85		Derek Mui		*/
+/*	Modify doq for acc wait	7/13/90		D.Mui			*/
+/*	Modify the doq and aqueue for multiple windows 10/28/90	D.Mui	*/
+/*	02/16/93	cjg	Convert to Lattice C 5.51		*/
+/*	02/23/93	cjg	Force the use of prototypes		*/
+
+/*	-----------------------------------------------------------
+*	AES Version 4.0	MultiTOS version is written by Derek M. Mui
+*	Copyright (C) 1992 
+*	Atari (U.S.) Corp
+*	All Rights Reserved
+*	-----------------------------------------------------------
+*/	
+
+/*
+*	-------------------------------------------------------------
+*	GEM Application Environment Services		  Version 1.0
+*	Serial No.  XXXX-0000-654321		  All Rights Reserved
+*	Copyright (C) 1985			Digital Research Inc.
+*	-------------------------------------------------------------
+*/
+#include "pgem.h"
+#include "pmisc.h"
+
+#include "machine.h"
+#include "aesmint.h"
+
+#include "message.h"
+
+						/* in PD88.C		*/
+EXTERN	PD	*currpd;
+EXTERN	WORD	spdid;
+EXTERN	WORD	gl_multi;
+
+
+	VOID
+doq( donq, p, m )
+	WORD		donq;
+	REG PD		*p;
+	QPB		*m;
+{
+	REG WORD	n;
+	REG WORD	index, *om, *nm;
+
+
+	n = m->qpb_cnt;
+
+	if (donq)
+	{
+	  LBCOPY(p->p_qaddr + p->p_qindex, m->qpb_buf, n);
+#if 1
+	/* the code below was commented out for MultiTOS */
+	/* why?? */
+						/* if its a redraw msg	*/
+						/*   try to find a 	*/
+						/*   matching msg and	*/
+						/*   union the redraw	*/
+						/*   rects together	*/
+	  nm = (WORD *) &p->p_queue[p->p_qindex];
+
+	  if ( nm[0] == WM_REDRAW )
+	  {
+	    index = 0;
+	    while ( (index < p->p_qindex) &&
+		    (n) )
+	    {
+	      om = (WORD *) &p->p_queue[index];
+	      if ( (om[0] == WM_REDRAW) &&
+		   (nm[3] == om[3]) )
+	      {
+		rc_union(&nm[4], &om[4]);
+	        n = 0;
+	      }
+	      else
+	        index += (om[2] + 16);
+	    }
+	  }
+#endif
+	  p->p_qindex += n;
+	}
+	else
+	{
+	  LBCOPY(m->qpb_buf, p->p_qaddr, n);
+
+	  p->p_qindex -= n;
+	  if ( p->p_qindex )
+	  {
+	    LBCOPY( p->p_qaddr, p->p_qaddr + n, p->p_qindex );
+	  }
+	}
+ }
+
+
+/*	Queue up events to wait for message	*/
+
+	WORD
+aqueue( isqwrite, e, lm )
+	WORD		isqwrite;
+	REG EVB		*e;
+	REG QPB		*lm;
+{
+	REG PD		*p;
+	EVB		**ppe;
+	EVB		*e1;
+	WORD		qready,reverse;
+
+	if ( !( p = idtopd( lm->qpb_pid ) ) ) {
+	  Debug5("aqueue: p is null\r\n");
+	  return( FALSE );
+	} 
+	else
+	{
+	  if ( p->p_state == PS_DEAD ) {
+	    Debug5("aqueue: p is dead\r\n");
+	    return( FALSE );
+	  }
+	}
+
+	if ( isqwrite )
+	  qready = ( lm->qpb_cnt < (QUEUE_SIZE - p->p_qindex) );
+	else		  /* was <=, changed 4/12/93 hmk */
+	  qready = ( p->p_qindex > 0 );
+
+	ppe = (isqwrite ^ qready) ? &p->p_qnq : &p->p_qdq;
+
+	reverse = FALSE;
+
+	if ( qready )
+	{
+	  doq( isqwrite, p, lm );	/* do the operation	*/
+	  e->e_mask = 0;	
+/*	  zombie( e );	*/
+					/* if somone is waiting for the */
+	  				/* operation then wake him up 	*/
+q_1:	  if ( e1 = *ppe )
+	  {
+	     while( e1 )		/* get the last one	*/
+	     {
+	       if ( e1->e_link )
+	         e1 = e1->e_link;
+	       else
+		 break;	
+	     }		     
+	
+	     doq( !isqwrite, p, (QPB *) e1->e_parm );
+	     e1->e_flag |= NOCANCEL;
+	     evremove( e1, 0 );
+	     if ( reverse )
+	     {
+	       doq( isqwrite, p, lm );
+	       e->e_mask = 0;
+/*	       zombie( e );	*/
+	     }
+	  }
+	}
+	else					
+	{			
+	  if ( !isqwrite ) 	/* if read but no message then check	*/
+	  {			/* to see if somebody is waiting to send*/
+	    if ( *ppe )		/* Yes	*/
+	    {
+	      reverse = TRUE;
+	      goto q_1;	
+	    }
+	  }
+	  else
+	  {			/* if queue is full and it is writing to */
+				/* itself, then return error		 */	
+	    if ( p == currpd ) {
+	      Debug1(currpd->p_name); Debug1(": Event queue is full.\r\n");
+	      return( FALSE );
+	    }
+	  }
+
+	  if ( spdid != currpd->p_pid )
+	  {
+	    e->e_parm = ( LONG )lm;
+	    evinsert( e, ppe );
+	  }	
+	  else {
+	    Debug5("aqueue: deadlock case\r\n");
+	    if (spdid){
+		Debug1("spdid is: "); Debug1(currpd->p_name); Debug1("\r\n");
+	    }else
+		Debug1("spdid is 0\r\n");	
+
+					/* to prevent dead lock		*/
+	    return( FALSE );		/* reject the request		*/
+	  }
+	}
+
+	return( TRUE );
+}
+
+@
+
+
+1.9
+log
+@Merged in Hans-Martin and Cary's changes
+@
+text
+@@
+
+
+1.8
+log
+@Another check in to save work.
+@
+text
+@@
+
+
+1.7
+log
+@Check in to save work
+@
+text
+@d52 3
+d60 1
+a60 3
+/*
+	  if (!gl_multi) {
+		  nm = (WORD *) &p->p_queue[p->p_qindex];
+d62 18
+a79 19
+		  if ( nm[0] == WM_REDRAW )
+		  {
+		    index = 0;
+		    while ( (index < p->p_qindex) &&
+			    (n) )
+		    {
+		      om = (WORD *) &p->p_queue[index];
+		      if ( (om[0] == WM_REDRAW) &&
+			   (nm[3] == om[3]) )
+		      {
+			rc_union(&nm[4], &om[4]);
+		        n = 0;
+		      }
+		      else
+		        index += (om[2] + 16);
+		    }
+		  }
+	}
+*/
+@
+
+
+1.6
+log
+@Merged Cary's and Hans-Martin's changes
+@
+text
+@@
+
+
+1.5
+log
+@Incorporated more single/multitasking changes.
+@
+text
+@d108 2
+a109 1
+	if ( !( p = idtopd( lm->qpb_pid ) ) )
+d111 1
+d114 2
+a115 1
+	  if ( p->p_state == PS_DEAD )
+d117 1
+d181 8
+a188 1
+	  else				/* to prevent dead lock		*/
+d190 1
+@
+
+
+1.4
+log
+@Merged HMK's loadable resource stuff
+@
+text
+@d28 3
+d34 1
+d44 1
+a44 1
+
+d57 22
+a78 19
+/*	  nm = (WORD *) &p->p_queue[p->p_qindex];
+
+	  if ( nm[0] == WM_REDRAW )
+	  {
+	    index = 0;
+	    while ( (index < p->p_qindex) &&
+		    (n) )
+	    {
+	      om = (WORD *) &p->p_queue[index];
+	      if ( (om[0] == WM_REDRAW) &&
+		   (nm[3] == om[3]) )
+	      {
+		rc_union(&nm[4], &om[4]);
+	        n = 0;
+	      }
+	      else
+	        index += (om[2] + 16);
+	    }
+	  }
+d117 2
+a118 2
+	  qready = ( lm->qpb_cnt <= (QUEUE_SIZE - p->p_qindex) );
+	else
+d166 2
+a167 1
+	    if ( p == currpd )
+d169 1
+@
+
+
+1.3
+log
+@Lattice port
+@
+text
+@@
+
+
+1.2
+log
+@REAL MultiTOS 1.01
+@
+text
+@d5 2
+d23 2
+d26 2
+a27 6
+#include <compiler.h>
+#include <machine.h>
+#include <pdstruct.h>
+#include <obdefs.h>
+#include <gemlib.h>
+#include <aesmint.h>
+a28 1
+EXTERN	PD	*idtopd();
+d165 1
+a165 1
+	    e->e_parm = lm;
+@
+
+
+1.1
+log
+@1 meg floppy MultiTOS
+@
+text
+@@
+
+
+1.0
+log
+@MultiTOS version 1.0
+@
+text
+@@

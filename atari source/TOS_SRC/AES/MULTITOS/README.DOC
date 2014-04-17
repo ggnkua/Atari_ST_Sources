@@ -1,0 +1,161 @@
+README.DOC for MultiTOS					11/19/92
+Copyright 1992. All Rights Reserved.
+CONFIDENTIAL - For your eyes only
+-------------------------------------------------------------------
+
+Building MultiTOS:
+
+The current directory E:\AES40 contains all the source files *.h *.s *.c *.o *.oo
+etc that are necessary to build MultiTOS. It is best for anyone to start up a shell
+to do the make. I am using the SUPERCOM.PRG as my shell to build the MultiTOS. However, 
+other shell program like gulam.prg is OK too.
+
+	The MultiTOS itself is actually an AES + Desktop + Resources ( all contries ).
+Each resource file also has AES, DESKTOP and default desktop.inf information in it.
+First thing to do is to update the resource files and 'glue' them together for each 
+country, then run newglue.prg to make the glue.XXX file and XXX is the country code.
+For example: USA for English, GRM for German and FRE for French etc. Finally, do 
+make -f makeprg. The make will automatically check for files that need to be compiled.
+The final output is 'GEM.SYS' and this file will be copied to c:\ at the end.
+
+
+About the desktop:
+
+Most of the desktop files are named like deskxxx.c and the start up file for desktop
+is deskstart.s. The codes in the desktop are very strict forward except at the part
+in the desktop.c that does the icon fixup. The reason is the current development
+tools can't create a resource file that contains color icons. Every color icon object 
+that you see at the desktop background is done by desktop artifically. Please read the
+code itself and hopefully you can figure out what is going on.
+
+
+About the AES:
+
+The AES itself is more complicated. A lot of codes have been rewritten to make it works
+under the MultiTOS environment. In the old AES ( F:\aes331 ), the context switching is
+done by the AES itself whenever application makes an AES call. In the MultiTOS, the 
+switching is done by the MiNT and it can happen at any time and at any where. A lot
+attention has to pay of answering this question, "What happen if this line of code is
+swapped out?" 
+
+The AES is now divided into three processes. The first process is the AES itself which 
+handles all the AES calls, scheduling, events forking and polling etc. The startup 
+codes of the AES is in gemstart.s it will eventually call main() in the geminit.c. 
+At this point, the AES will allocate a PD for itself in the AES which is process 0 
+( this will never change ). Then it goes on to open a physical work station, initalize
+window library, install trap2 vectors, create screen manager and desktop processes etc.
+
+
+Forker()
+In order to understand how AES works, we need to start from the bottom which is the
+event handler. In AES, events are mouse movement, button pressed and timer.  
+These events are handled by AES by queueing them on a FORKQ. The forkq
+is a structure with address of a function and a long data of an event. If button is 
+pressed, an interrupt will be generated, the button value is placed in the data field of
+a forkq and the function address ( &bchange() ) will be placed in the address field. The
+forkq event will be processed by the AES when it finishes handling the current AES 
+function call. The interrupt codes are in interrup.s and the event functions are in the
+gemsignal.c There are onl
+
+Disp()
+The function that processes all the forkq events is called disp() in the gemdisp.c. It 
+contains a loop that checks for keyboard events and processes new incoming forkq events.
+The keyboard event is being polled instead of using a forkq event because AES does not
+install a keyboard interrupt handler. In the forker() function, every event that is
+queued up by the forkq will be executed. After that, the disp() will call scheduler() 
+which links any process that are made READY by the forkq to the ready list (rlr). 
+BTW, the current running process PD structure is stored in variable currpd. The way the
+forker works is it jumps to the function location along with the long data from the
+forkq structure. Each function is designed partically for one event type. For example,
+bchange() checks for which process is waiting for click, checks for ownership and also
+what part of the screen the click is on etc and determines which process need to be
+waked up. The wake up sequence involves - evremove() which unlinks the EVB strcuture from
+the waiting process's PD links it to zlr - zombie() and signal() - unlinks the process 
+from not ready list ( nrl ) to dispatcher list ( drl ).
+
+Grptrp()
+In MultiTOS, every process makes an AES call through the trap2. The trap2 codes are in
+aestrap.s labelled as grptrp. It first checks for the incoming call to see if it is an
+AES function. If no, then redirects it to the old trap2 handler, otherwise take care of
+it in the following sequence. Wait for the AES semaphore ( make sure no one is in the
+AES ), then get the appropriate PD structure according to information in the pglobal.
+Any process that makes its first AES call will fail because it will contain the 'stuff'
+that get_aespd() is looking for and this 'stuff' is written at appl_init().
+Every function call will be examined by chk1bind which check for the nature of
+the call. If the call has no potential of being blocked by AES or it needs to allocate
+memory to perform certain task ( e.g. rsrc_load() ), it will be processed immediately
+which under the application context. Otherwise, it will be directed to sendmsg() call 
+which sends message to AES and then sleep on it. This implementation is to increase the
+performance of MultiTOS so that application will actually go to sleep instead of looping
+for services.
+
+Sendmsg()
+The sendmsg is called when the incoming process wants to make an AES call that may be
+blocked by the AES ( e.g. Evnt_multi() ). The codes do nothing more than stuff the
+function code and control block and then send message and sleep. It also contains codes
+to check to see if the current system is being 'controlled' by a special process. This
+special process is determined by certain factors. If a process is being started up, it
+is linked to the alr, every process being taken off from this list is assigned to the
+cpdid ( critical process id ). Once this process is being raised to this level, then 
+no other process can ( as long as they want to make AES call ) run until it is being 
+changed to 'WAIT' state for waiting an event or wind_update semaphore etc. The idea is
+to guarantee this partically process will run ( PS_ALLRUN ) until it goes into 
+evnt_multi(). However, in some cases, some 'stupid' applications may not make any AES 
+call that causes it to go into PS_MWAIT state, this will cause the system being 'owned' 
+by this process and no other process can run. Fortunately, the screen manager will do 
+something about this kind of situation. Please study the hctl_timer() in screen manager
+section.
+
+Screen Manager()
+The screen manager - screenmgr() is very important because it handles all the events 
+that AES is responsible for. That includes when the mouse enters the menu bar area or 
+when the mouse button is pressed on certain area of a window etc. The screen manager is
+more less like an application. It waits for event by making evnt_multi() call. However, 
+the advantage of the screen manager is that AES knows about its existance and a lot of 
+events will be sent to it by the AES regardless if other applicatons is asking for it.
+For example: When the mouse enters the menu bar area, AES will notify the screen
+manager about this even though another application may ask for the same mouse rectangle
+event. The menu drop down is handled by hctl_rect(). Button event that happens on the
+restricted area ( window arrow, size, closer and fuller etc ) is handled by 
+hctl_button() function. There is also a timer event handler in the screen manager, 
+the idea is to check the system status and change it accordingly. When a single process
+that controls ( PS_ALLRUN ) the system and never give it up, the timer handler comes to 
+rescue. It will check to see if any process taking up the system too long, if so, 
+change it from PS_ALLRUN state to PS_RUN state reset the cpdid to -1. Another purpose of
+this handler is to check to see if there is any dead process still being registered to 
+AES. if so, then unregister it and frees up the PD strcuture.
+
+Terminating process
+All the terminating process will be handed by pdterm() in gemdisp.c. When a terminated
+process exits, MiNT will send a signal (SIGTERM) to the its owner. In most case, this 
+owner is the AES itself. However, some programs will launch a child GEM program 
+themselves which when exits, the AES has no way to know about it. This is the reason why
+the screen manager has to check for every 5 seconds to find out if there is any dead
+process. When a terminate signal is caught by AES, it will look for the correspondance
+process, marks it as PS_DEAD and links to tlr and be processed at a later time.
+
+Window manager
+The new window manager is being redesigned and can handle unlimited number of windows.
+All the window structure is stored in a link list format and there is a bucket to store
+all the handles. Each bucket has 8 slots and must always be filled up unless there are
+less than 8 windows opened ( always full logic ). The window codes are pretty straight
+forward and well documented. The FALCON030 also used the same window library except one
+thing. In the MultiTOS, there is a window called phantom window that is opened by the
+system where FALOCN030 has non of this 'feature'. The idea is to present a no top window
+environemnt to the user. Since the window library can't create this environment ( it is 
+against the logic and concept of the library ), so phantom window is implemented to 
+accomplish the no top window goal. The phantom window is opened when needed at a off 
+screen location, and closed when not in use. The codes are pretty weird and care must be
+taken when changing it.
+
+How do I debug the AES?
+The only way to debug the AES is to study the codes and try to figure out something from
+it. Since the DB does not work under the MiNT ( actually it works but it does not help )
+, the best way to look at the progress of the system is put debugX() when X is the debug
+level number at each line of codes. This will help you to understand if certain piece of 
+codes are being executed and hopefully it can help you to find out the problem.
+ 
+
+What happen if the click does not respond?
+What happen if the system locks up?
+What happne if the menu does not drop down?

@@ -1,0 +1,871 @@
+' ------------------------------------------------------------------------------
+' - 'Fliegende Dialoge' fÅr GFA-BASIC 3.x                                      -
+' -                                                                            -
+' - von Gregor Duchalski, Baueracker 15a, D-44627 Herne                        -
+' - eMail-Kontakt: Gregor_Duchalski@do.maus.ruhr.de                            -
+' -                                                                            -
+' - Version 4.9, last change 02.06.94                                          -
+' ------------------------------------------------------------------------------
+' Bitte vor dem Starten den INLINE in 'rsc_init'
+' einlesen und den Pfad der RSC-Datei Ñndern.
+'
+$m40960
+RESERVE 40960                                     ! Nur im Interpreter!
+'
+rsc_init
+'
+IF @rsc_laden("D:\GFA_FLY4\GFA_FLY4.RSC",3,1,2,3) ! File$,Trees,Popup,Menu,Alert
+  main
+ENDIF
+'
+rsc_exit
+'
+> PROCEDURE main
+  LOCAL rsc&,popup&
+  '
+  ~GRAF_MOUSE(0,0)                           ! FÅr den Compiler!
+  ' Weil's im Interpreter schîner aussieht, fÅr den Compiler bitte entfernen!
+  ~FORM_DIAL(3,deskx&,desky&,deskw&,deskh&,deskx&,desky&,deskw&,deskh&)
+  '
+  rsc_draw(flags|,FALSE)                     ! Dialog zeichnen
+  '
+  REPEAT
+    rsc&=@rsc_do(flags|,0,popup&)            ! Dialog auswerten
+    '
+  UNTIL rsc&=abbruch| OR rsc&=ok|
+  '
+  rsc_back(flags|)                           ! Dialog entfernen
+  '
+RETURN
+' ------------------------------------------------------------------------------
+> PROCEDURE rsc_init
+  LOCAL a&
+  '
+  ' Initialisiert die von den RSC-Routinen benîtigten Variablen...
+  '
+  ap_id&=APPL_INIT()                         ! Applikations-ID
+  '
+  rsc_aes&=INT{{ADD(GB,4)}}                  ! AES-Version
+  rsc_mtsk!=INT{ADD({ADD(GB,4)},2)}<>1       ! Multitasking?
+  rsc_alert&=-1                              ! Noch keine fliegenden Alerts
+  '
+  CONTRL(6)=GRAF_HANDLE(wchar&,hchar&,a&,a&) ! AES-Handle, Zeichenbreite/Hîhe
+  rsc_vh&=V_OPNVWK(1)                        ! Virt.Workst. fÅr Flydials îffnen
+  IF rsc_vh&=0
+    rsc_vh&=V~H                              ! ...Fehler, dann eben die alte
+  ENDIF
+  CONTRL(6)=V~H
+  '
+  INTIN(0)=1
+  VDISYS 102,1,0
+  planes&=INTOUT(4)                          ! Bitplanes
+  '
+  ~WIND_GET(0,7,deskx&,desky&,deskw&,deskh&) ! Hintergrundfenster
+  ' ------------------------------------------------------ Inline vorbereiten
+  INLINE rsc_flyd%,2834
+  '
+  rsc_bitblt%=ADD(rsc_flyd%,INT{ADD(rsc_flyd%,16)})      ! BITBLT-Routine
+  rsc_obspec%=ADD(rsc_flyd%,INT{ADD(rsc_flyd%,18)})      ! OB_SPEC-Routine...
+  rsc_cookie%=ADD(rsc_flyd%,INT{ADD(rsc_flyd%,20)})      ! COOKIE-Routine...
+  '
+  {ADD(rsc_flyd%,22)}=ADD(GB,24)                         ! VDI-Parameterblock
+  INT{ADD(rsc_flyd%,26)}=rsc_vh&                         ! Virt. Workstation
+  INT{ADD(rsc_flyd%,28)}=wchar&                          ! Zeichenzellenbreite
+  INT{ADD(rsc_flyd%,30)}=hchar&                          ! Zeichenzellenhîhe
+  ' ------------------------------------------------------
+  ' Berechnet den Speicherbedarf einer Bitmap-Grafik...
+  DEFFN getsize(w&,h&)=SHL(SHR(ADD(MUL(MUL(SHR(ADD(w&,15),3),h&),planes&),255),8),8)
+  '
+  ' GegenstÅck zur Prozedur rsc_text: Universelles Objekt-Text auslesen...
+  DEFFN rsc_text$(tree&,obj&)=CHAR{C:rsc_obspec%(L:rsc_adr%(tree&),obj&)}
+  '
+RETURN
+> PROCEDURE rsc_exit
+  '
+  CONTRL(6)=rsc_vh&
+  VDISYS 38,0,0                              ! vqt_attributes
+  IF ABS(INTOUT(0))<>1                       ! Anderer AES-Zeichensatz (MTOS)...
+    ~VST_UNLOAD_FONTS(0)                     ! ...freigeben
+  ENDIF
+  '
+  IF rsc_vh&<>V~H                            ! Flydial-Workstation freigeben...
+    ~V_CLSVWK()
+  ENDIF
+  '
+  ' Die folgenden Zeilen sind nur im Interpreter relevant und kînnen im
+  ' Compilat wegfallen. Tip: Mit dem ERGO!pro-PrÑprozessor ausblenden.
+  '
+  ~RSRC_FREE()                               ! Resource entfernen
+  '
+  IF rsc_userblk%
+    ~MFREE(rsc_userblk%)                     ! Userblks freigeben
+  ENDIF
+  '
+  IF popup_back%
+    ~MFREE(popup_back%)                      ! Popup-Hintergrund freigeben
+  ENDIF
+  '
+RETURN
+'
+> FUNCTION rsc_laden(file$,trees&,popup&,menu&,alert&)
+$F%
+LOCAL tree&,obj&,font_h&,font_id&,color3d&,a%
+'
+' LÑdt die Resource und initialisiert einige globale Variablen...
+' ------------------------------------------------------ RSC laden
+' Wollen Sie das RSC-File direkt im Programmcode 'aufbewahren'?
+' Dann entREMen Sie diese Zeilen und laden Sie die Funktion
+' 'rsc_conv' aus EXTENDED.LST hinzu...
+' INLINE rsc%,3160
+' IF @rsrc_conv(rsc%)=0
+IF RSRC_LOAD(file$)=0
+  '
+  ~FORM_ALERT(1,"[3][ | Fehler beim Laden | der RSC-Datei! | ][Abbruch]")
+  RETURN FALSE
+ENDIF
+' ------------------------------------------------------
+DIM rsc_adr%(trees&),rsc_handle%(trees&)
+DIM rscx&(trees&),rscy&(trees&),rscw&(trees&),rsch&(trees&)
+'
+rsc_trees&=trees&                                      ! Anzahl ObjektbÑume-1
+rsc_popup&=popup&                                      ! Popup-Baum
+rsc_menu&=menu&                                        ! Dropdown-Baum
+rsc_alert&=alert&                                      ! Alert-Baum
+' ------------------------------------------------------
+' Die folgenden Zeilen sind nur nîtig, wenn das Resource-File ALERT-
+' oder FREE-BÑume enthÑlt. NÑheres in der Doku.
+' alerts&=trees&-SUCC(rsc_alert&)                        ! Alerts & Free Strings...
+' FOR tree&=0 TO alerts&
+' ~RSRC_GADDR(5,tree&,a%)
+' rsc_adr%(rsc_alert&+SUCC(tree&))=a%
+' NEXT tree&
+' trees&=rsc_alert&
+' ------------------------------------------------------ Adressen ermitteln
+FOR tree&=0 TO trees&
+  '
+  ~RSRC_GADDR(0,tree&,a%)  ! Kompatibel zu den XRSRC-Routinen
+  rsc_adr%(tree&)=a%
+  IF tree&<>menu&
+    ~FORM_CENTER(rsc_adr%(tree&),rscx&(tree&),rscy&(tree&),rscw&(tree&),rsch&(tree&))
+  ENDIF
+  '
+NEXT tree&
+' ------------------------------------------------------ Grîûtes Popup
+IF popup&>-1
+  obj&=1
+  '
+  WHILE obj&>0
+    popup_back%=MAX(popup_back%,@getsize(ADD(OB_W(rsc_adr%(popup&),obj&),21),OB_H(rsc_adr%(popup&),obj&)))
+    obj&=OB_NEXT(rsc_adr%(popup&),obj&)
+  WEND
+  '
+  popup_back%=MALLOC(popup_back%)                      ! Hintergrundpuffer...
+  IF popup_back%=0
+    RETURN FALSE                                       ! ...nicht geklappt
+  ENDIF
+  '
+ENDIF
+' ------------------------------------------------------ Anderer Zeichensatz
+IF rsc_aes&>=&H400 OR APPL_FIND("?API")=0              ! Hat APPL_GETINFO()...
+  '
+  GCONTRL(0)=130
+  GCONTRL(1)=1
+  GCONTRL(2)=5
+  GCONTRL(3)=0
+  GCONTRL(4)=0
+  GINTIN(0)=0
+  '
+  GEMSYS                                               ! APPL_GETINFO()
+  '
+  IF GINTOUT(0)=1                                      ! Hat geklappt...
+    font_h&=GINTOUT(1)                                 ! AES-Font Hîhe
+    font_id&=GINTOUT(2)                                ! AES-Font ID
+    '
+    IF ABS(font_id&)<>1 AND GDOS?<>0                   ! Anderer AES-Font...
+      V~H=rsc_vh&
+      ~VST_LOAD_FONTS(0)                               ! ...Fonts laden
+      DEFTEXT ,,,,font_id&
+      DEFTEXT ,,,font_h&                               ! ...und einstellen
+      V~H=-1
+    ENDIF
+  ENDIF
+ENDIF
+' ------------------------------------------------------ 3D-Darstellung
+IF rsc_aes&>=&H340                                     ! Ab AES 3.40...
+  GCONTRL(0)=48
+  GCONTRL(1)=4
+  GCONTRL(2)=3
+  GCONTRL(3)=0
+  GCONTRL(4)=0
+  '
+  GINTIN(0)=0                                          ! Inquire
+  GINTIN(1)=5                                          ! Background
+  '
+  GEMSYS                                               ! OBJC_SYSVAR()
+  '
+  IF GINTOUT(0)>0                                      ! Hat geklappt...
+    color3d&=GINTOUT(1)                                ! ...3D-Farbe
+  ENDIF
+ENDIF
+' ------------------------------------------------------
+INT{ADD(rsc_flyd%,32)}=color3d&>0                      ! 3D-Darstellung an/aus
+INT{ADD(rsc_flyd%,34)}=color3d&                        ! 3D-Farbe
+' ------------------------------------------------------
+IF @rsc_walk_tree(trees&)
+  rsc_zuweisungen(trees&)
+  RETURN TRUE                                          ! alles ok
+ENDIF
+'
+RETURN FALSE                                           ! Error!
+ENDFUNC
+> FUNCTION rsc_walk_tree(trees&)
+$F%
+LOCAL a&,b&,userblk&,tree&,obj&,a%
+'
+' RSC-Baum durchgehen und userdefs installieren...
+'
+' ------------------------------------------------------ Userdefs ermitteln
+FOR tree&=0 TO trees&
+'
+obj&=-1
+'
+REPEAT
+  '
+  INC obj&
+  '
+  a&=SHR&(OB_TYPE(rsc_adr%(tree&),obj&),8)           ! Es ist ein userdef...
+  ADD userblk&,-AND(a&>=17,a&<=22)
+  '
+UNTIL BTST(OB_FLAGS(rsc_adr%(tree&),obj&),5)         ! ...bis LAST_OBJ
+'
+NEXT tree&
+'
+rsc_userblk%=MALLOC(SHL(SUCC(userblk&),3))             ! Userblks(+1) anfordern (*8)
+IF rsc_userblk%=0                                      ! Zu wenig Speicher...
+RETURN FALSE                                         ! ...Error!
+ENDIF
+a%=rsc_userblk%                                        ! Merken
+' ------------------------------------------------------ ObjektbÑume modifiz.
+FOR tree&=0 TO trees&
+'
+obj&=-1
+REPEAT
+  '
+  INC obj&
+  '
+  SELECT SHR&(OB_TYPE(rsc_adr%(tree&),obj&),8)       ! OB_TYPE
+    ' ------------------------------------------------ Flydial-Ecke...
+  CASE 17
+    rsc_instal_userdef(tree&,obj&,5)
+    ' ------------------------------------------------ Button/String...
+  CASE 18
+    '
+    a&=OB_FLAGS(rsc_adr%(tree&),obj&)                ! OB_FLAGS
+    b&=BYTE(OB_TYPE(rsc_adr%(tree&),obj&))           ! Alter OB_TYPE
+    '
+    IF BTST(a&,4)                                    ! Radiobutton...
+      rsc_instal_userdef(tree&,obj&,1)
+      '                                              ! BUTTON, nicht EXIT
+    ELSE IF b&=26 AND (NOT BTST(a&,2))               ! Checkbutton...
+      rsc_instal_userdef(tree&,obj&,2)
+      '
+    ELSE                                             ! Normale EXIT-Buttons...
+      '
+      IF b&<>28                                      ! Kein STRING...
+        a&=SUCC(-BTST(a&,1)-BTST(a&,2)-BTST(a&,6))
+        IF a&>1 !EXIT       DEFAULT    TOUCHEXIT
+          OB_X(rsc_adr%(tree&),obj&)=SUB(OB_X(rsc_adr%(tree&),obj&),a&)
+          OB_Y(rsc_adr%(tree&),obj&)=SUB(OB_Y(rsc_adr%(tree&),obj&),a&)
+          OB_W(rsc_adr%(tree&),obj&)=ADD(OB_W(rsc_adr%(tree&),obj&),ADD(a&,a&))
+          OB_H(rsc_adr%(tree&),obj&)=SUCC(ADD(OB_H(rsc_adr%(tree&),obj&),ADD(a&,a&)))
+        ENDIF                                        ! ...fÅr Redraw grîûer
+      ENDIF
+      '
+      rsc_instal_userdef(tree&,obj&,6)
+      '
+    ENDIF
+    ' ------------------------------------------------ Unterstr. Text...
+  CASE 19
+    rsc_instal_userdef(tree&,obj&,4)
+    OB_FLAGS(rsc_adr%(tree&),obj&)=BSET(OB_FLAGS(rsc_adr%(tree&),obj&),13)
+    ' ...OB_FLAG 13 setzen, wird in 'rsc_draw' benîtigt
+    ' ------------------------------------------------ Rahmen...
+  CASE 20
+    rsc_instal_userdef(tree&,obj&,3)
+    ' ------------------------------------------------ Niceline...
+  CASE 21
+    rsc_instal_userdef(tree&,obj&,8)
+    ' ------------------------------------------------ Circlebutton...
+  CASE 22
+    IF hchar&=8 OR hchar&=16                         ! ...nur wenn mîglich
+      rsc_instal_userdef(tree&,obj&,7)               ! ...als Bitmap
+    ELSE
+      OB_TYPE(rsc_adr%(tree&),obj&)=OR(SHL&(27,8),BYTE(OB_TYPE(rsc_adr%(tree&),obj&)))
+    ENDIF                                            ! ...sonst Pfeil lassen
+    '
+  ENDSELECT
+  '
+UNTIL BTST(OB_FLAGS(rsc_adr%(tree&),obj&),5)         ! Bis LAST_OB gesetzt
+'
+NEXT tree&
+'
+{rsc_userblk%}=0                                       ! FÅr Nullstrings
+rsc_userblk%=a%                                        ! FÅr MFREE() am Ende
+'
+RETURN TRUE                                            ! Alles OK
+ENDFUNC
+> PROCEDURE rsc_instal_userdef(tree&,obj&,nr&)
+'
+' Userdef-Objekt installieren...
+'
+' nr& bezeichnet eine der folgenden Ausgaberoutinen:
+' 1  Radiobutton, rund
+' 2  Check-Button
+' 3  Rahmen
+' 4  Unterstr. Text
+' 5  Flydial
+' 6  Button
+' 7  Circlebutton
+' 8  Niceline
+'
+{rsc_userblk%}=ADD(rsc_flyd%,INT{ADD(rsc_flyd%,SHL(PRED(nr&),1))})
+{ADD(rsc_userblk%,4)}=OB_SPEC(rsc_adr%(tree&),obj&)
+'
+OB_SPEC(rsc_adr%(tree&),obj&)=rsc_userblk%             ! userdef und alter Typ
+OB_TYPE(rsc_adr%(tree&),obj&)=OR(SHL&(BYTE(OB_TYPE(rsc_adr%(tree&),obj&)),8),24)
+'                                                      ! im oberen Byte
+ADD rsc_userblk%,8
+'
+RETURN
+'
+> FUNCTION rsc_do(tree&,next_obj&,VAR popup&)
+$F%
+LOCAL ascii|,scan|,a&,edit_obj&,cont&,ob_tail&,obj&,idx&
+LOCAL evnt&,mx&,my&,mb&,mc&,shift&,key&,rsc_adr%,keytab%
+'
+' Dialog auswerten...
+'
+~WIND_UPDATE(1)                                          ! BEG_UPDATE
+~WIND_UPDATE(3)                                          ! BEG_MCTRL
+'
+rsc_adr%=rsc_adr%(tree&)
+cont&=TRUE
+' -------------------------------------------------------- Editierbares Objekt
+DO WHILE (NOT BTST(OB_FLAGS(rsc_adr%,next_obj&),3)) OR BTST(OB_STATE(rsc_adr%,next_obj&),3)
+INC next_obj&
+LOOP UNTIL BTST(OB_FLAGS(rsc_adr%,next_obj&),5)
+IF BTST(OB_FLAGS(rsc_adr%,next_obj&),5) AND (NOT BTST(OB_FLAGS(rsc_adr%,next_obj&),3))
+next_obj&=0
+ENDIF
+' --------------------------------------------------------
+WHILE cont&
+'
+IF next_obj&<>0 AND edit_obj&<>next_obj&               ! Ggf. Cursor setzen...
+edit_obj&=next_obj&
+next_obj&=0
+~OBJC_EDIT(rsc_adr%,edit_obj&,0,idx&,1,idx&)         ! ...Cursor ein
+ENDIF
+'
+evnt&=EVNT_MULTI(&X11,2,1,1,0,0,0,0,0,0,0,0,0,0,0,0,mx&,my&,mb&,shift&,key&,mc&)
+' ------------------------------------------------------ Tastaturereignis
+IF BTST(evnt&,0)
+'
+cont&=FORM_KEYBD(rsc_adr%,edit_obj&,key&,0,next_obj&,key&)
+' Mîchten Sie erweiterte Tastaturkommandos? Dann entREMen Sie
+' diese Zeile und ersetzen die Prozedur durch:
+' cont&=@form_keybd(rsc_adr%,edit_obj&,key&,0,next_obj&,key&,idx&)
+'
+ascii|=BYTE(key&)                                    ! ASCII-Code
+scan|=BYTE(SHR(key&,8))                              ! SCAN-Code
+'
+IF ascii|=0                                          ! Kein ASCII-Code...
+  '
+  IF scan|=97 OR scan|=98                            ! UNDO/HELP...
+    ascii|=ADD(SUB(scan|,97),14)
+    obj&=0
+    DO WHILE BTST(OB_FLAGS(rsc_adr%,obj&),5)=FALSE
+      INC obj&
+    LOOP UNTIL BTST(OB_FLAGS(rsc_adr%,obj&),ascii|)
+    IF BTST(OB_FLAGS(rsc_adr%,obj&),ascii|)
+      cont&=FORM_BUTTON(rsc_adr%,obj&,1,next_obj&)
+    ENDIF
+    '
+  ELSE IF scan|>=59 AND scan|<=68                    ! F-Tasten...
+    ascii|=SUB(scan|,58)
+    obj&=0
+    DO WHILE BTST(OB_FLAGS(rsc_adr%,obj&),5)=FALSE
+      INC obj&
+    LOOP UNTIL SHR&(OB_STATE(rsc_adr%,obj&),12)=ascii|
+    IF SHR&(OB_STATE(rsc_adr%,obj&),12)=ascii|
+      cont&=FORM_BUTTON(rsc_adr%,obj&,1,next_obj&)
+    ENDIF
+    '
+  ELSE                                               ! ALT+Buchstabe...
+    '
+    IF scan|>=120 AND scan|<=129                     ! Zahlen...
+      SUB scan|,118
+      keytab%={XBIOS(16,L:-1,L:-1,L:-1)}             ! ...ohne Shift
+    ELSE                                             ! Alles andere...
+      keytab%={ADD(XBIOS(16,L:-1,L:-1,L:-1),4)}      ! ...mit Shift
+    ENDIF
+    '
+    ascii|=BYTE{ADD(keytab%,scan|)}                  ! ASCII-Code holen
+    '
+    IF ascii|                                        ! Tastaturbedienbar...
+      CLR a&,obj&
+      '
+      DO WHILE NOT BTST(OB_FLAGS(rsc_adr%,obj&),5)   ! Nicht LASTOBJ
+        INC obj&
+        '
+        scan|=BYTE(SHR(OB_TYPE(rsc_adr%,obj&),8))
+        IF scan|=26 OR scan|=28                      ! Ein Button/String...
+          a$=@rsc_text$(tree&,obj&)                  ! ...Text
+          '
+          a&=INSTR(a$,"[")
+          IF a&                                      ! Tastaturbedienbar...
+            a&=ASC(MID$(a$,SUCC(a&),1))
+            a&=(BCLR(a&,5)=ascii|) OR (a&>=48 AND a&<=57 AND a&=ascii|)
+          ENDIF
+          '                                          ! '[' vor Zeichen
+        ENDIF
+        '
+      LOOP UNTIL a&                                  ! ...gefunden
+      '
+      IF a&                                          ! Objekt gefunden...
+        key&=0                                       ! ...keine Eingabe mehr
+        '                                            ! +SHIFT Circle-Butt?
+        IF BTST(shift&,1) AND BTST(OB_FLAGS(rsc_adr%,obj&),6) AND BTST(OB_STATE(rsc_adr%,SUCC(obj&)),5) AND SHR(OB_TYPE(rsc_adr%,obj&+2),8)=27
+          evnt&=BSET(evnt&,1)                        ! ...Mausklick simulieren
+          ~OBJC_OFFSET(rsc_adr%,obj&+2,mx&,my&)
+          '                                          ! Ist es ein Popup...
+        ELSE IF BTST(OB_FLAGS(rsc_adr%,obj&),6) AND BTST(OB_STATE(rsc_adr%,SUCC(obj&)),5)
+          evnt&=BSET(evnt&,1)
+          ~OBJC_OFFSET(rsc_adr%,obj&,mx&,my&)        ! ...Mausklick simulieren
+          '
+        ELSE
+          cont&=FORM_BUTTON(rsc_adr%,obj&,1,next_obj&)! ...Button bedienen
+        ENDIF
+      ENDIF
+      '
+    ENDIF
+  ENDIF
+  '
+ENDIF
+'
+IF key&
+  ~OBJC_EDIT(rsc_adr%,edit_obj&,key&,idx&,2,idx&)    ! ...Eingabe
+ENDIF
+'
+ENDIF
+' ------------------------------------------------------ Mausereignis
+IF BTST(evnt&,1)
+'                                                    ! Objekt unter Maus..
+next_obj&=OBJC_FIND(rsc_adr%,0,100,mx&,my&)
+'                                                    ! String vor Popup...
+IF next_obj&>0
+  IF BTST(OB_FLAGS(rsc_adr%,next_obj&),6) AND SHR(OB_TYPE(rsc_adr%,next_obj&),8)=28 AND BTST(OB_STATE(rsc_adr%,SUCC(next_obj&)),5)
+    ' (TOUCHEXIT, STRING, SUCC: SHADOWED)
+    INC next_obj&
+  ENDIF
+ENDIF
+'
+IF next_obj&=-1                                      ! Neben die Box...
+  ~BIOS(3,2,7)                                       ! ...PING!
+  next_obj&=0
+  '
+ELSE
+  cont&=FORM_BUTTON(rsc_adr%,next_obj&,1,next_obj&)
+  ' -------------------------------------------------- Flydial-Ecke
+  IF BTST(OB_STATE(rsc_adr%,next_obj&),1)            ! (CROSSED)
+    rsc_movedial(tree&,edit_obj&,idx&)               ! ...Dialog verschieben
+    '
+    next_obj&=0                                      ! Damit der Cursor..
+    cont&=1                                          ! ..bleibt wo er ist
+    ' ------------------------------------------------ Circle-Button...
+  ELSE IF SHR(OB_TYPE(rsc_adr%,next_obj&),8)=27 AND BTST(OB_STATE(rsc_adr%,MAX(0,PRED(next_obj&))),5) AND (NOT BTST(OB_STATE(rsc_adr%,MAX(0,PRED(next_obj&))),3))
+    ' (G_BOXCHAR, PRED: SHADOWED /NOT DISABLED)
+    next_obj&=PRED(next_obj&)                        ! Objektnr. Button
+    a$=@rsc_text$(tree&,next_obj&)                   ! Text des Buttons
+    evnt&=SHR&(OB_TYPE(rsc_adr%,next_obj&),8)-30     ! Nr. des Popup-Baumes
+    '
+    obj&=1
+    FOR ob_tail&=1 TO PRED(evnt&)
+      obj&=OB_NEXT(rsc_adr%(rsc_popup&),obj&)        ! Objektnr. des Popups
+    NEXT ob_tail&
+    '
+    evnt&=SUCC(obj&)
+    DO WHILE a$<>@rsc_text$(rsc_popup&,evnt&)
+      INC evnt&                                      ! Defaulteintrag
+    LOOP
+    '
+    REPEAT
+      INC evnt&                                      ! NÑchster Eintrag...
+      IF evnt&>OB_TAIL(rsc_adr%(rsc_popup&),obj&)    ! ...gibt es nicht
+        evnt&=SUCC(obj&)                             ! ...dann wieder 1.
+      ENDIF
+      '                                              ! bis nicht DISABLED
+    UNTIL NOT BTST(OB_STATE(rsc_adr%(rsc_popup&),evnt&),3)
+    '                                                ! Button Ñndern...
+    rsc_text(tree&,next_obj&,@rsc_text$(rsc_popup&,evnt&))
+    ~OBJC_DRAW(rsc_adr%,next_obj&,1,rscx&(tree&),rscy&(tree&),rscw&(tree&),rsch&(tree&))
+    popup&=SUB(evnt&,obj&)
+    ' ------------------------------------------------ Popup-Menue...
+  ELSE IF BTST(OB_STATE(rsc_adr%,next_obj&),5) AND BTST(OB_FLAGS(rsc_adr%,next_obj&),6) AND (NOT BTST(OB_STATE(rsc_adr%,next_obj&),3))
+    ' (SHADOWED, TOUCHEXIT, NOT DISABLED)
+    evnt&=SHR&(OB_TYPE(rsc_adr%,next_obj&),8)-30     ! Nr. des Popup-Baumes
+    obj&=1
+    FOR ob_tail&=1 TO PRED(evnt&)
+      obj&=OB_NEXT(rsc_adr%(rsc_popup&),obj&)        ! Objektnr. des Popups
+    NEXT ob_tail&
+    '
+    ob_tail&=OB_TAIL(rsc_adr%(rsc_popup&),obj&)
+    a$=@rsc_text$(tree&,next_obj&)                   ! Text des Buttons
+    '
+    evnt&=SUCC(obj&)
+    DO WHILE a$<>@rsc_text$(rsc_popup&,evnt&)
+      INC evnt&                                      ! Ausrichtung ermitteln
+    LOOP UNTIL evnt&>ob_tail&
+    '
+    IF evnt&<=ob_tail&                               ! Defaulteintrag...
+      popup&=@rsc_popup(TRUE,tree&,next_obj&,obj&,SUB(evnt&,SUCC(obj&)))
+    ELSE                                             ! Sonst ohne...
+      popup&=@rsc_popup(FALSE,tree&,next_obj&,obj&,1)
+    ENDIF
+    '
+    IF popup&=0                                      ! Abbuch...
+      cont&=1                                        ! ...weiter geht's
+      next_obj&=0                                    ! ...Cursor 'festhalten'
+    ENDIF
+    ' ------------------------------------------------ Cursor positionieren
+    ' Mîchten Sie den Cursor mit der Maus zeichengenau positionieren?
+    ' Dann entREMen Sie diese Zeilen und laden diese Prozedur nach:
+    ' ELSE IF BTST(OB_FLAGS(rsc_adr%,next_obj&),3)
+    ' rsc_set_cursor(rsc_adr%,mx&,my&,edit_obj&,next_obj&,idx&)
+  ENDIF
+  '
+ENDIF
+ENDIF
+'
+IF cont&=0 OR (next_obj&<>0 AND next_obj&<>edit_obj&)
+~OBJC_EDIT(rsc_adr%,edit_obj&,0,idx&,3,idx&)         ! Ggf. Cursor aus
+ENDIF
+'
+WEND
+'
+~GRAF_MOUSE(0,0)                                         ! Zur Sicherheit
+'
+~WIND_UPDATE(0)                                          ! END_UPDATE
+~WIND_UPDATE(2)                                          ! END_MCTRL
+'
+IF mc&=2 AND BTST(OB_FLAGS(rsc_adr%,next_obj&),6)        ! Doppelklick auf
+next_obj&=WORD(BSET(next_obj&,15))                     ! TOUCHEXIT...
+ENDIF                                                    ! ...15. Bit setzen
+'
+RETURN next_obj&
+ENDFUNC
+> FUNCTION rsc_popup(a!,tree&,button&,popup&,def&)
+$F%
+LOCAL x&,y&,b&,h&,m!
+LOCAL evnt&,mx&,my&,mb&,shift&,key&,mc&,ascii|,scan|
+LOCAL obj&,old_obj&,first&,anz&
+LOCAL rsc&,rsc_adr%
+'
+' Popup-MenÅ darstellen und auswerten...
+'
+' a!       : TRUE: Button verÑndern, FALSE: Nur Popup
+' tree&    : Index des Dialogbaumes
+' button&  : Objektnr. des betÑtigten Buttons
+' popup&   : Index des Popups
+' def&     : Default-Eintrag (1-x)
+'
+~WIND_UPDATE(1)                                   ! BEG_UPDATE
+~WIND_UPDATE(3)                                   ! BEG_MCTRL
+'
+rsc_adr%=rsc_adr%(rsc_popup&)
+'
+first&=OB_HEAD(rsc_adr%,popup&)                   ! erster Eintrag
+anz&=SUB(OB_TAIL(rsc_adr%,popup&),first&)         ! Anzahl EintrÑge-1
+' ------------------------------------------------- Popup positionieren
+~OBJC_OFFSET(rsc_adr%(tree&),button&,x&,y&)
+OB_X(rsc_adr%,0)=SUB(x&,OB_X(rsc_adr%,popup&))
+OB_Y(rsc_adr%,0)=MAX(ADD(hchar&,4),MIN(SUB(WORK_OUT(1),4)-OB_H(rsc_adr%,popup&),SUB(y&,MUL(def&,hchar&))))-OB_Y(rsc_adr%,popup&)
+'
+x&=ADD(OB_X(rsc_adr%,0),PRED(OB_X(rsc_adr%,popup&)))
+y&=ADD(OB_Y(rsc_adr%,0),PRED(OB_Y(rsc_adr%,popup&)))
+b&=ADD(OB_W(rsc_adr%,popup&),4)
+h&=ADD(OB_H(rsc_adr%,popup&),4)
+' -------------------------------------------------
+rsc_bitblt(0,0,0,popup_back%,b&,h&,x&,y&,b&,h&,0,0)
+'
+~OBJC_DRAW(rsc_adr%,0,7,x&,y&,b&,h&)              ! Popup zeichnen
+'
+IF a!                                             ! Button verÑndern...
+'
+~GRAF_MOUSE(256,0)                              ! Hidem
+V~H=rsc_vh&                                     ! ...Default-Eintrag mit...
+GRAPHMODE 2
+'
+INTIN(0)=8                                      ! ...HÑkchen versehen
+PTSIN(0)=ADD(x&,DIV(wchar&,2))
+PTSIN(1)=y&-DIV(hchar&,6)+MUL(SUCC(def&),hchar&)
+VDISYS 8,1,1                                    ! ...v_gtext()
+'
+GRAPHMODE 1
+V~H=-1
+~GRAF_MOUSE(257,0)                              ! Showm
+'
+ENDIF
+'
+~GRAF_MKSTATE(mx&,my&,mb&,shift&)
+'
+obj&=OBJC_FIND(rsc_adr%,popup&,anz&,mx&,my&)      ! Objekt unter der Maus...
+'
+IF obj&<=0                                        ! Daneben...
+obj&=ADD(first&,def&)                           ! ...Default-Eintrag nehmen
+ENDIF
+'
+old_obj&=obj&
+IF (NOT BTST(OB_STATE(rsc_adr%,MAX(0,obj&)),3))   ! Nicht disabled...
+~OBJC_CHANGE(rsc_adr%,obj&,0,x&,y&,b&,h&,BSET(OB_STATE(rsc_adr%,obj&),0),1)
+ENDIF                                             ! ...selektieren
+'
+~EVNT_TIMER(200)
+~GRAF_MKSTATE(mx&,my&,mb&,shift&)
+'
+IF mb&=1
+m!=TRUE
+evnt&=4
+ENDIF
+'
+' --------------------------------------------------
+DO
+'
+IF NOT m!
+evnt&=EVNT_MULTI(&X111,1,1,1,1,mx&,my&,1,1,0,0,0,0,0,0,0,mx&,my&,mb&,shift&,key&,mc&)
+ELSE
+~GRAF_MKSTATE(mx&,my&,mb&,shift&)
+ENDIF
+'
+IF BTST(evnt&,0)                                 ! Tastaturereignis...
+ascii|=BYTE(key&)
+scan|=BYTE(SHR(key&,8))
+'                                              ! Noch kein sel. Eintrag...
+IF NOT (obj&>=first& AND obj&<=ADD(first&,anz&))
+obj&=first&
+'
+ELSE IF scan|=80                               ! ...Cursor runter
+INC obj&
+IF obj&>ADD(first&,anz&)
+  obj&=first&
+ENDIF
+'
+ELSE IF scan|=72                               ! ...Cursor runter
+DEC obj&
+IF obj&<first&
+  obj&=ADD(first&,anz&)
+ENDIF
+'
+ENDIF
+'
+ENDIF
+'
+IF BTST(evnt&,2)                                 ! Mausereignis...
+obj&=OBJC_FIND(rsc_adr%,popup&,anz&,mx&,my&)
+ENDIF
+'                                                ! Alten Eintrag deselekt...
+IF obj&<>old_obj&
+~OBJC_CHANGE(rsc_adr%,old_obj&,0,x&,y&,b&,h&,BCLR(OB_STATE(rsc_adr%,old_obj&),0),1)
+ENDIF
+'                                                ! Im MenÅ und nicht disabled...
+IF (obj&>=first& AND obj&<=ADD(first&,anz&)) AND (NOT BTST(OB_STATE(rsc_adr%,MAX(0,obj&)),3))
+~OBJC_CHANGE(rsc_adr%,obj&,0,x&,y&,b&,h&,BSET(OB_STATE(rsc_adr%,obj&),0),1)
+'                                              ! ...neuen selektieren
+old_obj&=obj&
+rsc&=SUB(obj&,first&)                          ! RÅckgabe
+ENDIF
+'
+LOOP UNTIL BTST(evnt&,1) OR (mb&<>1 AND m!) OR ascii|=13 OR ascii|=27 OR scan|=97
+' --------------------------------------------------
+rsc_bitblt(popup_back%,b&,h&,0,0,0,0,0,b&,h&,x&,y&)! Hintergrund restaurieren
+'
+IF rsc&=SUB(obj&,first&) AND scan|<>97 AND ascii|<>27 ! Eintrag ausgewÑhlt...
+'
+~OBJC_CHANGE(rsc_adr%,obj&,0,x&,y&,b&,h&,BCLR(OB_STATE(rsc_adr%,obj&),0),0)
+'
+IF a!                                            ! Button verÑndern...
+'                                              ! Neuen Text eintragen:
+rsc_text(tree&,button&,@rsc_text$(rsc_popup&,obj&))
+'
+~OBJC_OFFSET(rsc_adr%(tree&),button&,x&,y&)    ! Button zeichnen
+~OBJC_DRAW(rsc_adr%(tree&),button&,1,x&,y&,OB_W(rsc_adr%(tree&),button&),OB_H(rsc_adr%(tree&),button&))
+'
+ENDIF
+'
+ELSE                                               ! Daneben => Abbruch...
+~OBJC_CHANGE(rsc_adr%,old_obj&,0,x&,y&,b&,h&,BCLR(OB_STATE(rsc_adr%,old_obj&),0),0)
+'
+rsc&=-1                                          ! ...Abbruch markieren
+'
+ENDIF
+'
+REPEAT
+~GRAF_MKSTATE(mx&,my&,mb&,shift&)                ! Mausknopf 'entprellen'
+UNTIL mb&=0
+'
+~WIND_UPDATE(2)                                    ! END_MCTRL
+~WIND_UPDATE(0)                                    ! END_UPDATE
+'
+RETURN SUCC(rsc&)
+ENDFUNC
+> PROCEDURE rsc_movedial(tree&,edit_obj&,idx&)
+LOCAL ghost!,x&,y&,a%
+'
+' Dialogbox bewegen...
+' Mîchten Sie SOLID-Flydials? Dann ersetzen Sie diese Prozedur
+' durch die entsprechenden aus der EXTENDED.LST-Datei.
+'
+~GRAF_MKSTATE(x&,x&,x&,y&)
+ghost!=AND(y&,&X1111) OR x&=3                            ! Geisterdials...
+IF ghost!
+rsc_bitblt(rsc_handle%(tree&),rscw&(tree&),rsch&(tree&),0,0,0,0,0,rscw&(tree&),rsch&(tree&),rscx&(tree&),rscy&(tree&))
+ENDIF
+'
+~GRAF_MOUSE(4,0)                                         ! Bewegen...
+~GRAF_DRAGBOX(rscw&(tree&),rsch&(tree&),rscx&(tree&),rscy&(tree&),deskx&,desky&,deskw&,deskh&,x&,y&)
+~GRAF_MOUSE(0,0)
+'
+IF x&<>rscx&(tree&) OR y&<>rscy&(tree&) OR ghost!        ! öberhaupt bewegt...
+'
+IF NOT ghost!
+a%=MALLOC(@getsize(rscw&(tree&),rsch&(tree&)))       ! Dialog getten
+IF a%                                                ! ...hat geklappt
+rsc_bitblt(0,0,0,a%,rscw&(tree&),rsch&(tree&),rscx&(tree&),rscy&(tree&),rscw&(tree&),rsch&(tree&),0,0)
+ENDIF
+ENDIF
+'                                                      ! Hintergr. restaur.
+rsc_bitblt(rsc_handle%(tree&),rscw&(tree&),rsch&(tree&),0,0,0,0,0,rscw&(tree&),rsch&(tree&),rscx&(tree&),rscy&(tree&))
+'
+rscx&(tree&)=x&                                        ! Neue Position setzen...
+rscy&(tree&)=y&
+'
+OB_X(rsc_adr%(tree&),0)=ADD(x&,3)
+OB_Y(rsc_adr%(tree&),0)=ADD(y&,3)
+'                                                      ! Neuen Hintergr. holen
+rsc_bitblt(0,0,0,rsc_handle%(tree&),rscw&(tree&),rsch&(tree&),rscx&(tree&),rscy&(tree&),rscw&(tree&),rsch&(tree&),0,0)
+'                                                      ! Dialog hinsetzen...
+IF a%                                                  ! Hintergrund gerettet...
+rsc_bitblt(a%,rscw&(tree&),rsch&(tree&),0,0,0,0,0,rscw&(tree&),rsch&(tree&),rscx&(tree&),rscy&(tree&))
+~MFREE(a%)
+ELSE                                                   ! Sonst wenigstens...
+~OBJC_DRAW(rsc_adr%(tree&),0,7,rscx&(tree&),rscy&(tree&),rscw&(tree&),rsch&(tree&))
+IF edit_obj&
+rsc_cursor(rsc_adr%(tree&),edit_obj&,idx&)         ! ...Cursor ein
+ENDIF
+ENDIF
+'
+ENDIF
+'
+RETURN
+'
+> PROCEDURE rsc_draw(tree&,flag%)
+LOCAL a!,a&,w&,h&,rsc_adr%
+'
+' Dialog zeichnen...
+'
+' 'flag%' wird hier nicht benutzt und dient nur der KompatibilitÑt
+' zu den Fenster-Routinen.
+'
+rsc_adr%=rsc_adr%(tree&)                         ! Åbersichtlicher
+w&=rscw&(tree&)
+h&=rsch&(tree&)
+'
+~WIND_UPDATE(1)                                  ! BEG_UPDATE
+'
+rsc_list$=rsc_list$+MKI$(tree&)                  ! Dialog in die Liste aufnehmen
+'
+rsc_handle%(tree&)=MALLOC(@getsize(w&,h&))
+IF rsc_handle%(tree&)                            ! Hintergrund gerettet...
+rsc_bitblt(0,0,0,rsc_handle%(tree&),w&,h&,rscx&(tree&),rscy&(tree&),w&,h&,0,0)
+'
+ENDIF
+'
+DO WHILE NOT BTST(OB_FLAGS(rsc_adr%,a&),5)       ! Flugecke suchen...
+INC a&
+a!=BTST(OB_STATE(rsc_adr%,a&),1)
+LOOP UNTIL a!
+'
+IF a!                                            ! Gefunden...
+IF rsc_handle%(tree&)                          ! ...sichtbar
+OB_FLAGS(rsc_adr%,a&)=BCLR(OB_FLAGS(rsc_adr%,a&),7)
+ELSE                                           ! ...verstecken
+OB_FLAGS(rsc_adr%,a&)=BSET(OB_FLAGS(rsc_adr%,a&),7)
+ENDIF
+ENDIF
+'                                                ! Zeichnen...
+~OBJC_DRAW(rsc_adr%,0,7,rscx&(tree&),rscy&(tree&),w&,h&)
+'
+RETURN
+> PROCEDURE rsc_back(tree&)
+'
+' Hintergrund des Formulars restaurieren...
+'
+rsc_list$=LEFT$(rsc_list$,SUB(LEN(rsc_list$),2))   ! Dialog aus der Liste entf.
+'
+IF rsc_handle%(tree&)                              ! Hintergrund gerettet...
+rsc_bitblt(rsc_handle%(tree&),rscw&(tree&),rsch&(tree&),0,0,0,0,0,rscw&(tree&),rsch&(tree&),rscx&(tree&),rscy&(tree&))
+~MFREE(rsc_handle%(tree&))
+rsc_handle%(tree&)=0
+'
+ELSE                                               ! Desktop redrawen...
+~FORM_DIAL(3,0,0,0,0,rscx&(tree&),rscy&(tree&),rscw&(tree&),rsch&(tree&))
+IF rsc_list$<>""                                 ! Noch ein Dialog drunter...
+~OBJC_DRAW(rsc_adr%(CVI(RIGHT$(rsc_list$,2))),0,7,rscx&(tree&),rscy&(tree&),rscw&(tree&),rsch&(tree&))
+ENDIF                                            ! ...diesen auch redrawen
+ENDIF
+'
+~WIND_UPDATE(0)                                    ! END_UPDATE
+'
+RETURN
+'
+> PROCEDURE rsc_text(tree&,obj&,a$)
+'
+' Universelle Objekt-Text Belegung...
+'
+CHAR{C:rsc_obspec%(L:rsc_adr%(tree&),obj&)}=a$
+RETURN
+> PROCEDURE rsc_bitblt(a%,w&,h&,b%,rb&,rh&,ax&,ay&,ab&,ah&,gx&,gy&)
+'
+' Universeller Rasterkopierer...
+'
+IF ab&>0 AND ah&>0                 ! Breite und Hîhe vorhanden...
+'
+~GRAF_MOUSE(256,0)               ! Hidem
+~C:rsc_bitblt%(L:a%,w&,h&,0,planes&,L:b%,rb&,rh&,0,planes&,ax&,ay&,ab&,ah&,gx&,gy&,1)
+~GRAF_MOUSE(257,0)               ! Showm
+'
+ENDIF
+'
+RETURN
+> PROCEDURE rsc_cursor(rsc_adr%,edit_obj&,idx&)
+LOCAL a|,a%
+'
+' Zeichengenaue Positionierung des Cursors...
+'
+a%=ADD({OB_SPEC(rsc_adr%,edit_obj&)},idx&)
+'
+a|=BYTE{a%}                                        ! Zeichen merken
+BYTE{a%}=0                                         ! ...und durch 0 ersetzen
+'
+~OBJC_EDIT(rsc_adr%,edit_obj&,0,idx&,1,idx&)       ! Cursor setzen
+BYTE{a%}=a|                                        ! ...Zeichen restaurieren
+'
+RETURN
+' ------------------------------------------------------------------------------
+> PROCEDURE rsc_zuweisungen(trees&)
+'
+flags|=0
+'
+abbruch|=26
+ok|=27
+'
+RETURN

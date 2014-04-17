@@ -1,0 +1,715 @@
+' FORMAT10.BAS: Formatiert 820-KB-Disks
+' Mit Optionen zum Begutachten des BIOS-Parameterblocks und
+' zum Konvertieren normal formatierter Disketten in ein spezielles
+' FASTLOAD-Format sowie einer kompletten BIOS- und XBIOS-Prozedurbibo
+'
+' Ω1988 Claus Brod, Am Felsenkeller 2, 8772 Marktheidenfeld
+'
+sd%=2
+spt%=10
+tracks%=83
+ileave%=1
+buf$=STRING$(10000,0)
+CLR drive%,exflag%
+'
+REPEAT
+  CLS
+  PRINT AT(22,1);CHR$(27);"pFORMAT10: Formatieren in GFABASIC";CHR$(27);"q"
+  PRINT AT(30,2);"Ω1987 Claus Brod"
+  PRINT AT(15,3);"SCHEIBENKLEISTER - das etwas andere Floppybuch"
+  PRINT AT(27,5);"(0) Quit"
+  PRINT AT(27,6);"(1) Parameter"
+  PRINT AT(27,7);"(2) Formatieren"
+  PRINT AT(27,8);"(3) Diskinfo"
+  PRINT AT(27,9);"(4) FASTLOAD-Format"
+  @getkey("01234")
+  choice%=VAL(a$)
+  ON choice% GOSUB para,format,diskinfo,nrm2fast
+UNTIL choice%=0
+END
+'
+PROCEDURE para
+  DO
+    CLS
+    PRINT AT(27,1);CHR$(27);"p Parameter einstellen ";CHR$(27);"q"
+    PRINT AT(27,5);"S  Seiten    : ";sd%
+    PRINT AT(27,6);"T  Tracks    : ";tracks%
+    PRINT AT(27,7);"P  Sektoren  : ";spt%
+    PRINT AT(27,8);"L  Laufwerk  : ";CHR$(drive%+65)
+    PRINT AT(27,9);"X  Executable: ";
+    IF exflag%
+      PRINT "j"
+    ELSE
+      PRINT "n"
+    ENDIF
+    PRINT AT(27,10);"I  Interleave: ";ileave%
+    PRINT AT(27,14);"0  HauptmenÅ"
+    @getkey("IXST0PL")
+    EXIT IF a$="0"
+    IF a$="I"
+      INC ileave%
+      IF ileave%>11
+        ileave%=1
+      ENDIF
+    ENDIF
+    IF a$="L"
+      drive%=1-drive%
+      IF DPEEK(&H4A6)<2
+        CLR drive%
+      ENDIF
+    ENDIF
+    IF a$="P"
+      INC spt%
+      IF spt%>10
+        spt%=1
+      ENDIF
+    ENDIF
+    IF a$="X"
+      exflag%=1-exflag%
+    ENDIF
+    IF a$="S"
+      sd%=sd% XOR 3
+    ENDIF
+    IF a$="T"
+      INC tracks%
+      IF tracks%>86
+        tracks%=80
+      ENDIF
+    ENDIF
+  LOOP
+RETURN
+'
+PROCEDURE getkey(b$)
+  REPEAT
+    a$=UPPER$(INKEY$)
+  UNTIL INSTR(b$,a$)
+RETURN
+'
+PROCEDURE format
+  CLS
+  PRINT AT(28,1);CHR$(27);"p Formatieren ";CHR$(27);"q"
+  PRINT AT(1,12);"Bitte Diskette in Laufwerk ";CHR$(65+drive%);" einlegen."
+  PRINT AT(1,13);"Taste drÅcken"
+  VOID INP(2)
+  VOID BIOS(7,drive%)
+  @formatdisk
+  @writeboot
+RETURN
+'
+PROCEDURE formatdisk
+  FOR t%=0 TO tracks%-1
+    PRINT AT(1,13);"Formatiere Spur ";USING "##",t%
+    FOR seite%=0 TO sd%-1
+      REPEAT
+        @flopfmt(VARPTR(buf$),0,drive%,spt%,t%,seite%,ileave%,&HE5CB)
+        @errchk(t%,seite%,"Formatieren")
+      UNTIL fehler%<>1
+      EXIT IF fehler%
+    NEXT seite%
+    EXIT IF fehler%
+  NEXT t%
+RETURN
+'
+PROCEDURE writeboot
+  LOCAL buf$
+  PRINT AT(1,13);"Schreibe Bootsektor etc."
+  buf$=STRING$(512,0)
+  RESTORE bootsector
+  READ a%
+  cn%=1
+  WHILE a%>=0
+    MID$(buf$,cn%)=CHR$(a%)
+    READ a%
+    INC cn%
+  WEND
+  secs%=tracks%*sd%*spt%
+  MID$(buf$,27)=CHR$(sd%)+CHR$(0)
+  MID$(buf$,20,1)=CHR$(secs% MOD 256)
+  MID$(buf$,21,1)=CHR$(secs% DIV 256)
+  MID$(buf$,25)=CHR$(spt% MOD 256)+CHR$(spt% DIV 256)
+  IF exflag%=0
+    MID$(buf$,1)=CHR$(&HE9)
+  ENDIF
+  @protobt(VARPTR(buf$),-1,-1,exflag%)
+  REPEAT
+    @flopwr(VARPTR(buf$),drive%,1,0,0,1)
+    @errchk(0,0,"Schreiben des Bootsektors")
+  UNTIL fehler%<>1
+  buf$=STRING$(10240,0)
+  @getbpb(drive%)
+  REPEAT
+    @rwabs(1,VARPTR(buf$),19,1,drive%)
+    @errchk(0,1,"Schreiben der FATs")
+  UNTIL fehler%<>1
+  @rwabs(0,0,2,-1,drive%)
+RETURN
+'
+PROCEDURE diskinfo
+  CLS
+  PRINT AT(28,1);CHR$(27);"p Diskinfo ";CHR$(27);"q"
+  @getbpb(drive%)
+  p%=pointer%
+  '
+  IF p%
+    PRINT AT(3,5);"Bytes pro Sektor   : ";DPEEK(p%)
+    PRINT AT(3,6);"Clustergrîûe       : ";DPEEK(p%+2)
+    PRINT AT(3,7);"    in Bytes       : ";DPEEK(p%+4)
+    PRINT AT(3,8);"DirectorylÑnge     : ";DPEEK(p%+6)
+    PRINT AT(3,9);"FAT-Grîûe          : ";DPEEK(p%+8)
+    PRINT AT(3,10);"Anfang der 2. FAT  : ";DPEEK(p%+10)
+    PRINT AT(3,11);"Erster Datensektor : ";DPEEK(p%+12)
+    PRINT AT(3,12);"Anzahl der Cluster : ";DPEEK(p%+14)
+    PRINT AT(3,13);"BFLAGS             : ";DPEEK(p%+16)
+    PRINT AT(3,14);"Spuranzahl         : ";DPEEK(p%+18)
+    PRINT AT(3,15);"Seiten             : ";DPEEK(p%+20)
+    PRINT AT(40,5);"Sektoren/Spur      : ";DPEEK(p%+22)
+    PRINT AT(40,6);"Sektoren/Spur/Seite: ";DPEEK(p%+24)
+    PRINT AT(40,7);"Versteckte Sektoren: ";DPEEK(p%+26)
+  ELSE
+    PRINT AT(3,10);" Fehler beim Lesen des Bootsektors!"
+  ENDIF
+  VOID INP(2)
+RETURN
+'
+bootsector:
+DATA 96,56,76,111,97,100,101,114,203,31,238,0,2,2,1,0,2
+DATA 112,0,34,7,249,5,0,10,0,2
+DATA 0,0,0,0,0,0,0,0,0,0,0,0,4,0,0,0,0,128,0,84,79
+DATA 83,32,32,32,32,32,73,77,71,0,51,250,255,226,0,0
+DATA 4,130,63,57,0,0,4,70,63,60,0,7,78,77,88,79
+DATA 74,128,103,0,0,246,42,64,65,250,255,208,74,144,102,6
+DATA 32,185,0,0,4,50,48,45,0,8,225,72,208,128,56,64
+DATA 217,250,255,184,48,58,255,170,103,16,60,58,255,166,56,58
+DATA 255,164,38,122,255,162,96,0,0,180,60,45,0,10,56,45
+DATA 0,8,216,109,0,6,38,122,255,146,97,0,0,178,102,0
+DATA 0,170,32,76,48,45,0,6,225,72,227,72,65,240,0,0
+DATA 67,250,255,124,144,252,0,32,177,204,109,0,0,142,112,10
+DATA 18,48,0,0,178,49,0,0,102,234,81,200,255,244,126,0
+DATA 30,40,0,27,225,79,30,40,0,26,44,122,255,78,38,122
+DATA 255,70,66,132,190,124,15,240,108,82,54,7,85,67,198,237
+DATA 0,2,214,109,0,12,184,124,0,64,108,8,74,68,103,14
+DATA 182,69,103,16,97,72,102,66,225,140,227,140,215,196,60,3
+DATA 58,3,66,132,216,109,0,2,218,109,0,2,52,7,226,74
+DATA 212,71,18,54,32,1,225,73,18,54,32,0,8,7,0,0
+DATA 103,2,232,73,194,124,15,255,62,1,96,168,74,68,103,4
+DATA 97,12,102,6,47,58,254,224,78,117,66,128,78,117,63,57
+DATA 0,0,4,70,63,6,63,4,47,11,66,103,63,60,0,4
+DATA 78,77,222,252,0,14,74,64,78,117,78,101,117,116,101,114
+DATA 32,66,111,111,116,101,114,13,10,40,67,41,49,57,56,53
+DATA 32,65,116,97,114,105,32,67,111,114,112,46,13,10
+DATA -1
+'
+' Konvertiert normal formatierte Diskette in FASTLOAD-Format
+PROCEDURE nrm2fast
+  CLS
+  CLR fcnt%
+  ALERT 1,"Normal formatierte Disk|in FASTLOAD-Format|wandeln",1,"OK|Raus!",a%
+  IF a%=1
+    buf1$=STRING$(5632,0)
+    buf2$=STRING$(5120,0)
+    ALERT 1,"Auf welchem Laufwerk | soll konvertiert werden? |",drive%+1,"A|B",a%
+    a$=CHR$(a%+64)
+    PRINT "Diskette in Laufwerk ";a$;" einlegen."
+    PRINT "Taste drÅcken."
+    VOID INP(2)
+    drive%=ASC(a$)-65
+    @getbpb(drive%)
+    sides%=DPEEK(pointer%+20)
+    spt%=DPEEK(pointer%+24)
+    IF spt%<>11
+      FOR track%=0 TO 79
+        FOR seite%=0 TO sides%-1
+          PRINT AT(1,10);"Konvertiere Track ";USING "##",track%
+          @convtrk(track%,seite%)
+          EXIT IF fehler%
+        NEXT seite%
+        EXIT IF fehler%
+      NEXT track%
+    ELSE
+      PRINT "Originaldiskette hat falsches Format (";spt%;" Sektoren)"
+      VOID INP(2)
+    ENDIF
+  ENDIF
+RETURN
+'
+' Konvertiert Spur auf FASTLOAD-Format
+PROCEDURE convtrk(spur,seite)
+  @floprd(VARPTR(buf2$),drive%,1,spur,seite,spt%)
+  @errchk(spur,seite,"Lesen")
+  IF fehler%=0
+    REPEAT
+      @flopfmt(VARPTR(buf1$),0,drive%,spt%,spur,seite,11,&HCBCB)
+      @errchk(spur,seite,"Formatieren")
+    UNTIL fehler%<>1
+  ENDIF
+  IF fehler%=0
+    REPEAT
+      @flopwr(VARPTR(buf2$),drive%,1,spur,seite,spt%)
+      @errchk(spur,seite,"Schreiben")
+    UNTIL fehler%<>1
+  ENDIF
+RETURN
+'
+PROCEDURE errchk(spur%,seite%,wo$)
+  LOCAL erg%
+  IF fehler%
+    a$="Fehler "+STR$(fehler%)+" beim |"+wo$+"!"
+    a$=a$+"| |(Spur "+STR$(spur%)+", Seite "+STR$(seite%)+")|"
+    PRINT CHR$(7);
+    ALERT 1,a$,1,"Weiter|Nochmal|Raus",erg%
+    IF erg%=1
+      CLR fehler%
+    ELSE
+      IF erg%=2
+        fehler%=1
+      ENDIF
+    ENDIF
+  ENDIF
+RETURN
+'
+' Und nun die Bibliothek aller BIOS- und XBIOS-Funktionen;
+' zuerst die, die etwas mit Massenspeicherprogrammierung zu tun haben
+'
+' Rwabs: Liest oder schreibt logische Sektoren
+' IN:  Flag% Modus (0=Sektoren lesen, 1= Sektoren schreiben,
+'                   2=Sektoren lesen, Mediachange ignorieren,
+'                   3=Sektoren schreiben, Mediachange ignorieren)
+'      Buf%  Zeiger auf Sektorenpuffer
+'      Count%   Anzahl der zu lesenden/schreibenden Sektoren
+'      Log_sec% erster zu lesender/schreibender logischer Sektor
+'      Drive%   Laufwerksnummer (0=Drive A, 1=Drive B..)
+' OUT: Fehler%  Fehlernummer
+'
+PROCEDURE rwabs(flag%,buf%,count%,log_sec%,drive%)
+  fehler%=BIOS(4,W:flag%,L:buf%,W:count%,W:log_sec%,W:drive%)
+RETURN
+'
+' Getbpb: Holt BIOS-Parameterblock
+' IN:  Drive% Laufwerk (0=A, 1=B...)
+' OUT: Fehler%, Pointer% Fehlernummer/Zeiger auf BPB (0=Fehler!)
+'      Struktur des BPB: siehe GETBPB.C/Kapitel 2
+PROCEDURE getbpb(drive%)
+  fehler%=BIOS(7,W:drive%)
+  pointer%=fehler%
+RETURN
+'
+' Mediach: Holt Diskwechsel-Status
+' IN:  Drive% Laufwerksnummer
+' OUT: Fehler% Mediachange-Status (0=nicht gewechselt, 1=vielleicht
+'      gewechselt, 2=gewechselt)
+PROCEDURE mediach(drive%)
+  fehler%=BIOS(9,W:drive%)
+RETURN
+'
+' Drvmap: Holt Bitvektor mit Laufwerksbelegung
+' IN: -
+' OUT: Fehler% Bitvektor (Bit 0=Laufwerk A, Bit 1=Laufwerk B...)
+PROCEDURE drvmap
+  fehler%=BIOS(10)
+RETURN
+'
+' Floprd: Liest einen Sektor (oder mehrere) ein
+' IN:  Buf%    Zeiger auf Sektorpuffer
+'      Drive%  Laufwerksnummer
+'      Sector% physikalischer Sektor
+'      Track%  Spurnummer
+'      Side%   Seite (0=Vorderseite, 1=RÅckseite)
+'      Count%  Anzahl der zu lesenden Sektoren
+' OUT: Fehler% Fehlernummer
+PROCEDURE floprd(buf%,drive%,sector%,track%,side%,count%)
+  fehler%=XBIOS(8,L:buf%,L:0,W:drive%,W:sector%,W:track%,W:side%,W:count%)
+RETURN
+'
+' Flopwr: Schreibt einen Sektor (oder mehrere)
+' IN:  Buf%    Zeiger auf Sektorpuffer
+'      Drive%  Laufwerksnummer
+'      Sector% physikalischer Sektor
+'      Track%  Spurnummer
+'      Side%   Seite (0=Vorderseite, 1=RÅckseite)
+'      Count%  Anzahl der zu schreibenden Sektoren
+' OUT: Fehler% Fehlernummer
+PROCEDURE flopwr(buf%,drive%,sector%,track%,side%,count%)
+  fehler%=XBIOS(9,L:buf%,L:0,W:drive%,W:sector%,W:track%,W:side%,W:count%)
+RETURN
+'
+' Flopfmt: Formatiert eine Spur
+' IN:  Bf%     Zeiger auf Trackpuffer (>=8K)
+'      Stab%   Zeiger auf Sektornummerntabelle (erst ab BlitterTOS, sonst 0)
+'      Drv%    Laufwerksnummer
+'      Spt%    Sektorenzahl pro Track
+'      Trk%    Spurnummer
+'      Sd%     Seitennummer
+'      Ileave% Interleavefaktor (-1, um ab BlitterTOS sec_table% anzuknipsen)
+'      Virgin% Urdaten
+' OUT: Fehler% Fehlernummer
+PROCEDURE flopfmt(bf%,stab%,drv%,spt%,trk%,sd%,ileave%,virgin%)
+  fehler%=XBIOS(10,L:bf%,L:stab%,W:drv%,W:spt%,W:trk%,W:sd%,W:ileave%,L:&H87654321,W:virgin%)
+RETURN
+'
+' Protobt: Erzeugt Bootsektor
+' IN:  Buf%    Zeiger auf Puffer fÅr Bootsektor
+'      Serial% Seriennummer (>=2^24: zufÑllig; -1: keine énderung)
+'      Typ%    Disktyp (0=40 Tracks, SS, 1=40 Tracks, DS, 2=80 Tracks, SS,
+'              3=80 Tracks, DS, -1=keine énderung)
+'      Exec%   AusfÅhrbarkeitsflag (0=nicht ausfÅhrbar, 1=ausfÅhrbar,
+'              -1=keine énderung)
+' OUT: Fehler% Fehlermeldung
+PROCEDURE protobt(buf%,serial%,typ%,exec%)
+  fehler%=XBIOS(18,L:buf%,L:serial%,W:typ%,W:exec%)
+RETURN
+'
+' Flopver: Verifiziert Sektoren
+' IN:  Buf%    Zeiger auf Sektorpuffer
+'      Drive%  Laufwerksnummer
+'      Sector% physikalischer Sektor
+'      Track%  Spurnummer
+'      Side%   Seite (0=Vorderseite, 1=RÅckseite)
+'      Count%  Anzahl der zu prÅfenden Sektoren
+' OUT: Fehler% Fehlernummer
+PROCEDURE flopver(buf%,drive%,sector%,track%,side%,count%)
+  fehler%=XBIOS(19,L:buf%,L:0,W:drive%,W:sector%,W:track%,W:side%,W:count%)
+RETURN
+'
+' Floprate: Steprate einstellen/erfragen (erst ab TOS1.4)
+' IN:  Drive%  gewÅnschtes Laufwerk (0=A:, 1=B:)
+'      Rate%   neue Steprate (0-3) oder -1 (Steprate nur erfragen)
+' OUT: Fehler% alte Steprate
+PROCEDURE floprate(drive%,rate%)
+  fehler%=XBIOS(41,drive%,rate%)
+RETURN
+'
+' Und jetzt noch die anderen BIOS- und XBIOS-Funktionen.
+' Zuerst das BIOS im Schnelldurchlauf:
+'
+' Getmpb: Holt den Memory Parameter Block in einen Puffer
+' IN:  Zeiger%  Zeiger auf Puffer (12 Bytes lang)
+' OUT: Zeiger auf Ur-MPB
+PROCEDURE getmpb
+  VOID BIOS(0,L:zeiger%)
+RETURN
+'
+' Bconstat: Eingabestatus holen
+' IN:  Geraet%  Von welchem GerÑt? (0=PRN, 1=AUX, 2=CON, 3=MIDI, 4=IKBD)
+' OUT: Fehler%  0: kein Zeichen da, -1: Zeichen da
+PROCEDURE bconstat(geraet%)
+  fehler%=BIOS(1,geraet%)
+RETURN
+'
+' Bconin: Zeichen von einem GerÑt holen
+' IN:  Geraet%  GerÑtenummer (siehe Bconstat)
+' OUT: Fehler%  Zeichen
+PROCEDURE bconin(geraet%)
+  fehler=BIOS(2,geraet%)
+RETURN
+'
+' Bconout: Zeichen auf Geraet ausgeben
+' IN:  Geraet%  GerÑtenummer (siehe Bconstat)
+'      Zeichen% auszugebendes Zeichen
+PROCEDURE bconout(geraet%,zeichen%)
+  VOID BIOS(3,geraet%,zeichen%)
+RETURN
+'
+' Setexec: Exception-Vektor holen oder setzen
+' IN:  Nummer%   Exception-Nummer
+'      Zeiger%   Neuer Exception-Vektor oder -1
+' OUT: Alter_vektor%  Alter Exception-Vektor
+PROCEDURE setexec(nummer%,zeiger%)
+  alter_vektor%=BIOS(5,nummer%,L:zeiger%)
+RETURN
+'
+' Tickcal: Abstand zwischen zwei System-Timer-Calls in Millisekunden holen
+' OUT: Time%  Zeitabstand in ms
+PROCEDURE tickcal
+  time%=BIOS(6)
+RETURN
+'
+' Bcostat: Ausgabestatus holen
+' IN: Geraet%  GerÑtenummer (siehe Bconstat)
+' OUT: Fehler% 0: nicht bereit zur Ausgabe, -1: kann losgehen
+PROCEDURE bcostat(geraet%)
+  fehler%=BIOS(8,geraet%)
+RETURN
+'
+' Kbshift: Shiftstatus holen oder setzen
+' IN: Modus%  -1: Status holen, sonst so setzen
+' OUT: Status%  Shiftstatus (Bit 0: SHIFT RIGHT, Bit 1: SHIFT LEFT,
+'               Bit 2: CTRL, Bit 3: ALT, Bit 4: CAPS LOCK,
+'               Bit 5: CLR/HOME (rechter Mausbutton),
+'               Bit 6: INSERT (linker Mausbutton))
+PROCEDURE kbshift(modus%)
+  status%=BIOS(11,modus%)
+RETURN
+'
+'
+' Zum XBIOS:
+'
+' Initmouse: Neue Mausroutinen installieren
+' IN:  Modus%   0=Maus aus, 1=Relativer Mausmodus, 2=Absoluter Mausmodus,
+'               4=Tastaturmodus
+'      Parm%    Zeiger auf einen Parameterblock (4 Bytes fÅr Koordinaten-
+'               ursprung [0=Y-Nullpunkt unten, 1=oben], Maustastenmodus,
+'               X-Skalierung, Y-Skalierung. Wenn Modus%=2, folgen noch
+'               Parameter in Wortgrîûe fÅr X- und Y-Maximalwert sowie
+'               X- und Y-Startwert der Maus.
+'      Zeiger%  Zeiger auf neue Mausroutine
+PROCEDURE initmouse(modus%,parm%,zeiger%)
+  VOID XBIOS(0,W:modus%,L:parm%,L:zeiger%)
+RETURN
+'
+' Ssbrk: Speicherplatz am oberen Speicherende reservieren (funktioniert
+'        nur in der RESET-Routine)
+' IN: Bytes%  Grîûe des Speicherbereichs
+' OUT: Fehler% Anfang des Speicherblocks
+PROCEDURE ssbrk(bytes%)
+  fehler%=XBIOS(1,bytes%)
+RETURN
+'
+' Physbase: Physikalische Bildadresse holen
+' OUT: Zeiger% Zeiger auf Video-RAM
+PROCEDURE physbase
+  zeiger%=XBIOS(2)
+RETURN
+'
+' Logbase: Logische Bildadresse holen
+' OUT: Zeiger% Zeiger auf logisches Video-RAM
+PROCEDURE logbase
+  zeiger%=XBIOS(3)
+RETURN
+'
+' Getrez: Auflîsung holen
+' OUT: Fehler%  0=Low, 1=Mid, 2=High
+PROCEDURE getrez
+  fehler%=XBIOS(4)
+RETURN
+'
+' Setscreen: Schirmparameter setzen
+' IN:  Logisch%   Zeiger auf logisches Video-RAM (-1: Wert so belassen)
+'      Physikalisch% Zeiger auf physikalisches Video-RAM (-1: Wert so lassen)
+'      Rez%       Auflîsung (-1: Wert so lassen)
+PROCEDURE setscreen(logisch%,physikalisch%,rez%)
+  VOID XBIOS(5,L:logisch%,L:physikalisch%,W:rez%)
+RETURN
+'
+' Setpalette: Neue Farbpalette installieren
+' IN:  Zeiger%    Zeiger auf neue Palette
+PROCEDURE setpalette(zeiger%)
+  VOID XBIOS(6,L:zeiger%)
+RETURN
+'
+' Setcolor: Eine Farbe holen oder setzen
+' IN:  Nummer%   Farbnummer in der Palette
+'      Farbe%    RGB-Farbwert (-1: nur Farbe holen)
+' OUT: Fehler%   alter Farbwert
+PROCEDURE setcolor(nummer%,farbe%)
+  fehler%=XBIOS(7,W:nummer%,farbe%)
+RETURN
+'
+' Midiws: String an MIDI-OUT ausgeben
+' IN:  Buf$   String
+PROCEDURE midiws(buf$)
+  VOID XBIOS(12,W:(LEN(buf$)-1),L:VARPTR(buf$))
+RETURN
+'
+' Mfpint: MFP-IRQ-Vektor verbiegen
+' IN:  Nummer%  MFP-IRQ-Nummer
+'      Zeiger%  neuer IRQ-Zeiger
+PROCEDURE mfpint(nummer%,zeiger%)
+  VOID XBIOS(13,W:nummer%,L:zeiger%)
+RETURN
+'
+' Iorec: Zeiger auf Puffer-Parameter holen
+' IN: Geraet%  GerÑtenummer (0=RS232, 1=KBD, 2=MIDI)
+' OUT: Zeiger% Zeiger auf Parameterblock (Zeiger auf Eingabepuffer,
+'              W:Puffergrîûe, W:Headindex, W:Tailindex, W:Lowwatermark,
+'              W:Highwatermark)
+PROCEDURE iorec(geraet%)
+  zeiger%=XBIOS(14,geraet%)
+RETURN
+'
+' Rsconf: RS232-Parameter konfigurieren
+' IN:  Baudrate%  (0=19200,1=9600,2=4800,3=3600,4=2400,5=2000,6=1800,
+'                  7=1200,8=600,9=300,10=200,11=150,12=134,13=110,
+'                  14=75,15=50)
+'      Ctrl%      0=kein Handshake, 1=XON/XOFF, 2=RTS/CTS, 3=XON + RTS
+'      Ucr%       USART-Register
+'      Rsr%       EmpfÑnger-Status
+'      Tsr%       Sender-Status
+'      Scr%       Synchron-Register
+PROCEDURE rsconf(baudrate%,ctrl%,ucr%,rsr%,tsr%,scr%)
+  VOID XBIOS(baudrate%,ctrl%,ucr%,rsr%,tsr%,scr%)
+RETURN
+'
+' Keytbl: Tastaturbelegung setzen
+' IN:   Ohneshift%  Zeiger auf Tastaturtabelle ohne Shifttaste
+'       Mitshift%   Zeiger auf Tastaturtabelle mit Shifttaste
+'       Mitcaps%    Zeiger auf Tastaturtabelle mit Caps-Taste
+PROCEDURE keytbl(ohneshift%,mitshift%,mitcaps%)
+  zeiger%=XBIOS(16,L:ohneshift%,mitshift%,mitcaps%)
+RETURN
+'
+' Random: Zufallszahl holen
+' OUT:  Fehler%   24-Bit-Zufallszahl
+PROCEDURE random
+  fehler%=XBIOS(17)
+RETURN
+'
+' Scrdmp: Hardcopy
+PROCEDURE scrdmp
+  VOID XBIOS(20)
+RETURN
+'
+' Cursconf: Cursor-Modus setzen
+' IN:  Modus%   0=Cursor aus, 1=Cursor ein, 2=Cursor blinkt, 3=Cursor
+'               blinkt nicht, 4=Cursor-Blinkrate setzen, 5=Blinkrate holen
+'      Blinkrate% Blinkfrequenz in 50stel, 60stel oder 71stel Sekunden
+' OUT: Fehler%  alte Blinkrate (Modus%=5)
+PROCEDURE cursconf(modus%,blinkrate%)
+  fehler%=XBIOS(21,modus%,blinkrate%)
+RETURN
+'
+' Settime: XBIOS-Zeit und -Datum setzen
+' IN: Time%   Zeit im GEMDOS-Format (Lowword) sowie Datum (Highword)
+PROCEDURE settime(time%)
+  VOID XBIOS(22,time%)
+RETURN
+'
+' Gettime: XBIOS-Zeit und -Datum holen
+' OUT: Time%   Zeit (Lowword) und Datum (Highword) im GEMDOS-Format
+PROCEDURE gettime
+  time%=XBIOS(23)
+RETURN
+'
+' Bioskeys: Standard-Tastenbelegung wiederherstellen
+PROCEDURE bioskeys
+  VOID XBIOS(24)
+RETURN
+'
+' Ikbdws: String an Tastaturprozessor schicken
+PROCEDURE ikbdws(buf$)
+  VOID XBIOS(25,LEN(buf$)-1,L:VARPTR(buf$))
+RETURN
+'
+' Jdisint: MFP-IRQ sperren
+' IN: Nummer%  Nummer des IRQs
+PROCEDURE jdisint(nummer%)
+  VOID XBIOS(26,nummer%)
+RETURN
+'
+' Jenabint: MFP-IRQ freigeben
+' IN: Nummer%  Nummer des IRQs
+PROCEDURE jenabint(nummer%)
+  VOID XBIOS(27,nummer%)
+RETURN
+'
+' Soundchip-Register lesen oder verÑndern
+' IN: Byte%     Neuer Wert des Registers
+'     Register% Registernummer (Bit 7 gesetzt: Register wird beschrieben,
+'               ansonsten gelesen)
+' OUT: Fehler%  Alter Wert des Registers (wenn Bit 7 von Register% gelîscht)
+PROCEDURE giaccess(byte%,register%)
+  fehler%=XBIOS(28,byte%,register%)
+RETURN
+'
+' Offgibit: Bits im Port A des Soundchips lîschen
+' IN: Parm%   Bitmaske (Bit=1: Portbit belassen, Bit=0: Portbit lîschen)
+PROCEDURE offgibit(parm%)
+  VOID XBIOS(29,W:parm%)
+RETURN
+'
+' Ongibit: Bits im Port A des Soundchips setzen
+' IN: Parm%   Bitmaske
+PROCEDURE ongibit(parm%)
+  VOID XBIOS(30,parm%)
+RETURN
+'
+' Xbtimer: Timer starten
+' IN: Nummer%  Timernummer (0=A, 1=B, 2=C, 3=D)
+'     Ctrl%   Wert fÅr Timer-Kontrollregister
+'     Daten%  Wert fÅr Timer-Datenregister
+'     Zeiger% Zeiger auf IRQ-Routine des Timers
+PROCEDURE xbtimer(nummer%,ctrl%,daten%,zeiger%)
+  VOID XBIOS(31,nummer%,ctrl%,daten%,L:zeiger%)
+RETURN
+'
+' Dosound: Sound im IRQ ablaufen lassen
+' IN: buf$   String mit Soundkommandos
+PROCEDURE dosound(buf$)
+  VOID XBIOS(32,L:VARPTR(buf$))
+RETURN
+'
+' Setprt: Druckerkonfiguration lesen oder setzen
+' IN: Modus%   -1: Druckerkonfiguration lesen, sonst setzen
+'              (Bit 0: Matrix/Typenrad, Bit 1:Farbdrucker, Bit 2:Epson-Drucker,
+'               Bit 3: NLQ, Bit 4:Centronics/RS232, Bit 5:Einzelblatt)
+' OUT: Fehler%  alte Druckerkonfiguration (Modus%=-1)
+PROCEDURE setprt(modus%)
+  fehler%=XBIOS(33,modus%)
+RETURN
+'
+' Kbdvbase: Tastatur-Vektortabelle holen
+' OUT: Zeiger%  Zeiger auf Tastatur-Vektortabelle (mit Zeigern auf Routinen
+'               fÅr MIDI-Eingabe, Tastaturfehlerbehandlung, MIDI-Fehler-
+'               behandlung, Tastaturstatus, Mausbehandlung, Uhrzeit-
+'               behandlung, Joystick, MIDI- und Tastatureingabe)
+PROCEDURE kbdvbase
+  zeiger%=XBIOS(34)
+RETURN
+'
+' Kbrate: Tastatur-Repeatwerte holen/setzen
+' IN: Warten%  -1 (lesen) oder neue Verzîgerungszeit
+'     Repeat%  -1 (lesen) oder neue Wiederholrate
+' OUT: Fehler% Bit 0-7: Repeat-Wert, Bit 8-15: Verzîgerungswert
+'              (wenn Warten% oder Repeat% gleich -1)
+PROCEDURE kbrate(warten%,repeat%)
+  fehler%=XBIOS(35,warten%,repeat%)
+RETURN
+'
+' Prtblk: Schirmaussschnitt ausdrucken
+' IN: Parm%   Zeiger auf Parameter
+PROCEDURE prtblk(parm%)
+  VOID XBIOS(36,L:parm%)
+RETURN
+'
+' Vertsync: Auf StrahlrÅcklauf warten
+PROCEDURE vertsync
+  VOID XBIOS(37)
+RETURN
+'
+' Supexec: Routine im Supervisormodus ausfÅhren
+' IN: Zeiger%  Zeiger auf Routine
+PROCEDURE supexec(zeiger%)
+  VOID XBIOS(38,L:zeiger%)
+RETURN
+'
+' Puntaes: AES abschalten
+PROCEDURE puntaes
+  VOID XBIOS(39)
+RETURN
+'
+' Blitmode: Blittermodus lesen/setzen
+' IN: Modus%   -1: Blitterstatus holen, 0: Blitter aus, 1: Blitter an
+' OUT: Fehler%  Bit 0: Blitter aus/an, Bit 1: Blitter da?
+PROCEDURE blitmode(modus%)
+  fehler%=XBIOS(64,modus%)
+RETURN
+'
+' Die Fehlernummern von BIOS und XBIOS:
+'  0  E_OK   alles klar
+' -1  ERROR  allgemeiner Fehler (DMA-Fehler, Timeout)
+' -2  EDRVNR Laufwerk nicht bereit (Timeout)
+' -3  EUNCMD Befehl unbekannt (nicht verwendet)
+' -4  E_CRC  PrÅfsummenfehler (in TOS1.0 mit EREADF und EWRITF verwechselt)
+' -5  EBADRQ ungÅltiger Befehl (nicht verwendet)
+' -6  E_SEEK Track nicht gefunden
+' -7  EMEDIA ungÅltiger Bootsektor (nicht verwendet)
+' -8  ESECNF Sektor nicht gefunden (RNF im FDC-Statusregister)
+' -9  EPAPER Kein Papier mehr (eigentlich fÅr Drucker)
+' -10 EWRITF Schreibfehler (Lost Data im FDC-Statusregister, wurde in
+'            TOS1.0 mit E_CRC verwechselt)
+' -11 EREADF Lesefehler (wurde in TOS1.0 mit E_CRC verwechselt)
+' -12 ERROR2 allgemeiner Fehler (nicht verwendet)
+' -13 EWRPRO Schreibschutz aktiviert
+' -14 E_CHNG Diskette gewechselt
+' -15 EUNDEV Unbekanntes GerÑt
+' -16 EBADSF Bad Sectors (bei Flopver und Flopfmt)
+' -17 EOTHER Diskette einlegen (nur Aufforderung, kein richtiger Fehler)

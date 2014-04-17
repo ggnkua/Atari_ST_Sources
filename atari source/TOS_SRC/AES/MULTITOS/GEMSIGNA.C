@@ -1,0 +1,766 @@
+/*	GEMSIGNAL.C	3/6/91 - 3/8/91		Derek Mui		*/
+/*	post_keybd will return the kstate correctly	5/21/92		*/
+
+/*	-----------------------------------------------------------
+*	AES Version 4.0	MultiTOS version is written by Derek M. Mui
+*	Copyright (C) 1992 
+*	Atari (U.S.) Corp
+*	All Rights Reserved
+*	-----------------------------------------------------------
+*/	
+
+/*
+*	-------------------------------------------------------------
+*	GEM Application Environment Services		  Version 1.1
+*	Serial No.  XXXX-0000-654321		  All Rights Reserved
+*	Copyright (C) 1985			Digital Research Inc.
+*	-------------------------------------------------------------
+*
+*	02/12/93	cjg	Convert to Lattice C 5.51
+*	02/22/93	cjg	Force the use of prototypes
+*	05/04/93	hmk	ch_mowner now recognizes iconified windows
+*	06/01/93	hmk	ch_owner only now reacts on double clicks 
+*				when window is iconified
+*/
+#include "pgem.h"
+#include "pmisc.h"
+
+#include "machine.h"
+#include "pdstruct.h"
+#include "dispvars.h"
+#include "windlib.h"
+#include "aesmint.h"
+
+
+EXTERN	WORD	gl_topw;
+EXTERN	GRECT	gl_rmenu;
+EXTERN	WORD	gl_play;			/* in gemaplib.c	*/
+EXTERN	WORD	gl_incerr;			/* in gemfmalt.c	*/
+EXTERN	WORD	ptsout[];
+EXTERN	WORD	intin[];
+EXTERN	WORD	ptsin[];	
+EXTERN	WORD	intout[];
+EXTERN	WORD	contrl[];
+
+
+EXTERN	LONG	NUM_TICK;	/* number of ticks since last sample	*/
+				/* while someone was waiting		*/
+EXTERN	LONG	CMP_TICK;	/* indicates to tick handler how much	*/
+				/* time to wait before sending the 	*/
+				/* first tchange			*/
+
+
+EXTERN	MOBLK	gl_ctwait;	/* MOBLK telling if menu bar is waiting	*/
+				/* to be entered or exited by ctrl mgr	*/
+
+EXTERN	OBJECT	*gl_mntree;
+
+EXTERN	WORD	gl_dclick;	/* # of ticks to wait to see if	*/
+				/* a second click will occur	*/
+
+GLOBAL	PD	*scr_pd;	/* screen manager process that 	*/
+				/* controls the mouse when its 	*/
+				/* outside control rectangle	*/
+
+GLOBAL	WORD	cu_button;	/* current button state after	*/
+				/* being processed by bchange	*/
+
+GLOBAL	WORD	cu_xrat;	/* current mouse position after	*/
+GLOBAL	WORD	cu_yrat;	/* being processed by mchange	*/
+		
+GLOBAL	WORD	gl_xrat;	/* the real mouse x and y	*/
+GLOBAL	WORD	gl_yrat;
+		
+GLOBAL	WORD	kstate;		/* current keyboard state	*/
+
+GLOBAL	WORD	gl_smid;	/* Super mouse owner id		*/
+
+GLOBAL	PD	*gl_mowner;	/* current mouse owner		*/
+
+GLOBAL	WORD	gl_kbid;	/* current keybd owner id	*/
+
+GLOBAL	WORD	gl_bclick;	/* number times into the desired*/
+				/* button state			*/
+
+GLOBAL	WORD	gl_bpend;	/* number of pending events wait*/
+				/* for more than a single click	*/
+
+GLOBAL	WORD	gl_bdesired;	/* the desired button state that cause	*/
+				/* the event to be satisfied		*/
+
+GLOBAL	WORD	gl_btrue;	/* the current true button state	*/
+
+GLOBAL	WORD	gl_bdelay;	/* the current amount of time before the*/
+				/* button event is considered finished	*/
+
+GLOBAL	WORD	gl_button;	/* current button state as reported by 	*/
+				/* interrupt routine			*/
+
+
+
+/*	Check if the current click will transfer mouse	*/
+/*	ownership and check the menu bar		*/
+
+	PD
+*ch_mowner( button, clicks )
+	WORD		button;
+	WORD		clicks;	/* +++ 5/27/93 HMK */
+
+{
+	WORD		wh;
+	PD		*m;
+	REG WORD	mx,my;
+	GRECT		t;
+	GRECT		temp;
+	WINDOW		*wp;
+
+	m = idtopd( gl_smid );
+
+	if ( !gl_smid )			/* There is no super owner	*/
+	{
+	  mx = cu_xrat;
+	  my = cu_yrat;
+
+	  m = scr_pd;
+				/* if inside an menu	*/
+	  if ( !inside( mx, my, &gl_rmenu ) )
+	  {
+	    if ( ( wh = wm_find( mx, my ) ) != NIL ) /* inside a window	*/
+	    {
+	      wm_get( wh, WF_WORKXYWH, ( WORD *)&t, ( WORD *)&temp );
+			
+	      if ( inside( mx, my, &t ) )	/* inside the work area	*/
+	      {
+		if ( ( ((wp = srchwp( wh ))->type & 0x01 ) || 
+	               ( !wh ) || ( wh == gl_topw ) || ( button != 0x01 )
+		     ) 
+		     && ( !wp->iconflag || (clicks != 2))  /* +++ 05/04/93 HMK 	*/
+		   ) /* if window is iconified, single clicks goes to appl. 	*/
+		     /* - a double click goes to the window manager (uniconify) */ 				   
+	        	m = srchwp( wh )->owner;
+	      }
+	    }
+	  }
+	}
+	
+	return( m );
+}
+
+
+/*	Forker of mouse change		*/
+/*	Check the mouse position	*/
+
+	VOID
+mchange( mx, my )
+	REG WORD	mx,my;
+{
+	WORD		rx,ry;
+
+	gsx_ncode( MOUSE_ST, 0x0, 0x0 );	/* get the real x,y	*/
+
+	rx = ptsout[0];			
+	ry = ptsout[1];			
+						/* zero out button wait	*/
+						/*   if mouse moves more*/
+						/*   then a little	*/
+
+	if ( gl_bdelay && ( ( cu_xrat - rx > 2 ) || ( cu_xrat - rx < - 2 ) || 
+	     ( cu_yrat - ry > 2 ) || ( cu_yrat - ry < -2 ) ) )
+	  b_delay( gl_bdelay );
+						/* xrat, yrat hold true	*/
+	gl_xrat = rx;
+	gl_yrat = ry;
+						/* post the event	*/
+	if ( gl_play )				/* KLUDGE 3/11/86	*/
+	{ 
+	  intin[0] = 1;		
+	  intin[1] = 2;				/* set input sample mode*/
+/*	  gsx_ncode( 33,0x00000002L );*/
+	  gsx_ncode( 33,0x0000, 0x0002 );
+	  ptsin[0] = mx;
+	  ptsin[1] = my;			
+/*	  gsx_ncode( 28, 0x00010000L );*/
+	  gsx_ncode( 28, 0x0001, 0x0000 );	/* draw the new mouse	*/
+	}
+
+	cu_xrat = mx;
+	cu_yrat = my;
+
+	/* give mouse to screen handler when not button down and	*/
+	/* there is an active menu and it will satisfy his event	*/
+						/* CHANGED LKW		*/
+	/* 04/28/93: Now also checking for gl_smid! If gl_smid != 0 then*/
+	/* someone did a wm_update(BEG_MCTRL) and requires total mouse  */
+	/* control. So we can NOT take away mouse control from him,     */
+	/* even if we are over the menu bar. 				*/
+	if ( ( !cu_button ) && ( gl_mntree ) && (!gl_smid) &&
+	     ( gl_ctwait.m_out != inside( cu_xrat, cu_yrat, ( GRECT *)&gl_ctwait.m_x ) ) )
+	{
+	  gl_mowner = scr_pd;
+	  Debug7("mchange: screen now owns mouse!!!\r\n");
+	}
+
+	if (!gl_incerr)
+	  post_mouse( gl_mowner, cu_xrat, cu_yrat );
+}
+
+
+/*	Post mouse movement event	*/
+
+	VOID
+post_mouse( p, grx, gry )
+	REG PD		*p;
+	WORD		grx, gry;
+{
+	REG EVB		*e;
+	REG EVB		*e1;
+	WORD		found;
+	WINDOW		*win;
+
+	if ( !p )
+	  return;
+
+	found = FALSE;	
+			/* First check the current mouse owner for 	*/
+			/* event list to signal waiting process		*/
+
+	for ( e = p->p_cda.c_msleep; e; e = e1 )
+	{
+	  e1 = e->e_link;
+	  if ( inorout(e, grx, gry) )
+	  {
+	    e->e_mx = grx;
+	    e->e_my = gry;
+	    evremove(e, 0);
+	    found = TRUE;
+	  }
+	}
+			/* Now check the top window owner 	*/
+	if ( !found )
+	{
+	  win = wm_top();
+
+	  if ( win->owner != p )
+	  {
+	    p = win->owner;
+
+	    for ( e = p->p_cda.c_msleep; e; e = e1 )
+	    {
+	      e1 = e->e_link;
+	      if ( inorout(e, grx, gry) )
+	      {
+	        e->e_mx = grx;
+	        e->e_my = gry;
+	        evremove(e, 0);
+	      }
+	    }
+	  }
+	}
+}
+
+
+/*	Timer is up so forker will come here		*/
+
+	VOID
+tchange( c )
+	REG LONG	c;	/* number of ticks that	have gone by	*/
+{
+	REG EVB		*e;
+	REG WORD	oldsr;
+
+	Debug7( "Tchange\r\n" );
+	oldsr = spl7();
+
+	e = tel;		/* pull pd's off the delay list that 	*/
+				/* have waited long enough		*/
+	while ( e )
+	{
+	  if ( !e->e_parm )	/* time out	*/
+	  {
+	    evremove(e, 0);
+	    e = tel;
+	  }
+	  else
+	  {  
+	    if ( c >= e->e_parm )/* if time past greater than	*/	
+	    {			/* the guy is waiting		*/
+	      c -= e->e_parm;
+	      e->e_parm = 0;
+	    }
+	    else
+	      e->e_parm -= c;
+
+	    if ( e->e_parm )	/* if this guy needs to wait	*/
+	      break;
+	  }
+	}
+			/* set compare tick time to the amount	*/
+			/* the first guy is waiting		*/
+	if ( e ) 	/*    6/19/85				*/
+	{
+	  CMP_TICK = e->e_parm;
+	  NUM_TICK = 0x0L;
+	}
+	spl(oldsr);
+}
+
+
+/*	Button change, forker will come here	*/
+
+	VOID
+bchange( button, clicks )
+	WORD	button,clicks;
+{
+	PD	*m;
+
+	Debug7( "Bchange\r\n" );
+	m = ch_mowner( button, clicks );/* +++ HMK 5/93, clicks added	*/	
+					/* the mouse see if this button	*/
+					/* event causes an ownership 	*/
+					/* change			*/
+	if ( ( m == wm_top()->owner ) && ( gl_kbid != m->p_pid ) )
+	  m = scr_pd;
+
+	post_button( m, button, clicks, cu_xrat, cu_yrat );
+}
+
+
+/*	Check the input event against the sleeping process	*/
+
+	VOID
+post_button( p, button, clks, xrat, yrat )
+	PD		*p;
+	WORD		button,xrat,yrat;
+	REG WORD	clks;
+{
+	REG CDA		*c;
+	REG EVB		*e1, *e;
+	REG UWORD	clicks;
+
+	cu_button = button;
+
+	c = &p->p_cda;
+
+	for (e = c->c_bsleep; e; e = e1)
+	{
+	  e1 = e->e_link;
+	  if ( downorup( button, e ) )
+	  {
+			/* decrement counting semaphore if one	*/
+			/* of the multi-click guys was satisfied*/
+
+	    clicks = ( UWORD )( LHIWD(e->e_parm) & 0x00ffL );	
+	    if ( clicks > 1 )		
+	      gl_bpend--;		
+	    
+	    e->e_return = HW( button );		/* changed */
+	    e->e_button = button;
+	    e->e_click = (clks > clicks) ? clicks : clks;
+	    e->e_mx = xrat;
+	    e->e_my = yrat;
+	    evremove( e, e->e_click );
+	  }
+	}
+}
+
+
+/*	Whenever there is a click, come to here
+*	Button click code call that is from the button interrupt
+*	code with interrupts off.
+*/
+
+	VOID
+b_click( newstate )
+	REG WORD	newstate;
+{
+	LONG temp;
+
+	if ( newstate != gl_button )	/* ignore it unless there is a	*/
+	{				/* change			*/
+	  gl_button = newstate;		/* record the new button state	*/
+	  if (gl_incerr)		/* don't do anything else if we */
+	    return;			/*   are in a critical error    */
+	  if ( gl_bdelay )		/* see if we've already set up 	*/
+	  {				/* a wait			*/
+					/* if the change is into the 	*/
+	    if ( newstate == gl_bdesired )	
+	    {				/* desired state then increment */
+	      gl_bclick++;		/* the click			*/
+	      gl_bdelay += 3;
+	    }						
+	  }
+	  else
+	  {
+	    if ( ( gl_bpend ) && ( newstate ) )	
+	    {			/* if someone cares about multiple 	*/
+				/* clicks and this is not a null mouse	*/
+				/* then set up delay else just fork it	*/
+
+	      gl_bclick = 1;	/* start click cnt at 1	and establish 	*/
+				/* desired state and set wait flag	*/
+	      gl_bdesired = newstate;
+				/* button delay set in ev_dclick (5) 	*/
+	      gl_bdelay = gl_dclick;
+				/* the button state that cause the event*/
+				/* to be satisfied			*/
+	    }
+	    else  {	/* tell the system that something happened	*/	
+	      temp = ((LONG) newstate << 16L) & 0xFFFF0001L;
+	      forkq( ( WORD(*)())bchange, temp );
+	    }
+	  }
+
+	}/* if there is a change	*/
+}
+
+
+
+/*
+*	Button delay code that is called from the tick 
+*	interrupt code with interrupts off.
+*/
+
+	VOID
+b_delay( amnt )
+	WORD	amnt;
+{
+	LONG temp;
+
+	if ( gl_bdelay )	/* see if we have a delay for mouse 	*/	
+	{			/* click in progress			*/
+
+	  gl_bdelay -= amnt;	/* see if decrementing delay cnt causes	*/
+				/* delay to be over			*/
+	  if ( gl_bdelay <= 0 )	/* changed 3/6/91	*/
+	  {
+	    gl_bdelay = 0;	/* reset the delay	*/
+	    if (gl_incerr)
+		return;
+	    temp = (((LONG) gl_bdesired << 16L) & 0xFFFF0000L) + (LONG)gl_bclick;
+	    forkq( ( WORD(*)())bchange, temp );
+				/* if there is another click coming in	*/
+				/* then report that one too		*/
+	    if ( gl_bdesired != gl_button ) {
+	      temp = ((LONG) gl_button << 16L ) & 0xFFFF0001L;
+	      forkq( ( WORD(*)())bchange, temp);
+	    }
+	  }
+	}
+}
+
+
+
+/*
+*	DeQueue a a character from a circular keyboard buffer.
+*/
+
+	UWORD
+dq( p )
+	PD	*p;
+{
+	REG WORD		q2;
+	REG CQUEUE		*qptr;
+
+	qptr = &p->p_cda.c_q;
+
+	qptr->c_cnt--;
+	q2 = qptr->c_front++;
+	if ( (qptr->c_front) == KBD_SIZE )
+	  qptr->c_front = 0;
+
+	return( qptr->c_buff[q2] );
+}
+
+
+#if 0
+/*
+*	Flush the characters from a circular keyboard buffer.
+*/
+	VOID
+fq()
+{
+	while (cda->c_q.c_cnt)
+	  dq( &cda->c_q );
+}
+#endif
+
+
+
+/*	Send key to screen manager	*/
+
+	VOID
+syskeyin( ch, keyin )
+	UWORD	ch;
+	WORD	keyin;
+{
+	kstate = keyin;
+	post_keybd( scr_pd, ch, keyin );
+}
+
+
+/*	Send keys to appropriate process	*/
+
+	VOID
+kchange( ch, keyin )
+	UWORD		ch;
+	WORD		keyin;
+{
+	PD		*p;
+
+	kstate = keyin;
+	if ( ch )
+	{
+	  p = idtopd( gl_kbid );
+	/*	  post_keybd( idtopd( gl_kbid ), ch, keyin );	*/
+	 /* we can't do it like the above because the optimizer will screw up */
+	  post_keybd( p, ch, keyin );
+	}
+}
+
+
+	VOID
+post_keybd( p, ch, keyin )
+	PD		*p;
+	UWORD		ch;
+	WORD		keyin;
+{
+	REG CDA		*c;
+	REG EVB		*e;
+	REG CQUEUE	*qptr;
+
+	c = &p->p_cda;
+						/* if anyone waiting ? 	*/
+	if ( e = c->c_iiowait )			/*   wake him up	*/
+	{
+	  e->e_char = ch;
+	  e->e_kstate = keyin;
+	  evremove(e, ch);
+	}
+	else
+	{
+						/* no one is waiting, 	*/
+						/*   just toss it in	*/
+						/*   the buffer 	*/
+						/* nq(ch, &c->c_q);	*/
+
+	  qptr = &c->c_q;
+
+	  if ( qptr->c_cnt < KBD_SIZE )
+	  {
+	    qptr->c_buff[qptr->c_rear++] = ch;
+	    if ( qptr->c_rear == KBD_SIZE )
+	      qptr->c_rear = 0;
+
+	    qptr->c_cnt++ ;
+	  }
+	}
+}
+
+
+/*	The e->e_parm has the following meaning	*/
+/*	11111111 11111111 11111111 11111111	*/
+/*	Clicks		  Mask	   Up or down	*/
+
+	WORD
+downorup( button, e )
+	WORD	button;
+	EVB	*e;
+{
+	return( test_button( button, e->e_parm ) );
+}
+
+
+/*	Test a button to see if it is what the use want	*/
+
+	WORD
+test_button( button, buparm )
+	WORD	button;
+	LONG	buparm;
+{
+#if 0
+	WORD clicks, updown, or, status;
+#endif
+	WORD	 mask;
+
+	REG WORD flag, val;
+
+	flag = ( WORD )( (buparm >> 24) & 0x00ffL );	/* clicks	*/
+	mask = ( WORD )( (buparm >> 8) & 0x00ffL );	/* which button	*/
+	val = ( WORD )( (buparm) & 0x00ffL );		/* up or down	*/
+	return( ((mask & (val ^ button)) == 0) != flag );
+#if 0
+WARNING ------CONTROL CANNOT REACH THESE STATEMENTS!!!!!
+	or = FALSE;
+	mask = (buparm >> 8) & 0x00ffL;		/* which button	*/
+	updown = buparm & 0x00ffL;		/* up or down	*/
+
+	clicks = (UWORD)(buparm >> 16);		/* get the high word	*/
+	if ( clicks & 0xFF00 )		/* if the high byte is set then	*/
+	{				/* it is a or case		*/
+	  clicks = 1;
+	  or = TRUE;
+	}
+	else
+	  clicks = clicks & 0x00ff;		/* clicks	*/
+
+	updown = ( WORD )( ~( updown ^ button ) );
+	status = mask & updown;
+	if ( !or )
+	  status = ( status == mask );
+
+	if ( status && clicks )
+	  return( TRUE );
+
+	return( FALSE );
+#endif
+}
+
+
+/*	Is the mouse in or out a certain rectangle?	*/ 
+
+	WORD
+inorout( e, rx, ry )
+	REG EVB		*e;
+	WORD		rx, ry;
+{
+	MOBLK		mo;
+
+				/* in or out of specified rectangle	*/
+	mo.m_out = ((e->e_flag & EVMOUT) != 0x0);
+	mo.m_x = LHIWD(e->e_parm);
+	mo.m_y = LLOWD(e->e_parm);
+	mo.m_w = LHIWD(e->e_return);
+	mo.m_h = LLOWD(e->e_return);
+	return( mo.m_out != inside(rx, ry, ( GRECT *)&mo.m_x) );
+}
+
+
+
+/*	Check the current keyboard owner's key buffer	*/
+
+	VOID
+chkkbd( VOID )
+{
+	REG WORD		achar, kstat;
+/*	REG WORD		*pintin;*/
+	WINDOW			*win;
+	PD			*p;
+	PD			*kpd;
+	WORD			i;
+	LONG			lachar;
+	LONG			temp;
+	
+	EXTERN		WINDOW	*hashtbl[];
+
+	if ( !gl_kbid )
+	{
+	  Debug1( "Chkkbd -> Window owner is zero\r\n" );
+	  return;
+	}
+
+	kpd = idtopd( gl_kbid );
+
+	if ( ( kpd->p_state == PS_DEAD ) || ( kpd->p_state == PS_ZOMBIE ) )
+	  return;
+
+/*   	gsx_ncode( KEY_SHST, 0x0L );*/
+   	gsx_ncode( KEY_SHST, 0x0, 0x0 );
+	kstat = intout[0];
+	achar = 0;
+
+	if ( lachar = newchkkbd() )
+	{			/* convert into VDI key code	*/
+	  achar = vdicode( lachar );
+	  if ( ( lachar == 0xc0f0009L ) || ( lachar == 0xe0f0009L ) ||
+	       ( lachar == 0xe770037L ) )	
+	  {
+	    if ( scr_pd->p_cda.c_q.c_cnt < KBD_SIZE ) {
+	      temp = (((LONG) LLOWD(lachar) << 16L) & 0xFFFF0000L)
+		 + (LONG) LHIWD(lachar);
+	      forkq( (WORD(*)())syskeyin, temp );		
+	    }
+	    return;
+	  }
+	}
+
+	if ( achar == 0x201 )		/* Control Shift 1 */
+	{
+	    p = plr;
+	    Debug1( "AES system process: \r\n" );
+	    while( p )
+	    {
+	      Debug1( p->p_name ); 	
+	      Debug1( "status " );	
+	      Ndebug1( (LONG)p->p_state );	
+	      p = p->p_thread;
+	    }
+
+	    Debug1( "Current gl_smowner is " );
+	    if ( gl_smid )
+	      Debug1( idtopd( gl_smid )->p_name );
+	    else
+	      Debug1( "nobody" );		 
+	
+	    Debug1( "\r\nKeyboard owner id is " );
+	    Ndebug1( (LONG)gl_kbid );		
+	    Debug1( "\r\nScreen owner is " );	
+	    if ( spdid )
+	      Debug1( idtopd( spdid )->p_name );
+	    Debug1( "\r\nCritical owner is " );
+
+	    if ( cpdid )
+	    {
+	      if (  cpdid == -1 )
+		Debug1( "-1" );
+	      else
+	        Debug1( idtopd( cpdid )->p_name );
+	    }
+	    Debug1( "\r\n" );
+	    showall();
+	}
+
+
+	if ( achar == 0x300 )		/* Control Shift 2 */
+	{
+	    for ( i = 0; i < NUMWIN; i++ )
+	    {
+	      if ( win = hashtbl[i] )
+	      {
+		while( win )
+		{
+		  Debug1( win->owner->p_name );
+		  if ( win->status.opened )
+		    Debug1( " Opened window handle " );
+		  else
+		    Debug1( " Closed window handle " );	 
+		  Ndebug1( (LONG)win->handle );
+		  win = win->wnext;
+		}
+	      }	
+	    }
+	}
+
+
+	if ( kpd->p_cda.c_q.c_cnt < KBD_SIZE )
+	{
+#if 0
+	  pintin = &intin[0];
+
+	  pintin[0] = 4;
+	  pintin[1] = 2;
+	  gsx_ncode( 33, 0x00000002L );
+	
+	  pintin[0] = -1;
+	  pintin[1] = FALSE;        	/* no echo */
+	  gsx_ncode( 31, FALSE, 2 );
+
+	  if ( contrl[4] )
+	    achar = intout[0];
+#endif
+	}
+
+	if ( ( achar ) || ( kstat != kstate ) ) {
+	  temp = (((LONG) achar << 16L) & 0xFFFF0000L) + (LONG) kstat;
+	  forkq( ( WORD(*)())kchange, temp );
+	}
+}

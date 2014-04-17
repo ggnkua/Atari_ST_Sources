@@ -1,0 +1,3149 @@
+$c+
+RESERVE MAX(FRE(0)/2,100*1024)
+'
+'
+' CD 1.1, der (C)ompact- (D)isk-Editor
+'
+'
+'
+'
+' Written & (C) 1987/1988/1989  by
+'
+'
+'
+'              Anton Stepper                      Claus Brod
+'              Jahnstr. 5                         Am Felsenkeller 2
+'         8772 Marktheidenfeld      &        8772 Marktheidenfeld
+'              09391/6651                         09391/3206
+'
+'
+version$="CD_110"
+'
+'       last update:    20/01/91        16:00 Uhr       AS
+' ###########################################################################
+' Entstanden aus HCD_....
+'
+' V1.00  NEU:   CTRL_Y = Memory-Info
+' V1.02 ANDERS: Showm,Fehler in DIR, Magic raus
+'               Offsett->Offset,Exit_ex -> Edit_ex,Texte korrigiert
+'               Cd_exread, Audio-Teil korrigiert
+'               LOGBUCH: Bps% Bytes statt 512!
+'
+' V1.03  NEU:   DEMO-Time und File wieder rein
+'               Aus SED: Scroll,.....
+'               CD-GET: Name wird gekÅrzt ab ";"  und  weiter verbessert
+'
+'
+' V1.04 ANDERS: GET schneller und abbrechbar !
+'               Audio Start mit Continue
+'
+'
+'
+'
+'
+' ###########################################################################
+'
+mfr%=FRE(0)
+ON ERROR GOSUB fehler_behandlung
+'
+PRINT coff$;            ! stîrt Bildschirmaufbau
+DEFMOUSE 2              ! Busy
+init_var
+init_mc                 ! Laden der Mc-Routinen
+felder                  ! OberflÑche
+SHOWM
+VOID XBIOS(21,3,0)      ! Cursor an, nicht blinken
+@list                   ! Zeige Sektor
+feld_wahl               ! Endlosschleife
+END
+'
+> PROCEDURE init_var
+  max_err%=100                    ! maximale Anzahl der Fehler
+  song_max%=50                    ! maximale Songs einer CD
+  cd_max%=200                     ! maximale Files in einem Ordner
+  '
+  DIM f%(8),text$(8,8),err_fld$(max_err%),stat$(20),flos$(1,20),cd_err$(20)
+  DIM art$(1),m$(50),song$(song_max%),sng$(song_max%),demo%(13)
+  DIM f.iles$(cd_max%),f.laeng%(cd_max%),f.start%(cd_max%),f.attr%(cd_max%)
+  '
+  esc$=CHR$(27)
+  n$=STRING$(10,"0")
+  con$=esc$+"e"
+  coff$=esc$+"f"
+  ro$=esc$+"p"
+  rof$=esc$+"q"
+  tim$="         "
+  inf$="   "
+  exe$=version$+".EXE"
+  logbuch$="DEFAULT.LOG"
+  SHOWM
+  drive%=GEMDOS(&H19)
+  pfad$=CHR$(drive%+65)+":\"
+  dda$="Datei|Drucker|Abbruch"
+  ddm$="Datei|Drucker|Moni"
+  '
+  '
+  dst$="00:00:00"
+  det$="00:00:00"
+  '
+  ascii$=STRING$(255,".")         ! String vorbelegen
+  FOR i%=32 TO 255                ! mit mîglichen Werten :  Default="."
+    MID$(ascii$,i%,1)=CHR$(i%)
+  NEXT i%
+  '
+  art$(0)="High Sierra"
+  art$(1)="ISO"
+  '
+  bps%=2048
+  hpt!=TRUE
+  hex!=TRUE
+  target%=6                      ! Default
+  SHOWM
+  blitter%=XBIOS(64,-1) AND 3
+  dclick%=40              ! Zeitkonstante fÅr Doppelklick
+  '
+  ' ------------------------------- Auflîsung ------------------------------
+  res%=XBIOS(4)           ! GETREZ
+  IF res%
+    IF res%=4 OR res%=5
+      res%=2
+    ENDIF
+    zh%=8*res%            ! Zeichenhîhe
+    a$=MKL$(&HA0002008)+MKL$(&H4E750000)
+    a%=VARPTR(a$)
+    zpz%=DPEEK(C:a%()-2)
+    planes%=DPEEK(C:a%())
+    f1%=5*res%            ! FÅr Bildschirm
+    o_box%=22*res%        !
+    vert%=153*res%        !
+    e1%=100               ! Linker Rand
+    e2%=70*res%           ! Oberer Rand
+    e3%=e1%+450           ! Links + Breite
+    e4%=e2%+5*zh%         ! Oben + Hîhe
+    IF res%=2
+      dtg%=13
+      dtk%=6
+      hyl%=21*zh%+3*res%  ! Zeile
+      hxl%=420            ! Spalte Cursor Anzeige
+    ELSE
+      dtg%=6
+      dtk%=4
+      hyl%=21*zh%+4*res%
+      hxl%=470
+    ENDIF
+    DEFTEXT ,,,dtg%
+  ELSE
+    ALERT 3,"Bitte die mittlere oder|hohe Auflîsung wÑhlen.",1,"Abbruch",dum%
+    EDIT
+  ENDIF
+  fh%=20*res%                     ! Hîhe der Boxen
+  v_box%=172*res%
+  '                               ! Variablen fÅr Eingabe-Box
+  tim%=0                          ! Default fÅr Clock-off
+  ' -------------- Copyright -----
+  RESTORE copyright
+  READ cp$
+copyright:
+  DATA "Ω Anton Stepper & Claus Brod, D-8772 Marktheidenfeld, aus SCHEIBENKLEISTER"
+  ' ------------------------------
+  RESTORE menu_daten
+  CLR i%
+  DO
+    READ m$(i%)
+    EXIT IF m$(i%)="***"
+    INC i%
+  LOOP
+  '
+menu_daten:
+  DATA  C D  ,  Gelaber ,----------------------------,1,2,3,4,5,6,""
+  DATA  ZurÅck  ,  Back to the Future ,  Desktop,"",""
+  DATA ***
+  ' --------- MenÅ -------
+  RESTORE feldertexte             ! MenÅtexte einlesen
+  FOR i%=0 TO 8
+    FOR j%=1 TO 7
+      READ text$(i%,j%)
+    NEXT j%
+  NEXT i%
+  '
+feldertexte:
+  DATA DATA,CD,AUDIO,DIVERS,,LIST,OUT/IN
+  '
+  DATA DATA,,,,DIR,GET,INFO
+  DATA CD,UNIT,READ,EXREAD,TOC,MODE,COMMAND
+  DATA AUDIO,STOP,PROG,START,SONG,TIME,FILE
+  DATA DIVERS,,,SEEK,REMOVE,INQUIRE,
+  DATA ,,,,,,
+  DATA LIST,SEARCH,UP,DOWN,TOP,END,DKLICK
+  DATA OUT/IN,DUMP,DATA,ERROR,F-KEY,READ,LOG
+  ' ------------------------------
+  '
+  CLR j%
+  RESTORE stat_dta                ! FÅr Floppyfehler
+  DO
+    READ stat$(j%)
+    EXIT IF stat$(j%)="*"
+    INC j%
+  LOOP
+  '
+stat_dta:
+  DATA Ok,Allgemeiner Fehler,Station nicht bereit,Unbekannter Befehl,CRC-Fehler
+  DATA UngÅltiger Befehl,Track nicht gefunden,Bootsektor nicht gÅltig
+  DATA Sektor nicht gefunden,Kein Papier,Schreibfehler,Lesefehler,Allgemeiner Fehler,Schreibschutz,Disk gewechselt
+  DATA GerÑt unbekannt,Sektor defekt,Floppy nicht eingelegt,*
+  '
+  RESTORE cd_err                  ! fÅr CD-Fehler
+  CLR cd_err%
+  DO
+    READ cd_err$(cd_err%)
+    EXIT IF cd_err$(cd_err%)="*"
+    INC cd_err%
+  LOOP
+  '
+cd_err:
+  DATA OK,nicht beseitigter Fehler,GerÑt nicht bereit,Fehler auf Medium
+  DATA Hardware-Fehler,UngÅltiges Kommando,Kein Medium eingelegt
+  DATA Falscher CD-Typ,*
+RETURN
+PROCEDURE init_mc               ! Maschinenroutinen einlesen
+  init_mem%=20000
+  malloc(init_mem%)
+  IF fehler%=0
+    ALERT 3,"    Speicher voll    ",1,"Abbruch",dum%
+    EDIT
+  ENDIF
+  ramend%=fehler%
+  '
+  INLINE cdread%,2000
+  INLINE zeile%,10000
+  com_blk%=cdread%+14
+  utis%=cdread%+1600
+  '
+  buf%=ramend%                  !  8192 Bytes   fÅr Sektordaten
+  buf2%=buf%+8192               !  1000 Bytes   fÅr Reservepuffer
+  buf3%=buf2%+1000              !   512 Bytes   fÅr CD Dta-Puffer  ?????
+  tbuf%=buf3%+512               !  8192 Bytes   fÅr Pfadtabelle
+  ak%=tbuf%+8192                !  2048 Bytes   fÅr Statuspuffer
+  '                             ! -----------
+  a$=STRING$(bps%,0)            ! 19944 Bytes
+  BMOVE VARPTR(a$),ak%,bps%
+RETURN
+> PROCEDURE malloc(platz%)        ! Speicher anfordern
+  SHOWM
+  fehler%=GEMDOS(&H48,L:platz%)
+RETURN
+> PROCEDURE mfree(adresse%)       ! Speicher freigeben
+  SHOWM
+  fehler%=GEMDOS(&H49,L:adresse%)
+  IF fehler%
+    ALERT 1,"    Probleme bei Speicherfreigabe    ",1," --- ",dum%
+  ENDIF
+RETURN
+> PROCEDURE fsel(muster$,vorschlag$,VAR ergebnis$)
+  FILESELECT muster$,vorschlag$,ergebnis$
+  CLR invert%
+  felder
+  felder_text(x1%)
+  @list
+RETURN
+' ---------------------------------------------------------------------------
+> PROCEDURE cd_play(op%,b0%,b1%,b2%,b3%,b4%,c%,s0%,s1%,s2%)
+  LPOKE cdread%+2,buf%          ! Zeiger auf Puffer
+  LPOKE cdread%+6,buf2%         ! Statuspuffer
+  LPOKE cdread%+10,1            ! Extended Mode
+  POKE com_blk%,target%*32+op%  ! Target + Opcode
+  POKE com_blk%+1,b0%
+  POKE com_blk%+2,b1%
+  POKE com_blk%+3,b2%
+  POKE com_blk%+4,b3%
+  POKE com_blk%+5,b4%
+  POKE com_blk%+6,c%
+  POKE com_blk%+7,s0%
+  POKE com_blk%+8,s1%
+  POKE com_blk%+9,s2%
+  LPOKE buf2%,bps%
+  CALL cdread%
+  cd_status%=LPEEK(cdread%+20)  ! Status holen
+  cd_tim%=LPEEK(cdread%+24)     ! Timeout?
+  IF cd_tim%<>0
+    tim$="Timeout"
+  ELSE
+    tim$=STRING$(8,32)
+  ENDIF
+RETURN
+> PROCEDURE cd_err
+  cd_fehler%=(cd_status% AND &HFF0000)/65536
+  dma_st%=(cd_status% AND &HFF)
+  POKE com_blk%,target%*32+3    ! Request Sense
+  POKE com_blk%+1,0
+  POKE com_blk%+2,0
+  POKE com_blk%+3,0
+  POKE com_blk%+4,0
+  POKE com_blk%+5,0
+  LPOKE cdread%+6,buf2%         ! Statuspuffer
+  LPOKE cdread%+10,1            ! Modus
+  CALL cdread%
+  cd_error%=PEEK(buf2%+2)       ! Status
+  '
+  IF fer%<max_err%-1 AND (cd_error% OR cd_tim%)
+    INC fer%
+    IF cd_error%<cd_err%
+      err_fld$(fer%)=STR$(cd_error%)+"  "+cd_err$(cd_error%)+"  "+tim$
+    ELSE
+      err_fld$(fer%)=STR$(cd_error%)+"  Fehler unbekannt  "+tim$
+    ENDIF
+  ENDIF
+RETURN
+' ----------- Cd Kommandos -----
+> PROCEDURE cd_unit
+  LOCAL a%
+  @err_clr
+  @eingabe(" Targetnummer: ",STR$(target%),4)
+  a%=VAL(a$)
+  IF a%>=0 AND a%<8
+    target%=a%
+    @cd_play(0,0,0,0,0,0,0,0,0,0)               ! Unit Ready
+    @cd_err
+  ENDIF
+  @info
+RETURN
+> PROCEDURE cd_read
+  @err_clr
+  @eingabe(" READ - Blocknummer: ","",6)
+  IF a$<>""
+    block%=VAL(a$)
+    @cd_block(block%)
+    @list
+  ENDIF
+RETURN
+> PROCEDURE cd_block(block%)
+  b0%=(block% AND &H1F0000)/65536
+  b1%=(block% AND &HFF00)/256
+  b2%=(block% AND &HFF)
+  @cd_play(8,b0%,b1%,b2%,1,0,0,0,0,0)
+  @cd_err
+RETURN
+> PROCEDURE get_lsn
+  @err_clr
+  @eingabe(" LSN eingeben: ","",8)
+  IF a$<>""
+    lsn%=VAL(a$)
+    @lsn(lsn%)
+    @list
+  ENDIF
+RETURN
+> PROCEDURE cd_exread
+  @err_clr
+  ALERT 1,"    Audio-Format    |    oder Daten-Format?",1," AUDIO | DATEN ",t_bit%
+  IF t_bit%=1
+    t_bit%=64
+    @eingabe(" EXREAD - Minute: ","",8)
+    IF a$<>""
+      @bcd(a$)
+      sminute%=a%
+      @eingabe(" EXREAD - Sekunde: ","",6)
+      @bcd(a$)
+      secunden%=a%
+      @eingabe(" EXREAD - Frame: ","",6)
+      @bcd(a$)
+      frame%=a%
+      block%=frame%+(secunden%+sminute%*60)*75
+      @cd_play(24,0,0,sminute%,secunden%,frame%,0,0,1,t_bit%)
+    ENDIF
+  ELSE
+    @eingabe(" EXREAD - Blocknummer: ","",8)
+    IF a$<>""
+      block%=VAL(a$)
+      blk_cnt%=1
+      t_bit%=0
+      b0%=(block% AND &H1F0000)/65536
+      b1%=(block% AND &HFF00)/256
+      b2%=(block% AND &HFF)
+      @cd_play(24,0,0,b0%,b1%,b2%,0,(blk_cnt% AND &HFF00)/256,(blk_cnt% AND &HFF),t_bit%)
+    ENDIF
+  ENDIF
+  @cd_err
+  @list
+RETURN
+> PROCEDURE toc
+  LOCAL a%,i%,toc%
+  @err_clr
+  @cd_play(25,0,0,0,0,0,0,0,0,0)        ! TOC holen
+  @cd_err
+  IF cd_error%=0
+    cd_time$=""
+    nr%=0
+    toc%=-1
+    REPEAT
+      INC toc%
+    UNTIL PEEK(buf%+toc%)=&HA0          ! erstes &HA0 suchen ?
+    DO
+      a%=PEEK(buf%+toc%)
+      IF a%=&HA0
+        bcd$=RIGHT$(n$+STR$(PEEK(buf%+toc%+1)),2)
+        first_song%=VAL(LEFT$(bcd$,1))*16+VAL(RIGHT$(bcd$,1))
+      ELSE
+        IF a%=&HA1
+          bcd$=RIGHT$(n$+STR$(PEEK(buf%+toc%+1)),2)
+          sec_song%=VAL(LEFT$(bcd$,1))*16+VAL(RIGHT$(bcd$,1))
+        ELSE
+          IF a%=&HA2 AND cd_time$=""
+            zt_end%=VAL(RIGHT$(n$+HEX$(PEEK(buf%+toc%+1)),2))*60+VAL(RIGHT$(n$+HEX$(PEEK(buf%+toc%+2)),2))
+            FOR i%=1 TO 2
+              cd_time$=cd_time$+RIGHT$(n$+HEX$(PEEK(buf%+toc%+i%)),2)+" "
+            NEXT i%
+            MID$(cd_time$,3)=":"
+          ELSE
+            IF a%>0 AND a%<&HA0
+              INC nr%
+              song$(nr%)=STRING$(70,32)
+              FOR i%=0 TO 3
+                MID$(song$(nr%),1+10*i%)=RIGHT$(n$+HEX$(PEEK(buf%+toc%+i%)),2)
+              NEXT i%
+              zt1%=VAL(RIGHT$(n$+HEX$(PEEK(buf%+toc%+1)),2))*60+VAL(RIGHT$(n$+HEX$(PEEK(buf%+toc%+2)),2))
+              zt2%=VAL(RIGHT$(n$+HEX$(PEEK(buf%+toc%-11)),2))*60+VAL(RIGHT$(n$+HEX$(PEEK(buf%+toc%-10)),2))
+              IF nr%>1
+                akt_zt%=zt1%-zt2%
+                akt_tim$=RIGHT$(n$+STR$(INT(akt_zt%/60)),2)
+                akt_tim$=akt_tim$+":"+RIGHT$(n$+STR$(INT(akt_zt% MOD 60)),2)
+                MID$(song$(nr%-1),42)=akt_tim$
+                '
+                a$=RIGHT$(n$+STR$(INT(zt1%/60)),2)
+                a$=a$+":"+RIGHT$(n$+STR$(INT(zt1% MOD 60)),2)
+                sng$(nr%)=a$+" "
+                '
+              ENDIF
+            ENDIF
+          ENDIF
+        ENDIF
+      ENDIF
+      ADD toc%,12                 ! immer 3*4 Bytes / Song  ?
+      '
+      EXIT IF nr%>0 AND PEEK(buf%+toc%)>=&HA0
+      EXIT IF toc%>=512
+    LOOP
+    song_anz%=nr%
+    akt_zt%=zt_end%-zt1%
+    akt_tim$=RIGHT$(n$+STR$(INT(akt_zt%/60)),2)
+    akt_tim$=akt_tim$+":"+RIGHT$(n$+STR$(INT(akt_zt% MOD 60)),2)
+    MID$(song$(nr%),42)=akt_tim$
+    IF cd_error%<>0
+      song_anz%=0
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE cd_toc
+  @toc
+  @zeig_song_data
+RETURN
+> PROCEDURE zeig_song_data
+  LOCAL i%
+  CLR zz%
+  titel$=" Nr.:   Minute    Sekunde    Block      Spielzeit      Total : "+cd_time$
+  @screen
+  PRINT AT(4,2);titel$
+  i%=1
+  WHILE i%<song_anz%+1
+    PRINT AT(5,zz%+4);song$(i%)'                ! Zeile drucken
+    INC zz%
+    IF zz%>15                                   ! nur 16 Zeilen ausgeben
+      @page(titel$)
+    ENDIF
+    INC i%
+  WEND
+  IF zz%<>0
+    @help_ex
+  ELSE
+    @list
+  ENDIF
+RETURN
+> PROCEDURE cd_mode
+  err_clr
+  eingabe(" MODE - Modusbyte (normal $41): ","",6)
+  IF a$<>""
+    mod%=VAL(a$)
+    cd_play(21,0,0,0,mod%,0,0,0,0,0)
+    cd_err
+    @list
+  ENDIF
+RETURN
+> PROCEDURE cd_command
+  @err_clr
+  @eingabe(" Befehls-Code: ","",6)
+  IF a$<>""
+    @err_clr
+    code%=VAL(a$)
+    @eingabe(" Parameterbyte 1: ","",6)
+    h1%=VAL(a$)
+    @eingabe(" Parameterbyte 2: ","",6)
+    h2%=VAL(a$)
+    @eingabe(" Parameterbyte 3: ","",6)
+    h3%=VAL(a$)
+    @eingabe(" Parameterbyte 4: ","",6)
+    h4%=VAL(a$)
+    @eingabe(" Parameterbyte 5: ","",6)
+    h5%=VAL(a$)
+    @eingabe(" Parameterbyte 6: ","",6)
+    h6%=VAL(a$)
+    @eingabe(" Parameterbyte 7: ","",6)
+    h7%=VAL(a$)
+    @eingabe(" Parameterbyte 8: ","",6)
+    h8%=VAL(a$)
+    @eingabe(" Parameterbyte 9: ","",6)
+    h9%=VAL(a$)
+    @cd_play(code%,h1%,h2%,h3%,h4%,h5%,h6%,h7%,h8%,h9%)
+    @cd_err
+    @list
+  ENDIF
+RETURN
+> PROCEDURE bcd(bcd$)
+  LOCAL bcd%
+  bcd%=VAL(bcd$)
+  bcd$=RIGHT$(n$+STR$(bcd%),2)
+  a%=VAL(LEFT$(bcd$,1))*16+VAL(RIGHT$(bcd$,1))
+RETURN
+' ------------------------------
+> PROCEDURE audio_stop
+  @err_clr
+  @cd_play(5,0,0,0,0,0,0,0,0,0)
+  @cd_err
+  @info
+RETURN
+> PROCEDURE audio_prog
+  @err_clr
+  @eingabe(" PROG - Startminute: ","",6)
+  IF a$<>""
+    @bcd(a$)
+    sminute%=a%
+    @eingabe(" PROG - Startsekunde: ","",6)
+    @bcd(a$)
+    ssecunde%=a%
+    @eingabe(" PROG - Startframe: ","",6)
+    @bcd(a$)
+    sframe%=a%
+    @eingabe(" PROG - Endminute: ","",6)
+    @bcd(a$)
+    eminute%=a%
+    @eingabe(" PROG - Endsekunde: ","",6)
+    @bcd(a$)
+    esecunde%=a%
+    @eingabe(" PROG - Endframe: ","",6)
+    @bcd(a$)
+    eframe%=a%
+    @eingabe(" PROG - Repeat   Y/N ","",1)
+    IF UPPER$(a$)="J" OR UPPER$(a$)="Y"
+      rep%=128
+    ELSE
+      rep%=0
+    ENDIF
+    @cd_play(17,0,sminute%,ssecunde%,sframe%,eminute%,esecunde%,eframe%,0,rep%)
+    @cd_err
+    @info
+  ENDIF
+RETURN
+> PROCEDURE audio_start
+  @err_clr
+  @eingabe(" START - erster Titel: ","",6)
+  IF a$<>""
+    song%=VAL(a$)
+    @eingabe(" START - Anzahl: ","",6)
+    IF a$<>""
+      song_cnt%=VAL(a$)
+      @eingabe(" START - Index  Y/N ","",1)
+      IF UPPER$(a$)="J" OR UPPER$(a$)="Y"
+        index%=64
+      ELSE
+        index%=0
+      ENDIF
+      @eingabe(" START - Continue Y/N ","",1)
+      IF UPPER$(a$)="J" OR UPPER$(a$)="Y"
+        ADD index%,128
+      ENDIF
+      @cd_play(6,0,0,song%,song_cnt%,index%,0,0,0,0)
+      @cd_err
+      @info
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE audio_song            ! Routine zeigt fÅr jeden Song ein KÑstchen
+  demo_file%=0                  ! und lÑût Anwahl der Titel zu
+  @toc
+  IF song_anz%<>0
+    @screen
+    @info
+    song%=0
+    DO
+      @song_select
+      demo_file%=1
+      IF song%>0 AND song_anz%>=song%
+        @cd_play(6,0,0,song%,1,0,0,0,0,0)
+      ENDIF
+      @maus_off
+      WHILE MOUSEK=0
+      WEND
+      mk%=MOUSEK
+      EXIT IF mk%=2
+    LOOP
+    @screen
+    @list
+  ENDIF
+RETURN
+> PROCEDURE song_select
+  PRINT coff$;
+  IF song_anz%>0
+    yl%=70
+    db%=40
+    dh%=20*res%
+    IF demo_file%=0
+      j%=0
+      FOR i1%=1 TO 2
+        FOR i%=1 TO 12
+          dx%=i%*45
+          INC j%
+          a$=STR$(j%)
+          IF j%<=song_anz%
+            DEFFILL 1,2,8
+            PBOX dx%+3,yl%+3,dx%+db%-7,yl%+dh%+2*res%
+            DEFFILL 1,0
+            PBOX dx%,yl%,dx%+db%-13,yl%+dh%
+            tp%=(db%-(LEN(a$)*8)-11)/2
+            DEFTEXT 1,0,0,13
+            TEXT dx%+tp%,yl%+(dh%-zh%),a$
+            a$=MID$(song$(j%),42,5)
+            tp%=(db%-(LEN(a$)*6)-11)/2
+            DEFTEXT 1,0,0,4
+            TEXT dx%+tp%,yl%+dh%+zh%,a$
+            a$=sng$(j%)
+            tp%=(db%-(LEN(a$)*6)-5)/2
+            DEFTEXT 1,0,0,4
+            TEXT dx%+tp%,yl%+dh%+zh%+10,a$
+          ENDIF
+        NEXT i%
+        yl%=yl%+yl%+20
+      NEXT i1%
+      DEFTEXT 1,0,0,13
+    ELSE
+      yl%=160+90*(song%<13)
+      j%=song%
+      dx%=(j%+12*(j%>12))*45
+      DEFFILL 1,2,8
+      PBOX dx%+3,yl%+3,dx%+db%-7,yl%+dh%+2*res%
+      DEFFILL 1,0
+      PBOX dx%,yl%,dx%+db%-13,yl%+dh%
+      tp%=(db%-(LEN(STR$(j%))*8)-11)/2
+      TEXT dx%+tp%,yl%+(dh%-zh%),STR$(j%)
+      song%=0
+    ENDIF
+    yl%=70
+    PRINT AT(7,18);"Total: ";cd_time$
+    DO
+      EXIT IF MOUSEK=2
+      MOUSE mx%,my%,mk%
+      IF mk%=1
+        FOR i%=1 TO 12
+          dx%=i%*45
+          IF mx%>dx% AND mx%<dx%+db%-13
+            IF my%>yl% AND my%<yl%+dh% AND i%<=song_anz%        ! erste Reihe
+              song%=i%
+              DEFFILL 1,1
+              GRAPHMODE 3
+              PBOX dx%,yl%,dx%+db%-13,yl%+dh%
+              GRAPHMODE 1
+            ENDIF
+            IF my%>yl%+yl%+20 AND my%<yl%+yl%+20+dh% AND i%+12<=song_anz%
+              DEFFILL 1,1
+              GRAPHMODE 3
+              PBOX dx%,yl%+yl%+20,dx%+db%-13,yl%+yl%+dh%+20
+              GRAPHMODE 1
+              song%=i%+12
+            ENDIF
+          ENDIF
+        NEXT i%
+      ENDIF
+      EXIT IF song%<>0
+    LOOP
+  ENDIF
+  IF MOUSEK=2
+    song%=99
+  ENDIF
+RETURN
+> PROCEDURE audio_file
+  @err_clr
+  path$=pfad$
+  soll$=nam$                    ! vorgegebener Dateiname
+  maske$="*.SNG"
+  fsel(path$+maske$,soll$,nam$)
+  @do_pfad(nam$)
+  IF EXIST(nam$)
+    cd$=LEFT$(nam$,MIN(INSTR(1,nam$,".")-1,LEN(nam$)))
+    cd$=RIGHT$(cd$,LEN(cd$)-LEN(pfad$))
+    ALERT 1,"    Bitte CD einlegen  :   |    "+cd$+" | | ",1," Ok | Cancel ",demo%
+    IF demo%=1
+      @screen
+      OPEN "I",#1,nam$
+      DO
+        INPUT #1,a$
+        IF a$="***"             ! Bedeutet Start Data
+          PRINT AT(3,2);" Kommando :"
+          FOR i%=1 TO 12
+            INPUT #1,a$
+            song$(i%)=a$
+            PRINT AT(12+5*i%,2);a$''
+            IF i%>1 AND i%<10
+              @bcd(a$)          ! Musikdaten ins BCD-Format
+              demo%(i%)=a%
+            ELSE
+              demo%(i%)=VAL(a$)
+            ENDIF
+          NEXT i%
+          cd1%=VAL(song$(5))+75*VAL(song$(4))+4500*VAL(song$(3))
+          cd2%=VAL(song$(8))+75*VAL(song$(7))+4500*VAL(song$(6))
+          '
+          cd3%=cd2%-cd1%                ! LÑnge des Ausschnitts in Frames
+          cd4%=(cd3%/75)*50*demo%(11)   ! in Pause umrechnen
+          '
+          @cd_play(demo%(1),demo%(2),demo%(3),demo%(4),demo%(5),demo%(6),demo%(7),demo%(8),demo%(9),demo%(10))
+          @cd_err
+          PAUSE demo%(12)*3
+          PAUSE cd4%
+        ENDIF
+        EXIT IF EOF(#1)
+      LOOP
+      CLOSE #1
+      @cd_play(5,0,0,0,0,0,0,0,0,0)
+      @cd_err
+    ENDIF
+  ENDIF
+  @list
+RETURN
+> PROCEDURE audio_time
+  LOCAL i1%,j%
+demo_time:
+  DATA "+","-","00:00:00","PLAY","STOP"
+  DATA "+","-","00:00:00","REPEAT","EXIT"
+  RESTORE demo_time
+  @screen
+  j%=0
+  yl%=50*res%
+  db%=90
+  dh%=20*res%
+  TEXT 32,yl%+(dh%-zh%),"START"
+  TEXT 32,yl%*2+(dh%-zh%),"ENDE"
+  FOR i1%=1 TO 2
+    FOR i%=1 TO 5
+      dx%=i%*100-10
+      INC j%
+      READ a$
+      IF i%=3
+        a$=dst$
+      ENDIF
+      IF i%=8
+        a$=det$
+      ENDIF
+      DEFFILL 1,2,8
+      PBOX dx%+3,yl%*i1%+3,dx%+db%-7,yl%*i1%+dh%+2*res%
+      DEFFILL 1,0
+      PBOX dx%,yl%*i1%,dx%+db%-13,yl%*i1%+dh%
+      tp%=(db%-(LEN(a$)*8)-11)/2
+      TEXT dx%+tp%,yl%*i1%+(dh%-zh%),a$
+      IF j%=9 AND rep%=1
+        rep%=0
+        @db9
+      ENDIF
+      IF j%=4 AND play%=1
+        DEFFILL 1,1
+        GRAPHMODE 3
+        PBOX dx%,yl%,dx%+db%-13,yl%+dh%
+        GRAPHMODE 1
+      ENDIF
+    NEXT i%
+  NEXT i1%
+  @demo_time_control
+  button%=0
+  DO
+    MOUSE mx%,my%,mk%
+    IF mk%>0 AND my%>yl% AND my%<yl%*2+dh%
+      FOR i%=1 TO 5
+        dx%=i%*100-10
+        IF mx%>dx% AND mx%<dx%+db%-13
+          button%=i%
+          IF my%>yl%*2
+            button%=i%+5
+          ENDIF
+          ON button% GOSUB db1,db2,db3,db4,db5,db6,db7,db8,db9
+        ENDIF
+      NEXT i%
+    ENDIF
+    EXIT IF button%=10
+  LOOP
+  CLR mx%,my%
+  @screen
+  @list
+RETURN
+> PROCEDURE db1
+  ON MOUSEK GOSUB b1_1,b1_2,b1_3
+  @demo_time_control
+RETURN
+> PROCEDURE b1_1
+  INC sframe%
+RETURN
+> PROCEDURE b1_2
+  INC ssecunde%
+RETURN
+> PROCEDURE b1_3
+  INC sminute%
+RETURN
+> PROCEDURE db2
+  ON MOUSEK GOSUB b2_1,b2_2,b2_3
+  @demo_time_control
+RETURN
+> PROCEDURE b2_1
+  DEC sframe%
+RETURN
+> PROCEDURE b2_2
+  DEC ssecunde%
+RETURN
+> PROCEDURE b2_3
+  DEC sminute%
+RETURN
+> PROCEDURE db3
+  @eingabe("Zeit eingeben : ",dst$,8)
+  IF a$<>""
+    sminute%=VAL(LEFT$(a$,2))
+    ssecunde%=VAL(MID$(a$,4,2))
+    sframe%=VAL(RIGHT$(a$,2))
+    dst$=a$
+    @demo_time_control
+  ENDIF
+RETURN
+> PROCEDURE db4
+  LOCAL d1%,d2%,d3%,d4%,d5%
+  IF play%=0
+    play%=1
+    IF POINT(dx%,yl%)=1
+      DEFFILL 1,1
+      GRAPHMODE 3
+      PBOX dx%,yl%,dx%+db%-13,yl%+dh%
+      GRAPHMODE 1
+    ENDIF
+    @bcd(STR$(sminute%))
+    d1%=a%
+    @bcd(STR$(eminute%))
+    d4%=a%
+    @bcd(STR$(ssecunde%))
+    d2%=a%
+    @bcd(STR$(esecunde%))
+    d5%=a%
+    @bcd(STR$(sframe%))
+    d3%=a%
+    @bcd(STR$(eframe%))
+    d6%=a%
+    @cd_play(17,0,d1%,d2%,d3%,d4%,d5%,d6%,0,rep%*128)
+    @cd_err
+    @info
+    PRINT coff$;
+    @maus_off
+  ENDIF
+RETURN
+> PROCEDURE db5
+  IF play%=1
+    @cd_play(5,0,0,0,0,0,0,0,0,0)
+    DEFFILL 1,1
+    GRAPHMODE 3
+    PBOX 390,yl%,390+db%-13,yl%+dh%
+    GRAPHMODE 1
+    play%=0
+  ENDIF
+RETURN
+> PROCEDURE db6
+  ON MOUSEK GOSUB b6_1,b6_2,b6_3
+  @demo_time_control
+RETURN
+> PROCEDURE b6_1
+  INC eframe%
+RETURN
+> PROCEDURE b6_2
+  INC esecunde%
+RETURN
+> PROCEDURE b6_3
+  INC eminute%
+RETURN
+> PROCEDURE db7
+  ON MOUSEK GOSUB b7_1,b7_2,b7_3
+  @demo_time_control
+RETURN
+> PROCEDURE b7_1
+  DEC eframe%
+RETURN
+> PROCEDURE b7_2
+  DEC esecunde%
+RETURN
+> PROCEDURE b7_3
+  DEC eminute%
+RETURN
+> PROCEDURE db8
+  @eingabe("Zeit eingeben : ",det$,8)
+  IF a$<>""
+    eminute%=VAL(LEFT$(a$,2))
+    esecunde%=VAL(MID$(a$,4,2))
+    eframe%=VAL(RIGHT$(a$,2))
+    det$=a$
+    @demo_time_control
+  ENDIF
+RETURN
+> PROCEDURE db9
+  rep%=1-rep%
+  DEFFILL 1,1
+  GRAPHMODE 3
+  PBOX dx%,yl%*2,dx%+db%-13,yl%*2+dh%
+  GRAPHMODE 1
+  @maus_off
+RETURN
+> PROCEDURE demo_time_control
+  IF sframe%>74
+    sframe%=0
+    INC ssecunde%
+  ENDIF
+  IF ssecunde%>60
+    ssecunde%=0
+    INC sminute%
+  ENDIF
+  IF sminute%>73
+    sminute%=73
+  ENDIF
+  '
+  IF sframe%<0
+    sframe%=74
+    DEC ssecunde%
+  ENDIF
+  IF ssecunde%<0
+    ssecunde%=59
+    DEC sminute%
+  ENDIF
+  sminute%=MAX(sminute%,0)
+  '
+  IF eframe%>74
+    eframe%=0
+    INC esecunde%
+  ENDIF
+  IF esecunde%>60
+    esecunde%=0
+    INC eminute%
+  ENDIF
+  IF eminute%>73
+    eminute%=73
+  ENDIF
+  '
+  IF eframe%<0
+    eframe%=74
+    DEC esecunde%
+  ENDIF
+  IF esecunde%<0
+    esecunde%=59
+    DEC eminute%
+  ENDIF
+  eminute%=MAX(eminute%,0)
+  '
+  MID$(dst$,1,2)=RIGHT$(n$+STR$(sminute%),2)
+  MID$(dst$,4,2)=RIGHT$(n$+STR$(ssecunde%),2)
+  MID$(dst$,7,2)=RIGHT$(n$+STR$(sframe%),2)
+  MID$(det$,1,2)=RIGHT$(n$+STR$(eminute%),2)
+  MID$(det$,4,2)=RIGHT$(n$+STR$(esecunde%),2)
+  MID$(det$,7,2)=RIGHT$(n$+STR$(eframe%),2)
+  tp%=(db%-(LEN(dst$)*8)-11)/2
+  TEXT 290+tp%,yl%+(dh%-zh%),dst$
+  tp%=(db%-(LEN(det$)*8)-11)/2
+  TEXT 290+tp%,yl%*2+(dh%-zh%),det$
+  PAUSE 2
+RETURN
+' -------------- Diverses --------------
+> PROCEDURE inquire
+  err_clr
+  cd_play(18,0,0,0,1,0,0,0,0,0)        ! Test ob CD dran
+  rom$=STRING$(11,0)
+  BMOVE buf2%+5,VARPTR(rom$),11
+  auswurf%=PEEK(buf2%+1)
+  acsi%=PEEK(buf2%+2)
+  cd_err
+  screen
+  PRINT AT(5,10);rom$
+  PRINT AT(5,12);"Auswurf : ";auswurf%
+  PRINT AT(5,14);"Version : ";acsi%
+  help_ex
+RETURN
+> PROCEDURE remove
+  err_clr
+  cd_play(30,0,0,0,0,0,0,0,0,0)        ! Auswurf erlauben
+  cd_err
+  info
+RETURN
+> PROCEDURE seek
+  err_clr
+  eingabe(" SEEK - Blocknummer: ","",6)
+  IF a$<>""
+    block%=VAL(a$)
+    b0%=(block% AND &H1F0000)/65536
+    b1%=(block% AND &HFF00)/256
+    b2%=(block% AND &HFF)
+    cd_play(11,b0%,b1%,b2%,0,0,0,0,0,0)        ! Auswurf erlauben
+    cd_err
+    @list
+    info
+  ENDIF
+RETURN
+' ########## Systemroutinen fÅr DATA-CD ########
+> PROCEDURE lsn(lsn%)
+  block%=lsn%+150
+  b0%=(block% AND &H1F0000)/65536
+  b1%=(block% AND &HFF00)/256
+  b2%=(block% AND &HFF)
+  cd_play(8,b0%,b1%,b2%,1,0,0,0,0,0)
+  cd_err
+RETURN
+> PROCEDURE fgetdta
+  dta%=buf3%                    ! Festbuffer
+RETURN
+> PROCEDURE fsfirst(fsfirst$)
+  LOCAL a$
+  a$=fsfirst$                   ! erst den Pfadnamen kontrollieren
+  IF LEFT$(a$)<>"\"
+    a$="\"+a$
+  ENDIF
+  IF LEN(a$)<2
+    a$=a$+"\"
+  ENDIF
+  IF RIGHT$(a$)<>"\"
+    a$=a$+"\"
+  ENDIF
+  fsfirst$=a$
+  end_flag%=0
+  fgetdta                      ! in DTA% steht Bufferaddresse
+  IF fsfirst$<>"\\"
+    ON wc%+1 GOSUB fs_search_old,fs_search_pfad
+    IF lsn%                     ! Pfad nicht gefunden wenn LSN%=0
+      lsn(lsn%)
+    ELSE
+      end_flag%=1               ! not found
+    ENDIF
+  ELSE
+    lsn(root%)
+  ENDIF
+  IF end_flag%=0
+    zg_dir%=buf%
+    fsnext                     ! erster und zweiter Eintrag
+    fsnext                     ! zeigen auf sich selbst ( Wurzel )
+    fsnext                     ! Dritter Eintrag = erstes File
+  ENDIF
+RETURN
+> PROCEDURE fs_search_pfad
+  LOCAL fs1%,fs2%,fsx%,zg%,snr%,sv%,vv%,ln%,fso$,ta$
+  sfirst%=1
+  sv%=1
+  fsx%=1
+  DO
+    fs1%=INSTR(fsx%,fsfirst$,"\")+1
+    fs2%=INSTR(fs1%+1,fsfirst$,"\")
+    fso$=MID$(fsfirst$,fs1%,fs2%-fs1%)        ! Ordnername isolieren
+    EXIT IF fso$=""
+    snr%=1                                    ! Nummer des Eintrags
+    zg%=tbuf%                                 ! Pufferanfang
+    DO
+      ln%=PEEK(zg%)                           ! LÑnge des Namens
+      EXIT IF ln%=0                           ! Ende ...
+      lsn%=LPEEK(zg%+2)                       ! Sektornummer
+      vv%=DPEEK(zg%+6)                        ! Vaterverzeichnis nummer
+      ta$=STRING$(ln%,0)                      ! Namen ...
+      BMOVE zg%+8,VARPTR(ta$),ln%             !        .. holen
+      EXIT IF ta$=fso$ AND (vv%=sv% OR sfirst%=1)
+      ADD zg%,ln%+8
+      IF zg%/2<>INT(zg%/2)
+        INC zg%                               ! auf Wortgrenze achten
+      ENDIF
+      INC snr%
+    LOOP
+    sfirst%=0
+    EXIT IF ln%=0
+    EXIT IF fs2%=LEN(fsfirst$)                ! fertig wenn ganzen Namen durch
+    fsx%=fs2%
+    sv%=snr%                                  ! sonst weiter
+  LOOP
+  IF ln%=0
+    lsn%=0
+  ENDIF
+RETURN
+> PROCEDURE fs_search_old
+  lsn(root%)
+  zg_dir%=buf%
+  fsnext
+  DO
+    DO
+      fs1%=INSTR(1,fsfirst$,"\")+1              ! Ordner-Name isolieren
+      fs2%=INSTR(fs1%,fsfirst$,"\")
+      fs1$=MID$(fsfirst$,fs1%,MAX(0,fs2%-fs1%)) ! ist jetzt Ordnername
+      DO
+        fs2$=STRING$(PEEK(dta%+znmd%),0)        ! aktuellen Filenamen
+        BMOVE dta%+znmd%+1,VARPTR(fs2$),PEEK(dta%+znmd%)
+        EXIT IF fs1$=fs2$                       ! mit Ordnernamen vergleichen
+        fsnext                                 ! wars nicht , weiter suchen
+        EXIT IF end_flag%=1                     ! raus wenn am Sectorende
+      LOOP
+      EXIT IF end_flag%=1 OR fs2$=fs1$
+    LOOP
+    IF fs2$=fs1$
+      lsn%=LPEEK(dta%+6)              ! Sectornummerlesen
+      lsn(lsn%)                      ! Verzeichnis lesen
+      zg_dir%=buf%                    ! von Anfang lesen ....
+      fsnext
+    ENDIF
+    fsfirst$=RIGHT$(fsfirst$,LEN(fsfirst$)-fs2%+1)
+    EXIT IF fsfirst$="\"
+  LOOP
+RETURN
+> PROCEDURE fsnext                ! holt DIR-Eintrag in Buffer
+  ldir%=PEEK(zg_dir%)           ! LÑnge des DIR-Eintrags
+  IF ldir%
+    BMOVE zg_dir%,dta%,ldir%    ! Eintrag holen
+    POKE dta%+ldir%,0
+    ADD zg_dir%,ldir%           ! und auf nÑchsten DIR-Eintrag zeigen
+    IF zg_dir%-buf%>bps%-3      ! wenn am Ende des Sectors ,
+      INC lsn%                  ! dann .....
+      lsn(lsn%)                ! nÑchsten Sector lesen
+      zg_dir%=buf%              ! Zeiger auf Pufferanfang
+    ENDIF
+  ELSE
+    end_flag%=1                 ! fertig, keinen Eintrag mehr gefunden
+  ENDIF
+RETURN
+' --------------------------- OberflÑche ------------------------------------
+> PROCEDURE felder
+  DEFFILL 1,2,4
+  PBOX 0,0,639,res%*200-1       ! Hintergrund
+  DEFFILL 1,2,8
+  PBOX 14,7*res%,627,20*res%
+  DEFFILL 1,0
+  PBOX 8,f1%,620,18*res%        ! Statuszeile
+  DEFFILL 1,2,8
+  PBOX 14,25*res%,627,vert%+3*res%
+  DEFFILL 1,0
+  PBOX 8,o_box%,620,vert%       ! Arbeitsfeld
+  fb%=90
+  CLR ft%
+  FOR i%=10 TO 600 STEP fb%
+    INC ft%
+    DEFFILL 1,2,8
+    PBOX i%+3,v_box%+3,i%+fb%-7,v_box%+fh%+2*res%
+    DEFFILL 1,0
+    PBOX i%,v_box%,i%+fb%-13,v_box%+fh%
+    f%(ft%)=i%
+  NEXT i%
+  DEFFILL 1,0
+  felder_text(0)
+RETURN
+> PROCEDURE felder_text(x%)       ! Gibt richtigen MenÅtext
+  LOCAL fl%,ti%                 ! zum richtigen UntermenÅ aus
+  CLR fl%
+  FOR i%=10 TO 600 STEP fb%
+    INC fl%
+    DEFFILL 1,0
+    PBOX i%+1,v_box%+1,i%+fb%-12,v_box%+fh%-1
+    IF x%=0 OR fl%=1
+      DEFTEXT 1,1,,res%*6+1
+      tp%=(fb%-(LEN(text$(x%,fl%))*9)-11)/2
+      FOR ti%=1 TO LEN(text$(x%,fl%))
+        TEXT i%+tp%+(ti%-1)*8+ti%,v_box%+(fh%-zh%+1),MID$(text$(x%,fl%),ti%,1)
+      NEXT ti%
+    ELSE
+      DEFTEXT 1,0,,res%*6-(res%=2)
+      tp%=(fb%-(LEN(text$(x%,fl%))*8)-11)/2
+      TEXT i%+tp%,v_box%+(fh%-zh%+1),text$(x%,fl%)
+    ENDIF
+  NEXT i%
+  DEFFILL 1,1
+  maus_off
+RETURN
+> PROCEDURE doubleclick
+  eingabe("Zeitkonstante fÅr Doppelklick: ",STR$(dclick%),3)
+  IF a$<>""
+    dclick%=VAL(a$)
+  ENDIF
+RETURN
+> PROCEDURE klick2(taste%)
+  t=TIMER
+  WHILE MOUSEK=taste% AND TIMER-t<dclick%
+  WEND
+  IF MOUSEK
+    t=-1
+  ELSE
+    WHILE MOUSEK<>taste% AND TIMER-t<dclick%
+    WEND
+    IF MOUSEK<>taste%
+      t=-1
+    ELSE
+      WHILE MOUSEK
+      WEND
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE feld_wahl
+  DO
+    @time
+    MOUSE mx%,my%,mk%
+    a$=INKEY$
+    IF a$<>""
+      taste(a$,mk%)                    ! Funktionen Åber Tastatur abrufen
+    ENDIF
+    '
+    IF MOUSEK
+      t=-1
+      IF my%>3*zh% AND my%<19*zh%
+        klick2(mk%)                    ! Auf Doppelklick prÅfen
+      ENDIF
+      IF t>0                            ! War Doppelklick ?
+        maus_pos
+        ON mk% GOSUB ctrl_a,ctrl_b
+      ELSE
+        IF mk%=2
+          taste(a$,mk%)
+        ENDIF
+      ENDIF
+    ENDIF
+    '
+    IF MOUSEK=1
+      IF mx%>8 AND mx%<620 AND my%>f1% AND my%<18*res%
+        status_line            ! Statuszeile ist angeklickt worden
+      ELSE
+        IF mx%>560 AND my%>20*zh% AND my%<21*zh%
+          dec_hex              ! Cursoranzeige umschalten
+        ENDIF
+        IF mx%>15 AND mx%<80 AND my%>20*zh% AND my%<21*zh%
+          set_time             ! Uhr ist angeklickt
+        ELSE
+          IF my%>o_box%-4 AND my%<vert%-1*res%+6
+            IF mx%<56
+              address          ! Zeiger ist auf Adresse
+              info
+            ELSE
+              maus_pos         ! Zeiger ist im Arbeitsfeld
+            ENDIF
+          ENDIF
+        ENDIF
+      ENDIF
+      '
+      IF my%>v_box% AND my%<v_box%+fh%
+        FOR x%=1 TO ft%
+          IF mx%>f%(x%) AND mx%<f%(x%)+fb%-13
+            IF hpt!=TRUE
+              x1%=x%
+              ON x1% GOSUB cd_on,cd_on,cd_on,dum,dum,dum,dum,dum
+              felder_text(x1%)
+              info
+              hpt!=FALSE
+            ELSE                ! Box gewÑhlt
+              box_invers
+              invert%=1
+              ON x1% GOSUB u_men_1,u_men_2,u_men_3,u_men_4,u_men_5,u_men_6,u_men_7
+              IF invert%
+                box_invers
+              ENDIF
+              info
+            ENDIF
+          ENDIF
+        NEXT x%
+      ENDIF
+    ENDIF
+  LOOP
+RETURN
+> PROCEDURE box_invers
+  DEFFILL 1,1
+  GRAPHMODE 3
+  PBOX f%(x%),v_box%,f%(x%)+fb%-13,v_box%+fh%
+  GRAPHMODE 1
+RETURN
+> PROCEDURE u_men_1
+  ON x% GOSUB help1,dum,dum,dum,cd_dir,get_cdfile,cd_info
+RETURN
+> PROCEDURE u_men_2
+  ON x% GOSUB help2,cd_unit,cd_read,cd_exread,cd_toc,cd_mode,cd_command
+RETURN
+> PROCEDURE u_men_3
+  ON x% GOSUB help3,audio_stop,audio_prog,audio_start,audio_song,audio_time,audio_file
+RETURN
+PROCEDURE u_men_4
+  ON x% GOSUB help4,dum,dum,seek,remove,inquire,dum
+RETURN
+> PROCEDURE u_men_5
+  ON x% GOSUB help5,dum,dum,dum,dum,dum,dum
+RETURN
+> PROCEDURE u_men_6
+  ON x% GOSUB help6,search,up,down,top,lend,doubleclick
+RETURN
+> PROCEDURE u_men_7
+  ON x% GOSUB help7,dump,data,err_out,out_f_key,read_file,logbuch
+RETURN
+> PROCEDURE cd_on
+  bps%=2048
+  hard!=FALSE
+  cd!=TRUE
+RETURN
+> PROCEDURE set_time              ! Setzt die Uhrzeit
+  IF tim%
+    eingabe("Neue Uhrzeit (xx:xx:xx): ",TIME$,10)
+    IF a$<>""
+      SETTIME a$,""
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE cursor_anz
+  LOCAL a%
+  a%=z%+tz%
+  PRINT coff$;
+  PRINT AT(54,21);"$";RIGHT$(n$+HEX$(PEEK(a%+buf%)),2)'RIGHT$(n$+STR$(PEEK(a%+buf%)),3)'"%";RIGHT$(n$+BIN$(PEEK(a%+buf%)),8);
+  IF dec%=1
+    PRINT AT(72,21);RIGHT$(n$+STR$(a%),7);
+  ELSE
+    PRINT AT(72,21);"$";RIGHT$(n$+HEX$(a%),6);
+  ENDIF
+  PRINT AT(xt%+10,yt%+4);con$;
+RETURN
+> PROCEDURE dec_hex
+  dec%=1-dec%
+  cursor_anz
+  maus_off
+RETURN
+> PROCEDURE ctrl_z                ! Zeitanzeige aktivieren/lîschen
+  tim%=1-tim%
+  IF tim%=0
+    PUT 16,20*zh%,uhr$          ! ausblenden
+  ELSE
+    GET 16,20*zh%,88,21*zh%,uhr$
+    tt%=TIMER-400
+    @time
+  ENDIF
+RETURN
+> PROCEDURE time                  ! Zeigt die Zeit alle 2 Sekunden
+  IF tim%
+    IF TIMER-tt%>400
+      PRINT coff$;
+      PRINT AT(3,21);TIME$;
+      tt%=TIMER
+      info
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE dum                   ! FÅr noch nicht implementierte Routinen
+RETURN
+> PROCEDURE status_line
+  IF mx%<120
+    cd_read
+  ELSE
+    IF mx%<192
+      cd_unit
+    ELSE
+      IF mx%<264
+        get_lsn
+      ELSE
+        IF mx%<455
+          zeig_cd_errors
+        ELSE
+          IF mx%<541
+            zeig_cd_status
+          ELSE
+            IF mx%<600
+              zeig_dma
+            ENDIF
+          ENDIF
+        ENDIF
+      ENDIF
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE zeig_cd_errors
+  screen
+  CLR zz%
+  titel$="Fehlermeldungen des CDAR504"
+  PRINT AT(4,2);titel$
+  FOR e%=0 TO cd_err%-2 STEP 2
+    IF zz%>=16
+      page(titel$)
+    ELSE
+      PRINT AT(5,zz%+4);RIGHT$(n$+STR$(e%),3)''cd_err$(e%)
+      PRINT AT(43,zz%+4);RIGHT$(n$+STR$(e%+1),3)''cd_err$(e%+1)
+      INC zz%
+    ENDIF
+  NEXT e%
+  help_ex
+RETURN
+> PROCEDURE zeig_cd_status
+  screen
+  PRINT AT(6,2);"Status - Zustand"
+  PRINT AT(16,7);"Bit   7 6 5 4 3 2 1 0    ";RIGHT$(n$+BIN$(cd_fehler%),8)
+  PRINT AT(22,9);"| | | | | | |  ->  : $01   reserviert (immer 0)"
+  PRINT AT(22,10);"| | | | | |  --->  : $02   ERROR (1: Fehler)"
+  PRINT AT(22,11);"| | | | |  ----->  : $04   BUSY"
+  PRINT AT(22,12);"| | | |  ------->  : $08   MEDIA CHANGE"
+  PRINT AT(22,13);"| | |  --------->  : $10"
+  PRINT AT(22,14);"| |  ----------->  : $20"
+  PRINT AT(22,15);"|  ------------->  : $40"
+  PRINT AT(22,16);" --------------->  : $80"
+  is_bit(cd_fehler%,9,72)
+  help_ex
+RETURN
+> PROCEDURE is_bit(msk%,ze%,sp%)
+  LOCAL i%
+  FOR i%=0 TO 7
+    IF (msk% AND 2^i%)
+      PRINT AT(sp%,ze%+i%);"**";
+    ENDIF
+  NEXT i%
+RETURN
+> PROCEDURE zeig_dma
+  screen
+  PRINT AT(6,2);"DMA - Zustand"
+  PRINT AT(16,7);"Bit   7 6 5 4 3 2 1 0    ";RIGHT$(n$+BIN$(dma_st%),8)
+  PRINT AT(22,9);"| | | | | | |  ->  : $01   (0: Fehler)"
+  PRINT AT(22,10);"| | | | | |  --->  : $02   SektorzÑhler<>0?"
+  PRINT AT(22,11);"| | | | |  ----->  : $04   DATA REQUEST"
+  PRINT AT(22,12);"| | | |  ------->  : $08"
+  PRINT AT(22,13);"| | |  --------->  : $10"
+  PRINT AT(22,14);"| |  ----------->  : $20"
+  PRINT AT(22,15);"|  ------------->  : $40"
+  PRINT AT(22,16);" --------------->  : $80"
+  is_bit(dma_st%,9,72)
+  help_ex
+RETURN
+' -----------------------------------------------------------------------------
+> PROCEDURE page(pt$)
+  DEFMOUSE 3
+  maus_klick
+  CLR zz%
+  screen
+  PRINT AT(4,2);pt$
+RETURN
+> PROCEDURE screen
+  PRINT coff$;
+  DEFFILL 1,0
+  PBOX 8,f1%,620,18*res%
+  PBOX 8,o_box%,620,vert%
+  DEFFILL 1,1
+RETURN
+> PROCEDURE box_1
+  DEFFILL 1,2,8
+  PBOX e1%+5,e2%+f1%,e3%,e4%
+  DEFFILL 1,0
+  PBOX e1%,e2%,e3%-5,e4%-f1%
+  DEFFILL 1,1
+RETURN
+' --------------------------- Tasteneingabe ----------------------------------
+> PROCEDURE taste(a$,mk%)
+  LOCAL a%
+  a%=ASC(RIGHT$(a$))
+  SHOWM
+  IF BIOS(11,-1) AND 4          ! = CTRL
+    control(a%)
+  ELSE
+    IF LEN(a$)=2                ! Cursor- oder Sondertasten
+      cursor(a$)
+    ELSE
+      IF MOUSEK=2 OR mk%=2 OR a%=27
+        IF hpt!=TRUE
+          exit                 ! ESC
+        ELSE
+          felder_text(0)       ! zurÅck zum Hauptmenö
+          CLR x%,x1%
+          hpt!=TRUE
+        ENDIF
+      ELSE
+        IF a%=9
+          tab                  ! Tabulator
+        ELSE
+          edit_buf(a$)         ! sonst Edit Buffer
+        ENDIF
+      ENDIF
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE maus_pos
+  IF my%<3*zh%
+    scrolldown
+  ELSE
+    IF my%>=19*zh%
+      scrollup
+    ELSE
+      xt%=(mx%-9*8)/8                   ! Cursor positionieren
+      yt%=(my%-3*zh%)/zh%
+      IF xt%>46 AND xt%<51
+        xt%=46
+      ENDIF
+      IF xt%>=0 AND xt%<47
+        IF FRAC((xt%+1)/3)<>0
+          hex!=TRUE                     ! Maus im Hexteil
+        ELSE
+          xt%=MAX(0,xt%-1)
+        ENDIF
+        tz%=xt%/3+yt%*16
+      ELSE
+        IF xt%>=51 AND xt%<67
+          tz%=xt%-51+yt%*16
+          hex!=FALSE
+        ENDIF
+      ENDIF
+    ENDIF
+  ENDIF
+  @cursor_anz
+RETURN
+> PROCEDURE scrollup
+  IF z%<bps%-256
+    ADD z%,16
+    IF blitter%=3
+      PRINT coff$;                ! Cursor aus
+      GET 9,4*zh%,619,19*zh%,sc$  ! Ausschnitt holen
+      PUT 9,3*zh%,sc$             ! eine Zeile hîher wieder rein
+      zeile(15)
+    ELSE
+      @list
+    ENDIF
+  ELSE
+    ctrl_n
+  ENDIF
+RETURN
+> PROCEDURE scrolldown
+  IF z%>=16
+    SUB z%,16
+    IF blitter%=3
+      PRINT coff$;                      ! Cursor aus
+      GET 9,3*zh%,619,18*zh%-1,sc$      ! Ausschnitt holen
+      PUT 9,4*zh%,sc$                   ! eine Zeile tiefer wieder rein
+      zeile(0)
+    ELSE
+      @list
+    ENDIF
+  ELSE
+    ctrl_p
+  ENDIF
+RETURN
+> PROCEDURE cursor(a$)
+  LOCAL a%
+  a%=ASC(RIGHT$(a$))
+  IF (a%>58 AND a%<69) OR (a%>83 AND a%<94)     ! Funktionstasten
+    floskel(a%)
+  ELSE
+    IF a%=80                    ! DOWN
+      IF yt%<15
+        INC yt%
+      ELSE
+        scrollup
+      ENDIF
+    ELSE
+      IF a%=72                  ! UP
+        IF yt%>0
+          DEC yt%
+        ELSE
+          scrolldown
+        ENDIF
+      ELSE
+        '
+        IF a%=75                ! LEFT
+          DEC xt%
+          IF hex!=TRUE
+            IF xt%<0
+              xt%=46
+              DEC yt%
+            ENDIF
+          ELSE
+            IF xt%<51
+              xt%=66
+              DEC yt%
+            ENDIF
+          ENDIF
+          IF yt%<0
+            @up
+            yt%=15
+          ENDIF
+        ELSE
+          '
+          IF a%=77              ! RIGHT
+            INC xt%
+            IF hex!=TRUE
+              IF xt%>46
+                CLR xt%
+                INC yt%
+              ENDIF
+            ELSE
+              IF xt%>66
+                xt%=51
+                INC yt%
+              ENDIF
+            ENDIF
+            IF yt%>15
+              @down
+              CLR yt%
+            ENDIF
+          ENDIF
+        ENDIF
+      ENDIF
+    ENDIF
+    '
+    IF xt%>=0 AND xt%<47        ! HEX-BEREICH
+      IF FRAC((xt%+1)/3)=0
+        IF a%=75                ! wenn LEFT und hi_nibble, dann 2 mal LEFT
+          DEC xt%
+        ELSE
+          INC xt%
+        ENDIF
+      ENDIF
+      tz%=xt%/3+yt%*16
+      hex!=TRUE
+    ELSE
+      IF xt%>=51 AND xt%<67     ! ASCII - BEREICH
+        hex!=FALSE
+        tz%=xt%-51+yt%*16
+      ENDIF
+    ENDIF
+    IF a%=71                    ! Home
+      @top
+    ELSE
+      IF a%=98
+        help
+      ELSE
+        IF a%=97
+          show_err_inf         ! Undo
+        ENDIF
+      ENDIF
+    ENDIF
+  ENDIF
+  cursor_anz
+  WHILE INKEY$<>""
+  WEND
+RETURN
+> PROCEDURE control(a%)
+  IF a%>0 AND a%<31
+    ON a% GOSUB ctrl_a,ctrl_b,ctrl_c,ctrl_d,dum,ctrl_f,dum,dum,ctrl_tab,dum,dum,ctrl_l,dum,ctrl_n,ctrl_o,ctrl_p,ctrl_q,ctrl_r,ctrl_s,ctrl_t,ctrl_u,dum,ctrl_w,dum,ctrl_y,ctrl_z,dum,log_out,dum,log_out
+  ELSE
+    IF a%=72
+      up
+    ELSE
+      IF a%=80
+        @down
+      ELSE
+        IF a%=98
+          ctrl_help
+        ELSE
+          IF a%=71
+            top
+          ELSE
+            IF a%=119
+              lend
+            ELSE
+              IF a%=116 AND hex!=TRUE           ! ctrl ->
+                hex!=FALSE
+                xt%=xt%/3+51
+                cursor_anz
+              ELSE
+                IF a%=115 AND hex!=FALSE        ! ctrl <-
+                  hex!=TRUE
+                  xt%=(xt%-51)*3
+                  cursor_anz
+                ENDIF
+              ENDIF
+            ENDIF
+          ENDIF
+        ENDIF
+      ENDIF
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE set_stat
+  VOID C:utis%(&H300,L:ak%,L:2048)
+  IF buf_end%>buf_beg%
+    VOID C:utis%(&H301,L:ak%+buf_beg%,L:buf_end%-buf_beg%)
+  ENDIF
+  @list
+RETURN
+> PROCEDURE ctrl_a                ! Blockanfang markieren
+  buf_beg%=tz%+z%
+  set_stat
+RETURN
+> PROCEDURE ctrl_b                ! Blockende markieren
+  buf_end%=tz%+z%
+  set_stat
+RETURN
+> PROCEDURE ctrl_c                ! Block kopieren
+  bc%=buf_end%-buf_beg%+1
+  IF bc%>1
+    bb$=STRING$(bc%,0)
+    BMOVE buf_beg%+buf%,VARPTR(bb$),bc%
+    BMOVE VARPTR(bb$),buf%+tz%+z%,bc%
+    CLR bb$
+    @list
+  ENDIF
+RETURN
+> PROCEDURE ctrl_d
+  ALERT 1,"    Puffer ausgeben    |    als...",1,"Dump|Data|Abbruch",erg%
+  ON erg% GOSUB dump,data
+RETURN
+> PROCEDURE ctrl_f                ! Block fÅllen mit Byte unter Cursor
+  bc%=buf_end%-buf_beg%+1
+  IF bc%>1
+    dt%=PEEK(buf%+tz%+z%)
+    bb$=STRING$(bc%,dt%)
+    BMOVE VARPTR(bb$),buf_beg%+buf%,bc%
+    CLR bb$
+    @list
+  ENDIF
+RETURN
+> PROCEDURE ctrl_l                ! Funktionstasten laden
+  fsel(pfad$+"*.*",floskel$,flo$)
+  do_pfad(flo$)
+  IF EXIST(flo$)
+    read_floskel(flo$)
+  ELSE
+    ALERT 1,"    INFO-Datei nicht da!    ",1," Ok ",erg%
+  ENDIF
+RETURN
+> PROCEDURE ctrl_n                ! Next Sector
+  DEFMOUSE 2
+  z%=bps%-256
+  @down
+  DEFMOUSE 0
+RETURN
+> PROCEDURE ctrl_o                ! Offset fÅr Anzeige
+  eingabe("Bitte Anzeige-Offset eingeben:",STR$(offset%),10)
+  IF a$<>""
+    offset%=VAL(a$)
+    @list
+  ENDIF
+RETURN
+> PROCEDURE ctrl_p                ! Previous Sector
+  DEFMOUSE 2
+  z%=0
+  up
+  top
+  DEFMOUSE 0
+RETURN
+> PROCEDURE ctrl_q
+  PRINT coff$;
+  CLS
+  TITLEW #1,""
+  INFOW #1,""
+  make_window(1,1,0,9*res%,640,res%*190)
+  MENU m$()
+  ON MENU GOSUB menu_auswert
+  ON MENU MESSAGE GOSUB m_message
+  DO
+    ON MENU
+    EXIT IF mn%=11
+  LOOP
+  MENU KILL
+  CLOSEW 1
+  CLOSEW 0
+  CLS
+  CLR mn%,x%
+  hpt!=TRUE
+  SHOWM
+  VOID XBIOS(21,3,0)    ! Cursor an, nicht blinken
+  felder
+  @list
+RETURN
+> PROCEDURE menu_auswert
+  MENU OFF
+  mn%=MENU(0)
+  IF mn%=1
+    ALERT 1,version$+" |    - aus dem|    SCHEIBENKLEISTER",1,"Kapiert",dum%
+  ENDIF
+  IF mn%=12
+    exit
+  ENDIF
+RETURN
+> PROCEDURE m_message
+  IF MENU(1)=20
+    CLS
+  ENDIF
+RETURN
+> PROCEDURE make_window(winum,flags,wix,wiy,wib,wih)
+  LOCAL faktor
+  faktor=(winum-1)*12
+  DPOKE WINDTAB+2+faktor,flags
+  DPOKE WINDTAB+4+faktor,wix
+  DPOKE WINDTAB+6+faktor,wiy
+  DPOKE WINDTAB+8+faktor,wib
+  DPOKE WINDTAB+10+faktor,wih
+  OPENW winum
+RETURN
+> PROCEDURE ctrl_r
+  search
+RETURN
+> PROCEDURE ctrl_s
+  out_f_key                    ! Save function keys
+RETURN
+> PROCEDURE ctrl_t                ! Block auf Funktionstaste legen
+  bc%=buf_end%-buf_beg%+1
+  IF bc%>1
+    eingabe("Welche F-Taste (1-20):","",4)
+    IF a$<>""
+      b%=VAL(a$)
+      IF b%>0 AND b%<21
+        DEFMOUSE 2
+        flos$(0,b%)=STR$(bc%*2)
+        flos$(1,b%)=STRING$(bc%*2,0)
+        j%=1
+        FOR i%=1 TO bc%
+          fu%=PEEK(buf%+buf_beg%+i%-1)
+          MID$(flos$(1,b%),j%)=RIGHT$("0"+HEX$(fu%),2)
+          ADD j%,2
+        NEXT i%
+      ENDIF
+    ENDIF
+  ENDIF
+  DEFMOUSE 0
+RETURN
+> PROCEDURE ctrl_u
+  eingabe(" Was umrechnen ? ","",10)
+  IF a$<>""
+    a%=VAL(a$)
+    ALERT 1,"    Ergebnis    |    DEZ: "+STR$(a%)+"|    HEX: $"+RIGHT$(n$+HEX$(a%),8),1,"Danke",dum%
+    ALERT 0,"",1," Bitte ",dum%
+  ENDIF
+RETURN
+> PROCEDURE ctrl_w
+  search_cont%=1
+  search
+  search_cont%=0
+RETURN
+> PROCEDURE ctrl_y
+  screen
+  PRINT AT(4,2);"System-Info"
+  PRINT AT(4,6);"Benutzter Speicher : "
+  PRINT AT(14,9);RIGHT$(n$+STR$(mfr%-FRE(0)),8);" Variablen"
+  PRINT AT(14,10);RIGHT$(n$+STR$(init_mem%),8);" Bytes Puffer"
+  PRINT AT(14,15);RIGHT$(n$+STR$(FRE(0)),8);" Bytes RAM frei"
+  help_ex
+RETURN
+> PROCEDURE ctrl_tab              ! Back - Tabulator
+  FOR i%=1 TO 8
+    cursor(CHR$(0)+CHR$(75))
+  NEXT i%
+RETURN
+> PROCEDURE tab                   ! Tabulator
+  FOR i%=1 TO 8
+    cursor(CHR$(0)+CHR$(77))
+  NEXT i%
+RETURN
+' ------------------------------
+> PROCEDURE floskel(a%)           ! Funktionstasten abarbeiten
+  LOCAL fu$
+  IF a%>83 AND a%<94            ! mit Shift ??
+    SUB a%,15
+  ENDIF
+  fu$=flos$(1,a%-58)            ! Funktionsstring auswÑhlen
+  fu%=VAL(flos$(0,a%-58))       ! LÑnge
+  bc%=z%+tz%
+  IF fu%>0
+    ch!=TRUE
+    DEFMOUSE 2
+    FOR fi%=1 TO fu% STEP 2
+      POKE buf%+bc%,VAL("&h"+MID$(fu$,fi%,2))
+      INC bc%
+    NEXT fi%
+  ENDIF
+  @list
+RETURN
+> PROCEDURE init_floskel          ! Existiert Floskeldatei?
+  IF EXIST(floskel$)
+    read_floskel(floskel$)
+  ENDIF
+RETURN
+> PROCEDURE read_floskel(a$)      ! Floskeldatei lesen
+  OPEN "I",#2,a$
+  WHILE NOT EOF(#2)
+    INPUT #2,a$
+    a%=VAL(a$)                  ! F1 - F10   + Shift
+    EXIT IF a%<1
+    IF a%<=20
+      INPUT #2,a$
+      fl%=VAL(a$)               ! LÑnge
+      flos$(0,a%)=a$
+      IF fl%<64
+        f%=fl%
+      ELSE
+        f%=64
+      ENDIF
+      fp%=fl% DIV 64            ! wieoft / 64
+      fprest%=fl% MOD 64        ! und Rest
+      IF fp%
+        FOR j%=1 TO fp%
+          INPUT #2,a$
+          flos$(1,a%)=flos$(1,a%)+a$    ! Floskeltext lesen
+        NEXT j%
+      ENDIF
+      IF fprest%
+        INPUT #2,a$
+        flos$(1,a%)=flos$(1,a%)+a$
+      ENDIF
+    ENDIF
+  WEND
+  CLOSE #2
+RETURN
+> PROCEDURE out_f_key             ! Funtionstasten ausgeben
+  PRINT coff$;
+  ALERT 1,"    Ausgabe auf...    ",1,dda$,erg%
+  dev("FKEY.DAT")
+  IF device%<>99
+    f_key_dev
+  ENDIF
+  CLOSE #3
+  info
+RETURN
+> PROCEDURE f_key_dev
+  FOR i%=1 TO 20
+    IF flos$(0,i%)<>""
+      PRINT #3,i%
+      PRINT #3,flos$(0,i%)
+      j%=1
+      DO
+        PRINT #3,MID$(flos$(1,i%),j%,64)
+        ADD j%,64
+        EXIT IF j%>LEN(flos$(1,i%))
+      LOOP
+    ENDIF
+  NEXT i%
+RETURN
+> PROCEDURE printer             ! Drucker eingeschaltet
+  IF OUT?(0)=TRUE
+    OPEN "O",#3,"PRN:"
+  ELSE
+    ALERT 1,"    Drucker nicht bereit!    ",1," Schade ",dum%
+    device%=99
+  ENDIF
+RETURN
+> PROCEDURE edit_buf(a$)
+  a%=ASC(a$)
+  b%=buf%+tz%+z%                ! Adresse von altem Wert
+  IF hex!=FALSE                 ! Edit in ASCII-Teil
+    edit_ex
+  ELSE
+    IF (a%>96 AND a%<103) OR (a%>64 AND a%<71) OR (a%>47 AND a%<58)
+      IF a%>&H60
+        SUB a%,32               ! Kleine Buchstaben wandeln in groûe
+      ENDIF
+      a%=a%-48+7*(a%>&H40)
+      IF FRAC((xt%+3)/3)=0
+        dt%=(PEEK(b%) AND 15)+a%*16     ! Cursor ist auf Hi-Nibble
+      ELSE
+        dt%=(PEEK(b%) AND 240)+a%       !        ist auf Low - "
+      ENDIF
+      a%=dt%
+      edit_ex
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE edit_ex
+  POKE b%,a%                    ! in Buffer schreiben
+  PRINT coff$;
+  zeile(yt%)                    ! ausgeben in Hex und Ascii
+  cursor(CHR$(0)+CHR$(77))      ! Cursor weiter
+RETURN
+> PROCEDURE info                  ! Statuszeile updaten
+  PRINT coff$;
+  cd_inf
+  cursor_anz
+  DEFMOUSE 0
+RETURN
+> PROCEDURE cd_inf
+  PRINT AT(3,2);ro$;"Block";rof$;" $";RIGHT$(n$+HEX$(block%),5)'
+  PRINT ro$;"Target";rof$'target%'
+  IF block%-150>=0
+    PRINT ro$;"LSN";rof$;" $";RIGHT$(n$+HEX$(block%-150),4)''''''''''''''
+  ELSE
+    PRINT ro$;"LSN";rof$;''''''''''''''''''''
+  ENDIF
+  PRINT ro$;"Error";rof$;" ";RIGHT$(n$+STR$(cd_error%),3)'
+  PRINT ro$;"Status";rof$;" $";RIGHT$(n$+HEX$(cd_fehler%),2)'
+  PRINT ro$;"DMA";rof$;" $";RIGHT$(n$+HEX$(dma_st%),2)'
+RETURN
+> PROCEDURE data
+  LET data!=TRUE
+  LET dump!=FALSE
+  @save
+RETURN
+> PROCEDURE dump
+  LET data!=FALSE
+  LET dump!=TRUE
+  @save
+RETURN
+> PROCEDURE save
+  LOCAL i%,a%,o$
+  ALERT 1,"    Ausgabe auf...    ",1,dda$,erg%
+  IF data!=TRUE
+    dev("DATA.DAT")
+  ELSE
+    dev("DUMP.DAT")
+  ENDIF
+  IF device%<>99
+    DEFMOUSE 2
+    IF dump!=TRUE
+      PRINT #3,"Block $";RIGHT$(n$+HEX$(block%),5)'
+      PRINT #3,"Target ";target%;''''''''''''''''''''''''
+      PRINT #3,"Error ";RIGHT$(n$+STR$(cd_error%),3)'
+      PRINT #3,"Status $";RIGHT$(n$+HEX$(cd_fehler%),2)'
+      PRINT #3,"DMA $";RIGHT$(n$+HEX$(dma_st%),2)
+      CLR z%,zl%
+      REPEAT
+        b%=buf%+zl%*16
+        o$=STRING$(16,".")
+        a$=STRING$(48,32)
+        FOR i%=0 TO 15
+          a%=PEEK(b%+i%)
+          MID$(a$,i%*3+1)=RIGHT$(n$+HEX$(a%),2)
+          MID$(o$,i%+1,1)=MID$(ascii$,a%,1)
+        NEXT i%
+        PRINT #3,RIGHT$(n$+HEX$(offset%+z%+zl%*16),6);"  ";a$;"  ";o$
+        INC zl%
+      UNTIL zl%>=bps%/16
+    ELSE
+      IF data!=TRUE
+        BPUT #3,buf%,bps%
+      ENDIF
+    ENDIF
+  ENDIF
+  CLOSE #3
+  DEFMOUSE 0
+RETURN
+' -------- Device Handling -----
+> PROCEDURE dev(n.ame$)
+  device%=0
+  IF erg%=3
+    device%=99
+  ENDIF
+  IF erg%=2
+    @printer
+  ENDIF
+  '
+  ni%=INSTR(n.ame$,".")
+  IF ni%
+    ex$=RIGHT$(n.ame$,LEN(n.ame$)-ni%)
+  ELSE
+    ex$=""
+  ENDIF
+  '
+  IF erg%=1
+    fsel(pfad$+"*."+ex$,n.ame$,fd$)
+    IF fd$<>""
+      do_pfad(fd$)
+      IF EXIST(fd$)
+        ALERT 2,"    Datei       |    "+RIGHT$(STRING$(28,32)+fd$,28)+" |    existiert schon! ",1,"Ersetzen|AnhÑngen|Abbruch",fex%
+        IF fex%=1
+          OPEN "O",#3,fd$
+        ENDIF
+        IF fex%=2
+          OPEN "A",#3,fd$
+        ENDIF
+        IF fex%=3
+          device%=99
+        ENDIF
+      ELSE
+        IF LEN(fd$)>3
+          OPEN "O",#3,fd$
+        ELSE
+          device%=99
+        ENDIF
+      ENDIF
+    ELSE
+      device%=99
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE err_inf(fehler%)
+  LOCAL a$
+  IF fehler%<>0
+    IF fer%<max_err%
+      INC fer%
+      a$=STR$(lgs%)
+      err_fld$(fer%)=a$+STRING$(10-LEN(a$),32)+stat$(ABS(fehler%))
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE show_err_inf
+  DEFFILL 1,0
+  screen
+  PRINT AT(5,2);"Fehlerliste:"
+  show_err
+  help_ex
+RETURN
+> PROCEDURE show_err                      ! Fehlerseite ausgeben
+  LOCAL i%
+  IF fer%
+    CLR zz%
+    FOR i%=1 TO fer%-1 STEP 2
+      IF zz%<15
+        PRINT AT(5,zz%+5);err_fld$(i%)
+        PRINT AT(43,zz%+5);err_fld$(i%+1)
+        INC zz%
+      ELSE
+        page("")
+      ENDIF
+    NEXT i%
+  ELSE
+    PRINT AT(5,6);"Kein Fehler....."
+  ENDIF
+RETURN
+> PROCEDURE err_clr
+  FOR i%=1 TO max_err%
+    err_fld$(i%)=""
+  NEXT i%
+  CLR fer%
+RETURN
+> PROCEDURE err_out
+  ALERT 1,"    Fehlerausgabe auf...    ",1,dda$,erg%
+  dev("ERROR.DAT")
+  IF device%<>99
+    PRINT #3," Fehlerliste:"
+    PRINT #3," Log.Sektor  Fehler "
+    show_err_dev
+  ENDIF
+  CLOSE #3
+RETURN
+> PROCEDURE show_err_dev
+  LOCAL i%
+  i%=1
+  REPEAT
+    PRINT #3,err_fld$(i%)
+    INC i%
+  UNTIL i%>fer%
+RETURN
+'
+> PROCEDURE top                           ! Ab Anfang listen
+  CLR z%,xt%,yt%,tz%
+  hex!=TRUE
+  @list
+RETURN
+> PROCEDURE lend                          ! List Ende
+  z%=MAX(0,bps%-256)
+  xt%=45
+  yt%=15
+  hex!=TRUE
+  tz%=xt%/3+yt%*16
+  @list
+RETURN
+> PROCEDURE down                          ! List eine Seite nach unten
+  IF z%+256<bps%
+    ADD z%,256
+  ELSE
+    INC block%
+    cd_block(block%)
+    z%=0
+  ENDIF
+  @list
+RETURN
+> PROCEDURE up                            ! List eine Seite nach oben
+  IF z%>0
+    SUB z%,256
+    z%=MAX(0,z%)
+  ELSE
+    DEC block%
+    cd_block(block%)
+    z%=bps%-256
+  ENDIF
+  @list
+RETURN
+> PROCEDURE address                       ! List ab Adresse
+  eingabe(" List-Adresse eingeben :  ","",8)
+  IF a$<>""
+    IF VAL(a$)<bps%
+      z%=VAL(a$)
+    ENDIF
+    @list
+  ENDIF
+RETURN
+> PROCEDURE read_buf(file$)               ! File in Buffer lesen
+  LOCAL a%
+  CLR read%
+  fsel(pfad$+"*.*",file$,fi$)
+  IF fi$<>"" AND RIGHT$(fi$)<>"\"
+    do_pfad(fi$)
+    IF EXIST(fi$)=TRUE
+      ch!=TRUE
+      OPEN "I",#2,fi$
+      a%=LOF(#2)
+      a%=MIN(512,a%)
+      BGET #2,buf%,a%
+      CLOSE #2
+      @list
+      read%=1
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE read_file
+  read_buf("")
+RETURN
+'
+> PROCEDURE list
+  PRINT coff$;
+  HIDEM
+  VOID C:zeile%(L:z%+buf%,L:z%+ak%,W:(4*zh%-8) OR 32768,L:z%+offset%,W:zpz%,w_zh%,W:planes%)
+  info
+  SHOWM
+RETURN
+> PROCEDURE zeile(zl%)
+  LOCAL zg%
+  zg%=z%+zl%*16
+  ADD zg%,offset%
+  HIDEM
+  VOID C:zeile%(L:zg%+buf%,L:zg%+ak%,W:(zl%+4)*zh%-8,L:zg%,w_zpz%,W:zh%,W:planes%)
+  SHOWM
+RETURN
+> PROCEDURE exit
+  SOUND 1,15,#284
+  WAVE 1,1,1,15535,0
+  CLR erg%
+  ALERT 1,"    Ist fÅr heute    |    wirklich Schluû (schnÅff)?",1,"Ja doch!|Nie!",erg%
+  IF erg%=1
+    PRINT coff$;
+    SOUND 1,15,#350
+    WAVE 1,1,1,15535,0
+    mfree(ramend%)
+    CLOSEW 1
+    CLOSEW 0
+    CLOSE
+    EDIT
+  ENDIF
+RETURN
+> PROCEDURE search
+  LOCAL search!,fll%,sz%
+  search!=FALSE
+  PRINT coff$;
+  sz%=tz%+2+z%
+  IF search_cont%=0
+    eingabe("Bitte Suchstring eingeben : ",in1$,38)
+    in1$=a$
+    wandlung(in1$)
+    search$=w$
+    IF search$<>""
+      eingabe("Suchen bis log.Sektor : ",bis$,6)
+      bis$=a$
+    ENDIF
+  ENDIF
+  '
+  PRINT coff$;
+  ch!=FALSE
+  bb$=STRING$(bps%,0)
+  DO
+    BMOVE buf%,VARPTR(bb$),bps%
+    b%=INSTR(sz%,bb$,search$)
+    was_ist
+    IF abb%=2
+      GOTO search_exit
+    ENDIF
+    IF b%
+      DEC b%
+      z%=INT(b%/256)*256
+      b%=b%-z%
+      yt%=b%/16
+      xt%=b%-yt%*16+51
+      tz%=xt%-51+yt%*16
+      hex!=FALSE
+      GOTO search_exit
+    ELSE
+      sz%=1
+      IF block%>VAL(bis$)
+        ALERT 1,"    String nicht gefunden    ",1,"Ok",dum%
+        GOTO search_exit
+      ELSE
+        INC block%
+        cd_block(block%)
+      ENDIF
+    ENDIF
+  LOOP
+search_exit:
+  maus_off
+  screen
+  @list
+  CLR mx%,my%
+RETURN
+> PROCEDURE wandlung(in$)
+  LOCAL i%,j%,h$,h%
+  CLR h$,i%,w$
+  INC i%
+  il%=LEN(in$)
+  DO
+    EXIT IF i%>il%
+    IF MID$(in$,i%,1)="," OR MID$(in$,i%,1)=" "
+      INC i%
+    ENDIF
+    '
+    IF MID$(in$,i%,1)="$"               ! hexadezimal
+      CLR h$
+      DO
+        INC i%
+        EXIT IF i%>il%
+        EXIT IF MID$(in$,i%,1)=","
+        h$=h$+MID$(in$,i%,1)
+      LOOP
+      IF FRAC(LEN(h$)/2)<>0 OR LEN(h$)=0
+        ALERT 3,"    Hex-Daten falsch    ",1," Ok ",dum%
+        CLR h$
+        i%=il%+1
+      ENDIF
+      FOR j%=1 TO LEN(h$) STEP 2
+        w$=w$+CHR$(VAL("&H"+MID$(h$,j%,2)))
+      NEXT j%
+    ELSE
+      '
+      IF MID$(in$,i%,1)>="0" AND MID$(in$,i%,1)<="9"
+        CLR h$
+        DO
+          EXIT IF i%>il%                ! dezimal
+          EXIT IF MID$(in$,i%,1)=","
+          h$=h$+MID$(in$,i%,1)
+          INC i%
+        LOOP
+        h%=VAL(h$)
+        IF h%>255
+          ALERT 1,"    Dezimale Werte    |    maximal bis 255!",1," OK ",dum%
+          h%=h% AND 255
+        ENDIF
+        w$=w$+CHR$(h%)
+      ELSE
+        '
+        IF MID$(in$,i%,1)="%"           ! binÑr
+          CLR h$
+          DO
+            INC i%
+            EXIT IF i%>il%
+            EXIT IF MID$(in$,i%,1)=","
+            h$=h$+MID$(in$,i%,1)
+          LOOP
+          INC i%
+          s%=VAL("&%"+h$)
+          IF s%>255
+            ALERT 1,"    BinÑre Werte    |    max. bis 255!",1," OK ",dum%
+            s%=s% AND 255
+          ENDIF
+          w$=w$+CHR$(s%)
+        ELSE
+          '
+          IF MID$(in$,i%,1)=CHR$(34)    ! ASCII
+            DO
+              INC i%
+              EXIT IF MID$(in$,i%,1)=CHR$(34)
+              EXIT IF i%>il%
+              w$=w$+MID$(in$,i%,1)
+            LOOP
+            INC i%
+          ENDIF
+        ENDIF
+      ENDIF
+      INC i%
+    ENDIF
+  LOOP
+RETURN
+> PROCEDURE eingabe(txt$,ta$,laenge%)
+  PRINT coff$;
+  GET e1%,e2%,e3%,e4%,egf$
+  box_1
+  PRINT AT(22,10);txt$
+  PRINT AT(22,13);STRING$(laenge%,"-")
+  PRINT AT(22,12);
+  FORM INPUT laenge% AS ta$
+  PUT e1%,e2%,egf$
+  a$=ta$
+  IF LEFT$(a$,1)="$"
+    a$=STR$(VAL("&H"+RIGHT$(a$,LEN(a$)-1)))
+  ENDIF
+RETURN
+> PROCEDURE maus_off
+  WHILE MOUSEK
+  WEND
+RETURN
+> PROCEDURE maus_klick
+  maus_off
+  DO
+    mk%=MOUSEK
+    in$=INKEY$
+    EXIT IF mk% OR in$<>""
+  LOOP
+  WHILE MOUSEK<>0 OR INKEY$<>""
+  WEND
+RETURN
+> PROCEDURE do_pfad(xpf$)
+  LOCAL i%
+  FOR i%=LEN(xpf$) DOWNTO 1
+    IF MID$(xpf$,i%,1)="\"              ! von rechts nach links
+      pfad$=LEFT$(xpf$,i%)              ! nach "\" suchen
+      i%=0
+    ENDIF
+  NEXT i%
+RETURN
+> PROCEDURE log_out
+  LOCAL erg%
+  IF NOT (EXIST(logbuch$))
+    ALERT 1,"    Logbuch ist noch nicht    |    aktiviert worden",1,"Login|Abbruch",erg%
+    IF erg%=1
+      logbuch
+      log_out
+    ENDIF
+  ELSE
+    DEFMOUSE 2
+    OPEN "A",#4,logbuch$
+    BPUT #4,buf%,bps%
+    CLOSE #4
+    DEFMOUSE 0
+  ENDIF
+RETURN
+> PROCEDURE logbuch
+  LOCAL erg%
+  extract(logbuch$,*fx$)
+  fsel(pfad$+"*.log",fx$,fi$)
+  IF RIGHT$(fi$)<>"\"
+    IF fi$<>""
+      logbuch$=fi$
+      do_pfad(fi$)
+      erg%=1
+      IF EXIST(fi$)
+        ALERT 1,"    Datei existiert schon    ",1,"Ersetzen|AnhÑngen|Abbruch",erg%
+      ENDIF
+      IF erg%=1
+        OPEN "O",#4,fi$
+        CLOSE #4
+      ENDIF
+    ENDIF
+  ENDIF
+RETURN
+' ------------------------------
+> PROCEDURE fehler_behandlung
+  ALERT 3,"    Systemfehler:    "+STR$(ERR),1,"Abbruch|Neustart",fehl%
+  IF fehl%=1
+    exit
+  ELSE
+    RUN
+  ENDIF
+RETURN
+> PROCEDURE was_ist
+  abb%=0
+  IF INKEY$<>"" OR MOUSEK=2
+    ALERT 0,"    Was ist los?    ",1,"Weiter|Abbruch",abb%
+  ENDIF
+RETURN
+> PROCEDURE cd_dir
+  ' ---- Routine listet Files auf einer CD -------
+  cd_sense
+  IF cd_error%=0
+    screen
+    err_clr
+    titel$=" Pfad + Name "+STRING$(50,32)+"LSN  LÑnge"
+    ALERT 1,"    CD-Verzeichnis ausgeben:    ",3,ddm$,erg%
+    dev("CD.DIR")
+    cdir%=erg%
+    IF device%<>99 OR cdir%=3
+      CLR zz%
+      IF cdir%<3
+        PRINT #3,titel$
+      ELSE
+        PRINT AT(4,2);titel$
+      ENDIF
+      CLR bel%
+      alle%=1
+      lies_dir("")
+      IF mk%<>2 AND in$<>esc$
+        PRINT AT(3,2);"Dateien auf CD: ";alle%;"      Belegt  : ca. ";INT(bel%/1024);" Kbyte";STRING$(21,32)
+        help_ex
+      ENDIF
+      CLOSE #3
+    ENDIF
+  ENDIF
+  @list
+RETURN
+> PROCEDURE lies_dir(path$)
+  LOCAL sci$,nr%,ai%
+  CLR nr%
+  sci$=path$+maske$
+  fsfirst(sci$)
+  IF end_flag%=0
+    REPEAT
+      INC nr%
+      nam.len%=PEEK(dta%+znmd%)
+      f$=STRING$(nam.len%,0)
+      BMOVE dta%+znmd%+1,VARPTR(f$),nam.len%
+      begin%=LPEEK(dta%+6)
+      leng%=LPEEK(dta%+14)
+      attr%=PEEK(dta%+zatt%)
+      ADD bel%,leng%
+      '
+      cdl%=INSTR(f$,";")
+      IF cdl%
+        f$=LEFT$(f$,cdl%-1)
+      ENDIF
+      '
+      IF cdir%<3
+        PRINT #3,path$+f$;STRING$(63-LEN(path$+f$),32);
+        PRINT #3,RIGHT$(n$+HEX$(begin%),4)'
+        PRINT #3,RIGHT$(n$+HEX$(leng%),6)
+      ENDIF
+      IF cd_copy%<>123
+        IF cdir%=3
+          PRINT AT(3,zz%+4);LEFT$(path$+f$,50);
+          PRINT AT(67,zz%+4);RIGHT$(n$+HEX$(begin%),4);
+          PRINT AT(72,zz%+4);RIGHT$(n$+HEX$(leng%),6);
+        ENDIF
+      ELSE
+        cdcy$=path$+f$
+        IF (attr% AND 2)
+          PRINT AT(20,11);LEFT$(cdcy$+STRING$(44,32),44)
+          dcreate(f$)
+          IF fehler%<0
+            GOTO cd_dir_ex
+          ENDIF
+          dsetpath(f$)
+          IF fehler%<0
+            GOTO cd_dir_ex
+          ENDIF
+        ELSE
+          buffer$=STRING$(bps%,0)
+          BMOVE buf%,VARPTR(buffer$),bps%
+          put_cdfile(f$,leng%,begin%)
+          IF abb%=2
+            mk%=2
+            GOTO cd_dir_ex
+          ENDIF
+          BMOVE VARPTR(buffer$),buf%,bps%
+        ENDIF
+      ENDIF
+      '
+      INC zz%
+      IF zz%>15
+        IF cdir%=3 AND cd_copy%<>123
+          page(titel$)
+          IF mk%=2 OR in$=esc$
+            GOTO cd_dir_ex
+          ENDIF
+        ELSE
+          IF cd_copy%<>123
+            screen
+            zz%=0
+          ENDIF
+        ENDIF
+      ENDIF
+      INC alle%
+      IF (attr% AND 2)
+        lies_dir(path$+f$+"\")
+        IF mk%=2 OR in$=esc$
+          GOTO cd_dir_ex
+        ENDIF
+        CLR ai%
+        IF cd_copy%=123
+          dsetpath("..")
+          IF fehler%<0
+            GOTO cd_dir_ex
+          ENDIF
+        ENDIF
+        fsfirst(sci$)
+        WHILE ai%<nr%-1
+          fsnext
+          INC ai%
+        WEND
+      ENDIF
+      fsnext
+    UNTIL end_flag%=1
+  ENDIF
+cd_dir_ex:
+RETURN
+> PROCEDURE get_cdfile
+  LOCAL cda%
+  ' -------------------- File von CD auf Diskette kopieren ----------------------
+  mk%=0
+  cd_sense
+  IF cd_error%=0
+    fc%=0
+    bpg%=bps%*4                         ! Byte Per Get = 8192 Bytes
+    o$="\"
+    DO
+      err_clr
+      cd_select(o$)
+      EXIT IF wahl%=0
+      '
+      GET e1%,e2%,e3%,e4%,egf$
+      box_1
+      IF fc%=0 OR f.attr%(wahl%)=0      ! Hier Entscheidung ob einzelnes File
+        cd_nm$=f.iles$(wahl%)
+        extract(cd_nm$,*fi$)
+        path$=pfad$
+        fsel(pfad$+"*.*",cd_nm$,fi$)
+        IF fi$<>""
+          do_pfad(fi$)
+          WHILE INSTR(1,fi$,"\")
+            fi$=RIGHT$(fi$,LEN(fi$)-INSTR(1,fi$,"\"))
+          WEND
+          buffer$=STRING$(bps%,0)
+          BMOVE buf%,VARPTR(buffer$),bps%       ! Puffer retten
+          '
+          screen
+          put_cdfile(pfad$+cd_nm$,f.laeng%(wahl%),f.start%(wahl%))
+          BMOVE VARPTR(buffer$),buf%,bps%       ! Puffer restaurieren
+        ENDIF
+      ELSE
+        '  Fc% ist 1                            ! oder ganzen Ordner
+        fsel(pfad$+"*.*","",zpfad$)
+        IF zpfad$<>"" AND RIGHT$(zpfad$)="\"
+          cd_nm$=f.iles$(wahl%)
+          screen
+          copy_folder(zpfad$,cd_nm$)
+        ENDIF
+      ENDIF
+      o$=fz$
+      PUT e1%,e2%,egf$
+    LOOP
+    screen
+    @list
+  ENDIF
+RETURN
+> PROCEDURE put_cdfile(cd_pfd$,bytes%,clsn%)
+  LOCAL i%
+  '        IN: Zielname,Anzahl der Bytes,Log.Sector auf der CD
+  IF mk%<>2
+    PRINT AT(20,11);LEFT$(cd_pfd$+STRING$(44,32),44)
+    fcreate(cd_pfd$,0)
+    fhandle%=handle%
+    IF handle%>0
+      PRINT AT(20,13);"Bytes : ";
+      DO
+        was_ist
+        EXIT IF abb%=2
+        PRINT AT(30,13);RIGHT$(n$+STR$(bytes%),8)'
+        block%=clsn%+150
+        b0%=(block% AND &H1F0000)/65536
+        b1%=(block% AND &HFF00)/256
+        b2%=(block% AND &HFF)
+        cda%=MAX(1,MIN(bpg%/bps%,bytes%/bps%+1))
+        cd_play(8,b0%,b1%,b2%,cda%,0,0,0,0,0)
+        twrb%=MIN(bpg%,bytes%)
+        fwrite(fhandle%,buf%,twrb%)
+        EXIT IF fehler%<0
+        SUB bytes%,bpg%
+        EXIT IF bytes%<=0
+        ADD clsn%,cda%
+      LOOP
+      PRINT AT(30,13);"00000000"'
+      fclose(fhandle%)
+      IF abb%=2
+        ALERT 1,"Schreiben abgebrochen",1,"Ok",dum%
+      ENDIF
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE copy_folder(cd_wohin$,cpfad$)
+  IF MID$(cd_wohin$,2,1)=":"            ! Falls nîtig Drive wechseln
+    dsetdrv(ASC(UPPER$(cd_wohin$))-65)
+    cd_wohin$=RIGHT$(cd_wohin$,LEN(cd_wohin$)-2)
+  ENDIF
+  REPEAT
+    dsetpath(cd_wohin$)                ! Ziel - Pfad
+    EXIT IF fehler%<0
+    dcreate(cpfad$)                    ! ausgewÑhlten Ordner erzeugen
+    EXIT IF fehler%<0
+    dsetpath(cpfad$)                   ! nun alles in Ordner kopieren
+    EXIT IF fehler%<0
+    cd_copy%=123                        ! Magic
+    cdir%=3
+    alle%=1
+    lies_dir(cpfad$+"\")               ! rekursive Routine
+  UNTIL 1
+  cd_copy%=0
+  dsetpath("..")                       ! Raus aus Ordner
+RETURN
+> PROCEDURE al_er(al_tx$,flr%)
+  ALERT 1,"    Fehler aufgetreten in    |    "+al_tx$+"|    "+STR$(flr%),1," Aha ",dum%
+  mk%=2
+RETURN
+' --------- GEMDOS - ROUTINEN ----------
+> PROCEDURE dsetpath(df$)
+  df$=df$+CHR$(0)
+  SHOWM
+  fehler%=GEMDOS(&H3B,L:VARPTR(df$))
+  IF fehler%<0
+    al_er("Dsetpath",fehler%)
+  ENDIF
+RETURN
+> PROCEDURE dsetdrv(drive%)
+  SHOWM
+  fehler%=GEMDOS(&HE,W:drive%)
+  IF fehler%<0
+    al_er("Dsetdrv",fehler%)
+  ENDIF
+RETURN
+> PROCEDURE dcreate(df$)
+  df$=df$+CHR$(0)
+  SHOWM
+  fehler%=GEMDOS(&H39,L:VARPTR(df$))
+  IF fehler%<0
+    al_er("Dcreate",fehler%)
+  ENDIF
+RETURN
+> PROCEDURE fcreate(name$,attr%)
+  LOCAL df$
+  df$=name$+CHR$(0)
+  SHOWM
+  handle%=GEMDOS(&H3C,L:VARPTR(df$),W:attr%)
+  fehler%=handle%
+  IF fehler%<0
+    al_er("Datei anlegen",handle%)
+  ENDIF
+RETURN
+> PROCEDURE fclose(handle%)
+  SHOWM
+  fehler%=GEMDOS(&H3E,W:handle%)
+RETURN
+> PROCEDURE fwrite(handle%,wbuf%,wa%)
+  SHOWM
+  fehler%=GEMDOS(&H40,handle%,L:wa%,L:wbuf%)
+  IF fehler%<0
+    al_er("Datei schreiben",fehler%)
+  ENDIF
+RETURN
+' ------- Fileselect-Box fÅr CD --------
+> PROCEDURE cd_select(fo$)
+  select_ed%=0
+  DO
+    DEFMOUSE 2
+    alle%=1
+    fsfirst(fo$)
+    WHILE end_flag%=0
+      IF alle%<cd_max%
+        nam.len%=PEEK(dta%+znmd%)
+        f.iles$(alle%)=STRING$(nam.len%,0)
+        BMOVE dta%+znmd%+1,VARPTR(f.iles$(alle%)),nam.len%
+        '
+        cdl%=INSTR(f.iles$(alle%),";")
+        IF cdl%
+          f.iles$(alle%)=LEFT$(f.iles$(alle%),cdl%-1)
+        ENDIF
+        '
+        f.attr%(alle%)=PEEK(dta%+zatt%)
+        f.start%(alle%)=LPEEK(dta%+6)
+        f.laeng%(alle%)=LPEEK(dta%+14)
+        INC alle%
+        fsnext
+      ELSE
+        ALERT 1,"    Ich kann nur "+STR$(cd_max%)+"   |    Dateien pro Ordner aufnehmen!",1," Sorry ",dum%
+        end_flag%=1
+      ENDIF
+    WEND
+    DEFMOUSE 0
+    max%=alle%-1
+    CLR wahl%,cnt%
+    min%=1
+    pt%=1
+    lx%=16                                      ! Maximale Anzahl anzeigen
+    IF max%<lx%                                 ! FÅr Bildschirmsteuerung
+      pt%=max%-1
+    ELSE
+      pt%=lx%-1
+    ENDIF
+    EXIT IF max%=0
+    screen
+    draw_selectbox
+    show_cd_files
+    REPEAT
+      EXIT IF max%=0
+      maus_select
+      IF ms_do%=1                               ! Box 1 ist up
+        min%=min%-lx%
+        IF min%<1
+          min%=1
+        ENDIF
+        show_cd_files
+      ENDIF
+      IF ms_do%=2                               ! Box 2 ist down
+        min%=min%+lx%
+        IF min%+lx%-1>max%
+          min%=max%-lx%+1
+          IF min%<1
+            min%=1
+          ENDIF
+        ENDIF
+        show_cd_files
+      ENDIF
+      IF ms_do%=3 AND fo$=""                    ! wenn im Wurzelverzeichnis
+        ms_do%=0                                ! kein Ordner schliessen
+      ENDIF                                     ! evtl neue CD ?
+      IF ms_do%=4                               ! Box 4 ist COPY
+        fc%=1-fc%
+        draw_selectbox
+        ms_do%=0
+        maus_off
+      ENDIF
+    UNTIL ms_do%>2 OR wahl%<>0
+    '
+    EXIT IF max%=0 OR ms_do%=5                  ! Wenn EXIT oder kein File
+    IF wahl%
+      IF (f.attr%(wahl%) AND 2) AND fc%=0       ! Wenn Attribut , dann....
+        fo$=fo$+f.iles$(wahl%)+"\"              ! Ordner îffnen
+      ELSE
+        select_ed%=1                             ! sonst Datei ausgewÑhlt
+      ENDIF
+    ENDIF
+    IF ms_do%=3 AND LEN(fo$)>1                  ! Ordner schliessen
+      fo$=LEFT$(fo$,LEN(fo$)-1)
+      FOR ms1%=LEN(fo$)-1 DOWNTO 1
+        EXIT IF MID$(fo$,ms1%,1)="\"
+      NEXT ms1%
+      fo$=LEFT$(fo$,ms1%)
+    ENDIF
+    EXIT IF select_ed%=1                         ! Fertig
+  LOOP
+  fz$=fo$
+RETURN
+> PROCEDURE show_cd_files                         ! von CD-Fileselect benutzt
+  LOCAL a%,zz%
+  PRINT AT(4,2);"CD:"+fo$
+  zz%=4
+  FOR a%=min% TO min%+pt%
+    PRINT AT(4,zz%);RIGHT$(n$+STR$(a%),5);
+    IF f.attr%(a%) AND 2
+      TEXT 80,zz%*zh%-3,""
+    ELSE
+      TEXT 80,zz%*zh%-3," "
+    ENDIF
+    PRINT AT(13,zz%);f.iles$(a%);STRING$(12,32)'
+    PRINT AT(37,zz%);RIGHT$(n$+HEX$(f.start%(a%)),4)
+    IF cdhx%
+      PRINT AT(42,zz%);" $";RIGHT$(n$+HEX$(f.laeng%(a%)),6)
+    ELSE
+      PRINT AT(42,zz%);RIGHT$(n$+STR$(f.laeng%(a%)),8)
+    ENDIF
+    INC zz%
+  NEXT a%
+RETURN
+> PROCEDURE draw_selectbox
+  xl%=500
+  dh%=12*res%
+  db%=80
+  RESTORE sel_box
+sel_box:
+  DATA "","","","ΩΩΩ","-->"
+  FOR i%=1 TO 5
+    dy%=i%*18*res%+40*res%
+    DEFFILL 1,2,8
+    PBOX xl%+3,dy%+3,xl%+db%-3*res%,dy%+dh%+2*res%
+    DEFFILL 1,0
+    READ a$
+    PBOX xl%,dy%,xl%+db%-13,dy%+dh%
+    tp%=(db%-(LEN(a$)*8)-11)/2
+    TEXT xl%+tp%,dy%+dh%-3*res%,a$
+    IF fc% AND i%=4
+      DEFFILL 1,1
+      GRAPHMODE 3
+      PBOX xl%,dy%,xl%+db%-13,dy%+dh%
+      GRAPHMODE 1
+    ENDIF
+  NEXT i%
+RETURN
+> PROCEDURE maus_select
+  LOCAL i%,a$
+  ms_do%=0
+  DO
+    MOUSE mx%,my%,mk%
+    IF mk%=1
+      IF mx%>8 AND mx%<620 AND my%>f1% AND my%<18*res%
+        get_pathname                           ! Statuszeile
+        IF a$<>fo$
+          fo$=a$
+          ms_do%=6
+        ENDIF
+      ELSE
+        IF mx%>xl% AND mx%<xl%+db%              ! Maus auf Boxen
+          FOR i%=1 TO 5
+            dy%=i%*18*res%+40*res%
+            IF my%>dy% AND my%<dy%+dh%
+              ms_do%=i%
+            ENDIF
+          NEXT i%
+        ELSE
+          IF mx%<260                            ! Maus ist auf Files
+            IF my%>3*zh% AND my%<pt%*zh%+4*zh%
+              cnt%=(my%-4*zh%)/zh%+1
+              wahl%=cnt%+min%
+              PRINT AT(13,cnt%+4);ro$;f.iles$(wahl%);rof$
+            ENDIF
+          ELSE
+            cdhx%=1-cdhx%                       ! Byteausgabe umschalten
+            show_cd_files
+            maus_off
+          ENDIF
+        ENDIF
+      ENDIF
+    ENDIF
+    EXIT IF ms_do% OR wahl%
+  LOOP
+RETURN
+> PROCEDURE get_pathname
+  eingabe(" Pfadname : ",fo$,25)
+  a$=UPPER$(a$)
+RETURN
+> PROCEDURE extract(a$,fi%)
+  WHILE INSTR(1,a$,"\")
+    a$=RIGHT$(a$,LEN(a$)-INSTR(1,a$,"\"))
+  WEND
+  *fi%=a$
+RETURN
+> PROCEDURE ausgabe(aus$)
+  IF erg%<3
+    PRINT #3,aus$
+  ELSE
+    PRINT AT(4,zz%+4);aus$
+    INC zz%
+  ENDIF
+RETURN
+> PROCEDURE cd_info
+  cd_sense
+  IF cd_error%=0
+    screen
+    PRINT AT(4,2);art$(wc%)
+    PRINT AT(5,5);"System-ID : ";sys_id$
+    PRINT AT(5,6);"Volume-ID : ";vol_id$
+    PRINT AT(5,8);"Anzahl der Blîcke      $";RIGHT$(n$+HEX$(max_lsn%),8)
+    PRINT AT(5,9);"Pfadtabellen       LBN $";RIGHT$(n$+HEX$(tabl%),8)
+    PRINT AT(5,10);"Wurzelverzeichnis  LBN $";RIGHT$(n$+HEX$(root%),8)
+    PRINT AT(5,12);"Bytes pro Block        $";RIGHT$(n$+HEX$(bps%),8)
+    PRINT AT(5,13);"LÑnge der Pfadtabelle  $";RIGHT$(n$+HEX$(len_tabl%),8)
+    PRINT AT(5,14);"Volume Set Size         ";RIGHT$(n$+STR$(vsets%),4)
+    PRINT AT(5,15);"Volume Sequence Number  ";RIGHT$(n$+STR$(vseqn%),4)
+    help_ex
+  ENDIF
+RETURN
+> PROCEDURE cd_sense
+  err_clr
+  lsn(16)
+  pvd$=STRING$(bps%,0)
+  BMOVE buf%,VARPTR(pvd$),LEN(pvd$)
+  welche$=STRING$(5,0)
+  vol_id$=STRING$(32,0)
+  sys_id$=STRING$(32,0)
+  BMOVE buf%+1,VARPTR(welche$),5
+  IF cd_error%=0
+    IF welche$="CD001"
+      wc%=1
+      BMOVE buf%+8,VARPTR(sys_id$),32
+      BMOVE buf%+40,VARPTR(vol_id$),32
+      max_lsn%=LPEEK(buf%+&H54)
+      vsets%=DPEEK(buf%+&H7A)
+      vseqn%=DPEEK(buf%+&H7E)
+      bps%=DPEEK(buf%+&H82)
+      len_tabl%=LPEEK(buf%+&H88)
+      tabl%=LPEEK(buf%+&H94)
+      root%=LPEEK(buf%+&HA2)
+      zpdt%=6
+    ELSE
+      wc%=0
+      BMOVE buf%+9,VARPTR(sys_id$),32
+      BMOVE buf%+&H30,VARPTR(vol_id$),32
+      max_lsn%=LPEEK(buf%+&H5C)
+      tabl%=LPEEK(buf%+&HA4)
+      root%=LPEEK(buf%+&HBA)
+      bps%=2048
+      zpdt%=8
+    ENDIF
+    znmd%=&H20
+    zatt%=24+wc%
+    '
+    ztl%=MIN(8192/bps%,len_tabl%/bps%)  ! muss noch auf Maximal Werte geprÅft werden !
+    '
+    FOR i%=0 TO ztl%
+      lsn(tabl%+i%)
+      BMOVE buf%,tbuf%+i%*bps%,bps%
+    NEXT i%
+    BMOVE VARPTR(pvd$),buf%,LEN(pvd$)
+    pvd$=""
+    block%=166
+    info
+  ENDIF
+RETURN
+'
+' ------- Ab hier HELP ---------
+dhelp0:
+DATA DATA      :                            DIR     GET      INFO
+DATA CD        :  UNIT     READ     EXREAD  TOC     MODE     COMMAND
+DATA AUDIO     :  STOP     PROG     START   SONG    TIME     FILE
+DATA           :
+DATA           :
+DATA LIST      :  SEARCH   UP       DOWN    TOP     END      ADDRESS
+DATA OUT/IN    :  DUMP     DATA     ERROR   F-KEY   READ     LOG
+DATA
+DATA HELP      :  Diese Helpseite
+DATA UNDO      :  Fehlerliste
+DATA
+DATA BUTTON RECHTS :  Eine MenÅebene hîher oder EXIT
+DATA *
+'
+dhelp1:
+DATA             :
+DATA             :
+DATA             :
+DATA DIR         :  Ausgabe aller Files auf CD
+DATA GET_FILE    :  Kopieren von Dateien oder Ordnern von CD
+DATA CD-INFO     :  Info Åber eine eingelegte Daten-CD
+DATA *
+'
+dhelp2:
+DATA UNIT        :  GerÑteaddresse des Laufwerks
+DATA READ        :  Lesen eines Blocks
+DATA EXREAD      :  Lesen eines Blocks
+DATA TOC         :  Inhaltsverzeichnis lesen
+DATA MODE        :  Mode Select Datenmodus setzen
+DATA COMMAND     :  einzelne Commandos von Hand rÅberschicken
+DATA *
+'
+dhelp3:
+DATA STOP        :  Wiedergabe beenden
+DATA PROG        :  Audio-Wiedergabe programmieren
+DATA START       :  Wiedergabe eines Songs starten
+DATA SONG        :  Anzeige aller Titel und Anspielmîglichkeit
+DATA TIME        :  Audio Demo
+DATA FILE        :  Audio Demo
+DATA *
+'
+dhelp4:
+DATA
+DATA
+DATA
+DATA SEEK        :  Lesekopf positionieren
+DATA REMOVE      :  Auswurfmîglichkeit
+DATA INQUIRE     :
+DATA
+DATA *
+'
+dhelp5:
+DATA
+DATA *
+'
+dhelp6:
+DATA SEARCH      :  Suchen und Ersetzen eines beliebigen Ausdrucks
+DATA UP          :  Listet die vorhergehende Seite
+DATA DOWN        :  Listet die nÑchste Seite
+DATA TOP         :  Listet die erste Seite
+DATA END         :  Listet die letzte Seite
+DATA ADDRESS     :  Listet ab Adresse xxxx
+DATA *
+'
+dhelp7:
+DATA DUMP        :  Ausgabe des Buffers als DUMP
+DATA DATA        :  Ausgabe des Buffers als Daten
+DATA ERROR       :  Ausgabe der Fehlermeldungen auf Drucker oder File
+DATA F-KEY       :  Ausgabe der Funktionstastenbelegung
+DATA READ        :  Datei in Puffer einlesen
+DATA LOG         :  Logbuchdatei anlegen (Autologin Åber CTRL->)
+DATA *
+'
+dhelpc1:
+DATA CTRL-A         :  Blockanfang definieren
+DATA CTRL-B         :  Blockende   definieren
+DATA CTRL-C         :  Kopiert Block an Cursorposition
+DATA CTRL-D         :  Dump oder Daten speichern       (-> OUTPUT - DUMP DATA)
+DATA CTRL-F         :  FÅllt Block mit Byte unter Cursor
+DATA CTRL-L         :  Laden der Funktionstastenbelegung
+DATA CTRL-N         :  NÑchster Sektor
+DATA CTRL-O         :  List-Offset eingeben
+DATA CTRL-P         :  Vorhergehender Sektor
+DATA CTRL-Q         :  MenÅ-Leiste einschalten
+DATA CTRL-R         :  Suchen       (-> LIST   - SEARCH)
+DATA *
+'
+dhelpc2:
+DATA CTRL-S         :  Funktionstasten sichern  (-> OUTPUT - F-KEY)
+DATA CTRL-T         :  Block auf Funktionstaste legen
+DATA CTRL-U         :  Umrechnen
+DATA CTRL-W         :  weiter suchen
+DATA CTRL-Y         :  Memory-Info
+DATA
+DATA CTRL- < (>)    :  Logbuch
+DATA CTRL-UP DOWN   :  Seite rauf/runter
+DATA CTRL-LEFT RIGHT:  Cursor wechselt zwischen Hex- und ASCII-Teil
+DATA CTRL-TAB  TAB  :  Cursor 8 Nibbles zurÅck / weiter
+DATA CTRL-HOME HOME :  Zum Ende / Anfang des Puffers
+DATA *
+'
+> PROCEDURE help
+  help0
+  RESTORE dhelp0
+  zz%=7
+  help_lp
+  help_ex
+RETURN
+> PROCEDURE help0
+  screen
+  PRINT AT(3,2);cp$
+RETURN
+> PROCEDURE help_lp
+  LOCAL h$
+  DO
+    READ h$
+    EXIT IF h$="*"
+    PRINT AT(5,zz%);h$
+    INC zz%
+  LOOP
+RETURN
+> PROCEDURE help_ex
+  maus_klick
+  screen
+  @list
+RETURN
+> PROCEDURE help1
+  help0
+  RESTORE dhelp1
+  zz%=10
+  help_lp
+  help_ex
+RETURN
+> PROCEDURE help2
+  help0
+  RESTORE dhelp2
+  zz%=10
+  help_lp
+  help_ex
+RETURN
+> PROCEDURE help3
+  help0
+  RESTORE dhelp3
+  zz%=10
+  help_lp
+  help_ex
+RETURN
+> PROCEDURE help4
+  help0
+  RESTORE dhelp4
+  zz%=10
+  help_lp
+  help_ex
+RETURN
+> PROCEDURE help5
+  help0
+  RESTORE dhelp5
+  zz%=10
+  help_lp
+  help_ex
+RETURN
+> PROCEDURE help6
+  help0
+  RESTORE dhelp6
+  zz%=10
+  help_lp
+  help_ex
+RETURN
+> PROCEDURE help7
+  help0
+  RESTORE dhelp7
+  zz%=10
+  help_lp
+  help_ex
+RETURN
+> PROCEDURE ctrl_help
+  help0
+  RESTORE dhelpc1
+  zz%=6
+  help_lp
+  maus_klick
+  help0
+  RESTORE dhelpc2
+  zz%=6
+  help_lp
+  help_ex
+RETURN
+' ------------------------------ End of Text ----------------------------------
