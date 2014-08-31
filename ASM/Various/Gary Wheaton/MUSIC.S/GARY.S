@@ -1,0 +1,1181 @@
+ CLR.L -(SP)       
+ MOVE.W #$20,-(SP) ; Super.
+ TRAP #1
+ ADDQ.L #6,SP
+ MOVE.L D0,SV   ; Save old status.
+
+play
+******************
+ move.b $469,d0  *
+ww cmp.b $469,d0 *
+ beq.s ww	 *
+******************
+
+
+ bsr vbi
+
+
+ cmp.b #97,$fffc02
+ bne play
+
+
+
+	lea	$ff8800,a0	get sound chip 
+	move.b	#7,(a0)
+	move.b	#%11111111,2(a0) cut out lingering noise
+	move.l #$8000000,$ff8800 
+	move.l #$9000000,$ff8800 
+	move.l #$a000000,$ff8800 
+
+
+ MOVE.L SV,-(SP)
+ MOVE.W #$20,-(SP)
+ TRAP #1
+ ADDQ.L #6,SP
+
+ CLR -(SP)
+ TRAP #1
+
+
+
+
+
+*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*
+
+
+SL EQU $FF8800
+SD EQU $FF8802
+ move.b #7,sl
+ move.b #%11111000,sd
+
+
+ 
+VBI  
+ movem.l d0-d3/a0-a6,-(sp)
+
+
+
+;\\\\\\\\\\\\\
+ MOVE.L UPTO,A2
+ MOVE CUNT,D3
+ MOVE.B 33(A2),D4
+SSU SUBQ.W #1,D3
+ BPL.S PART1
+
+COP
+ MOVE.L #1,PNT0
+ MOVE.L #1,PNT1
+ MOVE.L #1,PNT2
+ MOVE.L #1,PNT3
+ MOVE.L #1,PNT4
+ MOVE.L #1,PNT5
+ MOVE.L #$9000000,SL
+
+ ADD.L #36,a2
+ CMP.L #CHAN0,A2
+ BNE.S LLA
+ LEA DOTH,A2
+LLA
+ MOVE 34(A2),D3
+ MOVE.B 33(A2),D4
+PART1
+ CLR.B D2
+ BTST #1,D4
+ BEQ.S W1
+ MOVE.L (A2),A1
+ MOVE.L 4(A2),A0
+ BSR CHAN0
+
+W1 BTST #2,D4
+ BEQ.S W2
+ MOVE.L 8(A2),A1
+ MOVE.L 12(A2),A0
+ BSR CHAN0
+
+W2 MOVEQ.B #1,D2
+ BTST #3,D4
+ BEQ.S W3
+ MOVE.L 16(A2),A1
+ MOVE.L 20(A2),A0
+ BSR CHAN0
+
+W3 BTST #4,D4
+ BEQ.S W4
+ MOVE.L 24(A2),A1
+ MOVE.L 28(A2),A0
+ BSR CHAN0
+
+W4 MOVE.L A2,UPTO
+ MOVE D3,CUNT
+;--END OF VBI
+;--------EXIT
+
+
+ movem.l (sp)+,d0-d3/a0-a6 
+killer rts
+
+
+
+SV DC.L 0
+
+ DC.B " (C) G.WHEATON.  60 NEVIS GROVE BOLTON. LANCS, U.K. "
+
+ EVEN
+UPTO DC.L EE-36
+CUNT DC.W 0
+ EVEN
+;\\RUNNING ORDER SEQUENCE
+
+
+ee
+ DC.L PNT4,TUSK
+ DC.L PNT0,bas1
+ DC.L PNT2,bas
+ DC.L PNT3,TIKA drm
+ DC.B 2,%00011100
+ DC.W 8*64
+
+doth
+ DC.L PNT5,RUSK bas2
+ DC.L PNT0,bas1
+ DC.L PNT2,bas
+ DC.L PNT3,TIKAR
+ DC.B 3,%00011110
+ DC.W 8*64
+
+ DC.L PNT4,FUSK
+ DC.L PNT0,bas1
+ DC.L PNT2,bas
+ DC.L PNT3,TIKA drm
+ DC.B 2,%00011110
+ DC.W 4*64
+
+
+ DC.L PNT4,basa
+ DC.L PNT0,basa+32
+ DC.L PNT2,basa
+ DC.L PNT3,TIKA
+ DC.B 3,%00011110
+ DC.W 4*64
+
+ DC.L PNT5,bas2
+ DC.L PNT0,bas1
+ DC.L PNT2,bas
+ DC.L PNT3,TIKA
+ DC.B 3,%00011110
+ DC.W 4*64
+
+ DC.L PNT4,basa
+ DC.L PNT0,basa+12
+ DC.L PNT2,basa
+ DC.L PNT3,TIKAR
+ DC.B 3,%00011110
+ DC.W 4*64
+
+;;;;;;;
+ DC.L PNT5,bas2
+ DC.L PNT0,bas1
+ DC.L PNT2,bas
+ DC.L PNT3,TIKA
+ DC.B 3,%00011110
+ DC.W 4*64
+
+ DC.L PNT4,end
+ DC.L PNT0,end1
+ DC.L PNT2,end
+ DC.L PNT3,TIKA
+ DC.B 3,%00011110
+ DC.W 4*64
+
+ DC.L PNT5,bas2
+ DC.L PNT0,bas1
+ DC.L PNT2,bas
+ DC.L PNT3,TIKAR
+ DC.B 3,%00011110
+ DC.W 511
+
+
+
+;;;;tun
+ DC.L PNT0,man
+ DC.L PNT5,bas1
+ DC.L PNT2,bas2
+ DC.L PNT3,TIKA
+ DC.B 3,%00011110
+ DC.W 2*64
+
+ DC.L PNT5,m2
+ DC.L PNT0,bas33
+ DC.L PNT2,bas22
+ DC.L PNT3,TIKA
+ DC.B 3,%00011110
+ DC.W 4*64
+
+ DC.L PNT5,m33
+ DC.L PNT0,bas1
+ DC.L PNT2,bas2
+ DC.L PNT3,TIKA
+ DC.B 3,%00011110
+ DC.W 2*64
+
+ DC.L PNT5,man
+ DC.L PNT0,bas1
+ DC.L PNT2,bas
+ DC.L PNT3,drm
+ DC.B 3,%00011110
+ DC.W 2*64
+
+ DC.L PNT5,m2
+ DC.L PNT0,bas22
+ DC.L PNT2,bas21
+ DC.L PNT3,drm
+ DC.B 3,%00011110
+ DC.W 4*64
+
+ DC.L PNT5,m3
+ DC.L PNT0,bas1
+ DC.L PNT2,bas
+ DC.L PNT3,drm
+ DC.B 3,%00011110
+ DC.W 2*64
+
+ DC.L PNT5,M4
+ DC.L PNT0,end1
+ DC.L PNT2,end
+ DC.L PNT3,DRM
+ DC.B 3,%00011110
+ DC.W 4*64
+
+ DC.L PNT4,M5
+ DC.L PNT0,BAS1
+ DC.L PNT2,BAS
+ DC.L PNT3,TIKA
+ DC.B 3,%00011110
+ DC.W 255
+
+ DC.L PNT5,end1
+ DC.L PNT0,m44
+ DC.L PNT2,end
+ DC.L PNT3,DRM
+ DC.B 3,%00011110
+ DC.W 4*64
+
+ DC.L PNT4,M55
+ DC.L PNT0,BAS1
+ DC.L PNT2,BAS
+ DC.L PNT3,TIKA
+ DC.B 3,%00011110
+ DC.W 4*64
+
+ DC.L PNT5,RUSK bas2
+ DC.L PNT0,bas1
+ DC.L PNT2,bas
+ DC.L PNT3,DRM TIKAR
+ DC.B 2,%00011110
+ DC.W 16*64
+
+ DC.L PNT4,FUSK
+ DC.L PNT0,bas1
+ DC.L PNT2,bas
+ DC.L PNT3,NULL TIKA drm
+ DC.B 1,%00011110
+ DC.W 4*64
+
+ DC.L PNT5,RUSKA bas2
+ DC.L PNT1,RBAS1
+ DC.L PNT2,Rbas
+ DC.L PNT3,DRMMM1 TIKAT
+ DC.B 3,%00011110
+ DC.W 511
+
+
+ DC.L PNT5,RUSKA bas2
+ DC.L PNT1,RBAS1
+ DC.L PNT2,Rbas
+ DC.L PNT3,DRMMM TIKAT
+ DC.B 1,%00011110
+ DC.W 511
+
+ DC.L PNT4,basa
+ DC.L PNT0,basa+32
+ DC.L PNT2,basa
+ DC.L PNT3,TIKA
+ DC.B 3,%00011110
+ DC.W 4*64
+
+
+ DC.L PNT4,FUSK
+ DC.L PNT0,bas1
+ DC.L PNT2,bas
+ DC.L PNT3,TIKA drm
+ DC.B 1,%00011110
+ DC.W 4*64
+
+
+ DC.L PNT4,FUSK
+ DC.L PNT0,bas1
+ DC.L PNT2,bas
+ DC.L PNT3,TIKA drm
+ DC.B 1,%00011110
+ DC.W 4*64
+
+
+ DC.L PNT4,M55
+ DC.L PNT0,BAS1
+ DC.L PNT2,BAS
+ DC.L PNT3,TIKA
+ DC.B 3,%00011110
+ DC.W 4*64
+
+ DC.L PNT4,M55
+ DC.L PNT0,BAS1
+ DC.L PNT2,BAS
+ DC.L PNT3,TIKA
+ DC.B 3,%00011110
+ DC.W 4*64
+
+
+ 
+
+CHAN0
+;\\\\\\\\\\\\\\\\\\\\\\
+ MOVE (A1),D0
+ ADD D0,A0
+ MOVE.L (A0),D1  ;GET NOTE 0 & DURATION
+ MOVE.B 13(A1),D5
+ EXT.W D5
+ SWAP D1
+ ADD D5,D1
+ SWAP D1
+ CMP #$FFFF,D1
+ BNE CON2
+ CLR (A1)        ;RESET TO START
+ SUB D0,A0
+ MOVE.L (A0),D1
+CON2
+ SUBQ.B #1,3(A1)    ;NP0
+ BNE STILLON
+ MOVE.L D1,6(A1) ;TMP0  \D1.W IS DURATION
+ MOVE.L D1,20(A1);TEMP  HOLD NOTE
+ MOVE.B 26(A1),4(A1)   ;VOL0
+ MOVE D1,2(A1)   ;NP0  \SET NEW DURATION
+ ADDQ.W #4,(A1)        ; & INC POINTER
+STILLON
+;\\VOLUME
+RFF
+;\\\\\\\\\EFFECTS\\\\\\\\\\
+NV0 
+ MOVE.B 2(A1),D0
+ CMP.B #4,D0
+ BNE DOIT
+ ADDQ.B #1,4(A1)
+ RTS
+DOIT 
+
+DZZ
+ MOVE.B #7,SL
+ MOVE.B #%11111000,SD
+ BRA FCC
+EFCT
+
+ DC.L FINK,VIB,WARB,DRUM,slip,WB1,WRP,SLW
+ DC.L SLR,HOLD,TWERP,SLR1,inup,HOLDLOW,Half
+ dc.l holl,coll,foll,aoll,eoll
+ REPT 11
+ DC.L FINK
+ ENDR
+
+FCC LEA EFCT,A6
+ AND #31,D0 
+ ASL #2,D0
+ MOVE.L (A6,D0),A0
+ JSR (A0)
+
+MAZ ADDQ.B #1,4(A1)          ;VOL0
+ MOVE.B 11(A1),SL
+ MOVE.B 21(A1),SD   ;TMP0+1
+ MOVE.B 12(A1),SL
+ MOVE.B 20(A1),SD   ;TMP0
+ CLR D0
+ MOVE.B 4(A1),D0
+ MOVE.B 10(A1),SL
+ MOVE.B 28(A1,D0),D2    ;VOL0
+ MOVE.B D2,SD
+
+fink 
+  rts
+
+;-------EFFECTS ROUTINES--------
+;1-256---DELAYED--VIBRATO-------
+VV EOR.B #1,MC
+ BEQ.S SDC
+VIB CMP.B #16,4(A1)
+ BLT SDC
+
+WWQ 
+
+ SUB.B #1,24(A1)
+ BNE SDC
+ MOVE.B 25(A1),24(A1)
+ MOVE 16(A1),D1
+ ADD D1,18(A1)
+ MOVE 14(A1),D1
+ CMP 18(A1),D1
+ BLT.S RIST
+KJ NEG D1
+ CMP 18(A1),D1
+ BGT.S RIST
+SAZ MOVE 6(A1),D1
+ ADD 18(A1),D1
+ MOVE D1,20(A1)
+SDC RTS
+RIST NEG 16(A1)
+ BRA.S SAZ
+
+;2-512------WARB DW-----------
+XX DC.B 0,0
+
+WARB ADDQ.B #1,4(A1)
+SAX 
+ LSR 20(A1)
+ CMP #120,20(A1)
+ BGT.S PLOP
+ MOVE 6(A1),20(A1)
+PLOP BRA WWQ RTS
+
+
+;3--768--------DRUM-----------
+DRUM 
+ ;eor.b #1,lil
+ ;bne.s junk
+ SUBQ.B #4,19(A1)
+ MOVE.B #7,SL
+ MOVE.B #%11011000,SD
+ MOVE.B #6,SL
+ MOVE.B 19(A1),SD
+ MOVE.B #5,SL
+ MOVE.B 32(A2),SD
+ MOVE.B #4,SL
+ MOVE.B 19(A1),D0
+ ASL.B #5,D0
+ MOVE.B D0,SD
+JUNK RTS
+
+
+lil dc.b 0,0
+
+slip 
+
+
+WB1
+
+;6--1536-----WARB UP---------
+WRP 
+ ADD.B #200,KIN
+ BCC.S ED
+ SUBQ.B #1,4(A1) 
+ED ASL 6(A1)
+ CMP #80,20(A1)
+ BGT WWQ
+ MOVE 20(A1),6(A1)
+ RTS
+SDX
+PLAP
+KIN DC.B 0,0
+
+
+;7--1792---SLIDE-UP--WARBLE
+SLW 
+
+;--2048---SLIDE UP CONST VOL 
+SLR 
+
+YIN DC.B 0,0
+;9--2304-------HOLD-------------
+HOLD
+ move.b #15,4(a1)
+ rts
+
+;------10 2560
+TWERP 
+ LSR 20(A1)
+ CMP #60,20(A1)
+ BGT.S BB
+ MOVE 6(A1),20(A1)
+BB BRA VIB S
+
+;11-------2816 SLIDE UP WITH ADSR
+SLR1
+
+
+
+tp dc.b 0,0
+;12-------3072  
+inup
+ move.b #8,4(a1)
+ bra WWQ
+
+
+;13-------3328--HOLD VOL LOW
+HOLDLOW
+ addq.b #3,4(a1)
+ subq.w #2,20(a1)
+ rts
+
+
+;
+;14--------dw A
+half
+ MOVE.B #4,SL
+ MOVE.B 21(A1),SD   ;TMP0+1
+ MOVE.B #5,SL
+ MOVE.B 20(A1),SD   ;TMP0
+ MOVE.B #10,SL
+ MOVE.B #8,SD
+
+ MOVE.L (SP)+,D1
+ JMP FINK
+ RTS
+
+
+
+;15--------DW Am
+holl
+ MOVE.B #100,4(A1)
+ ADDQ.B #1,RONK
+ move.b RONK,d1
+ and #3,d1
+ asl #1,d1
+ move dq(pc,d1),20(a1)
+ rts
+
+dq dc.w 193,144,121,72
+
+
+;16--------DW Em
+Coll
+ MOVE.B #100,4(A1)
+wop ADDQ.B #1,RONK+1
+ move.b RONK+1,d1
+ and #3,d1
+ asl #1,d1
+ move Eq(pc,d1),20(a1)
+ rts
+Eq dc.w 193,128,96,81
+
+;17-------- 
+Foll
+ MOVE.B #100,4(A1)
+ ADDQ.B #1,RONK
+ move.b RONK,d1
+ and #3,d1
+ asl #1,d1
+ move Rq(pc,d1),20(a1)
+ rts
+
+Rq dc.w 288,144,121,72
+
+
+aoll
+eoll
+ rts
+
+RONK DC.B 0,0
+
+
+
+
+
+;\\\\\\\\\\\\\\DATAS\\\\\\\\\\\\\\\
+;\\NOTE 1ST WORD. DURATION 2ND WORD
+;\\\LEAD
+PNT0 DC.W 0
+NP0 DC.W 1
+ DC.W 0
+ DC.L 0
+ DC.B 9,2,3
+ DC.B 1      ;ADD TO NOTE
+ DC.W 11      ;VIB LIMIT
+ DC.W 7      ;16(A1)  ADD
+ DC.W 0      ;VIB 18(A1)
+ DC.L 0      ;TMP NOTE 20(A1)
+ DC.B 1,1    ;VIB RATE 24(A1)
+ DC.B 0,0    ;INITIAL VOL
+;ADSR  28(A1)
+
+ DC.B 12,12,12,11,10,10,10,10
+ DC.B 9,9,9,9
+ dcb.b	60,9
+
+
+PNT1 DC.W 0
+ DC.W 1
+ DC.W 0
+ DC.L 0
+ DC.B 9,2,3
+ DC.B 1      ;ADD TO NOTE
+ DC.W 1      ;VIB LIMIT
+ DC.W -1      ;16(A1)  ADD
+ DC.W 0      ;VIB 18(A1)
+ DC.L 0      ;TMP NOTE 20(A1)
+ DC.B 1,1    ;VIB RATE 24(A1)
+ DC.B 0,0    ;INITIAL VOL
+;ADSR  28(A1)
+
+ DC.B 15,14,13,12
+
+ DCB.B 6,10
+ DCB.B 6,9
+ DCB.B 6,8
+ DCB.B 8,7
+ DCB.B 8,6
+ DCB.B 8,5
+ DCB.B 8,4
+ DCB.B 8,3
+ DCB.B 8,2
+ DCB.B 8,1
+
+
+ EVEN
+
+;\\\BASS
+PNT2 DC.W 0
+ DC.W 1          ;2(A1) DURATION
+ DC.B 0,0        ;4(A1)
+ DC.L 0          ;6
+ DC.B 10,4,5     ;10(A1) VOL REG
+ DC.B 0          ;ADD TO NOTE 13(A1)
+ DC.W 5          ;VIB LIMIT
+ DC.W 2          ;VIBRATO ADD 16(A1)
+ DC.W 2          ;VIB 18(A1)
+ DC.L 0          ;TMP NOTE 20(A1)
+ DC.B 1,1        ;VIB RATE
+ DC.B 0,0        ;INITIAL VOL 26(A1)
+;\ADSR  28(A1)
+ADSR
+
+ DC.B 3,13,13,12,12,11,10,9
+ dcb.b	60,9
+
+
+
+
+ EVEN
+PNT3 DC.W 0
+NP3 DC.W 1      ;2(A1) DURATION
+ DC.B 0,0        ;4(A1)
+ DC.L 0          ;6
+ DC.B 10,6,11    ;10(A1) VOL REG
+ DC.B -1         ;ADD  13(A1)
+ DC.W 4         ;VIB LIMIT
+ DC.W 1          ;VIBRATO ADD 16(A1)
+ DC.W 0          ;VIB 18(A1)
+ DC.L 0          ;TMP NOTE 20(A1)
+ DC.B 1,1        ;VIB RATE
+ DC.B 0,0        ;INITIAL VOL 26(A1)
+;\ADSR  28(A1)
+ DC.B 15,14,13,11,10
+ DC.B 9,8,7,6,5,4,3,2,1
+
+
+
+ EVEN
+PNT4 DC.W 0
+NP4 DC.W 1      ;2(A1) DURATION
+ DC.B 0,0        ;4(A1)
+ DC.L 0
+ DC.B 8,0,1      ;10(A1) VOL REG
+ DC.B 0          ;ADD 13(A1)
+ DC.W 3          ;VIB LIMIT
+ DC.W 2          ;VIBRATO ADD 16(A1)
+ DC.W 0          ;VIB 18(A1)
+ DC.L 0          ;TMP NOTE 20(A1)
+ DC.B 1,1        ;VIB RATE
+ DC.B 3,0        ;INITIAL VOL 26(A1)
+;\ADSR  28(A1)
+
+ DC.B 15,15,14,14,13,13,12,12
+ DCB.B 20,11
+ DCB.B 20,10
+ DCB.B 20,9
+ DCB.B 20,8
+ DCB.B 20,7
+ DCB.B 20,6
+ DCB.B 20,5
+ DCB.B 20,4
+ DCB.B 20,3
+ DCB.B 20,2
+ DCB.B 40,1
+
+
+ even
+
+PNT5 DC.W 0
+ DC.W 1       ;EFFECT & DURATION 2(A1)
+ DC.B 0,0
+ DC.L 0
+ DC.B 8,0,1
+ DC.B 2       ;ADD  13(A1)
+ DC.W 2       ;VIB LIMIT
+ DC.W 3       ;VIB ADD 16(A1)
+ DC.W 0       ;VIB 18(A1)
+ DC.L 0       ;TEMP NOTE 20(A1)
+ DC.B 1,1     ;VIB RATE  24)A1)
+ DC.B 0,0     ;INITIAL VOL
+;ADSR  28(A1)
+
+ DC.B 12,12,11,11,10,10,10
+ DCB.B 8,9
+ DCB.B 8,8
+ DCB.B 8,7
+ DCB.B 8,6
+ DCB.B 8,5
+ DCB.B 8,4
+ DCB.B 8,3
+ DCB.B 8,2
+ DCB.B 64,1
+
+
+
+
+
+ EVEN
+TE2 DC.W 2,3
+
+MAX DC.B 71,32,87,72,69,65,84,79,78
+DRI DC.B 251,0
+MIN DC.B 0,0
+MC DC.B 0,0
+ EVEN
+
+;-----------MUSIC DATA
+
+
+
+
+NULL DC.W 2,128+2304
+ DC.W $FFFF,$FFFF
+e=256
+a=2
+c=256
+
+
+
+
+q=8
+bas
+ dc.w 193*q,32
+ dc.w 193*q,32
+ DC.W $FFFF,$FFFF
+
+t=4
+bas1
+ dc.w 193*q,16
+ dc.w 193*t,8
+ dc.w 0,8+2304
+ DC.W $FFFF,$FFFF
+
+
+bas21             ;a
+	 dc.w 144*q,32
+	 dc.w 144*q,32
+	 DC.W $FFFF,$FFFF
+
+bas22 	
+	 dc.w 144*q,16
+	 dc.w 144*t,8
+	 dc.w 144*q,16
+	 DC.W $FFFF,$FFFF
+
+bas33
+ dc.w 144*q,16
+ dc.w 72*q,8
+ dc.w 96*q,8
+ dc.w 60*q,8
+ dc.w 72*q,16
+ dc.w 96*q,8
+ DC.W $FFFF,$FFFF
+
+
+
+bas2
+ dc.w 193*q,16
+ dc.w 96*q,8
+ dc.w 128*q,8
+ dc.w 81*q,8
+ dc.w 96*q,16
+ dc.w 128*q,8
+ DC.W $FFFF,$FFFF
+
+
+bas3
+ dc.w 193*t,32
+ dc.w 96*t,16
+ dc.w 128*t,16
+ dc.w 81*t,16
+ dc.w 96*t,32
+ dc.w 128*t,16
+ DC.W $FFFF,$FFFF
+
+basa
+ dc.w 144*q,32
+ dc.w 0,16+2304
+ dc.w 162*q,16
+ dc.w 144*q,16
+ dc.w 0,48+2304
+
+ dc.w 144*q,32
+ dc.w 0,16+2304
+ dc.w 162*q,16
+ dc.w 144*q,16
+ dc.w 121*q,32+2304
+ 
+ DC.W $FFFF,$FFFF
+
+
+
+
+
+
+
+
+end
+ dc.w 128*q,64
+ dc.w 144*q,64
+ dc.w 162*q,64
+ dc.w 172*q,64
+
+
+end1
+ dc.w 128*q,32
+ dc.w 64*q,16
+ dc.w 128*q,16
+
+ dc.w 144*q,32
+ dc.w 72*q,16
+ dc.w 144*q,16
+
+ dc.w 162*q,32
+ dc.w 81*q,16
+ dc.w 162*q,16
+
+ dc.w 172*q,32
+ dc.w 85*q,16
+ dc.w 172*q,16
+
+
+
+
+
+u=2
+
+man
+ dc.w 128,1
+ dc.w 128*u,15+V
+ dc.w 121,1
+ dc.w 121*u,15+V
+ dc.w 128,1
+ dc.w 128*u,15+V
+ dc.w 121,1
+ dc.w 121*u,15+V
+ dc.w 128,1
+ dc.w 128*u,15+V
+ dc.w 121,1
+ dc.w 121*u,15+V
+ dc.w 128*u,1
+ dc.w 128*u,15+V
+
+ dc.w 162*u,1
+ dc.w 162*u,15+V
+
+
+m2
+ dc.w 144,2
+ dc.w 144*u,14
+ dc.w 144*u,16
+
+ dc.w 128,2
+ dc.w 128*u,14
+
+ dc.w 144,2
+ dc.w 144*u,64+14+V
+;
+
+ dc.w 144,2
+ dc.w 144*u,14
+ dc.w 144*u,16
+
+ dc.w 128*u,2
+ dc.w 128*u,14
+
+ dc.w 144*u,48+V
+
+
+ dc.w 162*u,16
+ dc.w 193*u,16
+
+m33
+ dc.w 162,2+256
+ dc.w 162*u,30+256
+
+ dc.w 193,1
+ dc.w 193*u,15
+ dc.w 193*u,96
+
+
+m3
+ dc.w 162*u,32+256
+
+ dc.w 193*u,16
+ dc.w 193*u,16+V 96
+
+ dc.w 193*u,8
+ dc.w 0,8+2304
+ dc.w 193*u,8
+ dc.w 0,8+2304
+ dc.w 193*u,8
+ dc.w 0,8+2304
+ dc.w 193*u,8
+ dc.w 0,8+2304
+
+
+V=256
+M4 ;HORSE SHIT
+ 
+ dc.w 128*u,32+V
+ dc.w 128*u,16
+ dc.w 162*u,16
+
+ dc.w 144*u,32+V
+ dc.w 144*u,16
+ dc.w 193*u,16
+
+ dc.w 162*u,16
+ dc.w 162*u,32+V
+
+ dc.w 172*u,32+V
+ dc.w 162*u,16
+ dc.w 172*u,16
+
+ dc.w 217*u,16
+
+
+M5
+ dc.w 193*u,64+V
+ dc.w 0,255+2304
+ dc.w 0,255+2304
+
+
+
+
+RE=14*256
+
+TIKA
+ DC.W 0,15+1024
+ DC.W 193/O,1+RE
+ DC.W 0,7+1024
+ DC.W 217/O,1+RE
+ DC.W 0,7+1024
+ DC.W 144/O,1+RE
+
+ dc.w 6,4+768    ;DRUM
+
+ DC.W 0,4+1024
+ DC.W 193/O,1+RE
+ DC.W 0,23+1024
+ DC.W $FFFF,$FFFF
+
+O=4
+TIKAR
+ DC.W 0,15+1024
+ DC.W 193/O,1+RE
+ DC.W 0,7+1024
+ DC.W 217/O,1+RE
+ DC.W 0,7+1024
+ DC.W 162/O,1+RE
+
+ dc.w 6,4+768    ;DRUM
+
+ DC.W 0,4+1024
+ DC.W 193/O,1+RE
+ DC.W 0,7+1024
+ DC.W 193/O,1+RE
+
+ DC.W 0,15+1024
+ DC.W $FFFF,$FFFF
+
+
+
+drm
+ dc.w 0,31+1024
+ dc.w 6,4+768
+ dc.w 0,29+1024
+ DC.W $FFFF,$FFFF
+
+
+EM=2*256
+
+TUSK 
+ DC.W 0,64+2304
+ DC.W 172*16,128+1536
+ DC.W $FFFF,$FFFF
+
+FUSK 
+ DC.W 172*16,255+1536
+ DC.W $FFFF,$FFFF
+ 
+I=8
+
+RUSK 
+ DC.W 128*I,48+EM
+ DC.W 128*I,16+EM
+ DC.W 121*I,48+EM
+ DC.W 121*I,16+EM
+ DC.W 144*I,48+EM
+ DC.W 144*I,16+EM
+ DC.W 128*I,48+EM
+ DC.W 128*I,16+EM
+
+ DC.W 162*I,48+EM
+ DC.W 162*I,16+EM
+ DC.W 144*I,32+EM
+ DC.W 162*I,32+EM
+ DC.W 172*I,64+EM
+ DC.W 172*I,48+EM
+ DC.W 170*I,16+EM
+ DC.W $FFFF,$FFFF
+
+
+
+M44 ;HORSE SHIT
+ 
+ dc.w 128*u,32+V
+ dc.w 128*u,16
+ dc.w 162*u,16
+
+ dc.w 144*u,32+V
+ dc.w 144*u,16
+ dc.w 193*u,16
+
+ dc.w 162*u,32+V
+ dc.w 162*u,16
+ dc.w 193*u,16
+
+ dc.w 172*u,32+V
+ dc.w 172*u,16
+ dc.w 217*u,16
+
+M55
+ dc.w 214*u,8+3328
+ dc.w 193*u,255+V
+ dc.w 0,255+2304
+ dc.w 0,255+2304
+
+H=2560
+Y=2
+
+RR1 DC.W 0,3
+RUSKA 
+ DC.W 128*Y,8+H
+ DC.W 128*Y,16+H
+ DC.W 128*2,8+H
+ DC.W 121*Y,24+H
+
+ DC.W 121*2,8+H
+
+ DC.W 144*Y,8+H
+ DC.W 144*Y,16+H
+ DC.W 144*2,8+H
+
+ DC.W 128*Y,10+H
+ DC.W 0,2+2304
+ DC.W 128*Y,10+H
+ DC.W 0,2+2304
+
+ DC.W 128*Y,10+H
+ DC.W 0,2+2304
+
+
+ DC.W 162*Y,20+H
+ DC.W 162*2,8+H
+ DC.W 144*Y,16+H
+ DC.W 162*Y,16+H
+ DC.W 172*Y,64+H
+ DC.W $FFFF,$FFFF
+
+RBAS
+ dc.w 193*q,32+256
+ DC.W $FFFF,$FFFF
+
+RBAS1
+ dc.w 193*16,32
+ dc.w 193*4,16
+ dc.w 193*4,16
+
+ DC.W 128/8,1 +256 
+ DC.W 193/4,47 +256 
+ dc.w 193*4,16
+ DC.W $FFFF,$FFFF
+
+N=2
+TIKAT
+ DC.W 0,15+1024
+ DC.W 193/N,1+RE
+ DC.W 0,7+1024
+ DC.W 217/N,1+RE
+ DC.W 0,7+1024
+ DC.W 162/N,1+RE
+
+ dC.w 6,4+768    ;DRUM
+
+ DC.W 0,4+1024
+ DC.W 193/N,1+RE
+ DC.W 0,7+1024
+ DC.W 193/N,1+RE
+
+ DC.W 0,15+1024
+ DC.W $FFFF,$FFFF
+
+
+DRMMM
+ DC.W 0,15+1024
+ DC.W 193/N,1+RE
+
+ DC.W 19,5+768
+ DC.W 0,3+1024
+ DC.W 217/N,1+RE
+ DC.W 0,7+1024
+
+ DC.W 162/N,1+RE
+ DC.W 0,7+1024
+ DC.W 193/N,1+RE
+ DC.W 0,7+1024
+ 
+ DC.W 19,5+768
+ DC.W 0,3+1024
+ DC.W 193/N,1+RE
+ DC.W 0,7+1024
+ DC.W $FFFF,$FFFF
+
+DRMMM1
+ DC.W 0,15+1024
+ DC.W 193/N,1+RE
+
+ DC.W 0,8+1024
+ DC.W 217/N,1+RE
+ DC.W 0,7+1024
+
+ DC.W 162/N,1+RE
+ DC.W 0,7+1024
+ DC.W 193/N,1+RE
+ DC.W 0,7+1024
+ 
+ DC.W 0,8+1024
+ DC.W 193/N,1+RE
+ DC.W 0,7+1024
+ DC.W $FFFF,$FFFF
+
+
+
+
+

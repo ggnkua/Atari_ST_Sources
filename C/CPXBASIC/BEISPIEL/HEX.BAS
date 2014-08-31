@@ -1,0 +1,6 @@
+10  INPUT 'x ',x
+20  PRINT BIN$ x
+30  PRINT OCT$ x
+40  PRINT STR$ x
+50  PRINT HEX$ x
+60  GOTO 10

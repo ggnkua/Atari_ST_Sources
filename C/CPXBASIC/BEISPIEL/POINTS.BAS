@@ -1,0 +1,6 @@
+10  REM Male zuf„llige Punkte
+20  USING$:CLS:PRINT CHR$ 27,'fAbbruch mit ESC'
+30  WHILE
+40    PLOT RAND 256,RAND 176
+50  WEND INKEY$=CHR$(27)
+60  CLS:PRINT CHR$ 27,'e'

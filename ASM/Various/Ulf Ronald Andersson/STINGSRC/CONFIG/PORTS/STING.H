@@ -1,0 +1,31 @@
+#define STING 0  	/* TREE */
+#define VERSION 3  	/* OBJECT in TREE #0 */
+#define MODE 4  	/* OBJECT in TREE #0 */
+#define PNAME 5  	/* OBJECT in TREE #0 */
+#define ACTIVE 7  	/* OBJECT in TREE #0 */
+#define TYPE 9  	/* OBJECT in TREE #0 */
+#define BOX_ADDR 10  	/* OBJECT in TREE #0 */
+#define IP_ADDR 12  	/* OBJECT in TREE #0 */
+#define SUBNET 13  	/* OBJECT in TREE #0 */
+#define MTU 14  	/* OBJECT in TREE #0 */
+#define ROUTE 16  	/* OBJECT in TREE #0 */
+#define BOX_PAR1 18  	/* OBJECT in TREE #0 */
+#define PP_SLIP 21  	/* OBJECT in TREE #0 */
+#define PP_PPP 23  	/* OBJECT in TREE #0 */
+#define PP_VJHC 26  	/* OBJECT in TREE #0 */
+#define PP_LAN 29  	/* OBJECT in TREE #0 */
+#define PP_N_LAN 30  	/* OBJECT in TREE #0 */
+#define BOX_PAR2 31  	/* OBJECT in TREE #0 */
+#define BOX_PAR3 34  	/* OBJECT in TREE #0 */
+#define SBL_HARD 36  	/* OBJECT in TREE #0 */
+#define SBL_MAC 37  	/* OBJECT in TREE #0 */
+#define BOX_PAR4 38  	/* OBJECT in TREE #0 */
+#define BOX_PAR5 39  	/* OBJECT in TREE #0 */
+#define BOX_PAR6 40  	/* OBJECT in TREE #0 */
+#define BOX_PAR7 41  	/* OBJECT in TREE #0 */
+#define M_PORT 43  	/* OBJECT in TREE #0 */
+#define M_IP 44  	/* OBJECT in TREE #0 */
+#define SAVE 46  	/* OBJECT in TREE #0 */
+#define SET 48  	/* OBJECT in TREE #0 */
+#define CANCEL 49  	/* OBJECT in TREE #0 */
+
