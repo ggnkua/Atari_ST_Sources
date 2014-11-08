@@ -1,0 +1,256 @@
+' Supercharger est par d‚faut le p‚riph‚rique
+' num‚ro 3 sur la chaine DMA
+' Ceci peut ˆtre adapt‚ … votre isntallation:
+'
+sc_id%=3
+'
+GOSUB charge_tool_box
+'
+' Installation
+'
+inst_ok%=0
+GOSUB installe
+inst_ok%=1
+'
+' Initialisation, Supercharger va ˆtre reboot‚
+'
+GOSUB boot
+'
+' chargement du programme PC
+'
+pc$=SPACE$(200)             ! je pr‚vois large...
+pc%=VARPTR(pc$)
+chemin$="\*.*"
+pc_taille%=@lire_fichier("PC_PROG.BIN",pc%)
+'
+' envoi dans Supercharger de notre petit programme
+' … l'adresse 0300:0000
+'
+GOSUB ecrire_donnees(pc%,&H3000000,pc_taille%)
+'
+' ex‚cute le petit programme
+'
+GOSUB exec_prog(&H3000000)
+'
+' lui fait faire les conversions
+'
+zone$=SPACE$(32000)
+texte%=VARPTR(zone$)
+DO
+  PRINT AT(1,1);"Choisir un fichier texte    "
+  FILESELECT chemin$,"",file$
+  EXIT IF LEN(file$)=0                      ! fin de boucle si ANNULER
+  txt_taille%=@lire_fichier(file$,texte%)
+  GOSUB envoie_octet(txt_taille%/256)       ! la taille en 2 octets
+  GOSUB envoie_octet(txt_taille% MOD 256)
+  GOSUB envoie_donnees(texte%,txt_taille%)  ! puis tout le fichier
+  '
+  ' ici, on laisse travailler Supercharger et on profite
+  ' du temps pour indiquer le chemin de sauvegarde
+  '
+  PRINT AT(1,1);"Sauver le fichier transform‚"
+  FILESELECT chemin$,file$,file$             ! chemin sauvegarde
+  '
+  ' maintenant, on peut r‚cup‚rer le texte tout en
+  ' majuscules.
+  '
+  GOSUB recoit_donnees(texte%,txt_taille%)  ! r‚cupŠre en majuscules
+  IF LEN(file$)
+    BSAVE file$,texte%,txt_taille%          ! si OK, ‚crit sur disque
+  ENDIF
+LOOP
+'
+' Notre programme se termine
+' on va vider le TOS et le PC de la tool box
+'
+GOSUB envoie_octet(0)                       ! code $0001 pour annuler
+GOSUB envoie_octet(1)                       ! le programme PC
+'
+' fin du programme, on d‚sinstalle les routines du TRAP 4
+'
+GOSUB desinstalle
+'
+' Ben c'est fini
+'
+END
+'
+' ********************************************
+' LES PROCEDURES ET FONCTIONS DE COMMUNICATION
+' ********************************************
+'
+' Chargement de la TOOL_BOX, initialisation des adresses
+'
+PROCEDURE charge_tool_box
+  ass$=SPACE$(18000)
+  BLOAD "TOOL_BOX.BIN",VARPTR(ass$)
+  tool_box%=VARPTR(ass$)    ! pour ex‚cuter les routines
+  id%=tool_box%+2           ! numero de fonction
+  dma%=tool_box%+4          ! numero de peripherique
+  taille%=tool_box%+6       ! taille des donnees
+  pc_adr%=tool_box%+10      ! adresse cote PC
+  tos_adr%=tool_box%+14     ! adresse cote Atari
+  retour%=tool_box%+18      ! code renvoy‚ (ok ou erreur)
+  octet%=tool_box%+22       ! valeur renvoy‚e par 'recoit_octet'
+RETURN
+'
+' met notre routine pricipale sur le Trap #4
+' et renvoit: 0=Ok, -9=d‚j… install‚, -10=trap #4 occup‚
+'
+PROCEDURE installe
+  LPOKE id%,-1
+  GOSUB trap
+RETURN
+'
+' ote notre routine du trap #4
+' pr‚f‚rable de ne pas l'oublier avant de quitter
+' renvoit: 0=Ok, -1=tool box non charg‚e
+'
+PROCEDURE desinstalle
+  DPOKE id%,-2
+  GOSUB trap
+RETURN
+'
+' r‚initialise Supercharger et lance cot‚ PC un programme
+' de communication attendant nos ordres
+'
+PROCEDURE boot
+  DPOKE id%,3
+  DPOKE dma%,sc_id%
+  GOSUB trap
+RETURN
+'
+' dans le mode 'Esclave', envoit des donnes … un
+' endroit pr‚cis de la m‚moire de Supercharger
+'
+PROCEDURE ecrire_donnees(source%,dest%,nombre%)
+  DPOKE id%,6
+  DPOKE dma%,sc_id%
+  LPOKE taille%,nombre%
+  LPOKE tos_adr%,source%
+  LPOKE pc_adr%,dest%
+  GOSUB trap
+RETURN
+'
+' dans le mode 'Esclave', lit des donn‚es d'un
+' endroit pr‚cis de la m‚moire de Supercharger
+'
+PROCEDURE lire_donnees(source%,dest%,nombre%)
+  DPOKE id%,7
+  DPOKE dma%,sc_id%
+  LPOKE taille%,nombre%
+  LPOKE tos_adr%,dest%
+  LPOKE pc_adr%,source%
+  GOSUB trap
+RETURN
+'
+' Passe du mode 'Esclave' au mode 'Coop‚ratif' en lan‡ant
+' l'ex‚cution d'un programme cot‚ PC (programme pr‚alablement
+' charg‚ avec ecrire_donnees). C'est ensuite au programme PC
+' de pr‚voir le retour au mode 'Esclave' si il le d‚sire.
+'
+PROCEDURE exec_prog(adresse%)
+  DPOKE id%,8
+  DPOKE dma%,sc_id%
+  LPOKE pc_adr%,adresse%
+  GOSUB trap
+RETURN
+'
+' en mode 'Coop‚ratif', envoie des donn‚es au programme PC
+' il faut que ce dernier ait pr‚vu l'envoi d'un bloc.
+'
+PROCEDURE envoie_donnees(source%,nombre%)
+  DPOKE id%,4
+  DPOKE dma%,sc_id%
+  LPOKE taille%,nombre%
+  LPOKE tos_adr%,source%
+  GOSUB trap
+RETURN
+'
+' en mode 'Coop‚ratif', re‡oit des donn‚es du programme PC
+' il faut que ce dernier ait pr‚vu la r‚ception d'un bloc.
+'
+PROCEDURE recoit_donnees(dest%,nombre%)
+  DPOKE id%,5
+  DPOKE dma%,sc_id%
+  LPOKE taille%,nombre%
+  LPOKE tos_adr%,dest%
+  GOSUB trap
+RETURN
+'
+' en mode 'Coop‚ratif', envoit un octet dans le registre
+' AL du PC. Il faut qu ce dernier ait pr‚vu de recevoir un octet.
+'
+PROCEDURE envoie_octet(valeur%)
+  DPOKE id%,9
+  DPOKE dma%,sc_id%
+  LPOKE taille%,valeur%
+  GOSUB trap
+RETURN
+'
+' en mode 'Coop‚ratif', re‡oit la valeur du registre AL du PC
+' Il faut que ce dernier ait pr‚vu l'envoi de AL.
+'
+FUNCTION recoit_octet
+  DPOKE id%,10
+  DPOKE dma%,sc_id%
+  GOSUB trap
+  RETURN PEEK(octet%)
+ENDFUNC
+'
+' proc‚dure g‚n‚rique g‚rant les erreurs en retour de l'appel
+' elle est limit‚e au minimum et stoppe le programme au moindre
+' problŠme.
+'
+PROCEDURE trap
+  LOCAL code%,i%
+  ' en cas de plantage sur cette ligne
+  ' essayez de la remplacer par
+  ' CALL tool_box%
+  VOID C:tool_box%()
+  code%=LPEEK(retour%)
+  IF code%<0
+    RESTORE erreurs
+    FOR i%=1 TO -code%
+      READ a$
+    NEXT i%
+    ALERT 1,a$,1,"Terminer",i%
+    IF inst_ok%=1
+      GOSUB desinstalle
+    ENDIF
+    END
+  erreurs:
+    DATA "ToolBOX non charg‚e !"
+    DATA "Erreur -2 | (R‚serv‚e...)"
+    DATA "Supercharger non branch‚!"
+    DATA "Time out: pas de r‚ponse!"
+    DATA "Erreur de protocole!"
+    DATA "Hot Key ABIO reconnue!"
+    DATA "Erreur -7 | (R‚serv‚e...)"
+    DATA "Appel de fonction ill‚gal!"
+    DATA "ToolBOX d‚j… install‚e!"
+    DATA "Le trap #4 est d‚j… en service!"
+  ENDIF
+RETURN
+'
+' lit un fichier en RAM a l'adresse indiquee puis
+' renvoit sa taille
+'
+FUNCTION lire_fichier(fich$,adr%)
+  LOCAL i%,path$,j%
+  i%=1
+  DO
+    j%=INSTR(i%,chemin$,"\")
+    EXIT IF j%=0
+    i%=j%+1
+  LOOP
+  path$=LEFT$(chemin$,i%-1)
+  IF path$="\"
+    path$=""
+  ENDIF
+  path$=path$+fich$
+  OPEN "i",#1,path$
+  i%=LOF(#1)
+  CLOSE #1
+  BLOAD path$,adr%
+  RETURN i%
+ENDFUNC
