@@ -1,0 +1,189 @@
+               MC68000 Instruction Execution Times
+
+               -----------------------------------
+
+
+
+  These are the times for instructons, most of it is self explainitory.
+  On the ST at 8 Mhz you need to round all times to multiples of four.
+  i.e 10 becomes 12. Please note that  execution instruction times are
+  generally irrelevant when you have a instruction cache, ie a greater
+  than 68000  processor and i doubt that these numbers will hold true
+  for anything except a 68000 even if you turn the cache off. Also note
+  that it isn't usually worth spending ages trying to optimise your code
+  by using faster instructions. If you're code is too slow, then you will
+  probably need to use a different method to achieve you're aims.
+
+
+
+MOVE Instructions:
+
+                                               d(an
+.b.w/.l    dn   an     (an)  (an)+ -(an) d(an) .Ri)  abs.s abs.l
+
+
+
+dn         4/4   4/4    8/12  8/12  8/14 12/16 14/18 12/16 16/20
+an         4/4   4/4    8/12  8/12  8/14 12/16 14/18 12/16 16/20
+(an)       8/12  8/12  12/20 12/20 12/20 16/24 18/26 16/24 20/28
+(an)+      8/12  8/12  12/20 12/20 12/20 16/24 18/26 16/24 20/28
+-(an)     10/14  10/14 14/22 14/22 14/22 18/26 20/28 18/26 22/30
+d(an)     12/16  12/16 16/24 16/24 16/24 20/28 22/30 20/28 24/32
+d(an,Ri)  14/18  14/18 18/26 18/26 18/26 22/30 24/32 22/30 26/34
+Abs.s     12/16  12/16 16/24 16/24 16/24 20/28 22/30 20/28 24/32
+Abs.l     16/20  16/20 20/28 20/28 20/28 24/32 26/34 24/32 28/36
+d(pc)     12/16  12/16 16/24 16/24 16/24 20/28 22/30 20/28 24/32
+d(pc,Ri)  14/18  14/18 18/26 18/26 18/26 22/30 24/32 22/30 26/34
+Immediate  8/12   8/12 12/20 12/20 12/20 16/24 18/26 16/24 20/28
+
+
+
+----------------------------------------------------------------------
+
+ Time to calculate effective addresses.
+
+                                 d(an                    d(pc
+          (an) (an)+ -(an) d(an) .Ri)  abs.s abs.l d(pc) .ri)  Imm
+ .b.w/.l  4/8  4/8   6/10  8/12  10/14 8/12  12/16 8/12  10/14 4/8
+
+
+The time taken to calculate the effective address must be added to
+       instructions that affect a memory address.
+
+----------------------------------------------------------------------
+
+Standard Instructions:
+
+.b.w/.l   ea,an   ea,dn   dn,mem
+
+add       8/6(8)  4/6(8)  8/12    (8) time if effective address
+and        -      4/6(8)  8/12    is direct
+cmp       6/6     4/6      -
+divs       -      158max   -          Add effective address times
+divu       -      140max   -          from above for memory
+eor        -      4/8     8/12        addresses.
+muls       -      70max    -
+mulu       -      70max    -
+or         -      4/6(8)  8/12
+sub       8/6(8)  4/6(8)  8/12
+
+
+
+Immediate Instructions
+
+
+.b.w/.l  #,dn  #,an  #,mem
+
+addi     8/16   -    12/20
+addq     4/8   8/8    8/12   Moveq.l only
+andi     8/16   -    12/20   nbcd+tas.b only
+cmpi     8/14  8/14   8/12
+eori     8/16   -    12/20   scc false/true
+moveq     4     -      -
+ori      8/16   -    12/20   add effective address
+subi     8/16   -    12/20   times from above
+subq     4/8   8/8    8/12   for mem addresses
+clr      4/6   4/6   8/12    single operand
+nbcd      6     6     8      instructions
+neg      4/6   4/6   8/12
+negx     4/6   4/6   8/12
+not      4/6   4/6   8/12
+scc      4/6   4/6   8/8
+tas       4     4    10
+tst      4/4   4/4   4/4
+
+
+
+Shift/rotate instructions.
+
+
+.b.w/.l   dn    an   mem
+
+asr,asl   6/8   6/8   8      memory is byte only
+lsr,lsl   6/8   6/8   8      register add 2x
+ror,rol   6/8   6/8   8      shift count
+roxr,roxl 6/8   6/8   8
+
+
+
+                                  d(an                   d(pc
+         (an)  (an)+  -(an) d(an) .ri) abs.s abs.l d(pc) .ri)
+
+jmp      8     -      -     10    14   10    12    10    14
+jsr      16    -      -     18    22   18    20    18    22
+lea      4     -      -     8     12   8     12    8     12
+pea      12    -      -     16    20   16    20    16    20
+
+movem t=4
+m>r      12    12     -     16    18   16    20    16    18
+
+movem t=5
+r>m      8     -      8     12    14   12    16    -     -
+
+
+movem   add t x number of registers for .w
+movem   add 2t x number of registers for .l
+
+
+
+Bit Instructions
+
+
+.b/.l   register .l    memory .b
+           only        only
+
+bchg     8/12          8/12
+bclr    10/14          8/12
+bset     8/12          8/12
+btst     6/10          4/8
+
+
+
+Exceptions       Periods
+
+Address Error    50
+Bus Error        50
+Interrupt        44
+Illegal Instr.   34
+Privilege Viol.  34
+Trace            34
+
+
+
+Other Instructions
+
+add effective address times from above for memory addresses
+
+
+.b.w/.l  dn,dn    m,m
+
+addx      4/8    18/30
+cmpm       -     12/20
+subx      4/8    18/30
+abcd       6      18      .b only
+sbcd       6      18      .b only
+Bcc      .b/.w   10/10      8/12
+bra      .b/.w   10/10       -
+bsr      .b/.w   18/18       -
+DBcc      t/f      10      12/14
+chk        -       40 max    8
+trap       -       34        -
+trapv      -       34        4
+
+                 reg<>mem
+
+movep   .w/.l   16/24
+
+              Reg   Mem                     Reg
+
+andi to ccr   20     -       move from usp    4
+andi to sr    20     -       nop              4
+eori to ccr   20     -       ori to ccr      20
+eori to sr    20     -       ori to sr       20
+exg            6     -       reset          132
+ext            4     -       rte             20
+link          18     -       rtr             20
+move to ccr   12    12       rts             16
+move to sr    12    12       stop             4
+move from sr   6     8       swap             4
+move to usp    4     -       unlk            12

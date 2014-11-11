@@ -1,0 +1,10 @@
+'$include D:\HBASIC\HGT\toolbox.bas
+'$INCLUDE D:\HBASIC\HGT\DIALOG.BAS
+'$include D:\HBASIC\HGT\menu.bas
+'$include D:\HBASIC\HGT\objcext.bas
+'$include D:\HBASIC\HGT\xformdo.bas
+'$include D:\HBASIC\HGT\window.bas
+'$include D:\HBASIC\HGT\objwind.bas
+'$include D:\HBASIC\HGT\formwind.bas
+'$include D:\HBASIC\HGT\textwind.bas
+'$include D:\HBASIC\HGT\popup.bas

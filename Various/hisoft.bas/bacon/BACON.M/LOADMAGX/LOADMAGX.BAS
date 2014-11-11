@@ -1,0 +1,26 @@
+CLS
+IF FEXISTS("C:\AUTO\MAGXBOOT.PRX") THEN NAME "C:\AUTO\MAGXBOOT.PRX" AS "C:\AUTO\MAGXBOOT.PRG"
+LOCATE 12,22:PRINT "Do you want to load MagiC? (Y/N)"
+DO
+INCR i
+A$=INKEY$
+SELECT CASE A$
+	CASE=="Y"
+		LOCATE 12,22:PRINT "Do you want to load MagiC? (Y/N) Yes"
+		CLS:SYSTEM
+	CASE=="y"
+		LOCATE 12,22:PRINT "Do you want to load MagiC? (Y/N) Yes"
+		CLS:SYSTEM
+	CASE=="N"
+		LOCATE 12,22:PRINT "Do you want to load MagiC? (Y/N) No"
+		NAME "C:\AUTO\MAGXBOOT.PRG" AS "C:\AUTO\MAGXBOOT.PRX"
+		CLS:SYSTEM
+	CASE=="n"
+		LOCATE 12,22:PRINT "Do you want to load MagiC? (Y/N) No"
+		NAME "C:\AUTO\MAGXBOOT.PRG" AS "C:\AUTO\MAGXBOOT.PRX"
+		CLS:SYSTEM
+END SELECT
+LOOP UNTIL i>4000
+LOCATE 12,22:PRINT "Do you want to load MagiC? (Y/N) Yes"
+CLS
+SYSTEM
