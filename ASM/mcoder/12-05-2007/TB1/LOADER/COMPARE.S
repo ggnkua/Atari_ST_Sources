@@ -1,0 +1,6 @@
+	LEA	$40040,A0
+	LEA	$50040,A1
+O:	CMPM.L	(A0)+,(A1)+
+	BEQ.S	O
+	ILLEGAL
+

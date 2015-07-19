@@ -1,0 +1,325 @@
+	opt	o+
+ecran = $78000
+;
+; calcul des points d'un polygone
+;
+; 07/06/90 fait en 30 minutes !!! donc non test‚...
+;  attention, on doit OBLIGATOIREMENT calculer tous les points de chaque
+;   segment parce que ‡a merderait quand ‡a clippe
+;  en plus ‡a permet d'‚viter d'avoir … effacer le tableau des Y !!!
+;
+; manquent :
+;	- un clipping en Y
+;	- on peut enlever les divisions en calculant les points de la maniŠre
+;	  suivante :
+;			add.l	PENTE,x
+;			swap	x
+;			move	(a6)+,(a6)+
+;			move	x,-4(a6)
+;			swap	x
+;	avec PENTE lu dans une table
+;
+PLOT	MACRO
+	move	(a6)+,(a6)+
+	move	d0,-4(a6)
+	ENDM
+;
+; remarques :
+;	- au lieu de :
+;			move	(a6)+,(a6)+
+;			move	d0,-4(a6)
+;	  on peut mettre :
+;			move	2(a6),(a6)+
+;			move	d0,(a6)+
+;
+; entr‚e :
+;	SEGMENTS contient les coordonn‚es des points projet‚s
+; sortie :
+;	d6 = Y minimum du polygone
+;	d7 = Y maximum
+;	CALCULES contient les coordonn‚es X pour chaque Y
+;
+nbseg = 3
+polycalc
+	move	#199,d6		;Y minimum
+	moveq	#0,d7		;Y maximum
+	lea	segments,a0
+	move	#nbseg-1,-(sp)
+1$	movem	(a0),d0/d1/d2/d3
+	addq	#4,a0
+	bsr.s	drawline
+	subq	#1,(sp)
+	bne.s	1$
+	addq	#2,sp
+	movem	(a0),d0/d1
+	movem	segments,d2/d3
+	bsr.s	drawline
+;
+; d6=Ymin
+; d7=Ymax
+;
+	lea	calcules,a6
+	move	d6,d0
+	mulu	#160,d0
+	lea	ecran,a5
+	add	d0,a5
+	sub	d6,d7		;d7=nb lignes-1
+	add	d6,d6
+	add	d6,d6
+	add	d6,a6		;ptr d‚but
+	bsr	draw_all
+
+	illegal
+	section	data
+segments:
+	dc.w	319,0		;triangle d‚mo
+	dc.w	0,150
+	dc.w	50,199
+;	ds.b	4*nbseg		;entr‚e
+	section	bss
+calcules:
+	ds.l	200		;sortie
+	section	text
+;
+; entr‚e :
+;	d0=X0
+;	d1=Y0
+;	d2=X1
+;	d3=Y1
+;
+noline:	rts
+drawline:
+	cmp	d1,d3		;du haut vers le bas
+	beq.s	noline		;pas 2 Y pareils !!!!
+	bhs.s	1$
+	exg	d0,d2
+	exg	d1,d3
+1$
+	cmp	d6,d1
+	bhs.s	.notmin
+	move	d1,d6		;nouveau Y minimum
+.notmin
+	cmp	d7,d3
+	bls.s	.notmax
+	move	d3,d7		;nouveau Y maximum
+.notmax
+	sub	d1,d3
+;
+; on peut aussi utiliser le code suivant (gain de 4 cycles … la fin)
+;
+	ifeq	1
+;
+; on se base sur le fait que chaque Y passe une fois par ici...
+;
+	cmp	d6,d1
+	bhs.s	.notmin
+	move	d1,d6		;nouveau Y minimum
+.notmin
+	cmp	d7,d1
+	bls.s	.notmax
+	move	d1,d7		;nouveau Y maximum
+.notmax
+	sub	d1,d3		;du haut vers le bas
+	bhs.s	1$
+	exg	d0,d2
+	neg	d3
+	add	d3,d1
+1$
+	endc
+
+;
+; ici d1=Y haut
+;     d3=nb pixels verticalement=pente en Y
+;
+; calcul des pointeurs pour ‚criture donn‚es
+;
+	add	d1,d1
+	add	d1,d1		;Y*4
+	lea	calcules,a6
+	add	d1,a6
+	PLOT
+
+	move	d3,d4
+	lsr	#1,d4		;d4=cumul
+	move	d3,d1
+	subq	#1,d1		;d1=nb lignes-1
+
+	sub	d0,d2
+;
+; d0=X d‚part
+; d2=delta X
+; d3=delta Y
+;
+	bpl.s	pente_droite
+pente_gauche
+	neg	d2
+	cmp	d2,d3
+	bhs.s	.dysupdx
+.dxsupdy
+	ext.l	d2		;bit 15=0->cleare poids fort
+	divu	d3,d2		;d2.h=reste
+	move	d2,d5
+	swap	d2		;nouveau deltax
+.dx1
+	sub	d2,d4
+	bhs.s	.dx2
+	add	d3,d4
+	subq	#1,d0
+.dx2
+	sub	d5,d0
+	PLOT
+	dbra	d1,.dx1
+	rts
+.dysupdx
+.dy1
+	sub	d2,d4
+	bhs.s	.dy2
+	add	d3,d4
+	subq	#1,d0
+.dy2
+	PLOT
+	dbra	d1,.dy1
+	rts
+pente_droite
+	sub	d0,d2
+	cmp	d2,d3
+	bhs.s	.dysupdx
+.dxsupdy
+	ext.l	d2		;clear poids fort
+	divu	d3,d2
+	move	d2,d5
+	swap	d2
+.dx1
+	sub	d2,d4
+	bhs.s	.dx2
+	add	d3,d4
+	addq	#1,d0
+.dx2
+	add	d5,d0
+	PLOT
+	dbra	d1,.dx1
+	rts
+.dysupdx
+.dy1
+	sub	d2,d4
+	bhs.s	.dy2
+	add	d3,d4
+	addq	#1,d0
+.dy2
+	PLOT
+	dbra	d1,.dy1
+	rts
+;
+; affichage des lignes horizontales
+;
+; entr‚e :
+;	d7=nb lignes-1 … afficher
+;	a5=ptr ‚cran 1Šre ligne
+;	a6=ptr coords 1Šre ligne
+;
+clipgau
+	cmp	#319,d1
+	bls.s	1$
+	move	d1,d2
+	eor	d0,d2
+	bpl.s	noaff
+	cmp	#319,d1
+	sge	d1
+	ext	d1
+	and	#319,d1
+1$	cmp	#319,d0
+	sge	d0
+	ext	d0
+	and	#319,d0
+	bra.s	noclip
+
+noaff:	lea	160(a5),a5
+	dbra	d7,draw_all2
+	rts
+draw_all:
+	lea	masques(pc),a1
+	moveq	#-1,d5
+draw_all2
+	movem	(a6)+,d0/d1
+	cmp	#319,d0
+	bhi.s	clipgau
+	cmp	#319,d1
+	bls.s	noclip
+	sge	d1
+	ext	d1
+	and	#319,d1
+noclip
+
+	cmp	d0,d1
+	bhs.s	1$		;d0=Xgauche
+	exg	d0,d1		;d1=Xdroite
+1$
+	moveq	#$f,d2
+	and	d1,d2
+	eor	d2,d1
+	lsr	#1,d1
+	move.l	a5,a0
+	add	d1,a0
+	ADD	D2,D2
+	move	masque1-masques(a1,d2.w),d6	;masque droit
+	add	d1,d1
+	sub	d0,d1
+	bgt.s	.more16
+
+	neg	d1
+	ADD	D1,D1
+	and	masque2-2-masques(a1,d1.w),d6
+	or	d6,(a0)
+	lea	160(a5),a5
+	dbra	d7,draw_all2
+	rts
+.more16
+	or	d6,(a0)
+	moveq	#$f,d2
+	and	d1,d2
+	eor	d2,d1
+	lsr	#1,d1
+	sub	d1,a0
+	CMP	#1*8,D1
+	BHS.S	.OK
+	ILLEGAL
+.OK
+	LSR	#1,D1
+	neg	d1
+	jmp	.last(pc,d1.w)
+x	set	19
+	rept	19
+	move	d5,x*8(a0)
+x	set	x-1
+	endr
+	NOP
+	NOP
+.last
+	add	d2,d2
+	move	masque2-masques(a1,d2.w),d6
+	or	d6,(a0)
+	lea	160(a5),a5
+	dbra	d7,draw_all2
+	rts
+masques
+masque2
+;	DC.W	$0001,$0003,$0007,$000F
+;	DC.W	$001F,$003F,$007F,$00FF
+;	DC.W	$01FF,$03FF,$07FF,$0FFF
+;	DC.W	$1FFF,$3FFF,$7FFF,$FFFF
+;
+	DC.W	$FFFF,$7FFF,$3FFF,$1FFF
+	DC.W	$0FFF,$07FF,$03FF,$01FF
+	DC.W	$00FF,$007F,$003F,$001F
+	DC.W	$000F,$0007,$0003,$0001
+
+;	DC.W	$FFFF,$7FFF,$3FFF,$1FFF
+;	DC.W	$0FFF,$07FF,$03FF,$01FF
+;	DC.W	$00FF,$007F,$003F,$001F
+;	DC.W	$000F,$0007,$0003,$0001
+;	dc.w	0
+masque1
+	DC.W	$8000,$C000,$E000,$F000
+	DC.W	$F800,$FC00,$FE00,$FF00
+	DC.W	$FF80,$FFC0,$FFE0,$FFF0
+	DC.W	$FFF8,$FFFC,$FFFE,$FFFF
