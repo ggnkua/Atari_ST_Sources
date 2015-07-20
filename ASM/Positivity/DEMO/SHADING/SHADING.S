@@ -454,12 +454,12 @@ clear_4_bpl:		; First see if the box is visible.
 ; The interesting routines.
 
 rotation:
-  include	'..\shading\rotation.s'
+  include	'e:\demos\positivi.ty\passion\shading\rotation.s'
 
   Section TEXT
   
 shaded_poly:
-  include	'..\shading\shade.s'
+  include	'e:\demos\positivi.ty\passion\shading\shade.s'
     
 ; *************************************************************************
   Section DATA
@@ -494,7 +494,7 @@ N set N+160
  endr
 
 inverses:
-  incbin	'..\shading\inverses.xxx'
+  incbin	'e:\demos\positivi.ty\passion\shading\inverses.xxx'
 
 colors:
   dc.w	$000,$d00,$e00,$e88

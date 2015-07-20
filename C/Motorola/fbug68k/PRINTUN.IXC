@@ -1,0 +1,153 @@
+#include "userdef.h"
+#include <varargs.h>
+
+int print(p,va_alist)
+char *p;                /* pointer to format string            */
+va_dcl
+{
+va_list params;
+char **pfmt;
+char pch;
+char *pformat;          /* pointer to format string */
+int pargument;  /* pointer to arg's for fmt string */
+int pvalue;
+char pchar;
+int pi,pj, pk;
+int pmaxwidth,pmaxpoints;
+char pstr[MAXLINE];
+unsigned ptemp;
+
+        va_start(params);
+        pformat = p;    /* set "format" to the format string */
+
+/*      Depending on the machine being used the variable number of parameters
+        passed to this function will not necessarily be accessed by incrementing
+        the pointer.  So a variable argument function will have to be used  */
+
+
+        while (pch = *pformat++)
+        {
+                if (pch == '%')
+                {
+                        pch = *pformat++;
+                        pi = 1;
+                        pmaxwidth = 0;
+                        pmaxpoints = 0;
+                        while ((pch >= '0') && (pch <= '9'))
+                        {
+                                pmaxwidth = (pch - '0') * pi + pmaxwidth;
+                                pi = pi * 10;
+                                pch = *pformat++; 
+                        }
+                        if (pch == '.')
+                        {
+                                pch = *pformat++;
+                                while ((pch >= '0') && (pch <= '9'))
+                                {
+                                        pmaxpoints = (pch - '0') * pi + pmaxpoints;
+                                        pi = pi * 10;
+                                        pch = *pformat++;
+                                }
+                        }
+			*pformat--;
+			pch = *pformat++;
+                        switch (pch)
+                        {
+                        case 'd':
+                        case 'u':
+                        case 'x':
+                        case 'X':
+                                pvalue = va_arg(params,int);
+                                if (pch == 'd' && pvalue < 0)
+                                {
+                                        putch(TERMINAL,'-');
+                                        pvalue = -pvalue;
+                                }
+
+                                if (pch == 'X' && pvalue < 0)
+                                {
+                                        pvalue = -pvalue;
+                                }
+
+                                if ((pch == 'd') || (pch == 'u'))
+                                        pk = 10;
+                                else
+                                        pk = 16;
+                                pi = 0;
+                                ptemp = pvalue;
+
+                                do
+                                {
+                                        pstr[pi] = (ptemp % pk) + '0';
+                                        if (pstr[pi] > '9')
+                                                pstr[pi] = pstr[pi] - ':' + 'A';
+                                        pi++;
+                                }
+                                while ((ptemp = ptemp / pk) > 0);
+
+                                pstr[pi] = ENDSTR;
+                                pj = --pi;
+                                for (pk = 0; pk < pj; pk++)
+                                {
+                                        pch = pstr[pk];
+                                        pstr[pk] = pstr[pj];
+                                        pstr[pj--] = pch;
+                                }
+
+				if(pmaxwidth != 0)
+				{
+	                                pmaxwidth = pmaxwidth - pi - 1;
+       		                        while (pmaxwidth > 0)
+       		                        {
+       		                                putch(TERMINAL,'0');
+       		                                pmaxwidth--;
+       		                        }
+					pi = 0;
+       		                        while (pmaxwidth < 0)
+       		                  	{
+       	                                	pmaxwidth++;
+						pi++;
+       	                        	}
+				}
+				else
+					pi = 0;
+
+                                for (;pstr[pi] != ENDSTR;pi++)
+                                        putch(TERMINAL,pstr[pi]);
+                                break;
+
+                        case 'c':
+                                pchar = va_arg(params,int);
+                                putch(TERMINAL,pchar);
+                                break;
+        
+                        default:
+                                pformat--;  /* need to back up if unrecognized */
+                                putch(TERMINAL,'%');
+
+                        }               /* switch c */
+
+                }
+                else if (pch == '\n')
+                {
+                        putch(TERMINAL,CR);     /* cr */
+                        putch(TERMINAL,LF);     /* lf */
+                }
+                else
+                {
+                        putch(TERMINAL,pch); 
+                }
+        } 
+        va_end(params);
+  }
+
+/* ************************************************************ */
+
+putch(addr,data)
+int addr,data;
+{
+        putchar(data);
+}
+
+/* ************************************************************ */
+

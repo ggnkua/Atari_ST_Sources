@@ -1,0 +1,143 @@
+#include"userdef.h"
+
+int print(pfmt)
+char *pfmt;
+{
+  return(format(&pfmt));	/* pass ptr to fmt ptr */
+}
+
+int format(pfmt)
+char **pfmt;		/* pointer to pointer to format string */
+{
+register char pch;
+register char *pformat;		/* pointer to format string */
+register char *pargument;		/* pointer to arg's for fmt string */
+register int pvalue,pi,pj, pk;
+int pmaxwidth,pmaxpoints;
+char pstr[MAXLINE];
+unsigned ptemp;
+
+	pformat = *pfmt++;	/* set "format" to the format string */
+	pargument = (char *) pfmt;
+
+	while (pch = *pformat++)
+  	{
+  		if (pch == '%')
+    		{
+    			pch = *pformat++;
+			pi = 1;
+			pmaxwidth = 0;
+			pmaxpoints = 0;
+    			while ((pch >= '0') && (pch <= '9'))
+			{
+				pmaxwidth = (pch - '0') * pi + pmaxwidth;
+				pi = pi * 10;
+				pch = *pformat++; 
+			}
+    			if (pch == '.')
+			{
+				pch = *pformat++;
+				while ((pch >= '0') && (pch <= '9'))
+				{
+					pmaxpoints = (pch - '0') * pi + pmaxpoints;
+					pi = pi * 10;
+					pch = *pformat++;
+				}
+			}
+			*pformat--;
+			pch = *pformat++;
+			switch (pch)
+      			{
+      			case 'd':
+      			case 'u':
+			case 'x':
+			case 'X':
+       				pvalue = *(int *)pargument;
+        			pargument += 4;
+				if (pch == 'd' && pvalue < 0)
+	  			{
+	  				putch(TERMINAL,'-');
+  	  				pvalue = -pvalue;
+	  			}
+                                if (pch == 'X' && pvalue < 0)
+                                {
+                                        pvalue = -pvalue;
+                                }
+				if ((pch == 'd') || (pch == 'u'))
+					pk = 10;
+				else
+					pk = 16;
+				pi = 0;
+				ptemp = pvalue;
+				do
+				{
+					pstr[pi] = (ptemp % pk) + '0';
+					if (pstr[pi] > '9')
+						pstr[pi] = pstr[pi] - ':' + 'A';
+					pi++;
+				}
+				while ((ptemp = ptemp / pk) > 0);
+				pstr[pi] = ENDSTR;
+				pj = --pi;
+				for (pk = 0; pk < pj; pk++)
+				{
+					pch = pstr[pk];
+					pstr[pk] = pstr[pj];
+					pstr[pj--] = pch;
+				}
+				if(pmaxwidth != 0)
+				{
+	                                pmaxwidth = pmaxwidth - pi - 1;
+       		                        while (pmaxwidth > 0)
+       		                        {
+       		                                putch(TERMINAL,'0');
+       		                                pmaxwidth--;
+       		                        }
+					pi = 0;
+       		                        while (pmaxwidth < 0)
+       		                  	{
+       	                                	pmaxwidth++;
+						pi++;
+       	                        	}
+				}
+				else
+					pi = 0;
+				for (pi=0;pstr[pi] != ENDSTR;pi++)
+					putch(TERMINAL,pstr[pi]);
+				break;
+
+      			case 'c':
+        			pvalue = *(int *)pargument;
+        			pargument += 4;
+				putch(TERMINAL,pvalue);
+				break;
+	
+      			default:
+				pformat--;  /* need to back up if unrecognized */
+				putch(TERMINAL,'%');
+
+      			}		/* switch c */
+
+    		}
+  		else if (pch == '\n')
+    		{
+    			putch(TERMINAL,CR);	/* cr */
+    			putch(TERMINAL,LF);	/* lf */
+    		}
+  		else
+    			putch(TERMINAL,pch); 
+	} 
+  }
+
+/* ************************************************************ */
+
+putch(addr,data)
+int addr,data;
+{
+	while ((get8(addr + SRX) & 4) == 0)
+		;
+	put8(addr + TBX,data);
+}
+
+/* ************************************************************ */
+

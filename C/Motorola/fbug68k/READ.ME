@@ -1,0 +1,105 @@
+
+
+           ************* READ_ME ************** READ_ME **************
+
+There are presently 2 versions of the monitor within this file.  The difference
+between the two is how the versions expect the I/O to be handled.  The routines 
+that handle I/O are getline.c and print.c.  There are 2 versions of each of 
+these routines in this directory.  The versions with the "unix" suffix are 
+designed to be used on a system which needs the putch() and getch() functions 
+called to handle I/O.  The versions with the "port" suffix are designed to be 
+used on systems where I/O is handled through a specific memory location (ie. the
+location of the DUART on the target system).  
+
+The errata shown below from version 1.0 has been noted and corrected.
+
+
+
+
+ERRATA version 1.0 of the 68FBUG monitor:
+
+1.  The rd command, when printing out the SR, displays this register as a 32 
+    bit register.  Changing the "else if" statement on line 409 in the general.c
+    file from:
+
+		OLD
+    409:	else if(reg[i].name[1] == 'S' && reg[i].name[2]=='R')
+
+		NEW
+    409:	else if((reg[i].name[0] == 'S' && reg[i].name[1]=='R') ||
+    410:		(reg[i].name[1] == 'S' && reg[i].name[2]=='R')) 
+
+    corrects this discrepancy.  If this change is not made then the lower 16bits
+    actually displayed for the SR register correspond with the actual contents
+    of the SR register.
+
+2.  If .bss ram space is not intialized to '0' then use of the 68030 version,
+    with NO coprocessor, of the monitor may crash (ie. continual "BUS ERROR" 
+    loops) as a result of using the rd command.  This problem stims from 
+    attempting to print the SR register in the printreg routine found in the 
+    general.c file. Line number 413 of this file should be removed.
+
+		OLD
+    413:		i++;
+
+		NEW
+    DELETED
+
+3.  The rm command, when printing out the SR, displays this register
+    as a 32 bit register.  Changing the "if" statement on line 527 in the
+    general.c file from:
+
+		OLD
+    527:	if(reg[i].name[1] == 'S' && reg[i].name[2]=='R')
+
+		NEW
+    527:	if((reg[i].name[0] == 'S' && reg[i].name[1]=='R') ||
+    528:		(reg[i].name[1] == 'S' && reg[i].name[2]=='R')) 
+
+4.  The rm command, when modifying a 16 bit register, allows these registers
+    to be modified to contain values larger than 16 bits.  Then displays these
+    values when executing either rm or rd commands.  Only the lower 16 bits
+    are correct.  Modifying the printunix.c and/or printport.c routines as shown
+    below corrects the display to only showing 16 bits.
+
+    ADD before "switch(pch)" statement on line 52 in printunix.c
+    ADD before "switch(pch)" statement on line 47 in printport.c
+
+ 			*pformat--;
+ 			pch = *pformat++;
+
+    OLD lines 94-100 printunix.c
+    OLD lines 86-92  printport.c
+                                 pmaxwidth = pmaxwidth - pi - 1;
+                                 while (pmaxwidth > 0)
+                                 {
+                                         putch(TERMINAL,'0');
+                                         pmaxwidth--;
+                                 }
+                                 for (pi=0;pstr[pi] != ENDSTR;pi++)
+    NEW lines 96-115 printunix.c
+    NEW lines 88-105 printport.c
+ 
+ 				if(pmaxwidth != 0)
+ 				{
+ 	                                pmaxwidth = pmaxwidth - pi - 1;
+        		                        while (pmaxwidth > 0)
+        		                        {
+        		                                putch(TERMINAL,'0');
+        		                                pmaxwidth--;
+        		                        }
+ 					pi = 0;
+        		                        while (pmaxwidth < 0)
+        		                  	{
+        	                                	pmaxwidth++;
+ 						pi++;
+        	                        	}
+ 				}
+ 				else
+ 					pi = 0;
+ 
+                                 for (;pstr[pi] != ENDSTR;pi++)
+
+5.  Minor change in coldport/coldunix.c routines to relflect correct version
+    on powerup.
+

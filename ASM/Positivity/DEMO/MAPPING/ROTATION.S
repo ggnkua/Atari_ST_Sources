@@ -176,4 +176,4 @@
   Section DATA
 
 .sinus:
-  incbin	'..\mapping\sinus.xxx'
+  incbin	'e:\demos\positivi.ty\passion\mapping\sinus.xxx'

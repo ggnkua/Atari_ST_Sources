@@ -1,0 +1,163 @@
+         TTL       IEEE FORMAT EQUIVALENT FLOAT TO ASCII (IEFFPA)
+***************************************
+* (C) COPYRIGHT 1981 BY MOTOROLA INC. *
+***************************************
+ 
+*******************************************************
+*            IEFFPA - FLOATING POINT TO ASCII         *
+*     IEEE FORAMT EQUIVALENT FAST FLOATING POINT      *
+*                                                     *
+*    INPUT:  D7 - IEEE FORMAT FLOATING POINT NUMBER   *
+*                                                     *
+*    OUTPUT: D7 - THE BASE TEN EXPONENT IN BINARY     *
+*                 FOR THE RETURNED FORMAT IF NOT      *
+*                 A NAN (NOT-A-NUMBER) OR INFINITY    *
+*            SP - DECREMENTED BY 14 AND               *
+*                 POINTING TO THE CONVERTED           *
+*                 NUMBER IN ASCII FORMAT              *
+*                                                     *
+*            ALL OTHER REGISTERS UNAFFECTED           *
+*                                                     *
+*           MAXIMUM STACK USAGE:    48 BYTES          *
+*                                                     *
+*    CONDITION CODES:                                 *
+*            N - SET IF THE RESULT IS NEGATIVE        *
+*            Z - SET IF THE RESULT IS ZERO            *
+*            V - SET IF RESULT IS NAN (NOT-A-NUMBER)  *
+*            C - CLEARED                              *
+*            X - UNDEFINED                            *
+*                                                     *
+*    RETURNED FORMAT:                                 *
+*                                                     *
+*            {S}{'.'}{DDDDDDDD}{'E'}{S}{DD}           *
+*            <     FRACTION   >< EXPONENT >           *
+*                                                     *
+*        WHERE  S - SIGN OF MANTISSA OR EXPONENT      *
+*                   ('+' OR '-')                      *
+*               D - DECIMAL DIGIT                     *
+*                                                     *
+*        STACK OFFSET OF RESULT  S.DDDDDDDDESDD       *
+*        AFTER RETURN            00000000001111       *
+*                                01234567890123       *
+*                                                     *
+*                     -- OR --                        *
+*                                                     *
+*        '>>            '    IF POSITIVE INFINITY     *
+*        '<<            '    IF NEGATIVE INFINITY     *
+*        '..            '    IF NAN (NOT-A-NUMBER)    *
+*                                                     *
+*        EXAMPLES  '+.12000000E+03' 120               *
+*                  '+.31415927E+01' PI                *
+*                  '+.10000000E-01' ONE-HUNDREDTH     *
+*                  '-.12000000E+03' MINUS 120         *
+*                  '>>            ' PLUS INFINITY     *
+*                  '<<            ' NEGATIVE INFINITY *
+*                  '..            ' NAN (NOT-A-NUMBER)*
+*                                                     *
+*     NOTES:                                          *
+*       1) NORMALIZED NON-ZERO VALUES NOT WITHIN THE  *
+*          RANGES BELOW ARE RETURNED AS SIGNED ZEROES *
+*          OR SIGNED INFINITIES, WHICHEVER IS APPRO-  *
+*          RIATE:                                     *
+*                     18                           -20*
+*      9.22337177 X 10  > +VALUE >  5.42101070 X 10   *
+*                                                     *
+*                     18                           -20*
+*     -9.22337177 X 10  > -VALUE > -2.71050535 X 10   *
+*                                                     *
+*          DENORMALIZED NUMBERS ARE NOT WITHIN THE    *
+*          ABOVE RANGE AND ARE TREATED AS SIGNED      *
+*          ZEROES.
+*       1) THE BINARY BASE 10 EXPONENT IS RETURNED    *
+*          IN D7 TO FACILITATE CONVERSIONS TO         *
+*          OTHER FORMATS.                             *
+*       2) EVEN THOUGH EIGHT DIGITS ARE RETURNED, THE *
+*          MAXIMUM BINARY PRECISION POSSIBLE IS 24    *
+*          BINARY BITS WHICH EQUATES TO 7.167 DECIMAL *
+*          DIGITS.  SEE THE MC68344 USER'S GUIDE FOR  *
+*          FURTHER DETAILS ON CONVERSION ACCURACY.    *
+*       3) THE STACK IS LOWERED 14 BYTES BY THIS      *
+*          ROUTINE.  THE RETURN ADDRESS TO THE CALLER *
+*          IS REPLACED BY A PORTION OF THE RESULTS.   *
+*       4) REGISTER D7 IS MEANINGLESS IF THE VALUE IS *
+*          A NAN (NOT-A-NUMBER) OR INFINITY.          *
+*       5) FOR NEGATIVE ZEROES, THIS ROUTINE CALLS    *
+*          THE FAST FLOATING POINT ASCII CONVERSION   *
+*          ROUTINE WITH A SPECIAL PSUEDO MINUS ZERO.  *
+*          THIS INSURES THE RETURN OF A MINUS SIGN.   *
+*                                                     *
+*******************************************************
+         PAGE
+IEFFPA   IDNT      1,1  IEEE FORMAT EQUIVALENT CONVERT TO ASCII
+         OPT       PCS
+ 
+         SECTION    9
+ 
+         XDEF      IEFFPA    ENTRY POINT DEFINITION
+ 
+         XREF      FFPFPA    FAST FLOATING POINT CONVERT ROUTINE
+         XREF      FFPFIEEE  FAST FLOATING POINT FROM IEEE CONVERT
+         XREF      FFPCPYRT  COPYRIGHT NOTICE
+ 
+EXPMSK   EQU       $7F800000 IEEE FORMAT EXPONENT MASK
+SGNIFMSK EQU       $007FFFFF IEEE FORMAT SIGNIFICAND MASK
+VBIT     EQU       $02       CONDITION CODE REGISTER "V" BIT
+FFPPSZRO EQU       $41       FFPFPA ROUTINE PSUEDO ZERO CONVERT VALUE
+ 
+********************
+* CONVERT TO ASCII *
+********************
+IEFFPA   MOVE.L   D6,-(SP) SAVE WORD REGISTER
+* TEST FOR NAN OR INFINITY OR ZERO
+         MOVE.L    D7,D6     COPY OVER ARGUMENT
+         ADD.L     D6,D6     SHIFT OUT SIGN BIT
+         BEQ.S     IEFZERO   BRANCH FOR SPECIAL CASE OF ZERO
+         AND.L     #EXPMSK<<1,D6     ISOLATE EXPONENT
+         CMP.L     #EXPMSK<<1,D6     ? ALL ONES
+         BNE.S     IEFCNVRT  BRANCH IF NOT
+         MOVE.L    D7,D6     COPY AGAIN
+         AND.L     #SGNIFMSK,D6  ? CHECK FOR NAN
+         BEQ.S     IEFISI    BRANCH IF NOT - IS INFINITY
+         MOVE.W    #'..',D6  SETUP NAN SYMBOL
+         BRA.S     IEFPLC    AND GO RETURN IT
+ 
+* FORCE FFP FORMAT OVERFLOW TO INFINITY
+IEFRTI   MOVE.L    (SP)+,D7  RELOAD ORIGINAL IEEE VALUE
+* IS INFINITY
+IEFISI   MOVE.W    #'>>',D6  SETUP PLUS INFINITY SYMBOL
+         TST.L     D7        ? IS IT PLUS
+         BPL.S     IEFPLC    BRANCH IF SO
+         MOVE.W    #'<<',D6 SETUP MINUS INFINITY SYMBOL
+IEFPLC   SUB.L     #6,SP     SET STACK TO RETURN DATA ADDRESS
+         MOVE.L    10(SP),-(SP) MOVE RETURN ADDRESS BELOW THAT
+         MOVE.L    10(SP),-(SP) MOVE SAVED WORK REGISTER BELOW THAT
+         MOVE.W    D6,8(SP)  INSERT SYMBOL TO RETURN
+         MOVE.L    #'    ',D6 PREPARE PADDING FOR 12 BLANKS
+         MOVE.L    D6,10(SP) MOVE FIRST 4 IN
+         MOVE.L    D6,14(SP) MOVE NEXT 4 IN
+         MOVE.L    D6,18(SP) MOVE LAST 4 IN
+         MOVE.L    (SP)+,D6  RESTORE CALLER'S D6
+         CMP.B     #'.',4(SP) ? IS THIS A NAN
+         BNE.S     IEFNOTN   BRANCH IF NOT NAN
+         OR.B      #VBIT,SR  SET "V" BIT
+         RTS                 RETURN TO CALLER
+IEFNOTN  TST.L     D7        SET CONDITION CODE
+         RTS                 RETURN TO CALLER
+ 
+* ZERO VALUE - CONVERT ZERO WITH PROPER SIGN BY FEEDING A PSUEDO ZERO
+IEFSMALL MOVE.L    (SP)+,D6  RELOAD ORIGINAL IEEE VALUE
+         ADD.L     D6,D6     SHIFT SIGN INTO "X" BIT
+IEFZERO  MOVE.L    #FFPPSZRO<<1,D7 SETUP PSUEDO ZERO FOR INTERNAL CALL
+         ROXR.B    #1,D7     SHIFT IN PROPER SIGN ("X" HAS SIGN)
+         BRA.S     IEFTOAS   NOW CONVERT THIS TO ASCII
+ 
+* NOT A SPECIAL CASE - CONVERT USING FAST FLOATING POINT ROUTINES
+IEFCNVRT MOVE.L    D7,-(SP)  SAVE ORIGINAL VALUE IF WE NEED THE SIGN
+         BSR       FFPFIEEE  CONVERT TO FAST FLOATING POINT
+         BVS.S     IEFRTI    OVERFLOW - BRANCH TO TREAT AS AN INFINITY
+         BEQ.S     IEFSMALL  BRANCH IF FORCED TO ZERO, EXPONENT TOO SMALL
+         ADD.L     #4,SP     RID STORED VALUE FROM STACK
+IEFTOAS  MOVE.L    (SP)+,D6  RESTORE CALLERS D6
+         BRA       FFPFPA    AND CONTINUE ON THROUGH WITH FFP CONVERSION
+ 
+         END

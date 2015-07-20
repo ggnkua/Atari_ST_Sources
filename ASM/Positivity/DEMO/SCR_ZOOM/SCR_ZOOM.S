@@ -345,7 +345,7 @@ wait_vbl:
 ; The interesting routine.
 
 print_box:
-  include	'..\scr_zoom\box.s'
+  include	'a:\scr_zoom\box.s'
       
 ; ************************************************************************
   Section DATA
@@ -362,7 +362,7 @@ text:
  even
 
 fonts:
-  incbin	'..\scr_zoom\fonts.xxx'
+  incbin	'a:\scr_zoom\fonts.xxx'
 
 points:
 N set -(nb_points*8)

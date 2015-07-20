@@ -621,12 +621,12 @@ clear_4_bpl:		; First see if the box is visible.
 ; The interesting routines.
 
 rotation:
-  include	'..\mapping\rotation.s'
+  include	'e:\demos\positivi.ty\passion\mapping\rotation.s'
 
   Section TEXT
   
 mapped_poly:
-  include	'..\mapping\map.s'
+  include	'e:\demos\positivi.ty\passion\mapping\map.s'
     
 ; *************************************************************************
   Section DATA
@@ -661,10 +661,10 @@ N set N+160
  endr
 
 inverses:
-  incbin	'..\mapping\inverses.xxx'
+  incbin	'e:\demos\positivi.ty\passion\mapping\inverses.xxx'
 
 x_movements:
-  incbin	'..\mapping\x_mov.xxx'
+  incbin	'e:\demos\positivi.ty\passion\mapping\x_mov.xxx'
   
 colors:
   dc.w	$000,$000,$ccc,$777
@@ -676,7 +676,7 @@ y_pos:
   dc.w	250
 
 nounours:
-  incbin	'..\mapping\nounours.xxx'
+  incbin	'e:\demos\positivi.ty\passion\mapping\nounours.xxx'
 
 zoom:
   dc.w	70
@@ -688,7 +688,7 @@ angle_inc:
   dc.w	7
 
 sinus2:
-  incbin	'..\mapping\sinus_2.xxx' 
+  incbin	'e:\demos\positivi.ty\passion\mapping\sinus_2.xxx' 
          
 ; *************************************************************************
   Section BSS

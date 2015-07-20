@@ -1,0 +1,187 @@
+       TTL     IEEE FORMAT EQUIVALENT COMPARE AND TEST (IEFCMP/IEFTST)
+***************************************
+* (C) COPYRIGHT 1981 BY MOTOROLA INC. *
+***************************************
+ 
+*************************************************************
+*                     IEFCMP                                *
+*  FAST FLOATING POINT IEEE FORMAT EQUIVALENT COMPARE       *
+*                                                           *
+*          (RESULT IS TEST OF DESTINATION - SOURCE)         *
+*                                                           *
+*  INPUT:  D6 - IEEE FORMAT NUMBER (SOURCE)                 *
+*          D7 - IEEE FORMAT NUMBER (DESTINATION)            *
+*                                                           *
+*  OUTPUT: THE CONDITION CODE REGISTER IS SET TO DIRECTLY   *
+*           REFLECT THE FOLLOWING RESULTS OF THE TEST:      *
+*                                                           *
+*                  EQ         EQUAL                         *
+*                  NE         NOT EQUAL                     *
+*                  GT         GREATER THAN                  *
+*                  GE         GREATER THAN OR EQUAL         *
+*                  LT         LESS THAN                     *
+*                  LE         LESS THAN OR EQUAL            *
+*                  CC         ORDERED                       *
+*                  CS         UNORDERED                     *
+*                                                           *
+*      CONDITION CODES:                                     *
+*              N - SET FOR PROPER ARITHMETIC TESTS          *
+*              Z - SET IF RESULT IS ZERO                    *
+*              V - SET FOR PROPER ARITHMETIC TESTS          *
+*              C - SET IF RESULT IS UNORDERED               *
+*                  (NOT-A-NUMBER OPERAND)                   *
+*              X - UNDEFINED                                *
+*                                                           *
+*               ALL REGISTERS TRANSPARENT                   *
+*                                                           *
+*            MAXIMUM STACK USAGE:    32 BYTES               *
+*                                                           *
+*  NOTES:                                                   *
+*    1) THE UNORDERED CONDITION RESULTS WHENEVER ANY        *
+*       ARGUMENT IS A NAN (NOT-A-NUMBER).  THE CARRY BIT    *
+*       WILL BE RETURNED ON IF THIS OCCURS.  THIS IS        *
+*       DIFFERENT FROM MOST OF THE OTHER MC68344 IEEE FORMAT*
+*       EQUIVALENT OPERATIONS IN THAT THEY RETURN THE "V"   *
+*       BIT SET WHICH IS HANDY FOR USE OF THE "TRAPV"       *
+*       INSTRUCTION.  HOWEVER, "V" MUST BE USED HERE FOR THE*
+*       SIGNED ARITHMETIC COMPARISONS.                      *
+*    2) IEFCMP RECOGNIZES AND PROPERLY HANDLES ALL SINGLE-  *
+*       PRECISION IEEE FORMAT VALUES AND DATA TYPES.        *
+*    3) INFINITIES ARE HANDLED IN AFFINE MODE (PLUS AND     *
+*       MINUS INFINITIES ARE ALLOWED AND OPERATE WITH NON-  *
+*       INFINITIES).                                        *
+*                                                           *
+*************************************************************
+         PAGE
+ 
+IEFCMP IDNT    1,3  IEEE FORMAT EQUIVALENT COMPARE/TEST
+ 
+         OPT       PCS
+ 
+         XREF      9:IEFDOP  DOUBLE ARGUMENT CONVERSION ROUTINE
+       XREF    FFPCPYRT        COPYRIGHT NOTICE
+ 
+         SECTION  9
+         XDEF      IEFCMP    IEEE FORMAT COMPARE
+ 
+CCRCBIT  EQU       $01       CONDITION CODE REGISTER "C" BIT MASK
+ 
+***********************
+* COMPARE ENTRY POINT *
+***********************
+IEFCMP   MOVE.L    D7,-(SP)  SAVE CALLERS ORIGINAL D7
+         BSR.S     IEFCALL   CALL INTERNAL ROUTINE (NANS WILL RETURN HERE)
+* IF CONTROL RETURNS HERE IT WILL BE FROM IEFDOPT DETECTING A NAN
+         MOVE.L    (SP)+,D7  RESTORE ORIGINAL D7 IN CASE ARG1 NAN AND NOT ARG2
+         OR.B      #CCRCBIT,SR   SET "C" BIT FOR UNORDERED (NAN ENCOUNTERED)
+         RTS                    RETURN TO CALLER WITH "C" SET
+ 
+* INTERNAL SUBROUTINE.  SPLIT NAN'S AWAY VIA CALL TO IEFDOP.  IEFDOP WILL
+* DIRECTLY RETURN TO THE CODE ABOVE IF IT DETECTS EITHER OPERAND TO BE A NAN.
+IEFCALL  BSR       IEFDOP    DECODE BOTH OPERANDS
+         BRA.S     IEFNRM    +0 NORMALIZED RETURN (OR ZERO OR DENORMALIZED)
+         BRA.S     IEFINF2   +2 ARG2 INFNITY RETURN
+         BRA.S     IEFINF1   +4 ARG1 INFNITY RETURN
+*                                       +6 BOTH INFINITY RETURN
+ 
+* BOTH VALUES ARE INFINITY.  WE CAN SUBSTITUTE +1 AND -1 VALUES FOR PLUS AND
+* MINUS INFINITY RESPECTIVELY, AND CONTINUE WITH A STRAIGHT ARITHMETIC COMPARE.
+         MOVE.L    #30,D5    SETUP SHIFT COUNT FOR SIGN PROPAGATION
+         ASR.L     D5,D7     CHANGE TO PLUS OR MINUS ONE
+         ASR.L     D5,D6     CHANGE TO PLUS OR MINUS ONE
+         BRA.S     IEFDOCMP  NOW FINISH WITH STANDARD ARITHMETIC COMPARE
+ 
+* ARG2 IS INFINITY AND NOT ARG1 - SUBSTITUTE $80000000 (LOWEST BINARY VALUE)
+* FOR NEGATIVE INFINITY TO FORCE PROPER COMPARE
+IEFINF2  TST.L     D7        ? WAS THIS MINUS INFINITY
+         BPL.S     IEFINF2P  BRANCH IF OK TO COMPARE
+         LSL.L     #8,D7     CHANGE TO SMALLEST NEGATIVE NUMBER FOR COMPARE
+IEFINF2P BSR.S     IEFFIX1   RELOAD AND FIX ARG1 NEGATIVE ZEROES
+         BRA.S     IEFDOCMP  NOW FINISH WITH COMPARE
+ 
+* ARG1 IS INFINITY AND NOT ARG2 - SUBSTITUTE $80000000 (LOWEST BINARY VALUE)
+* FOR NEGATIVE INFINITY TO FORCE PROPER COMPARE
+IEFINF1  TST.L     D6        ? WAS THIS MINUS INFINITY
+         BPL.S     IEFDARG2  BRANCH IF NOT, OK TO USE
+         LSL.L     #8,D6     SET TO SMALLEST NEGATIVE VALUE
+         BRA.S     IEFDARG2  RELOAD AND FIX ARG2 NEGATIVE ZEROES
+ 
+* ALL NORMALIZED, DENORMALIZED, OR ZEROES RETURN HERE.
+* EXCEPT FOR MINUS ZEROES, A SIMPLE ARITHMETIC COMPARE CAN BE
+* DONE DIRECTLY ON THE ORIGINAL IEEE ARGUMENTS.  MINUS ZEROES ARE
+* CHANGED TO TRUE ARITHMETIC ZEROES.
+IEFNRM   BSR.S     IEFFIX1   LOAD AND FIX NEGATIVE ZEROES FOR FIRST ARGUMENT
+IEFDARG2 MOVE.L    16(SP),D7 RELOAD ARG2
+         ADD.L     D7,D7     TEST FOR PLUS OR MINUS ZERO
+         BEQ.S     IEFDOCMP  BR ZERO, USE TRUE ZERO FOR COMPARE
+         MOVE.L    16(SP),D7 RELOAD AND USE ORIGINAL VALUE
+IEFDOCMP TST.L     D6        ? ARG1 POSITIVE
+         BPL.S     IEFDOCP   BR POSITIVE
+         TST.L     D7        ? ARG2 POSITIVE
+         BPL.S     IEFDOCP   BR POSITIVE
+         EXG.L     D7,D6     BOTH NEGATIVE - DO REVERSE COMPARE
+IEFDOCP  CMP.L     D6,D7     PERFORM THE COMPARE (DESTINATION MINUS SOURCE)
+         AND.B     #$FF-CCRCBIT,SR FORCE "C" BIT OFF FOR ORDERED COMPARE
+         MOVEM.L   (SP)+,D3-D7 RESTORE CALLERS ORIGINAL REGISTERS
+         ADD.L     #8,SP     SKIP OVER INTERNAL RETURN ADDRESS AND SAVED D7
+         RTS                 RETURN WITH ARITHMETIC COMPARE CONDITION CODE
+ 
+* LOAD AND FIX ARGUMENT 1 FOR NEGATIVE ZEROES
+IEFFIX1  MOVE.L    12+4(SP),D6 RELOAD IT BACK
+         ADD.L     D6,D6     CHECK FOR PLUS OR MINUS ZERO
+         BEQ.S     IEFFIXR   RETURN IF ZERO TO USE TRUE ZERO
+         MOVE.L    12+4(SP),D6 RELOAD AND USE ORIGINAL VALUE
+IEFFIXR  RTS                 RETURN TO CALLER
+         PAGE
+*************************************************************
+*                     IEFTST                                *
+*  FAST FLOATING POINT IEEE FORMAT EQUIVALENT TEST          *
+*                                                           *
+*          (RESULT IS TEST OF DESTINATION MINUS ZERO)       *
+*                                                           *
+*  INPUT:  D7 - IEEE FORMAT NUMBER (DESTINATION)            *
+*                                                           *
+*  OUTPUT: THE CONDITION CODE REGISTER IS SET TO DIRECTLY   *
+*           REFLECT THE FOLLOWING RESULTS OF THE TEST:      *
+*                                                           *
+*                  EQ         EQUAL ZERO                    *
+*                  NE         NOT EQUAL ZERO                *
+*                  PL         POSITIVE VALUE                *
+*                  MI         NEGATIVE VALUE                *
+*                  VC         NOT A NAN (NOT-A-NUMBER)      *
+*                  VS         NAN (NOT-A-NUMBER)            *
+*                                                           *
+*      CONDITION CODES:                                     *
+*              N - SET IF NEGATIVE                          *
+*              Z - SET IF ZERO                              *
+*              V - SET IF NAN (NOT-A-NUMBER)                *
+*              C - UNDEFINED                                *
+*              X - UNDEFINED                                *
+*                                                           *
+*               ALL REGISTERS TRANSPARENT                   *
+*                                                           *
+*            TOTAL STACK USAGE:    24 BYTES                 *
+*                                                           *
+*  NOTES:                                                   *
+*    1) IEFCMP RECOGNIZES AND PROPERLY HANDLES ALL SINGLE-  *
+*       PRECISION IEEE FORMAT VALUES AND DATA TYPES.        *
+*                                                           *
+*************************************************************
+         PAGE
+ 
+         XREF      9:IEFSOP  SINGLE ARGUMENT CONVERSION ROUTINE
+         XREF      9:IEFRTOD7 RETURN ORIGINAL D7 TO CALLER AS RESULT
+ 
+         XDEF      IEFTST    IEEE FORMAT TEST
+ 
+********************
+* TEST ENTRY POINT *
+********************
+IEFTST   BSR       IEFSOP    SEPARATE OUT NANS BACK TO CALLER
+         NOP                 +0 NORMALIZED ZERO OR DENORMALIZED
+*                                       +2 ARGUMENT WAS INFINITY
+ 
+* MERELY RETURN WITH D7 AS THE RESULT. CCR WILL BE SET PROPERLY
+         BRA       IEFRTOD7   RETURN OLD ORIGINAL D7
+ 
+         END

@@ -13,12 +13,24 @@
 time	equ	499
 ;249
 end_pos	equ	64*6
+rezo    equ     5000
 
 supervisor:
   move.l	#$0,-(sp)
   move.w	#$20,-(sp)
   trap	#$1	; User mode is shit....
   addq.l	#$6,sp
+
+Memorisation_pile:
+  move.l	d0,-(sp)
+
+Get_resolution:
+  move.w	#-1,-(sp)
+  move.w	#88,-(sp)
+  trap		#14
+  addq.l	#4,sp
+  move.w	d0,rezo	
+
 
 initialisations:	
   dc.w	$a00a	; Fuck the mouse.
@@ -38,7 +50,20 @@ initialisations:
   move.b	$ffff8203.w,old_screen+1
   move.b	$ffff820d.w,old_screen+2
 
-  move.b	#$0,$ffff8260.w
+  move.w	#$25,-(sp)
+  trap		#14	
+  addq.l	#2,sp
+
+;  move.w	#%100010,-(sp)
+;  move.w	#3,-(sp)
+  move.w	#-1,-(sp)
+  move.w	#-1,-(sp)
+  move.w	#5,-(sp)
+  trap		#14
+  add.l		#8,sp
+		
+
+;  move.b	#$0,$ffff8260.w
 
 ; ************************************************************************
 ; Generate the zooming routines.
@@ -222,7 +247,19 @@ the_end:
   trap	#$e	; Vsync
   addq.l	#$2,sp
 
-  move.b	old_rez,$ffff8260.w ; Restore screen features.
+  move.w	#$25,-(sp)
+  trap		#14	
+  addq.l	#2,sp
+
+  move.w	#rezo,-(sp)
+;  move.w	#3,-(sp)
+;  move.l	#-1,-(sp)
+;  move.l	#-1,-(sp)
+  move.w	#88,-(sp)
+  trap		#14
+  addq.l	#4,sp
+
+;  move.b	old_rez,$ffff8260.w ; Restore screen features.
   move.b	old_screen,$ffff8201.w
   move.b	old_screen+1,$ffff8203.w
   move.b	old_screen+2,$ffff820d.w
@@ -237,11 +274,14 @@ the_end:
   trap	#$e	; Vsync
   addq.l	#$2,sp
 
-  move.w	#$000,$ffff8240.w ; Devpac does not restore colors.
-  move.w	#$445,$ffff8242.w
-  move.w	#$445,$ffff8244.w
-  move.w	#$445,$ffff8246.w
-    
+;  move.w	#$000,$ffff8240.w ; Devpac does not restore colors.
+;  move.w	#$445,$ffff8242.w
+;  move.w	#$445,$ffff8244.w
+;  move.w	#$445,$ffff8246.w
+  		
+  move.w	#37,-(sp)
+  trap		#14	
+
   clr.w	-(sp)
   trap	#$1
 
@@ -347,22 +387,22 @@ wait_vbl:
 ; ************************************************************************
 
 generate:
-  include	'..\jelly\generate.s'
+  include	'E:\demos\positivi.ty\passion\jelly\generate.s'
   
 jelly_cube:
-  include	'..\jelly\gel_cube.s'
+  include	'E:\demos\positivi.ty\passion\jelly\gel_cube.s'
   
 ; ************************************************************************
   Section DATA
   
 colors1:
-  incbin	'..\jelly\fade1.xxx'
+  incbin	'E:\demos\positivi.ty\passion\jelly\fade1.xxx'
 
 colors2:
-  incbin	'..\jelly\fade2.xxx'
+  incbin	'E:\demos\positivi.ty\passion\jelly\fade2.xxx'
 
 movements:
-  incbin	'..\jelly\movement.xxx'
+  incbin	'E:\demos\positivi.ty\passion\jelly\movement.xxx'
 
 y_conv_table:		; Conv table for logo position ->adress.
 N set 72
@@ -372,14 +412,17 @@ N set N+160
  endr
 
 logo:
-  incbin	'..\jelly\pstvt.xxx'
+  incbin	'E:\demos\positivi.ty\passion\jelly\pstvt.xxx'
 
 image:
-  incbin	'..\jelly\brune2.xxx'
+  incbin	'E:\demos\positivi.ty\passion\jelly\brune2.xxx'
   
 ; ************************************************************************
-  Section BSS
+get_rezo
+	dc.w	1
 
+ section BSS
+  
 old_vbl:		; All the parameters for screen,
   ds.l	1	; and interrupts...
 old_timerc:
@@ -403,7 +446,7 @@ zoom_adr:
   ds.l	50	; Will contain the adresses of them.
 
 position:		; Adress in the movements.
-  ds.l	1
+  	ds.l	1
   
 old_logo_y1:
   ds.w	1
@@ -411,6 +454,11 @@ old_logo_y2:
   ds.w	1
 color_offset:
   ds.w	1
+
+ecran	ds.l	1
+        
+      
+        end 
   
   
   
