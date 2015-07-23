@@ -1,0 +1,66 @@
+         TTL       IEEE FORMAT EQUIVALENT ARCTANGENT (IEFATAN)
+***************************************
+* (C) COPYRIGHT 1981 BY MOTOROLA INC. *
+***************************************
+ 
+*************************************************
+*                  IEFATAN                      *
+*     IEEE FORMAT EQUIVALENT ARCTANGENT         *
+*                                               *
+*  INPUT:   D7 - IEEE FORMAT ARGUMENT           *
+*                                               *
+*  OUTPUT:  D7 - IEEE FORMAT ARCTANGENT RADIAN  *
+*                RESULT                         *
+*                                               *
+*     ALL OTHER REGISTERS TOTALLY TRANSPARENT   *
+*                                               *
+*  CONDITION CODES:                             *
+*        Z - SET IF RESULT IS ZERO              *
+*        N - CLEARED                            *
+*        V - SET IF RESULT IS NAN (NOT-A-NUMBER)*
+*            (SET IF THE INPUT ARGUMENT WAS NAN)
+*        C - UNDEFINED                          *
+*        X - UNDEFINED                          *
+*                                               *
+*          ALL OTHER REGISTERS TRANSPARENT      *
+*                                               *
+*          MAXIMUM STACK USED:   54 BYTES       *
+*                                               *
+*                                               *
+*  NOTES:                                       *
+*    1) SEE THE MC68344 USER'S GUIDE FOR DETAILS*
+*       ON IEEE FORMAT RANGE LIMITATIONS.       *
+*    2) SPOT CHECKS SHOW AT LEAST SIX DIGIT     *
+*       PRECISION ON ALL SAMPLED CASES.         *
+*                                               *
+*************************************************
+         PAGE
+IEFATAN  IDNT  1,1 IEEE FORMAT EQUIVALENT ARCTANGENT
+ 
+         OPT       PCS
+ 
+         SECTION   9
+ 
+         XDEF      IEFATAN                       ENTRY POINT
+ 
+         XREF      9:FFPATAN                FAST FLOATING POINT ARCTANGENT
+         XREF      9:IEFSOP            FRONT-END SINGLE OPERAND CONVERT
+         XREF      9:IEFTIEEE          BACK-END RETURN IEEE FORMAT
+         XREF      9:FFPFIEEE          FFP TO IEEE CONVERT ROUTINE
+         XREF      FFPCPYRT            COPYRIGHT STUB
+ 
+********************
+* ARCTANGENT ENTRY *
+********************
+ 
+* SAVE REGISTERS AND CONVERT ARGUMENT
+IEFATAN  BSR       IEFSOP    CONVERT THE SINGLE ARGUMENT
+         BRA.S     IEFNRM    +0 BRANCH NORMALIZED
+* ARGUMENT WAS INFINITE                  +2 INFINITY
+         BSR       FFPFIEEE  CONVERT TO MAXIMUM VALUES ALLOWED IN FFP FORMAT
+ 
+* ARGUMENT WAS NORMALIZED
+IEFNRM   BSR       FFPATAN   CALL FFP ARCTANGENT ROUTINE
+         BRA       IEFTIEEE  RETURN IN IEEE FORMAT
+ 
+         END

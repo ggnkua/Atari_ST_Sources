@@ -1,0 +1,46 @@
+      TTL     IEEE FORMAT EQUIVALENT INTEGER TO FLOAT (IEFIFP)
+************************************
+* (C) COPYRIGHT 1981 MOTORLA INC.  *
+************************************
+ 
+***********************************************************
+*    IEFIFP - IEEE FORMAT EQUIVALENT INTEGER TO FLOAT     *
+*                                                         *
+*      INPUT: D7 = FIXED POINT INTEGER (2'S COMPLEMENT)   *
+*      OUTPUT: D7 = IEEE FORMAT FLOATING POINT EQUIVALENT *
+*                                                         *
+*      CONDITION CODES:                                   *
+*                N - SET IF RESULT IS NEGATIVE            *
+*                Z - SET IF RESULT IS ZERO                *
+*                V - CLEARED (NOT A NAN)                  *
+*                C - UNDEFINED                            *
+*                X - UNDEFINED                            *
+*                                                         *
+*            REGISTERS ARE TRANSPARENT                    *
+*                                                         *
+*          MAXIMUM STACK USED:    28 BYTES                *
+*                                                         *
+*  NOTES:                                                 *
+*   1) SINCE A LONGWORD BINARY VALUE CONTAINS 31 BITS OF  *
+*      PRECISION WHICH IS MORE THAN THE EFFECTIVE 24 BITS *
+*      AVAILABLE WITH THE IEEE SINGLE-PRECISION FORMAT,   *
+*      INTEGERS OF GREATER THAN 24 BIT MAGNITUDE WILL BE  *
+*      ROUNDED AND IMPRECISE.                             *
+*                                                         *
+***********************************************************
+         PAGE
+      XDEF    IEFIFP      EXTERNAL NAME
+ 
+         XREF      9:FFPIFP  FAST FLOATING POINT INTEGER CONVERT
+         XREF      9:IEFTIEEE CONVERT FFP TO IEEE AND RETURN
+      XREF    FFPCPYRT    COPYRIGHT NOTICE
+ 
+IEFIFP IDNT    1,1  IEEE FORMAT EQUIVALENT INTEGER TO FLOAT
+ 
+         SECTION  9
+ 
+IEFIFP   MOVEM.L   D3-D7,-(SP) SAVE WORK REGISTERS
+         BSR       FFPIFP    CONVERT TO FAST FLOATING POINT FORMAT
+         BRA       IEFTIEEE  TO IEEE FORMAT, TEST, AND RETURN
+ 
+         END

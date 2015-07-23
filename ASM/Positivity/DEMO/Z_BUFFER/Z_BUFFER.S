@@ -30,6 +30,9 @@ initialisations:
   move.b	$ffff8201.w,old_screen
   move.b	$ffff8203.w,old_screen+1
   move.b	$ffff820d.w,old_screen+2
+  move.w	#$25,-(sp) 
+  trap	#$e	; Vsync
+  addq.l	#$2,sp
 
   move.b	#$0,$ffff8260.w
 
@@ -675,16 +678,19 @@ N set N-1
   Section DATA
 
 sinus:
-  incbin	'..\rotazoom\sinus.xxx'
+  incbin	'e:\demos\positivi.ty\passion\rotazoom\sinus.xxx'
   
 sfere96:
-  incbin	'..\z_buffer\96_sfere.xxx'
-sfere48:
-  incbin	'..\z_buffer\48_sfere.xxx'
+  incbin	'e:\demos\positivi.ty\passion\z_buffer\96_sfere.xxx'
+
+sfere48:  
+	incbin	'e:\demos\positivi.ty\passion\z_buffer\48_sfere.xxx'
+
 zsfere96:
-  incbin	'..\z_buffer\96_sfere.z'
+  incbin	'e:\demos\positivi.ty\passion\z_buffer\96_sfere.z'
+
 zsfere48:
-  incbin	'..\z_buffer\48_sfere.z'
+  incbin	'e:\demos\positivi.ty\passion\z_buffer\48_sfere.z'
 
 y_table:
 N set 0

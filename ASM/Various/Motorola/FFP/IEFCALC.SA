@@ -1,0 +1,539 @@
+         TTL       IEEE FORMAT EQUIVALENT - DESK CALCULATOR DRIVER
+***************************************
+* (C) COPYRIGHT 1981 BY MOTOROLA INC. *
+***************************************
+*  MODIFIED TO BE USABLE ON M68010  6/25/85 MBODINE
+ 
+******************************************
+* THIS IS A DESK-CALCULATOR DIAGNOSTIC   *
+* PROGRAM FOR THE MC68344 ROM IEEE FORMAT*
+* EQUIVALENT SUBROUTINES. THE INPUT      *
+* FORMAT IS NORMAL FORTRAN EXPRESSION    *
+* SYNTAX WITH AN OPTIONAL ASSIGNMENT     *
+* STATEMENT FOR THE ONLY VARIABLES "X"   *
+* AND "Y".  THE VARIABLES CAN BE USED IN *
+* EXPRESSIONS.  NO BLANKS ALLOWED.       *
+*                                        *
+* PLUS AND MINUS INIFINITY SYMBOLS ARE   *
+* >> AND <<.  A NAN IS REPRESENTED BY    *
+* TWO CONSECUTIVE PERIODS (..) OR BY NANX*
+* WHERE "X" IS A NUMBER FROM 1 TO 9 AND  *
+* IS PLACED INTO THE SIGNIFICAND PORTION *
+* OF THE NAN REPRESENTATION.             *
+*                                        *
+* A FLOATING POINT VALUE MAY BE ENTIRELY *
+* SPECIFIED IN HEXADECIMAL.  THIS IS DONE*
+* BY FOLLOWING A $ WITH EIGHT HEX DIGITS.*
+*                                        *
+* A SPECIAL DIADIC OPERATOR "?" PERFORMS *
+* A COMPARISON BETWEEN TWO VALUES REPORT-*
+* ING ALL VALID BRANCH CONDITIONS.       *
+*                                        *
+* ROUNDING (POWER OF TEN) IS SET WITH    *
+* AN "R=VALUE" STATEMENT (DEFAULT -100). *
+* FOR EXAMPLE, R=-1 ROUNDS TENTHS TO     *
+* UNITS.                                 *
+*                                        *
+*   EXAMPLES:      X=32.5                *
+*                                        *
+*                  Y                     *
+*                                        *
+*                  SQRT(5)*2E-3          *
+*                                        *
+*                  Y=X**.2+3.4           *
+*                                        *
+*                  10E-4*COS(Y-SIN(X))   *
+*                                        *
+*                  X=10E10+>>            *
+*                                        *
+*                  $7F80012F+ATAN(2)     *
+*                                        *
+*                  X=3.14159*..          *
+*                                        *
+*                  TEST(-0)              *
+*                                        *
+*                  3.14159*NAN1          *
+*                                        *
+*                  3.1?ABS(Y)            *
+*                                        *
+*  FUNCTIONS PROVIDED:        SQRT LOG   *
+*    EXP SIN COS TAN ATAN SINH COSH TANH *
+*    ABS NEG INT POWER (VIA ** OPERATOR) *
+*                                        *
+******************************************
+         PAGE
+         OPT       FRS,P=68010
+ 
+         XREF      IEFAFP,IEFFPA,IEFSQRT,IEFARND,IEFFPI,IEFIFP SUBROUTINES
+         XREF      IEFADD,IEFSUB,IEFDIV,IEFMUL,IEFCMP,IEFTST,IEFABS,IEFNEG
+         XREF      IEFSIN,IEFCOS,IEFTAN,IEFEXP,IEFLOG,IEFPWR,IEFATAN
+         XREF      IEFSINH,IEFCOSH,IEFTANH
+ 
+         XDEF      IEFCALC
+ 
+         SECTION   2
+ 
+******************************************
+* IEEE FORMAT EQUIVALENT  CALCULATOR     *
+*         VERSION 1.1    5/17/81         *
+******************************************
+ 
+*
+* AT LABEL 'INPUT' THE STACK POINTS TO THE INPUT BUFFER
+*
+* DURING CALCULATIONS A6 HOLDS THE ABOVE VALUE FOR ERROR ABORTS
+*
+ 
+EXPMSK   EQU.L     $7F800000 IEEE FORMAT EXPONENT MASK BITS
+ 
+IEFCALC  LEA       STACK,SP  LOAD STACK
+ 
+         BSR       MSG       GIVE BLANK LINE
+         DC.L      '        ' BEFORE HEADER
+         LEA       STRTM,A0  GIVE STARTUP MESSAGE
+         LEA       STRTME,A1 FOR STARTUP
+         BSR       PUT       PUT OUT FIRST LINE
+         LEA       STRTM2,A0 AND SECOND LINE
+         LEA       STRTM2E,A1 OF MESSAGE
+         BSR       PUT       CALL PUT ROUTINE
+         BSR       MSG       NOW BLANK LINE
+         DC.L      '       '
+         PAGE
+ 
+         LEA       -80(SP),SP ALLOCATE BUFFER
+         MOVE.L    SP,A6     SETUP ERROR RECOVERY FRAME POINTER
+ 
+INPUT    BSR       MSG       ISSUE PROMPT
+         DC.L      'READY'
+         MOVE.L    SP,A0     SETUP START ADDR
+         LEA       79(SP),A1 AND ENDING
+         BSR       GET       READ A LINE OF INPUT
+         MOVE.W    (SP),D0   GET FIRST TWO BYTES
+* TEST FOR 'QUIT' COMMAND
+         CMP.B     #'Q',(SP) ? "Q" COMMAND FOR QUIT
+         BEQ       QUIT
+* TEST FOR 'X=' ASSIGNMENT
+         LEA       2(SP),A0  DEFAULT ASSIGNMENT SCAN POSITION
+         CMP.W     #'X=',D0  ? ASSIGNMENT
+         BNE.S     NOTXASG   BRANCH IF NOT
+         BSR       INTRP     INTERPRET THE EXPRESSION
+         MOVE.L    D7,X      SAVE IN X
+         BRA.S     CALPRNT   PRINT OUT ITS VALUE
+* TEST FOR 'Y=' ASSIGNMENT
+NOTXASG  CMP.W     #'Y=',D0  ? Y ASSIGNMENT
+         BNE.S     NOTASG    BR NOT ASSIGNMENT
+         BSR       INTRP     INTERPRET THE EXPRESSION
+         MOVE.L    D7,Y      SAVE IN Y
+         BRA.S     CALPRNT    PRINT OUT ITS VALUE
+* TEST FOR 'R=' ROUNDING ASSIGNMENT
+NOTASG   CMP.W     #'R=',D0  ? ROUND SET
+         BNE.S     NOTRND    BRANCH NOT
+         BSR       INTRP     INTERPRET EXPRESSION
+         MOVE.L    D7,D1     SAVE FLOAT VALUE
+         BSR       IEFFPI    TO INTEGER
+         MOVE.L    D7,ROUND  SAVE ROUNDING FACTOR
+         MOVE.L    D1,D7     RESTORE FLOAT VALUE
+         BRA.S     CALPRNT   AND PRINT IT OUT
+NOTRND   LEA       (SP),A0   START SCAN AT FRONT
+         BSR       INTRP     INTERPRET EXPRESSION
+         BRA.S     CALPRNT   AND PRINT IT OUT
+ 
+* DISPLAY RESULT BACK IN ASCII
+HEXTBL   DC.L      '0123456789ABCDEF'
+ 
+CALPRNT  LEA       -8(SP),SP SETUP HEX TRANSLATE AREA
+         MOVE.L    #7,D0     LOOP 8 TIMES
+         MOVE.L    D7,D6     COPY FLOATING VALUE
+TOHEX    MOVE.B    D6,D1     TO NEXT FOUR BITS
+         AND.W     #%1111,D1 STRIP REST
+         MOVE.B    HEXTBL(D1),0(SP,D0) CONVERT TO HEX
+         LSR.L     #4,D6     TO NEXT HEX DIGIT
+         DBRA      D0,TOHEX  LOOP UNTIL DONE
+         MOVE.W    #'  ',-(SP) BLANK SEPERATOR
+         BSR       IEFFPA    BACK TO ASCII
+         MOVE.L    ROUND,D6  SETUP ROUNDING FACTOR
+         BSR       IEFARND   ROUND APPROPRIATLEY
+         LEA       (SP),A0   SETUP PUT
+         LEA       23(A0),A1 ARGUMENTS
+         MOVE.B    #$08,IOSBLK+3 FORCE UNFORMATTED MODE TO INHIBIT CR
+         BSR       PUT       SEND OUT RESULT OF CONVERSION
+         CLR.B     IOSBLK+3  TURN UNFORMATTED MODE BACK OFF
+         LEA       24(SP),SP DELETE WORK AREA
+         MOVE.W    CCRSAVE,CCR RESTORE CCR FOR BRANCH DISPLAY
+         BSR       DISPCCR   DISPLAY ALL BRANCH CONDITIONS VALID
+         BRA       INPUT     BACK FOR MORE
+ 
+* INVALID RESPONSE - TARGET THE CHARACTER IN ERROR (A0->)
+ERRORSYN MOVE.L    A6,SP     RESTORE STACK BACK TO NORMAL
+         SUB.L     SP,A0     FIND OFFSET TO BAD CHARACTER
+         MOVE.L    A0,D0     PAD WITH BLANKS
+LOOP2PD  MOVE.B    #' ',0(SP,D0) BLANK OUT FRONT END
+         DBRA      D0,LOOP2PD LOOP UNTIL DONE
+         MOVE.B    #'^',0(SP,A0) SET POINTER
+         MOVE.B    #$0D,1(SP,A0) SET END OF LINE
+         LEA       1(SP,A0),A1 END OF TEXT
+         MOVE.L    SP,A0     START OF TEXT
+         BSR       PUT       PLACE OUT FLAG
+         BSR       MSG       SEND MESSAGE
+         DC.L      'SYNTAX'
+         BRA       INPUT
+ 
+ 
+ 
+****************************
+* INTERPRET THE EXPRESSION *
+* OUTPUT - D7              *
+* IF ERRORS OCCUR WILL NOT *
+* RETURN TO CALLER         *
+****************************
+ 
+INTRP    CMP.B     #$0D,(A0)           ? NULL EXPRESSION
+         BEQ       ERRORSYN            ***SYNTAX ERROR***
+         BSR.S     EVAL                EVAULATE AS AN EXPRESSION
+         CMP.B     #$0D,(A0)           ? EXPRESSION END AT THE CR
+         BNE       ERRORSYN            ***SYNTAX ERROR***
+         RTS                           RETURN TO CALLER
+ 
+****************************
+* SUB EXPRESSION EVALUATOR *
+*       SUBROUTINE         *
+* OUTPUT: D7 - RESULT      *
+*  IF ERRORS WILL NOT      *
+*  RETURN TO CALLER.       *
+****************************
+EVAL     BSR       TERM      OBTAIN FIRST TERM
+EVALNXT  MOVE.W    CCR,CCRSAVE SAVE LAST FUNCTION CCR STATUS
+         MOVE.L    D7,-(SP)  SAVE FIRST ARGUMENT ON STACK
+* TEST FOR DIADIC OPERATOR AND ONE MORE TERM
+         MOVE.B    (A0)+,D0  LOAD NEXT CHARACTER
+         CMP.B     #'+',D0    ? ADD
+         BNE.S     NOTADD    BRANCH IF NOT
+*  "+" ADD OPERATOR
+         BSR.S     TERM      GET NEXT TERM
+         MOVE.L    (SP)+,D6  RELOAD ARG1 FOR ARG2
+         JSR       IEFADD    ADD THEM
+         BRA.S     EVALNXT   TRY FOR ANOTHER TERM
+NOTADD   CMP.B     #'-',D0    ? SUBTRACT
+         BNE.S     NOTSUB    BRANCH IF NOT
+*  "-" SUBTRACT OPERATOR
+         BSR.S     TERM      GET NEXT TERM
+         MOVE.L    (SP)+,D6  RELOAD ARG1
+         EXG.L     D6,D7     MUST SWAP FOR CORRECT ORDER
+         JSR       IEFSUB    SUBTRACT THEM
+         BRA.S     EVALNXT   TRY FOR ANOTHER TERM
+NOTSUB   CMP.B     #'*',D0    ? MULTIPLY
+         BNE.S     NOTMULT   BRANCH IF NOT
+         CMP.B     #'*',(A0) ? POWER FUNCTION
+         BNE.S     ISMULT    BRANCH NO, IS MULTIPLY
+*  "**" POWER OPERATOR
+         ADD.L     #1,A0     STRIP OFF SECOND ASTERISK
+         BSR.S     TERM      GET NEXT TERM
+         MOVE.L    (SP)+,D6  RELOAD BASE VALUE
+         EXG.L     D6,D7     SWAP FOR FUNCTION CALL
+         JSR       IEFPWR    PERFORM POWER FUNCTION
+         BRA.S     EVALNXT   TRY ANOTHER ITEM
+*  "*" MULTIPLY OPERATOR
+ISMULT   BSR.S     TERM      GET NEXT TERM
+         MOVE.L    (SP)+,D6  RELOAD ARG1
+         JSR       IEFMUL    MULTIPLY THEM
+         BRA.S     EVALNXT   TRY ANOTHER TERM
+NOTMULT  CMP.B     #'/',D0    ? DIVIDE
+         BNE.S     NOTDIV    BRANCH IF NOT DIVIDE
+*  "/" DIVIDE OPERATOR
+         BSR.S     TERM      GET NEXT TERM
+         MOVE.L    (SP)+,D6  RELOAD ARG1
+         EXG.L     D6,D7     SWAP ARGS (ARG2 INTO ARG1)
+         JSR       IEFDIV    DIVIDE THEM
+         BRA       EVALNXT   TRY FOR ANOTHER TERM
+NOTDIV   CMP.B     #'?',D0   ? TEST FOR COMPARE OPERATOR
+         BNE.S     EXPRTN    RETURN IF NOT
+*  "?" COMPARISON OPERATOR
+         BSR.S     TERM      GET NEXT TERM
+         MOVE.L    (SP)+,D6  RESTORE FIRST ARGUMENT
+         JSR       IEFCMP    DO IEEE FORMAT COMPARISON
+         BSR       DISPCMP   DISPLAY CCR FOR COMPARISON
+         MOVE.L    A6,SP     RESTORE STACK TO TOP LEVEL
+         BRA       INPUT     AND PERFORM NEXT REQUEST
+ 
+EXPRTN   SUB.L     #1,A0     BACK TO CURRENT POSITION
+         MOVE.L    (SP)+,D7  RESTORE UNUSED ARGUMENT
+         RTS                 RETURN TO CALLER
+ 
+ 
+*************************
+* OBTAIN A TERM (VALUE) *
+*  OUTPUT: D7 - VALUE   *
+*          V - OVERFLOW *
+* WILL NOT RETURN TO    *
+* CALLER IF ERROR       *
+*************************
+* SCAN FUNCTION TABLE FOR MATCH
+TERM     LEA       FNCTNTBL,A1 SETUP TABLE ADDRESS
+         MOVE.L    #NUMFUN,D1 COUNT TABLE ENTRIES
+FNCNXT   MOVE.W    (A1)+,D2  PREPARE COMPARE LENGTH
+         MOVE.L    A1,A2     PREPARE ENTRY STRING POINTER
+         MOVE.L    A0,A3     WITH INPUT SCAN STRING
+FNCMPR   CMP.B     (A2)+,(A3)+ ? STILL VALID MATCH
+         DBNE      D2,FNCMPR LOOP IF SO
+         BEQ.S     GOTFUNC   BRANCH FOR MATCH
+         LEA       12(A1),A1 TO NEXT ENTRY POSITION
+         DBRA      D1,FNCNXT LOOP IF MORE TO CHECK
+         BRA       NOTFUNC   BRANCH NOT A FUNCTION
+ 
+GOTFUNC  MOVE.L    8(A1),-(SP) SAVE ENTRY POINT ADDRESS
+         MOVE.L    A3,A0     BUMP SCAN TO AFTER PAREN
+         BSR       EVAL      OBTAIN INSIDE EXPRESSION
+         MOVE.L    (SP)+,A1  LOAD FUNCTION ROUTINE ADDRESS
+         JSR       (A1)      CALL APPROPRIATE ROUTINE
+         MOVE.W    CCR,-(SP)  SAVE RETURN CODE
+         CMP.B     #')',(A0)+  ARE THEY?
+         BNE       ERRORSYN  BRANCH SYNTAX ERROR IF NOT
+         RTR                 RETURN WITH CONDITION CODE
+ 
+* FUNCTION TABLE
+FNCTNTBL DC.W      0                   VANILLA PARENTHESIS
+         DC.L      '(       ',FPAREN
+         DC.W      4                   SQUARE ROOT
+         DC.L      'SQRT(   ',IEFSQRT
+         DC.W      3                   SINE
+         DC.L      'SIN(    ',IEFSIN
+         DC.W      3                   COSINE
+         DC.L      'COS(    ',IEFCOS
+         DC.W      3                   TANGENT
+         DC.L      'TAN(    ',IEFTAN
+         DC.W      3                   EXPONENT
+         DC.L      'EXP(    ',IEFEXP
+         DC.W      3                   LOGORITHM
+         DC.L      'LOG(    ',IEFLOG
+         DC.W      4                   ARCTANGENT
+         DC.L      'ATAN(   ',IEFATAN
+         DC.W      4                   HYPERBOLIC SINE
+         DC.L      'SINH(   ',IEFSINH
+         DC.W      4                   HYPERBOLIC COSINE
+         DC.L      'COSH(   ',IEFCOSH
+         DC.W      4                   HYPERBOLIC TANGENT
+         DC.L      'TANH(   ',IEFTANH
+         DC.W      3                   TST
+         DC.L      'TST(    ',IEFTST
+         DC.W      3                   NEGATE
+         DC.L      'NEG(    ',IEFNEG
+         DC.W      3                   ABSOLUTE VALUE
+         DC.L      'ABS(    ',IEFABS
+         DC.W      3                   INT (INTEGER CONVERT)
+         DC.L      'INT(    ',FINT
+ 
+NUMFUN   EQU       (*-FNCTNTBL)/12
+ 
+* PARENTHESIS EXPRESSION
+FPAREN   RTS       NO FUNCTION REQUIRED
+ 
+* INTEGER CONVERT
+FINT     MOVE.L    D7,-(SP)  SAVE ORIGINAL ARGUMENT
+         JSR       IEFFPI    CONVERT TO INTEGER
+         BVC.S     FINTOK    BRANCH NOT NAN OR OVERFLOW
+* OVERFLOW OR NAN, EITHER CASE IS PROPERLY HANDLED BY RETURNING THE ORIGINAL
+         MOVE.L    (SP)+,D7  RELOAD ORIGINAL ARGUMENT
+         JSR       IEFTST    AND SET PROPER CCR
+         RTS                 RETURN TO CALLER
+FINTOK   JSR       IEFIFP    BACK TO FLOAT
+         ADD.L     #4,SP     RID SAVED ARGUMENT FROM STACK
+         RTS                 RETURN TO CALLER
+ 
+* TEST FOR VARIABLES OR INFIX + AND -
+NOTFUNC  MOVE.B    (A0)+,D0  LOAD NEXT CHARACTER
+         MOVE.L    X,D7      DEFAULT TO X
+         CMP.B     #'X',D0   IS IT?
+         BEQ.S     TERMRTN   RETURN IF SO
+         MOVE.L    Y,D7      DEFAULT TO Y
+         CMP.B     #'Y',D0   ? IS IT
+         BEQ.S     TERMRTN   RETURN IF SO
+         CMP.B     #'+',D0    TEST PLUS
+         BEQ       NOTFUNC   BR YES TO SKIP IT
+         CMP.B     #'-',D0    INFIX MINUS
+         BNE.S     NOTMINUS  NO, TRY SOMTHING ELSE
+* IF THIS IS A NEGATIVE ASCII VALUE, WE MUST LET IT BE CONVERTED SINCE
+* A POSITIVE VALUE HAS LESS RANGE THAN A NEGATIVE ONE
+         CMP.B     #'.',(A0)  ? NUMERIC ASCII FOLLOWS
+         BEQ.S     NOTMINUS  YES, LET CONVERSION HANDLE IT PROPERLY
+         CMP.B     #'0',(A0)  ? ASCII NUMBER
+         BLS.S     DONEG     NOPE, COMPLEMENT THE FOLLOWING VALUE
+         CMP.B     #'9',(A0)  ? ASCII NUMBER
+         BLS.S     NOTMINUS   YEP, ALLOW PROPER CONVERSION
+DONEG    BSR       TERM      OBTAIN TERM
+         JSR       IEFNEG    NEGATE THE RESULT
+TERMRTN  RTS                 RETURN TO CALLER
+ 
+* CHECK FOR DIRECT HEXADECIMAL SPECIFICATION
+NOTMINUS CMP.B     #'$',D0   ? HEXADECIMAL HERE
+         BNE.S     NOTHEX    BRANCH IF NOT
+         CLR.L     D7        START BUILDING THE VALUE
+PRSHEX   MOVE.B    (A0),D0   LOAD NEXT CHARACTER
+         CMP.B     #'0',D0   ? LESS THAN ASCII ZERO
+         BCS.S     TERMRTN   RETURN WITH RESULT IN D7 IF SO
+         CMP.B     #'9',D0   ? GREATER THAN NINE
+         BLS.S     GOTHEX    BRANCH NOT, IS A VALID DECIMAL DIGIT
+         CMP.B     #'A',D0   ? LESS THAN ASCII "A"
+         BCS.S     TERMRTN   RETURN RESULT IF NOT HEX DIGIT
+         CMP.B     #'F',D0   ? GREATER THAN "F"
+         BHI.S     TERMRTN   RETURN RESULT IF NOT HEX DIGIT
+         ADD.B     #9,D0     RE-MAP INTO BINARY RANGE
+GOTHEX   ADD.L     #1,A0     BUMP PAST THIS CHARACTER
+         AND.B     #$F,D0    ISOLATE HEX DIGIT
+         CMP.L     #$0FFFFFFF,D7 ? WILL ANOTHER DIGIT OVERFLOW
+         BHI       ERRORSYN  YES, BRANCH FOR SYNTAX ERROR
+         LSL.L     #4,D7     SHIFT OVER SAFELY FOR NEXT DIGIT
+         OR.B      D0,D7     OR NEW DIGIT IN LOW BYTE
+         BRA.S     PRSHEX    GO PARSE ANOTHER HEX DIGIT
+ 
+* SEE IF 'NANX' SPECIFIC NAN DESIRED HERE
+NOTHEX   CMP.B     #'N',D0   ? NAN POSSIBLE
+         BNE.S     NOTNAN    NOPE
+         CMP.B     #'A',(A0) ? 'A' OF NAN
+         BNE.S     NOTNAN    NOPE
+         CMP.B     #'N',1(A0) ? 'N' OF NAN
+         BNE.S     NOTNAN    NOPE
+         CMP.B     #'0',2(A0) ? VALID NUMERIC ASCII
+         BLS.S     NOTNAN    NOPE
+         CMP.B     #'9',2(A0) ? VALID HIGH END
+         BHI.S     NOTNAN    NOPE
+         ADD.L     #2,A0     SKIP TO NUMBER
+         MOVE.L    #EXPMSK,D7 PREPARE NAN FORMAT - EXPONENT ALL ONES
+         MOVE.B    (A0)+,D7  LOAD ASCII DIGIT INTO LOW BYTE
+         AND.B     #$0F,D7   CONVERT TO STRAIGHT BINARY
+         JSR       IEFTST    SET PROPER CONDITION CODES FOR THIS VALUE
+         RTS                 AND RETURN THIS AS OUR VALUE
+ 
+* ATTEMPT TO TREAT IT AS AN ASCII NUMBER
+NOTNAN   SUB.L     #1,A0     ATTEMPT ASCII INPUT VALUE
+         JSR       IEFAFP    ATTEMPT ASCII TO FLOAT
+         BCS       ERRORSYN  SYNTAX ERROR IF NO GOOD
+         RTS                 RETURN IF GOT VALUE
+ 
+************
+* END TEST *
+************
+QUIT     BSR       MSG       ISSUE DONE MESSAGE
+         DC.L      '  DONE'
+         MOVE.L    #15,D0    TERMINATE TASK
+         TRAP      #1        HERE
+ 
+ 
+*   *
+*   * DISPLAY THE CCR BRANCH CONDITIONS SUBROUTINE
+*   *   EVERYTHING TRANSPARENT (INCLUDING CCR)
+*   *
+ 
+* COMPARE ONLY DISPLAY ("C" ON FOR NANS)
+DISPCMP  MOVE.W    CCR,-(SP)  SAVE STATUS ON STACK
+         BCC.S     CMPNNAN   BRANCH NO NAN DURING COMPARE
+         BSR       MSG       SHOW UNORDERED COMPARE
+         DC.L      'UNORDERD' EYE-CATCHER
+         RTR                 RETURN AND RESTORE CCR
+* SETUP ARITHMETIC RESULTS GT/LE GE/LT
+CMPNNAN  MOVE.W    (SP)+,CCR RESTORE CCR
+         MOVEM.L   D0-D1/A0-A1,-(SP) SAVE WORK REGISTERS
+         MOVE.W    CCR,D0     SAVE CCR IN D0
+         MOVE.L    SP,A1     STACK FRAME POINTER
+         MOVE.W    #'GT',-(SP) DEFAULT CONDITION
+         MOVE.W    D0,CCR    RESET CCR
+         BGT.S     DISPGT    BRANCH CORRECT
+         MOVE.W    #'LE',(SP) CHANGE
+DISPGT   MOVE.L    #'GE  ',-(SP) DEFAULT CONDITION
+         MOVE.W    D0,CCR    RESET CCR
+         BGE.S     DISPPL    BRANCH CORRECT
+         MOVE.W    #'LT',(SP) CHANGE
+         BRA.S     DISPPL    CONTINUE WITH EQ/NE TO FINISH DISPLAY
+ 
+* REGULAR DISPLAY
+DISPCCR  MOVEM.L   D0-D1/A0-A1,-(SP) SAVE WORK REGISTERS ON THE STACK
+         MOVE.W    CCR,D0     SAVE CONDITION CODE REGISTER FOR TESTS
+         MOVE.L    SP,A1     STACK FRAME POINTER
+* TEST FOR NAN (V SET)
+         BVC.S     DISPGE    BRANCH NOT NAN
+         MOVE.L    #'MBER',-(SP) SETUP NAN EYE-CATCHER
+         MOVE.L    #'A-NU',-(SP) SETUP NAN EYE-CATCHER
+         MOVE.L    #'NOT-',-(SP) SETUP NAN EYE-CATCHER
+* SETUP TEST RESULTS: EQ/NE PL/MI
+DISPGE   MOVE.L    #'PL  ',-(SP)  DEFAULT CONDITION
+         MOVE.W    D0,CCR    RESET CCR
+         BPL.S     DISPPL    BRANCH CORRECT
+         MOVE.W    #'MI',(SP) CHANGE
+DISPPL   MOVE.L    #'EQ  ',-(SP)  DEFAULT CONDITION
+         MOVE.W    D0,CCR    RESET CCR
+         BEQ.S     DISPEQ    BRANCH CORRECT
+         MOVE.W    #'NE',(SP) CHANGE
+DISPEQ   MOVE.L    #'    ',-(SP) ADD BLANKS TO BEGINNING
+         MOVE.L    SP,A0     START OF STRING PRINT
+         SUB.L     #1,A1     POINT TO LAST CHARACTER
+         BSR.S     PUT       SEND STRING TO CONSOLE
+         LEA       1(A1),SP  RESTORE STACK BACK
+         MOVE.W    D0,CCR  RESTORE CCR
+         MOVEM.L   (SP)+,D0-D1/A0-A1 RESTORE REGISTERS
+         RTS                 RETURN TO CALLER
+ 
+*   *
+*   * MSG SUBROUTINE
+*   *  INPUT: (SP) POINT TO EIGHT BYTE TEXT FOLLOWING BSR/JSR
+*   *
+MSG      MOVEM.L   D0/A0/A1,-(SP) SAVE REGS
+         MOVE.L    3*4(SP),A0 LOAD RETURN POINTER
+         LEA       7(A0),A1   POINT TO BUFFER END
+         BSR.S     PUT       ISSUE IOS CALL
+         MOVEM.L   (SP)+,D0/A0/A1 RELOAD REGISTERS
+         ADD.L     #8,(SP)   ADJUST RETURN ADDRESS
+         RTS                 RETURN TO CALLER
+ 
+*   *
+*   * PUT SUBROUTINE
+*   *  INPUT: A0->TEXT START, A1->TEXT END
+*   *
+PUT      MOVEM.L   D0/A0/A1,-(SP) SAVE REGS
+         MOVEM.L   A0-A1,BUFPTR SETUP BUFFER POINTERS
+         SUB.L     A0,A1     COMPUTE LENGTH-1
+         LEA       1(A1),A1  ADD ONE
+         MOVE.L    A1,BUFLEN INSERT LENGTH
+         MOVE.B    #6,DEVICE TO OUTPUT STREAM
+         MOVE.B    #2,IOSBLK+1 AND WRITE FUNCTION
+         LEA       IOSBLK,A0  LOAD BLOCK ADDRESS
+         TRAP      #2        ISSUE IOS CALL
+         MOVEM.L   (SP)+,D0/A0/A1 RELOAD REGISTERS
+         RTS                 RETURN TO CALLER
+ 
+*   *
+*   * GET SUBROUTINE
+*   *   INPUT: A0->BUFFER START, A1->LAST OF BUFFER
+*   *
+GET      MOVEM.L   D0/A0/A1,-(SP) SAVE REGS
+         MOVEM.L   A0-A1,BUFPTR PLACE BUFFER POINTERS
+         MOVE.B    #1,IOSBLK+1 PERFORM READ
+         MOVE.B    #5,DEVICE READ FROM INPUT DEVICE
+         LEA       IOSBLK,A0 LOAD PARAMETER
+         TRAP      #2        IOS CALL
+         MOVEM.L   (SP)+,D0/A0/A1 RESTORE REGISTERS
+         RTS                 RETURN TO CALLER
+ 
+* IOS BLOCK FOR TERMINAL FORMATED SEND
+IOSBLK   DC.B     0,2,0,0    WRITE FORMATTED WAIT
+         DC.B     0
+DEVICE   DC.B     0,0,0
+         DC.L     0
+BUFPTR   DC.L      0,0
+BUFLEN   DC.L      0,0
+ 
+* VARIABLES
+X        DC.L      0
+Y        DC.L      0
+CCRSAVE  DC.W      0
+ROUND    DC.L      -100      ROUNDING FACTOR
+ 
+* STARTUP MESSAGES
+STRTM    DC.W      'FAST FLOATING POINT IEEE FORMAT EQUIVALENT DESK CALCULATOR'
+STRTME   DC.W      0
+STRTM2   DC.W      '            (C) COPYRIGHT 1981 BY MOTOROLA'
+STRTM2E  DC.W      0
+ 
+* PROGRAM STACK
+         DCB.W     100,0      STACK AREA
+STACK    EQU       *
+ 
+         END       IEFCALC

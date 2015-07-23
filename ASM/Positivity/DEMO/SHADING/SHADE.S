@@ -930,7 +930,7 @@ N set N+160
  endr
  
 .inverses:		; Table n->16384/n.
-  incbin	'..\shading\inverses.xxx'
+  incbin	'e:\demos\positivi.ty\passion\shading\inverses.xxx'
 
 .xmax_ad:		; Table of adresses for the jump.
 N set 6

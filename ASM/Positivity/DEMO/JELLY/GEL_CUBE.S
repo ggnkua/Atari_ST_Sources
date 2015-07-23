@@ -49,7 +49,7 @@
   bra.s	.one_line
 
 .edges:
-  incbin	'..\jelly\gel_edge.xxx'
+  incbin	'e:\demos\positivi.ty\passion\jelly\gel_edge.xxx'
 
 .y_table:		; Table y->adress.
 N set 56		; For x centering.

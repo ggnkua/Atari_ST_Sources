@@ -588,17 +588,17 @@ clear_4_bpl:		; First see if the box is visible.
 ; The interesting routines.
 
 rotation:
-  include	'..\shading\rotation.s'
+  include	'e:\demos\positivi.ty\passion\shading\rotation.s'
 
   Section TEXT
   
 shaded_poly:
-  include	'..\both\shade.s'
+  include	'e:\demos\positivi.ty\passion\both\shade.s'
 
   Section TEXT
 
 mapped_poly:
-  include	'..\both\map.s'
+  include	'e:\demos\positivi.ty\passion\both\map.s'
     
 ; *************************************************************************
   Section DATA
@@ -642,7 +642,7 @@ N set N+160
  endr
 
 inverses:
-  incbin	'..\shading\inverses.xxx'
+  incbin	'e:\demos\positivi.ty\passion\shading\inverses.xxx'
 
 colors:
   dc.w	$000,$310,$b90,$420
@@ -651,13 +651,13 @@ colors:
   dc.w	$db9,$642,$eca,$753
 
 y_positions:
-  incbin	'..\both\y_mov.xxx'
+  incbin	'e:\demos\positivi.ty\passion\both\y_mov.xxx'
   
 y_pos:
   dc.w	0
 
 bois:
-  incbin	'..\both\wood.xxx'
+  incbin	'e:\demos\positivi.ty\passion\both\wood.xxx'
       
 ; *************************************************************************
   Section BSS

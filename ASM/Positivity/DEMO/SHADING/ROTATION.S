@@ -176,4 +176,4 @@
   Section DATA
 
 .sinus:
-  incbin	'..\shading\sinus.xxx'
+  incbin	'e:\demos\positivi.ty\passion\shading\sinus.xxx'

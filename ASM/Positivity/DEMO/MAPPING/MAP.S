@@ -631,7 +631,7 @@ N set N+160
  endr
  
 .inverses:		; Table n->16384/n.
-  incbin	'..\mapping\inverses.xxx'
+  incbin	'e:\demos\positivi.ty\passion\mapping\inverses.xxx'
 
 .xmax_ad:		; Table of adresses for the jump.
 N set 14

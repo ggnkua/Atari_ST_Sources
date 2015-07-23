@@ -32,7 +32,24 @@ fuck_system:
   move.b	$ffff8260.w,old_screen+3
 
   jsr	wait_vbl
-  move.b	#$0,$ffff8260.w	; Low resolution.
+
+  move.w	#$25,-(sp)
+  trap		#14	
+  addq.l	#2,sp
+ 
+  move.l	#-1,-(sp)
+  move.l	#-1,-(sp)
+  move.w	#0,-(sp)
+  move.w	#1,-(sp)
+  move.w	#5,-(sp)
+  trap		#14
+  add.l		#14,sp
+
+;  move.w	#$25,-(sp)
+;  trap		#14	
+;  addq.l	#2,sp
+ 
+ ; move.b	#$0,$ffff8260.w	; Low resolution.
   move.l	#colors,a0	; The good colors.
   move.w	#$8240,a1
  rept	8
@@ -530,16 +547,16 @@ wait_vbl:
   Section DATA
 
 fade:
-  incbin	'..\rotazoom\fade.xxx'
+  incbin	'E:\demos\positivi.ty\passion\rotazoom\fade.xxx'
   
 xmid:
-  incbin	'..\rotazoom\xmid.xxx'
+  incbin	'E:\demos\positivi.ty\passion\rotazoom\xmid.xxx'
 ymid:
-  incbin	'..\rotazoom\ymid.xxx'
+  incbin	'E:\demos\positivi.ty\passion\rotazoom\ymid.xxx'
 rotation:
-  incbin	'..\rotazoom\rotation.xxx'
+  incbin	'E:\demos\positivi.ty\passion\rotazoom\rotation.xxx'
 zoom:
-  incbin	'..\rotazoom\zoom.xxx'
+  incbin	'E:\demos\positivi.ty\passion\rotazoom\zoom.xxx'
 
 xmid_pos:
   dc.w	0
@@ -568,10 +585,10 @@ N set N+144
  endr
 
 sinus:
-  incbin	'..\rotazoom\sinus.xxx'
+  incbin	'E:\demos\positivi.ty\passion\rotazoom\sinus.xxx'
     
 image:		; This MUST be the last Data.
-  incbin	'..\rotazoom\girlie.xxx'
+  incbin	'E:\demos\positivi.ty\passion\rotazoom\girlie.xxx'
 ; *************************************************************************
   Section BSS
 

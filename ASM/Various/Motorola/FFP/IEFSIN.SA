@@ -1,0 +1,107 @@
+         TTL       IEEE FORMAT EQUIVALENT (IEFSIN/IEFCOS/IEFTAN)
+***************************************
+* (C) COPYRIGHT 1981 BY MOTOROLA INC. *
+***************************************
+ 
+*************************************************
+*            IEFSIN IEFCOS IEFTAN               *
+* IEEE FORMAT EQUIVALENT  SINE/COSINE/TANGENT   *
+*                                               *
+*  INPUT:   D7 - IEEE FORMAT ARGUMENT (RADIANS) *
+*                                               *
+*  OUTPUT:  D7 - IEEE FORMAT FUNCTION RESULT    *
+*                                               *
+*     ALL OTHER REGISTERS TOTALLY TRANSPARENT   *
+*                                               *
+*        MAXIMUM STACK USED:   54 BYTES         *
+*                                               *
+*  CONDITION CODES:                             *
+*        Z - SET IF RESULT IN D7 IS ZERO        *
+*        N - SET IF RESULT IN D7 IS NEGATIVE    *
+*        C - UNDEFINED                          *
+*        V - SET IF RESULT IS NAN (NOT-A-NUMBER)*
+*            (INPUT MAGNITUDE TOO LARGE OR NAN) *
+*        X - UNDEFINED                          *
+*                                               *
+*  FUNCTIONS:                                   *
+*             IEFSIN   -  SINE RESULT           *
+*             IEFCOS   -  COSINE RESULT         *
+*             IEFTAN   -  TANGENT RESULT        *
+*                                               *
+*  NOTES:                                       *
+*    1) INPUT VALUES ARE IN RADIANS.            *
+*    2) INPUT ARGUMENTS LARGER THAN TWO PI      *
+*       SUFFER REDUCED PRECISION.  THE LARGER   *
+*       THE ARGUMENT, THE SMALLER THE PRECISION.*
+*       EXCESSIVELY LARGE ARGUMENTS WHICH HAVE  *
+*       LESS THAN 5 BITS OF PRECISION ARE       *
+*       RETURNED AS A NAN WITH THE "V" BIT SET. *
+*    3) THE SIGN OF TANGENTS WITH INFINITE      *
+*       VALUE IS UNDEFINED, HOWEVER WE RETURN   *
+*       A POSITIVE INFINITY.                    *
+*    4) SPOT CHECKS SHOW RELATIVE ERRORS BOUNDED*
+*       BY 4 X 10**-7 BUT FOR ARGUMENTS CLOSE TO*
+*       PI/2 INTERVALS WHERE 10**-5 IS SEEN.    *
+*                                               *
+*************************************************
+         PAGE
+IEFSIN   IDNT  1,1 IEEE FORMAT EQUIVALENT SINE/COSINE/TANGENT
+ 
+         OPT       PCS
+ 
+         SECTION   9
+ 
+         XDEF      IEFSIN,IEFCOS,IEFTAN     ENTRY POINTS
+ 
+         XREF      9:FFPSIN,9:FFPCOS,9:FFPTAN  FFP TRANSCENDENTALS
+         XREF      9:IEFSOP          SINGLE OPERAND FRONT-ENDER
+         XREF      9:IEFTIEEE        BACK-END CONVERT BACK TO IEEE FORMAT
+         XREF      9:IEFRTNAN        BACK-END RETURN IEEE NAN ROUTINE
+         XREF      FFPCPYRT            COPYRIGHT STUB
+ 
+VBIT     EQU       $0002     CONDITION CODE REGISTER "V" BIT MASK
+FFPSIGN  EQU.B     $80       SIGN IN FAST FLOATING POINT VALUE
+ 
+***********************
+* TANGENT ENTRY POINT *
+***********************
+IEFTAN   BSR       IEFSOP    PARSE THE OPERAND
+         BRA.S     IEFTNRM   +0 BRANCH NOT INFINITY OR NAN
+         BRA       IEFRTNAN  +2 RETURN NAN FOR INFINITY
+ 
+* PERFORM TANGENT FUNCTION WITH NORMALIZED NUMBER
+IEFTNRM  BSR       FFPTAN    FIND TANGENT
+         BRA.S     IEFCMN    ENTER COMMON EXIT CODE
+ 
+**********************
+* COSINE ENTRY POINT *
+**********************
+IEFCOS   BSR       IEFSOP    PARSE THE OPERAND
+         BRA.S     IEFCNRM   +0 BRANCH NOT INFINITY OR NAN
+         BRA       IEFRTNAN  +2 RETURN NAN FOR INFINITY
+ 
+* PERFORM COSINE FUNCTION WITH NORMALIZED NUMBER
+IEFCNRM  BSR       FFPCOS    FIND COSINE
+         BRA.S     IEFCMN    ENTER COMMON EXIT CODE
+ 
+********************
+* SINE ENTRY POINT *
+********************
+IEFSIN   BSR       IEFSOP    PARSE THE OPERAND
+         BRA.S     IEFSNRM   +0 BRANCH NOT INFINITY OR NAN
+         BRA       IEFRTNAN  +2 RETURN NAN FOR INFINITY
+ 
+* PERFORM SINE FUNCTION WITH NORMALIZED NUMBER
+IEFSNRM  BSR       FFPSIN    FIND SINE
+IEFCMN   BVC       IEFTIEEE  RETURN IF HAD ENOUGH PRECISION
+* OVERFLOW CAN MEAN TRUE INFINITY RESULT OR NOT ENOUGH PRECISION
+* WE CAN TEST FOR NOT ENOUGH PRECISION BY CHECKING FOR LARGEST POSSIBLE VALUE
+         MOVE.L    D7,D5     COPY OVER FFP FORMAT RESULT
+         OR.B      #FFPSIGN,D5 SET SIGN BIT TO A ONE
+         SUB.L     #1,D5     TEST FOR ALL ONE BITS
+         BNE       IEFRTNAN  NO, NOT ENOUGH PRECISION, RETURN A NAN
+         TST.B     D7        RESET CCR AS IT WAS
+         OR.B      #VBIT,SR  AND SHOW OVERFLOW OCCURED
+         BRA       IEFTIEEE  RESTORE WITH INFINITY OF PROPER SIGN
+ 
+         END

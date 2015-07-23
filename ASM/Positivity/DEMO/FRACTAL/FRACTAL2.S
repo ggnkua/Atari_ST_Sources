@@ -587,10 +587,10 @@ conv2_table:
   dc.b	$a0
 
 colors:
-  incbin	'..\fractal\fade.xxx'
+  incbin	'e:\demos\positivi.ty\passion\fractal\fade.xxx'
 
 fonts:
-  incbin	'..\fractal\fonts.xxx'
+  incbin	'e:\demos\positivi.ty\passion\fractal\fonts.xxx'
 
 nb_lines_text:
   dc.w	14
