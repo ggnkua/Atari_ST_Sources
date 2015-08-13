@@ -1,0 +1,286 @@
+ARCHITEC.TXT                                                       ThR
+                                                            2002-05-04
+
+
+Architecture of EtherNE NE2000 driver support for Atari ST compatible
+Machines.
+Copyright 2001, 2002 Dr. Thomas Redelberger.
+Use it under the terms of the GNU General Public License (See file 
+COPYING.TXT)
+
+$Id: architec.txt 1.3 2002/06/08 16:35:48 Thomas Exp Thomas $
+
+
+The EtherNE driver software architecture has been designed to meet two
+objectives:
+
+1) Make writing a driver for a different bus easy. Examples:
+
+ - EtherNEA ACSI bus.
+   Hardware design due to me.
+   Hardware production: Elmar Hilgart
+
+ - EtherNEC Cartridge Port bus.
+   Hardware design due to Lyndon Amsdon and me.
+   Hardware production: Lyndon
+ 
+ - Milan ISA bus
+   The built in bus
+
+ - 68K processor (e.g. MegaST) or VME bus designs (e.g. TT) would
+   also be easy
+
+
+2) Make writing a driver for a different IP stack easier. Curently:
+
+ - STinG
+ - MagiCNet
+ - MINTNet
+
+
+The driver software is modular. The same software core can be
+used for STinG and MagicNet/MINTNet as well as for different hardware.
+Yet by employing assembler code the drivers are small and fast.
+The MagiCNet driver and the STing driver share the same software
+modules to access the hardware (NE.S plus include files). Software to
+retrieve the ethernet package from the NE card and build an IP
+datagram in memory however differs because MagiCNet and STing differ
+very much here (NESTNG.S versus NEMNET.S).
+
+The STing driver is more complex as it has to contain code to do
+ARP. In MNet this is done by higher software layers.
+
+
+Software modules talking to the hardware
+
+NE.S
+
+Although completely written in 68000 assembler this source code
+largely is based on the source modules NE.C and 8390.C from Linux
+originally due to the authors Donald Becker and Paul Gortmaker and
+IF_ETHER.H due also to Alan Cox, Frad van Kempen and Steve Whitehouse.
+I developed this with DEVPAC assembler 2.0. As I make heavy use of
+macros and other advanced assembler directives, changing to another
+assembler might not be easy.
+
+If you study the source code you will notice quite some gymnastics to
+recover from funny behaviour of the original 8390 chip in the NE2000
+design. This is also present in the original Linux driver code and
+seems to be unavoidable. In fact if I knew these problems before I
+probably would have chosen another ethernet card family...  The
+Realtek 8019 seems to not have these problems at all and I have made
+this code conditional (BUGGY_HW). The Code is switched on because
+there seems to be lot of funny hardware out there.
+
+Hardware access is encapsulated in assembler macros. This permits to
+configure NE.S for different interface hardware by including different
+macros from the file BUS.I.
+Switching different bus hardware is done by copying one of the files 
+BUSENE*.I over BUS.I.
+
+
+NEMNET.S and NESTNG.S
+
+These modules take care to retrieve and ethernet packet from the card
+and generate an IP datagram in memory. As the datagram representations
+are very different in STing and MNet they are specific for the IP
+stack. They are also adapted using BUS.I for the hardware at hand.
+
+NESTNG.S also branches out to take care of incoming ARP packets.
+
+
+Hardware independent software modules
+
+ENESTNG.C and ENEMNET.S are software modules specific for the IP stack.
+They use functions from NE.S.
+
+
+ENESTNG.C
+
+This is largely copied from code written by the "father" of STing
+Peter Rottengatter. It does general initialisation and the interfacing
+of the driver to the STing API. It further contains the ARP code that
+converts from IP numbers to ethernet MAC addresses and back.
+
+Please note that this module is also the main entry point for the
+operating system (or rather STING.PRG that loads the drivers from
+disk). No further startup code is needed, no stack space is allocated.
+I developed this with Turbo-C 2.0. Pure-C should also work. Care was
+exercised to avoid the need for C-library code that may unnecessarily
+enlarge the executable.
+
+
+ENEMNET.S
+
+Although coded in 68K assembler this code is largely based on dummyeth
+of Kay Roemer. This is the main entry point for the MNet software.
+There is no startup code and no stack space. Note that access to the
+kernel via the passed pointer is not done at all.
+
+ENEMNET.S also takes care to setup the polling via the HZ200
+interrupt. It further arranges for attempting to send packages that
+had been queued by previous attempts to send. Sending may fail for
+various reasons: sending a previous packet is not yet finished (e.g.
+because of collisions on the network), the bus is occupied by another
+device (ACSI only). 
+
+Originally I had developed this in Turbo-C 2.0 but I suspected this
+may give rise to problems as MINT and MagiCNet software are often
+compiled with Pure-C or GNU-C which destroy register A2. That may
+interfer with the code issued by Turbo-C 2.0.  I decided for a drastic
+solution of this issue and did it all in assmbler. This resulted in a
+smaller and faster driver as well.
+
+
+
+
+Architecture graph for a STinG ethernet driver
+
++------------------------------------------------------------------------------+
+| STinG                                                                        |
+| struct tpl tpl                                                               |
++------------------------------------------------------------------------------+
+
++-------+  +-PORT my_port DRIVER my_driver-------------------------------------+
+|       |  | ENESTNG.C                                                         |
+|       |  |                                                                   |
+|       |  +-------------------------------------------------------------------+
+|       |   
+|       |  +- NE.H----------------------------------------------------+  +UTI.H+
+|       |  |  NE.S                                                    |  |     |
+|       |  |                                                          |  |     |
+|       |  +---------------------+                                    |  |     |
+|       |                        |                                    |  |     |
+|       +----rtrvPckt()-------+  |                                    |  |     |
+|         NESTNG.S            |  |                                    |  |     |
+|                             |  |                                    |  |     |
++-----------------------------+  +------------------------------------+  |     |
+                                                                         |     |
+        +-8390.I------+ +-BUS.I--------+ +-NETDEV.I-------+ +-UTI.I------+     |
+        |             | |              | | NETDEV.S       | | UTI.S            |
+        |             | |              | |                | |                  |
+        +-------------+ |              | |                | |                  |
+                        |              | |                | |                  |
+        +---------------+              | |                | |                  |
+        |            Hardware          | |                | |                  |
+        |                              | |                | |                  |
+        +------------------------------+ +----------------+ +------------------+
+
+
+                        
+
+Architecture graph for the MagiCNet ethernet driver
+
++------------------------------------------------------------------------------+
+| MagiCNet                                                                     |
+| struct netinfo netinfo                                                       |
++------------------------------------------------------------------------------+
+
++-------+  +-struct nif if_ENE-------------------------------------------------+
+|       |  | ENEMNET.S                                                         |
+|       |  |                                                                   |
+|       |  +-------------------------------------------------------------------+
+|       | 
+|       |  +----------------------------------------------------------+  +UTI.I+
+|       |  | NE.S                                                     |  |     |
+|       |  |                                                          |  |     |
+|       |  +---------------------+                                    |  |     |
+|       |                        |                                    |  |     |
+|       +----rtrvPckt()-------+  |                                    |  |     |
+|         NEMNET.S            |  |                                    |  |     |
+|                             |  |                                    |  |     |
++-----------------------------+  +------------------------------------+  |     |
+                                                                         |     |
+        +-8390.I------+ +-BUS.I--------+ +-NETDEV.I-------+ +-UTI.I------+     |
+        |             | |              | | NETDEV.S       | | UTI.S            |
+        |             | |              | |                | |                  |
+        +-------------+ |              | |                | |                  |
+                        |              | |                | |                  |
+        +---------------+              | |                | |                  |
+        |            Hardware          | |                | |                  |
+        |                              | |                | |                  |
+        +------------------------------+ +----------------+ +------------------+
+
+
+
+Implementation details
+
+Operating system dependencies
+
+The drivers use only the BIOS Bconout function via trap 13 to output
+messages and diagnostics to the screen. Further the OS function
+_appl_yield via trap 2 is used to wait for bus availability.  If MINT
+supports these the drivers for MagiCNet may work under MINTNet as
+well.
+
+
+Polling versus Interrupts
+
+Both EtherNEA and EtherNEC interfaces do not support interrupt
+operation. As STing's driver architecture works with polling only this
+limitation does not hurt there.
+
+It would be possible to change the EtherNEA interface hardware to
+allow for interrupt operation. However if you operate another device
+on the ACSI bus -do not forget the floppy or a harddisk controller (as
+I do)- software to properly set up interrupt operation would be very
+difficult to develop and likely still limited in performance.
+
+The main limitation is due to the 68901 MFP chip operating in edge
+triggered interrupt mode effectively preventing a shared use of the
+ACSI interrupt line.
+
+Because also the Cartridge Port does not have an interrupt line, the
+EtherNEC drivers also always work in polling mode. Under STing polling
+is driven by the STing timeslice (variable "threading" in DEFAULT.CFG).
+This is the standard way STing drivers work. Under MNet polling is
+setup by the *driver* and fixed to be each 5 millisec as per Hz200
+system interrupt.
+
+Care was exercised to avoid reentering the driver if sending or
+receiving takes longer than the timeslice. The drivers for EtherNEA
+further arbitrates for the ACSI bus. If your harddisk also hangs from
+the ACSI port make sure your harddisk driver properly uses the system
+variable "flock". If it does not there is a big risk of data loss or
+corruption!
+
+Interrupt mode would however be possible using the interrupt line of
+the parallel port. This would apply for the MNet driver only. It is
+unclear whether this would result in a significant performance benefit
+worth the effort.
+
+
+DMA operation
+
+The ACSI bus supports DMA operations but EtherNEA currently does not
+support this. It would be possible to expand interface circuitry to
+allow for DMA operation. The software would probably need to always
+setup DMA transfers of 512 1024 or 1536 byte as the Atari DMA
+controller can only do transfers in multiples of 512 byte.
+
+DMA operation would be easy with MNet as the driver just needs to
+retrieve/send the straight ethernet packet.  For STing DMA operation
+would be involved because the STinG IP datagram to be sent is not in a
+contiguous buffer and constructing a straight ethernet packet would
+involve costly double buffering.
+
+
+
+Disclaimer
+
+This package is provided to you as is. I do not guarantee any features
+nor do I take any responsibility for any damage or loss you may suffer
+when using this hardware and/or software.  I advise you should backup
+your harddisk before using this, if you use EtherNEA and your harddisk
+is connected to the ACSI port.
+
+
+Contact Information
+
+Suggestions, bug reports, flames to
+
+Dr. Thomas Redelberger
+EMail:     redetho@gmx.de
+
+Copyright 2001, 2002 Dr. Thomas Redelberger
+
