@@ -1,0 +1,14 @@
+arrange.c
+dialog.c
+dialog1.c
+doclean.c
+dx.h
+dxed.c
+dxed.h
+midi.c
+print.c
+scales.c
+search.c
+seq.c
+slider.c
+vsel2.c
