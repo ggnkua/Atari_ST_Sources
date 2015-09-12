@@ -26,13 +26,22 @@
 ; is also accurate.
 ;
 ;========================================================================
+; 2009/01/24	AJB		Verfied buildable under Devpac3
+;						Verfied runnable under Steem 3.2
+;						Config Used: 8Mhz, 1Mb, TOS1.04
+;						NOTE:
+;						Previous version of this archive had a "fixed"
+;						version of the code since Pacifist could not cope
+;						with the border kill. Steem is fine with it, so
+;						the hack is gone.
+;========================================================================
 
-TIMING	equ	0	; Timing bars ON-OFF ( Debug )
-STEP	equ	0	; Keystepping ON-OFF ( Debug )
-DESK	equ	1	; Desktop Version ON-OFF
-PDS	equ	0	; PDS ON-OFF
-MUSIC_ON	equ	0	; Music ON-OFF
-KILLBORDER	equ	0	; Top/Bottom Border Death
+TIMING		equ	0	; Timing bars ON-OFF ( Debug )
+STEP		equ	0	; Keystepping ON-OFF ( Debug )
+DESK		equ	1	; Desktop Version ON-OFF
+PDS			equ	0	; PDS ON-OFF
+MUSIC_ON	equ	1	; Music ON-OFF
+KILLBORDER	equ	1	; Top/Bottom Border Death
 
 addition	equ	$21
 
@@ -277,7 +286,7 @@ value	ds.w	1
 
 wave_pointer	ds.l	1
 
-wave_data:	INCBIN C:\ASM\zuul\SWIB.DAT
+wave_data:	INCBIN SWIB.DAT
 
 repeat_wave
 	move.l	#wave_data,wave_pointer
@@ -382,7 +391,7 @@ x	set $a0+x
 	endr
 	rts
 
-char_set:   INCBIN C:\ASM\zuul\FRENCH.FNT
+char_set:   INCBIN FRENCH.FNT
 
 ;
 ; 116 characters long
@@ -755,9 +764,9 @@ create_linelist
 	rts
 
 plain_list:	
-	INCBIN C:\ASM\zuul\WIBBLE.TAB
+	INCBIN WIBBLE.TAB
 list_point:
-	INCBIN C:\ASM\zuul\WIBBLE.TAB
+	INCBIN WIBBLE.TAB
 
 	EVEN
 	
@@ -1470,7 +1479,7 @@ s_message
 
 	even
 
-charset	INCBIN c:\asm\zuul\32_3.fnt	;Le Font!
+charset	INCBIN 32_3.fnt	;Le Font!
 space	ds.b	26*12	
 
 here		ds.l	1
@@ -1486,7 +1495,7 @@ buffer_2	ds.b	26*6*20*2
 ;	
 		IFNE	MUSIC_ON
 		
-music	INCBIN c:\asm\zuul\awe.mus
+music	INCBIN awe.mus
 
 music_init	moveq	#1,d0
 		bra	music
@@ -1503,7 +1512,7 @@ music_vbl	equ	music+6
 ;
 ;===========================================================================	
 
-logo	INCBIN c:\asm\zuul\biglogo.dat
+logo	INCBIN biglogo.dat
 output	equ	*
 s_start	equ	*+(11040*16)
 

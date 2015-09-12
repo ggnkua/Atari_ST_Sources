@@ -1,6 +1,3 @@
-; buggered up!
-
-
 ; 
 ; Source Code : Insignificant Demo
 ; 
@@ -68,13 +65,17 @@
 *       v1.5 - Submitted to Inner Circle.		*
 *				
 *********************************************************
+* 2009/01/17	AJB		Tested build under Devpac3
+*						Verfied working under Steem 3.2
+*						Config: 8Mhz, 1MB, TOS 1.04
+*********************************************************
 
 	*********
 	* BEGIN *
 	*********
 
-PDS	equ	1
-DESK	equ	0
+PDS	equ	0
+DESK	equ	1
 
 nospr		equ	32	;Number of sprites
 
@@ -195,8 +196,8 @@ super_on
 mouse_off
 	move.b	#$12,$fffc02
 	move.b	#200,d0
-@delay	nop
-	dbf	d0,@delay
+.delay	nop
+	dbf	d0,.delay
 	rts
 	
 
@@ -244,8 +245,8 @@ screen_begin
 mouse_on
 	move.b	#$08,$fffc02
 	move.b	#200,d0
-@delay	nop
-	dbf	d0,@delay
+.delay	nop
+	dbf	d0,.delay
 	rts
 
 	
@@ -527,24 +528,24 @@ set_up	move.l	#screens,d0
 make_screens
 	lea	scroll_data,a0	; Clear out scroll buffer too!
 	move.w	#((40*18)/4)-1,d7
-@LOOP	move.l	#0,(a0)+
-	dbf	d7,@LOOP
+.LOOP	move.l	#0,(a0)+
+	dbf	d7,.LOOP
 
 	lea	picture,a0	;Now copy it 
 	move.l	screen_b,a1
 	move.w	#(32000/8)-1,d0
-@LOOP2
+.LOOP2
 	move.l	(a0)+,(a1)+
 	clr.l	(a1)+
-	dbf	d0,@LOOP2
+	dbf	d0,.LOOP2
 	
 	lea	picture,a0	;source
 	move.l	screen_a,a1	;destination
 	move.w	#(32000/8)-1,d0	;1 screen
-@LOOP1
+.LOOP1
 	move.l	(a0)+,(a1)+
 	clr.l	(a1)+
-	dbf	d0,@LOOP1
+	dbf	d0,.LOOP1
 
 	
 	;now do the extra copy!
@@ -553,19 +554,19 @@ make_screens
 	move.l	screen_c,a1
 	adda.l	#(6*$a0),a1
 	move.w	#32000/4-1,d0
-@LOOP3
+.LOOP3
 	move.l	(a0)+,(a1)+
-	dbf	d0,@LOOP3
+	dbf	d0,.LOOP3
 	move.w	#32000/4-1,d0
-@LOOP5
+.LOOP5
 	move.l	(a0)+,(a1)+
-	dbf	d0,@LOOP5
+	dbf	d0,.LOOP5
 	
 	move.l	screen_c,a1
 	move.w	#($a0*6)/4-1,d0
-@LOOP4
+.LOOP4
 	move.l	(a0)+,(a1)+
-	dbf	d0,@LOOP4
+	dbf	d0,.LOOP4
 	
 	
 extra_extra_copy_my_main_man
@@ -575,19 +576,19 @@ extra_extra_copy_my_main_man
 	move.l	screen_e,a1
 	adda.l	#(4*$a0),a1
 	move.w	#32000/4-1,d0
-@LOOP3
+.LOOP3
 	move.l	(a0)+,(a1)+
-	dbf	d0,@LOOP3
+	dbf	d0,.LOOP3
 	move.w	#32000/4-1,d0
-@LOOP5
+.LOOP5
 	move.l	(a0)+,(a1)+
-	dbf	d0,@LOOP5
+	dbf	d0,.LOOP5
 	
 	move.l	screen_e,a1
 	move.w	#($a0*4)/4-1,d0
-@LOOP4
+.LOOP4
 	move.l	(a0)+,(a1)+
-	dbf	d0,@LOOP4
+	dbf	d0,.LOOP4
 	
 	
 extra2
@@ -597,19 +598,19 @@ extra2
 	move.l	screen_g,a1
 	adda.l	#(2*$a0),a1
 	move.w	#32000/4-1,d0
-@LOOP3
+.LOOP3
 	move.l	(a0)+,(a1)+
-	dbf	d0,@LOOP3
+	dbf	d0,.LOOP3
 	move.w	#32000/4-1,d0
-@LOOP5
+.LOOP5
 	move.l	(a0)+,(a1)+
-	dbf	d0,@LOOP5
+	dbf	d0,.LOOP5
 	
 	move.l	screen_g,a1
 	move.w	#($a0*2)/4-1,d0
-@LOOP4
+.LOOP4
 	move.l	(a0)+,(a1)+
-	dbf	d0,@LOOP4
+	dbf	d0,.LOOP4
 	
 	rts
 
@@ -972,7 +973,7 @@ do_sprites
 	lea	x1,a0
 	lea	px1,a1
 	
-	do	nospr		;All 32 of 'em!
+	rept	nospr		;All 32 of 'em!
  	add.b	d0,(a0)+	;*** Save 40 cycles!
  	add.b	d1,(a0)+
  	add.b	d2,(a0)+
@@ -992,7 +993,7 @@ do_sprites
  	add.b	d7,d5		;Final Y coord
 	move.b	d4,(a1)+
 	move.b	d5,(a1)+
- 	LOOP
+ 	endr
  	
 	move.l	sp2,a3		;Base of Screen data
 	add.l	#6*$a0,a3	;	
@@ -1085,13 +1086,13 @@ change_disp
 	move.b	(a0),d1		;Get Start X
 	move.b	1(a0),d2	;Get Start Y
 	
-	do	nospr		;32 Sprites
+	rept	nospr		;32 Sprites
 	move.b	d1,(a0)		;New X
 	move.b	d2,1(a0)	;New Y
 	add.b	d0,d1		;Calc Next X
 	add.b	d3,d2		;Calc Next Y
 	addq.l	#4,a0		;Next Pointers
-	LOOP
+	endr
 	
 	lea	x1,a0		;Point to table pointers
 	move.w	X2Disp,d0	;Get displacement
@@ -1099,13 +1100,13 @@ change_disp
 	move.b	2(a0),d1	;Get Start X
 	move.b	3(a0),d2	;Get Start Y
 	
-arooga	do	nospr		;32 Sprites
+arooga	rept	nospr		;32 Sprites
 	move.b	d1,2(a0)	;New X
 	move.b	d2,3(a0)	;New Y
 	add.b	d0,d1		;Calc Next X
 	add.b	d3,d2		;Calc Next Y
 	addq.l	#4,a0		;Next Pointers
-	LOOP
+	endr
 	rts
 	
 	
@@ -1158,36 +1159,36 @@ scloop	scr	$0		;
 ***************************
 convert_text
 	lea	message,a0
-@next	
+.next	
 	move.b	(a0),d0
 	tst.b	d0
-	beq	@exit_convert
+	beq	.exit_convert
 
 	cmp.b	#65,d0		
-	blt	@symbols		
+	blt	.symbols		
 	subi.b	#65,d0		
-@trim	
+.trim	
 	move.b	d0,(a0)+
-	bra	@next
+	bra	.next
 
-@symbols
+.symbols
 	cmpi.b	#" ",d0
-	beq	@space	
+	beq	.space	
 	cmpi.b	#"+",d0
-	bgt	@above	
+	bgt	.above	
 	subi.b	#32,d0	
 	addi.b	#26,d0	
-	bra	@trim	
+	bra	.trim	
 
-@space	move.b	#26,d0	
-	bra	@trim	
+.space	move.b	#26,d0	
+	bra	.trim	
 
-@above	subi.b	#32,d0	
+.above	subi.b	#32,d0	
 	addi.b	#25,d0	
-	bra	@trim
+	bra	.trim
 	
 
-@exit_convert
+.exit_convert
 	move.b	#$ff,(a0)+
 	rts
 	
@@ -1217,7 +1218,7 @@ nibble1	lea	put_data,a1		;<--- Rewrite this - PLEASE!
 c1	set	0
 c2	set	0
 
-	do	16
+	rept	16
 	move.b	c2(a0),d5	;
 	andi.b	#$f,d5		;
 	move.b	c1(a1),d6	;
@@ -1226,7 +1227,7 @@ c2	set	0
 	move.b	d6,c1(a1)	;
 c1	set	40+c1
 c2	set	$3+c2
-	LOOP
+	endr
 	
 nib_xit	addq.b	#1,slice	;
 	cmpi.b	#6,slice	;
@@ -1240,7 +1241,7 @@ nibble2	lea	put_data,a1	;
 	
 c1	set	0
 c2	set	0
-	do	16
+	rept	16
 	move.w	#16-1,d0	;
 	move.b	c2(a0),d5	;
 	lsr.b	#4,d5		;
@@ -1251,7 +1252,7 @@ c2	set	0
 	move.b	d6,c1(a1)	;
 c1	set	40+c1
 c2	set	$3+c2
-	LOOP
+	endr
 
 	bra	nib_xit		;
 				;
@@ -1263,7 +1264,7 @@ c2	set	$3+c2
 print_scroller
 	lea	scroll_data,a1
 	
-	do	16
+	rept	16
 	move.w	(a1)+,$0+4(a2)
 	move.w	(a1)+,$8+4(a2)
 	move.w	(a1)+,$10+4(a2)
@@ -1285,7 +1286,7 @@ print_scroller
 	move.w	(a1)+,$90+4(a2)
 	move.w	(a1)+,$98+4(a2)
 	adda.l	#$a0,a2
-	LOOP
+	endr
 	
 	rts
 
@@ -1294,7 +1295,7 @@ print_scroller
 *******************************************
 remove_scroller
 	moveq.w	#0,d0
-	do	8
+	rept	8
 	move.w	d0,$0+4(a2)
 	move.w	d0,$8+4(a2)
 	move.w	d0,$10+4(a2)
@@ -1316,9 +1317,9 @@ remove_scroller
 	move.w	d0,$90+4(a2)
 	move.w	d0,$98+4(a2)
 	adda.l	#$a0,a2
-	LOOP
+	endr
 	adda.l	#15*$a0,a2	;now the bottom lines too!
-	do	8
+	rept	8
 	move.w	d0,$0+4(a2)
 	move.w	d0,$8+4(a2)
 	move.w	d0,$10+4(a2)
@@ -1340,7 +1341,7 @@ remove_scroller
 	move.w	d0,$90+4(a2)
 	move.w	d0,$98+4(a2)
 	adda.l	#$a0,a2
-	LOOP
+	endr
 	
 	rts
 
@@ -1410,8 +1411,8 @@ make_sprites
 clear_buf
 	lea	work,a3
 	move.w	#4*32-1,d0
-@LOOP	clr.w	(a3)+
-	dbf	d0,@LOOP
+.LOOP	clr.w	(a3)+
+	dbf	d0,.LOOP
 	rts	
 	
 make_and_do
@@ -1510,7 +1511,7 @@ shift
 	* FONT *
 	********
 		
-char_set	incbin	C:\ASM\INSIG\font2.dat
+char_set	incbin	font2.dat
 
 	even
 		
@@ -1657,7 +1658,7 @@ message
 
 	EVEN
 
-char		incbin	C:\ASM\INSIG\sprite.dat	;16x16 Character Set
+char		incbin	sprite.dat	;16x16 Character Set
 
 		even
 
@@ -1668,7 +1669,7 @@ blank_palette	dc.w	0,0,0,0
 					
 old_palette	ds.w	16
 
-music		incbin	C:\ASM\INSIG\seven.mus
+music		incbin	seven.mus
 	
 pic		incbin	fingpic.img
 picture		equ	pic+34
@@ -1678,8 +1679,8 @@ new_palette	equ	pic+2
 		* The Two 256 byte Sine Tables *
 		********************************
 		
-vertical	incbin	C:\ASM\INSIG\table100.dat
-vertical2	incbin	C:\ASM\INSIG\table40.dat
+vertical	incbin	table100.dat
+vertical2	incbin	table40.dat
 
 sp_pal0 	dc.w $400,$511,$622 ;Red
 sp_pal1 	dc.w $112,$223,$234 ;Blue
@@ -1996,4 +1997,4 @@ screens		ds.l	1
 
 
 
-
+
