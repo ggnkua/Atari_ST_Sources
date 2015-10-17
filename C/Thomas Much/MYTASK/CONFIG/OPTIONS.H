@@ -1,0 +1,199 @@
+/* Resource Datei Indizes fÅr OPTIONS */
+
+#define G_MAIN           0   /* Formular/Dialog */
+#define OPT_OK           1   /* BUTTON in Baum G_MAIN */
+#define OPT_BACK_ALLGEM  2   /* BUTTON in Baum G_MAIN */
+#define OPT_TIME2_BACK   5   /* BUTTON in Baum G_MAIN */
+#define OPT_FORMAT_TIME2 6   /* FTEXT in Baum G_MAIN */
+#define OPT_TIME1_BACK   7   /* BUTTON in Baum G_MAIN */
+#define OPT_FORMAT_TIME1 8   /* FTEXT in Baum G_MAIN */
+#define OPT_VAPROTOSTAT  9   /* BUTTON in Baum G_MAIN */
+#define OPT_AVNOTOS      10  /* BUTTON in Baum G_MAIN */
+#define OPT_AVIGNORE     11  /* BUTTON in Baum G_MAIN */
+#define OPT_MAGXFADEOUT  12  /* BUTTON in Baum G_MAIN */
+#define OPT_TOSMULTISTAR 13  /* BUTTON in Baum G_MAIN */
+#define OPT_AVNOACC      14  /* BUTTON in Baum G_MAIN */
+#define OPT_DHSTCOOKIE   15  /* BUTTON in Baum G_MAIN */
+#define OPT_SAVELINKS    16  /* BUTTON in Baum G_MAIN */
+#define OPT_NAME         19  /* FTEXT in Baum G_MAIN */
+#define OPT_SCHRITT      22  /* TEXT in Baum G_MAIN */
+#define OPT_SCHRITT_BAR  23  /* BUTTON in Baum G_MAIN */
+#define OPT_SCHRITT_CUR  24  /* BUTTON in Baum G_MAIN */
+#define OPT_FENSTERNUMME 25  /* BUTTON in Baum G_MAIN */
+#define OPT_ACCSYSTRAY   26  /* BUTTON in Baum G_MAIN */
+#define OPT_HTML_SEPARAT 27  /* BUTTON in Baum G_MAIN */
+#define OPT_BACK_STIC    28  /* BUTTON in Baum G_MAIN */
+#define OPT_STIC_POPUP   29  /* BUTTON in Baum G_MAIN */
+#define OPT_STIC_APPTRAY 30  /* BUTTON in Baum G_MAIN */
+#define OPT_STIC_TXTBUTT 32  /* BUTTON in Baum G_MAIN */
+#define OPT_STIC_BUTT    33  /* BUTTON in Baum G_MAIN */
+#define OPT_TEXT_BUTT    34  /* BUTTON in Baum G_MAIN */
+#define OPT_BACK_BEDINUN 35  /* BUTTON in Baum G_MAIN */
+#define OPT_NOQUITALERT  36  /* BUTTON in Baum G_MAIN */
+#define OPT_DOCUMENTS    37  /* BUTTON in Baum G_MAIN */
+#define OPT_DRIVES       38  /* BUTTON in Baum G_MAIN */
+#define OPT_AUTOHIDE     39  /* BUTTON in Baum G_MAIN */
+#define OPT_LANGUAGE_BUT 40  /* BUTTON in Baum G_MAIN */
+#define OPT_LANGUAGE_CYC 41  /* BUTTON in Baum G_MAIN */
+#define OPT_AUTOTOP_BACK 42  /* BUTTON in Baum G_MAIN */
+#define OPT_AUTOTOPSMART 43  /* BUTTON in Baum G_MAIN */
+#define OPT_AUTOTOPNORMA 44  /* BUTTON in Baum G_MAIN */
+#define OPT_AUTOTOP      45  /* BUTTON in Baum G_MAIN */
+#define OPT_DOPPEL_TIME  46  /* BUTTON in Baum G_MAIN */
+#define OPT_DOPPEL_BACK  47  /* BUTTON in Baum G_MAIN */
+#define OPT_DOPPEL_TXT   48  /* FTEXT in Baum G_MAIN */
+#define OPT_BACK_COLORS  49  /* BUTTON in Baum G_MAIN */
+#define OPT_COL_APP_TXT  54  /* BUTTON in Baum G_MAIN */
+#define OPT_COL_APP_COL  55  /* BOX in Baum G_MAIN */
+#define OPT_COL_ACC_TXT  56  /* BUTTON in Baum G_MAIN */
+#define OPT_COL_ACC_COL  57  /* BOX in Baum G_MAIN */
+#define OPT_COL_SYS_TXT  58  /* BUTTON in Baum G_MAIN */
+#define OPT_COL_SYS_COL  59  /* BOX in Baum G_MAIN */
+#define OPT_COL_SHE_TXT  60  /* BUTTON in Baum G_MAIN */
+#define OPT_COL_SHE_COL  61  /* BOX in Baum G_MAIN */
+#define OPT_COL_APP_CYC  62  /* BUTTON in Baum G_MAIN */
+#define OPT_COL_ACC_CYC  63  /* BUTTON in Baum G_MAIN */
+#define OPT_COL_SYS_CYC  64  /* BUTTON in Baum G_MAIN */
+#define OPT_COL_SHE_CYC  65  /* BUTTON in Baum G_MAIN */
+#define OPT_COL_CAPSONBU 67  /* BUTTON in Baum G_MAIN */
+#define OPT_COL_CAPSONCO 68  /* BOX in Baum G_MAIN */
+#define OPT_COL_CAPSONCY 69  /* BUTTON in Baum G_MAIN */
+#define OPT_COL_CAPSOFBU 71  /* BUTTON in Baum G_MAIN */
+#define OPT_COL_CAPSOFCO 72  /* BOX in Baum G_MAIN */
+#define OPT_COL_CAPSOFCY 73  /* BUTTON in Baum G_MAIN */
+#define OPT_TEX_APP_BACK 74  /* BUTTON in Baum G_MAIN */
+#define OPT_TEX_APP_COL  75  /* BOX in Baum G_MAIN */
+#define OPT_TEX_APP_CYC  76  /* BUTTON in Baum G_MAIN */
+#define OPT_TEX_ACC_BACK 77  /* BUTTON in Baum G_MAIN */
+#define OPT_TEX_ACC_COL  78  /* BOX in Baum G_MAIN */
+#define OPT_TEX_ACC_CYC  79  /* BUTTON in Baum G_MAIN */
+#define OPT_TEX_SYS_BACK 80  /* BUTTON in Baum G_MAIN */
+#define OPT_TEX_SYS_COL  81  /* BOX in Baum G_MAIN */
+#define OPT_TEX_SYS_CYC  82  /* BUTTON in Baum G_MAIN */
+#define OPT_TEX_SHE_BACK 83  /* BUTTON in Baum G_MAIN */
+#define OPT_TEX_SHE_COL  84  /* BOX in Baum G_MAIN */
+#define OPT_TEX_SHE_CYC  85  /* BUTTON in Baum G_MAIN */
+#define OPT_TEX_CON_BACK 86  /* BUTTON in Baum G_MAIN */
+#define OPT_TEX_CON_COL  87  /* BOX in Baum G_MAIN */
+#define OPT_TEX_CON_CYC  88  /* BUTTON in Baum G_MAIN */
+#define OPT_TEX_COFF_BAC 89  /* BUTTON in Baum G_MAIN */
+#define OPT_TEX_COFF_COL 90  /* BOX in Baum G_MAIN */
+#define OPT_TEX_COFF_CYC 91  /* BUTTON in Baum G_MAIN */
+#define OPT_COL_BACK     92  /* BUTTON in Baum G_MAIN */
+#define OPT_COL_TEXT     93  /* BUTTON in Baum G_MAIN */
+#define OPT_COL_FREEZYBU 95  /* BUTTON in Baum G_MAIN */
+#define OPT_COL_FREEZYCO 96  /* BOX in Baum G_MAIN */
+#define OPT_COL_FREEZYCY 97  /* BUTTON in Baum G_MAIN */
+#define OPT_TEX_FREE_BAC 98  /* BUTTON in Baum G_MAIN */
+#define OPT_TEX_FREE_COL 99  /* BOX in Baum G_MAIN */
+#define OPT_TEX_FREE_CYC 100 /* BUTTON in Baum G_MAIN */
+#define OPT_COL_HIDDENBU 102 /* BUTTON in Baum G_MAIN */
+#define OPT_COL_HIDDENCO 103 /* BOX in Baum G_MAIN */
+#define OPT_COL_HIDDENCY 104 /* BUTTON in Baum G_MAIN */
+#define OPT_TEX_HIDD_BAC 105 /* BUTTON in Baum G_MAIN */
+#define OPT_TEX_HIDD_COL 106 /* BOX in Baum G_MAIN */
+#define OPT_TEX_HIDD_CYC 107 /* BUTTON in Baum G_MAIN */
+#define OPT_KAT_BUT      108 /* BUTTON in Baum G_MAIN */
+#define OPT_KAT_CYC      109 /* BUTTON in Baum G_MAIN */
+#define OPT_SETZE        110 /* BUTTON in Baum G_MAIN */
+#define OPT_BACK_DONOTSH 111 /* BUTTON in Baum G_MAIN */
+#define OPT_APP_BACK_1   112 /* BUTTON in Baum G_MAIN */
+#define OPT_NOTSHOW_TXT1 113 /* BUTTON in Baum G_MAIN */
+#define OPT_NOTSHOW_TXT2 114 /* BUTTON in Baum G_MAIN */
+#define OPT_NOTSHOW_TXT3 115 /* BUTTON in Baum G_MAIN */
+#define OPT_NOTSHOW_TXT4 116 /* BUTTON in Baum G_MAIN */
+#define OPT_NOTSHOW_TXT5 117 /* BUTTON in Baum G_MAIN */
+#define OPT_NOTSHOW_TXT6 118 /* BUTTON in Baum G_MAIN */
+#define OPT_NOTSHOW_TXT7 119 /* BUTTON in Baum G_MAIN */
+#define OPT_NOTSHOW_TXT8 120 /* BUTTON in Baum G_MAIN */
+#define OPT_NOTSHOW_UP   121 /* BUTTON in Baum G_MAIN */
+#define OPT_NOTSHOW_BAR  122 /* BUTTON in Baum G_MAIN */
+#define OPT_NOTSHOW_SLID 123 /* BUTTON in Baum G_MAIN */
+#define OPT_NOTSHOW_DOWN 124 /* BUTTON in Baum G_MAIN */
+#define OPT_KAT_APP_BUT  125 /* BUTTON in Baum G_MAIN */
+#define OPT_KAT_APP_CYC  126 /* BUTTON in Baum G_MAIN */
+#define OPT_VER_DELETE   127 /* BUTTON in Baum G_MAIN */
+#define OPT_VER_ADD      128 /* BUTTON in Baum G_MAIN */
+#define OPT_VER_SORT     129 /* BUTTON in Baum G_MAIN */
+#define OPT_APP_BACK_2   130 /* BUTTON in Baum G_MAIN */
+#define OPT_NOTSHOW_ALI1 131 /* BUTTON in Baum G_MAIN */
+#define OPT_NOTSHOW_ALI2 132 /* BUTTON in Baum G_MAIN */
+#define OPT_NOTSHOW_ALI3 133 /* BUTTON in Baum G_MAIN */
+#define OPT_NOTSHOW_ALI4 134 /* BUTTON in Baum G_MAIN */
+#define OPT_NOTSHOW_ALI5 135 /* BUTTON in Baum G_MAIN */
+#define OPT_NOTSHOW_ALI6 136 /* BUTTON in Baum G_MAIN */
+#define OPT_NOTSHOW_ALI7 137 /* BUTTON in Baum G_MAIN */
+#define OPT_NOTSHOW_ALI8 138 /* BUTTON in Baum G_MAIN */
+#define OPT_BACK_MAUS    139 /* BUTTON in Baum G_MAIN */
+#define OPT_E_R_B        142 /* BUTTON in Baum G_MAIN */
+#define OPT_E_R_C        143 /* BUTTON in Baum G_MAIN */
+#define OPT_E_L_B        144 /* BUTTON in Baum G_MAIN */
+#define OPT_E_L_C        145 /* BUTTON in Baum G_MAIN */
+#define OPT_A_R_B        152 /* BUTTON in Baum G_MAIN */
+#define OPT_A_R_C        153 /* BUTTON in Baum G_MAIN */
+#define OPT_A_L_B        154 /* BUTTON in Baum G_MAIN */
+#define OPT_A_L_C        155 /* BUTTON in Baum G_MAIN */
+#define OPT_C_R_B        156 /* BUTTON in Baum G_MAIN */
+#define OPT_C_R_C        157 /* BUTTON in Baum G_MAIN */
+#define OPT_C_L_B        158 /* BUTTON in Baum G_MAIN */
+#define OPT_C_L_C        159 /* BUTTON in Baum G_MAIN */
+#define OPT_S_R_B        160 /* BUTTON in Baum G_MAIN */
+#define OPT_S_R_C        161 /* BUTTON in Baum G_MAIN */
+#define OPT_S_L_B        162 /* BUTTON in Baum G_MAIN */
+#define OPT_S_L_C        163 /* BUTTON in Baum G_MAIN */
+#define OPT_KLICK        164 /* BUTTON in Baum G_MAIN */
+#define OPT_DOPPELKLICK  165 /* BUTTON in Baum G_MAIN */
+#define OPT_BACK_KONTEXT 166 /* BUTTON in Baum G_MAIN */
+#define OPT_KONT_BACK    167 /* BUTTON in Baum G_MAIN */
+#define OPT_KONT_LAST    168 /* BUTTON in Baum G_MAIN */
+#define OPT_KONT_L1      183 /* BUTTON in Baum G_MAIN */
+#define OPT_BACK_SKINS   184 /* BUTTON in Baum G_MAIN */
+#define OPT_BACK_RSC     185 /* BUTTON in Baum G_MAIN */
+#define OPT_EXT_RSC      186 /* FTEXT in Baum G_MAIN */
+#define OPT_EXT_RSC_BUTT 187 /* BUTTON in Baum G_MAIN */
+#define OPT_BACK_RSC_NR  190 /* BUTTON in Baum G_MAIN */
+#define OPT_EXT_RSC_NR   191 /* FTEXT in Baum G_MAIN */
+#define OPT_ICONTEXT_ST  192 /* BUTTON in Baum G_MAIN */
+#define OPT_BACK_RSC_NRA 195 /* BUTTON in Baum G_MAIN */
+#define OPT_EXT_RSC_NRAP 196 /* FTEXT in Baum G_MAIN */
+#define OPT_ICONTEXT_APP 197 /* BUTTON in Baum G_MAIN */
+
+#define G_POPUP_KAT      1   /* Formular/Dialog */
+
+#define G_POPUP_MOUSE    2   /* Formular/Dialog */
+
+#define G_POPUP_LANGUAGE 3   /* Formular/Dialog */
+
+#define G_POPUP_FARBEN   4   /* Formular/Dialog */
+#define COWHITE          17  /* STRING in Baum G_POPUP_FARBEN */
+#define COBLACK          18  /* STRING in Baum G_POPUP_FARBEN */
+#define CORED            19  /* STRING in Baum G_POPUP_FARBEN */
+#define COGREEN          20  /* STRING in Baum G_POPUP_FARBEN */
+#define COCYAN           22  /* STRING in Baum G_POPUP_FARBEN */
+#define COYELLOW         23  /* STRING in Baum G_POPUP_FARBEN */
+#define COMAGENT         24  /* STRING in Baum G_POPUP_FARBEN */
+#define COLGREY          25  /* STRING in Baum G_POPUP_FARBEN */
+#define CODGREY          26  /* STRING in Baum G_POPUP_FARBEN */
+#define CODRED           27  /* STRING in Baum G_POPUP_FARBEN */
+#define CODGREEN         28  /* STRING in Baum G_POPUP_FARBEN */
+#define CODYELLO         31  /* STRING in Baum G_POPUP_FARBEN */
+#define CODMAGEN         32  /* STRING in Baum G_POPUP_FARBEN */
+
+#define G_POPUP_APPL     5   /* Formular/Dialog */
+#define APP_VERSTECKTE   1   /* STRING in Baum G_POPUP_APPL */
+#define APP_ALIASES      2   /* STRING in Baum G_POPUP_APPL */
+#define APP_IKONS        3   /* STRING in Baum G_POPUP_APPL */
+
+#define G_POPUP_APPL_VER 6   /* Formular/Dialog */
+
+#define G_POPUP_TEXTU    7   /* Formular/Dialog */
+#define FI0              1   /* BOX in Baum G_POPUP_TEXTU */
+#define FI1              2   /* BOX in Baum G_POPUP_TEXTU */
+#define FI2              3   /* BOX in Baum G_POPUP_TEXTU */
+#define FI3              4   /* BOX in Baum G_POPUP_TEXTU */
+#define FI4              5   /* BOX in Baum G_POPUP_TEXTU */
+#define FI5              6   /* BOX in Baum G_POPUP_TEXTU */
+#define FI6              7   /* BOX in Baum G_POPUP_TEXTU */
+#define FI7              8   /* BOX in Baum G_POPUP_TEXTU */
+
+#define G_POPUP_KONTEXT  8   /* Formular/Dialog */

@@ -1,0 +1,549 @@
+ **************************
+ *                        *
+ *  Calling MaxiFile III  *
+ *                        *
+ **************************
+
+ Documentation by Charles F. Johnson.
+ Last revision: Tuesday, April 16, 1991
+
+ Copyright 1991 CodeHead Software.
+ All Rights Reserved.
+
+ MaxiFile III is a tradename of CodeHead Software.
+
+
+ What This Is About
+ ******************
+
+ This document describes the "back door" built into MaxiFile III,
+ CodeHead Software's powerful file/disk management utility.  When
+ MaxiFile III is installed as a GEM desk accessory (or loaded into
+ CodeHead's MultiDesk), it is possible to inquire for its
+ presence, and call it with a simple subroutine jump.  When
+ MaxiFile then returns to your calling application, it passes back
+ the address of a structure that can be used to allow you to
+ select multiple files in any directory, for whatever purpose your
+ application has in mind.  To do this requires very little code,
+ and MaxiFile even gives you a pointer to an important subroutine
+ you can use to make things still easier. 
+
+ The techniques described here require that MaxiFile version 3.0 or
+ later be installed as a desk accessory on the user's system.
+
+ One application that uses MaxiFile III in the manner described in
+ this document is ARC Shell 2.5, from Little Green Footballs
+ Software (not affiliated with CodeHead Software).  ARC Shell
+ calls MaxiFile III to get a list of files to archive, all with
+ one action on the part of the user.  ARC Shell even takes this
+ concept one step further, and lets the user hold Shift to reenter
+ MaxiFile, selecting more items from other directories.  MaxiFile's
+ "multiple item selection" abilities can be very powerful. 
+
+
+ How to Detect MaxiFile III
+ **************************
+
+ To find out if you can access MaxiFile III, your code must make a
+ TRAP #13 call, passing it a function number that is not defined
+ by the system's BIOS handler.  This function code is 'M3' in
+ ASCII or $4D33 in hexadecimal.  If MaxiFile III is present, it
+ detects this call and returns the address of its entry point (and
+ indirectly, a pointer to some other important data structures
+ too...more later).  If MaxiFile III is not installed, the "bogus"
+ BIOS call returns with no harmful effects.  (Honest.  We checked
+ with Atari.)
+
+ Here's the code to detect MaxiFile III, in assembly language:
+
+ ------------------------------------------------------------------------
+        movem.l d5,-(sp)     ; Save register D5 for dumb C compilers
+        moveq   #0,d5        ; Clear D5 in preparation
+        move    #'M3',-(sp)  ; Is MaxiFile 3.0 somewhere in the vicinity?
+        trap    #13          ; Perform the trap
+        addq.l  #2,sp        ; Tidy up like a good little programmer
+        move.l  d5,d0        ; Return the pointer (or zero) in D0
+        movem.l (sp)+,d5     ; Restore D5 (movem does not change the CCR!)
+        beq.s   nope         ; If D5 was still zero after the trap,
+                             ;  then MaxiFile isn't here
+ ------------------------------------------------------------------------
+
+ As the comments describe, this code returns either a pointer to
+ MaxiFile III's entry point or zero to indicate that MaxiFile III
+ is not installed.  MaxiFile returns its pointer in register D5
+ for a reason.  Since D5 is not altered by the system BIOS handler
+ you can be sure that if the value changes, it was MaxiFile that
+ changed it.  (Note: the code above, however, takes pains to
+ preserve D5 and return the pointer in D0, in deference to C-style
+ return conventions.)
+
+ One thing you'll probably want to do is set MaxiFile's path
+ before calling it, similar to setting the path for a fsel_input
+ call.  The longword located four bytes before the address
+ returned by this TRAP #13 call contains a pointer to MaxiFile's
+ configuration buffer, which contains its source and destination
+ paths (zero-terminated, of course).  MaxiFile's entry point,
+ then, looks something like this (in fact, it looks exactly like
+ this):
+
+ ------------------------------------------------------------------------
+         dc.l    max_config   ; Pointer to MaxiFile III's config area
+
+ max_entry:                   ; Entry point returned by 'M3' BIOS call
+         .
+         .                    ; MaxiFile's code
+         .
+ ------------------------------------------------------------------------
+
+ The only areas of the MaxiFile configuration buffer that concern
+ an external program are the source and destination paths.  These
+ are located right at the beginning of the buffer, immediately
+ after a longword version number.  It's laid out like so:
+
+ ------------------------------------------------------------------------
+ magic:  dc.l    'MF30'       ; MaxiFile's version # in ASCII
+ source: dcb.b   128,0        ; 128 bytes for the source path
+ dest:   dcb.b   128,0        ; 128 bytes for the destination path
+ ------------------------------------------------------------------------
+
+ If you do want to change MaxiFile's source and/or destination
+ paths, it would be thoughtful and kind of you to save their
+ current contents and restore them when you're finished. 
+
+ When you set MaxiFile's source and/or destination path, you must
+ keep in mind that paths are expected to adhere to a rigid format:
+ the path string must start with an uppercase drive letter,
+ followed by a colon and a backslash, and it must be terminated
+ with "*.*" plus a null byte. 
+
+ This works:
+
+   C:\AUTO\DESKMGR\*.*
+   A:\*.*
+
+ This doesn't work:
+
+   \AUTO\DESKMGR\*.*
+   C:\AUTO\
+   C:\AUTO\*
+   *.*
+   C:\AUTO\DESKMGR\*.INF
+   a:\*.*
+
+
+ How to Call MaxiFile III
+ ************************
+
+ Once you've determined that MaxiFile III is installed, and gotten
+ the address of its entry point, the next step you'll probably
+ want to take is to actually call the danged thing.  This is just
+ as simple as finding out if it's around. 
+
+ Here's the assembly code which calls MaxiFile through its back
+ door (assuming that the pointer returned from the code above has
+ been saved in the longword variable called "maxiback"):
+
+ ------------------------------------------------------------------------
+         movem.l d1-a6,-(sp)  ; MaxiFile does NOT save any registers!
+
+         move.l  maxiback,d0  ; Get pointer to MaxiFile entry point
+         beq.s   dont         ; If MaxiFile isn't here, forget it
+
+         move.l  d0,a0        ; Put the pointer where it can do some good
+         move.l  #'MFBD',d3   ; Magic longword
+         lea     exit_text,a3 ; Pointer to text string for 'EXIT' button
+         jsr     (a0)         ; Call MaxiFile ("HEY, MAXIFILE!")
+
+ dont:   movem.l (sp)+,d1-a6  ; Restore everything except D0
+ ------------------------------------------------------------------------
+
+ The first thing you need to know about calling MaxiFile is that
+ it doesn't save any registers.  If preserving the 680x0 registers
+ is important to you, then you should be sure to save them before
+ calling MaxiFile III's back door entry point.  The code above
+ does this; it saves all registers except D0.  When MaxiFile III
+ returns to your calling code, register A0 holds a pointer to
+ MaxiFile's "return structure" -- more on this below. 
+
+ You should make sure that you have plenty of stack space when you
+ call MaxiFile; we recommend a minimum of 8K.  Depending on what
+ the user asks it to do, MaxiFile can be very "stack-hungry."
+ (Recursive routines are like that.)
+
+ MaxiFile can be called from either user or supervisor mode; if
+ you call it from supervisor mode, however, you must make sure
+ that there is a valid user stack pointer (USP) as well as a valid
+ supervisor stack pointer (SSP). 
+
+ There are two parameters that _must_ be passed to MaxiFile III
+ when you call it.  Both parameters must be present or MaxiFile
+ will crash.  Those parameters are:
+
+ 1) a "magic cookie" to tell MaxiFile it's being called from an
+    external program.  That value is 'MFBD' in ASCII ($4D464244 in
+    hexadecimal), and it is passed in register D3. 
+
+ 2) a pointer to a text string, which MaxiFile will insert into
+    its 'EXIT' button to let the user know from whence it was
+    called.  This text string can be a maximum of 5 bytes in
+    length, and must be zero-terminated.  The pointer is passed to
+    MaxiFile in register A3. 
+
+
+ MaxiFile III's Return Structure
+ *******************************
+
+ When it comes back from being called in the manner described
+ above, MaxiFile leaves register A0 pointing at a structure
+ containing information which can be used to discover which items
+ were selected by the user in the source directory when he/she
+ exited. 
+
+ You don't _have_ to do anything with this return structure
+ information; it's provided in case you wish to use MaxiFile III
+ as a "multiple file selection" tool.  If you want to allow the
+ user access to MaxiFile solely to take advantage of its file
+ management features, and ignore the return structure entirely,
+ there's nothing wrong with that. 
+
+ In case you do want to use it, here's the MaxiFile return
+ structure:
+
+ ------------------------------------------------------------------------
+ max_return:
+ ret_magic:      ds.l    1       ; Magic version number
+ max_xywh:       ds.w    4       ; Redraw coordinates
+ src_pointer:    ds.l    1       ; Pointer to source path
+ dst_pointer:    ds.l    1       ; Pointer to dest path
+ src_array:      ds.l    1       ; Pointer to source array of pointers
+ dst_array:      ds.l    1       ; Pointer to dest array of pointers
+ src_cnt:        ds.w    1       ; Count of source names
+ dst_cnt:        ds.w    1       ; Count of dest names
+ max_type:       ds.w    1       ; Flag for dual display mode
+ struc_rtn:      ds.l    1       ; Pointer to struc-DOS translation routine
+ ------------------------------------------------------------------------
+
+ Here are explanations of the various elements in this structure:
+
+ ret_magic     (longword) A 4-letter ASCII value indicating the
+               version number of MaxiFile III.  In version 3.0,
+               this longword is 'MF30'. 
+
+ max_xywh      (4 words) X, Y, Width, and Height coordinates of
+               the screen area "dirtied" by MaxiFile.  These four
+               words are also returned as two longwords in
+               registers D0 and D1.
+
+ src_pointer   (longword) Pointer to MaxiFile's source path.  This
+               is the path MaxiFile was displaying in its source
+               directory when the user exited.
+
+ dst_pointer   (longword) Pointer to destination path.
+
+ src_array     (longword) Pointer to an array of longword pointers
+               to MaxiFile's "item structures," for the source
+               directory.  MaxiFile's sort routines manipulate
+               this array of pointers; therefore, reading through
+               the pointer array consecutively will give you the
+               items in MaxiFile's current sorted order.  This
+               array always contains valid information. 
+
+ dst_array     (longword) Pointer to an array of pointers to the
+               items in MaxiFile's destination directory.  NOTE:
+               this array may or may not be valid, depending on
+               the state of max_type (see below). 
+
+ src_cnt       (word) Number of items in MaxiFile's source
+               directory.  NOTE: this value could be zero.
+
+ dst_cnt       (word) Number of items in the destination directory.
+               NOTE: may or may not be valid, depending on the
+               value of max_type (see below). 
+
+ max_type      (word) A flag indicating MaxiFile's "mode" at time
+               of exit.  If this flag is zero, MaxiFile was in
+               "Source Only" mode, and dst_array and dst_cnt are
+               not valid.  If the flag is one, MaxiFile was in
+               "Dual Display Mode" mode, and dst_array and dst_cnt
+               are valid. 
+
+ struc_rtn     (longword) Pointer to a subroutine that translates
+               item names from the "display" format used in
+               MaxiFile's item structures, to a GEMDOS format
+               suitable for file manipulations.  The subroutine
+               requires two parameters, passed in A0 and A1: 1)
+               the address of the start of the item structure
+               containing the name to translate, and 2) the
+               address of an area where the translated
+               GEMDOS-format string will be stored. 
+
+
+ MaxiFile III's "Item Structure"
+ *******************************
+
+ To find out which (if any) items were selected when the user
+ exited MaxiFile, it's necessary to look through MaxiFile's "item
+ structures."  The entry labeled "src_array" above, contains a
+ pointer to an array of pointers to these structures.  (Note the
+ two levels of indirection!)
+
+ Version 3.0 of MaxiFile has a limit of 400 files in any one
+ directory, so you should make allowances for a maximum of 400
+ possible selected items. 
+
+ The MaxiFile "item structure" is as follows:
+
+ ------------------------------------------------------------------------
+ mfolder:        ds.b    2   ; If folder, the 1st byte here is ASCII 7
+ mname:          ds.b    8   ; Start of item name field
+ mspace:         ds.b    1   ; A space separator (for display purposes)
+ mextension:     ds.b    4   ; Start of extension field (zero-terminated)
+ mselect:        ds.b    1   ; Selected flag (0=not selected)
+ mattrib:        ds.w    1   ; File attributes
+ mdate:          ds.w    1   ; Date stamp
+ mtime:          ds.w    1   ; Time stamp
+ msize:          ds.l    1   ; File size
+ mscalar:        ds.w    0   ; Length of structure
+ ------------------------------------------------------------------------
+
+
+ Putting It All Together
+ ***********************
+
+ Here's some sample code that demonstrates how to inquire for
+ MaxiFile's presence, call it, and use the return structure to
+ build an array of selected file/folder names.  The first example
+ is in assembly, and it does not take any care to preserve
+ registers; if you wish to incorporate this code into a C program,
+ you'll have to be a bit more meticulous about this. 
+
+ Following the assembly example is an example of the same sort of
+ code written in GFA Basic.
+
+
+ Assembly Code Example
+ *********************
+
+
+ * Example code to call MaxiFile and return multiple selected items
+ * By Charles F. Johnson
+ * April 16, 1991
+
+ * MaxiFile return structure
+
+         .ABS
+
+ max_return:
+ ret_magic:      ds.l    1    ; Magic version number
+ max_xywh:       ds.w    4    ; Redraw coordinates
+ src_pointer:    ds.l    1    ; Pointer to source path
+ dst_pointer:    ds.l    1    ; Pointer to dest path
+ src_array:      ds.l    1    ; Pointer to source array of pointers
+ dst_array:      ds.l    1    ; Pointer to dest array of pointers
+ src_cnt:        ds.w    1    ; Count of source names
+ dst_cnt:        ds.w    1    ; Count of dest names
+ max_type:       ds.w    1    ; Flag for dual display mode
+ struc_rtn:      ds.l    1    ; Pointer to struc-DOS translation routine
+ ret_scalar:     ds.w    0
+
+ * MaxiFile item structure
+
+         .ABS
+
+ max_item:
+ mfolder:        ds.b    2    ; If folder, the 1st byte here is ASCII 7
+ mname:          ds.b    8    ; Start of item name field
+ mspace:         ds.b    1    ; A space separator (for display purposes)
+ mextension:     ds.b    4    ; Start of extension field (zero-terminated)
+ mselect:        ds.b    1    ; Selected flag (0=not selected)
+ mattrib:        ds.w    1    ; File attributes
+ mdate:          ds.w    1    ; Date stamp
+ mtime:          ds.w    1    ; Time stamp
+ msize:          ds.l    1    ; File size
+ mscalar:        ds.w    0    ; Length of structure
+
+ * Start of code
+
+         .TEXT
+
+         .
+         .
+         .                    ; Initialization stuff here
+         .
+         .
+
+         moveq   #0,d5        ; Clear D5 in preparation
+         move    #'M3',-(sp)  ; Is MaxiFile 3.0 somewhere in the vicinity?
+         trap    #13          ; Perform the trap
+         addq.l  #2,sp        ; Dat ol' stack magic
+
+         move.l  d5,maxiback  ; Save returned address (or zero)
+
+         .
+         .
+         .                    ; More code here
+         .
+         .
+
+         bsr     callmaxi     ; Go call MaxiFile
+
+         .
+         .
+         .                    ; Rest of the program
+         .
+         .
+
+
+ * Subroutine to call MaxiFile and build array of selected item pathnames
+
+ callmaxi:
+         move.l  maxiback,d0      ; Get pointer to MaxiFile entry point
+         beq     .exit            ; If MaxiFile isn't here, just forget it
+
+         move.l  d0,a0            ; Put the pointer where it can do some good
+         move.l  #'MFBD',d3       ; Magic longword (MaxiFile Back Door)
+         lea     exit_text,a3     ; Pointer to text string for 'EXIT' button
+         jsr     (a0)             ; Call MaxiFile
+
+         clr     maxcount         ; Clear count of selected items 
+         move.l  a0,a6            ; Save pointer to return structure in A6
+         move.l  src_array(a6),a3 ; Pointer to MaxiFile's array of pointers
+         lea     select_array,a4  ; Pointer to example's array of pathnames
+         move    src_cnt(a6),d5   ; Ge    4count of items in source directory
+         beq     .exit            ; If this directory was empty, forget it
+
+         subq    #1,d5            ; Subtract 1 to use as dbf counter
+
+ .loop:  move.l  (a3)+,a0         ; Ge  pointer from MaxiFile array
+         tst.b   mselect(a0)      ; Is this item selected?
+         beq     .next            ; If not, go check the next structure
+
+         addq    #1,maxcount      ; Increment count of selected items
+
+         move.l  src_pointer(a6),a2 ; Pointer to MaxiFile's source path
+         move.l  a4,a1            ; Pointer to example's array of pathnames
+ .path1: move.b  (a2)+,(a1)+      ; Copy the path until
+         bne     .path1           ; a null is reached
+ .path2: cmp.b   #'\',-(a1)       ; Look back for the last backslash
+         bne     .path2
+         addq    #1,a1            ; First character past backslash
+
+         move.l  struc_rtn(a6),a2 ; A0->item structure, A1->example array
+         jsr     (a2)             ; Call MaxiFile's translation routine
+
+         lea     80(a4),a4        ; Bump the pointer to example's array
+
+ .next:  dbf     d5,.loop         ; Look through all the items
+ .exit:  rts
+
+ * Data storage and variables
+
+         .DATA
+
+ exit_text:      dc.b    "YOW!" ; Text for MaxiFile's exit button
+
+         .BSS
+
+ maxiback:       ds.l    1      ; Storage for MaxiFile backdoor pointer
+ maxcount:       ds.w    1      ; Number of selected entries returned
+ select_array:   ds.b    80*400 ; Array of selected items (complete pathnames)
+                                ; 80 bytes per item, 400 items maximum
+                                ; (for this example)
+         .END
+
+
+ GFA Basic (v3) Code Example
+ ***************************
+
+
+ ' Example code to call MaxiFile from GFA Basic 3
+ ' Fills a string array with the filenames & folders selected by the user
+ ' By John Eidsvoog
+ ' April 16, 1991
+ '
+ DEFINT "a-z"
+ maxselect=20                        ! Maximum number of selections
+ exit$="YOW!"+CHR$(0)                ! Text for MaxiFile's exit button
+ DIM r(16),select_names$(maxselect)
+ '
+ ' Assembly code to call trap #13 with opcode 'M3'
+ '    move.w     #'M3',-(sp)  ; 3F3C 4D33
+ '    trap       #13          ; 4E4D
+ '    addq.w     #2,sp        ; 544F
+ '    rts                     ; 4E75
+ '
+ DATA &H3F,&H3C,&H4D,&H33,&H4E,&H4D,&H54,&H4F,&H4E,&H75
+ '
+ FOR x=1 TO 10                       ! Read machine code into string
+   READ a
+   callmaxi$=callmaxi$+CHR$(a)
+ NEXT x
+ '
+ r(5)=0                              ! Register D5
+ RCALL V:callmaxi$,r()               ! Oh MaxiFile, are you there?
+ maxiback=r(5)                       ! Register D5
+ '
+ IF maxiback<>0                      ! If MaxiFile is present
+   r(3)=&H4D464244                   ! "MFBD" in register D3
+   r(11)=V:exit$                     ! Pointer to 'EXIT' button string in A3
+   RCALL maxiback,r()                ! Call MaxiFile
+   src_cnt=CARD{r(8)+28}             ! Number of items in source directory
+   src_array={r(8)+20}               ! Pointer to MaxiFile's array of pointers
+   src_path$=CHAR{{r(8)+12}}         ! Source path
+   src_path$=LEFT$(src_path$,RINSTR(src_path$,"\"))
+   struc_rtn={r(8)+34}               ! Pointer to translation routine
+   count=0                           ! Counter for selected items
+   FOR x=1 TO src_cnt
+     IF BYTE{{src_array}+15}=1 AND count<maxselect
+       INC count
+       a$=STRING$(16,0)
+       r(8)={src_array}              ! Item structure in register A0
+       r(9)=V:a$                     ! Work area in register A1
+       RCALL struc_rtn,r()           ! Call the translation routine
+       select_names$(count)=src_path$+CHAR{V:a$}
+       IF BYTE{{src_array}}=7        ! Is it a folder?
+         select_names$(count)=select_names$(count)+"\"
+       ENDIF
+     ENDIF
+     ADD src_array,4                 ! Next pointer in array
+   NEXT x
+   CLS
+   IF count=0
+     PRINT "No files selected."
+   ELSE
+     FOR x=1 TO count                ! Print the list of selected files
+       PRINT select_names$(x)
+     NEXT x
+   ENDIF
+   VOID INP(2)
+ ELSE
+   PRINT "MaxiFile isn't here."
+ ENDIF
+ END
+
+
+     *********************************************************
+     *                                                       *
+     *  This document is Copyright 1991 CodeHead Software.   *
+     *  All Rights Reserved.                                 *
+     *                                                       *
+     *  May be freely distributed in electronic form only,   *
+     *  and only if this ASCII text is complete and          *
+     *  unaltered in any way.  This copyright notice MUST    *
+     *  be included.  This document MAY NOT be reprinted or  *
+     *  used for commercial purposes without express         *
+     *  permission from CodeHead Software.                   *
+     *                                                       *
+     *  For reprint permission or for more information,      *
+     *  contact:                                             *
+     *                                                       *
+     *    CodeHead Software                                  *
+     *    P.O. Box 74090                                     *
+     *    Los Angeles, CA 90004                              *
+     *    Tel 213-386-5735                                   *
+     *    Fax 213-386-5789                                   *
+     *                                                       *
+     *  "the finest in productivity and utility software"    *
+     *                                                       *
+     *********************************************************
+
