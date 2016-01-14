@@ -1,5 +1,0 @@
-make.tos
-gen
-exit
-
-
