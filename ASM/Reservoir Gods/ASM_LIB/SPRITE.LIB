@@ -1,0 +1,573 @@
+***********************************
+*=================================*
+* RESERVOIR GODS LIBRARY ROUTINES *
+*=================================*
+*        |              |         *
+*        |SPRITE LIBRARY|         *
+*        |              |         *
+***********************************
+* CODE: MR. PINK | (C): 19/02/96  *
+***********************************
+* UPDATE: 19/2/96  *
+********************
+
+
+***************************************************************************
+	SECTION TEXT
+***************************************************************************	
+
+	even
+
+rlsp_sprite_constructor:
+	move.l	a2,-(a7)
+	lea	rlsp_sprite_space,a2
+	move.w	d0,rlsp_screen_x(a2)
+	move.w	d1,rlsp_screen_y(a2)
+	move.w	d2,rlsp_screen_mode(a2)
+	move.w	d3,rlsp_line_size(a2)
+	move.l	a0,rlsp_line_offset_ptr(a2)
+	move.l	a1,rlsp_pixel_offset_ptr(a2)
+	move.l	(a7)+,a2
+	rts
+
+rlsp_sprite_deconstructor:
+	rts
+
+; a0->source, a1->dest, d0-> x size, d1-> y size, d2=planes
+
+rlsp_create_sprite_mask:
+	lsr.w	#4,d0			;x size /16=num words
+	subq.w	#1,d0			;sp_x-1 for dbra
+	subq.w	#1,d1			;sp_y-1 for dbra
+	subq.w	#1,d2			;sp_planes-1 for dbra
+
+.spy	move.w	d0,d3			;sprite x values
+.spx	move.w	d2,d4			;planes values
+	moveq	#0,d5			;init no pixels to mask
+.planes
+	or.w	(a0)+,d5		;create mask data
+	dbra	d4,.planes		;loop for planes
+	not.w	d5			;invert sprite data->mask
+	move.w	d5,(a1)+		;store mask
+	dbra	d3,.spx			;loop for x
+	dbra	d1,.spy			;loop for y
+	rts
+
+;enter with a0->sprite, a1->screen d0=x1, d1=y1, d2=x size, d3=y size
+
+rlsp_draw_sprite:
+	movem.l	d0-7/a0-6,-(a7)
+
+	subq.w	#1,d2
+	bmi	.no_save
+	subq.w	#1,d3
+	bmi	.no_save
+
+	lea	rlsp_sprite_space,a3
+
+	cmp.w	rlsp_screen_y(a3),d1	;off bottom of screen?
+	bge	.no_save		;yes all off
+	move.w	d3,d4
+	add.w	d1,d4
+	sub.w	rlsp_screen_y(a3),d4
+	bmi	.in_bot
+	sub.w	d4,d3			;dec draw amount
+	subq.w	#1,d3
+	bmi	.no_save
+.in_bot
+	tst.w	d1			;off top
+	bpl	.on_top			;no
+	add.w	d1,d3			;decrease draw amount
+	bmi	.no_save		;all off top
+	moveq	#0,d1			;new start y
+
+.on_top
+	cmp.w	rlsp_screen_x(a3),d0	;off right of screen?
+	bge	.no_save		;yes
+	move.w	d2,d4
+	add.w	d0,d4
+	sub.w	rlsp_screen_x(a3),d4
+	bmi	.in_right
+	sub.w	d4,d2			;dec draw amount
+	subq.w	#1,d2
+	bmi	.no_save
+.in_right
+	tst.w	d0			;off left of screen?
+	bpl	.on_screen		;no
+	add.w	d0,d2			;dec draw amount
+	bmi	.no_save		;none on screen
+	moveq	#0,d0			;new start x
+
+.on_screen
+	move.w	rlsp_screen_mode(a3),d4
+	jsr	([rlsp_draw_sprite_routines,d4.w*4])
+.no_save
+	movem.l	(a7)+,d0-7/a0-a6
+	rts
+
+rlsp_draw_sprite_routines:
+	dc.l	rlsp_draw_sprite_2
+	dc.l	rlsp_draw_sprite_4
+	dc.l	rlsp_draw_sprite_16
+	dc.l	rlsp_draw_sprite_256
+	dc.l	rlsp_draw_sprite_tc
+
+rlsp_draw_sprite_2:
+	moveq	#2,d7
+	bra.s	rlsp_draw_sprite_bpl
+rlsp_draw_sprite_4:
+	moveq	#4,d7
+	bra.s	rlsp_draw_sprite_bpl
+rlsp_draw_sprite_16:
+	moveq	#8,d7
+	bra.s	rlsp_draw_sprite_bpl
+rlsp_draw_sprite_256:
+	moveq	#16,d7
+rlsp_draw_sprite_bpl:
+.wait0	btst	#7,RLBLIT_MODE
+	bne.s	.wait0
+
+	move.w	d7,RLBLIT_DEST_X_INC
+	move.w	#2,RLBLIT_SOURCE_X_INC	
+	clr.w	RLBLIT_SOURCE_Y_INC	
+
+	move.l	rlsp_pixel_offset_ptr(a3),a4
+	add.l	(a4,d0.w*4),a2			;get to X
+	move.l	rlsp_line_offset_ptr(a3),a4
+	add.l	(a4,d1.w*4),a2			;get to Y
+	addq.w	#1,d2
+	addq.w	#1,d3
+
+	lsr.w	#4,d2				;x size/16=num x words
+
+	moveq	#-1,d1				;mask value
+	and.w	#$f,d0				;nearest 16
+	beq	.no_shift			;on bound
+	clr.w	d1				;blank part
+	lsr.l	d0,d1				;shift mask
+	addq.w	#1,d2				;1 more x write
+	bra.s	.cont
+.no_shift
+	sub.w	d7,a0				;dec sprite space
+	sub.w	#2,a1				;dec mask space
+	bset	#7,d0				;force xtra source read
+.cont	move.b	d0,RLBLIT_SKEW			;set skew
+	move.w	d2,d4				;num x words
+	subq.w	#1,d4
+	mulu	d7,d4				;*num_planes*2
+	neg.w	d4				;ready for -
+	add.w	rlsp_line_size(a3),d4		;line size-x words
+	move.w	d4,RLBLIT_DEST_Y_INC
+
+	move.w	d1,RLBLIT_END_MASK_3
+	move.w	#-1,RLBLIT_END_MASK_2
+	swap	d1
+	move.w	d1,RLBLIT_END_MASK_1
+
+	move.b	#2,RLBLIT_HOP			;hop=source
+	move.b	#1,RLBLIT_LOP			;source AND dest (mask)
+	move.l	a2,a4				;screen address
+
+	move.w	d7,d6
+	lsr.w	#1,d6				;get num planes
+	subq.w	#1,d6				;-1 for dbra
+
+.mask_planes
+	move.l	a1,RLBLIT_SOURCE_ADDRESS	;sprite mask
+	move.l	a4,RLBLIT_DEST_ADDRESS		;screen address
+	move.w	d2,RLBLIT_X_COUNT		;x words
+	move.w	d3,RLBLIT_Y_COUNT		;y lines		
+	move.b	#128,RLBLIT_MODE			;go blitter (with skew)
+.wait1	btst	#7,RLBLIT_MODE
+	bne.s	.wait1
+	addq.w	#2,a4				;next plane on screen
+	dbra	d6,.mask_planes
+
+	move.b	#7,RLBLIT_LOP
+	move.w	d7,RLBLIT_SOURCE_X_INC
+	lsr.w	#1,d7				;get num planes
+	subq.w	#1,d7				;-1 for dbra
+
+.plot_sprite
+	move.l	a0,RLBLIT_SOURCE_ADDRESS	;sprite data
+	move.l	a2,RLBLIT_DEST_ADDRESS		;screen address
+	move.w	d2,RLBLIT_X_COUNT		;x words
+	move.w	d3,RLBLIT_Y_COUNT		;y lines		
+	move.b	#128,RLBLIT_MODE			;go blitter (with skew)
+.wait2	btst	#7,RLBLIT_MODE
+	bne.s	.wait2
+	addq.w	#2,a0				;next plane of sprite
+	addq.w	#2,a2				;next plane on screen
+	dbra	d7,.plot_sprite
+
+	rts
+
+
+
+rlsp_draw_sprite_tc:
+	lea	(a2,d0.w*2),a2			;get to x
+	move.l	rlsp_line_offset_ptr(a3),a1
+	add.l	(a1,d1.w*4),a2			;get to y
+
+	move.w	d3,d1				;y counter
+
+.drwy	move.w	d2,d0				;x counter
+.drwx	move.w	(a0)+,(a2)+
+	dbra	d0,.drwx
+	add.w	d4,a2				;next line
+	dbra	d1,.drwy
+	rts
+
+;enter with a0->top of save sprite stack space, a1->current screen
+
+rlsp_set_save_sprite_ptr:
+	move.l	a2,-(a7)
+	lea	rlsp_sprite_space,a2
+	move.l	a0,rlsp_save_sprite_ptr(a2)
+	move.l	a1,rlsp_save_sprite_screen(a2)
+	move.l	(a7)+,a2
+	rts
+
+;enter with d0=x1, d1=y1, d2=x size, d3=y size
+
+rlsp_save_sprite:
+	movem.l	d0-7/a0/a2-6,-(a7)
+
+	subq.w	#1,d2
+	bmi	.no_save
+	subq.w	#1,d3
+	bmi	.no_save
+
+	lea	rlsp_sprite_space,a2
+
+	cmp.w	rlsp_screen_y(a2),d1	;off bottom of screen?
+	bge	.no_save		;yes all off
+	move.w	d3,d4
+	add.w	d1,d4
+	sub.w	rlsp_screen_y(a2),d4
+	bmi	.in_bot
+	sub.w	d4,d3			;dec draw amount
+	subq.w	#1,d3
+	bmi	.no_save
+.in_bot
+	tst.w	d1			;off top
+	bpl	.on_top			;no
+	add.w	d1,d3			;decrease draw amount
+	bmi	.no_save		;all off top
+	moveq	#0,d1			;new start y
+
+.on_top
+	cmp.w	rlsp_screen_x(a2),d0	;off right of screen?
+	bge	.no_save		;yes
+	move.w	d2,d4
+	add.w	d0,d4
+	sub.w	rlsp_screen_x(a2),d4
+	bmi	.in_right
+	sub.w	d4,d2			;dec draw amount
+	subq.w	#1,d2
+	bmi	.no_save
+.in_right
+	tst.w	d0			;off left of screen?
+	bpl	.on_screen		;no
+	add.w	d0,d2			;dec draw amount
+	bmi	.no_save		;none on screen
+	moveq	#0,d0			;new start x
+
+.on_screen
+	move.l	rlsp_save_sprite_screen(a2),a0
+	move.l	rlsp_save_sprite_ptr(a2),a1
+	move.w	rlsp_screen_mode(a2),d4
+	jsr	([rlsp_save_sprite_routines,d4.w*4])
+.no_save
+	movem.l	(a7)+,d0-7/a0/a2-a6
+	rts
+
+rlsp_save_sprite_routines:
+	dc.l	rslp_save_sprite_2
+	dc.l	rslp_save_sprite_4
+	dc.l	rslp_save_sprite_16
+	dc.l	rslp_save_sprite_256
+	dc.l	rslp_save_sprite_tc
+
+rslp_save_sprite_2
+	moveq	#-16,d4
+	add.w	d0,d2			;d1=x2
+	and.w	d4,d0			;x1 in 16
+	and.w	d4,d2			;x2 in 16
+	sub.w	d0,d2
+	moveq	#3,d4
+	lsr.w	d4,d0			;d0=byte offset
+	moveq	#4,d4
+	lsr.w	d4,d2			;/16=num words
+	move.w	d2,d4			;num words
+	addq.w	#1,d4
+	add.w	d4,d4
+	neg.w	d4
+	add.w	rlsp_line_size(a2),d4	;next line offset
+	bra	rlsp_sprite_saver
+
+rslp_save_sprite_4
+	moveq	#-16,d4
+	add.w	d0,d2			;d1=x2
+	and.w	d4,d0			;x1 in 16
+	and.w	d4,d2			;x2 in 16
+	sub.w	d0,d2
+	moveq	#2,d4
+	lsr.w	d4,d0			;d0=byte offset
+
+	moveq	#3,d4
+	lsr.w	d4,d2			;/16=num words
+	addq.w	#1,d2
+	move.w	d2,d4			;num words
+	addq.w	#1,d4
+	add.w	d4,d4
+	neg.w	d4
+	add.w	rlsp_line_size(a2),d4	;next line offset
+	bra	rlsp_sprite_saver
+
+rslp_save_sprite_16
+	moveq	#-16,d4
+	add.w	d0,d2			;d1=x2
+	and.w	d4,d0			;x1 in 16
+	and.w	d4,d2			;x2 in 16
+	sub.w	d0,d2
+	moveq	#1,d4
+	lsr.w	d4,d0			;d0=byte offset
+
+	moveq	#2,d4
+	lsr.w	d4,d2			;/16=num words
+	addq.w	#3,d2
+	move.w	d2,d4			;num words
+	addq.w	#1,d4
+	add.w	d4,d4
+	neg.w	d4
+	add.w	rlsp_line_size(a2),d4	;next line offset
+	bra	rlsp_sprite_saver
+
+rslp_save_sprite_256
+	moveq	#-16,d4
+	add.w	d0,d2			;d1=x2
+	and.w	d4,d0			;x1 in 16
+	and.w	d4,d2			;x2 in 16
+	sub.w	d0,d2
+
+	moveq	#1,d4
+	lsr.w	d4,d2			;/16=num words
+	addq.w	#7,d2
+	move.w	d2,d4			;num words
+	addq.w	#1,d4
+	add.w	d4,d4
+	neg.w	d4
+	add.w	rlsp_line_size(a2),d4	;next line offset
+	bra	rlsp_sprite_saver
+
+rslp_save_sprite_tc
+	moveq	#1,d4
+	add.w	d2,d4				;x width+1
+	add.w	d4,d4				;*2=num words
+	neg.w	d4
+	add.w	rlsp_line_size(a2),d4	
+	bmi	rlsp_nospritesave
+
+	add.w	d0,d0				;x*2=word offset
+
+rlsp_sprite_saver
+	lea	(a0,d0.w),a0			;get to x
+	move.l	rlsp_line_offset_ptr(a2),a3
+	add.l	(a3,d1.w*4),a0			;get to y
+
+	move.w	d3,d1				;y counter
+
+.savy	move.w	d2,d0				;x counter
+.savx	move.w	(a0)+,-(a1)
+	dbra	d0,.savx
+	add.w	d4,a0				;next line
+	dbra	d1,.savy
+
+	move.w	d4,-(a1)			;next line offset
+	move.w	d3,-(a1)			;y size
+	move.w	d2,-(a1)			;x size
+	move.l	a0,-(a1)			;screen address (bot sprite)
+	clr.l	-4(a1)
+
+rlsp_nospritesave
+	rts
+
+
+rlsp_restore_all_sprites:
+	movem.l	d0-3/a0-a1,-(a7)
+
+.loop	move.l	(a0)+,a1			;screen_address
+	cmpa.l	#0,a1
+	beq	.last
+
+	move.w	(a0)+,d0			;x size
+	move.w	(a0)+,d1			;y size
+	move.w	(a0)+,d2			;line offset
+
+.resy	move.w	d0,d3
+	sub.w	d2,a1			;get to line above
+.resx	move.w	(a0)+,-(a1)		;draw pixel
+	dbra	d3,.resx
+	dbra	d1,.resy
+
+	bra.s	.loop
+
+.last	movem.l	(a7)+,d0-3/a0-1
+	rts
+
+;a0-> god file, a1-> screen
+
+rlsp_display_god_file:
+	movem.l	d0-3/a0-2,-(a7)	
+
+	lea	rlsp_sprite_space,a2
+	lea	(a1,d0.w*2),a1		;get to x
+	move.l	rlsp_line_offset_ptr(a2),a3
+	add.l	(a3,d1.w*4),a1
+	
+	move.w	2(a0),d0		;x
+	move.w	4(a0),d1		;y
+	addq.w	#6,a0
+	subq.w	#1,d1
+
+	move.w	d0,d2
+	add.w	d2,d2
+	neg.w	d2
+	add.w	rlsp_line_size(a2),d2
+	
+	subq.w	#1,d0
+.copy	move.w	d0,d3
+.copx	move.w	(a0)+,(a1)+
+	dbra	d3,.copx
+	add.w	d2,a1
+	dbra	d1,.copy
+
+	movem.l	(a7)+,a0-2/d0-3
+	rts
+
+; a0->god file, a1-> dest, d0=char x, d1=char y, d2=back col
+
+rlsp_convert_font:
+	movem.l	d0-a6,-(a7)
+
+	move.l	a0,a2
+	lea	rlsp_sprite_space,a0
+
+	move.w	2(a2),d3		;x size
+	ext.l	d3
+	divu	d0,d3			;char x/god x =chars/line
+	subq.w	#1,d3
+	move.w	d3,rlsp_font_x_chars(a0)
+
+	move.w	2(a2),d3		;x size of god
+	add.w	d3,d3
+	mulu	d1,d3			;*y char size
+	move.w	d3,rlsp_font_y_offset(a0)
+
+	move.w	4(a2),d4		;y size
+	ext.l	d4
+	divu	d1,d4			;char y/god y =char lines
+	move.w	d4,rlsp_font_y_lines(a0)
+
+	move.w	2(a2),d5		;x size
+	add.w	d5,d5			;offset to next line
+	sub.w	d0,d5
+	sub.w	d0,d5			;-char size
+
+	move.w	d0,d3
+	add.w	d3,d3
+	move.w	d3,rlsp_font_x_offset(a0)
+
+	subq.w	#1,d0			;x size-1 for dbra	
+	subq.w	#1,d1			;y size-1 for dbra
+
+	addq.w	#6,a2			;get to gfx
+	moveq	#0,d7
+
+.next_y	move.w	rlsp_font_x_chars(a0),d6
+	move.l	a2,a3			;start line of chars
+.do_x	move.l	a3,a4			;start of current char
+	move.w	d1,d4
+.convy	move.w	d0,d3			;x size
+.convx	bfclr	(a1){d7:1}
+	cmp.w	(a4)+,d2
+	beq.s	.blank
+	bfset	(a1){d7:1}
+.blank	addq.l	#1,d7
+	dbra	d3,.convx
+	add.w	d5,a4
+	dbra	d4,.convy
+
+	add.w	rlsp_font_x_offset(a0),a3	;get to next char
+	dbra	d6,.do_x
+	add.w	rlsp_font_y_offset(a0),a2	;get to next line
+	subq.w	#1,rlsp_font_y_lines(a0)
+	bne.s	.next_y
+
+	movem.l	(a7)+,d0-a6
+	rts
+
+
+***************************************************************************
+	SECTION DATA
+***************************************************************************	
+
+rlsp_left_side_table:
+	dc.w	$ffff
+	dc.w	$7fff
+	dc.w	$3fff
+	dc.w	$1fff
+	dc.w	$0fff
+	dc.w	$07ff
+	dc.w	$03ff
+	dc.w	$01ff
+	dc.w	$00ff
+	dc.w	$007f
+	dc.w	$001f
+	dc.w	$000f
+	dc.w	$0007
+	dc.w	$0003
+	dc.w	$0001
+	dc.w	$0000
+
+rlsp_right_side_table:
+	dc.w	$8000
+	dc.w	$c000
+	dc.w	$e000
+	dc.w	$f000
+	dc.w	$f800
+	dc.w	$fc00
+	dc.w	$fe00
+	dc.w	$ff00
+	dc.w	$ff80
+	dc.w	$ffc0
+	dc.w	$ffe0
+	dc.w	$fff0
+	dc.w	$fff8
+	dc.w	$fffc
+	dc.w	$fffe
+	dc.w	$ffff
+
+***************************************************************************
+	SECTION BSS
+***************************************************************************	
+
+	RSRESET
+rlsp_line_offset_ptr	rs.l	1
+rlsp_pixel_offset_ptr	rs.l	1
+rlsp_save_sprite_ptr	rs.l	1
+rlsp_save_sprite_screen	rs.l	1
+rlsp_screen_x		rs.w	1
+rlsp_screen_y		rs.w	1
+rlsp_screen_mode	rs.w	1
+rlsp_line_size		rs.w	1
+rlsp_font_y_lines	rs.w	1
+rlsp_font_x_chars	rs.w	1
+rlsp_font_x_offset	rs.w	1
+rlsp_font_y_offset	rs.w	1
+rlsp_buffer1_size	rs.w	1
+
+
+rlsp_sprite_space:
+	ds.b		rlsp_buffer1_size

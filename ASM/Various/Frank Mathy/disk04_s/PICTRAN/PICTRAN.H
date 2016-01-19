@@ -1,0 +1,14 @@
+#define QUIT 27
+#define INVERT 29
+#define XMIRROR 30
+#define YMIRROR 31
+#define ROT180 32
+#define MENU 0
+#define PICINFO 8
+#define LOAD 17
+#define SAVE 18
+#define DEGAS 21
+#define NEO 20
+#define DOODLE 22
+#define COMPACT 23
+#define HARDCOPY 25

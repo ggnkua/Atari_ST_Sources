@@ -1,0 +1,15 @@
+systempath=h:\qbbs
+ALLFILE=allcomms
+ALLPATH=E:\QBBS\DOWNLOAD\GEN_TEXT\
+ALLTXT
+NEWFILE=NEWcomms
+NEWPATH=E:\QBBS\DOWNLOAD\GEN_TEXT\
+NEWTXT
+NEWDAYS=10
+uselog
+allstat
+newstat
+ALLSIZE
+NEWSIZE
+alldate
+newdate
