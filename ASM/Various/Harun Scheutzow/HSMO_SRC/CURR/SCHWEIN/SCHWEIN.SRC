@@ -1,0 +1,241 @@
+;Schweineprogramm fÅr MagiC3/MagiCMac, das alle Fopen auf
+;U:\DEV\xxx mit "xxx" = "in der Liste eingetragener Name"
+;auf "Filesharing erlaubt" ergÑnzt.
+
+
+          .PATH "E:\AHSMOD\LIB\"
+          .INCLUDE "MISC_DEF.IS"
+          .INCLUDE "ERRNO.IS"        ;Fehlermeldungen
+
+
+;--------------------------------------------------------
+
+
+          .TEXT 
+start:    
+          bra       starti
+;Sprung nach hinten, damit mîglichst wenig resident bleibt
+
+
+;----------------------------------------------------------
+
+;GEMDOS Trap#1
+
+;ZugestÑndnis an Scheiûprogramme (Modula(A1/A2/D1/A2), TurboC(A2)):
+;killt nur A0/D0
+
+          .DC.b 'XBRA'
+          .DC.b 'RSVE'
+oldgemdosv:         .DC.l 0
+
+t1_gemdos:          
+          move.l    usp,a0           ;da die Daten meist auf Userstack liegen
+          btst      #5,(sp)          ;diese Reihenfolge
+          beq       t1_bss           ;Daten schon auf Superstack
+t1_gP:    
+          lea       8(sp),a0         ;wird beim Start evtl. auf 6 gepatcht
+t1_bss:   
+          move.w    (a0)+,d0         ;Funktionsnummer
+          cmpi.w    #n_fopen,d0
+          beq       t1_fopen
+
+t1_old:   
+          movea.l   oldgemdosv(pc),a0
+          jmp       (a0)             ;altes GEMDOS anspringen
+
+
+t1_fopen: 
+;Fopen, teste ob "U:\DEV\known_device", case-insensitiv
+          movem.l   d1-d3/a1-a3,-(sp)             ;sichern
+          movea.l   (a0)+,a2         ;Zeiger auf Filenamen
+;A0 zeigt auf Parameter mode (word)
+          bsr       udev_test        ;teste ob Filename mit 'U:\DEV\' beginnt
+          beq       .na1_ok
+.not_udev:          
+          movem.l   (sp)+,d1-d3/a1-a3             ;zurÅckholen
+          movea.l   oldgemdosv(pc),a0
+          jmp       (a0)             ;altes GEMDOS anspringen
+.na1_ok:  
+
+          .IF 0     ;XXXXXXXXXXXXXXXX
+;'U:\DEV\' stimmt, dahinter weiter testen (A2 zeigt dorthin)
+          lea       ptr2dev0,a2      ;erster Name
+.next:    
+          tst.l     (a3)+            ;setzt Flags
+          movea.l   (a3)+,a1         ;(keine Flags) Zeiger auf Name
+          beq       .pl_leer
+          bsr       string_ucomp     ;A0, A1 unverÑndert
+          tst.l     d0
+          bmi       .found           ;gefunden
+.pl_leer: 
+          cmpa.l    ptrbldev,a3
+          bcs       .next            ;nÑchstes prÅfen
+          bra       .not_udev        ;keine öbereinstimmung, altes
+.found:   
+          .ENDIF    ;XXXXXXXXXXXXXXXX
+
+;den Parameter "mode" Ñndern auf "Sharing erlaubt"
+          moveq.l   #$70,d0          ;lasse nur "sharing" Åbrig
+          and.w     (a0),d0
+          bne       .not_udev        ;nicht "alter Modus" -> nicht Ñndern
+          ori.w     #$0040,(a0)      ;setze "Sharing - alles erlaubt"
+          bra       .not_udev
+
+
+
+udev_test:          
+;teste auf U:\DEV\ (fÅr Fopen, Dcntl, Fdelete, ...)
+;in:   A2 Zeiger auf String, GROSS/klein egal
+;out:  wenn es String "U:\DEV\" ist: A2 dahinter, Z-Flag gesetzt
+;       sonst: A2 undef., Z-Flag gelîscht
+;kill: D0
+          moveq.l   #$df,d0
+          and.b     (a2)+,d0
+          cmpi.b    #'U',d0
+          bne       .no
+          cmpi.b    #':',(a2)+
+          bne       .no
+          cmpi.b    #'\',(a2)+
+          bne       .no
+          moveq.l   #$df,d0
+          and.b     (a2)+,d0
+          cmpi.b    #'D',d0
+          bne       .no
+          moveq.l   #$df,d0
+          and.b     (a2)+,d0
+          cmpi.b    #'E',d0
+          bne       .no
+          moveq.l   #$df,d0
+          and.b     (a2)+,d0
+          cmpi.b    #'V',d0
+          bne       .no
+          cmpi.b    #'\',(a2)+
+.no:      
+          rts       
+
+
+string_ucomp:       
+;vergleicht die Zeichenketten ab A0 und A1 miteinander ohne BerÅcksichtigung
+;von GROSS/klein, mind. eine muû nullterminiert sein
+;in:   A1, A2:  Zeiger auf String 1, 0
+;out:  D0 -1: gleich bis Ende (identisch, beide sind auch gleich lang)
+;          0: total ungleich
+;         >0: nur die ersten D0 Zeichen gleich (auch bei Ende eines Strings)
+;kill: D1/D2
+          moveq.l   #-1,d0
+.next:    addq.l    #1,d0
+          move.b    0(a1,d0.l),d1
+          cmpi.b    #'a',d1
+          bcs       .nl1
+          cmpi.b    #'z',d1
+          bhi       .nl1
+          subi.b    #$20,d1
+.nl1:     
+          move.b    0(a2,d0.l),d2
+          cmpi.b    #'a',d2
+          bcs       .nl0
+          cmpi.b    #'z',d2
+          bhi       .nl0
+          subi.b    #$20,d2
+.nl0:     
+          sub.b     d2,d1
+          bne       .ende            ;sind ungleich
+          tst.b     d2               ;gleich, D2 $00 heiût beide $00
+          beq       .null
+          add.b     d2,d1            ;D1 wieder herstellen
+          bne       .next            ;D1 noch nicht $00 terminiert
+          bra       .ende
+.null:    
+          moveq.l   #-1,d0
+.ende:    
+          rts       
+
+
+
+;Adr. des ersten nichtresidenten Byte, fÅr zus. Speichervergabe
+first_unresi:       .DC.l prg_ende   ;Anfangswert
+
+
+;----------------------------------------------------------
+
+          .DC.l 0
+prg_ende:           ;muû hinter dem letzten Residenten
+
+
+;Supervisorteil fÅr Init.
+
+suwinit:  
+;CPU ermitteln
+          tst.w     _longframe
+          bne       .lang            ;8 Byte Stackframe, steht schon drin
+;Annahme: CPUs mit kurzem Stackframe haben nie Probleme mit modifizierendem
+;Code ohne Cacheflushes
+          moveq.l   #6,d0            ;6 byte (nur 68000)
+          move.w    d0,2+t1_gP       ;Offsets in lea-Befehlen anpassen
+.lang:    
+;GEMDOS-Zusatz einhÑngen
+          move.l    va_gemdos,oldgemdosv
+          move.l    #t1_gemdos,va_gemdos
+
+          rts       
+
+
+starti:   
+;Installation
+          bsr       prints
+          .DC.b $1b,'p',' Super-SCHWEIN for MagiC(3/Mac) ',$1b,'q',cr,lf
+          .DC.b '1995-04-09 (C) Harun Scheutzow.',cr,lf,0
+          .EVEN 
+
+          pea       suwinit          ;TOS und CPU ermitteln
+          move.w    #38,-(sp)
+          trap      #14              ;XBIOS Supexec
+          addq.l    #6,sp
+
+          bsr       prints
+          .DC.b 'Installed',cr,lf,cr,lf,0
+          .EVEN 
+
+          clr.w     -(sp)
+          move.l    first_unresi,d0
+          subi.l    #(start-$100),d0
+          move.l    d0,-(sp)         ;residente LÑnge
+          move.w    #$31,-(sp)
+          trap      #1               ;GEMDOS Ptermres
+
+
+;------------------------------------------
+
+
+          .INCLUDE "PRINTS.IS"       ;nette Druckroutine
+
+
+;------------------------------------------
+
+          .DATA 
+
+          .IF 0     ;XXXXXXXXXXXXXXX
+
+;Konfigurationszeug
+          .EVEN     ;wichtig!!!
+magisch:  .DC.b "hAruNs cONfigER",0  ;Magischer String
+          .DC.l magisch              ;Sicherheitszeiger
+          .DC.b "FASTINT: Soll die Timerinterruptmodifikation fÅr 57600Bd auf",cr,lf
+          .DC.b "8MHz-STs installiert werden?",cr,lf
+          .DC.b "(Bei TT/Falcon kann es auch helfen.)",cr,lf,0
+          .EVEN 
+          .DC.w 0   ;Cmd Entscheidung
+yes_fastint:        .DC.w -1         ;-1 fÅr "schnelle" Interrupts installieren
+          .DC.b "EXOPEN: Sollen sich GerÑte nur einmal îffnen lassen?",cr,lf,0
+          .EVEN 
+          .DC.w 0   ;Cmd Entscheidung
+c_evexop: .DC.w 0   ;nicht exclusiv
+          .DC.b 0   ;Nullstring als Ende
+          .EVEN 
+
+          .ENDIF    ;XXXXXXXXXXXXXXXXXXX
+
+          .BSS 
+
+          .DS.l $400                 ;Stack-Platz nur fÅr Initialisierung
+

@@ -1,0 +1,406 @@
+;LPT1-Gemdos-Device for MagiC3
+
+          .PATH "E:\AHSMOD\LIB\"
+          .INCLUDE "MISC_DEF.IS"
+          .INCLUDE "ERRNO.IS"
+
+mxk_act_appl        = 18
+mxk_evnt_IO         = 50
+mxk_appl_IOcomplete                  = 62
+mxk_Pfree           = 70             ;offset in kernel
+;--------------------------------------------------------
+
+          .TEXT 
+start:    bra       starti
+;Sprung nach hinten, damit mîglichst wenig resident bleibt
+
+;--------------------------------------------------------
+kernel:   .DC.l 0   ;pointer to kernel structure
+oldvec:   .DC.l 0   ;old MFP-BUSY-int vector
+
+
+unsel:    .DC.l 0
+appl:     .DC.l 0
+
+handle_busy:        
+          tst.l     unsel
+          beq.s     hb_ende
+          tst.l     appl
+          beq.s     hb_ende
+          movem.l   d0-d2/a0-a2,-(sp)
+
+          moveq     #1,d0
+          movea.l   unsel(pc),a0
+          clr.l     unsel            ; Interrupt deaktivieren
+          move.l    d0,(a0)          ; als eingetroffen markieren
+
+          movea.l   appl(pc),a0
+          movea.l   kernel(pc),a1
+          movea.l   mxk_appl_IOcomplete(a1),a1
+          jsr       (a1)
+          movem.l   (sp)+,d0-d2/a0-a2
+hb_ende:  
+          move.b    #$fe,$10+mfp     ; service- Bit lîschen
+          rte       
+
+
+m1_lseek: 
+          moveq.l   #0,d0            ;position 0 after seek
+          rts                        ;always for U:\DEV\-drivers
+
+m1_fopen: 
+          moveq.l   #0,d0            ;OK
+          rts       
+
+m1_fclose:          
+          moveq.l   #0,d0            ;OK
+          rts       
+
+m1_stat:  
+          tst.w     d0               ; lesen ?
+          beq       st_err           ; ja, Fehler
+
+          btst.b    #0,mfp           ; MFP-BUSY (parallele Schnittstelle)
+          beq.s     st_ok            ; nein, bereit
+
+          tst.l     d1
+          beq       st_ende          ; wollte Polling, gib 0 zurÅck
+
+          move.l    a1,unsel
+          move.l    d1,appl
+          move.l    #dev_unsel,d0
+          bra       st_ende
+
+st_ok:    
+          moveq     #1,d0
+          bra.s     st_ende
+st_err:   
+          moveq     #EWRITF,d0
+
+st_ende:  
+          move.l    a1,d1
+          beq.s     st_e2
+          move.l    d0,(a1)
+st_e2:    
+          rts       
+
+
+;*********************************************************************
+;
+; void dev_unsel( a0 = long *unselect, a1 = void *apcode );
+;
+;
+
+dev_unsel:          
+          clr.l     unsel
+          clr.l     appl
+          clr.l     (a0)
+          rts       
+
+
+m1_delete:          
+;delete device (never called by kernel if device is open)
+          move.l    oldvec,-(sp)     ;restore old MFP-BUSY-int vector
+          move.l    #$00050040,-(sp)
+          trap      #13              ;BIOS Setexc
+          addq.l    #8,sp
+
+          movea.l   kernel,a1        ;free drivers memory
+          movea.l   mxk_Pfree(a1),a1
+          lea       start-$100,a0    ;address of basepage
+          jsr       (a1)
+
+          moveq.l   #E_OK,d0
+          rts       
+
+
+;Dcntl kopiert nicht, also Name und Zeiger resident halten
+m1_iname: 
+          .DC.b "u:\dev\lpt1",0
+          .EVEN 
+m1_drvr:  
+          .DC.l m1_fopen,m1_fclose,m1_fread,m1_fwrite
+          .DC.l m1_stat,m1_lseek
+          .DC.l 0   ;datime, darf Nullzeiger sein
+          .DC.l m1_fcntl,m1_delete   ;(ioctl)
+          .DC.l 0,0,0                ;getc, getline, putc
+
+;----------------------------------------------------------------------
+          .TEXT 
+
+m1_fread: 
+;Fread fÅr MODEM1
+;Mag!X-mÑûig
+;in:   A0: Zeiger auf Filedeskriptor
+;      A1: LONG buffer
+;      D0: LONG len
+;out:  D0: Anzahl wirklich gelesener Byte oder Fehlercode
+;kill: D0-D2/A0-A2
+          moveq.l   #EACCDN,d0       ;FEHLER
+          rts       
+
+
+m1_fwrite:          
+;Fwrite fÅr MODEM1
+;Mag!X-mÑûig
+;in:   A0: Zeiger auf Filedeskriptor
+;      A1: LONG buffer
+;      D0: LONG len
+;out:  D0: Anzahl wirklich gelesener Byte oder Fehlercode
+;kill: D0-D2/A0-A2
+          movem.l   d6/d7/a6,-(sp)
+          movea.l   a1,a6            ; a6 = buf
+          move.l    d0,d7            ; d7 = count
+          moveq     #0,d6
+          bra       dw_nxt
+dw_loop:  
+
+; Interrupt sperren und Bedingung testen
+
+          move.w    sr,d1
+          ori.w     #$700,sr
+          btst.b    #0,mfp           ; MFP-BUSY (parallele Schnittstelle)
+          beq.s     dw_send          ; nein, abschicken
+
+; Interrupt aufsetzen
+
+          pea       dev_unsel(pc)
+          movea.l   kernel,a1
+          movea.l   mxk_act_appl(a1),a0
+          move.l    (a0),appl
+          move.l    sp,unsel
+
+; Interrupt freigeben
+
+          move.w    d1,sr
+
+; Auf Interrupt warten
+
+          movea.l   mxk_evnt_IO(a1),a2
+          movea.l   sp,a0
+          move.l    #500,d0          ; 10s
+          jsr       (a2)
+          addq.l    #4,sp
+          tst.l     d0               ; OK ?
+          beq       dw_end           ; nein
+          bra       dw_loop          ; ##### ??? ######
+
+dw_send:  
+          lea       sndchp,a1        ; Soundchip: Register selektieren/lesen
+          lea       2(a1),a2         ; Soundchip: Register schreiben
+          move.b    #7,(a1)          ; Register 7 auswÑhlen
+          move.b    (a1),d0          ; Wert holen
+          ori.b     #$c0,d0          ; Port A (Centr.Strobe) und
+          move.b    d0,(a2)          ; Port B (Centr.Data) auf Ausgang
+          move.b    #15,(a1)         ; Register 15 wÑhlen: Port B
+          move.b    (a6)+,(a2)       ; Zeichen ausgeben
+          move.b    #14,(a1)         ; Register 14 wÑhlen: Port A
+          move.b    (a1),d0
+          andi.b    #$df,d0          ; Strobe low
+          move.b    d0,(a2)          ; Strobe low -> Drucker
+;hier ggf. Verzîgerung
+          ori.b     #$20,d0          ; Strobe high
+          move.b    d0,(a2)          ; Strobe high -> Drucker
+          move.w    d1,sr
+
+
+; move.l  #1000,d2                 ; #### ??? #####
+;dw_delay:
+; subq.l  #1,d2
+; bne.b   dw_delay
+
+          addq.l    #1,d6
+
+dw_nxt:   
+          subq.l    #1,d7
+          bcc       dw_loop
+dw_end:   
+          move.l    d6,d0
+          movem.l   (sp)+,d6/d7/a6
+          rts       
+
+
+
+m1_fcntl: 
+;Fcntl = ioctl fÅr MODEM1
+;Mag!X-mÑûig
+;in:   A0: Zeiger auf Filedeskriptor
+;      A1: LONG argument (meist ein Zeiger)
+;      D0: WORD command
+;out:  D0: Fehlercode
+;kill: D0-D2/A0-A2
+          moveq.l   #EINVFN,d0       ;ERSTMAL
+          rts       
+          .IF 0
+          cmpi.w    #FIONREAD,d0
+          beq       .m000
+          cmpi.w    #FIONWRITE,d0
+          beq       .m001
+          cmpi.w    #TIOCCBRK,d0
+          beq       .m002
+          cmpi.w    #TIOCSBRK,d0
+          beq       .m003
+          cmpi.w    #TIOCIBAUD,d0
+          beq       .m004
+          cmpi.w    #TIOCOBAUD,d0
+          beq       .m005
+          cmpi.w    #TIOCGFLAGS,d0
+          beq       .m006
+          cmpi.w    #TIOCSFLAGS,d0
+          beq       .m007
+          cmpi.w    #TIOCCTLMAP,d0
+          beq       .m008
+          cmpi.w    #TIOCCTLGET,d0
+          beq       .m009
+          cmpi.w    #TIOCCTLSET,d0
+          beq       .m010
+          cmpi.w    #TIONOTSEND,d0
+          beq       .m011
+          cmpi.w    #TIOCFLUSH,d0
+          beq       .m012
+          moveq.l   #EINVFN,d0       ;invalid function number, ## ??? passende Meldung
+          bra       .ende
+.ok_ende: 
+          moveq.l   #0,d0            ;OK
+.ende:    
+          rts       
+
+.m000:    
+;FIONREAD
+;Anzahl der ohne Warten lesbaren Byte auf der Adresse hinterlassen
+          moveq.l   #0,d1
+          move.w    $8+m1_iorec,d1   ;Schreibz
+          sub.w     $6+m1_iorec,d1   ;Lesez
+          bcc       .m000a
+          add.w     $4+m1_iorec,d1
+.m000a:   move.l    d1,(a1)          ;Anzahl belegter PlÑtze = vorhandene Byte
+          bra       .ok_ende
+
+.m001:    
+;FIONWRITE:
+;Anzahl der ohne Warten schreibbaren Byte auf der Adresse hinterlassen
+          moveq.l   #0,d1
+          move.w    $e+$6+m1_iorec,d1             ;Lesez
+          sub.w     $e+$8+m1_iorec,d1             ;Schreibz
+          bhi       .m001a
+          add.w     $e+$4+m1_iorec,d1
+.m001a:   subq.l    #2,d1
+          bpl       .m001b
+          moveq.l   #0,d1            ;nur zur Sicherheit, dÅrfte nie - werden
+.m001b:   move.l    d1,(a1)          ;Anzahl freier PlÑtze
+          bra       .ok_ende
+
+          .ENDIF 
+
+
+;----------------------------------------------------------------------
+
+;Adr. des ersten nichtresidenten Byte, fÅr zus. Speichervergabe
+first_unresi:       .DC.l prg_ende   ;Anfangswert
+
+;----------------------------------------------------------------------
+          .DC.l 0
+prg_ende:           ;muû hinter dem Letzten resident zu haltenden stehen
+
+
+sursini:  
+;Supervisorteil RSVF- und Fastint- Ini
+          bclr.b    #0,2+mfp         ;AER, H/L, BUSY becomes inactiv
+          bclr.b    #0,4+mfp         ;DDR, BUSY is input
+          bset.b    #0,8+mfp         ;IERB, enable BUSY-int
+          bset.b    #0,$14+mfp       ;IMRB, enable BUSY-int
+
+          rts       
+
+
+
+;Installation
+starti:   
+          bsr       prints
+          .DC.b $1b,'p','Routines for LPT1'
+          .DC.b $1b,'q',cr,lf
+          .DC.b ' as MagiC3-demo 1995-01-02',cr,lf,0
+          .EVEN 
+
+;lies und setze MFP-BUSY-Int Vektor
+          pea       handle_busy
+          move.l    #$00050040,-(sp)
+          trap      #13              ;BIOS Setexc
+          addq.l    #8,sp
+          move.l    d0,oldvec
+;(Anmerk: Es ist nicht sauberer, mit Mfpint zu setzen, wenn man die
+;(68000er-Vektornummer sowieso im Setexc benutzt.
+
+;installiere GEMDOS-device
+          moveq.l   #1,d7            ;erster-Versuch-Flag
+          bra       m1iniins         ;erst Installationsversuch, dann:
+m1inidel: 
+          pea       m1_iname         ;Dev. lîschen, falls Inst.Fehler,
+          move.w    #65,-(sp)        ;weil es wohl schon existiert
+          trap      #1               ;GEMDOS Fdelete
+          addq.l    #6,sp
+m1iniins: 
+          pea       m1_drvr          ;Dev. in U:\DEV\ installieren
+          pea       m1_iname
+          move.w    #DEV_M_INSTALL,-(sp)
+          move.w    #n_dcntl,-(sp)
+          trap      #1               ;GEMDOS Dcntl (Mag!X)
+          lea       12(sp),sp
+          tst.l     d0               ;Fehler-negativ, sonst >=0 (evtl. Zeiger)
+          dbpl      d7,m1inidel
+          bpl       m1iniok          ;successful
+
+;installation error, terminate not resident
+          move.l    oldvec,-(sp)
+          move.l    #$00050040,-(sp)
+          trap      #13              ;BIOS Setexc
+          addq.l    #8,sp
+
+          move.l    #$004c0001,-(sp) ;error code 1
+          trap      #1               ;GEMDOS Pterm, **END**
+
+
+m1iniok:  
+          clr.l     -(sp)
+          clr.l     -(sp)
+          move.w    #KER_GETINFO,-(sp)
+          move.w    #n_dcntl,-(sp)
+          trap      #1               ;GEMDOS Dcntl (MagiC)
+          lea       12(sp),sp
+          move.l    d0,kernel
+
+          pea       sursini          ;RSVF, Fastint
+          move.w    #38,-(sp)
+          trap      #14              ;XBIOS Supexec
+          addq.l    #6,sp
+
+
+          bsr       prints
+          .DC.b cr,lf,0              ;Leerzeile am Ende
+          .EVEN 
+
+
+          clr.w     -(sp)
+          move.l    first_unresi,d0
+          subi.l    #(start-$100),d0
+          move.l    d0,-(sp)         ;residente LÑnge
+          move.w    #$31,-(sp)
+          trap      #1               ;GEMDOS Ptermres
+
+
+
+;------------------------------------------
+
+
+          .INCLUDE "PRINTS.IS"
+
+
+;------------------------------------------
+
+
+
+          .BSS 
+          .EVEN 
+
+          .DS.l $400                 ;Stack-Platz nur fÅr Initialisierung
+
