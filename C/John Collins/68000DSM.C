@@ -1,0 +1,4310 @@
+Article 2660 (70 more) in net.sources:
+From: jmc@inset.UUCP (John Collins)
+Subject: 68000 Disassembler
+Message-ID: <658@inset.UUCP>
+Date: 15 Aug 85 23:11:30 GMT
+Date-Received: 24 Aug 85 05:01:10 GMT
+Reply-To: jmc@inset.UUCP (John Collins)
+Organization: --- NONE ---
+Lines: 4303
+Xpath: icdoc ivax
+
+--MORE--(0%)This is the 68000 disassembler mentioned on the net.
+It is not my final version by any means, but I have found it extremely
+useful and it represents severl weeks' work.
+
+        John Collins.
+
+You should get the following files:
+
+        doc             - MM macros
+        makefile
+        unc.h
+        alloc.c
+        file.c
+        heur.c
+        iset.c
+        libmtch.c
+        main.c
+        prin.c
+        robj.c
+
+To extract /bin/sh the remainder of the file after the next line
+------------------------------cut here------------------------------
+
+# To unbundle, sh this file
+echo doc 1>&2
+sed 's/.//' >doc <<'//GO.SYSIN DD doc'
+-.\"/*% nroff -cm -rL72 %|epson|spr -f plain.a -h uncdoc -w
+-.nr Hb 7
+-.nr Hs 3
+-.ds HF 3 3 3 3 3 3 3
+-.nr Hu 5
+-.nr Hc 1
+-.SA 1
+-.PH "''A Disassembler''"
+-.PF "'Issue %I%'- Page \\\\nP -'%G%'"
+-.H 1 "Introduction"
+-This document describes the first release of a disassembler for UNIX
+-executable files.
+-The key features are:
+-.AL
+-.LI
+-For object files the output can be assembled to generate the same
+-object module, (apart from minor variations in symbol table ordering) as the
+-input.
+-.LI
+-For stripped executable files object modules and libraries may be scanned,
+-modules in the main input identified and the appropriate names automatically
+-inserted into the output.
+-.LI
+-An option is available to convert most non-global names into local symbols,
+-which cuts down the symbols in the generated assembler file.
+-.LI
+-The disassembler copes reasonably with modules merged with the
+-.B "-r"
+-option to
+-.B "ld" ,
+-generating a warning message as to the number of modules involved.
+-.LE
+-.P
+-At present this is available forcertain Motorola 68000 ports of UNIX
+-System III and System V. Dependencies on
+-.AL a
+-.LI
+-Instruction set.
+-.LI
+-Object module format.
+-.LI
+-Library module format.
+-.LI
+-Assembler output format.
+-.LE
+-.P
+-are hopefully sufficiently localised to make the product useful as a
+-basis for other disassemblers for other versions of UNIX.
+-.P
+-The product is thus distributed in source form at present.
+-.H 1 "Use"
+-The disassembler is run by entering:
+-.DS I
+-unc mainfile lib1 lib2 ...
+-.DE
+-.P
+-The first named file is the file to be disassembled, which should be
+-a single file, either an object module, a (possibly stripped) executable
+-file, or a library member. Library members are designated using a
+-parenthesis notation, thus:
+-.DS I
+-unc '/lib/libc.a(printf.o)'
+-.DE
+-.P
+-It is usually necessary to escape the arguments in this case to prevent
+-misinterpretation by the shell. Libraries in standard places such as
+-.I "/lib"
+-and
+-.I "/usr/lib"
+-may be specified in the same way as to
+-.B "ld" ,
+-thus
+-.DS I
+-unc '-lc(printf.o)'
+-unc '-lcurses(wmove.o)'
+-.DE
+-.P
+-As an additional facility, the list of directories searched for
+-libraries may be varied by setting the environment variable
+-.B "LDPATH" ,
+-which is interpreted similarly to the shell
+-.B "PATH"
+-variable, and of course defaults to
+-.DS I
+-LDPATH=/lib:/usr/lib
+-.DE
+-.P
+-As a further facility, the insertion of
+-.B "lib"
+-before and
+-.B ".a"
+-after the argument may be suppressed by using a capital
+-.B "-L"
+-argument, thus to print out the assembler for
+-.I "/lib/crt0.o" ,
+-then the command
+-.DS I
+-unc -Lcrt0.o
+-.DE
+-.P
+-should have the desired effect.
+-.P
+-Second and subsequent file arguments are only referenced for stripped
+-executable files, and may consist of single object files and library
+-members, using the same syntax as before, or whole libraries of object
+-files, thus:
+-.DS I
+-unc strippedfile -Lcrt0.o -lcurses -ltermcap '-lm(sqrt.o)' -lc
+-.DE
+-.P
+-It is advisable to make some efort to put the libraries to be searched
+-in the order in which they were originally loaded. This is because the
+-search for each module starts where the previously matched module ended.
+-However, no harm is done if this rule is not adhered to apart from
+-increased execution time except in the rare cases where the disassembler
+-is confused by object modules which are very nearly similar.
+-.H 1 "Additional options"
+-The following options are available to modify the behaviour of the
+-disassembler.
+-.VL 15 2
+-.LI "-o file"
+-Causes output to be sent to the specified file instead of the standard
+-output.
+-.LI "-t prefix"
+-Causes temporary files to be created with the given prefix. The default
+-prefix is
+-.B "split" ,
+-thus causing two temporary files to be created with this prefix in the
+-current directory. If it is desired, for example, to create the files as
+-.B "/tmp/xx*" ,
+-then the argument
+-.B "-t /tmp/xx"
+-should be given. Note that the temporary files may be very large as a
+-complete map of the text and data segments is generated.
+-.LI "-a"
+-Suppresses the generation of non-global absolute symbols from the
+-output. This saves output from C compilations without any obvious
+-problems, but the symbols are by default included in the name of
+-producing as nearly identical output as possible to the original source.
+-.LI "-s"
+-Causes an additional scan to take place where all possible labels are
+-replaced by local symbols. The local symbols are inserted in strictly
+-ascending order, starting at 1.
+-.LI "-v"
+-Causes a blow-by-blow account of activities to be output on the standard
+-error.
+-.LE
+-.H 1 "Diagnostics etc"
+-Truncated or garbled object and library files usually cause processing
+-to stop with an explanatory message.
+-.P
+-The only other kinds of message are some passing warnings concerning
+-obscure constructs not handled, such as the relocation of byte fields,
+-or the relocation of overlapping fields. Occasionally a message
+-.DS I
+-Library clash: message
+-.DE
+-.P-may appear and processing cease. This message is found where at a late
+-stage in processing libraries, the program discovers that due to the
+-extreme similarity of two or more library members, it has come to the
+-wrong conclusion about which one to use. The remedy here is to spell out
+-to the program which members to take in which order.
+-.H 1 "Future development"
+-In the future it is hoped to devise ways of making the disassembler
+-independent of all the above-mentioned version dependencies, by first
+-reading a files defining these things. This will probably be applied
+-after the Common Object Format becomes more standard.
+-.P
+-In the long term it would be desirable and useful to enhance the product
+-to produce compilable C in addition to assemblable assembler. Stages in
+-the process are seen as follows:
+-.AL
+-.LI
+-Better identification of basic blocks in the code. Switch statements are
+-a major problem here, as are constant data held in the text segment.
+-.LI
+-Marrying of data to the corresponding text. It is in various places hard
+-to divorce static references "on the fly" (e.g. strings, and switch
+-lists in some implementations) from static at the head of a module. This
+-is part of the problem of identifying basic blocks.
+-.LI
+-Compilation of header files to work out structure references within the
+-text. At this stage some interaction may be needed.
+-.LE
+-.P
+-Meanwhile the product is one which is a useful tool to the author in its
+-present form. Comments and suggestions as to the most practical method
+-of improving the product in the ways suggested or in other ways would be
+-gratefully considered.
+//GO.SYSIN DD doc
+echo makefile 1>&2
+sed 's/.//' >makefile <<'//GO.SYSIN DD makefile'
+-CFLAGS=-v -OB
+-OBJS=alloc.o file.o libmtch.o robj.o iset.o prin.o heur.o main.o
+-
+-unc:   $(OBJS)
+-       cc -o unc $(OBJS)
+-
+-$(OBJS):       unc.h
+//GO.SYSIN DD makefile
+echo unc.h 1>&2
+sed 's/.//' >unc.h <<'//GO.SYSIN DD unc.h'
+-/*
+- *     SCCS:   @(#)unc.h       1.2     11/2/84 1421:02
+- *     Header file for uncompile program.
+- *
+- ***********************************************************************
+- *     This software is copyright of
+- *
+- *             John M Collins
+- *             47 Cedarwood Drive
+- *             St Albans
+- *             Herts, AL4 0DN
+- *             England                 +44 727 57267
+- *
+- *     and is released into the public domain on the following conditions:
+- *
+- *             1.  No free maintenance will be guaranteed.
+- *             2.  Nothing may be based on this software without
+- *                 acknowledgement, including incorporation of this
+- *                 notice.
+- *
+- *     Notwithstanding the above, the author welcomes correspondence and bug
+- *     fixes.
+- ***********************************************************************
+- */
+-
+-#define        MAXCHARS        50
+-#define        HASHMOD         97
+-
+-/*
+- *     The following structure is used to keep track of symbols.
+- */
+-
+-struct symstr  {
+-       struct  symstr  *s_next;                /*  Next in hash chain  */
+-       struct  symstr  *s_link;                /*  Next in duplicate labels */
+-       unsigned        s_type  :  3;           /*  Symbol type  */
+-       unsigned        s_newsym:  1;           /*  A new symbol  */
+-       unsigned        s_invent:  1;           /*  Invented symbol  */
+-       unsigned        s_glob  :  1;           /*  Global symbol  */
+-       long            s_value;                /*  Value if defined  */
+-       short           s_defs;                 /*  Defined count  */
+-       short           s_used;                 /*  Used count  */
+-       unsigned short  s_lsymb;                /*  Local symbol  */
+-       char            s_name[1];              /*  Chars of name null term */
+-};
+-
+-typedef        struct  symstr  *symbol;
+-
+-symbol symbhash[HASHMOD];
+-
+-typedef        struct  {
+-       int     ef_t;                   /*  Text file fd  */
+-       int     ef_d;                   /* Data file fd  */
+-       long    ef_entry;               /*  Entry point  */
+-       long    ef_tsize;               /*  Text size  */
+-       long    ef_dsize;               /*  Data size  */
+-       long    ef_bsize;               /*  Bss size  */
+-       long    ef_end;                 /*  End of it all  */
+-       long    ef_tbase;               /*  Text base  */
+-       long    ef_dbase;               /*  Data base  */
+-       long    ef_bbase;               /*  Bss base  */
+-       int     ef_stcnt;               /*  Number of symbols  */
+-       int     ef_stmax;               /*  Max number of symbols  */
+-       symbol  *ef_stvec;              /*  Symbol vector  */
+-}  ef_fids;
+-
+-typedef        ef_fids *ef_fid;
+-
+-/*
+- *     Description of word in text file.  This entry is held in the place
+- *     corresponding to the address in the text file.
+- */
+-
+-typedef        struct  {
+-       unsigned  short t_contents;             /*  Actual contents  */
+-       unsigned  short t_iindex;               /*  Index in table  */
+-       unsigned        t_type  :  2;           /*  Type  */
+-       unsigned        t_vins  :  1;           /*  Valid instruction  */
+-       unsigned        t_bdest :  1;           /*  Is branch dest  */
+-       unsigned        t_gbdest:  1;           /*  Is global dest  */
+-       unsigned        t_dref  :  1;           /*  Refered to in data  */
+-       unsigned        t_bchtyp:  2;           /*  Branch type  */
+-       unsigned        t_lng   :  3;           /*  Length in words  */
+-       unsigned        t_reloc :  2;           /*  Relocatable  */
+-       unsigned        t_rptr  :  2;           /*  Where relocated  */
+-       unsigned        t_rdisp :  1;           /*  Relocatable displacement */
+-       unsigned        t_isrel :  1;           /*  Relocated  */
+-       unsigned        t_amap  :  1;           /*  Worked out  */
+-       symbol          t_relsymb;              /*  Relocation symbol  */
+-       long            t_reldisp;              *  Offset + or - from symb */
+-       symbol          t_lab;                  /*  Label  */
+-       unsigned  short t_lsymb;                /*  Local symbol  */
+-       long            t_reflo;                /*  Lowest place referred  */
+-       long            t_refhi;                /*  Highest place referred  */
+-       unsigned  short t_match;                /*  Lib match lng  */
+-}  t_entry;
+-
+-/*
+- *     Types ......
+- */
+-
+-#define        T_UNKNOWN       0
+-#define        T_BEGIN         1
+-#define        T_CONT          2
+-
+-#define        R_NONE          0               /*  No relocation  */
+-#define        R_BYTE          1               /*  Byte relocation  */
+-#define        R_WORD          2               /*  Word relocation  */
+-#define        R_LONG          3               /*  Long relocation  */
+-
+-/*
+- *     Branch types.
+- */
+-
+-#define        T_NOBR          0
+-#define        T_CONDBR        1
+-#define        T_UNBR          2
+-#define        T_JSR           3
+-
+-typedef        struct  {
+-       unsigned  char  d_contents;             /*  Actual contents  */
+-       unsigned        d_type  :  4;           /*  Data type  */
+-       unsigned        d_reloc :  2;           /*  Relocatable  */
+-       unsigned        d_rptr  :  2;           /*  Where relocated  */
+-       short           d_lng;                  /*  Length -ve for D_CONT */
+-       symbol          d_relsymb;              /*  Relocation symbol  */
+-       long            d_reldisp;              /*  Offset + or - from symb */
+-       symbol          d_lab;                  /*  Label  */
+-}  d_entry;
+-
+-/*
+- *     Data types.
+- */
+-
+-#define        D_ASC           0               /*  Ascii chars  */
+-#define        D_ASCZ          1               /*  Null-term ascii  */
+-#define        D_BYTE          2               /*  Decimal bytes  */
+-#define        D_WORD          3               /*  Words  */
+-#define        D_LONG          4               /*  Longs  */
+-#define        D_ADDR         5               /*  Address pointer  */
+-#define        D_CONT          6               /*  Continuation of last  */
+-
+-/*
+- *     'Common' items.
+- */
+-
+-struct commit  {
+-       symbol  *c_symb;                /*  List of symbols  */
+-       int     c_int;                  /*  Current number  */
+-       int     c_max;                  /*  Maximum  */
+-};
+-
+-/*
+- *     Library file description.
+- */
+-
+-struct libit   {
+-       int     lf_fd;                  /*  File descriptor  */
+-       long    lf_offset;              /*  Offset of current file  */
+-       long    lf_next;                /*  Offset of next file  */
+-       char    lf_name[14];            /*  Name of item  */
+-};
+//GO.SYSIN DD unc.h
+echo alloc.c 1>&2
+sed 's/.//' >alloc.c <<'//GO.SYSIN DD alloc.c'
+-/*
+- *     SCCS:   @(#)alloc.c     1.2     11/2/84 14:17:20
+- *     Allocate space etc.
+- *
+- ***********************************************************************
+- *     This software is copyright of
+- *
+- *             John M Collins
+- *             47 Cedarwood Drive
+- *             St Albans
+- *             Herts, AL4 0DN
+- *             England                 +44 727 57267
+- *
+- *     and is released into the public domain on the following conditions:
+- *
+- *             1.  No free maintenance will be guaranteed.
+- *             2.  Nothing may be based on this software without
+- *                 acknowledgement, including incorporation of this
+- *                 notice.
+- *
+- *     Notwithstanding the above, the author welcomes correspondence and bug
+- *     fixes.
+- ***********************************************************************
+- */
+-
+-#include <stdio.h>
+-#include <a.out.h>
+-#include <setjmp.h>
+-#include "unc.h"
+-
+-#define        STINC   10
+-
+-char   *malloc(), *realloc();
+-char   *strncpy();
+-void   gette(), getde(), setde(), putte(), putde();
+-void   unimpl();
+-long   gettw();
+-
+-ef_fids        mainfile;
+-
+-/*
+- *     Oops! out of memory.....
+- */
+-
+void   nomem()
+-{
+-       (void) fprintf(stderr, "Sorry - run out of memory\n");
+-       exit(255);
+-}
+-
+-/*
+- *     Look up hash value of symbol.
+- */
+-
+-unsigned  shash(str)
+-register  char *str;
+-{
+-       register  unsigned  result = 0;
+-       register  int   cnt = 0;
+-       
+-       while  (*str  &&  cnt < MAXCHARS)  {
+-               result += *str++;
+-               cnt++;
+-       }
+-       return  result % HASHMOD;
+-}
+-
+-/*
+- *     Look up hash value of symbol, possibly allocating a new symbol.
+- */
+-
+-symbol lookup(str)
+-char   *str;
+-{
+-       register  symbol  res, *pp;
+-       register  int   len;
+-       
+-       pp = &symbhash[shash(str)];
+-       res = *pp;
+-       while  (res != NULL)  {
+-               if  (strncmp(res->s_name, str, MAXCHARS) == 0)
+-                       return  res;
+-               pp = &res->s_next;
+-               res = *pp;
+-       }
+-       for  (len = 0;  len < MAXCHARS;  len++)
+-               if  (str[len] == '\0')
+-                       break;
+-       len++;
+-       res = (symbol) malloc(sizeof(struct symstr) + len);
+-       if  (res == NULL)
+-               nomem();
+-       *pp = res;
+-       res->s_next = NULL;
+-       (void) strncpy(res->s_name, str, len);
+-       res->s_name[len] = '\0';                /*  Null-terminate  */
+-       res->s_newsym = 1;
+-       res->s_glob = 0;
+-       res->s_invent = 0;
+-       res->s_link = NULL;
+-       res->s_used = 0;
+-       res->s_defs = 0;
+-       res->s_lsymb = 0;
+-       return  res;
+-}
+-
+-/*
+- *     Invent a symbol, making sure that we don't know it.
+- */
+-
+-symbol inventsymb(prefix)
+-char   *prefix;
+-{
+-       static  int  nsymb = 0;
+-       char    schars[10];
+-       register  symbol  res;
+-       
+-       do      (void) sprintf(schars, "%s%d", prefix, ++nsymb);
+-       while  (!(res = lookup(schars))->s_newsym);
+-       
+-       res->s_newsym = 0;
+-       res->s_invent = 1;
+-       return  res;
+-}
+-        
+-/*
+- *     Reallocate symboltable.
+- */
+-
+-void   reallst(outf)
+-register  ef_fid  outf;
+-{
+-       outf->ef_stmax += STINC;
+-       if  (outf->ef_stvec == NULL)
+-               outf->ef_stvec = (symbol *) malloc(outf->ef_stmax * sizeof(symbol));
+-       else
+-               outf->ef_stvec = (symbol *) realloc(outf->ef_stvec,
+-                                       outf->ef_stmax * sizeof(symbol));
+-       if  (outf->ef_stvec == NULL)
+-               nomem();
+-}
+-
+-/*
+- *     Search through existing symbol table for symbol with given
+- *     value.  Invent a new one if needed.
+- */
+-
+-symbol getnsymb(fid, seg, pos)
+-register  ef_fid  fid;
+-unsigned  seg;
+-long   pos;
+-{
+-       register  int   i;
+-       register  symbol  res;
+-       
+-       /***********  MACHINE DEPENDENT  ******************************
+-        *      Convert relocation segment type (argument) to symbol type
+-        *      (as remembered in symbol table).  Don't ask me why they
+-        *      have to be different.....
+-        */
+-       
+-       seg += TEXT - RTEXT;
+-       
+-       /*
+-        *      See if the reference is to an external symbol.
+-        *      If so, use that.
+-        */
+-       
+-       for  (i = 0;  i < fid->ef_stcnt;  i++)  {
+-               res = fid->ef_stvec[i];
+-               if  (res->s_type == seg  &&  res->s_value == pos)
+-                       return  res;
+-       }
+-       
+-       /*
+-        *      Invent a symbol and use that.
+-        */
+-       
+-       res = inventsymb("RS");
+-       if  (fid->ef_stcnt >= fid->ef_stmax)
+-               reallst(fid);
+-       fid->ef_stvec[fid->ef_stcnt++] = res;
+-       res->s_type = seg;
+-       res->s_value = pos;
+-       if  (seg == TEXT)  {
+-               t_entry tent;
+-               gette(fid, pos, &tent);
+-               tent.t_bdest = 1;
+-               tent.t_lab = res;
+-               putte(fid, pos, &tent);
+-       }
+-       else  if  (seg == DATA  ||  seg == BSS)  {
+-               d_entry dent;
+-               getd(fid, pos, &dent);
+-               dent.d_lab = res;
+-               putde(fid, pos, &dent);
+-       }
+-
+-       return  res;
+-}
+-
+-/*
+- *     Assuming address given is in text segment, find its label, or invent
+- *     one.  Also set where refered from.
+- */
+-
+-symbol textlab(loc, refpos)
+-long   loc, refpos;
+-{
+-       t_entry tent;
+-
+-       gette(&mainfile, loc, &tent);
+-       if  (tent.t_type == T_CONT)
+-               return  NULL;
+-       if  (tent.t_lab == NULL)  {
+-               tent.t_lab = inventsymb("TS");
+-               tent.t_lab->s_type = TEXT;
+-               tent.t_lab->s_value = loc;
+-               tent.t_bdest = 1;
+-               putte(&mainfile, loc, &tent);
+-       }
+-       else
+-               tent.t_lab->s_used++;
+-       if  (tent.t_refhi < refpos)  {
+-               tent.t_refhi = refpos;
+-               putte(&mainfile, loc, &tent);
+-       }
+-       if  (tent.t_reflo > refpos)  {
+-               tent.t_reflo = refpos;
+-               putte(&mainfile, loc, &tent);
+-       }
+-       return  tent.t_lab;
+-}
+-
+-/*
+- *     Note references to data.
+- */
+-
+-void   mkdref(tpos, size)
+-long   tpos;
+-unsigned  size;
+-{
+-       t_entry tent;
+-       d_entry dent;
+-       register  symbol  ds;
+-       int     dchng = 0;
+-       int     wsize;
+-       long    dpos;
+-       
+-       gette(&mainfile, tpos, &tent);
+-       if  (tent.t_relsymb != NULL)
+-               return;
+-               
+-       dpos = gettw(&mainfile, tpos, R_LONG);
+-       if  (dpos < mainfile.ef_dbase  ||  dpos > mainfile.ef_end)
+-               return;
+-       
+-       switch  (size)  {
+-       default:
+-               wsize = D_BYTE;
+-               break;
+-       case  2:
+-               wsize = D_WORD;
+-               break;
+-       case  4:
+-               wsize = D_LONG;
+-               break;
+-       }
+-       
+-       getde(&mainfile, dpos, &dent);
+-       if  ((ds = dent.d_lab) == NULL)  {
+-               if  (dpos >= mainfile.ef_bbase)  
+-                       ds = inventsymb("BS");
+-                       ds->s_type = BSS;
+-               }
+-               else  {
+-                       ds = inventsymb("DS");
+-                       ds->s_type = DATA;
+-               }
+-               ds->s_value = dpos;
+-               dent.d_lab = ds;
+-               dchng++;
+-       }
+-       else
+-               ds->s_used++;
+-
+-       if  (dent.d_type != D_BYTE)  {
+-               if  (dent.d_type != wsize)  {
+-                       if  (dent.d_type == D_ADDR)  {
+-                               if  (wsize != D_LONG)
+-                                       unimpl("Addr word usage");
+-                       }
+-                       else  if  (dent.d_type > wsize)  {
+-                               dchng++;
+-                               dent.d_type = wsize;
+-                               dent.d_lng = size;
+-                       }
+-               }
+-       }
+-       else  {
+-               dent.d_type = wsize;
+-               dent.d_lng = size;
+-               dchng++;
+-       }
+-       if  (dchng)  {
+-               putde(&mainfile, dpos, &dent);
+-               for  (dchng = 1;  dchng < size; dchng++)
+-                       setde(&mainfile, dpos+dchng, D_CONT, 1);
+-       }
+-               
+-       tent.t_relsymb = ds;
+-       putte(&mainfile, tpos, &tent);
+-}
+-
+-/*
+- *     Add item to common or abs list.
+- */
+-
+-#define        COMINC  10
+-
+-void   addit(cp, symb)
+-register  struct  commit  *cp;
+-symbol symb;
+-{
+-       if  (cp->c_int >= cp->c_max)  {
+-               cp->c_max += COMINC;
+-               if  (cp->c_symb == NULL)
+-                       cp->c_symb = (symbol *) malloc(COMINC*sizeof(symbol));
+-               else
+-                       cp->c_symb = (symbol *)
+-                                       realloc(cp->c_symb,
+-                                               cp->c_max * sizeof(symbol));
+-               if  (cp->c_symb == NULL)
+-                       nomem();
+-      }
+-       cp->c_symb[cp->c_int++] = symb;
+-}
+//GO.SYSIN DD alloc.c
+echo file.c 1>&2
+sed 's/.//' >file.c <<'//GO.SYSIN DD file.c'
+-/*
+- *     SCCS:   @(#)file.c      1.2     11/2/84 14:17:35
+- *     Various operations on files.
+- *
+- ***********************************************************************
+- *     This software is copyright of
+- *
+- *             John M Collins
+- *             47 Cedarwood Drive
+- *             St Albans
+- *             Herts, AL4 0DN
+- *             England                 +44 727 57267
+- *
+- *     and is released into the public domain on the following conditions:
+- *
+- *             1.  No free maintenance will be guaranteed.
+- *             2.  Nothing may be based on this software without
+- *                 acknowledgement, including incorporation of this
+- *                 notice.
+- *
+- *     Notwithstanding the above, the author welcomes correspondence and bug
+- *     fixes.
+- ***********************************************************************
+- */
+-
+-#include <stdio.h>
+-#include <a.out.h>
+-#include "unc.h"
+-       
+-long   lseek();
+-void   unimpl();
+-
+-/*
+- *     Validate addr and get text entry corresponding to it from the given
+- *     file.
+- */
+-
+-void   gette(fid, addr, te)
+-register  ef_fid  fid;
+-register  long addr;
+-t_entry        *te;
+-{
+-       addr -= fid->ef_tbase;
+-       if  (addr < 0  ||  addr > fid->ef_tsize  || (addr & 1) != 0)  {
+-               (void) fprintf(stderr, "Invalid text address %lx\n", addr);
+-               exit(200);
+-       }
+-       (void) lseek(fid->ef_t, (long)(addr * sizeof(t_entry)/2), 0);
+-       if  (read(fid->ef_t, (char *) te, sizeof(t_entry)) != sizeof(t_entry))  {
+-               (void) fprintf(stderr, "Trouble reading text at %lx\n", addr);
+-               exit(201);
+-       }
+-}
+-
+-/*
+- *     Store a text entry.
+- */
+-
+-void   putte(fid, addr, te)
+-register  ef_fid  fid;
+-register  long addr;
+-t_entry        *te;
+-{
+-       addr -= fid->ef_tbase;
+-      if  (addr < 0  ||  addr > fid->ef_tsize  ||  (addr & 1) != 0)  {
+-               (void) fprintf(stderr, "Invalid text address %lx\n", addr);
+-               exit(200);
+-       }
+-       (void) lseek(fid->ef_t, (long)(addr * sizeof(t_entry)/2), 0);
+-       (void) write(fid->ef_t, (char *) te, sizeof(t_entry));
+-}
+-
+-/*
+- *     Validate addr and get data entry corresponding to it from the given
+- *     file.
+- */
+-
+-void   getde(fid, addr, de)
+-register  ef_fid  fid;
+-register  long addr;
+-d_entry        *de;
+-{
+-       if  (addr < fid->ef_dbase  ||  addr > fid->ef_end)  {
+-               (void) fprintf(stderr, "Invalid data address %lx\n", addr);
+-               exit(200);
+-       }
+-       addr -= fid->ef_dbase;
+-       (void) lseek(fid->ef_d, (long)(addr * sizeof(d_entry)), 0);
+-       if  (read(fid->ef_d, (char *) de, sizeof(d_entry)) != sizeof(d_entry))  {
+-               (void) fprintf(stderr, "Trouble reading data at %lx\n", addr);
+-               exit(201);
+-       }
+-}
+-
+-/*
+- *     Store a data entry.
+- */
+-
+-void   putde(fid, addr, de)
+-register  ef_fid  fid;
+-register  long addr;
+-d_entry        *de;
+-{
+-       if  (addr < fid->ef_dbase  ||  addr > fid->ef_end)  {
+-               (void) fprintf(stderr, "Invalid data address %lx\n", addr);
+-               exit(200);
+-       }
+-       addr -= fid->ef_dbase;
+-       (void) lseek(fid->ef_d, (long)(addr * sizeof(d_entry)), 0);
+-       (void) write(fid->ef_d, (char *) de, sizeof(d_entry));
+-}
+-
+-/*
+- *     Set type and length of given data entry.
+- */
+-
+-void   setde(fid, addr, type, lng)
+-ef_fid fid;
+-long   addr;
+-unsigned  type;
+-int    lng;
+-{
+-       d_entry dat;
+-
+-       if  (addr > fid->ef_end)
+-               return;
+-       getde(fid, addr, &dat);
+-       if  (type == D_CONT  &&  dat.d_reloc != R_NONE)  {
+-               char    obuf[30];
+-               (void) sprintf(obuf, "overlapped reloc 0x%x", addr);
+-               unimpl(obuf);
+-       }
+-       dat.d_type = type;
+-       at.d_lng = lng;
+-       putde(fid, addr, &dat);
+-}
+-       
+-/*
+- *     Get a word of data file, size as requested.
+- */
+-
+-long   getdw(fid, pos, size)
+-register  ef_fid  fid;
+-long   pos;
+-int    size;
+-{
+-       d_entry dat;
+-       register  long  res;
+-       register  int   i, lt;
+-       
+-       getde(fid, pos, &dat);
+-       
+-       switch  (size)  {
+-       case  R_BYTE:
+-               return  dat.d_contents;
+-               
+-       case  R_LONG:
+-               lt = 4;
+-               goto  rest;
+-               
+-       case  R_WORD:
+-               lt = 2;
+-       rest:
+-               res = dat.d_contents;
+-               for  (i = 1;  i < lt; i++)  {
+-                       getde(fid, pos+i, &dat);
+-                       res = (res << 8) + dat.d_contents;
+-               }
+-               return  res;
+-               
+-       default:
+-               (void) fprintf(stderr, "Data word size error\n");
+-               exit(20);
+-       }
+-       /*NOTREACHED*/
+-}
+-
+-/*
+- *     Get a word of text file.
+- */
+-
+-long   gettw(fid, pos, size)
+-register  ef_fid  fid;
+-long   pos;
+-int    size;
+-{
+-       t_entry tex;
+-       long    res;
+-       
+-       gette(fid, pos, &tex);
+-       
+-       switch  (size)  {
+-       case  R_BYTE:
+-               return  tex.t_contents >> 8;
+-               
+-       case  R_WORD:
+-               return  tex.t_contents;
+-               
+-       case  R_LONG:
+-               res = tex.t_contents;
+-               gette(fid, pos+2, &tex);
+-               return  (res << 16) + tex.t_contents;
+-       default:
+-               (void) fprintf(stderr, "Text word size error\n");
+-               exit(20);
+-       }
+-       /*NOTREACHED*/
+-}
+//GO.SYSIN DD file.c
+echo heur.c 1>&2
+sed 's/.//' >heur.c <<'//GO.SYSIN DD heur.c'
+-/*
+- *     SCCS:   @(#)heur.c      1.2     11/2/84 14:17:46
+- *     Attempt to guess things about the file.
+- *
+- **********************************************************************
+- *     This software is copyright of
+- *
+- *             John M Collins
+- *             47 Cedarwood Drive
+- *             St Albans
+- *             Herts, AL4 0DN
+- *             England                 +44 727 57267
+- *
+- *     and is released into the public domain on the following conditions:
+- *
+- *             1.  No free maintenance will be guaranteed.
+- *             2.  Nothing may be based on this software without
+- *                 acknowledgement, including incorporation of this
+- *                 notice.
+- *
+- *     Notwithstanding the above, the author welcomes correspondence and bug
+- *     fixes.
+- ***********************************************************************
+- */
+-
+-#include <stdio.h>
+-#include <a.out.h>
+-#include "unc.h"
+-
+-#define        INITDAT 256
+-#define        INCDAT  128
+-
+-#define        STRSCNT 3
+-#define        STRECNT 3
+-
+-char   *malloc(), *realloc();
+-
+-void   gette(), getde(), setde(), putte(), putde();
+-void   nomem();
+-long   getdw();
+-symbol inventsymb();
+-
+-long   endt;
+-ef_fids        mainfile;
+-
+-/*
+- *     Talk about implemented things.....
+- */
+-
+-void   unimpl(msg)
+-char   *msg;
+-{
+-       (void) fprintf(stderr, "Warning: handling of \"%s\" not implemented\n", msg);
+-}
+-
+-/*
+- *     Return 1 if string char, otherwise 0.
+- */
+-
+-int    possstr(x)
+-unsigned  x;
+-{
+-       if  (x >= ' '  &&  x <= '~')
+-               return  1;
+-       if  (x == '\n'  ||  x == '\t')
+-               return  1;
+-       return  0;
+-}
+-
+-/*
+- *     Guess things about data files.
+- */
+-
+-void   intudat(fid)
+-ef_fid  fid;
+-{
+-       register  int   i, j;
+-       int     lt, input, invcnt;
+-       long    offs, soffs, endd;
+-       d_entry fdat;
+-       unsigned  char  *inbuf;
+-       int     ibsize;
+-       
+-       inbuf = (unsigned  char *)malloc(INITDAT);
+-       if  (inbuf == NULL)
+-               nomem();
+-       ibsize = INITDAT;
+-       
+-       offs = fid->ef_dbase;
+-       endd = fid->e_bbase;
+-
+-       while  (offs < endd)  {
+-               getde(fid, offs, &fdat);
+-               if  (fdat.d_type != D_BYTE)  {
+-                       offs += fdat.d_lng;
+-                       continue;
+-               }
+-               
+-               /*
+-                *      Looks like general data.  Read in as much as possible.
+-                */
+-               
+-               input = 0;
+-               soffs = offs;
+-               do  {
+-                       if  (input >= ibsize)  {
+-                               ibsize += INCDAT;
+-                               inbuf = (unsigned  char *)
+-                                       realloc((char *)inbuf, (unsigned)ibsize);
+-                               if  (inbuf == NULL)
+-                                       nomem();
+-                       }
+-                       inbuf[input++] = fdat.d_contents;
+-                       offs++;
+-                       if  (offs >= endd)
+-                               break;
+-                       getde(fid, offs, &fdat);
+-               }  while  (fdat.d_type == D_BYTE && fdat.d_lab == NULL);
+-               
+-               /*
+-                *      Now split up the data.
+-                */
+-               
+-               for  (i = 0;  i < input;  )  {
+-                       
+-                       /*
+-                        *      Might be a string.
+-                        */
+-                       
+-                       if  (possstr(inbuf[i]))  {
+-                               lt = input;
+-                               if  (i + STRSCNT < lt)
+-                                       lt = i + STRSCNT;
+-                               for  (j = i + 1;  j < lt;  j++)  {
+-                                       if  (inbuf[j] == '\0')
+-                                               break;
+-                                       if  (!possstr(inbuf[j]))
+-                                               goto  notstr;
+-                               }
+-                              
+-                               /*
+-                                *      Looks like a string then.
+-                                */
+-                               
+-                               invcnt = 0;
+-                               for  (j = i + 1; j < input;  j++)  {
+-                                       if  (inbuf[j] == '\0')  {
+-                                               j++;
+-                                               break;
+-                                       }
+-                                       if  (possstr(inbuf[j]))
+-                                               invcnt = 0;
+-                                       else  {
+-                                               invcnt++;
+-                                               if  (invcnt >= STRECNT)  {
+-                                                       j -= invcnt - 1;
+-                                                       break;
+-                                               }
+-                                       }
+-                               }
+-
+-                               setde(fid,
+-                                     soffs+i,
+-                                     (unsigned)(inbuf[j-1]=='\0'?D_ASCZ:D_ASC),-                                     j - i);
+-                               for  (i++;  i < j;  i++)
+-                                       setde(fid, soffs+i, D_CONT, 1); 
+-                               continue;
+-                       }
+-
+-notstr:
+-                       /*
+-                        *      If on odd boundary, treat as a byte.
+-                        */
+-                       
+-                       if  ((soffs + i) & 1  ||  i + 1 >= input)  {
+-                               setde(fid, soffs + i, D_BYTE, 1);
+-                               i++;
+-                               continue;
+-                       }
+-
+-                       /*
+-                        *      Treat as longs unless not enough.-                        */
+-                       
+-                       if  (i + 3 >= input)  {
+-                               setde(fid, soffs + i, D_WORD, 2);
+-                               setde(fid, soffs + i + 1, D_CONT, -1);
+-                               i += 2;
+-                               continue;
+-                       }
+-
+-                       /*
+-                        *      Treat as a long but mark changable.
+-                        */
+-                       
+-                       setde(fid, soffs + i, D_LONG, 4);
+-                       for  (j = 1;  j < 4;  j++)
+-                               setde(fid, soffs + i + j, D_CONT, -j);
+-                       i += 4;
+-               }
+-       }
+-       free((char *)inbuf);
+-       
+-       /*
+-        *      Now zap bss segment.
+-        */
+-       
+-       offs = fid->ef_bbase;
+-       endd = fid->ef_end;
+-
+-       while  (offs < endd)  {
+-               getde(fid, offs, &fdat);
+-               if  (fdat.d_type != D_BYTE)  {
+-                       offs += fdat.d_lng;
+-                       continue;
+-               }
+-
+-               soffs = offs;
+-               do  {
+-                       offs++;
+-                       if  (offs >= endd)
+-                               break;
+-                       getde(fid, offs, &fdat);
+-               }  while  (fdat.d_type == D_BYTE && fdat.d_lab == NULL);
+-               
+-               setde(fid, soffs, D_BYTE, (int)(offs-soffs));
+-               for  (i = -1, soffs++;  soffs < offs; i--, soffs++)
+-                       setde(fid, soffs, D_CONT, i); 
+-       }
+-}
+-
+-/*
+- *     For non relocatable files, try to identify address pointers in
+- *     the data.
+- */
+-
+-void   inturdat(fid)
+-ef_fid fid;
+-{
+-       register  long  offs = fid->ef_dbase;
+-       register  int   i;
+-       register  symbol  ds;
+-       long  endd = fid->ef_bbase;
+-       long  cont;
+-       d_entry dent, refdent;
+-
+-       while  (offs < endd) {
+-               getde(fid, offs, &dent);
+-               if  (dent.d_type != D_LONG)
+-                       goto  endit;
+-               cont = getdw(fid, offs, R_LONG);
+-               if  (cont < fid->ef_dbase || cont > fid->ef_end)
+-                       goto  endit;
+-               getde(fid, cont, &refdent);
+-               if  (refdent.d_type == D_CONT)  {
+-                       d_entry pdent;
+-                       int     siz;
+-                       
+-                       if  (refdent.d_lng >= 0)
+-                               goto  endit;
+-                       getde(fid, cont+refdent.d_lng, &pdent);
+-                       i = -refdent.d_lng;
+-                       refdent.d_lng += pdent.d_lng;
+-                       pdent.d_lng = i;
+-                       if  (pdent.d_type == D_LONG  &&  i == 2)
+-                               siz = D_WORD;
+-                       else
+-                               siz = D_BYTE;
+-                       refdent.d_type = siz;
+-                       pdent.d_type = siz;
+-                       putde(fid, cont - i, &pdent);
+-                       for  (i = 1;  i < refdent.d_lng;  i++)
+-                               setde(fid, cont+i, D_CONT, -i);
+-               }
+-               if  ((ds = refdent.d_lab) == NULL)  {
+-                       if  (cont >= fid->ef_bbase)  {
+-                               ds = inventsymb("BS");
+-                               ds->s_type = BSS;
+-                       }
+-                       else  {
+-                               ds = inventsymb("DS");
+-                               ds->s_type = DATA;
+-                       }
+-                       ds->s_value = cont;
+-                       refdent.d_lab = ds;
+-                       putde(fid, cont, &refdent);
+-               }
+-               else
+-                       ds->s_used++;
+-               dent.d_type = D_ADDR;
+-               dent.d_relsymb = ds;
+-               dent.d_rptr = ds->s_type;
+-               putdefid, offs, &dent);
+-               for  (i = 1;  i < 4;  i++)
+-                       setde(fid, offs+i, D_CONT, 1);
+-endit:
+-               offs += dent.d_lng;
+-       }
+-}
+-
+-/*
+- *     Recursively follow through the code, stopping at unconditional
+- *     branches and invalid instructions.
+- */
+-
+-void   follseq(pos)
+-long   pos;
+-{
+-       t_entry tent;
+-       int     lng;
+-       long    npos;
+-
+-       while  (pos < endt)  {
+-               gette(&mainfile, pos, &tent);
+-               if  (tent.t_amap)       /*  Been here  */
+-                       return;
+-               tent.t_amap = 1;
+-               lng = findinst(&tent, pos);
+-               npos = pos + lng*2;
+-               if  (npos > endt)  {
+-                       tent.t_vins = 0;
+-                       tent.t_lng = 1;
+-                       tent.t_type = T_UNKNOWN;
+-                       lng = 0;
+-                       npos = endt;
+-               }
+-               putte(&mainfile, pos, &tent);
+-               pos = npos;
+-               
+-               if  (lng <= 0)
+-                       return;
+-
+-               switch  (tent.t_bchtyp)  {
+-               case  T_UNBR:
+-                       if  (tent.t_relsymb == NULL)
+-                               return;
+-                       pos = tent.t_relsymb->s_value;
+-                       continue;
+-               case  T_JSR:
+-                       if  (tent.t_relsymb != NULL)
+-                               follseq(tent.t_relsymb->s_value);
+-                       continue;
+-               case  T_CONDBR:
+-                       follseq(tent.t_relsymb->s_value);
+-               default:
+-                       continue;
+-               }
+-       }
+-}
+-                       
+-                       
+-/*
+- *     Try to work out things about text files.
+- */
+-
+-void   intutext()
+-{
+-       long    pos;
+-       t_entry tent;
+-       int     lng;
+-       
+-       endt = mainfile.ef_tbase + mainfile.ef_tsize;
+-      pos = mainfile.ef_entry;
+-nextv:
+-       for  (;  pos < endt;)  {
+-               gette(&mainfile, pos, &tent);
+-               if  (!tent.t_amap && tent.t_vins)  {
+-                       follseq(pos);
+-                       pos += 2;
+-                       goto  nextiv;
+-               }
+-               pos += tent.t_lng * 2;
+-               if  (tent.t_bchtyp == T_UNBR)
+-                       goto  nextiv;
+-       }
+-       goto    dorest;
+-nextiv:
+-       for  (;  pos < endt;  pos += 2)  {
+-               gette(&mainfile, pos, &tent);
+-               if  (tent.t_bdest)
+-                       goto  nextv;
+-       }
+-dorest:
+-       /*
+-        *      Deal with unmapped instructions.
+-        */
+-       
+-       for  (pos = 0;  pos < endt;)  {
+-               gette(&mainfile, pos, &tent);
+-               switch  (tent.t_type)  {
+-               case  T_BEGIN:
+-                       pos += tent.t_lng * 2;
+-                       continue;
+-               case  T_UNKNOWN:
+-                       if  (tent.t_vins)  {
+-                               lng = findinst(&tent, pos);
+-                               putte(&mainfile, pos, &tent);
+-                               if  (lng > 0)  {
+-                                       pos += lng * 2;
+-                                       continue;
+-                               }
+-                       }
+-               default:
+-                       pos += 2;
+-                       continue;
+-               }
+-       }
+-}
+-
+-/*
+- *     Invent local symbols.
+- */
+-
+-void   intlsym()
+-{
+-       long    bpos, epos, hiref, hipos;
+-       unsigned  llnum;
+-       t_entry tent;
+-       register  symbol  tl;
+-       
+-       endt = mainfile.ef_tbase + mainfile.ef_tsize;
+-       epos = mainfile.ef_entry;
+-       for  (;;)  {
+-               bpos = epos;
+-               hiref = bpos;
+-               if  (epos >= endt)
+-                       return;
+-               gette(&mainfile, epos, &tent);
+-              epos += tent.t_lng * 2;
+-               for  (;  epos < endt;)  {
+-                       gette(&mainfile, epos, &tent);
+-                       if  (tent.t_gbdest  ||  tent.t_dref)
+-                               break;
+-                       if  (tent.t_reflo < bpos)
+-                               break;
+-                       if  (tent.t_refhi > hiref)  {
+-                               hiref = tent.t_refhi;
+-                               hipos = epos;
+-                       }
+-                       epos += tent.t_lng * 2;
+-               }
+-               if  (hiref > epos)
+-                       epos = hipos;
+-               llnum = 0;
+-               for  (hipos = bpos;  hipos < epos;)  {
+-                       gette(&mainfile, hipos, &tent);
+-                       if  (!tent.t_gbdest && !tent.t_dref &&
+-                        tent.t_reflo >= bpos && tent.t_refhi < epos &&
+-                        (tl = tent.t_lab) != NULL)
+-                               tl->s_lsymb = ++llnum;
+-                       hipos += tent.t_lng * 2;
+-               }
+-       }
+-}
+-
+-/*
+- *     Given the main file, a possible candidate for matching in the
+- *     file and an offset, see if text matches.  Return 1 if matches,
+- *     or 0 if no match.
+- */
+-
+-int    matchup(mf, lf, startpos)
+-register  ef_fid  mf, lf;
+-long   startpos;
+-{
+-       register  int   i, matches = 0;
+-       t_entry ltent, mtent;
+-
+-       if  (lf->ef_tsize > mf->ef_tsize - startpos + mf->ef_tbase)
+-               return  0;      /*  At end - can't fit  */
+-
+-       for  (i = 0;  i < lf->ef_tsize;  i += 2)  {
+-               gette(lf, lf->ef_tbase + i, &ltent);
+-               if  (ltent.t_isrel)
+-                       continue;
+-               gette(mf, startpos + i, &mtent);
+-               if  (mtent.t_contents != ltent.t_contents)
+-                       return  0;
+-               matches++;
+-       }
+-       
+-       /*
+-        *      Give up on zero length or all relocatable fils.
+-        */
+-       
+-       return  matches > 0;
+-}
+-
+-/*
+- *     Scan through main file looking for a match.
+- */
+-
+-long   findstart(mf, lf)
+-register  ef_fid  mf, lf;
+-{
+-       register  long  res = mf->ef_tbase;
+-       long    lim = mf->ef_tbase + mf->ef_tsize - lf->ef_tsize;
+-       t_entry tent;
+-       
+-restart:
+-       for  (;  res <= lim;  res += 2)  {
+-               gette(mf, res, &tent);
+-               if  (tent.t_match != 0)  {
+-                       res += tent.t_match;
+-                       goto  restart;
+-               }
+-               if  (matchup(mf, lf, res))
+-                       return  res;
+-       }
+-       return  -1;
+-}
+-
+-/*
+- *     Mark the head of a matched module to save searching.
+- */
+-
+-void   markmatch(mf, lf, pos)
+-ef_fid mf, lf;
+-long   pos;
+-{
+-       t_entry tent;
+-       
+-       gette(mf, pos, &tent);
+-       tent.t_match = (unsigned) lf->ef_tsize;
+-       putte(mf, pos, &tent);
+-}
+//GO.SYSIN DD heur.c
+echo iset.c 1>&2
+sed 's/.//' >iset.c <<'//GO.SYSIN DD iset.c'
+-/*
+- *     SCCS:   @(#)iset.c      1.2     11/2/84 14:18:23
+- *     Decode instructions.
+- *
+- ***********************************************************************
+- *     This software is copyright of
+- *
+- *             John M Collins
+- *             47 Cedarwood Drive
+- *             St Albans
+- *             Herts, AL4 0DN
+- *             England                 +44 727 57267
+- *
+- *     and is released into the public domain on the following conditions:
+- *
+- *             1.  No free maintenance will be guaranteed.
+- *             2.  Nothing may be based on this software without
+- *                 acknowledgement, including incorporation of this
+- *                 notice.
+- *
+- *     Notwithstanding the above, the author welcomes correspondence and bug
+- *     fixes.
+- ***********************************************************************
+- */
+-
+-#include <stdio.h>
+-#include <a.out.h>
+-#include "unc.h"
+-
+-ef_fids       mainfile;
+-long   endt;
+-
+-void   gette(), putte();
+-void   mkdref();
+-long   gettw();
+-symbol textlab();
+-
+-int    l1(), l2(), el1(), lea(), lmove(), lcbch(), jj();
+-int    limed(), lsbit(), lmvml(), lone(), loone(), lonew(), lonel();
+-
+-int    pmove(), pcbch(), pdbcc(), pscc(), pcs(), pmovc(), pstop(), pexg();
+-int    pimed(), pmovp(), psbit(), pdbit(), pcs2(), pone(), ppea();
+-int    plea(), pdreg(), pmvml(), ptrap(), plink(), pareg(), podreg();
+-int    pqu(), pmqu(), ptreg(), pcmpm(), pomode(), pmshf(), pshf();
+-
+-struct opstr   {
+-       unsigned  short  mask;
+-       unsigned  short  match;
+-       int     (*opsize)();
+-       int     (*opprin)();
+-       char    *prarg;
+-} optab[] = {
+-       0xf000, 0x2000, lmove, pmove, "l",
+-       0xf000, 0x3000, lmove, pmove, "w",
+-       0xf000, 0x1000, lmove, pmove, "b",
+-       0xf000, 0x6000, lcbch, pcbch, 0,
+-       0xffbf, 0x003c, l2,    pcs,   "or",
+-       0xff00, 0x0000, limed, pimed, "or",
+-       0xffbf, 0x023c, l2,    pcs,   "and",
+-       0xff00, 0x0200, limed, pimed, "and",
+-       0xff00, 0x0400, limed, pimed, "sub",
+-       0xff00, 0x0600, limed, pimed, "add",
+-       0xffbf, 0x0a3c, l2,    pcs,   "eor",
+-       0xff00, 0x0a00, limed, pimed, "eor",
+-       0xff00, 0x0c00, limed, pimed, "cmp",
+-       0xf138, 0x0108, l2,    pmovp, 0,
+-       0xff00, 0x0800, lsbit, psbit, 0,
+-       0xf100, 0x0100, lonew, pdbit, 0,
+-       0xffc0, 0x40c0, lonew, pcs2,  "sr",
+-       0xff00, 0x4000, lone,  pone,  "negx",
+-       0xff00, 0x4200, lone,  pone,  "clr",
+-       0xffc0, 0x44c0, lonew, pcs2,  "cc",
+-       0xff00, 0x4400, lone,  pone,  "neg",
+-       0xffc0, 0x46c0, lonew, pcs2,  "sr",
+-       0xff00, 0x4600, lone,  pone,  "not",
+-       0xffc0, 0x4800, lonew, ppea,  "nbcd",
+-       0xfff8, 0x4840, l1,    pdreg, "swap",
+-       0xffc0, 0x4840, lonel, ppea,  "pea",
+-       0xfff8, 0x4880, l1,    pdreg, "extw",
+-       0xfff8, 0x48c0, l1,    pdreg, "extl",
+-       0xfb80, 0x4880, lmvml, pmvml, 0,
+-       0ffc0, 0x4ac0, lonew, ppea,  "tas",
+-       0xff00, 0x4a00, lone,  pone,  "tst",
+-       0xfff0, 0x4e40, l1,    ptrap, 0,
+-       0xfff8, 0x4e50, l2,    plink, 0,
+-       0xfff8, 0x4e58, l1,    pareg, "unlk\t%s",
+-       0xfff8, 0x4e60, l1,    pareg, "movl\t%s,usp",
+-       0xfff8, 0x4e68, l1,    pareg, "movl\tusp,%s",
+-       0xffff, 0x4e70, l1,    pareg, "reset",
+-       0xffff, 0x4e71, l1,    pareg, "nop",
+-       0xffff, 0x4e72, l2,    pstop, 0,
+-       0xffff, 0x4e73, el1,   pareg, "rte",
+-       0xffff, 0x4e75, el1,   pareg, "rts",
+-       0xffff, 0x4e76, l1,    pareg, "trapv",
+-       0xffff, 0x4e77, el1,   pareg, "rtr",
+-       0xfffe, 0x4e7a, l2,    pmovc, 0,
+-       0xffc0, 0x4e80, jj,    ppea,  "jsr",
+-       0xffc0, 0x4ec0, jj,    ppea,  "jmp",
+-       0xf1c0, 0x4180, lonew, podreg,"chk",
+-       0xf1c0, 0x41c0, lonel, plea,  0,
+-       0xf0f8, 0x50c8, lcbch, pdbcc, 0,
+-       0xf0c0, 0x50c0, lonew, pscc,  0,
+-       0xf100, 0x5000, lone,  pqu,   "add",
+-       0xf100, 0x5100, lone,  pqu,   "sub",
+-       0xf100, 0x7000, l1,    pmqu,  0,
+-       0xf1c0, 0x80c0, lonew, podreg,"divu",
+-       0xf1c0, 0x81c0, lonew, podreg,"divs",
+-       0xf1f0, 0x8100, l1,    ptreg, "sbcd",
+-       0xf000, 0x8000, loone, pomode,"or",
+-       0xf1f0, 0x9100, l1,    ptreg, "subxb",
+-       0xf1f0, 0x9140, l1,    ptreg, "subxw",
+-       0xf1f0, 0x9180, l1,    ptreg, "subxl",
+-       0xf000, 0x9000, loone, pomode,"sub",
+-       0xf1f8, 0xb108, l1,    pcmpm, "cmpmb",
+-       0xf1f8, 0xb148, l1,    pcmpm, "cmpmw",
+-       0xf1f8, 0xb188, l1,    pcmpm, "cmpml",
+-       0xf100, 0xb000, loone, pomode,"cmp",
+-       0xf1c0, 0xb1c0, loone, pomode,"cmp",
+-       0xf100, 0xb100, loone, pomode,"eor",
+-       0xf1c0, 0xc0c0, lonew, podreg,"mulu",
+-       0xf1c0, 0xc1c0, lonew, podreg,"muls",
+-       0xf1f0, 0xc100, l1,    ptreg, "abcd",
+-       0xf130, 0xc100, l1,    pexg,  0,
+-       0xf000, 0xc000, loone, pomode,"and",
+-       0xf1f0, 0xd100, l1,    ptreg, "addxb",
+-       0xf1f0, 0xd140, 1,    ptreg, "addxw",
+-       0xf1f0, 0xd180, l1,    ptreg, "addxl",
+-       0xf000, 0xd000, loone, pomode,"add",
+-       0xf8c0, 0xe0c0, lonew, pmshf,  0,
+-       0xf000, 0xe000, l1,    pshf,   0,
+-       0
+-};
+-
+-char   *areg[] = { "a0", "a1", "a2", "a3", "a4", "a5", "a6", "sp"};
+-char   *cclist[] = { "hi", "ls", "cc", "cs", "ne", "eq", "vc", "vs",
+-                       "pl", "mi", "ge", "lt", "gt", "le"};
+-       
+-char   *shtype[] = { "as", "ls", "rox", "ro" };
+-char   *bittyp[] = { "tst", "chg", "clr", "set" };
+-
+-char   *creg[] = { "sfc", "dfc", "usp", "vbr" };
+-
+-/*
+- *     Length functions.
+- */
+-
+-int    l1()
+-{
+-       return  1;
+-}
+-
+-int    l2()
+-{
+-       return  2;
+-}
+-
+-int    el1(te)
+-t_entry        *te;
+-{
+-       te->t_bchtyp = T_UNBR;
+-       return  1;
+-}
+-
+-int    lea(instr, size, pos)
+-unsigned  instr, size;
+-long   pos;
+-{
+-       switch  ((instr >> 3) & 0x7)  {
+-       case  0:
+-       case  1:
+-       case  2:
+-       case  3:
+-       case  4:
+-               return  1;
+-       case  5:
+-       case  6:
+-               return  2;
+-       default:
+-               switch  (instr & 0x7)  {
+-               case  0:
+-               case  2:
+-               case  3:
+-                       return  2;
+-               case  1:
+-                       mkdref(pos, size);
+-                       return  3;
+-               case  4:
+-                       if  (size > 2)
+-                               return  3;
+-                       return  2;
+-               default:
+-                       return  0;
+-               }
+-       }
+-}
+-
+-/*
+- *     Lengths of move instructions.
+- */
+-
+-int    lmove(te, pos)
+-t_entry        *te;
+-long   pos;
+-{
+-       register  unsigned  tc  =  te->t_contents;
+-       unsigned  sz  =  1;
+-       int     lng, lng2;
+-       
+-       lng  = tc & 0xf000;
+-       if  (lng == 0x3000)
+-               sz = 2;
+-       else  if  (lng == 0x2000)
+-               sz = 4;
+-       
+-       i  ((lng = lea(tc, sz, pos+2)) <= 0)
+-               return  0;
+-       lng2 = lea(((tc>>3) & 0x38) | ((tc>>9) & 0x7), sz, pos+lng+lng);
+-       if  (lng2 <= 0)
+-               return  0;
+-       return  lng + lng2 - 1;
+-}
+-
+-/*
+- *     Lengths for conditional branches and dbcc instructions.
+- */
+-
+-int    lcbch(te, pos)
+-t_entry        *te;
+-long   pos;
+-{
+-       unsigned  tc  =  te->t_contents;
+-       long    dest  =  pos + 2;
+-       int     res   =  2;
+-       
+-       if  ((tc & 0xf000) == 0x5000  ||  (tc & 0xff) == 0)
+-               dest += (short)gettw(&mainfile, pos+2, R_WORD);
+-       else  {
+-               dest += (char) tc;
+-               res = 1;
+-       }
+-       if  ((tc & 0xff00) == 0x6000)
+-               te->t_bchtyp = T_UNBR;
+-       else  if  ((tc & 0xff00) == 0x6100)
+-               te->t_bchtyp = T_JSR;
+-       else
+-               te->t_bchtyp = T_CONDBR;
+-
+-       te->t_relsymb = textlab(dest, pos);
+-       return  res;
+-}
+-
+-int    jj(te, pos)
+-t_entry        *te;
+-long   pos;
+-{
+-       unsigned  tc  =  te->t_contents;
+-       t_entry nextl;
+-       
+-       te->t_bchtyp = (tc & 0x40)? T_UNBR: T_JSR;
+-       if  ((tc & 0x3f) == 0x39)  {
+-               gette(&mainfile, pos+2, &nextl);
+-               if  (nextl.t_relsymb == NULL)  {
+-                       nextl.t_relsymb = textlab(gettw(&mainfile, pos+2, R_LONG), pos);
+-                       putte(&mainfile, pos+2, &nextl);
+-               }
+-               te->t_relsymb = nextl.t_relsymb;        /*  Easy ref  */
+-       }
+-       return  lea(tc, 4, pos+2);
+-}
+-
+-int    limed(te, pos)
+-t_entry        *te;
+-long   pos;
+-{
+-       unsigned  tc  =  te->t_contents;
+-       int     lng;
+-       
+-       /*
+-        *      Specifically exclude byte address register operands,
+-        *      and ones which have lengths of 3.
+-        */
+-
+-       if  ((tc & 0xf8) == 0x08)
+-               return  0;
+-       
+-       if  ((tc & 0xc0) >= 0x80)  {
+-               if  (tc &0x40)
+-                       return  0;
+-               lng = lea(tc, 4, pos+6);
+-               if  (lng > 0)
+-                       lng += 2;
+-       }
+-       else  {
+-               lng = lea(tc, (unsigned)((tc & 0xc0)?2:1), pos+4);
+-               if  (lng > 0)
+-                       lng++;
+-       }
+-       return  lng;
+-}
+-
+-int    lsbit(te, pos)
+-t_entry        *te;
+-long   pos;
+-{
+-       int     lng = lea(te->t_contents, 1, pos+4);
+-       
+-       if  (lng > 0)
+-               lng++;
+-       return  lng;
+-}
+-
+-int    lmvml(te, pos)
+-t_entry        *te;
+-long   pos;
+-{
+-       int     lng = lea(te->t_contents,
+-                       (unsigned)(te->t_contents&0x40? 4:2), pos+4);
+-       
+-       if  (lng > 0)
+-               lng++;
+-       return  lng;
+-}
+-
+-/*
+- *     Length depends on bits 6 and 7 of instruction.
+- */
+-
+-int    lone(te, pos)
+-t_entry        *te;
+-long   pos;
+-{
+-       unsigned  tc  =  te->t_contents;
+-       
+-       return  lea(tc, 1 << ((tc >> 6) & 3), pos+2);
+-}
+-
+-/*
+- *     Length depends on bits 6-8 of instruction.
+- */
+-
+-int    loone(te, pos)
+-t_entry        *te;
+-long   pos;
+-{
+-       unsigned  tc  =  te->t_contents;
+-       
+-       switch  ((tc >> 6) & 7)  {
+-       case  0:
+-       case  4:
+-               return  lea(tc, 1, pos+2);
+-       case  1:
+-       case  3:
+-       case  5:
+-               return  lea(tc, 2, pos+2);
+-       case  2:
+-       case  6:
+-       case  7:
+-               return  lea(tc, 4, pos+2);
+-       }
+-       /*NOTREACHED*/
+-}
+-
+-int    lonew(te, pos)
+-t_entry        *te;
+-long   pos;
+-{
+-       return  lea(te->t_contents, 2, pos+2);
+-}
+-
+-int    lonel(te, pos)
+-t_entry        *te;
+-long   pos;
+-{
+-       return  lea(te->t_contents, 4, pos+2);
+-}
+-
+-/*
+- *     Print routines.
+- */
+-
+-int    findleng(tc)
+-unsigned  tc;
+-{
+-       switch  ((tc >> 6) & 3)  {
+-       case  0:
+-               return  'b';
+-       case  1:
+-               return  'w;
+-       default:
+-               return  'l';
+-       }
+-}
+-
+-void   piword(disp)
+-unsigned  disp;
+-{
+-       int     szc;
+-       
+-       (void) printf("@(0x%x,", disp & 0xff);
+-       if  (disp & 0x8000)
+-               (void) printf("%s", areg[(disp >> 12) & 0x7]);
+-       else
+-               (void) printf("d%d", (disp >> 12) & 0x7);
+-       szc = 'w';
+-       if  (disp & (1 << 10))
+-               szc = 'l';
+-       (void) printf(":%c)", szc);
+-}
+-
+-void   paddr(pos)
+-long   pos;
+-{
+-       t_entry tent;
+-       symbol  symb;
+-       
+-       gette(&mainfile, pos, &tent);
+-       if  (tent.t_relsymb != NULL)  {
+-               symb = tent.t_relsymb;
+-               if  (symb->s_lsymb != 0)
+-                       (void) printf("%u$", symb->s_lsymb);
+-               else
+-                       (void) printf("%s", symb->s_name);
+-               if  (tent.t_reldisp != 0)
+-                       (void) printf("+0x%x", tent.t_reldisp);
+-               return;
+-       }
+-       (void) printf("0x%x", gettw(&mainfile, pos, R_LONG));
+-}
+-
+-int    prea(ea, pos, sz)
+-unsigned  ea, sz;
+-long   pos;                    /*  Address of previous word to extn  */
+-{
+-       unsigned  reg  =  ea & 0x7;
+-       long    disp;
+-       
+-       pos += 2;
+-       
+-       switch  ((ea >> 3) & 0x7)  {
+-       case  0:
+-               (void) printf("d%d", reg);
+-               return  0;
+-       case  1:
+-               (void) printf("%s", areg[reg]);
+-               return  0;
+-       case  2:
+-               (void) printf("%s@", areg[reg]);
+-               return  0;
+-       case  3:
+-               (void) printf("%s@+", areg[reg]);
+-               return  0;
+-       case  4:
+-               (void) printf("%s@-", areg[reg]);
+-               return  0;
+-       case  5:
+-               disp = gettw(&mainfile, pos, R_WORD);
+-               (void) printf("%s@(0x%x)", areg[reg], disp);
+-               return  2;
+-       case  6:
+-               (void) printf("%s, areg[reg]);
+-               piword((unsigned) gettw(&mainfile, pos, R_WORD));
+-               return  2;
+-       default:
+-               switch  (reg)  {
+-               case  0:
+-                       disp = gettw(&mainfile, pos, R_WORD);
+-                       (void) printf("0x%x:w", disp);
+-                       return  2;
+-               case  1:
+-                       paddr(pos);
+-                       return  4;
+-               case  2:
+-                       disp = gettw(&mainfile, pos, R_WORD);
+-                       (void) printf("pc@(0x%x)", disp);
+-                       return  2;
+-               case  3:
+-                       (void) printf("pc");
+-                       piword((unsigned) gettw(&mainfile, pos, R_WORD));
+-                       return  2;
+-               case  4:
+-                       (void) printf("#");
+-                       if  (sz < 4)
+-                               (void) printf("0x%x", gettw(&mainfile, pos, R_WORD));
+-                       else
+-                               paddr(pos);
+-                       return  sz;
+-               default:
+-                       (void) fprintf(stderr, "Funny mode\n");
+-                       exit(220);
+-               }
+-       }
+-       /*NOTREACHED*/
+-}
+-       
+-int    pmove(te, pos)
+-t_entry        *te;
+-long   pos;
+-{
+-       unsigned  sz  =  2;
+-       unsigned  tc  =  te->t_contents;
+-       
+-       (void) printf("mov%s\t", optab[te->t_iindex].prarg);
+-       
+-       if  ((tc & 0xf000) == 0x2000)
+-               sz = 4;
+-       
+-       pos += prea(tc, pos, sz);
+-       putchar(',');
+-       (void) prea(((tc >> 9) & 0x7) | ((tc >> 3) & 0x38), pos, sz);
+-}
+-
+-int    pcbch(te)
+-t_entry        *te;
+-{
+-       int     cc = ((te->t_contents >> 8) & 0xf) - 2;
+-       char    *msg;
+-       register  symbol  ts;
+-       
+-       if  (cc < 0)
+-               msg = cc < -1? "ra": "sr";
+-       else
+-               msg = cclist[cc];
+-       (void) printf("b%s",msg);
+-       if  (te->t_lng < 2)
+-               (void) printf("s");
+-       ts = te->t_relsymb;
+-       if  (ts->s_lsymb != 0)
+-               (void) printf("\t%u$", ts->s_lsymb);
+-       else
+-               (void) printf("\t%s", ts->s_name);
+-}
+-
+-int    pdbcc(te)
+-t_entry        *te;
+-{
+-       unsigned  tc  =  te->t_contents;
+-       int     cc = ((tc >> 8) & 0xf) - 2;
+-       char    *msg;
+-       register  symbol  ts;
+-       
+-       if  (cc < 0)
+-               msg = cc < -1? "t": "f";
+-       else
+-               msg = cclist[cc];
+-       ts = te->t_relsymb;
+-       (void) printf("db%s\td%d,", msg, tc & 0x7);
+-       if  (ts->s_lsymb)
+-               (void) printf("%u$", ts->s_lsymb);
+-       else
+-               (void) printf("%s", ts->s_name);
+-}
+-
+-int    pscc(te, pos)
+-t_entry        *te;
+-long   pos;
+-{
+-       unsigned  tc  =  te->t_contents;
+-       int     cc = ((tc >> 8) & 0xf) - 2;
+-       char    *msg;
+-       
+-       if  (cc < 0)
+-               msg = cc < -1? "t": "f";
+-       else
+-               msg = cclist[cc];
+-       (void) printf("s%s\t", msg);
+-       (void) prea(tc, pos, 1);
+-}
+-
+-int    pcs(te, pos)
+-t_entry        *te;
+-long   pos;
+-{
+-       long    disp  =  gettw(&mainfile, pos+2, R_WORD);
+-       
+-       (void) printf("%s", optab[te->t_iindex].prarg);
+-       if  ((te->t_contents & 0xc0) == 0)
+-               (void) printf("b\t#0x%x,cc", disp);
+-       else
+-               (void) printf("w\t#0x%x,sr", disp);
+-}
+-
+-int    pmovc(te, pos)
+-t_entry        *te;
+-long   pos;
+-{
+-       int     disp = gettw(&mainfile, pos+2, R_WORD);
+-       int     ctrl = ((disp >> 10) & 2) | (disp & 1);
+-
+-       (void) printf("movec\t");
+-       if  ((te->t_contents & 1) == 0)
+-               (void) printf("%s,", creg[ctrl]);
+-       if  (disp & 0x8000)
+-               (void) printf("%s", areg[(disp >> 12) & 7]);
+-       else
+-               (void) printf("d%d", disp >> 12);
+-       if  (te->t_contents & 1)
+-              (void) printf(",%s", creg[ctrl]);
+-}
+-
+-int    pimed(te, pos)
+-t_entry        *te;
+-long   pos;
+-{
+-       int     sz = findleng(te->t_contents);
+-       
+-       (void) printf("%s%c\t#", optab[te->t_iindex].prarg, sz);
+-       if  (sz == 'l')  {
+-               paddr(pos+2);
+-               putchar(',');
+-               (void) prea(te->t_contents, pos+4, 4);
+-       }
+-       else  {
+-               (void) printf("0x%x,", gettw(&mainfile, pos+2, R_WORD));
+-               (void) prea(te->t_contents, pos+2, 2);
+-       }
+-}
+-
+-int    pmovp(te, pos)
+-t_entry        *te;
+-long   pos;
+-{
+-       unsigned  tc  =  te->t_contents;
+-       long    disp  =  gettw(&mainfile, pos+2, R_WORD);
+-       int     dreg = tc >> 9;
+-       char    *ar = areg[tc & 0x7];
+-       
+-       (void) printf("movep");
+-       if  (tc & (1 << 6))
+-               putchar('l');
+-       else
+-               putchar('w');
+-
+-       if  (tc & (1 << 7))
+-               (void) printf("\td%d,%s@(0x%x)", dreg, ar, disp);
+-       else
+-               (void) printf("\t%s@(0x%x),d%d", ar, disp, dreg);
+-}
+-
+-int    psbit(te, pos)
+-t_entry        *te;
+-long   pos;
+-{
+-       unsigned  tc  =  te->t_contents;
+-       
+-       (void) printf("b%s\t#%d,", bittyp[(tc >> 6) & 0x3], gettw(&mainfile, pos+2, R_WORD));
+-       (void) prea(tc, pos+2, 1);
+-}
+-
+-/*ARGSUSED*/
+-int    pstop(te, pos)
+-t_entry        *te;
+-long   pos;
+-{
+-       (void) printf("stop\t#0x%x", gettw(&mainfile, pos+2, R_WORD));
+-}
+-
+-int    pdbit(te, pos)
+-t_entry        *te;
+-long   pos;
+-{
+-       unsigned  tc  =  te->t_contents;
+-       
+-       (void) printf("b%s\td%d,", bittyp[(tc >> 6) & 0x3], (tc >> 9) & 0x7);
+-       (void) prea(tc, pos, 1);
+-}
+-
+-int    pcs2(te, pos)
+-t_entry        *te;
+-long   pos;
+-{
+-       unsigned  tc  =  te->t_contents;
+-       
+-       (void) printf("movw\t");
+-       if  ((tc & 0xffc0) == 0x40c0)  {
+-               (void) printf("sr,");
+-               (void) prea(tc, pos, 2);
+-      }
+-       else  {
+-               (void) prea(tc, pos, 2);
+-               (void) printf(",%s", optab[te->t_iindex].prarg);
+-       }
+-}
+-
+-int    pone(te, pos)
+-t_entry        *te;
+-long   pos;
+-{
+-       unsigned  tc  =  te->t_contents;
+-       int     sz = findleng(tc);
+-       
+-       (void) printf("%s%c\t", optab[te->t_iindex].prarg, sz);
+-       (void) prea(tc, pos, (unsigned)(sz == 'l'? 4: 2));
+-}
+-
+-int    ppea(te, pos)   /*  nbcd, pea, tas, jmp, jsr  */
+-t_entry        *te;
+-long   pos;
+-{
+-       (void) printf("%s\t", optab[te->t_iindex].prarg);
+-       (void) prea(te->t_contents, pos, (unsigned)(te->t_lng > 2? 4: 2));
+-}
+-
+-
+-int    plea(te, pos)
+-t_entry        *te;
+-long   pos;
+-{
+-       (void) printf("lea\t");
+-       (void) prea(te->t_contents, pos, 4);
+-       (void) printf(",%s", areg[(te->t_contents >> 9) & 0x7]);
+-}
+-
+-int    pdreg(te)
+-t_entry        *te;
+-{
+-       (void) printf("%s\td%d", optab[te->t_iindex].prarg, te->t_contents & 7);-}
+-
+-
+-int    pmvml(te, pos)
+-t_entry        *te;
+-long   pos;
+-{
+-       unsigned  tc  =  te->t_contents;
+-       register  unsigned  dw  =  gettw(&mainfile, pos+2, R_WORD);
+-       unsigned  sz = 4;
+-       int     sc = 'l';
+-       register  int   i;
+-       register  unsigned  bit;
+-       
+-       (void) printf("movem");
+-       if  ((tc & 0x40) == 0)  {
+-               sc = 'w';
+-               sz = 2;
+-       }
+-       
+-       (void) printf("%c\t", sc);
+-       
+-       if  (tc & 0x400)  {
+-               (void) prea(tc, pos+2, sz);
+-               (void) printf(",#0x%x", dw);
+-       }
+-       else  {
+-               (void) printf("#0x%x,", dw);
+-               (void) prea(tc, pos+2, sz);
+-       }
+-       
+-       (void) printf("\t|");
+-       
+-       if  ((tc & 0x38) == 0x20)  {
+-               bit = 0x8000;
+-               for  (i = 0;  i < 8;  i++)  {
+-                       if  (dw & bit)
+-                               (void) printf(" d%d", i);
+-                      bit >>= 1;
+-               }
+-               for  (i = 0;  i < 8;  i++)  {
+-                       if  (dw & bit)
+-                               (void) printf(" %s", areg[i]);
+-                       bit >>= 1;
+-               }
+-       }
+-       else  {
+-               bit = 1;
+-               for  (i = 0;  i < 8;  i++)  {
+-                       if  (dw & bit)
+-                               (void) printf(" d%d", i);
+-                       bit <<= 1;
+-               }
+-               for  (i = 0;  i < 8;  i++)  {
+-                       if  (dw & bit)
+-                               (void) printf(" %s", areg[i]);
+-                       bit <<= 1;
+-               }
+-       }
+-}
+-
+-int    ptrap(te)
+-t_entry        *te;
+-{
+-       (void) printf("trap\t#0x%x", te->t_contents & 0xf);
+-}
+-
+-int    plink(te, pos)
+-t_entry        *te;
+-long   pos;
+-{
+-       (void) printf("link\t%s,#0x%x", areg[te->t_contents & 0x7],
+-                               gettw(&mainfile, pos+2, R_WORD));
+-}
+-
+-
+-int    pareg(te)
+-t_entry        *te;
+-{
+-       (void) printf(optab[te->t_iindex].prarg, areg[te->t_contents & 0x7]);
+-}
+-
+-int    podreg(te, pos)
+-t_entry        *te;
+-long   pos;
+-{
+-       unsigned  tc  =  te->t_contents;
+-       
+-       (void) printf("%s\t", optab[te->t_iindex].prarg);
+-       (void) prea(tc, pos, 2);
+-       (void) printf(",d%d", (tc >> 9) & 0x7);
+-}
+-
+-int    pqu(te, pos)
+-t_entry        *te;
+-long   pos;
+-{
+-       unsigned  tc  =  te->t_contents;
+-       int     sz  =  findleng(tc);
+-       int     amt = (tc >> 9) & 0x7;
+-       
+-       if  (amt == 0)
+-               amt = 8;
+-       (void) printf("%sq%c\t#%d,", optab[te->t_iindex].prarg, sz, amt);
+-       (void) prea(tc, pos, (unsigned)(sz == 'l'? 4: 2));
+-}
+-
+-int    pmqu(te)
+-t_entry        *te;
+-{
+-       unsigned  tc  =  te->t_contents;
+-
+-       (void) printf("moveq\t#0x%x,d%d", (char)tc, (tc >> 9) & 0x7);
+-}
+-
+-int    ptreg(te)
+-t_entry        *te;
+-{
+-       regster  unsigned  tc  =  te->t_contents;
+-       int     rx = (tc >> 9) & 0x7;
+-       int     ry = tc & 0x7;
+-
+-       (void) printf("%s\t", optab[te->t_iindex].prarg);
+-       if  (tc & 0x8)
+-               (void) printf("%s@-,%s@-", areg[ry], areg[rx]);
+-       else
+-               (void) printf("d%d,d%d", ry, rx);
+-}
+-
+-int    pcmpm(te)
+-t_entry        *te;
+-{
+-       register  unsigned  tc  =  te->t_contents;
+-
+-       (void) printf("%s\t%s@+,%s@+", optab[te->t_iindex].prarg,
+-               areg[tc & 7], areg[(tc >> 9) & 7]);
+-}
+-
+-int    pomode(te, pos)
+-t_entry        *te;
+-long   pos;
+-{
+-       unsigned  tc  =  te->t_contents;
+-       char    bef[4], aft[4];
+-       int     sz;
+-       int     reg = (tc >> 9) & 7;
+-
+-       bef[0] = aft[0] = '\0';
+-       
+-       switch  ((tc >> 6) & 7)  {
+-       case  0:
+-               sz = 'b';
+-               goto  toreg;
+-       case  1:
+-               sz = 'w';
+-               goto  toreg;
+-       case  2:
+-               sz = 'l';
+-       toreg:
+-               (void) sprintf(aft, ",d%d", reg);
+-               break;
+-       case  3:
+-               sz = 'w';
+-               goto  toareg;
+-       case  7:
+-               sz = 'l';
+-       toareg:
+-               (void) sprintf(aft, ",%s", areg[reg]);
+-               break;
+-       case  4:
+-               sz = 'b';
+-               goto  frreg;
+-       case  5:
+-               sz = 'w';
+-               goto  frreg;
+-       case  6:
+-               sz = 'l';
+-       frreg:
+-               (void) sprintf(bef, "d%d,", reg);
+-               break;
+-       }
+-
+-       (void) printf("%s%c\t%s", optab[te->t_iindex].prarg, sz, bef);
+-       (void) prea(tc, pos, (unsigned)(sz == 'l'? 4: 2));
+-       (void) printf(aft);
+-}
+-
+-int    pexg(te)
+-t_entry        *te;
+-{
+-       unsigned  tc  =  te->t_contents;
+-       int     r1 = (tc >> 9) & 7, r2 = tc & 7;
+-
+-       (void) printf("exg\t");
+-       
+-       if  ((tc & 0x00f8) == 0x0048)
+-              (void) printf("%s,", areg[r1]);
+-       else
+-               (void) printf("d%d,", r1);
+-       if  (tc & 0x8)
+-               (void) printf("%s", areg[r2]);
+-       else
+-               (void) printf("d%d", r2);
+-}
+-       
+-int    pmshf(te, pos)
+-t_entry        *te;
+-long   pos;
+-{
+-       unsigned  tc  =  te->t_contents;
+-       
+-       (void) printf("%s%cw\t", shtype[(tc >> 9) & 3], tc & 0x100? 'l': 'r');
+-       (void) prea(tc, pos, 2);
+-}
+-
+-int    pshf(te)
+-t_entry        *te;
+-{
+-       unsigned  tc  =  te->t_contents;
+-       int     sz  =  findleng(tc);
+-       int     disp = (tc >> 9) & 7;
+-
+-       (void) printf("%s%c%c\t", shtype[(tc >> 3) & 3], tc & 0x100? 'l': 'r', sz);
+-       if  (tc & 0x20)
+-               (void) printf("d%d", disp);
+-       else
+-               (void) printf("#%d", disp == 0? 8: disp);
+-       (void) printf(",d%d", tc & 7);
+-}
+-
+-/*
+- *     Find length etc of instruction.
+- */
+-
+-int    findinst(te, pos)
+-register  t_entry  *te;
+-long   pos;
+-{
+-       register  struct  opstr *op;
+-       unsigned  tc  =  te->t_contents;
+-       int     lng = 0;
+-       register  int   i;
+-
+-       te->t_type = T_BEGIN;
+-       te->t_bchtyp = T_NOBR;
+-       
+-       for  (op = &optab[0];  op->mask;  op++)  {
+-               if  ((tc & op->mask) == op->match)  {
+-                       te->t_iindex = op - optab;
+-                       lng = (op->opsize)(te, pos);
+-                       break;
+-               }
+-       }
+-
+-       for  (i = 1;  i < lng;  i++)  {
+-               t_entry ctent;
+-               long    npos = pos+i+i;
+-               
+-               if  (npos >= endt)
+-                       goto  clearem;
+-               gette(&mainfile, npos, &ctent);
+-               if  (ctent.t_bdest || ctent.t_dref)  {
+-clearem:               for  (i--; i > 0; i--)  {
+-                               npos = pos + i + i;
+-                               gette(&mainfile, npos, &ctent);
+-                               ctent._type = T_UNKNOWN;
+-                               putte(&mainfile, npos, &ctent);
+-                       }
+-                       lng = 0;
+-                       goto  ginv;
+-               }
+-               ctent.t_type = T_CONT;
+-               putte(&mainfile, npos, &ctent);
+-       }
+-       
+-       if  (lng <= 0)  {
+-ginv:          te->t_vins = 0;
+-               te->t_lng = 1;
+-               te->t_type = T_UNKNOWN;
+-               te->t_bchtype = T_NOBR;
+-       }
+-       else
+-               te->t_lng = lng;
+-       return  lng;
+-}
+-
+-/*
+- *     Print instruction.
+- */
+-
+-void   prinst(te, pos)
+-t_entry        *te;
+-long   pos;
+-{
+-       putchar('\t');
+-       (optab[te->t_iindex].opprin)(te, pos);
+-       putchar('\n');
+-}
+//GO.SYSIN DD iset.c
+echo libmtch.c 1>&2
+sed 's/.//' >libmtch.c <<'//GO.SYSIN DD libmtch.c'
+-/*
+- *     SCCS:   @(#)libmtch.c   1.2     11/2/84 14:18:55
+- *     Read library files.
+- *
+- ***********************************************************************
+- *     This software is copyright of
+- *
+- *             John M Collins
+- *             47 Cedarwood Drive
+- *             St Albans
+- *             Herts, AL4 0DN
+- *             England                 +44 727 57267
+- *
+- *     and is released into the public domain on the following conditions:
+- *
+- *             1.  No free maintenance will be guaranteed.
+- *             2.  Nothing may be based on this software without
+- *                 acknowledgement, including incorporation of this
+- *                 notice.
+- *
+- *     Notwithstanding the above, the author welcomes correspondence and bug
+- *     fixes.
+- ***********************************************************************
+- */
+-
+-#include <stdio.h>
+-#include <fcntl.h>
+-#include <a.out.h>
+-#include <ar.h>
+-#include <setjmp.h>
+-#include "unc.h"
+-
+-long   lseek();
+-void   bfopen(), bfclose(), nomem();
+-void   rrell2(), markmatch();
+-char   *strchr(), *strrchr(), *strncpy(), *strcat(), *strcpy(, *malloc();
+-int    matchup();
+-long   findstart();
+-
+-char   verbose;                /*  Tell the world what we are doing  */
+-char   *tfnam;
+-char   *cfile;
+-ef_fids        mainfile;
+-struct commit  dreltab;
+-int    donedrel, donebrel;
+-long   trelpos, drelpos, brelpos;
+-static struct  libit   currlib = {-1, 0, -1, ""};
+-
+-void   lclash(str)
+-char   *str;
+-{
+-       (void) fprintf(stderr, "Library scan failure - %s\n", str);
+-       (void) fprintf(stderr, "Searching %s\n", cfile);
+-       if  (currlib.lf_name[0])
+-               (void) fprintf(stderr, "Member is %s\n", currlib.lf_name);
+-       exit(255);
+-}
+-
+-/*
+- *     Find next member.
+- */
+-
+-long   nextmemb(lfd)
+-register  struct  libit         *lfd;
+-{
+-       struct  ar_hdr  arbuf;
+-       
+-       if  (lfd->lf_next < 0)
+-               return  -1;
+-       
+-       (void) lseek(lfd->lf_fd, lfd->lf_next, 0);
+-       if  (read(lfd->lf_fd, (char *)&arbuf, sizeof(arbuf)) != sizeof(arbuf))  {
+-               lfd->lf_next = -1;
+-               return  -1;
+-       }
+-       (void) strncpy(lfd->lf_name, arbuf.ar_name, sizeof(lfd->lf_name));
+-       lfd->lf_offset = lfd->lf_next + sizeof(arbuf);
+-       lfd->lf_next = (lfd->lf_offset + arbuf.ar_size + 1) & ~1;
+-       return  lfd->lf_offset;
+-}
+-
+-/*
+- *     Decode a file name thus -
+- *
+- *     -lxxx decode as /lib/libxxx.a /usr/lib/libxxx.a etc
+- *     -Lxxx forget "lib" ".a" bit thus -Lcrt0.o
+- *     or read LDPATH environment var to give list of directories as sh
+- *     (default /lib:/usr/lib).
+- *
+- *     Alternatively treat as normal pathname.
+- *
+- *     File names may be followed by (membername) if the file is an archive,
+- *     thus
+- *
+- *             -lc(printf.o)
+- *
+- *     in which case the specified module is fetched.
+- */
+-
+-struct libit   *getfnam(str)
+-char   *str;
+-{
+-       char    *bp, *ep = NULL, *pathb, *pathe, *fullpath = NULL;
+-       static  char    *pathn;
+-       extern  char    *getenv();
+-       long    magic;-       struct  ar_hdr  arhdr;
+-       int     fd;
+-
+-       if  ((bp = strrchr(str, '(')) != NULL &&
+-                (ep = strrchr(str, ')')) != NULL)
+-               *ep = *bp = '\0';
+-
+-       if  (str[0] == '-'  &&  (str[1] == 'l' || str[1] == 'L'))  {
+-               if  (pathn == NULL)  {
+-                       if  ((pathn = getenv("LDPATH")) == NULL)
+-                               pathn = "/lib:/usr/lib";
+-               }
+-               fullpath = malloc((unsigned)(strlen(pathn) + strlen(str) + 1));
+-               if  (fullpath == NULL)
+-                       nomem();
+-               pathb = pathn;
+-               do  {
+-                       pathe = strchr(pathb, ':');
+-                       if  (*pathb == ':')
+-                               fullpath[0] = '\0';
+-                       else  {
+-                               if  (pathe != NULL)
+-                                       *pathe = '\0';
+-                               (void) strcpy(fullpath, pathb);
+-                               (void) strcat(fullpath, "/");
+-                               if  (pathe != NULL)
+-                                       *pathe = ':';
+-                       }
+-                       if  (str[1] == 'l')
+-                               (void) strcat(fullpath, "lib");
+-                       (void) strcat(fullpath, &str[2]);
+-                       if  (str[1] == 'l')
+-                               (void) strcat(fullpath, ".a");
+-                       if  ((fd = open(fullpath, O_RDONLY)) >= 0)
+-                               goto  found;
+-                       pathb = pathe + 1;
+-               }   while  (pathe != NULL);
+-               
+-               (void) fprintf(stderr, "Unable to locate lib%s.a in %s\n",
+-                       &str[2], pathn);
+-               exit(101);
+-       }
+-       else  if  ((fd = open(str, O_RDONLY)) < 0)  {
+-               (void) fprintf(stderr, "Cannot open %s\n", str);
+-               exit(102);
+-       }
+-       
+-found:
+-
+-       if  ((read(fd, (char *) &magic, sizeof(magic)) != sizeof(magic)  ||
+-               magic != ARMAG))  {
+-               if  (ep != NULL)  {
+-                       (void) fprintf(stderr, "%s is not library file\n",
+-                                       fullpath != NULL? fullpath: str);
+-                       exit(103);
+-               }
+-               if  (fullpath != NULL)
+-                       free(fullpath);
+-               currlib.lf_fd = fd;
+-               currlib.lf_offset = 0;
+-               currlib.lf_next = -1;
+-               currlib.lf_name[0] = '\0';
+-               return  &currlib;
+-       }
+-       
+-       /*
+-        *      It appears to be a library file - see if we want a specific
+-        *      one.
+-        */
+-       
+-       if  (ep != NULL)  {
+-               currlib.lf_offset = sizeof(magic) + sizeof(struct ar_hdr);
+-               for  (;;)  {
+-                       if  (read(fd, &arhdr, sizeof(arhdr)) != sizeof(arhdr))  {
+-                               (void) fprintf(stderr, "Cannot find member %s in %s\n",
+-                                       bp+1, fullpath?fullpath: str);
+-                               exit(103);
+-                       }
+-                       if  (strncmp(bp+1, arhdr.ar_name, sizeof(arhdr.ar_name)) == 0)
+-                               break;
+-                       currlib.lf_offset += arhdr.ar_size + sizeof(arhdr) + 1;
+-                       currlib.lf_offset &= ~ 1;
+-                       (void) lseek(fd, (long)(currlib.lf_offset - sizeof(arhdr)), 0);
+-               }
+-               if  (fullpath != NULL)
+-                       free(fullpath);
+-               currlib.lf_fd = fd;
+-               currlib.lf_next = -1;
+-               currlib.lf_name[0] = '\0';
+-               *bp = '(';
+-               *ep = ')';
+-               return  &currlib;
+-       }
+-       
+-       /*
+-        *      Otherwise point to 1st member in library.
+-        */
+-       
+-       if  (read(fd, &arhdr, szeof(arhdr)) != sizeof(arhdr))  {
+-               (void) fprintf(stderr, "Library %s empty\n", fullpath? fullpath: str);
+-               exit(104);
+-       }
+-       if  (fullpath != NULL)
+-               free(fullpath);
+-       currlib.lf_offset = sizeof(magic) + sizeof(arhdr);
+-       currlib.lf_next = currlib.lf_offset + arhdr.ar_size + 1;
+-       currlib.lf_next &= ~1;
+-       currlib.lf_fd = fd;
+-       (void) strncpy(currlib.lf_name, arhdr.ar_name, sizeof(currlib.lf_name));-       return  &currlib;
+-}
+-
+-/*
+- *     Process library files.
+- */
+-
+-#define        MINTEXT 6
+-
+-void   lscan(nfiles, fnames)
+-int    nfiles;
+-char   **fnames;
+-{
+-       ef_fids libfile;
+-       register  ef_fid  ll = &libfile;
+-       register  struct  libit  *clf;
+-       extern  symbol  dolsymb();
+-       int     firstfile;
+-       
+-       for  (;  nfiles > 0;  fnames++, nfiles--)  {
+-               clf = getfnam(*fnames);
+-               cfile = *fnames;
+-               firstfile = 1;
+-               do  {
+-                       bfopen(tfnam, ll);
+-
+-                       /*
+-                        *      If file is garbled, silently forget it and go
+-                        *      on to the next one.
+-                        */
+-
+-                       if  (!rtext(clf->lf_fd, clf->lf_offset, ll))
+-                               goto  closeit;
+-                               
+-                       if  (ll->ef_tsize < MINTEXT)
+-                               goto  closeit;
+-                               
+-                       if  (!rdata(clf->lf_fd, clf->lf_offset, ll))
+-                               goto  closeit;
+-                               
+-                       if  (rrell1(clf->lf_fd, clf->lf_offset, ll) < 0)
+-                               goto  closeit;
+-                               
+-                       /*
+-                        *      If first file in library, find it from
+-                        *      beginning of main file.
+-                       */
+-                       
+-                       if  (firstfile)  {
+-                               if  ((trelpos = findstart(&mainfile, ll)) < 0)
+-                                       goto  closeit;
+-                               firstfile = 0;
+-                       }
+-                       else   if  (!matchup(&mainfile, ll, trelpos))
+-                                       goto  closeit;
+-                       
+-                       /*
+-                        *      Found a match.
+-                        */
+-                       
+-                       if  (!rsymb(clf->lf_fd, clf->lf_offset, dolsymb, ll))  {-                               (void) fprintf(stderr, "Corrupt file %s\n",
+-                                                       *fnames);
+-                               exit(150);
+-                       }
+-                       
+-                       donedrel = 0;
+-                       donebrel = 0;
+-                       rrell2(clf->lf_fd, clf->lf_offset, ll);
+-                       if  (verbose)  {
+-                               (void) fprintf(stderr, "Found: ");
+-                               if  (clf->lf_name[0])
+-                                       (void) fprintf(stderr, "%.14s in ",
+-                                                       clf->lf_name);
+-                               (void) fprintf(stderr, "%s\n", *fnames);
+-                       }
+-                       if  (libfile.ef_stvec != NULL)  {
+-                               free(libfile.ef_stvec);
+-                               libfile.ef_stvec = NULL;
+-                               libfile.ef_stcnt = 0;
+-                       }
+-                       dreltab.c_int = 0;
+-                               
+-                       /*
+-                        *      Start looking next time round
+-                        *      where last one left off.
+-                        */
+-                       
+-                       markmatch(&mainfile, ll, trelos);
+-                       trelpos += libfile.ef_tsize;
+-closeit:
+-                       bfclose(ll);
+-               }  while  (nextmemb(clf) >= 0);
+-       }
+-}
+//GO.SYSIN DD libmtch.c
+echo main.c 1>&2
+sed 's/.//' >main.c <<'//GO.SYSIN DD main.c'
+-/*
+- *     SCCS:   @(#)main.c      1.2     11/2/84 14:19:31
+- *     Main routine etc.
+- *
+- ***********************************************************************
+- *     This software is copyright of
+- *
+- *             John M Collins
+- *             47 Cedarwood Drive
+- *             St Albans
+- *             Herts, AL4 0DN
+- *             England                 +44 727 57267
+- *
+- *     and is released into the public domain on the following conditions:
+- *
+- *             1.  No free maintenance will be guaranteed.
+- *             2.  Nothing may be based on this software without
+- *                 acknowledgement, including incorporation of this
+- *                 notice.
+- *
+- *     Notwithstanding the above, the author welcomes correspondence and bug
+- *     fixes.
+- ***********************************************************************
+- */
+-
+-#include <stdio.h>
+-#include <fcntl.h>
+-#include <a.out.h>
+-#include <sys/var.h>
+-#include "unc.h"
+-
+-#define        LINELNG 70
+-
+-void   inturdat(), intutext(), intudat(), intlsym();
+-void   ptext(), pdata(), pabs(), pbss(), lscan();
+-
+-ef_fids        mainfile;
+-
+-int    par_entry, par_round;   /*  68000 parameters  */
+-int    nmods;                  /*  Number of modules it looks like  */
+-
+-char   *tfnam = "split";
+-
+-char   lsyms;                  /*  Generate local symbols  */
+-char   verbose;                /*  Tell the world what we are doing  */
+-char   noabs;                  /*  No non-global absolutes  */
+-int    rel;                    /*  File being analysed is relocatable  */
+-int    lpos;
+-
+-symbol dosymb();
+-struct libit   *getfnam();
+-
+-/*
+- *     Get hex characters, also allowing for 'k' and 'm'.
+- */
+-
+-int    ghex(str)
+-registe  char *str;
+-{
+-       register  int   result = 0;
+-       register  int   lt;
+-
+-       for  (;;)  {
+-               lt = *str++;
+-               switch  (lt)  {
+-               default:
+-err:                   (void) fprintf(stderr, "Invalid hex digit \'%c\'\n", lt);
+-                       exit(1);
+-                       
+-               case '\0':
+-                       return  result;
+-                       
+-               case '0':case '1':case '2':case '3':case '4':
+-               case '5':case '6':case '7':case '8':case '9':
+-                       result = (result << 4) + lt - '0';
+-                       continue;
+-                       
+-               case 'a':case 'b':case 'c':case 'd':case 'e':case 'f':
+-                       result = (result << 4) + lt - 'a' + 10;
+-                       continue;
+-
+-               case 'A':case 'B':case 'C':case 'D':case 'E':case 'F':
+-                       result = (result << 4) + lt - 'A' + 10;
+-                       continue;
+-               
+-               case 'k':case 'K':
+-                       if  (*str != '\0')
+-                               goto  err;
+-                       return  result << 10;
+-                       
+-               case 'm':case 'M':
+-                       if  (*str != '\0')
+-                               goto  err;
+-                       return  result << 20;
+-               }
+-       }
+-}
+-
+-/*
+- *     Process entry line options.  Return number dealt with.
+- */
+-
+-int    doopts(av)
+-char   *av[];
+-{
+-       register  int   cnt = 0, lt;
+-       register  char  *arg;
+-       struct  var     vs;
+-       
+-       uvar(&vs);
+-       par_entry = vs.v_ustart;
+-       par_round = vs.v_txtrnd - 1;
+-       
+-       for  (;;)  {
+-               arg = *++av;
+-               if  (*arg++ != '-')
+-                       return  cnt;
+-               cnt++;
+-               
+-nx:            switch  (lt = *arg++)  {
+-               default:
+-                       (void)fprintf(stderr, "Bad option -%c\n", lt);
+-                       exit(1);
+-                       
+-               case  '\0':
+-                       continue;
+-                       
+-               case  'l':      /*  A file name  */
+-               case  'L':
+-                       return  cnt - 1;
+-                       
+-               case  's':
+-                       lsyms++;
+-                       goto  nx;
+-                       
+-               case  'v':
+-                       verbose++;
+-                       goto  nx;
+-                       
+-               case  'a':
+-                       noabs++;
+-                       goto  nx;
+-
+-               case  'R':
+-               case  'N':
+-                       if  (*arg == '\0')  {
+-                               cnt++;
+-                               arg = *++av;
+-                               if  (arg == NULL)  {
+-bo:                                    (void) fprintf(stderr,"Bad -%c option\n",lt);
+-                                       exit(1);
+-                               }
+-                       }
+-                       if  (lt == 'R')
+-                               par_entry = ghex(arg);
+-                       else
+-                               par_round = ghex(arg) - 1;
+-                       continue;
+-                       
+-               case  't':
+-                       if  (*arg == '\0')  {
+-                               cnt++;
+-                               arg = *++av;
+-                               if  (arg == NULL)
+-                                       goto  bo;
+-                       }
+-                       tfnam = arg;
+-                       continue;
+-                       
+-               case  'o':
+-                       if  (*arg == '\0')  {
+-                               cnt++;
+-                               arg = *++av;
+-                               if  (arg == NULL)
+-                                       goto  bo;
+-                      }
+-                       if  (freopen(arg, "w", stdout) == NULL)  {
+-                               (void) fprintf(stderr, "Help! cant open %s\n", arg);
+-                               exit(20);
+-                       }
+-                       continue;
+-               }
+-       }
+-}
+-       
+-/*
+- *     Open binary files.  Arrange to erase them when finished.
+- */
+-
+-void   bfopen(nam, fid)
+-char   *nam;
+-ef_fid fid;
+-{
+-       char    fnam[80];
+-       
+-       (void) sprintf(fnam, "%s.tx", nam);
+-       if  ((fid->ef_t = open(fnam, O_RDWR|O_CREAT, 0666)) < 0)  {
+-efil:          (void) fprintf(stderr, "Help could not open %s\n", fnam);
+-               exit(4);
+-       }
+-       (void) unlink(fnam);
+-       (void) sprintf(fnam, "%s.dt", nam);
+-       if  ((fid->ef_d = open(fnam, O_RDWR|O_CREAT, 0666)) < 0)
+-               goto  efil;
+-       (void) unlink(fnam);
+-}
+-
+-/*
+- *     Close binary files.  They should get zapped anyway.
+- */
+-
+-void   bfclose(fid)
+-ef_fid fid;
+-{
+-       (void) close(fid->ef_t);
+-       (void) close(fid->ef_d);
+-}
+-
+-/*
+- *     Main routine.
+- */
+-
+-main(argc, argv)
+-int    argc;
+-char   *argv[];
+-{
+-       int     i;
+-       char    *progname = argv[0];
+-       char    *msg;
+-       register  struct  libit  *lfd;
+-       
+-       i = doopts(argv);
+-       argc -= i;
+-       argv += i;
+-       
+-       if  (argc < 2)  {
+-               (void) fprintf(stderr, "Usage: %s [ options ] file\n", progname);
+-               exit(1);
+-       }
+-       
+-       lfd = getfnam(argv[1]);
+-       if  (lfd->lf_next > 0)  {
+-               (void) fprintf(stderr, "Main file (%s) cannot be library\n", argv[1]);
+-               exit(2);
+-       }
+-       
+-       bfopen(tfnam, &mainfile);
+-       if  (verbose)
+-               (void) fprintf(stderr, "Scanning text\n");
+-       if  (!rtext(lfd->lf_fd, lfd->lf_offset, &mainfile))  {
+-               msg = "text";
+-bf:            (void) fprintf(stderr, "Bad format input file -reading %s\n", msg);
+-               exit(5);
+-       }
+-       if  (verbose)
+-               (void) fprintf(stderr, "Scanning data\n");
+-       if  (!rdata(lfd->lf_fd, lfd->lf_offset, &mainfile))  {
+-               msg = "data";
+-               goto  bf;
+-       }
+-       if  (verbose)
+-               (void) fprintf(stderr, "Scanning symbols\n");
+-       if  (!rsymb(lfd->lf_fd, lfd->lf_offset, dosymb, &mainfile))  {
+-               msg = "symbols";
+-               goto  bf;
+-       }
+-       if  (verbose)
+-               (void) fprintf(stderr, "Scanning for relocation\n");
+-       if  ((rel = rrel(lfd->lf_fd, lfd->lf_offset, &mainfile)) < 0)  {
+-               msg = "reloc";
+-               goto  bf;
+-       }
+-       
+-       if  (rel)  {
+-               if  (verbose)
+-                       (void) fprintf(stderr, "File is relocatable\n");
+-               if  (argc > 2)
+-                       (void) fprintf(stderr, "Sorry - no scan on reloc files\n");
+-       }
+-       else
+-               lscan(argc - 2, &argv[2]);
+-
+-       if  (verbose)
+-               (void) fprintf(stderr, "End of input\n");
+-       
+-       (void) close(lfd->lf_fd);
+-       if  (nmods > 0)
+-               (void) fprintf(stderr, "Warning: at least %d merged modules\n",
+-                       nmods + 1);
+-
+-       if  (mainfile.ef_stvec != NULL)  {
+-               free(mainfile.ef_stvec);
+-               mainfile.ef_stvec = NULL;
+-               mainfile.ef_stcnt = 0;
+-       }
+-       
+-       if  (verbose)
+-               (void) fprintf(stderr, "Text anal 1\n");
+-       intutext();
+-       if  (verbose)
+-               (void) fprintf(stderr, "Data anal 1\n");
+-       intudat(&mainfile);
+-       if  (!rel)  {
+-               if  (verbose)
+-                       (void) fprintf(stderr, "Data anal 2\n");
+-               inturdat(&mainfile);
+-       }
+-       if  (lsyms)  {
+-               if  (verbose)
+-                       (void) fprintf(stderr, "Local symbol scan\n");
+-              intlsym();
+-       }
+-       pabs();
+-       ptext(&mainfile);
+-       pdata(&mainfile);
+-       pbss(&mainfile);
+-       bfclose(&mainfile);
+-       exit(0);
+-}
+//GO.SYSIN DD main.c
+echo prin.c 1>&2
+sed 's/.//' >prin.c <<'//GO.SYSIN DD prin.c'
+-/*
+- *     SCCS:   @(#)prin.c      1.2     11/2/84 14:19:47
+- *     Print stuff.
+- *
+- ***********************************************************************
+- *     This software is copyright of
+- *
+- *             John M Collins
+- *             47 Cedarwood Drive
+- *             St Albans
+- *             Herts, AL4 0DN
+- *             England                 +44 727 57267
+- *
+- *     and is released into the public domain on the following conditions:
+- *
+- *             1.  No free maintenance will be guaranteed.
+- *             2.  Nothing may be based on this software without
+- *                 acknowledgement, including incorporation of this
+- *                 notice.
+- *
+- *     Notwithstanding the above, the author welcomes correspondence and bug
+- *     fixes.
+- ***********************************************************************
+- */
+-
+-#include <stdio.h>
+-#include <a.out.h>
+-#include "unc.h"
+-
+-#define        LINELNG 70
+-
+-void   gette(), getde();
+-long   gettw(), getdw();
+-void   prinst();
+-
+-char   noabs;                  /*  No non-global absolutes  */
+-int    rel;                    /*  File being analysed is relocatable  */
+-int    lpos;
+-
+-struct commit  abstab, comtab;
+-
+-/*
+- *     Print absolute and common values.
+- */
+-
+-void   pabs()
+-{
+-       register  int   i;
+-       register  symbol  cs;
+-
+-       for  (i = 0;  i < abstab.c_int;  i++)
+-       
+-       for  (i = 0;  i < abstab.c_int;  i++)  {
+-               cs = abstab.c_symb[i];
+-               if  (cs->s_glob)
+-                       (void) printf("\t.globl\t%s\n", cs->s_name);
+-               else  if  (noabs)
+-                       continue;
+-               (void) printf("%s\t=\t0x%lx\n", cs->s_name, cs->s_valu);
+-       }
+-       for  (i = 0;  i < comtab.c_int;  i++)  {
+-               cs = comtab.c_symb[i];
+-               (void) printf("\t.comm\t%s,%d\n", cs->s_name, cs->s_value);
+-       }
+-}
+-
+-/*
+- *     Print out labels.
+- */
+-
+-void   plabs(ls, seg)
+-register  symbol  ls;
+-int    seg;
+-{
+-       for  (; ls != NULL;  ls = ls->s_link)  {
+-               if  (ls->s_type != seg)
+-                       continue;
+-               if  (ls->s_lsymb)  {
+-                       (void) printf("%u$:\n", ls->s_lsymb);
+-                       return;         /*  Set last  */
+-               }
+-               if  (ls->s_glob)
+-                       (void) printf("\n\t.globl\t%s", ls->s_name);
+-               (void) printf("\n%s:\n", ls->s_name);
+-       }
+-}
+-
+-/*
+- *     Print out text.
+- */
+-
+-void   ptext(fid)
+-register  ef_fid  fid;
+-{
+-       register  long  tpos, endt;
+-       t_entry tstr;
+-
+-       (void) printf(".text\n");
+-       
+-       tpos = fid->ef_tbase;
+-       endt = tpos + fid->ef_tsize;
+-contin:        
+-       for  (;  tpos < endt;  tpos += tstr.t_lng * 2)  {
+-               gette(fid, tpos, &tstr);
+-               plabs(tstr.t_lab, TEXT);
+-               if  (tstr.t_type == T_BEGIN)
+-                       prinst(&tstr, tpos);
+-               else  if  (tstr.t_relsymb != NULL)  {
+-                       (void) printf("\t.long\t%s", tstr.t_relsymb->s_name);
+-                       if  (tstr.t_relsymb->s_type!=TEXT &&
+-                               tstr.t_relsymb->s_type!=DATA)
+-                               (void) printf("+0x%x", gettw(fid, tpos, R_LONG));
+-                       putchar('\n');
+-                       tpos += 4;
+-                       goto  contin;
+-               }
+-               else
+-                       (void) printf("\t.word\t0x%x\n", tstr.t_contents);
+-       }
+-
+-       /*
+-        *      Print out any trailing label.
+-        */
+-       
+-       gette(fid, tpos, &tstr);
+-       plabs(tstr.t_lab, TEXT);
+-}
+
+-/*
+- *     Print out data.
+- */
+-
+-void   pdata(fid)
+-register  ef_fid  fid;
+-{
+-       register  long  dpos, endd;
+-       register  int   lng;
+-       unsigned  ctyp;
+-       int     had, par, inc;
+-       char    *msg;
+-       d_entry dstr;
+-       
+-       (void) printf("\n.data\n");
+-       
+-       dpos = fid->ef_dbase;
+-       endd = dpos + fid->ef_dsize;
+-
+-       while  (dpos < endd)  {
+-               
+-               getde(fid, dpos, &dstr);
+-               plabs(dstr.d_lab, DATA);
+-                       
+-               switch  (dstr.d_type)  {
+-               case  D_CONT:
+-                       (void) fprintf(stderr, "Data sync error\n");
+-                       exit(200);
+-                       
+-               case  D_ASC:
+-               case  D_ASCZ:
+-                       ctyp = dstr.d_type;
+-                       lng = dstr.d_lng;
+-                       (void) printf("\t.asci");
+-                       if  (ctyp == D_ASC)
+-                               (void) printf("i\t\"");
+-                       else  {
+-                               (void) printf("z\t\"");
+-                               lng--;
+-                       }
+-                               
+-                       while  (lng > 0)  {
+-                               getde(fid, dpos, &dstr);
+-                               switch  (dstr.d_contents)  {
+-                               default:
+-                                       if  (dstr.d_contents < ' ' ||
+-                                               dstr.d_contents > '~')
+-                                               (void) printf("\\%.3o", dstr.d_contents);
+-                                       else
+-                                               putchar(dstr.d_contents);
+-                                       break;
+-                               case  '\"':
+-                               case  '\'':
+-                               case  '\\':
+-                               case  '|':
+-                                      (void) printf("\\%c", dstr.d_contents);
+-                                       break;
+-                               case  '\b':
+-                                       (void) printf("\\b");
+-                                       break;
+-                               case  '\n':
+-                                       (void) printf("\\n");
+-                                       break;
+-                               case  '\r':
+-                                       (void) printf("\\r");
+-                                       break;
+-                               }
+-                               
+-                               lng--;
+-                               dpos++;
+-                       }
+-                       (void) printf("\"\n");
+-                       if  (ctyp == D_ASCZ)
+-                               dpos++;
+-                       break;
+-
+-               case  D_BYTE:
+-                       msg = "byte";
+-                       par = R_BYTE;
+-                       inc = 1;
+-                       goto  wrest;
+-                       
+-               case  D_WORD:
+-                       msg = "word";
+-                       par = R_WORD;
+-                       inc = 2;
+-                       goto  wrest;
+-                       
+-               case  D_LONG:
+-                       msg = "long";
+-                       par = R_LONG;
+-                       inc = 4;
+-               wrest:
+-                       (void) printf("\t.%s\t", msg);
+-                       lng = dstr.d_lng;
+-                       lpos = 16;
+-                       had = 0;
+-                       while  (lng > 0)  {
+-                               if  (lpos > LINELNG)  {
+-                                       (void) printf("\n\t.%s\t", msg);
+-                                       lpos = 16;
+-                               }
+-                               else  if  (had)
+-                                       lpos += printf", ");
+-
+-                               lpos += printf("0x%x", getdw(fid, dpos, par));
+-                               lng -= inc;
+-                               dpos += inc;
+-                               had++;
+-                       }
+-                       putchar('\n');
+-                       break;
+-
+-               case  D_ADDR:
+-                       (void) printf("\t.long\t");
+-                       lng = dstr.d_lng;
+-                       lpos = 16;
+-                       had = 0;
+-                       while  (lng > 0)  {
+-                               if  (lpos > LINELNG)  {
+-                                       (void) printf("\n\t.long\t");
+-                                       lpos = 16;
+-                               }
+-                               else  if  (had)
+-                                       lpos += printf(", ");
+-
+-                               getde(fid, dpos, &dstr);
+-                               lpos += printf("%s", dstr.d_relsymb->s_name);
+-                               lng -= sizeof(long);
+-                               dpos += sizeof(long);
+-                               had++;
+-                       }
+-                       putchar('\n');
+-                       break;
+-               }
+-       }
+-       
+-       /*
+-        *      Print trailing label.
+-        */
+-       
+-       getde(fid, dpos, &dstr);
+-       plabs(dstr.d_lab, DATA);
+-}
+-
+-void   pbss(fid)
+-register  ef_fid  fid;
+-{
+-       register  long  bpos = fid->ef_bbase;
+-       long    endb = fid->ef_end;
+-       d_entry bstr;
+-       
+-       (void) printf("\n.bss\n");
+-       
+-       while  (bpos < endb)  {
+-               getde(fid, bpos, &bstr);
+-               plabs(bstr.d_lab, BSS);
+-               (void) printf("\t.space\t%d\n", bstr.d_lng);
+-               bpos += bstr.d_lng;
+-       }
+-       
+-       getde(fid, endb, &bstr);
+-       plabs(bstr.d_lab, BSS);
+-}
+//GO.SYSIN DD prin.c
+echo robj.c 1>&2
+sed 's/.//' >robj.c <'//GO.SYSIN DD robj.c'
+-/*
+- *     SCCS:   @(#)robj.c      1.2     11/2/84 14:19:59
+- *     Read object files.
+- *
+- ***********************************************************************
+- *     This software is copyright of
+- *
+- *             John M Collins
+- *             47 Cedarwood Drive
+- *             St Albans
+- *             Herts, AL4 0DN
+- *             England                 +44 727 57267
+- *
+- *     and is released into the public domain on the following conditions:
+- *
+- *             1.  No free maintenance will be guaranteed.
+- *             2.  Nothing may be based on this software without
+- *                 acknowledgement, including incorporation of this
+- *                 notice.
+- *
+- *     Notwithstanding the above, the author welcomes correspondence and bug
+- *     fixes.
+- ***********************************************************************
+- *
+- *     This particular module will obviously have to be munged beyond
+- *     recognition for another object format.
+- */
+-
+-#include <stdio.h>
+-#include <a.out.h>
+-#include "unc.h"
+-
+-void   gette(), getde(), setde(), putte(), putde();
+-long   gettw(), getdw();
+-void   reallst(), lclash(), nomem(), unimpl();
+-void   addit();
+-char   *malloc();
+-long   lseek();
+-
+-int    par_entry, par_round, nmods, donedrel, donebrel;
+-struct commit  abstab, comtab, dreltab;
+-long   trelpos, drelpos, brelpos;
+-
+-ef_fids        mainfile;
+-
+-symbol lookup(), inventsymb(), getnsymb();
+-
+-#define        DBSIZE  100
+-#define        STINIT  20
+-
+-/*
+- *     Read text segment.  Return 0 if not ok.
+- */
+-
+-int    rtext(inf, offset, outf)
+-int    inf;            /*  a.out file (possibly in library)  */
+-long   offset;         /*  Offset from start of inf of a.out file  */
+-ef_fid outf;           /*  Output file descriptor  */
+-{
+-       t_entry         tstr;
+-       struct  bhdr    filhdr;
+-       register  long  size;
+-       register  int   i, l;
+-       unsigned  short inbuf[DBSIZE/2];
+-
+-      /*
+-        *      Initialise fields in structure.
+-        */
+-       
+-       tstr.t_type = T_UNKNOWN;
+-       tstr.t_vins = 1;                /*  For the moment  */
+-       tstr.t_bdest = 0;
+-       tstr.t_gbdest = 0;
+-       tstr.t_lng = 1;
+-       tstr.t_reloc = R_NONE;
+-       tstr.t_rdisp = 0;
+-       tstr.t_isrel = 0;
+-       tstr.t_amap = 0;
+-       tstr.t_dref = 0;
+-       tstr.t_relsymb = NULL;
+-       tstr.t_reldisp = 0;
+-       tstr.t_lab = NULL;
+-       tstr.t_lsymb = 0;
+-       tstr.t_refhi = 0;
+-       tstr.t_reflo = 0x7fffffff;
+-       tstr.t_match = 0;
+-       
+-       /*
+-        *      Read a.out header.
+-        */
+-       
+-       (void) lseek(inf, offset, 0);
+-
+-       if  (read(inf, (char *)&filhdr, sizeof(filhdr)) != sizeof(filhdr))
+-               return  0;
+-
+-       if  (filhdr.fmagic != FMAGIC  &&  filhdr.fmagic != NMAGIC)
+-               return  0;
+-
+-       /*
+-        *      Warn user if entry point does not tie up.
+-        */
+-       
+-       if  (filhdr.entry != par_entry)
+-               (void) fprintf(stderr, "Warning: File has -R%X\n", filhdr.entry);
+-
+-       outf->ef_entry = filhdr.entry;
+-       outf->ef_tbase = filhdr.entry;
+-       outf->ef_dbase = filhdr.tsize + filhdr.entry;
+-
+-       if  (filhdr.fmagic == NMAGIC)
+-               outf->ef_dbase = (outf->ef_dbase + par_round) & (~par_round);
+-
+-       outf->ef_bbase = outf->ef_dbase + filhdr.dsize;
+-       outf->ef_end = outf->ef_bbase + filhdr.bsize;
+-
+-       outf->ef_tsize = filhdr.tsize;
+-       outf->ef_dsize = filhdr.dsize;
+-       outf->ef_bsize = filhdr.bsize;
+-       
+-       (void) lseek(inf, offset + TEXTPOS, 0);
+-       
+-       size = outf->ef_tsize;
+-       
+-       while  (size > 1)  {
+-               l = size > DBSIZE? DBSIZE: size;
+-               if  (read(inf, (char *)inbuf, l) != l)
+-                       return  0;
+-               l /= 2;
+-               for  (i = 0;  i < l;  i++)  {
+-                       tstr.t_contents = inbuf[i];
+-                       (void) write(outf->ef_t, (char *)&tstr, sizeof(tstr));
+-               }
+-               size -= l + l;
+-       }
+-       
+-       /*
+-        *      Extra one to cope with "etext".
+-        */
+-       
+-       (void) write(outf->ef_t, (char *)&tstr, sizeof(tstr));
+-       return  1;
+-}
+-
+-/*
+- *     Same sort of thing for the data segment.
+- */
+-
+-int    rdata(inf, offset, outf)
+-int    inf;            /*  a.out file (possibly in library)  */
+-long   offset;         /*  Offset from start of inf of a.out file  */
+-ef_fid outf;           /*  Output file descriptor  */
+-{
+-       d_entry         dstr;
+-       struct  bhdr    filhdr;
+-       register  long  size;
+-       register  int   i, l;
+-       unsigned  char  inbuf[DBSIZE];
+-
+-       /*
+-        *      Initialise fields in structure.
+-        */
+-       
+-       dstr.d_type = D_BYTE;
+-       dstr.d_reloc = R_NONE;
+-       dstr.d_lng = 1;
+-       dstr.d_relsymb = NULL;
+-       dstr.d_reldisp = 0;
+-       dstr.d_lab = NULL;
+-       
+-       /*
+-        *      Read a.out header.
+-        */
+-       
+-       (void) lseek(inf, offset, 0);
+-
+-       if  (read(inf, (char *)&filhdr, sizeof(filhdr)) != sizeof(filhdr))
+-               return  0;
+-
+-       (void) lseek(inf, offset + DATAPOS, 0);
+-       
+-       size = outf->ef_dsize;
+-       
+-       while  (size > 0)  {
+-               l = size > DBSIZE? DBSIZE: size;
+-               if  (read(inf, (char *)inbuf, l) != l)
+-                       return  0;
+-               for  (i = 0;  i < l;  i++)  {
+-                       dstr.d_contents = inbuf[i];
+-                       (void) write(outf->ef_d, (char *)&dstr, sizeof(dstr));
+-               }
+-               size -= l;
+-       }
+-       
+-       /*
+-        *      Repeat for BSS segment.
+-        */
+-
+-       dstr.d_contents = 0;
+-       for  (size = outf->ef_bsize;  size > 0;  size--)
+-               (void) write(outf->ef_d, (char *)&dstr, sizeof(dstr));
+-       
+-      /*
+-        *      Extra one to cope with "end".
+-        */
+-       
+-       (void) write(outf->ef_d, (char *)&dstr, sizeof(dstr));
+-       return  1;
+-}
+-
+-/*
+- *     Process symbol table segment.
+- */
+-
+-int    rsymb(inf, offset, dproc, outf)
+-int    inf;            /*  a.out file (possibly in library)  */
+-long   offset;         /*  Offset from start of inf of a.out file  */
+-symbol (*dproc)();
+-register  ef_fid  outf;        /*  Output file descriptor  */
+-{
+-       register  symbol  csym;
+-       struct  bhdr    filhdr;
+-       struct  sym     isym;
+-       register  long  size;
+-       register  int   i, l;
+-       char    inbuf[SYMLENGTH+1];
+-
+-       /*
+-        *      Read a.out header.
+-        */
+-       
+-       (void) lseek(inf, offset, 0);
+-
+-       if  (read(inf, (char *)&filhdr, sizeof(filhdr)) != sizeof(filhdr))
+-               return  0;
+-
+-       offset += SYMPOS;
+-       size = filhdr.ssize;
+-       if  (size <= 0)
+-               return  1;
+-
+-       /*
+-        *      Guesstimate symbol table vector size.
+-        */
+-
+-       l = size / (sizeof(struct sym) + 4);
+-       if  (l <= 0)
+-               l = STINIT;
+-
+-       outf->ef_stvec = (symbol *) malloc(l * sizeof(symbol));
+-       if  (outf->ef_stvec == NULL)
+-               nomem();
+-
+-       outf->ef_stcnt = 0;
+-       outf->ef_stmax = l;
+-       
+-       while  (size > sizeof(struct sym))  {
+-               (void) lseek(inf, offset, 0);
+-               if  (read(inf, (char *)&isym, sizeof(isym)) != sizeof(isym))
+-                       return  0;
+-               size -= sizeof(isym);
+-               l = SYMLENGTH;
+-               if  (l > size)
+-                       l = size;
+-               if  (read(inf, inbuf, l) != l)
+-                       return  0;
+-               inbuf[l] = '\0';
+-               for  (i = 0; inbuf[i] != '\0';  i++)
+-                       ;
+-               size -= i + 1;
+-               offset += sizeof(isym) + i + 1;
+-               csm = (*dproc)(lookup(inbuf), isym.stype, isym.svalue, outf);
+-               if  (outf->ef_stcnt >= outf->ef_stmax)
+-                       reallst(outf);
+-               outf->ef_stvec[outf->ef_stcnt++] = csym;
+-       }
+-       return  1;
+-}
+-
+-/*
+- *     Process relocation stuff.  -1 error, 0 no relocation, 1 relocation.
+- */
+-
+-int    rrel(inf, offset, outf)
+-int    inf;            /*  a.out file (possibly in library)  */
+-long   offset;         /*  Offset from start of inf of a.out file  */
+-ef_fid outf;           /*  Output file descriptor  */
+-{
+-       struct  bhdr    filhdr;
+-       struct  reloc   crel;
+-       t_entry tstr;
+-       d_entry dstr;
+-       register  long  size;
+-       long    cont, pos;
+-
+-       /*
+-        *      Read a.out header.
+-        */
+-       
+-       (void) lseek(inf, offset, 0);
+-
+-       if  (read(inf, (char *)&filhdr, sizeof(filhdr)) != sizeof(filhdr))
+-               return  -1;
+-       if  (filhdr.rtsize <= 0  &&  filhdr.rdsize <= 0)
+-               return  0;
+-
+-       size  =  filhdr.rtsize;
+-
+-       (void) lseek(inf, RTEXTPOS + offset, 0);
+-       while  (size >= sizeof(struct reloc))  {
+-               if  (read(inf, (char *)&crel, sizeof(crel)) != sizeof(crel))
+-                       return  -1;
+-
+-               pos = crel.rpos + outf->ef_tbase;
+-               gette(outf, pos, &tstr);
+-               tstr.t_reloc = crel.rsize + 1;  /*  Fiddle!  YUK!!!  */
+-               tstr.t_rdisp = crel.rdisp;
+-               tstr.t_rptr = crel.rsegment;
+-               if  (crel.rsegment == REXT)  {
+-                       if  (crel.rsymbol >= outf->ef_stcnt)
+-                               return  -1;
+-                       tstr.t_relsymb = outf->ef_stvec[crel.rsymbol];
+-                       tstr.t_reldisp = gettw(outf, pos, (int)crel.rsize+1);
+-               }
+-               else  {
+-                       cont = gettw(outf, pos, (int)crel.rsize+1);
+-                       tstr.t_relsymb = getnsymb(outf, crel.rsegent, cont);
+-               }
+-               tstr.t_relsymb->s_used++;
+-               putte(outf, pos, &tstr);
+-               size -= sizeof(crel);
+-       }
+-       
+-       /*
+-        *      And now repeat all that for data relocations.
+-        */
+-       
+-       size  =  filhdr.rdsize;
+-       
+-       (void) lseek(inf, RDATAPOS + offset, 0);
+-       while  (size >= sizeof(struct reloc))  {
+-               if  (read(inf, (char *)&crel, sizeof(crel)) != sizeof(crel))
+-                       return  -1;
+-
+-               pos = crel.rpos + outf->ef_dbase;
+-               getde(outf, pos, &dstr);
+-               dstr.d_reloc = crel.rsize + 1;  /*  Fiddle!  YUK!!!  */
+-               dstr.d_rptr = crel.rsegment;
+-
+-               if  (crel.rsegment == REXT)  {
+-                       if  (crel.rsymbol >= outf->ef_stcnt)
+-                               return  -1;
+-                       dstr.d_relsymb = outf->ef_stvec[crel.rsymbol];
+-                       dstr.d_reldisp = getdw(outf, pos, (int)crel.rsize+1);
+-               }
+-               else  {
+-                       cont = getdw(outf, pos, (int)crel.rsize+1);
+-                       dstr.d_relsymb = getnsymb(outf, crel.rsegment, cont);
+-                       if  (dstr.d_relsymb->s_type == TEXT)  {
+-                               gette(outf, cont, &tstr);
+-                               tstr.t_dref = 1;
+-                               putte(outf, cont, &tstr);
+-                       }
+-               }
+-               switch  (crel.rsize)  {
+-               default:
+-                       unimpl("Data byte relocation");
+-                       break;
+-               case  RWORD:
+-                       unimpl("data word reloc");
+-                       dstr.d_type = D_WORD;
+-                       dstr.d_lng = 2;
+-                       setde(outf, pos+1, D_CONT, 1);
+-                       break;
+-               case  RLONG:
+-                       dstr.d_type = D_ADDR;
+-                       dstr._lng = 4;
+-                       setde(outf, pos+1, D_CONT, 1);
+-                       setde(outf, pos+2, D_CONT, 1);
+-                       setde(outf, pos+3, D_CONT, 1);
+-                       break;
+-               }
+-               dstr.d_relsymb->s_used++;
+-               putde(outf, pos, &dstr);
+-               size -= sizeof(crel);
+-       }
+-       return 1;
+-}
+-
+-/*
+- *     Process a symbol.
+- */
+-
+-symbol dosymb(sy, type, val, fid)
+-register  symbol  sy;
+-int    type;
+-long   val;
+-ef_fid fid;
+-{
+-       t_entry tstr;
+-       d_entry dstr;
+-       
+-       if  (!sy->s_newsym)  {
+-               if  (type & EXTERN)  {
+-                       (void) fprintf(stderr, "Duplicate symbol %s\n", sy->s_name);
+-                       exit(10);
+-               }
+-               if  (++sy->s_defs > nmods)
+-                       nmods = sy->s_defs;
+-               sy = inventsymb("DUP");
+-       }
+-
+-       sy->s_value = val;
+-       
+-       switch  (type)  {
+-       default:
+-               return  NULL;
+-               
+-       case  EXTERN|UNDEF:
+-               if  (val != 0)  {
+-                       sy->s_type = COMM;
+-                       addit(&comtab, sy);
+-               }
+-               else
+-                       sy->s_type = N_UNDF;
+-               sy->s_glob = 1;
+-               break;
+-               
+-       case  EXTERN|ABS:
+-               sy->s_type = N_ABS;
+-               sy->s_glob = 1;
+-               addit(&abstab, sy);
+-               break;
+-               
+-       case  ABS:
+-               sy->s_type = N_ABS;
+-               addit(&abstab, sy);
+-               break;
+-               
+-       case  EXTERN|TEXT:
+-       case  TEXT:
+-               sy->s_type = N_TEXT;
+-               gette(fid, val, &tstr);
+-               tstr.t_bdest = 1;
+-               if  (type & EXTERN)  {
+-                       tstr.t_gbdest = 1;
+-                       sy->s_glob = 1;
+-               }
+-               sy->s_link = tsr.t_lab;
+-               tstr.t_lab = sy;
+-               putte(fid, val, &tstr);
+-               break;
+-               
+-       case  BSS:
+-       case  EXTERN|BSS:
+-               sy->s_type = N_BSS;
+-               goto    datrest;
+-       case  DATA:
+-       case  EXTERN|DATA:
+-               sy->s_type = N_DATA;
+-       datrest:
+-               getde(fid, val, &dstr);
+-               if  (type & EXTERN)
+-                       sy->s_glob = 1;
+-               sy->s_link = dstr.d_lab;
+-               dstr.d_lab = sy;
+-               putde(fid, val, &dstr);
+-               break;
+-       }
+-       
+-       sy->s_newsym = 0;
+-       return  sy;
+-}
+-
+-/*
+- *     Process relocation stuff in putative library modules.
+- *     The main function of all this is to mark which bits of the text
+- *     not to look at as I compare the stuff.
+- *
+- *     As with "rrel", return -1 error, 0 no relocation, 1 relocation.
+- */
+-
+-int    rrell1(inf, offset, outf)
+-int    inf;            /*  a.out file (possibly in library)  */
+-long   offset;         /*  Offset from start of inf of a.out file  */
+-ef_fid outf;           /*  Output file descriptor  */
+-{
+-       struct  bhdr    filhdr;
+-       struct  reloc   crel;
+-       t_entry tstr;
+-       register  long  size;
+-       long    pos;
+-
+-       /*
+-        *      Read a.out header.
+-        */
+-       
+-       (void) lseek(inf, offset, 0);
+-
+-       if  (read(inf, (char *)&filhdr, sizeof(filhdr)) != sizeof(filhdr))
+-               return  -1;
+-       if  (filhdr.rtsize <= 0  &&  filhdr.rdsize <= 0)
+-               return  0;
+-
+-       size  =  filhdr.rtsize;
+-
+-       (void) lseek(inf, RTEXTPOS + offset, 0);
+-       while  (size >= sizeof(struct reloc))  {
+-               if  (read(inf, (char *)&crel, sizeof(crel)) != sizeof(crel))
+-                       return  -1;
+-
+-               pos = crel.rpos + outf->ef_tbase;
+-               gette(outf, pos, &tstr);
+-               tstr.t_reloc = crel.rsize + 1;  /*  Fidde!  YUK!!!  */
+-               tstr.t_rdisp = crel.rdisp;
+-               tstr.t_rptr = crel.rsegment;
+-               tstr.t_isrel = 1;
+-               putte(outf, pos, &tstr);
+-               if  (crel.rsize == RLONG)  {
+-                       gette(outf, pos+2, &tstr);
+-                       tstr.t_isrel = 1;
+-                       putte(outf, pos+2, &tstr);
+-               }
+-               size -= sizeof(crel);
+-       }
+-       
+-       /*
+-        *      Dont bother with data relocation at this stage. We'll
+-        *      tie that up later.
+-        */
+-       
+-       return 1;
+-}
+-
+-/*
+- *     Process a symbol in library file.  The extern variable trelpos gives
+- *     the place in the main file where the library module is relocated.
+- *     We don't know the data position until we do the final merge, perhaps
+- *     not even then.
+- */
+-
+-symbol dolsymb(sy, type, val, fid)
+-register  symbol  sy;
+-int    type;
+-long   val;
+-ef_fid fid;
+-{
+-       t_entry tstr;
+-       
+-       switch  (type)  {
+-       default:
+-               return  NULL;
+-               
+-       case  EXTERN|UNDEF:
+-               if  (!sy->s_newsym)
+-                       return  sy;
+-               sy->s_value = val;
+-               if  (val != 0)  {
+-                       sy->s_type = COMM;
+-                       addit(&dreltab, sy);
+-               }
+-               else
+-                       sy->s_type = N_UNDF;
+-               sy->s_glob = 1;
+-               break;
+-               
+-       case  EXTERN|ABS:
+-               if  (!sy->s_newsym)  {
+-                       if  (sy->s_type != N_ABS || sy->s_value != val)
+-                               lclash("abs");
+-               }
+-               sy->s_type = N_ABS;
+-               sy->s_value = val;
+-               sy->s_glob = 1;
+-               addit(&abstab, sy);
+-               break;
+-               
+-       case  EXTERN|TEXT:
+-               sy->s_type = N_TEXT;
+-               val += trelpos - fid-ef_tbase;
+-               if  (!sy->s_newsym)  {
+-                       if  (val != sy->s_value)
+-                               lclash("tsym");
+-                       return  sy;
+-               }
+-               sy->s_value = val;
+-               gette(&mainfile, val, &tstr);
+-               tstr.t_bdest = 1;
+-               tstr.t_gbdest = 1;
+-               sy->s_glob = 1;
+-               sy->s_link = tstr.t_lab;
+-               tstr.t_lab = sy;
+-               putte(&mainfile, val, &tstr);
+-               break;
+-
+-       case  EXTERN|BSS:
+-               if  (!sy->s_newsym)
+-                       return  sy;
+-               sy->s_type = N_BSS;
+-               sy->s_value = val - fid->ef_bbase;
+-               goto    datrest;
+-
+-       case  EXTERN|DATA:
+-               if  (!sy->s_newsym)
+-                       return  sy;
+-               sy->s_type = N_DATA;
+-               sy->s_value = val - fid->ef_dbase;
+-       datrest:
+-               sy->s_glob = 1;
+-               addit(&dreltab, sy);
+-               break;
+-       }
+-       
+-       sy->s_newsym = 0;
+-       return  sy;
+-}
+-
+-/*
+- *     Change definition of undefined symbol as we define it.
+- */
+-
+-void   reassign(sy, val)
+-register  symbol  sy;
+-long   val;
+-{
+-       sy->s_value = val;
+-
+-       if  (val < mainfile.ef_tbase)  {
+-               sy->s_type = N_ABS;
+-               addit(&abstab, sy);
+-       }
+-       else  if  (val < mainfile.ef_dbase)  {
+-               t_entry tstr;
+-               
+-               sy->s_type = N_TEXT;
+-               gette(&mainfile, val, &tstr);
+-               tstr.t_bdest = 1;
+-               tstr.t_gbdest = 1;
+-               sy->s_glob = 1;
+-               sy->s_link = tstr.t_lab;
+-               tstr.t_lab = sy;
+-               putte(&mainfile, val, &tstr);
+-       }
+-       else  {
+-               d_entry dstr;
+-               
+-               sy->s_type = val < mainfile.ef_bbase? N_DATA: N_BSS;
+-               getde(&mainfile, val &dstr);
+-               sy->s_link = dstr.d_lab;
+-               dstr.d_lab = sy;
+-               putde(&mainfile, val, &dstr);
+-       }
+-}
+-
+-/*
+- *     When we discover where bss or data come, reallocate the table.
+- */
+-
+-void   zapdat(seg, inc)
+-int    seg;
+-long   inc;
+-{
+-       register  int   i;
+-       register  symbol  csymb;
+-       d_entry dent;
+-       
+-       for  (i = 0;  i < dreltab.c_int;  i++) {
+-               csymb = dreltab.c_symb[i];
+-               if  (csymb->s_type != seg)
+-                       continue;
+-               csymb->s_value += inc;
+-               getde(&mainfile, csymb->s_value, &dent);
+-               csymb->s_link = dent.d_lab;
+-               dent.d_lab = csymb;
+-               putde(&mainfile, csymb->s_value, &dent);
+-       }
+-}
+-
+-/*
+- *     Process relocation stuff in library module which we are inserting.
+- *     Horrors if something goes wrong.
+- */
+-
+-void   rrell2(inf, offset, outf)
+-int    inf;            /*  a.out file (possibly in library)  */
+-long   offset;         /*  Offset from start of inf of a.out file  */
+-ef_fid outf;           /*  Output file descriptor  */
+-{
+-       struct  bhdr    filhdr;
+-       struct  reloc   crel;
+-       t_entry mtstr;
+-       d_entry mdstr;
+-       register  long  size;
+-       register  symbol  csymb;
+-       long    pos, mpos, mval, lval;
+-       int     dhere = 0;              /*  Mark whether bss done  */
+-
+-       /*
+-        *      Read a.out header.
+-        */
+-       
+-       (void) lseek(inf, offset, 0);
+-
+-       if  (read(inf, (char *)&filhdr, sizeof(filhdr)) != sizeof(filhdr))
+-               return;
+-       if  (filhdr.rtsize <= 0  &&  filhdr.rdsize <= 0)
+-               return;
+-
+-       size  =  filhdr.rtsize;
+-
+-       (void) lseek(inf, RTEXTPOS + offset, 0);
+-       for  (;  size >= sizeof(struct reloc);  size -= sizeof(crel))  {
+-               if  (read(inf, (char *)&crel, sizeof(crel)) != sizeof(crel))
+-                       lclash("rd rel");
+-
+-               pos = crel.rpos + outf->ef_tbase;
+-               mpos = crel.rpos + trelpos;
+-               gette(&mainfile, mpos, &mtstr);
+-               lval = gettw(outf, pos, (int)crel.rsize+1);
+-               mval = gettw(&mainfile, mpos, (int)crel.rsize+1);
+-               
+-               switch  (crel.rsegment)  {
+-               case  RTEXT:
+-                       if  (lval + trelpos - outf->ef_tbase != mval)
+-                               lclash("Trel");
+-                       continue;
+-               case  RDATA:
+-                       if  (donedrel)  {
+-                               if  (lval + drelpos - outf->ef_dbase != mval)
+-                                       lclash("Drel");
+-                       }
+-                       else  {
+-                               donedrel++;
+-                               drelpos = mval - lval + outf->ef_dbase;
+-                       }
+-                       continue;
+-               case  RBSS:
+-                       if  (donebrel)  {
+-                               if  (lval + brelpos - outf->ef_bbase != mval)
+-                                       lclash("brel");
+-                       }
+-                       else  {
+-                               donebrel++;
+-                               brelpos = mval - lval + outf->ef_bbase;
+-                       }
+-                       continue;
+-               case  REXT:
+-                       if  (crel.rsymbol >= outf->ef_stcnt)
+-                               lclash("Bad sy no");
+-                       csymb = outf->ef_stvec[crel.rsymbol];
+-                       if  (csymb == NULL)
+-                               continue;
+-                       switch  (csymb->s_type)  {
+-                       case  N_UNDF:
+-                               reassign(csymb, mval - lval);
+-                               break;
+-                       case  N_ABS:
+-                               if  (lval + csymb->s_value != mval)
+-                                      lclash("abs rel");
+-                               break;
+-                       case  N_TEXT:
+-                               if  (lval + csymb->s_value != mval)
+-                                       lclash("text rel");
+-                               break;
+-                       case  N_DATA:
+-                               if  (lval + csymb->s_value != mval)
+-                                       lclash("data rel");
+-                               break;
+-                       case  N_BSS:
+-                               if  (lval + csymb->s_value != mval)
+-                                       lclash("bss rel");
+-                               break;
+-                       case  COMM:
+-                               reassign(csymb, mval - lval);
+-                               break;
+-                       }
+-                       mtstr.t_relsymb = csymb;
+-                       mtstr.t_reldisp = lval;
+-                       break;
+-               }
+-       }
+-       
+-       /*
+-        *      Relocate data and bss if possible.
+-        */
+-       
+-       if  (donebrel)  {
+-               zapdat(N_BSS, brelpos);
+-               dhere++;
+-       }
+-       
+-       if  (!donedrel)
+-               return;
+-               
+-
+-       zapdat(N_DATA, drelpos);
+-       
+-       /*
+-        *      And now repeat all that for data relocations if possible
+-        */
+-       
+-       size  =  filhdr.rdsize;
+-       
+-       (void) lseek(inf, RDATAPOS + offset, 0);
+-       for  (;  size >= sizeof(struct reloc); size -= sizeof(crel))  {
+-               if  (read(inf, (char *)&crel, sizeof(crel)) != sizeof(crel))
+-                       lclash("Rd drel");
+-
+-               if  (crel.rsize != RLONG)
+-                       continue;
+-
+-               pos = crel.rpos + outf->ef_dbase;
+-               mpos = crel.rpos + drelpos;
+-               getde(&mainfile, mpos, &mdstr);
+-               lval = getdw(outf, pos, (int)crel.rsize+1);
+-              mval = getdw(&mainfile, mpos, (int)crel.rsize+1);
+-               switch  (crel.rsegment)  {
+-               case  RTEXT:
+-                       if  (lval + trelpos - outf->ef_tbase != mval)
+-                               lclash("Trel-d");
+-                       continue;
+-               case  RDATA:
+-                       if  (lval + drelpos - outf->ef_dbase != mval)
+-                               lclash("Drel-d");
+-                       continue;
+-               case  RBSS:
+-                       if  (donebrel)  {
+-                               if  (lval + brelpos - outf->ef_bbase != mval)
+-                                       lclash("brel");
+-                       }
+-                       else  {
+-                               donebrel++;
+-                               brelpos = mval - lval + outf->ef_bbase;
+-                       }
+-                       continue;
+-               case  REXT:
+-                       if  (crel.rsymbol >= outf->ef_stcnt)
+-                               lclash("Bad sy no");
+-                       csymb = outf->ef_stvec[crel.rsymbol];
+-                       if  (csymb == NULL)
+-                               continue;
+-                       switch  (csymb->s_type)  {
+-                       case  N_UNDF:
+-                               reassign(csymb, mval - lval);
+-                               break;
+-                       case  N_ABS:
+-                               if  (lval + csymb->s_value != mval)
+-                                       lclash("abs rel");
+-                               break;
+-                       case  N_TEXT:
+-                               if  (lval + csymb->s_value != mval)
+-                                       lclash("text rel");
+-                               break;
+-                       case  N_DATA:
+-                               if  (lval + csymb->s_value != mval)
+-                                       lclash("data rel");
+-                               break;
+-                      case  N_BSS:
+-                               if  (lval + csymb->s_value != mval)
+-                                       lclash("bss rel");
+-                               break;
+-                       case  COMM:
+-                               reassign(csymb, mval - lval);
+-                               break;
+-                       }
+-                       mtstr.t_relsymb = csymb;
+-                       mtstr.t_reldisp = lval;
+-                       break;
+-               }
+-       }
+-
+-       if  (dhere || !donebrel)
+-               return;
+-
+-       zapdat(N_BSS, brelpos);
+-}
+//GO.SYSIN DD robj.c
+-- 
+John M Collins          ....mcvax!ist!inset!jmc
+Phone:  +44 727 57267
+Snail Mail: 47 Cedarwood Drive, St Albans, Herts, AL4 0DN, England.
+                         brelpos = mval - lval + outf->ef_bbase;
+-                       }
+-   

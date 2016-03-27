@@ -1,0 +1,359 @@
+'
+REM ****************************************
+REM *** G‚n‚rateur d'index de ressources ***
+REM *** Novembre 1991        par NCC1701 ***
+REM ****************************************
+'
+$m5000
+$I-,%3
+'
+REM *** Initialise le traitement des erreurs
+ON ERROR GOSUB traite_erreurs
+REM *** Codes d'erreurs relatifs au programme
+err_rsc&=-128   ! Fichier ressource introuvable
+err_def&=-127   ! Fichier d‚finition introuvable
+err_lng&=-126   ! Fichier langage introuvable
+err_idx&=-125   ! Index d'une structure hors-limites
+REM *** Tailles des structures dans un RSC
+obj_size&=24    ! Objet   = 24 octets
+ted_size&=28    ! Tedinfo = 28 octets
+icn_size&=36    ! Ic“ne   = 36 octets
+bit_size&=14    ! Bitblk  = 14 octets
+str_size&=4     ! Pointeur de chaŒne libre
+img_size&=4     ! Pointeur d'image libre
+tree_size&=4    ! Pointeur d'arbre d'objets
+REM *** Quelques constantes
+tab$=CHR$(9)
+ac_open&=40
+REM *** Initialisation des variables disque
+rsc_drive$=CHR$(65+GEMDOS(25))  ! Lecteur courant
+rsc_path$=DIR$(0)               ! Chemin d'accŠs courant
+rsc_name$=""                    ! Nom nul
+'
+REM *** Boucle principale selon ACC ou PRG
+IF {ADD(BASEPAGE,36)}=0 THEN
+  acc_mode!=TRUE
+  ' *** En mode ACC, enregistre l'accessoire
+  menu_id&=MENU_REGISTER(APPL_INIT(),"  Index RSC ‚tendus ")
+  ' *** Boucle sans fin d'attente du message AC_OPEN
+  DO
+    evnt&=EVNT_MESAG(0)
+    IF MENU(1)=ac_open& AND MENU(5)=menu_id& THEN
+      ' *** Si accessoire appel‚, choix d'un fichier RSC … traiter
+      IF @file_select("RSC",rsc_drive$,rsc_path$,rsc_name$)<>0
+        @rsc_xindices(rsc_name$)
+      after_error_acc:
+      ENDIF
+    ENDIF
+  LOOP
+ELSE
+  acc_mode!=FALSE
+  ' *** En mode PRG, boucle tant qu'on choisit un fichier RSC
+  WHILE @file_select("RSC",rsc_drive$,rsc_path$,rsc_name$)<>0
+    @rsc_xindices(rsc_name$)
+  after_error_prg:
+  WEND
+ENDIF
+'
+ON ERROR
+END
+'
+REM *** Traitement du fichier ressource choisi
+> PROCEDURE rsc_xindices(rsc_name$)
+  rsc_search(rsc_name$)          ! Recherche des fichiers n‚cessaires
+  ' *** Chargement du ressource et des d‚finitions
+  rsc_addr%=@file_load(rsc_name$,rsc_size%)
+  def_addr%=@file_load(def_name$,def_size%)
+  def_end%=ADD(def_addr%,def_size%)
+  rsc_init(rsc_addr%)            ! Calcul des adresses des blocs de structures
+  def_pter%=@def_init(def_addr%) ! Initialise le pointeur d‚finitions
+  OPEN "A",#1,lng_name$          ! Pr‚pare la sortie vers le fichier langage
+  n_obj&=0                       ! Initialise les compteurs
+  n_ted&=0
+  n_bit&=0
+  n_icn&=0
+  ' *** Boucle sur toutes les entr‚es du fichier de d‚finition
+  WHILE def_pter%<def_end%
+    ' *** Lecture de l'entr‚e courante
+    e&=@get_def(def_pter%,def_tree&,def_objc&,def_name$)
+    IF e&=1 THEN        ! Si c'est un OBJET,
+      ' *** Calcule son adresse...
+      obj_addr%=@obj_addr(def_tree&,def_objc&)
+      ' *** ...et ‚crit son index dans le fichier langage
+      @put_lng("OBJ_"+def_name$,obj_addr%,obj_base%,obj_count&,obj_size&)
+      INC n_obj&
+      ' *** Selon le type de l'objet, ‚crit l'index de sa structure
+      $S|,S<
+      SELECT BYTE{ADD(obj_addr%,7)}
+      CASE 21,22,29,30  ! Structures TEDINFO
+        ted_addr%=ADD(rsc_addr%,{ADD(obj_addr%,12)})
+        @put_lng("TED_"+def_name$,ted_addr%,ted_base%,ted_count&,ted_size&)
+        INC n_ted&
+      CASE 23           ! Structures BITBLK
+        bit_addr%=ADD(rsc_addr%,{ADD(obj_addr%,12)})
+        @put_lng("BIT_"+def_name$,bit_addr%,bit_base%,bit_count&,bit_size&)
+        INC n_bit&
+      CASE 31           ! Structures ICONBLK
+        icn_addr%=ADD(rsc_addr%,{ADD(obj_addr%,12)})
+        @put_lng("ICN_"+def_name$,icn_addr%,icn_base%,icn_count&,icn_size&)
+        INC n_icn&
+      ENDSELECT
+    ELSE IF e&=2        ! Si c'est une FREE IMAGE,
+      ' *** calcule l'adresse de sa structure BITBLK...
+      bit_addr%=@bit_addr(def_objc&)
+      ' *** ... et ‚crit son index dans le fichier langage
+      @put_lng("BIT_"+def_name$,bit_addr%,bit_base%,bit_count&,bit_size&)
+      INC n_bit&
+    ENDIF
+  WEND
+  '
+  CLOSE #1                      ! Ferme le fichier langage
+  ~MFREE(rsc_addr%)             ! LibŠre le ressource
+  ~MFREE(def_addr%)             ! LibŠre les d‚finitions
+  '
+  ~FORM_ALERT(1,"[0][R‚sultat des courses  :| |"+STR$(n_obj&,3)+" objets  "+STR$(n_ted&,3)+" tedinfos|"+STR$(n_bit&,3)+" bitblks "+STR$(n_icn&,3)+" icnblks|][ OK ]")
+RETURN
+'
+REM *** Choix d'un fichier par le s‚lecteur GEM
+> FUNCTION file_select(ext$,VAR drive$,path$,name$)
+$F%,F<
+LOCAL choix&,path2$
+path2$=path$+"\*."+ext$
+IF FSEL_INPUT(path2$,name$,choix&)<>0 THEN
+  IF choix&<>0 THEN
+    IF MID$(path2$,2,1)=":" THEN
+      drive$=LEFT$(path2$,1)
+    ENDIF
+    path$=MID$(path2$,INSTR(path2$,"\"),SUB(RINSTR(path2$,"\"),INSTR(path2$,"\")))
+    CHDRIVE drive$
+    CHDIR path$
+  ENDIF
+ELSE
+  ERROR -39
+ENDIF
+RETURN choix&
+ENDFUNC
+'
+REM *** Recherche du fichier RSC et des fichiers associ‚s de
+REM *** d‚finition des noms d'objets et de sortie langage.
+> PROCEDURE rsc_search(VAR rsc_name$)
+LOCAL dta_addr%,e&,filename$,fileext$,filesize%
+dta_addr%=FGETDTA()                   ! Adresse du tampon DTA
+filename$=rsc_name$
+IF INSTR(filename$,".")<>0 THEN       ! Masque de recherche
+  filename$=LEFT$(filename$,PRED(INSTR(filename$,".")))
+ENDIF
+filename$=filename$+".*"              ! Recherche toutes extensions
+rsc_size%=-1
+def_size%=-1
+lng_size%=-1
+e&=FSFIRST(filename$,0)               ! Lance la recherche
+WHILE e&=0                            ! Tant qu'on trouve des fichiers
+  ' *** R‚cupŠre le nom, la taille et l'extension dans le tampon DTA
+  LET filename$=CHAR{ADD(dta_addr%,30)}
+  LET fileext$=RIGHT$(filename$,SUB(LEN(filename$),RINSTR(filename$,".")))
+  LET filesize%={ADD(dta_addr%,26)}
+  $S%,S<
+  SELECT UPPER$(fileext$)             ! Selon l'extension trouv‚e
+  CASE "RSC"                          ! Le fichier ressource lui-mˆme
+    rsc_name$=filename$               ! -> m‚morise son nom et sa taille
+    rsc_size%=filesize%
+  CASE "DEF","RSD","DFN","HRD"        ! Le fichier de d‚finition
+    def_name$=filename$               ! -> m‚morise nom,type et taille
+    def_ext$=fileext$
+    def_size%=filesize%
+  CASE "H","LST","S","I"              ! Le fichier langage
+    lng_name$=filename$               ! -> m‚morise nom,type et taille
+    lng_ext$=fileext$
+    lng_size%=filesize%
+  ENDSELECT                           ! Ignore les autres extensions
+  e&=FSNEXT()                         ! Recherche le fichier suivant
+WEND
+IF rsc_size%<0 THEN                   ! Si fichier RSC non-trouv‚
+  ERROR err_rsc&                      ! provoque l'erreur associ‚e
+ENDIF
+IF def_size%<0 THEN                   ! Idem avec fichier d‚finition
+  ERROR err_def&
+ENDIF
+IF lng_size%<0 THEN                   ! Idem avec fichier langage
+  ERROR err_lng&
+ENDIF
+RETURN
+'
+REM *** Chargement d'un fichier en m‚moire
+> FUNCTION file_load(name$,size%)
+$F%,F<
+LOCAL addr%
+addr%=MALLOC(size%)
+IF addr%>0 THEN
+BLOAD name$,addr%
+ELSE
+ERROR -39
+ENDIF
+RETURN addr%
+ENDFUNC
+'
+REM *** Calcul des adresses des blocs de structures
+REM *** et du nombre de structures de chaque type dans le RSC
+> PROCEDURE rsc_init(addr%)
+obj_base%=ADD(addr%,INT{ADD(addr%,2)})        ! Objets
+obj_count&=INT{ADD(addr%,20)}
+ted_base%=ADD(addr%,INT{ADD(addr%,4)})        ! Tedinfos
+ted_count&=INT{ADD(addr%,24)}
+icn_base%=ADD(addr%,INT{ADD(addr%,6)})        ! Ic“nes
+icn_count&=INT{ADD(addr%,26)}
+bit_base%=ADD(addr%,INT{ADD(addr%,8)})        ! Bitblks
+bit_count&=INT{ADD(addr%,28)}
+str_base%=ADD(addr%,INT{ADD(addr%,10)})       ! ChaŒnes libres
+str_count&=INT{ADD(addr%,30)}
+img_base%=ADD(addr%,INT{ADD(addr%,16)})       ! Images libres
+img_count&=INT{ADD(addr%,32)}
+tree_base%=ADD(addr%,INT{ADD(addr%,18)})      ! Arbres d'objets
+tree_count&=INT{ADD(addr%,22)}
+RETURN
+'
+REM *** Initialisation du pointeur dans le fichier de d‚finition
+> FUNCTION def_init(addr%)
+$F%,F<
+LOCAL pter%
+pter%=addr%
+$S%,S<
+SELECT def_ext$
+CASE "DFN"
+ADD pter%,2
+CASE "HRD"
+ADD pter%,8
+ENDSELECT
+RETURN pter%
+ENDFUNC
+'
+REM *** Lecture d'un enregistrement dans le fichier de d‚finition
+> FUNCTION get_def(VAR pter%,tree&,objc&,name$)
+$F%,F<
+LOCAL e&
+e&=-1                         ! El‚ment non-identifi‚
+$S%,S<
+SELECT def_ext$               ! Selon l'origine du fichier RSC,
+CASE "DEF","RSD"              ! format K-RSC ou RCS
+tree&=BYTE{ADD(pter%,4)}    ! index de l'arbre
+objc&=BYTE{ADD(pter%,5)}    ! index relatif de l'objet
+$S|,S<
+SELECT BYTE{ADD(pter%,7)}   ! Selon le type
+CASE 0                      ! si c'est un objet
+e&=1                      ! renvoie 1
+CASE 6                      ! si c'est une image libre
+e&=2                      ! renvoie 2
+ENDSELECT
+LET name$=CHAR{ADD(pter%,8)}! nom de l'‚l‚ment
+ADD pter%,16                ! pointeur sur enregistrement suivant
+'
+CASE "DFN"                    ! format RCS2
+tree&=BYTE{ADD(pter%,1)}
+objc&=BYTE{pter%}
+$S|,S<
+SELECT BYTE{ADD(pter%,2)}
+CASE 0
+e&=1
+CASE 6
+e&=2
+ENDSELECT
+LET name$=CHAR{ADD(pter%,4)}
+ADD pter%,14
+'
+CASE "HRD"                    ! format WERCS
+tree&=BYTE{ADD(pter%,3)}
+objc&=BYTE{ADD(pter%,5)}
+$S|,S<
+SELECT BYTE{pter%}
+CASE 5
+e&=1
+CASE 4
+e&=2
+ENDSELECT
+LET name$=CHAR{ADD(pter%,6)}
+ADD pter%,ADD(6,SUCC(LEN(name$)))
+'
+ENDSELECT
+RETURN e&                          ! 1 si objet, 2 si free image
+ENDFUNC
+'
+REM *** Ecriture d'une ligne dans le fichier langage
+> PROCEDURE put_lng(name$,s_addr%,s_base%,s_count&,s_size&)
+LOCAL s_index&
+s_index&=DIV(SUB(s_addr%,s_base%),s_size&)    ! Calcul de l'index
+IF s_index&>=0 AND s_index&<s_count& THEN     ! Si index OK,
+$S%,S<
+SELECT lng_ext$                             ! Selon le langage
+CASE "LST"                                  ! GFA3
+PRINT #1,"LET ";name$;"&=";s_index&
+CASE "H"                                    ! C
+PRINT #1,"#define ";name$;tab$;s_index&
+CASE "S"                                    ! Assembleur
+PRINT #1,name$;tab$;"EQU";tab$;s_index&
+CASE "I"                                    ! Pascal
+PRINT #1,tab$;name$;tab$;"= ";s_index&
+ENDSELECT
+ELSE                          ! Si l'index est hors des limites,
+ERROR err_idx&              ! provoque l'erreur pr‚vue
+ENDIF
+RETURN
+'
+REM *** Calcul de l'adresse d'un objet dans le ressource
+> FUNCTION obj_addr(tree&,objc&)
+$F%,F<
+LOCAL addr%
+addr%={ADD(tree_base%,MUL(tree_size&,tree&))}
+ADD addr%,MUL(obj_size&,objc&)
+ADD addr%,rsc_addr%
+RETURN addr%
+ENDFUNC
+REM *** Calcul de l'adresse d'un structure BITBLK d'image
+> FUNCTION bit_addr(img&)
+$F%,F<
+LOCAL addr%
+addr%={ADD(img_base%,MUL(img_size&,img&))}
+ADD addr%,rsc_addr%
+RETURN addr%
+ENDFUNC
+'
+REM *** Gestion des erreurs
+> PROCEDURE traite_erreurs
+LOCAL err_msg$
+$S&,S<
+SELECT ERR                    ! S‚lection du message … afficher
+CASE err_rsc&
+err_msg$="[3][Fichier ressource absent.][Annuler]"
+CASE err_def&
+err_msg$="[3][Fichier de d‚finition absent.][Annuler]"
+CASE err_lng&
+err_msg$="[3][Fichier langage absent.][Annuler]"
+CASE err_idx&
+err_msg$="[3][Mauvais index de structure.][Annuler]"
+CASE -13
+err_msg$="[1][D‚prot‚gez la disquette!][Annuler]"
+CASE -31 TO -1
+err_msg$="[3][Il y a un problŠme avec|le lecteur ou la disquette.][Annuler]"
+CASE -34
+err_msg$="[2][R‚pertoire inconnu.][Annuler]"
+CASE -36
+err_msg$="[3][Fichier prot‚g‚ en ‚criture.][Annuler]"
+CASE -39
+err_msg$="[3][M‚moire insuffisante.][Annuler]"
+CASE -46
+err_msg$="[2][Lecteur inconnu.][Annuler]"
+CASE 37
+err_msg$="[1][Disquette pleine.][Annuler]"
+DEFAULT
+err_msg$="[3][Erreur "+STR$(ERR)+".][Annuler]"
+ENDSELECT
+err_choix&=FORM_ALERT(1,err_msg$)
+CLOSE                         ! Ferme le fichier langage
+~MFREE(rsc_addr%)             ! LibŠre le ressource
+~MFREE(def_addr%)             ! LibŠre les d‚finitions
+ON ERROR GOSUB traite_erreurs
+IF acc_mode! THEN
+RESUME after_error_acc
+ELSE
+RESUME after_error_prg
+ENDIF
+RETURN
