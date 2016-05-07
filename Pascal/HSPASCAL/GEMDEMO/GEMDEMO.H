@@ -1,0 +1,20 @@
+CONST
+  MAINMENU = 0 ;
+  DESKMENU = 3 ;
+  QUITMENU = 5 ;
+   WINMENU = 4 ;
+  SLCTDEMO = 1 ;
+  ELLIPSES = 3 ;
+      PIES = 2 ;
+  ABOUTBAR = 8 ;
+     LINES = 4 ;
+     BOXES = 5 ;
+  WINCLOSE = 18 ;
+  TXTCLOSE = 21 ;
+   TXTOPEN = 20 ;
+   GRAOPEN = 23 ;
+  GRASELEC = 25 ;
+  GRACLOSE = 24 ;
+   QUITBAR = 27 ;
+  ABOUTBOX = 2 ;
+   ABOUTOK = 4 ;
