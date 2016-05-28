@@ -11,8 +11,8 @@
 ;
 ;(C)oderight NulloS/DNT-Crew 1993.
 ;
-	include	k:\falcon\hard_sys.s		;
-	include	k:\falcon\tos_030.s		;
+	include	hard_sys.s		;
+	include	tos_030.s		;
 Taille	equ	250000		;Nombre d'‚l‚ments
 Tz	equ	4		;Taille d'un ‚l‚ment tableau
 
