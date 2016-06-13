@@ -1,0 +1,6 @@
+	include	"d:\include\gemdos.s"
+	include	"d:\include\bios.s"
+	include	"d:\include\xbios.s"
+	include	"d:\include\video.s"
+	include	"d:\include\son.s"
+	include	"d:\include\dsp.s"

@@ -2192,7 +2192,7 @@ loopf	move.w (a0)+,d2
 	dbf d1,loopf
 	rts
 
-musique	incbin 'e:\musiques\mad_max\syntax_1.mus'
+musique	incbin 'prehis_1.mus'
 
 	section data
 
@@ -2204,7 +2204,7 @@ tbl_kbd	dc.b $12,9
 org_pos	dc.w 0,0
 end_kbd
 	
-sin_tab	incbin 'e:\langages\devpac2\lignes\sintab.bin'
+sin_tab	incbin 'sintab.bin'
 
 pal_pres	dc.w $000,$776,$775,$764,$653,$120,$220,$543
 	dc.w $432,$321,$210,$100,$110,$200,$300,$400
@@ -2488,19 +2488,19 @@ curs	dc.w $FFF0,$FFD0,$FFE0,$FFE0,$FFA0,$8040,$CCC0,$DCC0
 curs_msk	dc.w $FFF0,$FFE0,$FFC0,$FF80,$FF80,$FFC0,$FFE0,$FFF0
 	dc.w $FFF8,$E7FC,$C3FE,$81FF,$00FE,$007C,$0038,$0010
 
-carac	include 'e:\langages\devpac2\lignes\carac.s'
+carac	include 'carac.s'
 
-base	incbin 'e:\langages\devpac2\lignes\base.3p'
+base	incbin 'base.3p'
 
-present	incbin 'e:\langages\devpac2\lignes\g_dead.4p'
+present	incbin 'g_dead.4p'
 
-fonte	incbin 'e:\langages\devpac2\lignes\fonte_01.dat'
+fonte	incbin 'fonte_01.dat'
 
-datas_3d	incbin 'e:\langages\devpac2\lignes\3d_prism.dat'
+datas_3d	incbin '3d_prism.dat'
 
-mes_uk	incbin 'e:\langages\devpac2\lignes\textdemo.cod'
+mes_uk	incbin 'textdemo.cod'
 
-mes_fr	incbin 'e:\langages\devpac2\lignes\text_fr.cod'
+mes_fr	incbin 'text_fr.cod'
 	even
 
 tab_font	
