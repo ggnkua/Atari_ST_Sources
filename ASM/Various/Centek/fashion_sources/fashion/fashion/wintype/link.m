@@ -1,0 +1,10 @@
+formul.o
+toolbox2.o
+drag.o
+winobjet.o
+colorwin.o
+flagwin.o
+tedinfo.o
+edmenu.o
+gline.o
+alrt_ed.o
