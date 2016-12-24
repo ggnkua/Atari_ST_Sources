@@ -1,4 +1,4 @@
-screen	equ	$3f8000
+screen	equ	$f8000
 
 	opt	d+
 	
@@ -55,7 +55,6 @@ main	move	#$25,-(a7)
 	cmp.b	#$39,$fffffc02.w
 	bne.s	main
 	
-	clr.w	$ffff8240.w
 	pea	0
 	trap	#1
 		

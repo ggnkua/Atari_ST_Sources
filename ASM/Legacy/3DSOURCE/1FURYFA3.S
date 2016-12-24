@@ -10,7 +10,7 @@
 	pea	0
 	trap	#1
 
-screen	equ	$3f8000
+screen	equ	$f8000
 
 	opt	d+
 	
@@ -38,8 +38,7 @@ nodebug	pea	0
 main	move	#$25,-(a7)
 	trap	#14
 	addq	#2,a7
-
-	clr.w	$ffff8240.w	
+	
 *	move	#3000,d0
 *efe	dbra	d0,efe	
 *	clr	$ffff8240.w
@@ -51,7 +50,6 @@ main	move	#$25,-(a7)
 	cmp.b	#$39,$fffffc02.w
 	bne.s	main
 	
-	move	#0,$ffff8240.w
 	pea	0
 	trap	#1
 		
@@ -101,7 +99,7 @@ no_let	move.l	last_scro,a1
 	bpl.s	zlot
 	
 	lea	scroll_pos,a1
-zlot	move.l	a1,last_scro
+zlot	move.l	a1,LAST_scro
 	
 	move	#1,nxt_pos	* Nbre de frames avant le chgt-1
 	
@@ -473,7 +471,7 @@ letre_in	MOVE	(a0)+,(a3)+
 	lea	46(a3),a3
 	dbra	d0,letre_in
 	
-	LEA	new_bloc+1,A0
+	LEA	NEW_BLOC+1,A0
 	LEA	-1(A0),A1
 	MOVEQ	#27,D0
 DECAL	MOVE.B	(A0)+,(A1)+
@@ -590,7 +588,7 @@ gizi	set	gizi+1
 	dc.l	pic_dat+40*140+8	* plein de codes!
 	endr
 	
-message
+meSSAGE	
 	INCLUDE	"1TEXTSCR.S"
 	DC.B	-1
 	

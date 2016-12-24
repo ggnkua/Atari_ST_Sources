@@ -10,8 +10,8 @@
 	pea	0
 	trap	#1
 
-screen	equ	$3f0000
-screen1	equ	$3f0000-32000-48*160
+screen	equ	$f0000
+screen1	equ	$f0000-32000-48*160
 	opt	d+
 
 	text
@@ -105,7 +105,7 @@ main	tst	synchro
 	move.l	#$09090000,$ffff8800.w
 	move.l	#$0a0a0000,$ffff8800.w
 	
-	move	#$006,$ffff8240.w
+	move	#$666,$ffff8240.w
 	clr	$ffff8246.w	
 	pea	0
 	trap	#1

@@ -10,7 +10,7 @@
 	pea	0
 	trap	#1
 
-screen	equ	$3f0000
+screen	equ	$f0000
 
 	opt	d+
 	
@@ -90,7 +90,7 @@ main	move	#$25,-(a7)
 
 	move	#$2300,sr
 	
-	move	#0,$ffff8240.w
+	move	#$777,$ffff8240.w
 	
 	pea	0
 	trap	#1

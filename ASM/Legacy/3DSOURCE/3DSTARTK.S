@@ -1,4 +1,4 @@
-screen	equ	$3f8000
+screen	equ	$f0000
 screen1	equ	screen-32000-48*160
 	opt	d+
 
@@ -147,7 +147,7 @@ one_vb	clr	synchro
 	move.l	#$09090000,$ffff8800.w
 	move.l	#$0a0a0000,$ffff8800.w
 	
-	move	#0,$ffff8240.w
+	move	#$666,$ffff8240.w
 	clr	$ffff8246.w	
 	pea	0
 	trap	#1
