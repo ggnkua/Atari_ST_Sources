@@ -311,7 +311,7 @@ value	ds.w	1
 
 wave_pointer	ds.l	1
 
-wave_data:	INCBIN SWIB.DAT
+wave_data:	INCBIN C:\ASM\zuul\SWIB.DAT
 
 repeat_wave
 	move.l	#wave_data,wave_pointer
@@ -463,7 +463,7 @@ MYARSE	EQU	0
 
 	rts
 
-char_set:   INCBIN FRENCH.FNT
+char_set:   INCBIN C:\ASM\zuul\FRENCH.FNT
 
 ;
 ; 116 characters long
@@ -866,9 +866,9 @@ create_linelist
 	rts
 
 plain_list:	
-	INCBIN WIBBLE.TAB
+	INCBIN C:\ASM\zuul\WIBBLE.TAB
 list_point:
-	INCBIN WIBBLE.TAB
+	INCBIN C:\ASM\zuul\WIBBLE.TAB
 
 	EVEN
 	
@@ -1581,7 +1581,7 @@ s_message
 
 	even
 
-charset	INCBIN 32_3.fnt	;Le Font!
+charset	INCBIN c:\asm\zuul\32_3.fnt	;Le Font!
 space	ds.b	26*12	
 
 here		ds.l	1
@@ -1597,7 +1597,7 @@ buffer_2	ds.b	26*6*20*2
 ;	
 		IFNE	MUSIC_ON
 		
-music	INCBIN awe.mus
+music	INCBIN c:\asm\zuul\awe.mus
 
 music_init	moveq	#1,d0
 		bra	music
@@ -1614,7 +1614,7 @@ music_vbl	equ	music+6
 ;
 ;===========================================================================	
 
-logo	INCBIN biglogo.dat
+logo	INCBIN c:\asm\zuul\biglogo.dat
 output	equ	*
 s_start	equ	*+(11040*16)
 
