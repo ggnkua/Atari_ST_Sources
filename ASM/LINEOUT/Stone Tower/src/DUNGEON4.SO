@@ -1,0 +1,1479 @@
+; Nasty precalc column version of dungeon2..
+; 4VBL on st.
+; this shit also now has 3bpl c2p to leave 1bpl for rastered background.
+
+******** OBJECT EQUS ********
+
+RASTERS:	=	1			; rasters+3bpl or 4bpl w/o rasters
+DOUBLING:	=	1			; line doubling yes/no
+
+maxslicelen:	=	200
+frameheight:	=	90
+texturelen:	=	64
+framewidth:	=	152
+
+framesize:	=	framewidth*frameheight
+
+		RSRESET
+		IFNE	RASTERS
+c2plookup:	RS.L	1<<14
+		ELSE
+c2plookup:	RS.L	1<<16
+		ENDC
+c2pinst:	RS.B	90000 			* Rough guess...
+chunkybuf:	RS.B	framesize
+wallroutadrs:	RS.L	maxslicelen
+wallrouts:	RS.B	70000			* Rough guess as well!
+dungeon_size:	rs.b	0
+
+		RSRESET
+trajecttime:	RS.L	1
+trajectx:	RS.W	1
+trajecty:	RS.W	1
+trajectangle:	RS.W	1
+trajentrysize:	RS.B	0
+
+******** OBJECT TABLE ********
+
+* Must be first in object!!
+dungeon_tbl:
+	DC.L	DUNGEONMAINLOOP
+	DC.L	INIT_DUNGEON
+	DC.L	SET_DUNGEONRES
+	DC.L	trigger_downfade
+* Add more addresses here..
+	DC.L	0
+
+
+******** RESOLUTION SETTING ROUTINE ********
+
+anus:	move.l	#dungeon_size,d0
+
+SET_DUNGEONRES:
+	move.l	#killpal,pal_irq
+
+	movem.l	dungwallpal_tbl,d0-d3
+	movem.l	d0-d3,dungwallpal_tbl+16
+	bsr	CALC_DUNGEONPAL
+
+	IFNE	RASTERS
+	bsr	generate_3bpl_tab
+	ELSE
+	bsr	GENTAB
+	ENDC
+	bsr	INIT_C2PINSTRUCTIONS
+	bsr	CREATE_WALLROUTINES
+
+; clear some top and btm border trash..
+	IFNE	RASTERS
+	clr.l	d0
+
+	movea.l	scr,a0
+	lea	sky+$3E,a1
+	move.w	#200-1,d7
+.loop1:
+	REPT	19
+	move.l	d0,(a0)+
+	move.w	d0,(a0)+
+	move.w	(a1)+,(a0)+
+	ENDR
+	move.l	d0,(a0)+
+	move.l	d0,(a0)+
+	addq	#2,a1
+	dbf	d7,.loop1
+
+	movea.l	scr+4,a0
+	lea	sky+$3E,a1
+	move.w	#200-1,d7
+.loop2:
+	REPT	19
+	move.l	d0,(a0)+
+	move.w	d0,(a0)+
+	move.w	(a1)+,(a0)+
+	ENDR
+	move.l	d0,(a0)+
+	move.l	d0,(a0)+
+	addq	#2,a1
+	dbf	d7,.loop2
+
+	ELSE
+
+	moveq	#(100-frameheight)-1,d7
+	movea.l	scr,a0
+	movea.l	scr+4,a1
+	clr.l	d0
+.loop:
+	REPT	40
+	move.l	d0,(a0)+
+	move.l	d0,(a1)+
+	ENDR
+	dbf	d7,.loop
+	moveq	#(100-frameheight)-1,d7
+	adda.w	#160*frameheight*2,a0
+	adda.w	#160*frameheight*2,a1
+	clr.l	d0
+.loop2:
+	REPT	40
+	move.l	d0,(a0)+
+	move.l	d0,(a1)+
+	ENDR
+	dbf	d7,.loop2
+
+; clear side border trash..
+	movea.l	scr,a0
+	movea.l	scr+4,a1
+	adda.w	#160*(100-frameheight),a0
+	adda.w	#160*(100-frameheight),a1
+	move.w	#frameheight*2-1,d7
+.loop3:	lea	152(a0),a0
+	lea	152(a1),a1
+	move.l	d0,(a0)+
+	move.l	d0,(a0)+
+	move.l	d0,(a1)+
+	move.l	d0,(a1)+
+	dbf	d7,.loop3
+
+	ENDC
+
+	move.w	$0468,old468
+	rts
+
+killpal:clr.l	d0
+	lea	$FFFF8240.w,a0
+	REPT	8
+	move.l	d0,(a0)+
+	ENDR
+	rts
+
+******** INIT SUBROUTINE ********
+
+INIT_DUNGEON:
+;	clr.w	enhanced			; test!
+
+	tst.w	enhanced
+	beq.s	.st
+.ste:	move.l	#prefade_hbl_cols_ste,prefade_cols_adr
+	rts
+.st:	move.l	#prefade_hbl_cols_stf,prefade_cols_adr
+	rts
+
+******** MAINLOOP SUBROUTINE ********
+
+DUNGEONMAINLOOP:
+	move.l	frmcnt,d0
+	cmp.l	lastfrmcnt,d0
+	bne.s	.res_done
+	bsr	SET_DUNGEONRES
+.res_done:
+
+	bsr	CLEAR_CHUNKYBUF
+
+	move.w	frames_done,d0
+	cmp.w	frames,d0
+	beq.s	.dont_do_it
+	addq.w	#1,d0
+	move.w	d0,frames_done
+
+	movea.l	coltabadr,a1
+	bsr	PLOT_DUNGEON
+	move.l	a1,coltabadr
+.dont_do_it:
+
+	lea	temp_buf+c2plookup,a2
+	lea	temp_buf+chunkybuf,a1
+	movea.l	scr,a0
+	adda.w	#(100-frameheight)*160,a0
+	jsr	temp_buf+c2pinst
+
+; wait 10% of vbl: 16.000 cycles, dbf taken : 10 cycles
+; so loop 1600 times
+;	move.w	#1600-1,d7
+;noloop:	dbf	d7,noloop
+
+	move.w	old468(pc),d1
+.wait:	move.w	$0468.w,d0
+	move.w	d0,d2
+	sub.w	d1,d0
+	cmpi.w	#4,d0
+	blt.s	.wait
+	move.w	d2,old468
+
+	IFNE	0
+	movea.l	scr,a0
+	adda.w	#(100-frameheight)*160,a0
+.vblloop:
+	move.l	#$FF00FF00,(a0)+
+	move.w	#$FF00,(a0)+
+	addq	#2,a0
+	subq.w	#1,d0
+	bgt.s	.vblloop
+	ENDC
+
+	IFEQ	testmode
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	lsr.w	#8,d0
+	move.l	d0,$FFFF8200.w
+	ENDC
+
+	move.l	frmcnt,d0
+	sub.l	lastfrmcnt,d0
+;	cmpi.l	#25,d0
+	bne.s	.done
+	bsr	TRIGGER_DUNGEONHBL
+.done:	rts
+
+old468:	DS.W	1
+
+******** OBJECT SUBROUTINES ********
+
+fadedir:DC.W	0
+
+TRIGGER_DUNGEONHBL:
+	move.w	#+1,fadedir
+	move.l	#dungeonfadepal,fadepaladr
+	move.l	#INSTALL_DUNGEONHBL,pal_irq
+	rts
+
+trigger_downfade:
+	move.w	#-1,fadedir
+	move.l	#dungeonfadepal+32*16,fadepaladr
+	move.l	#INSTALL_DUNGEONHBL,pal_irq
+	rts
+
+INSTALL_DUNGEONHBL:
+	tst.w	fadedir
+	beq	.end_fade
+	bmi	.fade_out
+
+;- fade in -----------------------------------------------------------------
+.fade_in:
+	move.w	$468.w,d0
+	move.w	d0,d1
+	andi.w	#3,d1
+	bne	.end_fade
+; colours 1..F
+	movea.l	fadepaladr,a1
+	cmpa.l	#dungeonfadepal+16*32,a1
+	bne.s	.go_on
+	clr.w	fadedir
+	bra	.end_fade
+.go_on:	lea	$FFFF8242.w,a0
+	addq	#2,a1
+	REPT	7
+	move.w	(a1)+,(a0)+
+	ENDR
+	addq	#2,a0
+	addq	#2,a1
+	REPT	7
+	move.w	(a1)+,(a0)+
+	ENDR
+	move.l	a1,fadepaladr
+	andi.w	#3,d0
+	bne	.end_fade
+
+; colour 0
+.col0:	lea	hbl_col1(pc),a0
+	movea.l	prefade_cols_adr(pc),a1
+	moveq	#9-1,d7
+	moveq	#0,d6
+.fup_loop:
+	move.w	(a0),d0
+	move.w	(a1)+,d3
+	move.w	d0,d1
+	move.w	d0,d2
+	move.w	d3,d4
+	move.w	d3,d5
+
+	move.w	d0,d6
+	lsr.w	#8,d0				; 0rRRR
+	add.w	d0,d0				; rRRR0
+	lsr.w	#4,d1				; 0gGGG
+	add.w	d1,d1				; gGGG0
+	add.w	d2,d2				; bBBB0
+	lsl.w	#5,d6				; x=r
+	addx.b	d6,d0				; RRR0+x=RRR0+r=RRRr
+	lsl.w	#4,d6				; x=g
+	addx.b	d6,d1				; GGG0+x=GGG0+g=GGGg
+	lsl.w	#4,d6				; x=b
+	addx.b	d6,d2				; BBB0+x=BBB0+b=BBBb
+
+	moveq	#$F,d6
+	and.w	d6,d0
+	and.w	d6,d1
+	and.w	d6,d2
+	
+	lsr.w	#8,d3
+	lsr.w	#4,d4
+	and.w	d6,d4
+	and.w	d6,d5
+
+	addq.w	#1,d0
+	cmp.w	d3,d0
+	ble.s	.rok
+	move.w	d3,d0
+;	andi.w	#$E,d0				; stf emulation
+.rok:	addq.w	#1,d1
+	cmp.w	d4,d1
+	ble.s	.gok
+	move.w	d4,d1
+;	andi.w	#$E,d1				; stf emulation
+.gok:	addq.w	#1,d2
+	cmp.w	d5,d2
+	ble.s	.bok
+	move.w	d5,d2
+;	andi.w	#$E,d2				; stf emulation
+.bok:	moveq	#$8,d6
+	lsr.w	d0
+	bcc.s	.nr
+	or.w	d6,d0
+.nr:	lsr.w	d1
+	bcc.s	.ng
+	or.w	d6,d1
+.ng:	lsr.w	d2
+	bcc.s	.nb
+	or.w	d6,d2
+.nb:
+	lsl.w	#8,d0
+	lsl.w	#4,d1
+	or.w	d2,d0
+	or.w	d1,d0
+	move.w	d0,(a0)+
+	dbf	d7,.fup_loop
+	bra	.end_fade
+
+;- fade out ----------------------------------------------------------------
+.fade_out:
+	move.w	$468.w,d0
+	move.w	d0,d1
+	andi.w	#1,d1
+	bne.s	.end_fade
+; colours 1..F
+	movea.l	fadepaladr,a1
+	cmpa.l	#dungeonfadepal,a1
+	bgt.s	.go_on2
+	clr.w	fadedir
+	bra.s	.col0_2
+.go_on2:lea	$FFFF8260.w,a0
+	REPT	7
+	move.l	-(a1),-(a0)
+	ENDR
+	move.w	-(a1),-(a0)
+	subq	#2,a1
+	move.l	a1,fadepaladr
+
+.col0_2:move.w	$468.w,d0
+	andi.w	#3,d0
+	bne.s	.end_fade
+	lea	hbl_col1(pc),a0
+	moveq	#9-1,d7
+.fdown_loop:
+	move.w	(a0),d0
+	move.w	d0,d1
+	move.w	d0,d2
+	andi.w	#$0700,d0
+	andi.w	#$0070,d1
+	andi.w	#$0007,d2
+	mulu.w	#$FFFF,d0
+	mulu.w	#$FFFF,d1
+	mulu.w	#$FFFF,d2
+	swap	d0
+	swap	d1
+	swap	d2
+	andi.w	#$0700,d0
+	andi.w	#$0070,d1
+	andi.w	#$0007,d2
+	or.w	d2,d0
+	or.w	d1,d0
+	move.w	d0,(a0)+
+	dbf	d7,.fdown_loop
+
+.end_fade:
+	IFNE	RASTERS
+	move	#$2700,sr
+	clr.b	$fffffa1b.w
+	move.b	#100-frameheight,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	move.l	#HBL_DUNGEON1,$120.w
+	bset	#0,$fffffa07.w
+	bset	#0,$fffffa13.w
+	move	#$2300,sr
+	ENDC
+	rts
+
+HBL_DUNGEON1:
+	move.w	hbl_col1(pc),$ffff8240.w
+	move.w	hbl_col2(pc),$ffff8250.w
+	;move	#$2700,sr
+	move.l	#HBL_DUNGEON2,$120.w
+	clr.b	$fffffa1b.w
+	move.b	#17,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	rte
+
+HBL_DUNGEON2:
+	move.w	hbl_col3(pc),$ffff8240.w
+	move.w	hbl_col2(pc),$ffff8250.w
+	;move	#$2700,sr
+	move.l	#HBL_DUNGEON3,$120.w
+	clr.b	$fffffa1b.w
+	move.b	#25,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	rte
+
+HBL_DUNGEON3:
+	move.w	hbl_col3(pc),$ffff8240.w
+	move.w	hbl_col4(pc),$ffff8250.w
+	;move	#$2700,sr
+	move.l	#HBL_DUNGEON4,$120.w
+	clr.b	$fffffa1b.w
+	move.b	#24,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	rte
+
+HBL_DUNGEON4:
+	move.w	hbl_col5(pc),$ffff8240.w
+	move.w	hbl_col4(pc),$ffff8250.w
+	;move	#$2700,sr
+	move.l	#HBL_DUNGEON5,$120.w
+	clr.b	$fffffa1b.w
+	move.b	#24,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	rte
+
+HBL_DUNGEON5:
+	move.w	hbl_col5(pc),$ffff8240.w
+	move.w	hbl_col6(pc),$ffff8250.w
+	;move	#$2700,sr
+	move.l	#HBL_DUNGEON6,$120.w
+	clr.b	$fffffa1b.w
+	move.b	#24,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	rte
+
+HBL_DUNGEON6:
+	move.w	hbl_col7(pc),$ffff8240.w
+	move.w	hbl_col6(pc),$ffff8250.w
+	;move	#$2700,sr
+	move.l	#HBL_DUNGEON7,$120.w
+	clr.b	$fffffa1b.w
+	move.b	#24,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	rte
+
+HBL_DUNGEON7:
+	move.w	hbl_col7(pc),$ffff8240.w
+	move.w	hbl_col8(pc),$ffff8250.w
+	;move	#$2700,sr
+	move.l	#HBL_DUNGEON8,$120.w
+	clr.b	$fffffa1b.w
+	move.b	#24,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	rte
+
+HBL_DUNGEON8:
+	move.w	hbl_col9(pc),$ffff8240.w
+	move.w	hbl_col8(pc),$ffff8250.w
+	;move	#$2700,sr
+	move.l	#END_HBL,$120.w
+	clr.b	$fffffa1b.w
+	move.b	#18,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	rte
+
+HBL_DUNGEON9:
+	move.w	hbl_col9(pc),$ffff8240.w
+	move.w	hbl_colA(pc),$ffff8250.w
+	;move	#$2700,sr
+	move.l	#HBL_DUNGEON10,$120.w
+	clr.b	$fffffa1b.w
+	move.b	#24,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	rte
+
+HBL_DUNGEON10:
+	move.w	hbl_colA(pc),$ffff8240.w
+	move.w	hbl_colB(pc),$ffff8250.w
+	;move	#$2700,sr
+	move.l	#HBL_DUNGEON11,$120.w
+	clr.b	$fffffa1b.w
+	move.b	#24,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	rte
+
+HBL_DUNGEON11:
+	move.w	hbl_colA(pc),$ffff8240.w
+	move.w	hbl_colB(pc),$ffff8250.w
+	;move	#$2700,sr
+	move.l	#HBL_DUNGEON12,$120.w
+	clr.b	$fffffa1b.w
+	move.b	#12,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	rte
+
+HBL_DUNGEON12:
+	move.w	hbl_colB(pc),$ffff8240.w
+	move.w	hbl_colC(pc),$ffff8250.w
+	;move	#$2700,sr
+	move.l	#HBL_DUNGEON13,$120.w
+	clr.b	$fffffa1b.w
+	move.b	#13,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	rte
+
+HBL_DUNGEON13:
+	move.w	hbl_colC(pc),$ffff8240.w
+	move.w	hbl_colD(pc),$ffff8250.w
+	;move	#$2700,sr
+	move.l	#HBL_DUNGEON14,$120.w
+	clr.b	$fffffa1b.w
+	move.b	#12,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	rte
+
+HBL_DUNGEON14:
+	move.w	hbl_colD(pc),$ffff8240.w
+	move.w	hbl_colE(pc),$ffff8250.w
+	;move	#$2700,sr
+	move.l	#END_HBL,$120.w
+	clr.b	$fffffa1b.w
+	move.b	#6,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	rte
+
+END_HBL:
+	clr.w	$ffff8240.w
+	clr.w	$ffff8250.w
+	bclr	#0,$fffffa07.w
+	bclr	#0,$fffffa13.w
+	rte
+
+hbl_col1:
+	DC.W	$0000
+hbl_col2:
+	DC.W	$0000
+hbl_col3:
+	DC.W	$0000
+hbl_col4:	
+	DC.W	$0000
+hbl_col5:
+	DC.W	$0000
+hbl_col6:
+	DC.W	$0000
+hbl_col7:
+	DC.W	$0000
+hbl_col8:
+	DC.W	$0000
+hbl_col9:
+	DC.W	$0000
+hbl_colA:
+	DC.W	$0000
+hbl_colB:
+	DC.W	$0000
+hbl_colC:
+	DC.W	$0000
+hbl_colD:
+	DC.W	$0000
+hbl_colE:
+	DC.W	$0000
+
+prefade_cols_adr:
+	ds.l	1
+
+prefade_hbl_cols_stf:
+	DC.W	$08A8
+	DC.W	$0686
+	DC.W	$0464
+	DC.W	$0242
+	DC.W	$0020
+	DC.W	$0224
+	DC.W	$0446
+	DC.W	$0668
+	DC.W	$088A
+prefade_hbl_cols_ste:
+	DC.W	$0565
+	DC.W	$0454
+	DC.W	$0343
+	DC.W	$0232
+	DC.W	$0111
+	DC.W	$0223
+	DC.W	$0334
+	DC.W	$0445
+	DC.W	$0556
+
+; Calculate some blackfaded versions of the palette..
+CALC_DUNGEONPAL:
+
+; 1: Extract (ste) palette to easy format.
+	lea	dungwallpal_tbl,a1
+	lea	.pal_tbl(pc),a0
+	moveq	#16-1,d7
+
+.preloop:
+	move.w	(a1)+,d0
+	move.w	d0,d1
+	move.w	d0,d2
+	move.w	d0,d3
+	move.w	d0,d4
+	move.w	d0,d5
+
+	andi.w	#$0700,d0
+	lsr.w	#7,d0
+	rol.w	#5,d3
+	andi.w	#$0001,d3
+	or.w	d3,d0
+
+	andi.w	#$0070,d1
+	lsr.w	#3,d1
+	rol.b	#1,d4
+	andi.w	#$0001,d4
+	or.w	d4,d1
+	
+	andi.w	#$0007,d2
+	add.w	d2,d2
+	rol.b	#5,d5
+	andi.w	#$0001,d5
+	or.w	d5,d2
+
+	move.b	d0,(a0)+
+	move.b	d1,(a0)+
+	move.b	d2,(a0)+
+
+	dbra	d7,.preloop
+
+; 2: make faded versions..
+	lea	dungeonfadepal,a0
+	moveq	#16-1,d7
+
+.lowloop:
+	lea	.pal_tbl(pc),a1
+	moveq	#16-1,d6
+
+.lowentryloop:
+	moveq	#0,d0
+	moveq	#0,d1
+	moveq	#0,d2
+
+; do the actual fade..
+	move.b	(a1)+,d0
+	sub.b	d7,d0
+	bpl.s	.r_ok
+	moveq	#0,d0
+.r_ok:	move.b	(a1)+,d1
+	sub.b	d7,d1
+	bpl.s	.g_ok
+	moveq	#0,d1
+.g_ok:	move.b	(a1)+,d2
+	sub.b	d7,d2
+	bpl.s	.b_ok
+	moveq	#0,d2
+.b_ok:
+
+; Put in rorred format, weird STe crap..
+	lsr.w	d0
+	bcc.s	.rok
+	ori.w	#%1000,d0
+.rok:	lsr.w	d1
+	bcc.s	.gok
+	ori.w	#%1000,d1
+.gok:	lsr.w	d2
+	bcc.s	.bok
+	ori.w	#%1000,d2
+.bok:	
+
+; Pack rgb, and store..
+	lsl.w	#8,d0
+	lsl.w	#4,d1
+	or.w	d0,d2
+	or.w	d1,d2
+	move.w	d2,(a0)+
+	dbf	d6,.lowentryloop
+
+	dbf	d7,.lowloop
+	rts
+
+.pal_tbl:
+	DS.B	3*16
+
+; Unrolling a loop a few thousand times.
+INIT_C2PINSTRUCTIONS:
+	lea	temp_buf+c2pinst,a0
+	moveq	#frameheight-1,d7
+	moveq	#0,d0
+
+	IFNE	RASTERS
+
+.c2pyloop:
+	moveq	#9-1,d6
+
+.c2pxloop:
+	lea	c2p3loopstart,a1
+	movea.l	a0,a3
+	moveq	#c2p3loopsize/2-1,d5
+.c2pinstrloop:
+	move.w	(a1)+,(a0)+
+	dbf	d5,.c2pinstrloop
+	add.w	d0,c2p3offset1-c2p3loopstart(a3)
+	add.w	d0,c2p3offset2-c2p3loopstart(a3)
+	add.w	d0,c2p3offset2a-c2p3loopstart(a3)
+	add.w	d0,c2p3offset3-c2p3loopstart(a3)
+	add.w	d0,c2p3offset4-c2p3loopstart(a3)
+	add.w	d0,c2p3offset4a-c2p3loopstart(a3)
+	addi.w	#16,d0
+	dbf	d6,.c2pxloop
+
+	lea	c2p3aloopstart,a1
+	movea.l	a0,a3
+	moveq	#c2p3aloopsize/2-1,d5
+.c2p2instrloop:
+	move.w	(a1)+,(a0)+
+	dbf	d5,.c2p2instrloop
+	add.w	d0,c2p3aoffset1-c2p3aloopstart(a3)
+	add.w	d0,c2p3aoffset2-c2p3aloopstart(a3)
+	add.w	d0,c2p3aoffset2a-c2p3aloopstart(a3)
+	addi.w	#160+16,d0
+	dbf	d7,.c2pyloop
+
+	ELSE
+
+.c2pyloop:
+	moveq	#9-1,d6
+
+.c2pxloop:
+	lea	c2ploopstart,a1
+	movea.l	a0,a3
+	moveq	#c2ploopsize/2-1,d5
+.c2pinstrloop:
+	move.w	(a1)+,(a0)+
+	dbf	d5,.c2pinstrloop
+	add.w	d0,c2poffset1-c2ploopstart(a3)
+	add.w	d0,c2poffset2-c2ploopstart(a3)
+	add.w	d0,c2poffset3-c2ploopstart(a3)
+	add.w	d0,c2poffset4-c2ploopstart(a3)
+	addi.w	#16,d0
+	dbf	d6,.c2pxloop
+
+	lea	c2p2loopstart,a1
+	movea.l	a0,a3
+	moveq	#c2p2loopsize/2-1,d5
+.c2p2instrloop:
+	move.w	(a1)+,(a0)+
+	dbf	d5,.c2p2instrloop
+	add.w	d0,c2p2offset1-c2p2loopstart(a3)
+	add.w	d0,c2p2offset2-c2p2loopstart(a3)
+	addi.w	#160+16,d0
+	dbf	d7,.c2pyloop
+
+	ENDC
+
+	IFNE	DOUBLING
+
+	IFNE	RASTERS
+
+	move.w	#$2248,(a0)+			* "movea.l a0,a1"
+	move.l	#$41e800a0,(a0)+		* "lea     160(a0),a0"
+	moveq	#0,d0
+	moveq	#frameheight-1,d7
+
+.doubleyloop:
+	moveq	#6-1,d6
+
+.dblchunkloop:
+	moveq	#dblloopsize/2-1,d5
+	lea	dblloopstart,a1
+	movea.l	a0,a3
+
+.doublecopyloop:
+	move.w	(a1)+,(a0)+
+	dbf	d5,.doublecopyloop
+
+	add.w	d0,dbl1offset-dblloopstart(a3)
+	add.w	d0,dbl2offset-dblloopstart(a3)
+	add.w	d0,dbl3offset-dblloopstart(a3)
+	addi.w	#24,d0
+	dbf	d6,.dblchunkloop
+
+	lea	dblaloopstart,a1
+	movea.l	a0,a3
+	moveq	#dblaloopsize/2-1,d5
+
+.dblacopyloop:
+	move.w	(a1)+,(a0)+
+	dbf	d5,.dblacopyloop
+
+	add.w	d0,dblaoffset-dblaloopstart(a3)
+
+	addi.w	#160+16,d0
+	dbf	d7,.doubleyloop
+
+	ELSE
+
+	move.w	#$2248,(a0)+			* "movea.l a0,a1"
+	move.l	#$41e800a0,(a0)+		* "lea     160(a0),a0"
+	moveq	#0,d0
+	moveq	#frameheight-1,d7
+.doubleyloop:
+	lea	doubleloopstart,a1
+	movea.l	a0,a3
+
+	moveq	#doubleloopsize/2-1,d6
+.doublecopyloop:
+	move.w	(a1)+,(a0)+
+	dbf	d6,.doublecopyloop
+
+	add.w	d0,double1offset-doubleloopstart(a3)
+	add.w	d0,double2offset-doubleloopstart(a3)
+	add.w	d0,double3offset-doubleloopstart(a3)
+	addi.w	#320,d0
+	dbf	d7,.doubleyloop
+
+	ENDC
+
+	ENDC
+
+	move.w	#$4e75,(a0)+			* "rts"
+	rts
+
+* Hardcoded textured wallsclices from the dungeons of hell! =)
+* Hardcore kinky cycle-sexing in the dungeons of hell!
+* Routines 'whipped' out in strictly disciplined and streamlined order.
+CREATE_WALLROUTINES:
+	lea	temp_buf+wallrouts,a0
+	lea	temp_buf+wallroutadrs,a1
+	moveq	#0,d7
+	;moveq	#maxslicelen-1,d7		* max slicelength and number of routines.
+
+.loop:	move.l	a0,(a1)+			* Store address of new routine.
+
+* if (texturelen/slicelen < 1.0) then fast (an)+ loop
+* else default d(an) offset loop
+	move.l	#texturelen<<8,d1
+	move.w	d7,d0
+	addq.w	#1,d0
+	divu.w	d0,d1
+	andi.l	#$0000ffff,d1
+	cmpi.w	#64,d7
+	blt	.make_offset_loop
+
+; height > 64, we write every read pixel at least once.
+	moveq	#0,d2
+	move.w	d7,d6
+	move.w	d6,d0
+	subi.w	#frameheight,d0
+	bpl.s	.addq_clipped
+	neg.w	d0
+;	addq.w	#1,d0
+	lsr.w	#1,d0
+	mulu.w	#framewidth,d0
+	move.w	d0,d3
+	bra.s	.end_addqclipped
+.addq_clipped:
+	move.w	d6,d5
+	ext.l	d5
+	lsl.l	#8,d5
+	divu.w	#texturelen,d5
+	moveq	#frameheight-1,d6
+	moveq	#0,d3
+	lsr.w	#1,d0
+	mulu.w	d1,d0
+	addi.w	#$0080,d0
+	lsr.l	#8,d0
+	beq.s	.end_addqclipped
+	move.w	#$4BED,(a0)+			* "LEA D(A5),A5"
+	move.w	d0,(a0)+
+.end_addqclipped:
+
+	lsl.l	#8,d1
+	cmpi.w	#128,d7
+	bge.s	.make_postinc
+
+; 64<height<128, don't use regs just copy same pixel twice..
+	move.w	#$1D5D,(a0)+			; "move.b (a5)+,x(a6)"
+	move.w	d3,(a0)+
+	subq.w	#1,d6
+.post_inc_loop:
+	addi.w	#framewidth,d3
+	add.w	d1,d2
+	bcs.s	.proceed
+	move.w	#$1D55,(a0)+			; "move.b (a5),x(a6)"
+	bra.s	.offset
+.proceed:
+	move.w	#$1D5D,(a0)+			; "move.b (a5)+,x(a6)"
+.offset:move.w	d3,(a0)+
+	dbf	d6,.post_inc_loop
+
+	move.w	#$4e75,(a0)+			* "RTS"
+	addq.w	#1,d7
+	cmpi.w	#maxslicelen,d7
+	blt	.loop
+	rts
+
+; height >=128, put pixels into reg then write that multiple times..
+; uses post increment addressing for reads.
+.make_postinc:
+	move.w	#$101D,(a0)+			* "MOVE.B (A5)+,D0"
+
+.pixelloop:
+	add.w	d1,d2
+	bcc.s	.skip_fetch
+	move.w	#$101D,(a0)+			* "MOVE.B (A5)+,D0"
+.skip_fetch:
+	move.w	#$1D40,(a0)+			* "MOVE.B D0,D(A6)"
+	move.w	d3,(a0)+
+	addi.w	#framewidth,d3
+	dbra	d6,.pixelloop
+
+	move.w	#$4e75,(a0)+			* "RTS"
+	addq.w	#1,d7
+	cmpi.w	#maxslicelen,d7
+	blt	.loop
+	rts
+
+.make_offset_loop:
+	move.w	d7,d6
+	move.w	d6,d0
+	subi.w	#frameheight,d0
+	bpl.s	.offset_clipped
+	neg.w	d0
+	lsr.w	#1,d0
+	mulu.w	#framewidth,d0
+	move.w	d0,d3
+	moveq	#0,d2
+	bra.s	.end_offsetclipped
+.offset_clipped:
+	moveq	#frameheight-1,d6
+	moveq	#0,d3
+	lsr.w	#1,d0
+	moveq	#0,d2
+	move.w	d0,d2
+	swap	d2
+.end_offsetclipped:
+	lsl.l	#8,d1
+; between 48 and 64 there's a better solution..
+	cmpi.w	#48,d7
+	bgt.s	.make_opt_pinc_loop
+
+.offsetpixelloop:
+	move.l	d2,d0
+	swap	d0
+	move.w	#$1D6D,(a0)+			* "MOVE.B D(A1),D(A6)"
+	move.w	d0,(a0)+
+	move.w	d3,(a0)+
+	addi.w	#framewidth,d3
+	add.l	d1,d2
+	dbra	d6,.offsetpixelloop
+
+	move.w	#$4e75,(a0)+			* "RTS"
+	addq.w	#1,d7
+	cmpi.w	#maxslicelen,d7
+	blt	.loop
+	rts
+
+.make_opt_pinc_loop:
+.pinc_loop:
+	move.w	#$1D5D,(a0)+			; move.b (a1)+,x(a6)
+	move.w	d3,(a0)+
+	add.w	d1,d2
+	bcc.s	.skip
+	move.w	#$524D,(a0)+			; addq.w #1,a5
+.skip:	addi.w	#framewidth,d3
+	dbf	d6,.pinc_loop
+
+	move.w	#$4e75,(a0)+			* "RTS"
+	addq.w	#1,d7
+	cmpi.w	#maxslicelen,d7
+	blt	.loop
+	rts
+
+* Clear chunkypixel-buffer
+CLEAR_CHUNKYBUF:
+	IFNE	1
+	lea	temp_buf+chunkybuf+framesize,a0
+	moveq.l	#$00000000,d0
+	move.l	d0,d1
+	move.l	d0,d2
+	move.l	d0,d3
+	move.l	d0,d4
+	move.l	d0,d5
+	move.l	d0,d6
+	move.l	d0,d7
+	movea.l	d0,a1
+	movea.l	d0,a2
+	movea.l	d0,a3
+	movea.l	d0,a4
+	movea.l	d0,a5
+	movea.l	d0,a6
+	REPT	(framesize)/56
+	movem.l	d0-d7/a1-a6,-(a0)	
+	ENDR
+	REPT	(framesize-(framesize/56)*56)/4
+	move.l	d0,-(a0)
+	ENDR
+	ENDC
+	rts
+
+generate_3bpl_tab:
+	LEA	temp_buf+c2plookup,A6
+	LEA	TAB1(pc),A0
+	MOVEQ	#0,D3
+
+.GENLOOP1:
+	LEA	TAB3(pc),A2
+	MOVEQ	#0,D4
+
+.GENLOOP2:
+	moveq	#4-1,d7
+
+.GENLOOP2a:
+	MOVEQ	#0,D5
+	LEA	TAB2(pc),A1
+
+.GENLOOP3:
+	MOVEQ	#$8-1,D6
+	LEA	TAB4(pc),A3
+	MOVE.L  (A0),D2
+	OR.L	(A1),D2
+	OR.L	(A2),D2
+
+.GENLOOP4:
+	MOVE.L	D2,D0
+	OR.L	(A3)+,D0
+	MOVE.L  D0,(A6)+
+	DBF	D6,.GENLOOP4
+
+	ADDQ	#4,A1
+	ADDQ.W  #4,D5
+	CMP.B   #$20,D5
+	BNE.S   .GENLOOP3
+
+	dbf	d7,.GENLOOP2a
+
+	ADDQ	#4,A2
+	ADDQ.W  #4,D4
+	CMP.B   #$20,D4
+	BNE.S   .GENLOOP2
+
+	ADDQ	#4,A0
+	ADDQ.W  #4,D3
+	CMP.B   #$20,D3
+	BNE.S   .GENLOOP1
+	rts
+
+GENTAB:	LEA	temp_buf+c2plookup,A6
+	LEA	TAB1(pc),A0
+	MOVEQ	#0,D3
+
+GENLOOP1:
+	LEA	TAB3(pc),A2
+	MOVEQ	#0,D4
+
+GENLOOP2:
+	MOVEQ	#0,D5
+	LEA	TAB2(pc),A1
+
+GENLOOP3:
+	MOVEQ	#$10-1,D6
+	LEA	TAB4(pc),A3
+	MOVE.L  (A0),D2
+	OR.L	(A1),D2
+	OR.L	(A2),D2
+
+GENLOOP4:
+	MOVE.L	D2,D0
+	OR.L	(A3)+,D0
+	MOVE.L  D0,(A6)+
+	DBF	D6,GENLOOP4
+
+	ADDQ	#4,A1
+	ADDQ.W  #4,D5
+	CMP.B   #$40,D5
+	BNE.S   GENLOOP3
+
+	ADDQ	#4,A2
+	ADDQ.W  #4,D4
+	CMP.B   #$40,D4
+	BNE.S   GENLOOP2
+
+	ADDQ	#4,A0
+	ADDQ.W  #4,D3
+	CMP.B   #$40,D3
+	BNE.S   GENLOOP1
+
+	RTS
+
+TAB1:
+                DC.B $00,$00,$00,$00
+                DC.B $C0,$00,$00,$00
+                DC.B $00,$C0,$00,$00
+                DC.B $C0,$C0,$00,$00
+                DC.B $00,$00,$C0,$00
+                DC.B $C0,$00,$C0,$00
+                DC.B $00,$C0,$C0,$00
+                DC.B $C0,$C0,$C0,$00
+                DC.B $00,$00,$00,$C0
+                DC.B $C0,$00,$00,$C0
+                DC.B $00,$C0,$00,$C0
+                DC.B $C0,$C0,$00,$C0
+                DC.B $00,$00,$C0,$C0
+                DC.B $C0,$00,$C0,$C0
+                DC.B $00,$C0,$C0,$C0
+                DC.B $C0,$C0,$C0,$C0
+TAB2:
+                DC.B $00,$00,$00,$00
+                DC.B $30,$00,$00,$00
+                DC.B $00,$30,$00,$00
+                DC.B $30,$30,$00,$00
+                DC.B $00,$00,$30,$00
+                DC.B $30,$00,$30,$00
+                DC.B $00,$30,$30,$00
+                DC.B $30,$30,$30,$00
+                DC.B $00,$00,$00,$30
+                DC.B $30,$00,$00,$30
+                DC.B $00,$30,$00,$30
+                DC.B $30,$30,$00,$30
+                DC.B $00,$00,$30,$30
+                DC.B $30,$00,$30,$30
+                DC.B $00,$30,$30,$30
+                DC.B $30,$30,$30,$30
+TAB3:
+                DC.B $00,$00,$00,$00
+                DC.B $0C,$00,$00,$00
+                DC.B $00,$0C,$00,$00
+                DC.B $0C,$0C,$00,$00
+                DC.B $00,$00,$0C,$00
+                DC.B $0C,$00,$0C,$00
+                DC.B $00,$0C,$0C,$00
+                DC.B $0C,$0C,$0C,$00
+                DC.B $00,$00,$00,$0C
+                DC.B $0C,$00,$00,$0C
+                DC.B $00,$0C,$00,$0C
+                DC.B $0C,$0C,$00,$0C
+                DC.B $00,$00,$0C,$0C
+                DC.B $0C,$00,$0C,$0C
+                DC.B $00,$0C,$0C,$0C
+                DC.B $0C,$0C,$0C,$0C
+TAB4:
+                DC.B $00,$00,$00,$00
+                DC.B $03,$00,$00,$00
+                DC.B $00,$03,$00,$00
+                DC.B $03,$03,$00,$00
+                DC.B $00,$00,$03,$00
+                DC.B $03,$00,$03,$00
+                DC.B $00,$03,$03,$00
+                DC.B $03,$03,$03,$00
+                DC.B $00,$00,$00,$03
+                DC.B $03,$00,$00,$03
+                DC.B $00,$03,$00,$03
+                DC.B $03,$03,$00,$03
+                DC.B $00,$00,$03,$03
+                DC.B $03,$00,$03,$03
+                DC.B $00,$03,$03,$03
+                DC.B $03,$03,$03,$03
+
+; INPUT:
+; a1: frame (160 columns)
+; OUTPUT:
+; a1: next frame
+PLOT_DUNGEON:
+;	addq	#4*2,a1
+
+	lea	dungwall_dat,a2
+	lea	temp_buf+wallroutadrs,a3
+	lea	temp_buf+chunkybuf,a6
+	move.w	#152-1,d7
+	moveq	#48,d2
+
+.columnloop:
+	moveq	#0,d0
+	moveq	#0,d1
+	move.b	(a1)+,d1
+	move.b	(a1)+,d0
+	beq.s	.next
+	lsl.w	#4,d1
+	lea	(a2,d1.w),a5
+	cmp.w	d2,d0				; If high enough..
+	blt.s	.oki2
+	adda.w	#$3000,a5			; ..set to bright texture.
+	bra.s	.oki
+.oki2:	move.w	d0,d1
+	andi.w	#$0030,d1
+	lsl.w	#8,d1
+	adda.w	d1,a5
+.oki:	add.w	d0,d0
+	add.w	d0,d0
+	movea.l	(a3,d0.w),a4
+	jsr	(a4)
+.next:	addq	#1,a6				; Next column..
+	dbf	d7,.columnloop
+
+;	addq	#4*2,a1
+	rts
+
+******** OBJECT DATA ********
+
+	DATA
+
+; 4bpl
+;
+; 00.00llll0000llll00<<4
+; =
+; ll.ll0000llll000000
+; 
+; ll.ll0000llll000000
+; 00.00rrrr0000rrrr00
+; ------------------- +
+; ll.llrrrrllllrrrr00
+
+c2ploopstart:	MOVEm.W	(A1)+,D0-d7		; 44
+                LSL.l	#4,D0			; 16
+                OR.W	d1,D0			;  4
+                MOVE.L	0(A2,D0.l),D0		; 18
+c2poffset1:	=	*+2
+		MOVEP.L	D0,0(A0)		; 24
+                LSL.l	#4,D2			; 16
+                OR.W	d3,D2			;  4
+                MOVE.L	0(A2,D2.l),D0		; 18
+c2poffset2:	=	*+2
+		MOVEP.L	D0,1(A0)		; 24
+                LSL.l	#4,D4			; 16
+                OR.W	d5,D4			;  4
+                MOVE.L	0(A2,D4.l),D0		; 18
+c2poffset3:	=	*+2
+		MOVEP.L	D0,8(A0)		; 24
+                LSL.l	#4,D6			; 16
+                OR.W	d7,D6			;  4
+                MOVE.L	0(A2,D6.l),D0		; 18
+c2poffset4:	=	*+2
+		MOVEP.L	D0,9(A0)		; 24
+						; -- +
+						;292
+c2ploopend:
+
+c2ploopsize:=	c2ploopend-c2ploopstart
+
+c2p2loopstart:	MOVEm.W	(A1)+,D0-d3		; 28
+                LSL.L   #4,D0			; 16
+                OR.W    d1,D0			;  4
+                MOVE.L  0(A2,D0.l),D0		; 18
+c2p2offset1:	=	*+2
+		MOVEP.L D0,0(A0)		; 24
+                LSL.L   #4,D2			; 16
+                OR.W    d3,D2			;  4
+                MOVE.L  0(A2,D2.l),D0		; 18
+c2p2offset2:	=	*+2
+		MOVEP.L D0,1(A0)		; 24
+						; -- +
+						;152
+c2p2loopend:
+
+c2p2loopsize:=	c2p2loopend-c2p2loopstart
+
+; 3bpl
+;
+; 000lll00000lll00<<3
+; =
+; lll00000lll00000
+; 
+; lll00000lll00000
+; 000rrr00000rrr00
+; ---------------- +
+; lllrrr00lllrrr00
+
+c2p3loopstart:	movem.w	(a1)+,d0-d7		; 44
+
+		lsl.w	#3,d0			; 12
+		or.w	d1,d0			;  4
+		move.w	(a2,d0.l),d1		; 14
+c2p3offset1:	=	*+2
+		movep.w	d1,0(a0)		; 16, 0
+		move.w	2(a2,d0.l),d0		; 12
+
+		lsl.w	#3,d2			; 12
+		or.w	d3,d2			;  4
+		move.w	(a2,d2.l),d1		; 14
+c2p3offset2:	=	*+2
+		movep.w	d1,1(a0)		; 16, 1
+		move.b	2(a2,d2.l),d0		; 12
+
+c2p3offset2a:	=	*+2
+		move.w	d0,4(a0)		; 12, 4
+
+		lsl.w	#3,d4			; 12
+		or.w	d5,d4			;  4
+		move.w	(a2,d4.l),d0		; 14
+c2p3offset3:	=	*+2
+		movep.w	d0,8(a0)		; 16, 8
+		move.w	2(a2,d4.l),d0		; 12
+
+		lsl.w	#3,d6			; 12
+		or.w	d7,d6			;  4
+		move.w	(a2,d6.l),d1		; 14
+c2p3offset4:	=	*+2
+		movep.w	d1,9(a0)		; 16, 9
+		move.b	2(a2,d6.l),d0		; 12
+
+c2p3offset4a:	=	*+2
+		move.w	d0,12(a0)		; 12, 12
+						; -- +
+						;300
+c2p3loopend:
+
+c2p3loopsize:=	c2p3loopend-c2p3loopstart
+
+c2p3aloopstart:	movem.w	(a1)+,d0-d3		; 28
+
+		lsl.w	#3,d0			; 12
+		or.w	d1,d0			;  4
+		move.w	(a2,d0.l),d1		; 14
+c2p3aoffset1:	=	*+2
+		movep.w	d1,0(a0)		; 16
+		move.w	2(a2,d0.l),d0		; 12
+
+		lsl.w	#3,d2			; 12
+		or.w	d3,d2			;  4
+		move.w	(a2,d2.l),d1		; 14
+c2p3aoffset2:	=	*+2
+		movep.w	d1,1(a0)		; 16
+		move.b	2(a2,d2.l),d0		; 12
+
+c2p3aoffset2a:	=	*+2
+		move.w	d0,4(a0)		; 12
+						; -- +
+						;156
+c2p3aloopend:
+
+c2p3aloopsize:=	c2p3aloopend-c2p3aloopstart
+
+; lllrrrlllrrr000, 12+3=15bit index... ofcourse impossible to supply this format.. arghh!
+
+		lsl.w	#3,d0			; 12
+		or.w	d1,d0			;  4
+		move.l	(a1,d0.l),d1		; 18
+		move.w	2(a1,d0.l),d0		; 14
+		lsl.w	#3,d2			; 12
+		or.w	d3,d2			;  4
+		or.l	(a1,d2.l),d1		; 18
+		move.l	d1,(a0)+		; 12
+		move.b	2(a1,d2.l),d0		; 14
+		move.w	d0,(a0)+		;  8
+		addq	#2,a0			;  8
+						;--- +
+						;124
+
+
+; 124*2+44=248+44=292 (exactly the same as 4bpl!!)
+
+doubleloopstart:
+		movem.l	(a1)+,d0-d7/a2-a6	* 112
+double1offset:	=	*+4
+		movem.l	d0-d7/a2-a6,0(a0)	* 116
+		movem.l	(a1)+,d0-d7/a2-a6	* 112
+double2offset:	=	*+4
+		movem.l	d0-d7/a2-a6,52(a0)	* 116
+		movem.l	(a1)+,d0-d7/a2-a5	* 104
+double3offset:	=	*+4
+		movem.l	d0-d7/a2-a5,104(a0)	* 108
+		lea	168(a1),a1		*   8
+*						 ---- +
+*                                                 676
+* 676 cycles/scanline * 90 scanlines =  60840 cycles
+
+doubleloopend:
+doubleloopsize:=doubleloopend-doubleloopstart
+
+		move.l	(a1)+,(a0)+		; 20
+		move.w	(a1)+,(a0)+		; 12
+		addq	#2,a1			;  8
+		addq	#2,a0			;  8
+						; -- +
+						; 48
+; 48*19=912 cycles/scanline * 90 scanlines = 82080
+
+		movem.l	(a1)+,d0-7		; 12+8*4=44
+		move.l	d0,(a0)+		;        12
+		swap	d1			;         4
+		move.w	d1,(a0)+		;         8
+		addq	#2,a0			;         8
+		move.l	d2,(a0)+		;        12
+		swap	d3			;         4
+		move.w	d3,(a0)+		;         8
+		addq	#2,a0			;         8
+		move.l	d4,(a0)+		;        12
+		swap	d5			;         4
+		move.w	d5,(a0)+		;         8
+		addq	#2,a0			;         8
+		move.l	d6,(a0)+		;        12
+		swap	d7			;         4
+		move.w	d7,(a0)+		;         8
+		addq	#2,a0			;         8
+; 4*(44+32*4)+(32+32*3)=688+128=816 cycles/scanline
+
+		movem.w	(a1)+,d0-7		; 12+4*4=28
+		movem.w	d0-2,0(a0)		; 16+3*4=28
+		movem.w	d4-6,8(a0)		; 16+3*4=28
+
+		movem.w	(a1)+,d0-3		; 12+3*4=28
+		movem.w	d0-2,0(a0)		; 16+3*4=28
+
+; 9*(28+2*28)+28+28=812 cycles/scanline
+
+dblloopstart:	movem.w	(a1)+,d0-7/a2-a5	; 12+7*4=44
+dbl1offset:=	*+4
+		movem.w	d0-2,0(a0)		; 16+3*4=28
+dbl2offset:=	*+4
+		movem.w	d4-6,8(a0)		; 16+3*4=28
+dbl3offset:=	*+4
+		movem.w	a2-4,16(a0)		; 16+3*4=28
+dblloopend:
+dblloopsize:=	dblloopend-dblloopstart
+
+dblaloopstart:	movem.w	(a1),d0-2		; 12+3*4=28
+		lea	160+16(a1),a1
+dblaoffset:=	*+4
+		movem.w	d0-2,0(a0)		; 16+3*4=28
+dblaloopend:
+dblaloopsize:=	dblaloopend-dblaloopstart
+
+; 6*(40+3*28)+24+28=804 cycles/scanline
+
+;		movem.l	(a1)+,d0-7		; 12+8*8=76
+;		movem.w	(a2)+,d1/d3/d5/d7	; 12+4*4=28
+;dbl1offset:=	*+4
+;		movem.l	d0-7,0(a0)		; 16+8*8=80
+;
+;		movem.l	(a1)+,d0-5		; 12+6*8=60
+;		movem.w	(a2)+,d1/d3/d5		; 12+3*4=24
+;dbl2offset:=	*+4
+;		movem.l	d0-6,0(a0)		; 16+6*8=64
+;
+;
+; 4*(76+28+80)+(60+24+64) = 4*184 + 148 = 884
+
+dungwall_dat:
+	INCBIN	DUNG2025.RAW
+	INCBIN	DUNG2050.RAW
+	INCBIN	DUNG2075.RAW
+	INCBIN	DUNG2100.RAW
+dungwallpal_tbl:
+;	INCBIN	RED.PAL
+	INCBIN	BLUE.PAL
+frames:	INCBIN	FRAMES2.DAT			; precalc anim (slices)
+sky:	INCBIN	SKYBW.IFF			; 1bpl sky piccy
+
+coltabadr:
+	DC.L	frames+2
+frames_done:
+	DC.W	0
+
+******** OBJECT RESERVES ********
+
+	BSS
+
+dungeonfadepal:
+	DS.W	16*16
+fadepaladr:
+	DS.L	1
+
+******** END OF DEMO-EFFECT OBJECT ********

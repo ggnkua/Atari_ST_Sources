@@ -1,0 +1,1949 @@
+* The dungeons of hell.
+* All hardcoded and well.
+
+* Blech.. Rasters look shakey due to the nature of the beasty. Costly
+* instructions like movem are required sometimes, but they can't be
+* interrupted and hence they cause lower interrupt responsiveness!
+
+; Revised in 2003. Now a byte c2p, an optimised version of the one by
+; ultra/cream. The wallmappers are now considerably faster and take up less
+; space. It's well optimised I have to say, not much more to improve.
+;
+; the raycaster had it's share of optimisations..
+; it can be a little tighter, but it's risky..
+
+
+******** OBJECT EQUS ********
+
+RASTERS:	=	0
+
+manualcontrol:	=	0
+sinecontrol:	=	1
+trajectcontrol:	=	2
+controltype:	=	trajectcontrol
+
+maxslicelen:	=	200 128
+texturelen:	=	64
+
+dungeonxsize:	=	16
+dungeonysize:	=	16
+
+		RSRESET
+c2plookup:	RS.L	1<<16
+c2pinst:	RS.B	64000			* Rough guess...
+chunkybuf:	RS.B	160*100
+wallroutadrs:	RS.L	maxslicelen
+wallrouts:	RS.W	1<<16			* Rough guess as well!
+tantbl:		RS.W	sintbllen
+itantbl:	RS.W	sintbllen
+isinetbl:	RS.L	sintbllen*2		; 1/sin,1/cos,.. (doubled)
+xysteptbl:	RS.L	sintbllen*2		; x,y,x... (doubled)
+costable:	RS.W	sintbllen*2		; doubled
+invtable:	RS.W	dungeonxsize<<8
+
+		RSRESET
+trajecttime:	RS.L	1
+trajectx:	RS.W	1
+trajecty:	RS.W	1
+trajectangle:	RS.W	1
+trajentrysize:	RS.B	0
+
+******** OBJECT TABLE ********
+
+* Must be first in object!!
+dungeon_tbl:
+	DC.L	DUNGEONMAINLOOP
+	DC.L	INIT_DUNGEON
+	DC.L	SET_DUNGEONRES
+* Add more addresses here..
+	DC.L	0
+
+******** RESOLUTION SETTING ROUTINE ********
+
+SET_DUNGEONRES:
+	move.l	#notimerb,pal_irq
+
+	bsr	CALC_DUNGEONPAL
+
+	bsr	GENTAB
+	bsr	INIT_C2PINSTRUCTIONS
+	bsr	CREATE_WALLROUTINES
+	bsr	INIT_TANTABLES
+	bsr	INIT_ISINCOSTABLES
+	bsr	CREATE_COSTABLE
+	bsr	CALC_INVTABLE
+
+	move.w	#$b00,playerx
+	move.w	#$780,playery
+	move.w	#674,playerarc
+;	move.w	#$b80,playerx
+;	move.w	#$b00,playery
+;	move.w	#864,playerarc
+
+	clr.w	trajectstep
+	move.l	$466.w,start466
+
+	IFEQ	testmode 
+	move.w	$0468.w,d0
+.ck466:	cmp.w	$0468.w,d0
+	beq.s	.ck466
+
+	movem.l	dungwallpal_tbl,d0-d7
+	movem.l	d0-d7,$ffff8240.w
+
+	bsr	TRIGGER_DUNGEONHBL
+
+	cmpi.w	#falcon,computer
+	beq.s	.falc
+	clr.b	$ffff8260.w
+	rts
+
+.falc:	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga
+	cmpi.w	#vga100,d0
+	beq.s	.vga
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+* Unknown monitormode..
+	rts
+.vga:	lea	stlowvga_fv,a0
+	bsr	CHANGE_FVFAST
+	rts
+.rgb50:	
+        MOVE.L   #$3E0032,$FFFF8282.W
+        MOVE.L   #$9023F,$FFFF8286.W
+        MOVE.L   #$1C0035,$FFFF828A.W
+        MOVE.L   #$2710265,$FFFF82A2.W
+        MOVE.L   #$2F006F,$FFFF82A6.W
+        MOVE.L   #$1FF026B,$FFFF82AA.W
+        MOVE.W   #$200,$FFFF820A.W
+        MOVE.W   #$81,$FFFF82C0.W
+        CLR.W    $FFFF8266.W
+        MOVE.B   #$0,$FFFF8260.W
+        MOVE.W   #$0,$FFFF82C2.W
+        MOVE.W   #$50,$FFFF8210.W
+	ENDC
+	rts
+
+******** INIT SUBROUTINE ********
+
+INIT_DUNGEON:
+	rts
+
+******** MAINLOOP SUBROUTINE ********
+
+DUNGEONMAINLOOP:
+	move.w	$468.w,.old468
+
+	move.l	frmcnt,d0
+	cmp.l	lastfrmcnt,d0
+	bne.s	.res_done
+	bsr	SET_DUNGEONRES
+.res_done:
+
+	bsr	CLEAR_CHUNKYBUF
+	bsr	PLOT_DUNGEON
+	lea	temp_buf+c2plookup,a2
+	lea	temp_buf+chunkybuf,a1
+	movea.l	scr,a0
+	jsr	temp_buf+c2pinst
+
+	IFEQ	controltype-sinecontrol
+	move.w	$468.w,playerarc
+	lea	sine_tbl,a0
+	move.w	$468.w,d0
+	move.w	d0,d1
+	mulu.w	#3,d0
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	Get_Sin	a0,d0,d0
+	Get_Cos	a0,d1,d1
+	muls.w	#$d00,d0
+	muls.w	#$d00,d1
+	swap	d0
+	swap	d1
+	addi.w	#8<<8,d0
+	addi.w	#8<<8,d1
+	move.w	d0,playerx
+	move.w	d1,playery
+	ENDC
+	IFEQ	controltype-manualcontrol
+	move.b	$fffffc02.w,d0
+.up:	cmpi.b	#$48,d0
+	bne.s	.down
+	move.w	playerarc,d0
+	Do_SinModulo	d0
+	lea	sine_tbl,a0
+	Get_SinCos	a0,d0,d0,d1
+	moveq	#10,d2
+	asr.w	d2,d0
+	asr.w	d2,d1
+	add.w	d0,playerx
+	sub.w	d1,playery
+	bra.s	.end
+.down:	cmpi.b	#$50,d0
+	bne.s	.left
+	move.w	playerarc,d0
+	Do_SinModulo	d0
+	lea	sine_tbl,a0
+	Get_SinCos	a0,d0,d0,d1
+	moveq	#10,d2
+	asr.w	d2,d0
+	asr.w	d2,d1
+	sub.w	d0,playerx
+	add.w	d1,playery
+	bra.s	.end
+.left:	cmpi.b	#$4b,d0
+	bne.s	.right
+	subi.w	#16,playerarc
+	bra.s	.end
+.right:	cmpi.b	#$4d,d0
+	bne.s	.end
+	addi.w	#16,playerarc
+.end:
+	ENDC
+	IFEQ	controltype-trajectcontrol
+	lea	dungeontraject_tbl,a0
+	move.w	(a0)+,d1
+	move.w	trajectstep,d2
+	cmp.w	d1,d2
+	bhs	.end
+	mulu.w	#trajentrysize,d2
+	adda.l	d2,a0
+	move.l	$466.w,d0
+	sub.l	start466,d0
+	move.l	trajentrysize(a0),d3
+	move.l	(a0),d4
+.test_nextentry:
+	cmp.l	d3,d0
+	blt.s	.not_nextentry
+	addq.w	#1,trajectstep
+	lea	trajentrysize(a0),a0
+	move.l	trajentrysize(a0),d3
+	move.l	(a0),d4
+	bra.s	.test_nextentry
+.not_nextentry:
+	move.l	d0,d6
+	sub.l	d4,d6				* Time elapsed since last event.
+	sub.l	d4,d3				* Interval between events.
+	bne.s	.div
+	moveq	#0,d6
+	beq.s	.interpolate
+.div:	swap	d6
+	divu.w	d3,d6				* Elapsed fraction of interval.
+	lsr.w	#1,d6
+.interpolate:
+	move.w	trajectx(a0),d0
+	move.w	trajecty(a0),d1
+	move.w	trajectangle(a0),d2
+	move.w	trajentrysize+trajectx(a0),d3
+	move.w	trajentrysize+trajecty(a0),d4
+	move.w	trajentrysize+trajectangle(a0),d5
+	sub.w	d0,d3
+	sub.w	d1,d4
+	sub.w	d2,d5
+	muls.w	d6,d3
+	muls.w	d6,d4
+	muls.w	d6,d5
+	add.l	d3,d3
+	add.l	d4,d4
+	add.l	d5,d5
+	swap	d3
+	swap	d4
+	swap	d5
+	add.w	d3,d0
+	add.w	d4,d1
+	add.w	d5,d2
+	move.w	d0,playerx
+	move.w	d1,playery
+	move.w	d2,playerarc
+.end:	
+	ENDC
+
+	move.w	.old468(pc),d1
+.wait:	move.w	$0468.w,d0
+	sub.w	d1,d0
+	cmpi.w	#2,d0
+	blt.s	.wait
+
+	movea.l	scr,a0
+.vblloop:
+	move.l	#$FF00FF00,(a0)+
+	move.l	#$FF00FF00,(a0)+
+	subq.w	#1,d0
+	bgt.s	.vblloop
+
+	IFEQ	testmode
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	ENDC
+	rts
+
+.old468:DS.W	1
+
+******** OBJECT SUBROUTINES ********
+
+fadedir:DC.W	0
+
+TRIGGER_DUNGEONHBL:
+	move.w	#+1,fadedir
+	move.l	#dungeonfadepal,fadepaladr
+	move.l	#INSTALL_DUNGEONHBL,pal_irq
+	rts
+
+trigger_downfade:
+	move.w	#-1,fadedir
+	rts
+
+INSTALL_DUNGEONHBL:
+	tst.w	fadedir
+	beq	.end_fade
+	bmi	.fade_out
+
+.fade_in:
+	move.w	$468.w,d0
+	move.w	d0,d1
+	andi.w	#1,d1
+	bne.s	.end_fadyy
+; colours 1..F
+	movea.l	fadepaladr,a1
+	cmpa.l	#dungeonfadepal+16*32,a1
+	bne.s	.go_on
+	clr.w	fadedir
+	bra.s	.col0
+.go_on:	lea	$FFFF8242.w,a0
+	addq	#2,a1
+	move.w	(a1)+,(a0)+
+	REPT	7
+	move.l	(a1)+,(a0)+
+	ENDR
+	move.l	a1,fadepaladr
+.end_fadyy:
+	andi.w	#3,d0
+	bne	.end_fade
+; colour 0
+.col0:	lea	hbl_col1(pc),a0
+	move.w	#$0700,d7
+.rloopi:move.w	(a0),d0
+	addi.w	#$0100,d0
+	cmp.w	d7,d0
+	ble.s	.okir
+	move.w	d7,d0
+.okir:	move.w	d0,(a0)+
+	subi.w	#$0100,d7
+	bgt.s	.rloopi
+	clr.w	d7
+.gloopi:move.w	(a0),d0
+	addi.w	#$0010,d0
+	cmp.w	d7,d0
+	ble.s	.okig
+	move.w	d7,d0
+.okig:	move.w	d0,(a0)+
+	addi.w	#$0010,d7
+	cmpi.w	#$0080,d7
+	blt.s	.gloopi
+	bra.s	.end_fade
+
+.fade_out:
+	move.w	$468.w,d0
+	andi.w	#3,d0
+	bne.s	.end_fade
+	lea	hbl_col1(pc),a0
+	moveq	#$7-1,d7
+.rloop:	move.w	(a0),d0
+	mulu.w	#$FFFF,d0
+	swap	d0
+	andi.w	#$0F00,d0
+	move.w	d0,(a0)+
+	dbf	d7,.rloop
+	moveq	#$7-1,d7
+.gloop:	move.w	(a0),d0
+	mulu.w	#$FFFF,d0
+	swap	d0
+	andi.w	#$00F0,d0
+	move.w	d0,(a0)+
+	dbf	d7,.gloop
+.end_fade:
+	IFNE	RASTERS
+	move	#$2700,sr
+	clr.b	$fffffa1b.w
+	move.b	#1,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	move.l	#HBL_DUNGEON1,$120.w
+	bset	#0,$fffffa07.w
+	bset	#0,$fffffa13.w
+	move	#$2300,sr
+	ENDC
+	rts
+
+HBL_DUNGEON1:
+	move.w	hbl_col1(pc),$ffff8240.w
+	;move	#$2700,sr
+	move.l	#HBL_DUNGEON2,$120.w
+	clr.b	$fffffa1b.w
+	move.b	#12,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	rte
+
+HBL_DUNGEON2:
+	move.w	hbl_col2(pc),$ffff8240.w
+	;move	#$2700,sr
+	move.l	#HBL_DUNGEON3,$120.w
+	clr.b	$fffffa1b.w
+	move.b	#13,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	rte
+
+HBL_DUNGEON3:
+	move.w	hbl_col3(pc),$ffff8240.w
+	;move	#$2700,sr
+	move.l	#HBL_DUNGEON4,$120.w
+	clr.b	$fffffa1b.w
+	move.b	#12,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	rte
+
+HBL_DUNGEON4:
+	move.w	hbl_col4(pc),$ffff8240.w
+	;move	#$2700,sr
+	move.l	#HBL_DUNGEON5,$120.w
+	clr.b	$fffffa1b.w
+	move.b	#13,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	rte
+
+HBL_DUNGEON5:
+	move.w	hbl_col5(pc),$ffff8240.w
+	;move	#$2700,sr
+	move.l	#HBL_DUNGEON6,$120.w
+	clr.b	$fffffa1b.w
+	move.b	#12,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	rte
+
+HBL_DUNGEON6:
+	move.w	hbl_col6(pc),$ffff8240.w
+	;move	#$2700,sr
+	move.l	#HBL_DUNGEON7,$120.w
+	clr.b	$fffffa1b.w
+	move.b	#13,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	rte
+
+HBL_DUNGEON7:
+	move.w	hbl_col7(pc),$ffff8240.w
+	;move	#$2700,sr
+	move.l	#HBL_DUNGEON8,$120.w
+	clr.b	$fffffa1b.w
+	move.b	#12,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	rte
+
+HBL_DUNGEON8:
+	clr.w	$ffff8240.w
+	;move	#$2700,sr
+	move.l	#HBL_DUNGEON9,$120.w
+	clr.b	$fffffa1b.w
+	move.b	#13+12,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	rte
+
+HBL_DUNGEON9:
+	move.w	hbl_col8(pc),$ffff8240.w
+	;move	#$2700,sr
+	move.l	#HBL_DUNGEON10,$120.w
+	clr.b	$fffffa1b.w
+	move.b	#12,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	rte
+
+HBL_DUNGEON10:
+	move.w	hbl_col9(pc),$ffff8240.w
+	;move	#$2700,sr
+	move.l	#HBL_DUNGEON11,$120.w
+	clr.b	$fffffa1b.w
+	move.b	#13,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	rte
+
+HBL_DUNGEON11:
+	move.w	hbl_colA(pc),$ffff8240.w
+	;move	#$2700,sr
+	move.l	#HBL_DUNGEON12,$120.w
+	clr.b	$fffffa1b.w
+	move.b	#12,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	rte
+
+HBL_DUNGEON12:
+	move.w	hbl_colB(pc),$ffff8240.w
+	;move	#$2700,sr
+	move.l	#HBL_DUNGEON13,$120.w
+	clr.b	$fffffa1b.w
+	move.b	#13,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	rte
+
+HBL_DUNGEON13:
+	move.w	hbl_colC(pc),$ffff8240.w
+	;move	#$2700,sr
+	move.l	#HBL_DUNGEON14,$120.w
+	clr.b	$fffffa1b.w
+	move.b	#12,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	rte
+
+HBL_DUNGEON14:
+	move.w	hbl_colD(pc),$ffff8240.w
+	;move	#$2700,sr
+	move.l	#HBL_DUNGEON15,$120.w
+	clr.b	$fffffa1b.w
+	move.b	#13,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	rte
+
+HBL_DUNGEON15:
+	move.w	hbl_colE(pc),$ffff8240.w
+	;move	#$2700,sr
+	move.l	#HBL_DUNGEON_END,$120.w
+	clr.b	$fffffa1b.w
+	move.b	#12,$fffffa21.w
+	move.b	#8,$fffffa1b.w
+	rte
+
+HBL_DUNGEON_END:
+	clr.w	$ffff8240.w
+	;move	#$2700,sr
+	;move.l	#HBL_DUNGEON16,$120.w
+	clr.b	$fffffa1b.w
+	;move.b	#12,$fffffa21.w
+	;move.b	#8,$fffffa1b.w
+	rte
+
+hbl_col1:
+	DC.W	$0000
+hbl_col2:
+	DC.W	$0000
+hbl_col3:
+	DC.W	$0000
+hbl_col4:
+	DC.W	$0000
+hbl_col5:
+	DC.W	$0000
+hbl_col6:
+	DC.W	$0000
+hbl_col7:
+	DC.W	$0000
+hbl_col8:
+	DC.W	$0000
+hbl_col9:
+	DC.W	$0000
+hbl_colA:
+	DC.W	$0000
+hbl_colB:
+	DC.W	$0000
+hbl_colC:
+	DC.W	$0000
+hbl_colD:
+	DC.W	$0000
+hbl_colE:
+	DC.W	$0000
+
+; Calculate some blackfaded versions of the palette..
+CALC_DUNGEONPAL:
+
+; 1: Extract (ste) palette to easy format.
+	lea	dungwallpal_tbl,a1
+	lea	.pal_tbl(pc),a0
+	moveq	#16-1,d7
+
+.preloop:
+	move.w	(a1)+,d0
+	move.w	d0,d1
+	move.w	d0,d2
+	move.w	d0,d3
+	move.w	d0,d4
+	move.w	d0,d5
+
+	andi.w	#$0700,d0
+	lsr.w	#7,d0
+	rol.w	#5,d3
+	andi.w	#$0001,d3
+	or.w	d3,d0
+
+	andi.w	#$0070,d1
+	lsr.w	#3,d1
+	rol.b	#1,d4
+	andi.w	#$0001,d4
+	or.w	d4,d1
+	
+	andi.w	#$0007,d2
+	add.w	d2,d2
+	rol.b	#5,d5
+	andi.w	#$0001,d5
+	or.w	d5,d2
+
+	move.b	d0,(a0)+
+	move.b	d1,(a0)+
+	move.b	d2,(a0)+
+
+	dbra	d7,.preloop
+
+; 2: make faded versions..
+	lea	dungeonfadepal,a0
+	moveq	#16-1,d7
+
+.lowloop:
+	lea	.pal_tbl(pc),a1
+	moveq	#16-1,d6
+
+.lowentryloop:
+	moveq	#0,d0
+	moveq	#0,d1
+	moveq	#0,d2
+
+; do the actual fade..
+	move.b	(a1)+,d0
+	sub.b	d7,d0
+	bpl.s	.r_ok
+	moveq	#0,d0
+.r_ok:	move.b	(a1)+,d1
+	sub.b	d7,d1
+	bpl.s	.g_ok
+	moveq	#0,d1
+.g_ok:	move.b	(a1)+,d2
+	sub.b	d7,d2
+	bpl.s	.b_ok
+	moveq	#0,d2
+.b_ok:
+
+; Put in rorred format, weird STe crap..
+	lsr.w	d0
+	bcc.s	.rok
+	ori.w	#%1000,d0
+.rok:	lsr.w	d1
+	bcc.s	.gok
+	ori.w	#%1000,d1
+.gok:	lsr.w	d2
+	bcc.s	.bok
+	ori.w	#%1000,d2
+.bok:	
+
+; Pack rgb, and store..
+	lsl.w	#8,d0
+	lsl.w	#4,d1
+	or.w	d0,d2
+	or.w	d1,d2
+	move.w	d2,(a0)+
+	dbf	d6,.lowentryloop
+
+	dbf	d7,.lowloop
+	rts
+
+.pal_tbl:
+	DS.B	3*16
+
+* Rolling a joint is nice. Unrolling a loop is nicer.
+INIT_C2PINSTRUCTIONS:
+	lea	temp_buf+c2pinst,a0
+	moveq	#100-1,d7
+	moveq	#0,d0
+
+.c2pyloop:
+	moveq	#10-1,d6
+
+.c2pxloop:
+	lea	c2ploopstart,a1
+	movea.l	a0,a3
+
+	moveq	#c2ploopsize/2-1,d5
+.c2pinstrloop:
+	move.w	(a1)+,(a0)+
+	dbra	d5,.c2pinstrloop
+
+	add.w	d0,c2poffset1-c2ploopstart(a3)
+	add.w	d0,c2poffset2-c2ploopstart(a3)
+	add.w	d0,c2poffset3-c2ploopstart(a3)
+	add.w	d0,c2poffset4-c2ploopstart(a3)
+	addi.w	#16,d0
+	dbra	d6,.c2pxloop
+
+	addi.w	#160,d0
+	dbra	d7,.c2pyloop
+
+	move.w	#$2248,(a0)+			* "movea.l a0,a1"
+	move.l	#$41e800a0,(a0)+		* "lea     160(a0),a0"
+	moveq	#0,d0
+	moveq	#100-1,d7
+.doubleyloop:
+	lea	doubleloopstart,a1
+	movea.l	a0,a3
+
+	moveq	#doubleloopsize/2-1,d6
+.doublecopyloop:
+	move.w	(a1)+,(a0)+
+	dbra	d6,.doublecopyloop
+
+	add.w	d0,double1offset-doubleloopstart(a3)
+	add.w	d0,double2offset-doubleloopstart(a3)
+	add.w	d0,double3offset-doubleloopstart(a3)
+	add.w	d0,double4offset-doubleloopstart(a3)
+	addi.w	#320,d0
+	dbra	d7,.doubleyloop
+
+	move.w	#$4e75,(a0)+			* "rts"
+	rts
+
+* Hardcoded textured wallsclices from the dungeons of hell! =)
+* Hardcore kinky cycle-sexing in the dungeons of hell!
+* Routines 'whipped' out in strictly disciplined and streamlined order.
+CREATE_WALLROUTINES:
+	lea	temp_buf+wallrouts,a0
+	lea	temp_buf+wallroutadrs,a1
+	moveq	#0,d7
+	;moveq	#maxslicelen-1,d7		* max slicelength and number of routines.
+
+.loop:	move.l	a0,(a1)+			* Store address of new routine.
+
+* if (texturelen/slicelen < 1.0) then fast (an)+ loop
+* else default d(an) offset loop
+	move.l	#texturelen<<8,d1
+	move.w	d7,d0
+	addq.w	#1,d0
+	divu.w	d0,d1
+	andi.l	#$0000ffff,d1
+	cmpi.w	#64,d7
+	blt	.make_offset_loop
+
+; height > 64, we write every read pixel at least once.
+	moveq	#0,d2
+	move.w	d7,d6
+	move.w	d6,d0
+	subi.w	#100,d0
+	bpl.s	.addq_clipped
+	neg.w	d0
+;	addq.w	#1,d0
+	lsr.w	#1,d0
+	mulu.w	#160,d0
+	move.w	d0,d3
+	bra.s	.end_addqclipped
+.addq_clipped:
+	move.w	d6,d5
+	ext.l	d5
+	lsl.l	#8,d5
+	divu.w	#texturelen,d5
+	moveq	#100-1,d6
+	moveq	#0,d3
+	lsr.w	#1,d0
+	mulu.w	d1,d0
+	addi.w	#$0080,d0
+	lsr.l	#8,d0
+	beq.s	.end_addqclipped
+	move.w	#$4BED,(a0)+			* "LEA D(A5),A5"
+	move.w	d0,(a0)+
+.end_addqclipped:
+
+	lsl.l	#8,d1
+	cmpi.w	#128,d7
+	bge.s	.make_postinc
+
+; 64<height<128, don't use regs just copy same pixel twice..
+	move.w	#$1D5D,(a0)+			; "move.b (a5)+,x(a6)"
+	move.w	d3,(a0)+
+	subq.w	#1,d6
+.post_inc_loop:
+	addi.w	#160,d3
+	add.w	d1,d2
+	bcs.s	.proceed
+	move.w	#$1D55,(a0)+			; "move.b (a5),x(a6)"
+	bra.s	.offset
+.proceed:
+	move.w	#$1D5D,(a0)+			; "move.b (a5)+,x(a6)"
+.offset:move.w	d3,(a0)+
+	dbf	d6,.post_inc_loop
+
+	move.w	#$4e75,(a0)+			* "RTS"
+	addq.w	#1,d7
+	cmpi.w	#maxslicelen,d7
+	blt	.loop
+	rts
+
+; height >=128, put pixels into reg then write that multiple times..
+; uses post increment addressing for reads.
+.make_postinc:
+	move.w	#$101D,(a0)+			* "MOVE.B (A5)+,D0"
+
+.pixelloop:
+	add.w	d1,d2
+	bcc.s	.skip_fetch
+	move.w	#$101D,(a0)+			* "MOVE.B (A5)+,D0"
+.skip_fetch:
+	move.w	#$1D40,(a0)+			* "MOVE.B D0,D(A6)"
+	move.w	d3,(a0)+
+	addi.w	#160,d3
+	dbra	d6,.pixelloop
+
+	move.w	#$4e75,(a0)+			* "RTS"
+	addq.w	#1,d7
+	cmpi.w	#maxslicelen,d7
+	blt	.loop
+	rts
+
+.make_offset_loop:
+	move.w	d7,d6
+	move.w	d6,d0
+	subi.w	#100,d0
+	bpl.s	.offset_clipped
+	neg.w	d0
+	lsr.w	#1,d0
+	mulu.w	#160,d0
+	move.w	d0,d3
+	moveq	#0,d2
+	bra.s	.end_offsetclipped
+.offset_clipped:
+	moveq	#100-1,d6
+	moveq	#0,d3
+	lsr.w	#1,d0
+	moveq	#0,d2
+	move.w	d0,d2
+	swap	d2
+.end_offsetclipped:
+	lsl.l	#8,d1
+; between 48 and 64 there's a better solution..
+	cmpi.w	#48,d7
+	bgt.s	.make_opt_pinc_loop
+
+.offsetpixelloop:
+	move.l	d2,d0
+	swap	d0
+	move.w	#$1D6D,(a0)+			* "MOVE.B D(A1),D(A6)"
+	move.w	d0,(a0)+
+	move.w	d3,(a0)+
+	addi.w	#160,d3
+	add.l	d1,d2
+	dbra	d6,.offsetpixelloop
+
+	move.w	#$4e75,(a0)+			* "RTS"
+	addq.w	#1,d7
+	cmpi.w	#maxslicelen,d7
+	blt	.loop
+	rts
+
+.make_opt_pinc_loop:
+.pinc_loop:
+	move.w	#$1D5D,(a0)+			; move.b (a1)+,x(a6)
+	move.w	d3,(a0)+
+	add.w	d1,d2
+	bcc.s	.skip
+	move.w	#$524D,(a0)+			; addq.w #1,a5
+.skip:	addi.w	#160,d3
+	dbf	d6,.pinc_loop
+
+	move.w	#$4e75,(a0)+			* "RTS"
+	addq.w	#1,d7
+	cmpi.w	#maxslicelen,d7
+	blt	.loop
+	rts
+
+* Clear chunkypixel-buffer
+CLEAR_CHUNKYBUF:
+	lea	temp_buf+chunkybuf+160*100,a0
+	moveq.l	#$00000000,d0
+	move.l	d0,d1
+	move.l	d0,d2
+	move.l	d0,d3
+	move.l	d0,d4
+	move.l	d0,d5
+	move.l	d0,d6
+	move.l	d0,d7
+	movea.l	d0,a1
+	movea.l	d0,a2
+	movea.l	d0,a3
+	movea.l	d0,a4
+	movea.l	d0,a5
+	movea.l	d0,a6
+	REPT	(160*100)/56
+	movem.l	d0-d7/a1-a6,-(a0)	
+	ENDR
+	movem.l	d0-d7/a1-a2,-(a0)
+	rts
+
+GENTAB:	LEA	temp_buf+c2plookup,A6
+	LEA	TAB1(pc),A0
+	MOVEQ	#0,D3
+
+GENLOOP1:
+	LEA	TAB3(pc),A2
+	MOVEQ	#0,D4
+
+GENLOOP2:
+	MOVEQ	#0,D5
+	LEA	TAB2(pc),A1
+
+GENLOOP3:
+	MOVEQ	#$10-1,D6
+	LEA	TAB4(pc),A3
+	MOVE.L  (A0),D2
+	OR.L	(A1),D2
+	OR.L	(A2),D2
+
+GENLOOP4:
+	MOVE.L	D2,D0
+	OR.L	(A3)+,D0
+	MOVE.L  D0,(A6)+
+	DBF	D6,GENLOOP4
+
+	ADDQ	#4,A1
+	ADDQ.W  #4,D5
+	CMP.B   #$40,D5
+	BNE.S   GENLOOP3
+
+	ADDQ	#4,A2
+	ADDQ.W  #4,D4
+	CMP.B   #$40,D4
+	BNE.S   GENLOOP2
+
+	ADDQ	#4,A0
+	ADDQ.W  #4,D3
+	CMP.B   #$40,D3
+	BNE.S   GENLOOP1
+
+	RTS
+
+TAB1:
+                DC.B $00,$00,$00,$00
+                DC.B $C0,$00,$00,$00
+                DC.B $00,$C0,$00,$00
+                DC.B $C0,$C0,$00,$00
+                DC.B $00,$00,$C0,$00
+                DC.B $C0,$00,$C0,$00
+                DC.B $00,$C0,$C0,$00
+                DC.B $C0,$C0,$C0,$00
+                DC.B $00,$00,$00,$C0
+                DC.B $C0,$00,$00,$C0
+                DC.B $00,$C0,$00,$C0
+                DC.B $C0,$C0,$00,$C0
+                DC.B $00,$00,$C0,$C0
+                DC.B $C0,$00,$C0,$C0
+                DC.B $00,$C0,$C0,$C0
+                DC.B $C0,$C0,$C0,$C0
+TAB2:
+                DC.B $00,$00,$00,$00
+                DC.B $30,$00,$00,$00
+                DC.B $00,$30,$00,$00
+                DC.B $30,$30,$00,$00
+                DC.B $00,$00,$30,$00
+                DC.B $30,$00,$30,$00
+                DC.B $00,$30,$30,$00
+                DC.B $30,$30,$30,$00
+                DC.B $00,$00,$00,$30
+                DC.B $30,$00,$00,$30
+                DC.B $00,$30,$00,$30
+                DC.B $30,$30,$00,$30
+                DC.B $00,$00,$30,$30
+                DC.B $30,$00,$30,$30
+                DC.B $00,$30,$30,$30
+                DC.B $30,$30,$30,$30
+TAB3:
+                DC.B $00,$00,$00,$00
+                DC.B $0C,$00,$00,$00
+                DC.B $00,$0C,$00,$00
+                DC.B $0C,$0C,$00,$00
+                DC.B $00,$00,$0C,$00
+                DC.B $0C,$00,$0C,$00
+                DC.B $00,$0C,$0C,$00
+                DC.B $0C,$0C,$0C,$00
+                DC.B $00,$00,$00,$0C
+                DC.B $0C,$00,$00,$0C
+                DC.B $00,$0C,$00,$0C
+                DC.B $0C,$0C,$00,$0C
+                DC.B $00,$00,$0C,$0C
+                DC.B $0C,$00,$0C,$0C
+                DC.B $00,$0C,$0C,$0C
+                DC.B $0C,$0C,$0C,$0C
+TAB4:
+                DC.B $00,$00,$00,$00
+                DC.B $03,$00,$00,$00
+                DC.B $00,$03,$00,$00
+                DC.B $03,$03,$00,$00
+                DC.B $00,$00,$03,$00
+                DC.B $03,$00,$03,$00
+                DC.B $00,$03,$03,$00
+                DC.B $03,$03,$03,$00
+                DC.B $00,$00,$00,$03
+                DC.B $03,$00,$00,$03
+                DC.B $00,$03,$00,$03
+                DC.B $03,$03,$00,$03
+                DC.B $00,$00,$03,$03
+                DC.B $03,$00,$03,$03
+                DC.B $00,$03,$03,$03
+                DC.B $03,$03,$03,$03
+
+CREATE_COSTABLE:
+; copy cos..
+	lea	sine_tbl+2,a1				;cos
+	lea	temp_buf+costable,a0
+	lea	temp_buf+costable+sintbllen*2,a2
+	move.w	#sintbllen-1,d7
+.loop:	move.w	(a1),(a0)+
+	move.w	(a1),(a2)+
+	addq	#4,a1
+	dbf	d7,.loop
+	rts
+
+INIT_TANTABLES:
+* First, precalc the tan and inverse tan tables..
+	lea	temp_buf+itantbl,a2
+	lea	temp_buf+tantbl,a0
+	lea	sine_tbl,a1
+	move.w	#sintbllen-1,d7
+.loop:	movem.w	(a1)+,d0-d1			* Get sin(i) and cos(i).
+	move.l	d1,d2
+	lsl.l	#8,d1
+	move.w	d0,d0
+	beq.s	.notandiv
+	divs.w	d0,d1				* 1/tan(i) = cos(i)/sin(i)
+	bra.s	.endtandiv
+.notandiv:
+
+;	asr.l	#8,d1
+	tst.l	d1
+	bmi.s	.neg1
+	move.w	#$7FFF,d1
+	bra.s	.pos1
+.neg1:	move.w	#$8001,d1
+.pos1:
+
+.endtandiv:
+	lsl.l	#8,d0
+	move.w	d2,d2
+	beq.s	.noitandiv
+	divs.w	d2,d0				* tan(i) = sin(i)/cos(i)
+	bra.s	.enditandiv
+.noitandiv:
+
+;	asr.l	#8,d0
+	tst.l	d0
+	bmi.s	.neg2
+	move.w	#$7FFF,d0
+	bra.s	.pos2
+.neg2:	move.w	#$8001,d0
+.pos2:	
+
+.enditandiv:
+	move.w	d0,(a0)+			* STore tan(i).
+	move.w	d1,(a2)+			* STore 1/tan(i).
+	dbra	d7,.loop
+
+* Second, precalc the Xstep table (based on tan table).
+* 1st and 2nd quadrants must be positive.
+; Note: we add resp. subtract 2 to compensate for 'invisible-corner' bug.
+	lea	temp_buf+xysteptbl,a0
+	lea	temp_buf+tantbl,a1
+	move.w	#sintbllen/2-1,d7
+.xsteploop1:
+	move.w	(a1)+,d0
+	bpl.s	.xpos
+	neg.w	d0
+.xpos:	addq.w	#2,d0
+	move.w	d0,(a0)
+	addq	#4,a0
+	dbf	d7,.xsteploop1
+* 3rd and 4th quadrants must be negative.
+	move.w	#sintbllen/2-1,d7
+.xsteploop2:
+	move.w	(a1)+,d0
+	bmi.s	.xneg
+	neg.w	d0
+.xneg:	subq.w	#2,d0
+	move.w	d0,(a0)
+	addq	#4,a0
+	dbf	d7,.xsteploop2
+
+* Third, precalc the Ystep table (based on itan table).
+* 1st quadrant must be negative.
+	lea	temp_buf+xysteptbl+2,a0
+	lea	temp_buf+itantbl,a1
+	move.w	#sintbllen/4-1,d7
+.ysteploop1:
+	move.w	(a1)+,d0
+	bmi.s	.yneg1
+	neg.w	d0
+.yneg1:	subq.w	#2,d0
+	move.w	d0,(a0)
+	addq	#4,a0
+	dbra	d7,.ysteploop1
+* 2nd and 3rd quadrants must be positive.
+	move.w	#sintbllen/2-1,d7
+.ysteploop2:
+	move.w	(a1)+,d0
+	bpl.s	.ypos
+	neg.w	d0
+.ypos:	addq.w	#2,d0
+	move.w	d0,(a0)
+	addq	#4,a0
+	dbra	d7,.ysteploop2
+* 4th quadrant must be negative.
+	move.w	#sintbllen/4-1,d7
+.ysteploop3:
+	move.w	(a1)+,d0
+	bmi.s	.yneg2
+	neg.w	d0
+.yneg2:	subq.w	#2,d0
+	move.w	d0,(a0)
+	addq	#4,a0
+	dbra	d7,.ysteploop3
+
+; repeat it
+	lea	temp_buf+xysteptbl+sintbllen*4,a0
+	lea	temp_buf+xysteptbl,a1
+	move.w	#sintbllen-1,d7
+.repeat:move.l	(a1)+,(a0)+
+	dbf	d7,.repeat
+	rts
+
+INIT_ISINCOSTABLES:
+	lea	sine_tbl,a1
+	lea	temp_buf+isinetbl,a0
+	move.w	#sintbllen*2-1,d7
+	move.l	#$007fffff,d0
+
+.loop:	move.l	d0,d1
+	move.w	(a1)+,d2
+	bpl.s	.sin_is_pos
+	cmpi.w	#$ff00,d2				; sin>-256 ?
+	bgt.s	.sinroof
+.sin_is_pos:
+	cmpi.w	#$0100,d2
+	blo.s	.sinroof
+	divs.w	d2,d1
+	bcc.s	.endsindiv
+.sinroof:
+	move.w	#$7fff,d1
+.endsindiv:
+	move.w	d1,d1
+	bpl.s	.sinpos
+	neg.w	d1
+.sinpos:move.w	d1,(a0)+
+	dbf	d7,.loop
+
+; repeat it once..
+	move.w	#sintbllen-1,d7
+	lea	temp_buf+isinetbl,a1
+
+.loop2:	move.l	(a1)+,(a0)+
+	dbf	d7,.loop2
+	rts
+
+CALC_INVTABLE:
+	lea	temp_buf+invtable,a0
+	move.l	#$00008000,d0
+	move.l	#maxslicelen-1,d2
+	move.l	#$0000FFFF,d3
+	clr.w	d7
+.loop:	move.l	d0,d1
+	divu.w	d7,d1
+	and.l	d3,d1
+	cmp.l	d2,d1
+	blt.s	.ok
+	move.w	d2,d1
+.ok:	move.w	d1,(a0)+
+	addq.w	#1,d7
+	cmpi.w	#dungeonxsize<<8,d7
+	blt.s	.loop
+	rts
+
+PLOT_DUNGEON:
+	move.w	playerarc(pc),d7
+	subi.w	#160,d7
+	Do_SinModulo	d7
+	lea	temp_buf+costable+(sintbllen-160)*2,a0	; a0:cos(ray[0])
+	lea	temp_buf+xysteptbl,a1
+	lea	temp_buf+isinetbl,a2
+	move.w	d7,d0
+	add.w	d0,d0
+	add.w	d0,d0
+	adda.w	d0,a1					; a1:xystep(a[0])
+	adda.w	d0,a2					; a2:inv_sincos(a[0])
+	lea	dungeonmap_tbl,a3
+	lea	temp_buf+chunkybuf,a6
+
+.columnloop:
+* Calculate castline and check for intersection with horizontal wall.
+* distToNextXIntersection = fXStepTable[castArc];
+.findxquad:
+	move.w	(a1)+,d0			; d0=xstep
+	movem.w	playerx(pc),d1/d6
+	move.l	d6,d2
+	clr.b	d6
+	sub.l	d6,d2
+
+	cmpi.w	#sintbllen/4,d7
+	bhs.s	.xtestquad4
+	subq.w	#1,d6				;d6.w=[playery]-0.01=[playery]-1+0.FF
+	move.w	#-1<<8,d5
+	muls.w	d0,d2
+	asr.l	#8,d2
+	add.w	d2,d1
+	bra.s	.endfindxquad
+.xtestquad4:
+	cmpi.w	#(sintbllen/4)*3,d7
+	bhs.s	.xquad4
+	move.w	#1<<8,d5
+	add.w	d5,d6				;d6.w=[playery]+1
+	not.b	d2				;d2.w=0.FF-frac(playery)
+	muls.w	d0,d2
+	asr.l	#8,d2
+	add.w	d2,d1
+	bra.s	.endfindxquad
+.xquad4:subq.w	#1,d6				;d6.w=[playery]-0.01=[playery]-1+0.FF
+	move.w	#-1<<8,d5
+	muls.w	d0,d2
+	asr.l	#8,d2
+	add.w	d2,d1
+.endfindxquad:
+	move.w	#dungeonxsize<<8,d4
+	cmp.w	d4,d1			;out of range?
+	bhs.s	.notfoundxintersect
+
+.xintersectloop:
+	move.l	d6,d2
+	clr.b	d2
+	move.w	d1,d3
+	lsr.w	#4,d3
+	move.b	d3,d2
+	lsr.w	#4,d2
+	tst.b	(a3,d2.w)
+	bne.s	.foundxintersect
+	add.w	d0,d1
+	add.w	d5,d6
+	cmp.w	d4,d1
+	bcc.s	.notfoundxintersect
+	cmp.w	d4,d6
+	bcs.s	.xintersectloop
+.notfoundxintersect:
+	moveq	#-1,d4
+	bra.s	.endxintersect
+.foundxintersect:
+	andi.w	#$00fc,d1			; align to longword (txt is 64 longs wide)
+	movea.w	d1,a4				* Save X-intersection (for texture coord)
+	sub.w	playery(pc),d6
+	bpl.s	.xposy
+	neg.w	d6
+.xposy:	move.w	d6,d4				* Save dY (for distance calc)
+.endxintersect:
+	
+* Calculate castline and check for intersection with vertical wall.
+* distToNextYIntersection = fYStepTable[castArc];
+.findyquad:
+	move.w	(a1)+,d0			; d0=ystep
+	addq	#4,a1
+	movem.w	playerx(pc),d1/d6
+	move.w	d1,d2
+	clr.b	d1
+	sub.w	d1,d2				* d2.w: X distance to first gridpoint
+
+	cmpi.w	#sintbllen/2,d7
+	bhs.s	.ytestquad34
+	move.w	#$0100,d5
+	add.w	d5,d1
+	not.b	d2
+	muls.w	d0,d2
+	asr.l	#8,d2
+	add.w	d2,d6
+	bra.s	.endfindyquad
+.ytestquad34:
+	subq.w	#1,d1			;?
+	move.w	#$ff00,d5
+	muls.w	d0,d2
+	asr.l	#8,d2
+	add.w	d2,d6
+.endfindyquad:
+	cmpi.w	#dungeonysize<<8,d6
+	bhs.s	.notfoundyintersect
+
+.yintersectloop:
+	move.w	d6,d2
+	clr.b	d2
+	move.w	d1,d3
+	lsr.w	#4,d3
+	move.b	d3,d2
+	lsr.w	#4,d2
+	tst.b	(a3,d2.w)
+	bne.s	.foundyintersect
+	add.w	d5,d1
+	add.w	d0,d6
+	move.w	#dungeonxsize<<8,d2
+	cmp.w	d2,d1
+	bcc.s	.notfoundyintersect
+	cmp.w	d2,d6
+	bcs.s	.yintersectloop
+.notfoundyintersect:
+	moveq	#-1,d1
+	bra.s	.endyintersect
+.foundyintersect:
+	andi.w	#$00fc,d6
+	movea.l	d6,a5
+	sub.w	playerx(pc),d1
+	bpl.s	.yposx
+	neg.w	d1
+.yposx:						* Save dX (for distance calc)
+.endyintersect:
+
+* Find out which intersection is nearest...
+* The horizontal or the vertical...
+	move.w	(a2)+,d2			; d2=1/sin
+	move.w	(a2)+,d3			; d3=1/cos
+	addq	#4,a2
+	tst.w	d4
+	bmi.s	.calc_verdist
+	tst.w	d1
+	bmi.s	.calc_hordist
+	mulu.w	d3,d4
+	mulu.w	d2,d1
+	cmp.l	d4,d1
+	blt.s	.end_getdist
+	move.l	d4,d1
+	movea.l	a4,a5
+	bra.s	.end_getdist
+.calc_hordist:
+	mulu.w	d3,d4
+	move.l	d4,d1
+	movea.l	a4,a5
+	bra.s	.end_getdist
+.calc_verdist:
+	tst.l	d1
+	bmi	.endcolumnloop
+	mulu.w	d2,d1
+.end_getdist:
+	lsr.l	#7,d1
+
+; range checking on d1 anyone?
+
+; Compensate fishfuck effect.
+	mulu.w	(a0),d1				; *cos(ray)
+	addq	#4,a0
+	swap	d1				; >>16
+
+; Then calculate the slice height.
+	IFNE	1
+; Tabelized, not really that much faster when seen on a grand scale.
+	lea	temp_buf+invtable,a4		; 12
+	add.w	d1,d1				;  4
+	move.w	(a4,d1.w),d0			; 14
+	ELSE
+	move.l	#$00008000,d0			; 12
+	divu.w	d1,d0				;~70 ?
+	ENDC
+
+* Now draw the vertical slice.
+	move.w	a5,d1
+	lea	dungwall_dat,a5
+	lsl.w	#4,d1
+	adda.w	d1,a5
+	cmpi.w	#48,d0				; If high enough..
+	blt.s	.oki2
+	adda.w	#$3000,a5			; ..set to bright texture.
+	IFEQ	1
+	cmpi.w	#maxslicelen-1,d0		; Clip sliceheight.
+	bls.s	.oki
+	move.w	#(maxslicelen-1)*4,d0		
+	bra.s	.oki3
+	ELSE
+	bra.s	.oki
+	ENDC
+.oki2:	move.w	d0,d1
+	andi.w	#$0030,d1
+	lsl.w	#8,d1
+	adda.w	d1,a5
+.oki:	add.w	d0,d0
+	add.w	d0,d0
+.oki3:	lea	temp_buf+wallroutadrs,a4
+	movea.l	(a4,d0.w),a4
+	jsr	(a4)
+
+* Next column..
+.endcolumnloop:
+	addq.w	#2,d7
+	Do_SinModulo	d7
+	addq	#1,a6
+	cmpa.l	#temp_buf+chunkybuf+160,a6
+	blt	.columnloop
+	rts
+
+.xcastplayerx:
+	DS.W	1
+.xcastplayery:
+	DS.W	1
+.xcasttrunc:
+	DS.W	1
+.ycastplayerx:
+	DS.W	1
+.ycastplayery:
+	DS.W	1
+.ycasttrunc:
+	DS.W	1
+
+; option1: addx shit.. requires extra init code, saves 22cyc/loop
+bla:
+	move.w	#dungeonxsize<<8,d3
+
+.yintersectloop:
+	move.w	d6,d2
+	clr.b	d2
+	move.b	d1,d2
+	lsr.w	#4,d2
+	tst.b	(a3,d2.w)
+	bne.s	.foundyintersect
+	add.l	d0,d6
+	addx.w	d5,d1
+	cmpi.w	#dungeonxsize,d1
+	bcc.s	.notfoundyintersect
+	cmp.w	d3,d6
+	bcs.s	.yintersectloop
+.foundyintersect
+.notfoundyintersect
+
+; option2: 4:12 shit.. requires _loads_ of changes in code
+; forget it, it's slower...
+bla2:
+.xintersectloop:
+	move.l	d6,d2
+	lsr.w	#8,d2
+	move.w	d1,d3
+	rol.w	#4,d3
+	move.b	d3,d2
+	tst.b	(a3,d2.w)
+	bne.s	.foundxintersect
+	add.w	d0,d1
+	bcc.s	.notfoundxintersect
+	add.w	d5,d6
+	bcs.s	.xintersectloop
+.foundxintersect
+.notfoundxintersect
+	
+; option3: addx shit v2.. requires extra init code, and 256^2 playfield
+; 16+24+4+4+8=56 saved.. hmmmm...
+; really fucking fast, but... playfield extending sounds like a bitch!
+; also.. 4:12 format needed.. loads of trashing up the code required!
+bla3:	clr.l	d2
+
+.yintersectloop:
+	move.w	d6,d2
+	move.b	d1,d2
+	tst.b	(a3,d2.l)
+	bne.s	.foundyintersect
+	add.w	d0,d6
+	bcc.s	.notfoundyintersect
+	add.l	d3,d6
+	addx.b	d5,d1
+	bcs.s	.yintersectloop
+.foundyintersect
+.notfoundyintersect
+
+; option4: addx shit v3.. requires extra init code, and 256^2 playfield
+; no borders!
+; hhhmm, shit, casting outside of level is not smart.. casting can take
+; an eternity (what if 0!)
+; see option 3..
+bla4:	clr.l	d2
+
+.yintersectloop:
+	move.w	d6,d2
+	move.b	d1,d2
+	tst.b	(a3,d2.l)
+	beq.s	.yintersectloop
+	add.w	d0,d6
+	bcc.s	.notfoundyintersect
+	add.l	d3,d6
+	addx.b	d5,d1
+	bcs.s	.yintersectloop
+.notfoundyintersect
+
+; really optimised version..
+; takes up way too much mem, but who cares ;)
+PLOT_DUNGEON_OPT:
+	move.w	playerarc(pc),d7
+	subi.w	#160,d7
+	Do_SinModulo	d7
+	lea	temp_buf+costable+(sintbllen-160)*2,a0	; a0:cos(ray[0])
+	lea	temp_buf+xysteptbl,a1
+	lea	temp_buf+isinetbl,a2
+	move.w	d7,d0
+	add.w	d0,d0
+	add.w	d0,d0
+	adda.w	d0,a1					; a1:xystep(a[0])
+	adda.w	d0,a2					; a2:inv_sincos(a[0])
+	lea	dungeonmap_tbl,a3
+	lea	temp_buf+chunkybuf,a6
+
+.columnloop:
+* Calculate castline and check for intersection with horizontal wall.
+* distToNextXIntersection = fXStepTable[castArc];
+.findxquad:
+	move.w	(a1)+,d0			; d0=xstep
+	movem.w	playerx(pc),d1/d6
+	move.l	d6,d2
+	clr.b	d6
+	sub.l	d6,d2
+
+	cmpi.w	#sintbllen/4,d7
+	bhs.s	.xtestquad4
+	subq.w	#1,d6				;d6.w=[playery]-0.01=[playery]-1+0.FF
+	move.w	#-1<<12,d5
+	muls.w	d0,d2
+	asr.l	#8,d2
+	add.w	d2,d1
+	bra.s	.endfindxquad
+.xtestquad4:
+	cmpi.w	#(sintbllen/4)*3,d7
+	bhs.s	.xquad4
+	move.w	#+1<<12,d5
+	add.w	d5,d6				;d6.w=[playery]+1
+	not.b	d2				;d2.w=0.FF-frac(playery)
+	muls.w	d0,d2
+	asr.l	#8,d2
+	add.w	d2,d1
+	bra.s	.endfindxquad
+.xquad4:subq.w	#1,d6				;d6.w=[playery]-0.01=[playery]-1+0.FF
+	move.w	#-1<<12,d5
+	muls.w	d0,d2
+	asr.l	#8,d2
+	add.w	d2,d1
+.endfindxquad:
+	bhs.s	.notfoundxintersect		; out of range?
+
+; todo, painful addx init and crap..
+
+.xintersectloop:
+	move.w	d6,d2
+	move.b	d1,d2
+	tst.b	(a3,d2.l)
+	bne.s	.foundxintersect
+	add.w	d0,d6
+	bcc.s	.notfoundxintersect
+	add.l	d3,d6
+	addx.b	d5,d1
+	bcs.s	.xintersectloop
+.notfoundxintersect:
+	moveq	#-1,d4
+	bra.s	.endxintersect
+.foundxintersect:
+	andi.w	#$00fc,d1			; align to longword (txt is 64 longs wide)
+	movea.w	d1,a4				* Save X-intersection (for texture coord)
+	sub.w	playery(pc),d6
+	bpl.s	.xposy
+	neg.w	d6
+.xposy:	move.w	d6,d4				* Save dY (for distance calc)
+.endxintersect:
+	
+* Calculate castline and check for intersection with vertical wall.
+* distToNextYIntersection = fYStepTable[castArc];
+.findyquad:
+	move.w	(a1)+,d0			; d0=ystep
+	addq	#4,a1
+	movem.w	playerx(pc),d1/d6
+	move.w	d1,d2
+	clr.b	d1
+	sub.w	d1,d2				* d2.w: X distance to first gridpoint
+
+	cmpi.w	#sintbllen/2,d7
+	bhs.s	.ytestquad34
+	move.w	#+1<<12,d5
+	add.w	d5,d1
+	not.b	d2
+	muls.w	d0,d2
+	asr.l	#8,d2
+	add.w	d2,d6
+	bra.s	.endfindyquad
+.ytestquad34:
+	subq.w	#1,d1
+	move.w	#-1<<12,d5
+	muls.w	d0,d2
+	asr.l	#8,d2
+	add.w	d2,d6
+.endfindyquad:
+	bhs.s	.notfoundyintersect
+
+; todo: painful addx init
+
+.yintersectloop:
+	move.w	d6,d2
+	move.b	d1,d2
+	tst.b	(a3,d2.l)
+	bne.s	.foundyintersect
+	add.w	d0,d6
+	bcc.s	.notfoundyintersect
+	add.l	d3,d6
+	addx.b	d5,d1
+	bcs.s	.yintersectloop
+.notfoundyintersect:
+	moveq	#-1,d1
+	bra.s	.endyintersect
+.foundyintersect:
+	andi.w	#$00fc,d6
+	movea.l	d6,a5
+	sub.w	playerx(pc),d1
+	bpl.s	.yposx
+	neg.w	d1
+.yposx:						* Save dX (for distance calc)
+.endyintersect:
+
+* Find out which intersection is nearest...
+* The horizontal or the vertical...
+	move.w	(a2)+,d2			; d2=1/sin
+	move.w	(a2)+,d3			; d3=1/cos
+	addq	#4,a2
+	tst.w	d4
+	bmi.s	.calc_verdist
+	tst.w	d1
+	bmi.s	.calc_hordist
+	mulu.w	d3,d4
+	mulu.w	d2,d1
+	cmp.l	d4,d1
+	blt.s	.end_getdist
+	move.l	d4,d1
+	movea.l	a4,a5
+	bra.s	.end_getdist
+.calc_hordist:
+	mulu.w	d3,d4
+	move.l	d4,d1
+	movea.l	a4,a5
+	bra.s	.end_getdist
+.calc_verdist:
+	tst.l	d1
+	bmi	.endcolumnloop
+	mulu.w	d2,d1
+.end_getdist:
+	lsr.l	#7,d1
+
+; range checking on d1 anyone?
+
+; Compensate fishfuck effect.
+	mulu.w	(a0),d1				; *cos(ray)
+	addq	#4,a0
+	swap	d1				; >>16
+
+; Then calculate the slice height.
+	lea	temp_buf+invtable,a4		; 12
+	add.w	d1,d1				;  4
+	move.w	(a4,d1.w),d0			; 14
+
+* Now draw the vertical slice.
+	move.w	a5,d1
+	lea	dungwall_dat,a5
+	lsl.w	#4,d1
+	adda.w	d1,a5
+	cmpi.w	#48,d0				; If high enough..
+	blt.s	.oki2
+	adda.w	#$3000,a5			; ..set to bright texture.
+	bra.s	.oki
+.oki2:	move.w	d0,d1
+	andi.w	#$0030,d1
+	lsl.w	#8,d1
+	adda.w	d1,a5
+.oki:	add.w	d0,d0
+	add.w	d0,d0
+.oki3:	lea	temp_buf+wallroutadrs,a4
+	movea.l	(a4,d0.w),a4
+	jsr	(a4)
+
+* Next column..
+.endcolumnloop:
+	addq.w	#2,d7
+	Do_SinModulo	d7
+	addq	#1,a6
+	cmpa.l	#temp_buf+chunkybuf+160,a6
+	blt	.columnloop
+	rts
+
+.xcastplayerx:
+	DS.W	1
+.xcastplayery:
+	DS.W	1
+.xcasttrunc:
+	DS.W	1
+.ycastplayerx:
+	DS.W	1
+.ycastplayery:
+	DS.W	1
+.ycasttrunc:
+	DS.W	1
+
+
+
+******** OBJECT DATA ********
+
+	DATA
+
+c2ploopstart:	MOVEm.W	(A1)+,D0-d7		; 44
+                LSL.L   #4,D0			; 16
+                OR.W    d1,D0			;  4
+                MOVE.L  0(A2,D0.l),D0		; 18
+c2poffset1:	=	*+2
+		MOVEP.L D0,0(A0)		; 24
+                LSL.L   #4,D2			; 16
+                OR.W    d3,D2			;  4
+                MOVE.L  0(A2,D2.l),D0		; 18
+c2poffset2:	=	*+2
+		MOVEP.L D0,1(A0)		; 24
+                LSL.L   #4,D4			; 16
+                OR.W    d5,D4			;  4
+                MOVE.L  0(A2,D4.l),D0		; 18
+c2poffset3:	=	*+2
+		MOVEP.L D0,8(A0)		; 24
+                LSL.L   #4,D6			; 16
+                OR.W    d7,D6			;  4
+                MOVE.L  0(A2,D6.l),D0		; 18
+c2poffset4:	=	*+2
+		MOVEP.L D0,9(A0)		; 24
+						; -- +
+						;292
+c2ploopend:
+
+c2ploopsize:	=	c2ploopend-c2ploopstart
+
+; 292000 cycles per frame!
+; 363600 cycles with linedoubling.. 2.2725 VBL/frame
+
+doubleloopstart:
+		movem.l	(a1)+,d0-d7/a2-a6	* 112
+double1offset:	=	*+4
+		movem.l	d0-d7/a2-a6,0(a0)	* 116
+		movem.l	(a1)+,d0-d7/a2-a6	* 112
+double2offset:	=	*+4
+		movem.l	d0-d7/a2-a6,52(a0)	* 116
+		movem.l	(a1)+,d0-d7/a2-a6	* 112
+double3offset:	=	*+4
+		movem.l	d0-d7/a2-a6,104(a0)	* 116
+double4offset:	=	*+2
+		move.l	(a1)+,156(a0)		*  24
+		lea	160(a1),a1		*   8
+doubleloopend:
+
+doubleloopsize:	=	doubleloopend-doubleloopstart
+
+*						 ---- +
+*                                                 716
+* 716 cycles/scanline * 100 scanlines        =  71600 cycles
+
+dungwall_dat:
+	INCBIN	DUNG2025.RAW
+	INCBIN	DUNG2050.RAW
+	INCBIN	DUNG2075.RAW
+	INCBIN	DUNG2100.RAW
+dungwallpal_tbl:
+	INCBIN	DUNGEON.PAL
+
+dungeonmap_tbl:
+	dc.b	1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1
+	dc.b	1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1
+	dc.b	1,0,1,1,0,1,1,1,1,1,1,0,1,1,0,1
+	dc.b	1,0,1,0,0,0,0,0,0,0,0,0,0,1,0,1
+	dc.b	1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1
+	dc.b	1,0,1,0,0,1,1,0,0,1,1,0,0,1,0,1
+	dc.b	1,0,1,0,0,1,0,0,0,0,1,0,0,1,0,1
+	dc.b	0,0,1,0,0,0,0,0,0,0,0,0,0,1,0,0
+	dc.b	1,0,1,0,0,0,0,0,0,0,0,0,0,1,0,1
+	dc.b	1,0,1,0,0,1,0,0,0,0,1,0,0,1,0,1
+	dc.b	1,0,1,0,0,1,1,0,0,1,1,0,0,1,0,1
+	dc.b	1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1
+	dc.b	1,0,1,0,0,0,0,0,0,0,0,0,0,1,0,1
+	dc.b	1,0,1,1,0,1,1,1,1,1,1,0,1,1,0,1
+	dc.b	1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1
+	dc.b	1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1
+
+dungeontraject_tbl:
+	DC.W	((.end-.start)/trajentrysize)-1
+.start:	DC.L	0
+	DC.W	$0,$780
+	DC.W	512
+
+	DC.L	200
+	DC.W	$180,$780
+	DC.W	0
+
+	DC.L	300
+	DC.W	$180,$480
+	DC.W	0
+
+	DC.L	400
+	DC.W	$140,$180
+	DC.W	512
+
+	DC.L	500
+	DC.W	$480,$140
+	DC.W	1024
+
+	DC.L	550
+	DC.W	$400,$300
+	DC.W	700
+
+	DC.L	650
+	DC.W	$800,$380
+	DC.W	900
+
+	DC.L	750
+	DC.W	$b80,$400
+	DC.W	1024
+
+	DC.L	800
+	DC.W	$c00,$500
+	DC.W	1200
+
+	DC.L	850
+	DC.W	$c40,$600
+	DC.W	1400
+
+	DC.L	900
+	DC.W	$c40,$800
+	DC.W	1600
+
+	DC.L	1000
+	DC.W	$b80,$800
+	DC.W	1800
+
+	DC.L	1100
+	DC.W	$a00,$800
+	DC.W	2048
+
+	DC.L	1200
+	DC.W	$800,$800
+	DC.W	2048+256
+
+	DC.L	1250
+	DC.W	$800,$800
+	DC.W	2048+512
+
+	DC.L	1275
+	DC.W	$800,$800
+	DC.W	2048+1024
+
+	DC.L	1300
+	DC.W	$800,$800
+	DC.W	2048+1536
+
+	DC.L	1325
+	DC.W	$800,$800
+	DC.W	2048*2
+
+	DC.L	1350
+	DC.W	$800,$800
+	DC.W	2048*2+512
+
+	DC.L	1392
+	DC.W	$800,$800
+	DC.W	2048*2+1024
+
+	DC.L	1425
+	DC.W	$800,$800
+	DC.W	2048*2+1400
+
+	DC.L	1450
+	DC.W	$800,$800
+	DC.W	2048*2+1750
+
+	DC.L	1475
+	DC.W	$800,$800
+	DC.W	2048*3+100
+
+	DC.L	1500
+	DC.W	$800,$800
+	DC.W	2048*3+450
+
+	DC.L	1525
+	DC.W	$800,$800
+	DC.W	2048*3+800
+
+	DC.L	1550
+	DC.W	$800,$800
+	DC.W	2048*3+1024
+
+	DC.L	1575
+	DC.W	$800,$800
+	DC.W	2048*3+1300
+
+	DC.L	1600
+	DC.W	$800,$800
+	DC.W	2048*3+1500
+
+	DC.L	1625
+	DC.W	$800,$800
+	DC.W	2048*3+1700
+
+	DC.L	1675
+	DC.W	$800,$800
+	DC.W	2048*3+1900
+
+	DC.L	1725
+	DC.W	$800,$780
+	DC.W	2048*4
+
+	DC.L	1775
+	DC.W	$800,$680
+	DC.W	2048*4
+
+	DC.L	1850
+	DC.W	$880,$400
+	DC.W	2048*4+200
+
+	DC.L	1900
+	DC.W	$900,$380
+	DC.W	2048*4+512
+
+	DC.L	1950
+	DC.W	$a00,$3c0
+	DC.W	2048*4+512
+
+	DC.L	2000
+	DC.W	$b00,$480
+	DC.W	2048*4+600
+
+	DC.L	2100
+	DC.W	$e80,$480
+	DC.W	2048*4+700
+
+	DC.L	2150
+	DC.W	$e80,$500
+	DC.W	2048*4+1024
+
+	DC.L	2200
+	DC.W	$e80,$600
+	DC.W	2048*4+1024
+
+	DC.L	2250
+	DC.W	$e80,$700
+	DC.W	2048*4+700
+
+	DC.L	2300
+	DC.W	$fff,$780
+	DC.W	2048*4+700
+.end:
+
+******** OBJECT RESERVES ********
+
+	BSS
+
+start466:
+	DS.L	1
+trajectstep:
+	DS.W	1
+playerarc:
+	DS.W	1
+playerx:DS.W	1
+playery:DS.W	1
+
+dungeonfadepal:
+	DS.W	16*16
+
+fadepaladr:
+	DS.L	1
+
+******** END OF DEMO-EFFECT OBJECT ********
