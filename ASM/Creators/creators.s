@@ -12,7 +12,7 @@
 ; $FFFF8205  r    |..xxxxxx|          Video address counter high (r/w on STe)
 ; $FFFF8207  r    |xxxxxxxx|          Video address counter med (r/w on STe)
 ; $FFFF8209  r    |xxxxxxx.|          Video address counter low (r/w on STe)
-; $FFFF820A  r/w  |......xx|          Sync mode
+; $FFFF820A  r/w  |......xx|          Sync mode (changing this value tends to cause issues on TT, like black screen and crash)
 ;                        ||__________ External/Internal sync
 ;                        |___________ 50/60Hz
 ; 
@@ -30,6 +30,8 @@
 ;                        |___________ 0 - 320x200x4
 ;                                     1 - 640x200x2
 ;                                     2 - 640x400x1
+;
+; $FFFF8262  r/w  |....xxxxxxxxxxxx|  TT resolution
 ; 
 ; $FFFF8264  r/w  |....xxxx|          Undocumented STE pixel hard scroll
 ; $FFFF8265  r/w  |....xxxx|          STE pixel hard scroll
@@ -297,6 +299,7 @@ DetectMachine
  rts
 
 .found_tt
+ st.b machine_is_tt
  move.b #MACHINE_TT,machine_type
  rts
 
@@ -419,6 +422,8 @@ FlipScreen
 screen_choc
  jsr WaitVbl
  sf $ffff8260.w
+ tst.b machine_is_tt
+ bne.s .exit
  sf $ffff820a.w
  jsr WaitVbl
  jsr WaitVbl
@@ -431,6 +436,7 @@ screen_choc
  jsr WaitVbl
  jsr WaitVbl
  move.b #2,$ffff820a.w
+.exit 
  rts 
  
 
@@ -2759,10 +2765,16 @@ SaveSystem
  ; System specific saves
  ;
  tst.b machine_is_mste
- beq.s .end_specific 
+ beq.s .end_megaste 
 .megaste 
  move.b $ffff8e21.w,save_mste_cache
-.end_specific
+.end_megaste
+
+ tst.b machine_is_tt
+ beq.s .end_tt 
+.tt 
+ move.w $ffff8262.w,save_tt_rez
+.end_tt 
  
  move #$2300,sr
  rts
@@ -2801,11 +2813,17 @@ RestoreSystem
  ; System specific load
  ;
  tst.b machine_is_mste
- beq.s .end_specific 
+ beq.s .end_megaste 
 .megaste 
  move.b save_mste_cache,$ffff8e21.w
-.end_specific
+.end_megaste
  
+ tst.b machine_is_tt
+ beq.s .end_tt
+.tt 
+ move.w save_tt_rez,$ffff8262.w
+.end_tt
+
  move #$2300,sr
  rts
  
@@ -3793,6 +3811,8 @@ save_usp     		ds.l 1 ; User Stack Pointer
 save_70      		ds.l 1	; VBL handler
 save_120	 		ds.l 1	; HBL handler
 
+save_tt_rez			ds.w 1
+
 save_iera			ds.b 1
 save_ierb			ds.b 1
 save_imra			ds.b 1
@@ -3803,6 +3823,7 @@ save_tbdr			ds.b 1  ; Timer B data register
 
 machine_type		ds.b 1
 machine_is_ct60		ds.b 1
+machine_is_tt		ds.b 1
 machine_is_mste 	ds.b 1
 overscan_is_allowed	ds.b 1
 

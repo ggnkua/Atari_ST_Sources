@@ -1,0 +1,1 @@
+*-------------------------------------------* liste des screens installes sur le disk 2*  dc x,p,s,f*  x nombre de secteurs ke prend le fichier sur disk*  p piste de depart*  s secteur de depart (non compris)*  f face de depart 
