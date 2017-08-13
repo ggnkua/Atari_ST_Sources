@@ -1,0 +1,3 @@
+
+void convert_bmp();
+
