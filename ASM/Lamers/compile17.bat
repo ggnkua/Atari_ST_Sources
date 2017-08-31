@@ -1,0 +1,1 @@
+..\..\vasm17e\vasmm68k_mot.exe -devpac -m68030 -align -nowarn=6 -Ftos demo.s -o out.tos
