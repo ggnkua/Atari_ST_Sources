@@ -1,0 +1,5 @@
+PROGRAM HELLO;
+
+BEGIN
+	WRITELN('Hello World!')
+END.

@@ -1,0 +1,153 @@
+LMS ADAPTIVE FILTER
+ 
+ 
+                  x(0) |----| x(n-1)|----| x(n-2)|----| x(n-3)
+     x(n) -------------| 1/z|-------| 1/z|-------| 1/z|----
+                   |   |----|   |   |----|   |   |----|   |
+                   h0           h1           h2           h3
+                     \________  |____   _____|  _________/
+                              \______(+)_______/
+                                      |
+                                      |--------->f(n)
+                                      v
+           d(n) -------------------->(+)-------->e(n)
+                                    -
+ 
+ 
+Notation and symbols:
+  x(n)  - Input sample at time n.
+  d(n)  - Desired signal at time n.
+  f(n)  - FIR filter output at time n.
+  H(n)  - Filter coefficient vector at time n.  H={h0,h1,h2,h3}
+  X(n)  - Filter state variable vector at time N.
+          X={x(0),x(n-1),x(n-2),x(n-3)}
+  u     - Adaptation gain.
+  ntaps - Number of coefficient taps in the filter. For this
+          example, ntaps=4.
+ 
+ 
+      True LMS Algorithm        Delayed LMS Algorithm
+      ------------------        ---------------------
+      Get input sample          Get input sample
+      Save input sample         Save input sample
+      Do FIR                    Do FIR
+      Get d(n), find e(n)       Update coefficients
+      Update coefficients       Get d(n), find e(n)
+      Output f(n)               Output f(n)
+      Shift vector X            Shift vector X
+ 
+System equations:
+ e(n)=d(n)-H(n)X(n)    e(n)=d(n)-H(n)X(n)        (FIR filter and error)
+ H(n+1)=H(n)+uX(n)e(n) H(n+1)=H(n)+uX(n-1)e(n-1) (Coefficient update)
+ 
+References:
+  "Adaptive Digital Filters and Signal Analysis", Maurice G. Bellanger
+      Marcel Dekker, Inc. New York and Basel
+ 
+  "The DLMS Algorithm Suitable for the Pipelined Realization of Adaptive
+      Filters", Proc. IEEE ASSP Workshop, Academia Sinica, Beijing, 1986
+ 
+Note: The sections of code shown describe how to initialize all
+      registers, filter an input sample and do the coefficient update.
+      Only the instructions relating to the filtering and coefficient
+      update are shown as part of the benchmark.  Instructions executed
+      only once (for intialization) or instructions that may be user
+      application dependent are not included in the benchmark.
+ 
+ 
+ 
+ 
+            Implementation of the true LMS on the DSP56000
+ 
+ 
+Memory map:
+ 
+    Initial X                           H
+  x(0) x(n-1) x(n-2) x(n-3)       h0   h1   h2   h3
+   |                              |
+   r0                             r4
+                                  r5
+ 
+                                                        Program  Icycles
+                                                        Words
+ 
+    move    #XM,r0              ;start of X
+    move    #ntaps-1,m0         ;mod 4
+    move    #-2,n0              ;adjustment for filtering
+    move    #H,r4               ;coefficients
+    move    m0,m4               ;mod 4
+    move    r4,r5               ;coefficients
+    move    m0,m5               ;mod 4
+ 
+_getsmp
+    movep   y:input,x0          ;get input sample
+ 
+    clr  a        x0,x:(r0)+ y:(r4)+,y0  ;save x(0), get h0    1      1
+    rep  #ntaps-1                        ;do fir               1      2
+    mac  x0,y0,a  x:(r0)+,x0 y:(r4)+,y0  ;do taps              1      1
+    macr x0,y0,a                         ;last tap             1      1
+ 
+    movep  a,y:output     ;output fir if desired
+ 
+    (Get d(n), subtract fir output, multiply by "u", put
+     the result in x1. This section is application dependent.)
+ 
+    move          x:(r0)+,x0 y:(r4)+,a   ;get x(0), h0         1      1
+    do   #ntaps,_coefupdate              ;update coefficients  2      3
+    macr x0,x1,a  x:(r0)+,x0 y:(r4)+,y0  ;(u e(n) *x(n))+h     1      1
+    tfr  y0,a                a,y:(r5)+   ;copy h, save new h   1      1
+_coefupdate
+    move   x:(r0)+n0,x0  y:(r4)-,y0      ;update r0,r4         1      1
+ 
+    jmp    _getsmp                       ;continue looping
+                                                         ------   ------
+                                                            10     3N+9
+ 
+ 
+          Implementation of the delayed LMS on the DSP56000 Revision C
+ 
+Memory map:
+ 
+    Initial X                           H
+  x(0) x(n-1) x(n-2) x(n-3)       hx  h0   h1   h2   h3
+   |                              |   |
+   r0                             r5  r4
+hx is an unused value to make the calculations faster.
+ 
+ 
+                                                       Program  Icycles
+                                                       Words
+ 
+    move    #XM,r0              ;start of X
+    move    #ntaps-1,m0         ;mod 4
+    move    #-2,n0              ;adjustment for filtering
+    move    #H+1,r4             ;coefficients
+    move    #ntaps,m4           ;mod 5
+    move    #H,r5               ;coefficients
+    move    m4,m5               ;mod 5
+ 
+_smploop
+  movep   y:input,a           ;get input sample
+ 
+  move            a,x:(r0)    ;save input sample                   1  1
+  ;error signal is in y1
+  clr   a         x:(r0)+,x0  y:(r4)+,y0  ;get x(0), h0            1  1
+  do    #ntaps,_fir_cupdate   ;do fir and coefficient update       2  3
+  mac   x0,y0,a   y0,b        b,y:(r5)+   ;fir, copy h, save new h 1  1
+  macr  x0,y1,b   x:(r0)+,x0  y:(r4)+,y0  ;update h, new x, new h  1  1
+_fir_cupdate
+  rnd   a       x:(r0)+n0,x0  b,y:(r5)+   ;update r0, save last h  1  1
+ 
+  (Get d(n), subtract fir output (reg a), multiply by "u", put
+   the result in y1. This section is application dependent.)
+ 
+  movep         a,y:output         ;output fir if desired
+  jmp           _smploop
+                                                             ----- -----
+                                                              7    2N+6
+ 
+ 
+ 
+ 
+^Z
+
