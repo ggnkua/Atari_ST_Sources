@@ -1,0 +1,1 @@
+#ifndef __Manitor_200Hz_h__#define __Manitor_200Hz_h__#include <Types2B.h>extern volatile int32 my_200Hz;extern int32 my_200Hz_begin;extern bool install_200Hz();extern bool deinstall_200Hz(bool is_super, bool wait);#endif

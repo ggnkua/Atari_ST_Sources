@@ -1,0 +1,1 @@
+#ifndef __Manitor_VDITrace_h__#define __Manitor_VDITrace_h__#include <trapper.h>extern void CDECL VDICallTrace(VDIPB *para, int16 *call_original, int16 super_called);extern void CDECL VDIReturnTrace(VDIPB *para, int16 is_super);#endif

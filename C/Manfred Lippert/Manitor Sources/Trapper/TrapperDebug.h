@@ -1,0 +1,1 @@
+#ifndef __Trapper_h__#define __Trapper_h__#define COUNT_JUMPTABLE_USE 0#endif

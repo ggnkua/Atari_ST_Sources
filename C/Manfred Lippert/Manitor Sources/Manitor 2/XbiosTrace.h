@@ -1,0 +1,1 @@
+#ifndef __Manitor_XbiosTrace_h__#define __Manitor_XbiosTrace_h__#include <trapper.h>extern int32 CDECL XbiosCallTrace(int16 *para, int16 *call_original, int16 super_called);extern int32 CDECL XbiosReturnTrace(int32 ret, int16 *para, int16 is_super);#endif

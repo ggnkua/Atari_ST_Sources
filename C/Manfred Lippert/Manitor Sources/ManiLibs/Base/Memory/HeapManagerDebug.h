@@ -1,0 +1,1 @@
+// Prefix file for debugging#define HEAPMANAGER_DEBUG 0	// debug malloc calls#define DEBUG_OS_ERR 1			// print out all OS errors that are given to Err.setOS())#if HEAPMANAGER_DEBUG#include <stdlib.h>#include <Types2B.h>#define malloc(x) debug_malloc(x, __FILE__, __LINE__)extern void *debug_malloc(size_t size, char *file, int32 line);#endif

@@ -1,0 +1,1 @@
+#ifndef __Manitor_AESTrace_h__#define __Manitor_AESTrace_h__#include <trapper.h>extern void CDECL AESCallTrace(AESPB *para, int16 *call_original, int16 super_called);extern void CDECL AESReturnTrace(AESPB *para, int16 is_super);#endif

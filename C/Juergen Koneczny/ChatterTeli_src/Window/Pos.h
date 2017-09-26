@@ -1,0 +1,1 @@
+void	UnSetPosWindow( WORD WinId );

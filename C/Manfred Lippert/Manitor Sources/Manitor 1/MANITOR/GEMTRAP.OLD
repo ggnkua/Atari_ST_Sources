@@ -1,0 +1,114 @@
+.export new_gemtrap
+.export old_gemtrap
+.import aes_trace
+.import vdi_trace
+.import show_aesreturns
+.import show_vdireturns
+.import ret_semaphore
+.import akt_ret
+.import ret
+.import my_200hz
+.import p_run
+
+.EVEN
+.super
+
+/********* Neuer GEM-Trap (trap #2) ***********/
+
+dc.l 'XBRA'
+dc.l 'MANI'
+old_gemtrap: ds.l 1
+new_gemtrap:
+
+	cmp.w #200,d0		; AES?
+	beq.s is_aes
+	cmp.w #115,d0		; VDI?
+	bne.s ende_vditrap
+
+/********* Neuer VDI-Trap ***********/
+
+is_vdi:
+	movem.l d0-a6,-(sp)
+	move.l d1,a0		/* Zeiger auf VDIPB */
+	bsr vdi_trace
+	movem.l (sp)+,d0-a6
+	
+ende_vditrap:
+	move.l old_gemtrap, -(sp)
+	rts
+
+
+/********* Neuer AES-Trap ***********/
+
+AES_MAX_REENTRANCE 16
+aes_reentranz: dc.w 0	; Wie oft wurde eigetreten?
+
+AES_INFO_SIZE = 2			; 2 longs (basepage/old_return)
+aes_info: ds.l (AES_INFO_SIZE * AES_MAX_REENTRANCE)
+
+/*
+aes_semaphore: dc.w 0
+aes_oldreturn: ds.l 1
+aes_merkbaspag: ds.l 1
+aes_merkbaspag2: ds.l 1
+*/
+
+is_aes:
+	movem.l d0-a6,-(sp)
+	move.l p_run,a0	/* Zeiger auf Zeiger auf Basepage */
+	move.l (a0),aes_merkbaspag2
+	move.l d1,a0		/* Zeiger auf AESPB */
+	bsr aes_trace
+	movem.l (sp)+,d0-a6
+
+	tst.w show_aesreturns
+	beq.s ende_aestrap
+
+	tas.b aes_semaphore	; Semaphore testen und setzen
+	bne.s ende_aestrap	; reentranter Aufruf geht nicht
+
+	move.l aes_merkbaspag2, aes_merkbaspag	; Basepage merken
+	move.l 2(sp),aes_oldreturn	; alte Return-Adresse merken
+	move.l #nach_aestrap,2(sp)	; Return verbiegen
+
+ende_aestrap:
+	move.l old_gemtrap, -(sp)
+	rts								; in Trap "reingehen"
+
+nach_aestrap:						; hier kommt man evtl. wieder raus!
+	movem.l d1/a0/a1,-(sp)
+
+	tas.b ret_semaphore		; Semaphore testen und setzen
+	bne.s ende_nach_aestrap	; Anderer kam in die Quere :-(
+
+	move.w akt_ret,d1			; aktueller Return-Zaehler
+	addq.w #1,akt_ret			; ZÑhler hochzÑhlen
+
+	and.l #$f,d1				; Ring
+	lsl.l #5,d1					; * 32 (sizeof(RETURN))
+	lea.l ret,a0				; Adresse Return-Tabelle
+	adda.l d1,a0				; aktueller Eintrag
+
+	tst.w (a0)					; state != RET_EMPTY ? -> Ringpuffer voll!
+	beq.s nach_aestrap_ok	; noch Platz
+
+	subq.w #1,akt_ret			; kein Platz mehr -> wieder zurÅckzÑhlen
+	clr.b ret_semaphore		; Semaphore freigeben
+	bra.s ende_nach_aestrap	; raus!
+
+nach_aestrap_ok:				; noch Platz
+	move.l a0,a1				; Anfang auch in a1 merken
+	move.w #1,(a0)+					; state: RET_BUSY eintragen
+	clr.b ret_semaphore		; Semaphore freigeben
+
+	move.l my_200hz,(a0)+			; hz200
+	move.w #4,(a0)+					; typ: RET_AES
+	move.l d0,(a0)+					; ret: d0
+	move.l aes_merkbaspag,(a0)+	; bas
+	move.w #2,(a1)						; state: RET_READY eintragen
+
+ende_nach_aestrap:
+	movem.l (sp)+,d1/a0/a1
+	move.l aes_oldreturn,-(sp)
+	clr.b aes_semaphore		; Semaphore freigeben
+	rts

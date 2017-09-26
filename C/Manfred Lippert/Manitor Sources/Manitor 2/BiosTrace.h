@@ -1,0 +1,1 @@
+#ifndef __Manitor_BiosTrace_h__#define __Manitor_BiosTrace_h__#include <trapper.h>extern int32 CDECL BiosCallTrace(int16 *para, int16 *call_original, int16 super_called);extern int32 CDECL BiosReturnTrace(int32 ret, int16 *para, int16 is_super);#endif

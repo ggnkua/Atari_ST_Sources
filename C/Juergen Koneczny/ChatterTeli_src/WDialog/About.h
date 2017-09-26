@@ -1,0 +1,1 @@
+void	OpenAboutDialog( WORD Global[15] );

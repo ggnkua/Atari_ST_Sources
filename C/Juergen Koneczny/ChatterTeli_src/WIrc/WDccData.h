@@ -1,0 +1,2 @@
+WORD	AskDccRx( IRC *Irc, BYTE *Nickname, BYTE *File, UWORD Port, ULONG IP, ULONG Size, WORD Global[15] );
+WORD	StartDccTx( IRC_SESSION *IrcSession, BYTE *Nickname, ULONG Size, BYTE *File, ULONG Filesize, WORD Global[15] );

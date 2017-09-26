@@ -1,0 +1,296 @@
+HOST.C
+
+hostent	*dns_gethostbyname(const char *name)
+{
+	ierr=res_query((char*)name, C_IN, T_A, buf, 1024);
+}
+
+----------------------------------------------------
+
+SOCKIOS.C
+
+int cdecl getsockopt(int s, int level, int optname, void *optval, int *optlen)
+{
+			*(long*)optval=tcp_get_sendbufsize(sd->tcp_handle);
+}
+
+int cdecl select(int nfds, fd_set	*readlist, fd_set *writelist, 
+                 fd_set *exceptlist, timeval *TimeOut)
+{
+			/* Get information from transport-layer */
+			if(sd->type==SOCK_STREAM) /* TCP-Connection */
+			{	
+				if(sd->flags & SF_PARENT) /* Listen-socket */
+				{
+					in_this=check_assigned_tcb(sd->handle);
+					if(in_this>=0)
+						tcp_status(in_this, &mtcb);
+					else /* No new connection, ignore this one */
+					{clear_flag(SOCK_SEM); continue;}
+				}
+				else
+				{
+					if(sd->tcp_handle < 0)
+						mtcb.state=TCPS_CLOSED;
+					else if(tcp_status(sd->tcp_handle, &mtcb) < 0)
+					/* tcb was deletet (probably due to timeout on connection) */
+						mtcb.state=TCPS_CLOSED;     /* 		^ This already puts info in mtcb */
+				}
+			}
+
+
+			/* Select readlist */
+			if((readlist) && (FD_ISSET(c, readlist)))
+			{ /* TCP-Connection? */
+				if(sd->type==SOCK_STREAM)
+					switch(mtcb.state)
+					{
+						case TCPS_CLOSED:	case TCPS_CLOSING: case TCPS_LASTACK:	case TCPS_TIMEWAIT:
+							++wont;
+						break;
+						case TCPS_CLOSEWAIT:
+							/* remote host has send fin */
+							if(mtcb.recv_buf_len > 0)
+							{	++res; FD_SET(c, &mread); }
+							else
+								++wont;
+						break;
+						case TCPS_FINWAIT1: case TCPS_FINWAIT2: 
+						case TCPS_ESTABLISHED: 
+							if(mtcb.recv_buf_len > 0)
+							{	++res; FD_SET(c, &mread); }
+						break;
+						/* Other states are ignored until they change to one of the above */
+					}
+				else /* UDP-Connection */
+				{
+					in_this=udp_status(sd->port);	/* returns number of recv- */
+					if(in_this > 0)								/* buf Bytes or -1 of port */
+					{	++res; FD_SET(c, &mread);	} /* not prepared for recv */
+					else if(in_this < 0)
+						++wont;
+				}
+			}
+			/* Select exceptlist */
+			if((exceptlist) && (FD_ISSET(c, exceptlist)))
+			{
+				if(sd->type==SOCK_STREAM)	/* Exceptions can only occur on TCP */
+				{/* and only when reading is possible */
+					switch(mtcb.state)
+					{
+						case TCPS_CLOSED:	case TCPS_CLOSING: case TCPS_LASTACK: case TCPS_TIMEWAIT:
+							++wont;
+						break;
+						case TCPS_ESTABLISHED: case TCPS_FINWAIT1: case TCPS_FINWAIT2: case TCPS_CLOSEWAIT:
+							if(mtcb.recv_flags & 3) /* PSH or URG */
+							{	++res; FD_SET(c, &mexce); }
+						break;
+						/* Other states are ignored until they change to one
+							 of the above */
+					}
+				}
+				else /* UPDs can never except */
+					++wont;
+			}
+}
+
+----------------------------------------------------
+
+SYSTEM.C
+
+void timer_jobs(void)
+{
+	timer_malloc();
+	tcp_timer_jobs();
+	ip_timer_jobs();
+	if(defaults.using_ppp)
+		ppp_timer_jobs();
+	else
+		slip_timer_jobs();
+}
+
+----------------------------------------------------
+
+SOCKETS.C
+
+int cdecl listen(int s, int backlog)
+		ierr=tcp_open(sd->port, -1, 0, sd->handle, &(sd->tcp_sig), defaults.user_timeout, 
+             defaults.precedence, defaults.security);
+
+int cdecl accept(int s, const void *addr, int *addrlen)
+		tcp_handle=find_assigned_tcb(sd->handle, sa);
+
+int cdecl connect(int s, const void *addr, int addrlen)
+		state=tcp_status(sd->tcp_handle, &mtcb);
+	tcph=ierr=sd->tcp_handle=tcp_open(sd->port, sa->sin_port, sa->sin_addr, 0, 
+      &(sd->tcp_sig), defaults.user_timeout, defaults.precedence, defaults.security);
+		ierr=tcp_status(tcph, NULL);
+
+int cdecl send(int s, const void *msg, int len, int flags)
+	state=tcp_status(sd->tcp_handle, NULL);
+			ierr=tcp_send(sd->tcp_handle, msg, len, flags, -1);
+
+long cdecl recv(int s, void *buf, long len, int flags)
+	ierr=tcp_status(sd->tcp_handle, &mtcb);
+		ierr=tcp_recv(tcph, buf, len, &dum, flags);
+	ierr=tcp_status(sd->tcp_handle, mtcb);
+
+int cdecl shutdown(int s, int how)
+		tcp_kill_childs(sd->handle);
+	state=tcp_status(sd->tcp_handle, NULL);
+			sd->so_error=state=tcp_close(sd->tcp_handle);
+
+int cdecl sclose(int s)
+		tcp_kill_childs(sd->handle);
+	state=tcp_status(sd->tcp_handle, NULL);
+					tcp_close(sd->tcp_handle);
+						state=tcp_status(sd->tcp_handle, NULL);
+					tcp_abort(sd->tcp_handle);
+				tcp_close(sd->tcp_handle);
+
+int cdecl getpeername(int s, void *addr, int *addrlen)
+		switch(tcp_status(sd->tcp_handle, &mtcb))
+
+void sockets_abort(void)
+	tcp_all_abort();
+
+***************************
+
+int	tcp_open(int src_port, int dst_port, ulong dst_ip, int act_pas, int *tcp_sig,
+        int user_timeout, byte precedence, int security)
+{/* 
+	act_pas: 0=Active,>0=Passive (handle of the parent-socket)
+	tcp_sig: Integer to write con-reset signal at
+	user_timeout: in seconds. Connection will be closed if tcp can't send
+								a buffer within <user_timeout> seconds.
+								For none-timeout set to -1
+	precedence=precedence used in IP-Options
+	sec_comp=Security/Compartment used in IP-Options
+ */
+
+int	check_assigned_tcb(int parent)
+{/* Return tcp-handle of first assigned child or ERROR if none */
+ /* parent=socket-handle given on passive tcp_open call */
+
+int	find_assigned_tcb(int parent, sockaddr_in *addr)
+{/* Return tcp-handle of first assigned child or ERROR if none */
+ /* parent=socket-handle given on passive tcp_open call */
+ /* Assign the found tcb */
+
+int	tcp_status(int handle, tcb *dtcb)
+{/* Copies tcb to dtcb and returns status on success.
+		if dtcb is set to NULL, only status is returned
+    Else EIHNDL will be returned */
+
+int	tcp_send(int handle, uchar *buf, int len, int flags, int user_timeout)
+{/*
+	flags: #0=PUSH, #1=URGENT
+	user_timeout: timeout in seconds(overrides timeout in tcp_open)
+	  					 	if timeout=-1, user_timeout from open is used
+ */
+
+long	tcp_recv(int handle, uchar *buf, ulong len, int *flags, int peek)
+{/* The received flags (#0=PUSH, #1=URGENT) will be copied
+		to <flags>.
+		if <peek> is != 0, the bytes will stay in the buffer, thus beeing
+		recopied on the next tcp_recv-call.
+		The number of bytes copied to <buf> will be returned
+ */
+
+void tcp_kill_childs(int parent)
+{/* Deletes all unassigned tcb-childs of <parent>*/
+
+int tcp_close(int handle)
+
+int tcp_abort(int handle)
+
+void tcp_all_abort(void)
+
+
+typedef struct	_tcb
+{
+	struct	_tcb	*next;
+	
+	int		state;				/* TCPS_* */
+	int		handle;				/* TCP local handle */
+	int		parent_sock;	/* handle of parent socket if listen tcb */
+	int		*tcp_sig;			/* int to write at, if connection fails */
+	int		src_port;			/* adresses */
+	int		dst_port;
+	ulong	src_ip;
+	ulong	dst_ip;
+	
+	byte	precedence;		/* tcp parameters */
+	int		security;
+	byte	TOS;
+	int		TTL;
+	
+	long	close_timeout;		/* value for close_timer when starting */
+	long	close_timer;			/* running in TCPS_TIMEWAIT */
+	long	connection_timer;	/* running in SYNSENT and SYNRCVD */
+	long	user_timeout;			/* how long will a segment stay in the retransmission queue
+                             until deletion */
+	long	retrans_timeout;	/* how long until retransmission if not ACKed */
+	
+	ulong	snd_isn;					/* my initial sequence number (sn) */
+	ulong	snd_una;					/* highest unacknowledged sent byte */
+	ulong	snd_next;					/* next sn to send */
+	uint	snd_wnd;					/* size of send window */
+	ulong	snd_buf_next_isn;	/* ISN for first byte of a new buffer */
+	tcp_send_buffer	*first;	/* Pointer to first buffer to send */
+	
+	ulong	rcv_next;			/* next expected sn */
+	uint	rcv_wnd;			/* size of rcv window */
+	long	recv_up;			/* Received Urgent Pointer */
+	int		recv_flags;		/* Received Flags, #0=Push, #1=Urgent */
+	ulong	recv_isn;			/* Received ISN */
+	ulong	rbuf_isn;			/* ISN of first byte in buffer */
+	ulong	recv_buf_len;	/* Used Bytes in Receiving buffer */
+	ulong	recv_buf_siz;	/* Size of Receiving buffer */
+	uchar	*recv_buf;
+}tcb;
+
+----------------------------------------------------
+
+
+UDP
+
+int cdecl bind(int s, const void *addr, int addrlen)
+		err=udp_open(sd->port);	/* uses tmalloc, maybe free SOCK_SEM before? */
+
+int cdecl sendto(int s, const void *msg, int len, int flags, void *to, int tolen)
+		ierr=udp_open(sd->port);
+	ierr=udp_send(sd->port, ad->sin_port, ad->sin_addr, msg, len);
+
+
+long cdecl recvfrom(int s, void *buf, long len, int flags, void *from, int *fromlen)
+		ierr=udp_recv(sd->port, buf, (int)len, flags, &ad, &c);
+
+int cdecl shutdown(int s, int how)
+			udp_close(sd->port);
+
+int cdecl sclose(int s)
+			udp_close(sd->port);
+
+void sockets_abort(void)
+	udp_all_abort();
+
+
+int udp_open(int port)
+{/* Prepares UDP-Port number <port> to receive incoming data
+    returns E_OK or any errors (ENSMEM, ENHNDL) */
+
+int	udp_send(int src_port, int dst_port, ulong dst_ip, uchar *buf, int len)
+
+int udp_recv(int port, uchar *buf, int len, int peek, void *from, int *fromlen)
+{
+	/* <from> will be filled with the sender's data */
+	/* fromlen indicates <from>-size on call and gives back len
+	   of copied adress */
+	/* if <port> isn't ready to receive any data, -1 is returned,
+		 else the number of received bytes (which might of course be 0) */
+
+int udp_close(int port)
+
+void udp_all_abort(void)
+
