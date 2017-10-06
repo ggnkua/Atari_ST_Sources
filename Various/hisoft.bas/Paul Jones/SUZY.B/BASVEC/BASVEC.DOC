@@ -1,0 +1,302 @@
+
+
+BASVEC.DOC - for BASVEC_E.BAS - Release #01, Version 0.90, On 10/05/91
+
+
+     The BasVec System ----------------------------------------------------
+
+     BasVec is a system for compiled Basic programmers that allows Basic
+code to be installed in an exception vector, allowing Basic programmers to
+write programs that do things previously possible only in advanced (and
+difficult to learn, write and debug) assembly language.
+
+
+     The Basic Side of Basvec ---------------------------------------------
+
+
+     An example BasVec application is provided in the Basic source file
+'BASVEC_E.BAS'.  It is written in HiSoft Basic, and this document assumes
+HiSoft also, so some translation of both may be necessary if you use a
+different one (also BasVec has only as yet been tested with HiSoft).
+     The example source includes initialization and other code that may be
+useful as is for other applications; most of it is self explanitory, but
+see the next section for the meaning of some returned variables.
+     Installing exception handlers is most useful in terminate-and-stay-
+resident programs that allow you to run other programs while your handler
+lives on in the background; of course, BasVec allows you to do this.
+In HiSoft, the gemdos library necessary for the 'Ptermres' call takes 1500+
+bytes, so a much smaller TSR routine is provided as a convenience.
+     Warning: When developing a basvec application, do NOT TSR while in the
+compiler/editor!  Due to the way memory is allocated, you will have set up
+a time bomb that could go off at any time, and should reboot immediately
+or operate at your peril!  At most save your source if you otherwise would
+loose a lot of work, then reboot.  And fix your code so it doesn't happen
+again!
+     Also, select the compile options 'Max Speed' to prevent the Basic
+runtime package from polling the keyboard, etc., slowing down your code,
+and taking up more memory; select Error Messages 'Off' for the same reason.
+These suggestions may be selectively ignored during development, but should
+be applied to the final version.
+
+
+     The Machine Language Side of BasVec ----------------------------------
+
+
+     The system works via a small library of machine language routines
+and a global parameter block used for communication between Basic and
+BasVec.  There is also a block of code that is duplicated for additional
+vectors beyond the first, known as dispatchers, each with it's own
+associated parameter block (local parameter blocks) and small library of
+routines.  The first dispatcher and it's parameter block are intrinsic and
+automatically available.
+     The machine language in the Basic data is preceded by three numbers:
+the length of the remaining data in longwords (including the next two
+numbers), the length of the local parameter block(s) in longs, and the
+length of the dispatcher block(s) in longs.  These are returned in the
+variables bl& (1st - 2), bx&, and bd& by the basic init code, and the
+actual basvec block is returned in b&() ('&' assumed below).
+     The first dispatcher is included in the basvec block, and local
+parameter blocks always immediately follow their dispatchers (at
+local(bd)), so the first local parameter block immediately follows the
+basvec block (at b(bl)).
+
+
+     The header of the basvec block contains the global parameter block and
+the global library entry table.
+
+     Global Header Structure ----------------------------------------------
+
+     Index:    Name:          Description:
+
+     long 0    h_vec_f        Global vector disable flag (true = disable)
+          1    h_local_p      Pointer to local block, else null
+          2    h_keep_c       Memory count, in bytes, to keep on TSR
+
+          3    h_super_e      Set supervisor mode routine entry point
+          4    h_init_e       Initialize vector entry point
+          5    h_exit_e       Terminate and Stay Resident entry point
+          6    0              (End of entry table)
+
+          7    h_chain_p      * Last installed param block or 0 (read only)
+
+     ----------------------------------------------------------------------
+
+     'H_vec_f' will disable /all/ basvec-installed vector routines if set
+to true until reset to false.
+     'H_local_p' points to the local block to initialize, large enough to
+hold both the dispatcher block and the local parameter block (size bd+bx).
+If null, built-in local block is assumed (at b(bl)).
+     'H_keep_c' holds the amount of memory to keep on TSR exit.  This may
+need to be determined empirically.  For HiSoft Basic, the 'K(eep)' option
+should be used to specify how much memory Basic should keep /in addition
+to/ the program (14K minimum for the example).  If wrong, the worst that
+should happen is a Basic 'out of memory' error, UNLESS it is specified much
+too small, in which case basic will ignore it and decide how much to keep;
+if you assume basic is actually using the keep value in this case, you're
+doomed.  The value in h_keep_c is the basic keep value PLUS the size of the
+program, plus a safety margin if you're paranoid (28K total in example).
+If THIS value is too small, you are doomed.
+
+     'H_super_e' is the entry point to a routine that sets the processor's
+supervisor mode (as opposed to user mode), which is neccessary to access
+the machine vectors.  This should be called once before calling init.
+After this call, basic may also access vectors, system variables, hardware
+registers, etc.  All basic subprograms installed in vectors will be called
+in supervisor mode automatically.
+     'H_init_e' is the entry point to the routine that actually installs
+basic subprograms in machine vectors.  It should be called only after
+setting up the appropriate local parameter block (see h_local_p), once for
+each.  Use 'calls', not 'call loc', to supply a (possibly) more accurate
+register set, which will be saved and used by basvec when calling basic
+subprograms.  Init will copy the intrinsic dispatcher block to the
+destination block.
+     'H_exit_e' is the exit point, and should be called as the last action
+of the program, in lieu of 'end' or 'system' (see h_keep_c).
+
+     'H_chain_p' is set by every init call to point to the most recently
+installed local parameter block.  It is used by init to link parameter
+blocks into a single structure for easier system-wide operations.
+
+
+     The header of each local block contains the local library entry table.
+The intrinsic local block is located at b(bl-bd).
+
+     Local Header Structure -----------------------------------------------
+
+     Index:    Name:          Description:
+
+     long 0    d_sr_e         Set sr according to pb_sr (see below)
+          1    0              (End of entry table)
+
+     ----------------------------------------------------------------------
+
+     'D_sr_e' is the entry point to a routine that sets the processor's
+status register, which may be neccessary in some applications where the IPL
+must be modified in a part of the basic code, such as to block or enable
+certain interrupts temporarily (see pb_sr below).
+
+
+     Each local block contains a local parameter block at local(bd).  The
+intrinsic local parameter block is located at b(bl).
+
+     Local Parameter Structure --------------------------------------------
+
+     Index:    Name:          Description:
+
+     long  0   p_glob_p       Pointer to global parameter block
+           1   p_link_p       Pointer to previous param struct, else null
+
+           2   pv_p           Pointer to machine vector
+           3   pv_reent_c     Blocked reentrances count
+           4   pv_abort_f     Abort exit flag (false=continue, true=return)
+
+           5   pt_c           Vector countdown timer (-1 = off)
+           6   pt_reset_c     Timer reset count
+           7   pt_io_c        I/O timer reset count (-1 = none)
+
+           8   pp_ss_p        Pointer to process's supervisor stack
+           9   pp_us_p        Pointer to process's user stack
+
+          10   pb_sr          Basic sr or true/false = process's/exception
+          11   pb_regs        Basic's starting register set (d3-d7/a3-a6)
+          20   pb_v           Basic handler vector
+          21   pb_call_f      Call flag: false/true/1 = prefix/post/replace
+
+          22   ph_sr          Displaced handler continue sr (0 = no chg)
+          23   ph_v           Displaced handler vector
+
+     ----------------------------------------------------------------------
+
+     General:
+     'P_glob_p' is set by init to point to the global parameter block.
+     'P_link_p' is set by init to point to the local parameter block of the
+last local block initialized (vector installed).  Thus any parameter block
+can be used to find all others.
+
+     Vector:
+     'Pv_p' is set from basic before initialization to point to the vector
+to install a basic subprogram in.  Note that this must be a machine vector,
+exited through an RTE, not a soft vector exited through an RTS.
+     'Pv_reent_c' counts reentries, that is, when an exception occurs while
+the basic subprogram has not finished handling the last exception yet.  In
+this case, the basic code is not reentered, but this counter is
+incremented, thus the basic code can detect further exceptions in software
+and act appropriately.  Note that in the case of an interrupt exception,
+reentry cannot occur unless the status register's IPL is lowered
+explicitly.  If no reentry has occured within the exception subprogram,
+pv_reent_c will equal zero.  Other code will see a -1 when no exception
+is being processed (only a different exception at a higher priority will
+ever see a value > -1).
+     'Pv_abort_f' indicates the action to be taken when the dispatcher
+decides not to call the basic subprogram after an exception has occured,
+whatever the reason.  False indicates continue, that is, jump through the
+original vector as if the basic subprogram weren't there.  True indicates
+return, which means ignore the exception, don't call basic or the original
+handler.  Among the reasons to not call the basic handler are: reentry,
+global disable, timer (see below) disabled, timer not done, or disk/DMA I/O
+in progress (see pt_io_c).
+
+     Timer:
+     The timer system is only meant to be useful with timed interrupts,
+except for the disble feature.
+     'Pt_c' is the timer counter and is normally decremented upon each
+exception.  If it is > 0, the basic subprogram is not called.  If it is 0,
+it is reset and the basic subprogram is called.  If it is -1, it remains -1
+and the basic handler is never called (local disable feature).
+     'Pt_reset_c' is the count reloaded into pt_c after it counts down to
+zero.  Note that init does not set pt_c, so the initial delay may (must)
+be set independently of the subsequent delays.
+     'Pt_io_c' is the minimum delay specified to suspend basic exception
+processing after a time-critical I/O operation has been detected.  Pt_c is
+set to this value if and only if it does not already indicate an equal or
+longer delay.
+
+     Process:
+     'Pp_ss_p' is the suspended process's supervisor stack pointer.  It
+points to the register set in use at the time of the exeption (d0-d7/a0-a6)
+followed by the process sr (word), pc, and supervisor stack contents.
+     'Pp_us_p' is the suspended process's user stack pointer.  It points to
+the user stack contents.  To determine which stack was in use at the time
+of the exception, check the super/user bit (&h2000) of the process sr (such
+as for locating parameters of OS trap calls).
+
+     Basic:
+     'Pb_sr' determines the sr to be used within the basic handler.  False
+indicates use exception sr (supplied automatically by processor);  true
+indicates use process's; a positive value is the literal sr to use.  Note
+that choosing a different sr in an interrupt handler may allow reentrances.
+Note that pb_sr is used automatically by the dispatcher, but also
+explicitly by d_sr_e (above).
+     'Pb_regs' is the location of the register set (d3-d7/a3-a6) used every
+time the basic subprogram is called, set by init to the register set it
+receives through it's 'calls' invocation.
+     'Pb_v' is the actual vector used by the dispatcher to call basic.  It
+contains the pointer to the basic subprogram called to handle exceptions.
+The subprogram should be defined by 'def sub [name]'...'end sub' and it's
+pointer obtained through 'varptrs([name])'.  It should accept no
+parameters, although it may use global variables for them.
+     'Pb_call_f' is a three-state flag indicating the relationship between
+the basic handler and the displaced (old) handler.  True indicates postfix,
+or call the basic handler after calling the original handler.  False means
+prefix or call the basic handler before calling the original handler.  One
+means replace, or only call the basic handler.  Note that pb_call_f applies
+only when the basic call is not blocked; see pv_abort_f (above).
+
+     Handler:
+     'Ph_sr' specifies the sr to use when calling the displaced handler,
+whether part of a basic-handled event or an abort.  A zero indicates keep
+sr currently in use.
+     'Ph_v' is the displaced handler vector, used to call the original
+handler whenever necessary.  Also can (must) be used if and when it is
+necessary to deinstall the basic handler.
+
+
+     This is a preliminary version of BasVec and has a few problem areas:
+
+     - Screen I/O: Text I/O interferes with other text I/O; text screen
+     scrolling and graphics I/O crashes GEM (line A vars must be saved); 
+     all screen I/O interferes with blitter when on.  But this is more of
+     a multitasking area than what basvec is intended to do.
+
+     - Violates an ST commandment by using supervisor stack.  If mysterious
+     crashes occur (they inevitably do in exception programming), try
+     booting with fewer installing AUTO programs or shallower nesting of
+     subroutines in the basic handler.
+
+     - Does not currently support XBRA protocol.
+
+     - Multiple local blocks feature is untested.
+
+     These should be fixed in version 1.0.
+
+
+     ----------------------------------------------------------------------
+
+
+     If you'd like a particular feature or just more features generally,
+here's what you have to do: just ask!
+     If you'd like this program (or others) to have a future, or you'd like
+to donate $5 towards that cause or in sincerest thanks, here's where:
+
+     BCS-Atari BBS: (617)396-4607; leave mail for Tom Nolan
+     (Boston Computer Society Atari User Group Bulletin Board System)
+
+     Or:
+
+     Power Supply Software
+     5 South St.
+     Peabody, MA 01960-6121
+     (508)532-0615 (ask for Mike)
+
+     This package should contain this file, BASVEC.DOC and the program
+source BASVEC_E.BAS.
+
+    History:
+      Release #01, Version 0.90, On 10/05/91 - original
+
+     This program is Copyright (c) 1991.  It may be distributed for and
+only for free, and only accompanied by this documentation in its entirety.
+
+
+End of Document -----------------------------------------------------------
+

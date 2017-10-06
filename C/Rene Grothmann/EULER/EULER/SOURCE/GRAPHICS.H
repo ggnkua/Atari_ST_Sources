@@ -1,0 +1,31 @@
+/* graphics.c */
+
+void mplot (header *hd);
+void mplot1 (header *hd);
+void mmark (header *hd);
+void mcontour (header *hd);
+void mwire (header *hd);
+void msolid (header *hd);
+void msolid1 (header *hd);
+void mview (header *hd);
+void mmesh (header *);
+void ghold (void);
+void show_graphics (void);
+void mctext (header *hd);
+void mtext (header *hd);
+void mtextsize (header *hd);
+void mstyle (header *hd);
+void mcolor (header *hd);
+void mfcolor (header *hd);
+void mwcolor (header *hd);
+void mtcolor (header *hd);
+void mwindow (header *hd);
+void mwindow0 (header *hd);
+void mscale (header *hd);
+void mmouse (header *hd);
+void mproject (header *hd);
+void mview0 (header *hd);
+void mholding (header *hd);
+void mholding0 (header *hd);
+void msetplot (header *hd);
+void mscaling (header *hd);

@@ -1,0 +1,9 @@
+#include <stdio.h>
+#include "mgif.h"
+#include "file.i"
+#include "low.i"
+#include "mgif.i"
+#include "readgif.i"
+#include "readpi.i"
+#include "process.i"
+#include "flicker.i"

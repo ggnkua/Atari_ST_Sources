@@ -1,0 +1,5 @@
+;MINID
+ DAT -1
+START MOV #0 <-1
+ JMP START
+END

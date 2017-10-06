@@ -1,0 +1,2 @@
+"ams.olb" can be create in this directory by using the makefile in ../src.
+

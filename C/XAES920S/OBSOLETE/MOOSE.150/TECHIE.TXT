@@ -1,0 +1,251 @@
+*** How to program the Moose ********************************* (tabs=4) ***
+
+NOTE: I have attempted to use program code that looks like C, but I can
+only read C so it probably will require a good number of data type and
+syntax modifications. Where mistakes are present, I would be really
+gratefull if people could mail me repaired code so that this document
+can be made accurate.
+
+
+*** Notes on training your Moose ******************************************
+
+When writing commands to the Moose, it is important to remember that you
+may only write one command at a time. If you try to write more than one
+command in a single Fwrite(), only the first one will be interpreted by
+the Moose.
+
+The return value from Fwrite() is NOT the number of bytes written but an
+error code type thing. If the returned value is 0 then an error occured.
+Anything else is reserved for future use but may be interpreted as
+success.
+
+The best way to implement these commands is to make a set of subroutines,
+one for each command. The example subroutines below all take a parameter
+moose_file_handle. In your program, it may be more convenient to have this
+as a global variable, in which case, you can simply drop that parameter.
+
+
+*** Step by step Moose usage **********************************************
+
+** Wake your Moose ********************************************************
+
+First you need to Fopen() a channel to the Moose. This channel MUST be for
+reading and writing since you have to write commands to it and you would
+really like to be able to read from it (wouldn't you? :).
+
+From now on, I refer to this read/write file handle as moose_file_handle.
+
+
+** Feed your Moose ********************************************************
+
+You have  to send Moose the pointer to the IKBD table. This can be obtained
+from the Xbios will function number 22(hex). The Atari Compendium calls
+this command Kbdvbase().
+
+Below are the structures and definitions required for init_moose():
+
+
+#define	MOOSE_INIT_COM_PREFIX=0x4d49	/* 'MI' */
+
+
+typedef struct moose_init_com {
+	WORD	init_prefix;
+	KBDVECS	*ikbd_table;
+} MOOSE_INIT_COM;
+
+
+/* init_moose() returns the number of bytes written to the Moose. To check
+ * for errors, just see if the returned LONG is 0 - if it is, then an
+ * error occured
+ */
+
+LONG init_moose(WORD moose_file_handle)
+{
+
+/* com is a structure holding the command */
+
+MOOSE_INIT_COM com;
+
+
+	/* load the command prefix into the command */
+
+	com.init_prefix=MOOSE_INIT_COM_PREFIX;
+
+
+	/* load the pointer to the IKBD table into the command */
+
+	com.ikbd_table=Kbdvbase();
+
+	return Fwrite(moose_file_handle,sizeof(MOOSE_INIT_COM),&com);
+}
+
+
+So, now we can initialise the Moose. Once the Moose is hooked in, it
+cannot be unhooked, however, once you close the file moose_file_handle,
+the Moose will shut itself down nicely. You can then open a new channel to
+it. Any subsequent init_moose() calls will be ignored by Moose unless it
+really needs to rehook itself (in the case of opening/closing physical
+screen workstations the Moose will be unhooked by the VDI).
+
+
+** Gee, the Moose is kinda quiet... ***************************************
+
+The Moose will not send anything unless you request it to. This sounds
+stupid - like you'll have to poll it. What it actually means is that
+the Moose is multifunctional and some programs may want to use just a
+small subset of its functions.
+
+In order to make it start sending mouse button information, you have to
+set the double click time. This is sounds really stupid, I know, but
+rather than implement an entire command to tell Moose to send button data,
+I am taking advantage of the fact that if you have a double click time
+of 0, then nothing happens.
+
+So, below are the definitions, structures and an example function to allow
+you to change the double click time:
+
+
+#define	MOOSE_DCLICK_PREFIX=0x4d44	/* 'MD' */
+
+
+/* the dclick_time is specified in 200ths of a second */
+
+typedef struct moose_dclick_com {
+	WORD	dclick_prefix;
+	WORD	dclick_time;
+} MOOSE_DCLICK_COM;
+
+
+/* moose_dclick() is a nice function to let you change the double click
+ * time. it returns the number of bytes 'written' to the device. As with
+ * writting any command, if Fwrite() returns 0 then an error occured,
+ * else it worked
+ */
+
+LONG moose_dclick(WORD moose_file_handle, WORD time)
+{
+
+/* com is a structure holding the command */
+
+MOOSE_DCLICK_COM	com;
+
+	/* load the command prefix into the command */
+
+	com.dclick_prefix=MOOSE_DCLICK_COM_PREFIX;
+
+
+	/* load the dclick time into the command */
+
+	com.dclick_time=time;
+
+	return Fwrite(moose_file_handle,sizeof(MOOSE_DCLICK_COM),&com);
+}
+
+
+It's quite important that you don't tell Moose to be stupid and have a
+double click time of 1 hour. That would mean that evne if the user only
+clicked a mouse button once, it wold be an hour before your program
+got to know about it :). So, Moose has a safe guard that means that you
+cannot set the double click time to anythong more than 1 second (200).
+
+If you set the double click time to 0 (Moose starts off like this) then
+you will prevent Moose from sending anymore button reports. This might be
+usefull... There is no need to set the double click time back to 0 when
+you're finished with the Moose - it will do this automatically when you
+Fclose() your channel to it.
+
+
+** Grooming your Moose ****************************************************
+
+Next we need to be able to interpret data sent back from the Moose. This
+data will be queued until your application starts reading it.
+
+Somewhere in your program you will need to Fselect() the Moose device
+waiting for reading. This code is not included below since you can get it
+from any MiNT documentation. Do not Fselect() the Moose for writing - it
+will tell you that it's always ready to receive data.
+
+Once you have returned from Fselect(), you have to Fread() the data. The
+first WORD of the read will be a data prefix that tells you what sort of
+data you're looking at. Presently, only mouse buttons and ractangle events
+are reported, and rectangle events are only reported if you send the Moose
+rectangles to watch (see below).
+
+If you don't recognise a data prefix, then you'll have to panic :).
+
+Below are the structures and definitions for mouse button reports.
+It may be noted, that the structure does not contain the prefix
+WORD, since you will have already Fread() it:
+
+
+#define MOOSE_BUTTON_PREFIX=0x5842	/* 'XB' */
+
+
+/* x,y are the mouse coordinates at the time of the click
+ * state is the mouse button state for this click in AES format
+ * clicks is the number of clicks recorded
+ * (if multiple clicks are recorded, the x,y coordinates are for the
+ * first click)
+ */
+
+typedef struct moose_button_data {
+	WORD	x;
+	WORD	y;
+	WORD	state;
+	WORD	clicks;
+} MOOSE_BUTTON_DATA;
+
+
+You would probably use some code that looks like this to read data
+from Moose:
+
+	.
+	.
+	.
+	WORD				moose_prefix;
+	MOUSE_BUTTON_DATA 	mouse_button;
+	.
+	.
+	.
+	error=Fread(moose_file_handle,2,&moose_prefix);
+
+	switch(moose_prefix) {
+	case MOOSE_BUTTON_PREFIX:
+		error=Fread(moose_file_handle,sizeof(MOOSE_BUTTON_DATA),&mouse_button);
+		/* do something with the button data */
+		break;
+
+	defualt:
+		/* unknown data prefix - this _shouldn't_ happen */
+	};
+	.
+	.
+	.
+	
+
+The above fragment of code could either be placed in a loop (loop around
+until there's no more data to read) or you could be a little bit more lazy
+and just go straight back into your Fselect() loop whereupon Fselect() will
+return immediately if there is more data to read.
+
+
+** What other groovy tricks can my Moose do? ******************************
+
+** Okay, I'm finished with my Moose ***************************************
+
+Remember, a Moose is not just for Christmas, it's for life :).
+
+When you have finished using the Moose just do an Fclose(moose_file_handle)
+and it will sort itself out. It will remain patched into the IKBD for at
+least as long as it takes the VDI to open/close a physical workstation, but
+it won't do anything if no one is using it.
+
+If you do have any problems with the Moose, please let me know and I'll
+try to sort it out.
+
+Cheers,
+
+James Cox <jamesco@cogs.susx.ac.uk>
+
+
+***************************************************************************

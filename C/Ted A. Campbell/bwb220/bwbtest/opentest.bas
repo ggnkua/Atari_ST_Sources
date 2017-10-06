@@ -1,0 +1,12 @@
+10 PRINT "OPENTEST.BAS -- Test OPEN, PRINT#, LINE INPUT#, and CLOSE"
+20 OPEN "test.out" FOR OUTPUT AS # 1
+30 PRINT #1,"This is line 1."
+40 PRINT #1, "This is line 2."
+50 CLOSE #1
+60 OPEN "test.out" FOR INPUT AS #1
+70 LINE INPUT #1,A$
+80 LINE INPUT #1,B$
+90 PRINT "Read from file:"
+100 PRINT ">";A$
+110 PRINT ">";B$
+120 CLOSE #1

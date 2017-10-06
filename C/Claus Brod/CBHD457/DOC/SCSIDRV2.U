@@ -1,0 +1,422 @@
+
+Konzept fr Systemglobale SCSI-Routinen.										½ S. Engel 1994-1995
+
+Teil 2 : Target-Handling
+
+#
+# $Source: F:\KLEISTER.II\CBHD\RCS\scsidrv2.doc,v $
+#
+# $Revision: 1.1 $
+#
+# $Author: S_Engel $
+#
+# $Date: 1995/02/05 10:40:36 $
+#
+# $State: Exp $
+#
+#****************************************************************************
+# History:
+#
+# $Log: scsidrv2.doc,v $
+# Revision 1.1	1995/02/05	10:40:36	S_Engel
+# Initial revision
+#
+#
+#
+#
+
+
+STRUKTUREN
+
+	Typen fr Target-Routinen:
+
+			 tReqData =
+						RECORD
+							ErrCode 		: BYTE; 				(* Standard auf $70 								*)
+							SegNo 			: BYTE;
+							SenseKey		: BYTE;
+							InfoByte1 	: BYTE; 				(* ODD ADDRESS!!! 									*)
+							InfoByte2 	: BYTE;
+							InfoByte3 	: BYTE;
+							InfoByte4 	: BYTE;
+							AddLen			: BYTE; 				(* Standard auf $0A : 18 Bytes Daten *)
+							Reserved		: LONGCARD;
+							CmdSpec 		: LONGCARD; 		(* Cmd-Specific Info								*)
+							AddSense		: BYTE;
+							AddSenseQual: BYTE;
+							FieldRepl 	: BYTE;
+							SKeySpec0 	: BYTE;
+							SKeySpec1 	: BYTE;
+							SKeySpec2 	: BYTE;
+						END;
+	
+			 tpCmd						= POINTER TO ARRAY[0..11] OF BYTE;
+			 tpTargetHandler	= POINTER TO tTargetHandler;
+			 tTargetHandler 	=
+						RECORD
+							next				: tpTargetHandler;
+							TSel				: PROCEDURE ((* CSB *) SHORTCARD,
+																			 (* CSD *) SHORTCARD) : BOOLEAN;
+							TCmd				: PROCEDURE ((* Cmd *) tpCmd) : BOOLEAN;
+							TCmdLen 		: PROCEDURE ((* Cmd *) SHORTCARD) : SHORTCARD;
+*****
+Bei den drei Routinen k”nnte ich mich auf Registerbergabe einlassen, damit
+man etwas schneller ist, aber da hat man dann ja sofort die Basis fr
+Nicht-Reentranz.
+tSel mu fr andere Busse als NCR5380 evtl anders gel”st werden, eigentlich
+sollten aktueller Bus-Status und aktueller Busdateninhalt aber reichen,
+h”chstens den Busdateninhalt auf 32 Bit anheben (32-Bit-SCSI)
+*****
+
+							TReset			: PROCEDURE;
+							TEOP				: PROCEDURE;
+							TPErr 			: PROCEDURE;
+							TPMism			: PROCEDURE;
+							TBLoss			: PROCEDURE;
+							TUnknownInt : PROCEDURE;
+						END;
+	
+FUNKTIONEN
+
+	Jede Routine in tTargetHandler kann einen Nullzeiger enthalten, was bedeutet, 
+	da der Handler sich fr die Funktion nicht interessiert.
+
+	Per Install wird ein Handler eingetragen.
+	Die Installationsroutine verkettet den Handler ber next und merkt
+	sich den ersten Eintrag der Tabelle.
+	Wenn noch keine Handler installiert sind, werden die Interrupts
+	gesch„rft.
+	Grunds„tzlich werden sp„ter installierte Handler eher gerufen, also
+	kann ein sp„ter installierender Handler die Kommandos einem vorher
+	installierten Handler wegschnappen.
+
+	Bei Deinstall wird ein Handler ausgekettet. Ist kein Handler
+	mehr brig, werden die Interrupts entsch„rft.
+
+	NICHT VERGESSEN!!
+
+	Alle Routinen laufen im Interrupt ab -> keine Systemaufrufe!!!
+	TT			: Interrupt vom TT-MFP
+	Falcon	: Interrupt vom ST-MFP
+
+
+	Bei der ganzen Sache gibt es ein Problem:
+	Festplattentreiber l”schen im allgemeinen das select enable register
+	bei SCSI-Zugriffen, und somit ist daraufhin der Handler fr Kommandos
+	inaktiv.
+
+	Bekannte Verhalten von Plattentreibern:
+
+	CBHD		 : l”scht (in bisherigen Releases von Claus Brod)
+	AHDI		 : l”scht
+	HUSHI 	 : l”scht
+	HDDRIVER : l”scht anscheinend nicht
+
+	next	: N„chster Handler in der Tabelle
+					Wird vom Treiber benutzt (Finger wech)
+
+	TSel	: Selektion aufgetreten
+					Interessant zB fr reselection
+					CSD ist der aktuelle Inhalt des SCSI-Busses, maskiert mit der
+					eigenen ID -> das Bit der ID des Rufers ist gesetzt.
+					Damit kann kontrolliert werden, ob es berhaupt das Ger„t ist,
+					auf das gewartet wird.
+
+					CSB ist der aktuelle SCSI-Busstatus:
+
+					Bit 15	 Reserved 		(EDMA)
+					Bit 14	 Reserved 		(DRQ)
+					Bit 13	 Reserved 		(SPER)
+					Bit 12	 Reserved 		(INT)
+					Bit 11	 Reserved 		(PHSM)
+					Bit 10	 Reserved 		(BSY)
+					Bit 09	 /ATN
+					Bit 08	 /ACK
+					Bit 07	 /RST
+					Bit 06	 /BSY
+					Bit 05	 /REQ
+					Bit 04	 /MSG
+					Bit 03	 /C/D
+					Bit 02	 /I/O
+					Bit 01	 /SEL
+					Bit 00	 /DBP
+
+					Man sollte dabei beachten, da eine šbernahme der Selektion
+					allen anderen in der Handlerkette liegenden Handlern
+					keine Chance l„t, an der aktuellen Operation teilzunehmen.
+					Wer auf eine Reselection wartet, sollte nur diese annehmen
+					(Reselection: /I/O gesetzt)
+
+	!!!!		Nur was macht man, wenn zwei Prozesse auf eine Reselection
+	!!!!		vom gleichen Ger„t warten??
+
+					RETURN TRUE  : Zustand angenommen und behandelt
+					RETURN FALSE : interessiert mich nicht
+
+	TCmd	: Bekommt ein empfangenes Kommando angeboten
+					RETURN FALSE : Nicht an dem Kommando interessiert
+					RETURN TRUE  : Kommando verarbeitet
+
+					Wenn die Routine das Kommando verarbeitet, mu sie selbst
+					SendData, GetData, SendStatus und SendMsg abarbeiten
+					und dann auch TRUE melden.
+
+	TCmdLen: Ein Kommando ist angekommen, dessen Kommandol„nge nicht
+					bekannt ist.
+					RETURN : 0 : Dieses Kommando interessiert den Handler nicht
+									 x : Dieses Kommando soll mit x Bytes empfangen
+											 werden.
+
+					Vom Kern werden selbstt„tig bercksichtigt:
+
+					Gruppe 0 : 6-Byte-Kommando
+					Gruppe 1 : 10-Byte-Kommando
+					Gruppe 2 : 10-Byte-Kommando
+					Gruppe 5 : 12-Byte-Kommando
+
+					bei allen anderen Gruppen wird nachgefragt (z. Zt. nicht)
+
+					Gibt niemand eine Antwort, wird folgende Annahme getroffen:
+
+					Gruppe 3 : 10-Byte-Kommando 	Gruppe ist Reserved!
+					Gruppe 4 : 10-Byte-Kommando 	Gruppe ist Reserved!
+					Gruppe 6 : 12-Byte-Kommando 	Gruppe ist vendor specific
+					Gruppe 7 : 12-Byte-Kommando 	Gruppe ist vendor specific
+
+					ACHTUNG!!!
+					Wer die Kommandol„nge angibt, MUSS auch das Kommando benutzen
+					und dann TCmd bedienen!
+
+					In dem Fall, da TCmdLen gerufen wird, w„hrend der aktive
+					Handler in TSel ist, ist eh klar, da er das Kommando
+					bedient.
+					Wenn TCmdLen vom internen Kommandoempf„nger gerufen wird,
+					wird anschlieend das Kommando auch an diesen Handler per
+					TCmd bergeben! (z. Zt. nicht implementiert)
+
+
+	TReset: Der SCSI-Bus hatte einen Reset
+					Alle installierten Handler werden gerufen
+
+	TEOP	: EOP aufgetreten (zur Zeit nicht benutzt)
+
+	TPErr : Ein Parity Error ist aufgetreten (z. Zt. nicht benutzt)
+
+	TPMism: Ein Phase Mismatch aufgetreten (z. Zt. nicht benutzt)
+					Routine kann auch NIL sein
+
+	TBLoss: BSY verloren (z. Zt. nicht benutzt)
+
+	TUnknownInt: unbekannter Interrupt aufgetreten (z. Zt. nicht benutzt)
+
+
+
+ABLAUF DER INTERRUPT-BEHANDLUNG 	(ZUR ZEIT)
+
+				------------------------
+				| 										 |
+				| 	 Interrupt vom		 |
+				| 			 MFP					 |
+				| 										 |
+				------------------------
+									 |
+									 |
+									 V
+				------------------------
+				| 										 |
+				| 	 Selektion? 			 |	Nein
+				| 										 |--------->
+				| 										 |
+				| 										 |
+				------------------------
+									 |
+									 | Ja
+									 V
+				------------------------
+				| 										 |
+				| 	Interrupt-Handler  |
+	----->| 	 ber TSel rufen	 |
+	| 		| 										 |		Ja
+	| 		| 		RETURN TRUE?		 |---------> Ende
+	| 		| 										 |
+	| 		------------------------
+	| 							 |
+	| Ja						 | Nein
+	| 							 V
+	| 		------------------------
+	| 		| 										 |
+	------|  weitere Handler in  |
+				| 	der Kette?				 |
+				| 										 |
+				------------------------
+									 |
+									 | Nein
+									 V
+				------------------------
+				| 										 |
+				|  1. Kommando-Byte 	 |
+				|  empfangen					 |
+				| 										 |
+				------------------------
+									 |							 ********************************************
+									 |							 *				Noch nicht implementiert					*
+									 V							 *																					*
+				------------------------	 *					------------------------				*
+				| 										 |	 *					| 										 |				*
+				| 	Klasse 0,1,2,5? 	 |	 *	Nein		|  Handler fragen,		 |				*
+				| 										 |---*--------->|  welche Kommando- 	 |				*
+				| 										 |	 *					|  l„nge das Cmd hat.  |				*
+				| 										 |	 *			--->| 										 |------	*
+				| 										 |	 *			| 	|  Antwort 0? 				 |		 |	*
+				| 										 |	 *			| 	| 										 |		 |	*
+				------------------------	 *			| 	------------------------		 |	*
+									 |							 *			| 						 |								 |	*
+									 | Ja 					 *			| 						 | Ja 						 |	*
+									 V							 *			| 						 V								 |	*
+				------------------------	 *			| 	------------------------		 |	*
+				| 										 |	 *			| 	| 										 |		 |	*
+				|  Rest des Kommandos  |	 *			| 	|  weitere Handler in  |		 |	*
+				|  empfangen. 				 |	 *			----|  der Kette? 				 |		 |	*
+				| 										 |	 *			Ja	| 										 |		 |	*
+				| 	 Klasse  Bytes		 |	 *					------------------------		 |	*
+				| 		 0			 6			 |	 *										 |								 |	*
+				| 		 1			10			 |	 *										 | Nein 					 |	*
+				| 		 2			10			 |	 *										 |								 |	*
+				| 		 5			12			 |	 *										 V								 |	*
+				| 										 |	 *					------------------------		 |	*
+				------------------------	 *					| 										 |		 |	*
+									 |							 *					|  Rest des Kommandos  |		 |	*
+									 |							 *					|  empfangen. 				 |		 |	*
+									 |							 *					| 										 |		 |	*
+									 |							 *					| 	 10 Bytes 				 |		 |	*
+									 V							 *					| 										 |		 |	*
+				------------------------	 *					------------------------		 |	*
+				| 										 |	 *										 |								 |	*
+				| 	Interrupt-Handler  |	 *										 |								 |	*
+	----->| 	 ber TCmd rufen	 |<--*----------------------								 |	*
+	| 		| 										 |	 *																			 |	*
+	| 		| 		RETURN TRUE?		 |---*--------->Ende												 |	*
+	| 		| 										 |	 *	 Ja 																 |	*
+	| 		------------------------	 *																			 |	*
+	| 							 |							 *					------------------------		 |	*
+	| 							 |							 *					| 										 |<-----	*
+	| Ja						 | Nein 				 *					|  Rest des Kommandos  |				*
+	| 							 |							 *					|  empfangen. 				 |				*
+	| 							 |							 *					| 										 |				*
+	| 							 V							 *					|  Kommando ber TCmd  |				*
+	| 		------------------------	 *					|  von dem Handler		 |				*
+	| 		| 										 |	 *					|  abarbeiten lassen	 |				*
+	------|  weitere Handler in  |	 *					| 										 |				*
+				| 	der Kette?				 |	 *					------------------------				*
+				| 										 |	 *										 |										*
+				------------------------	 *										 |										*
+									 |							 *										 V										*
+									 | Nein 				 *									 Ende 									*
+									 V							 *																					*
+				------------------------	 ********************************************
+				| 										 |
+				|  REQUEST SENSE? 		 |
+				| 										 |
+				| 										 |
+				------------------------
+									 |
+									 | Nein
+									 V
+				------------------------		
+				| 										 |		
+				| Setze Sense Data auf |		
+				| ILLEGAL REQUEST und  | 
+				| INVALID COMMAND 		 | 
+				| OPERATION CODE			 | 
+				| 										 |		
+				| Sende Check Condition|		
+				| und Msg Cmdcomplete  |
+				| 										 |
+				------------------------
+									 |
+									 |
+									 V
+								 Ende
+
+
+STANDARDFUNKTIONEN
+
+	Als Targethandler sollten unbedingt die folgenden Funktionen installiert 
+	werden (mandatory fr Processordevices):
+
+	TEST UNIT READY (00H)
+
+	REQUEST SENSE (03H)
+	(* liefert die Daten aus ReqData *)
+
+	SEND (0AH)
+
+	INQUIRY (12H)
+
+	SEND DIAGNOSTIC (1DH)
+
+	REQUEST SENSE kann dabei den globalen Sense-Block bertragen, in den auch alle 
+	Routinen Ihre Fehler eintragen k”nnen (dran denken: wer eigene Fehlermeldungen 
+	in den Sense-Daten zusammenstellt, sollte auch die Sense-Daten vorher 
+	vorl”schen, damit keine Altlasten darin liegen)
+
+DERZEITIGE REALISIERUNG
+
+	CBHD bedient die Mandatories und antwortet auf Request Sense mit den globalen 
+	Request Sense Daten.
+
+	Inquiry meldet Processor Device, ANSI 2, ATARI, TT030/Falcon030.
+
+	Ein SCSI-Monitor zum rumspielen existiert auch.
+
+TODO
+
+	-Bedienung von BSY loss
+	-Bedienung von EOP
+	-Bedienung von Phase Mismatch
+	-Bedienung von UnknownInt (landet bei TReset)
+	-šbergabe eines Kommandos an den Beantworter von TCmdLen, wenn das
+	 Kommando selbstt„tig von der Interruptroutine empfangen wurde.
+	-Wenn man selbst als Initiator auftritt, und die ersten Schritte zum Absetzen 
+	 des Kommandos vorbereitet sind, und dann eine Selektion als Target auftritt, 
+	 werden die Ports von den Target-Routinen umprogrammiert. 
+	 Danach kann man wohl kaum an der unterbrochenen Stelle wieder aufsetzen.
+	 Mu in Ordnung gebracht werden!! 
+
+
+ANWENDUNGEN
+
+	Fr Anwendungen l„t sich einiges sehen. Zum einen ist ein SCSI-Monitor 
+	m”glich, mit dem man sehen kann, was ein zu untersuchendes Programm an 
+	SCSI-Calls absetzt. Ein sehr interessantes Zeil ist auch ein Netzwerktreiber, 
+	der ber SCSI arbeitet.
+
+
+PROBLEME
+
+	W„hrend Transfers mssen die Interrupts maskiert werden, da sonst ein
+	Transfer durch den Handler unterbrochen wird. Es w„re interessant, wenn ein 
+	Treiber auch die Interrupts zum Schlafenlegen benutzt.
+
+	Falcon: Zugriffe auf die Floppy fhren zum Interrupt, da der SCSI-Interrupt 
+					auf dem DMA-Interrupt liegt. :-(((
+					Mal sehen, was man da machen kann.
+
+	Wenn die Target-Routinen aktiv sind, bekommen Programme mit onboard-SCSI evtl. 
+	Probleme, da die DMA-Transfers ber den PhaseMismatch an den Interrupt-Handler 
+	geliefert werden.
+
+OFFENE FRAGEN
+
+	-Wann und in welcher Form sollten EOP, Parity Error, Phase Mismatch
+	 und BSY loss berhaupt verwendet werden?
+	-EOP, Parity Error, PhaseMismatch, BSY loss nur an den in Aktion
+	 befindlichen Handler? Halte ich fr Sinnvoll, was sollen die anderen
+	 damit?
+	 Wie kann man diese Interrupts berhaupt bekommen, w„hrend man Transfers 
+	 macht???
+	-Was h„ngt man in TUnknownInt?
+		1. Interrupt bei BSR.INT = 0
+		2. ?
+				
+				

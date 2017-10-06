@@ -1,0 +1,71 @@
+#include <gem++.h>
+
+
+main()
+{
+#define CLASS(T) printf("sizeof(%s) = %d\n",#T,sizeof(T));
+
+	CLASS(GEMmenu);
+	CLASS(GEMdeskaccessory);
+	CLASS(GEMwindow);
+	CLASS(GEMtimer);
+	CLASS(GEMkeysink);
+	CLASS(GEMevent);
+	CLASS(GEMactivity);
+	CLASS(GEMrsc);
+	CLASS(GEMalert);
+	CLASS(GEMapplication);
+	CLASS(GEMcanvas);
+	CLASS(GEMchangearea);
+	CLASS(GEMdesktop);
+	CLASS(GEMapplication);
+	CLASS(GEMactivity);
+	CLASS(GEMevent);
+	CLASS(GEMdeskaccessory);
+	CLASS(GEMevent);
+	CLASS(GEMrawobject);
+	CLASS(GEMobject);
+	CLASS(GEMrsc);
+	CLASS(GEMevent);
+	CLASS(GRect);
+	CLASS(GEMform);
+	CLASS(GEMformiconwindow);
+	CLASS(VDI);
+	CLASS(GEMfontlist);
+	CLASS(GEMfont);
+	CLASS(GEMfileselector);
+	CLASS(GEMformwindow);
+	CLASS(GEMhotform);
+	CLASS(IMG);
+	CLASS(GEMimageobject);
+	CLASS(GEMactivity);
+	CLASS(GEMevent);
+	CLASS(GEMkeysink);
+	CLASS(GEMactivity);
+	CLASS(GEMevent);
+	CLASS(GEMmenu);
+	CLASS(GEMevent);
+	CLASS(GEMobject);
+	CLASS(GEMpanarea);
+	CLASS(GEMrawobject);
+	CLASS(GEMrsc);
+	CLASS(GEMobject);
+	CLASS(GEMrawobject);
+	CLASS(GEMrecorder);
+	CLASS(GEMstreambuf);
+	CLASS(GEMscrollableobject);
+	CLASS(GEMslider);
+	CLASS(GEMscrolltext);
+	CLASS(GEMscrollingwindow);
+	CLASS(GEMactivity);
+	CLASS(GEMevent);
+	CLASS(GEMtimer);
+	CLASS(GEMtextobject);
+	CLASS(GEMuserobject);
+	CLASS(GEMvdiobject);
+	CLASS(GEMactivity);
+	CLASS(GEMevent);
+	CLASS(GEMwindow);
+	CLASS(IMG);
+	CLASS(VDI);
+}

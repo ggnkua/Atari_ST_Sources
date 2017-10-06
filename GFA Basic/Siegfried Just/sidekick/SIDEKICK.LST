@@ -1,0 +1,2411 @@
+$m219136
+vers$=" SideKick.GFA, Vers.2/o7, 5.Febr.91, 18 Uhr, v.Pfr.Siegfried Just,Kirchweg 5,6936 Haag, GFABasic 3.5E, *** PUBLIC-DOMAIN *** "
+' Wichtig fuer Accessories, die NIE terminieren duerfen:
+ON ERROR GOSUB fehler
+@init
+@schleife
+'
+PROCEDURE init
+  ap_id&=APPL_INIT()
+  als_prog&=0
+  debug!=(ap_id&=als_prog&)
+  abbruch!=FALSE
+  ' Streng auf TT-High-Modus abgestimmt!
+  geht!=(WORK_OUT(0)=1279) AND (WORK_OUT(1)=959)
+  ' Message-Buffer
+  DIM buff&(16)
+  buffer%=V:buff&(1)
+  ' Bildschirm-Buffer
+  DIM s_bytes|(153600)
+  scrn_buf%=VARPTR(s_bytes|(0))
+  ' Kopier-Buffer (auch fuer FAT u.a.)
+  DIM k_bytes|(32768)
+  kop_buf%=VARPTR(k_bytes|(0))
+  ' Buffer fuer Directory mit 1 Cluster
+  DIM d_bytes|(1024)
+  ddir_buf%=VARPTR(d_bytes|(0))
+  ' GetBIOSParameterBlock
+  DIM bpb&(9)
+  bpb%=VARPTR(bpb&(0))
+  '
+  ' Ausgangsmaterial LISTING: DATA-Zeilen benuetzen!
+  '
+  ' DATA 20,6F,00,04,20,2F,00,08,22,3C,FF,FF,FF,FF,20,C1
+  ' DATA 51,C8,FF,FC,4E,75
+  INLINE dark_l%,22
+  ' DATA 20,6F,00,04,20,2F,00,08,46,98,51,C8,FF,FC,4E,75
+  INLINE invert_l%,16
+  ' DATA 4E,56,00,00,48,E7,00,F0,20,6E,00,08,20,2E,00,0C
+  ' DATA 22,6E,00,10,22,2E,00,14,61,08,4C,DF,0F,00,4E,5E
+  ' DATA 4E,75,4A,81,67,40,52,40,90,81,63,3A,24,48,D5,C0
+  ' DATA 26,49,D7,C1,10,19,26,09,12,12,4A,6E,00,18,66,2A
+  ' DATA 14,80,B0,18,66,FC,14,81,B1,CA,62,1A,24,08,B3,CB
+  ' DATA 64,0C,18,18,B8,19,67,F6,20,42,22,43,60,E2,20,02
+  ' DATA 90,AE,00,08,4E,75,70,00,4E,75,3A,3C,FF,DF,14,80
+  ' DATA 18,18,B1,04,C8,05,66,F8,14,81,B1,CA,62,E8,24,08
+  ' DATA B3,CB,64,DA,18,18,1C,19,BD,04,C8,05,67,F2,20,42
+  ' DATA 22,43,60,DA,00,00,00,9C,00,00,00,05,BC,2C,00,00
+  INLINE thhust%,160
+  '
+  mx&=0
+  my&=0
+  button&=0
+  kstate&=0
+  key&=0
+  geklickt&=0
+  ac_open&=40
+  '
+  hot_key%=3
+  hot_key$="SHIFT-L+R"
+  '
+  befehls|=38
+  DIM befehl$(befehls|+1)
+  DATA "DIR","CD","laufw:","COPY","DEL","TYPE","MKDIR","HOTKEY","STATUS","DUMP"
+  DATA "MEMO","CLS","RMDIR","REN","HELP","DARK","MOVE","DMON","CALC","INV"
+  DATA "MERK","XBIOS","BIOS","GEMDOS","FIND","ASC","SHIP","POKE","BILD","CLUSTER"
+  DATA "TIME","DATE","TEST","PRINT","WO","ATTR","MEM","EXIT"
+  FOR befehl|=1 TO befehls|
+    READ befehl$(befehl|)
+  NEXT befehl|
+  '
+  DIM attr$(6)
+  DATA "ReadOnly","Hidden","System","Label","Directory","Archiv"
+  FOR i%=0 TO 5
+    READ attr$(i%)
+  NEXT i%
+  '
+  esc$=CHR$(27)
+  inv$=esc$+"p"
+  norm$=esc$+"q"
+  beep$=CHR$(7)
+  cur_get$=esc$+"j"
+  cur_put$=esc$+"k"
+  cltoeop$=esc$+"J"
+  '
+  rechns%=32
+  DIM rechn(rechns%+1),rechn$(rechns%+1),priority%(rechns%+1)
+  rechnarts%=4
+  DIM rechnart$(rechnarts%+1)
+  rechnart$(1)="+"
+  rechnart$(2)="-"
+  rechnart$(3)="/"
+  rechnart$(4)="*"
+  calc$=""
+  ' Welche Laufwerke sind angeschlossen?
+  DIM drive!(16)
+  dr_v%=BIOS(10)
+  drive!(0)=TRUE
+  drive!(1)=TRUE
+  FOR i%=2 TO 15
+    IF BTST(dr_v%,i%) THEN
+      drive!(i%)=TRUE
+    ELSE
+      drive!(i%)=FALSE
+    ENDIF
+  NEXT i%
+  ' Ermittle Letzte Partition, Letzten Sektor
+  i%=16
+  DO
+    DEC i%
+    EXIT IF drive!(i%) OR i%<2
+  LOOP
+  IF i%>1 THEN
+    BMOVE BIOS(7,i%),bpb%,18
+    end_drive%=i%
+    end_sector%=bpb&(6)+bpb&(7)*bpb&(1)
+  ENDIF
+  '
+  fehler!=FALSE
+  DIM file$(1)
+  merken!=FALSE
+  '
+  such$=""
+  such%=0
+  suchfile$=""
+  '
+  wildcard!=FALSE
+  s_startp%=0
+  d_startp%=0
+  DIM s_nam_mask!(8),s_ext_mask!(3)
+  s_nam_mask$="        "
+  s_ext_mask$="   "
+  '
+  fnams%=32
+  DIM s_file$(fnams%+1),d_file$(fnams%+1)
+  datein%=0
+  tiefe%=0
+  ord%=0
+  '
+  prnt!=FALSE
+  memo$=""
+  '
+RETURN ! init
+'
+PROCEDURE schleife
+  IF ap_id&=als_prog& THEN
+    PRINT AT(1,2);" Hot-Key: Beide Shift-Tasten"
+    DO
+      @abfrage
+      EXIT IF abbruch!
+    LOOP
+    ALERT 3,"Nur als .ACC-Test|gedacht!",1,"ENDE",dummy%
+    END
+  ELSE ! Als Accessory
+    IF geht! THEN
+      me_id&=MENU_REGISTER(ap_id&,"  SideKick: L^^R ")
+      PRINT
+      PRINT " --- 'SideKick' im Hintergrund von Pfr.S.Just, Haag, GFABasic 3.5E, Hotkey: Beide Shift-Tasten ---"
+      DO
+        @abfrage
+      LOOP
+    ELSE ! Geht nicht!
+      DO
+        ~EVNT_TIMER(-1)
+      LOOP
+    ENDIF
+  ENDIF
+RETURN ! schleife
+PROCEDURE abfrage
+  LOCAL rueck&
+  rueck&=EVNT_MULTI(&X110000,0,0,0,0,0,0,0,0,0,0,0,0,0,buffer%,100,mx&,my&,button&,kstate&,key&,geklickt&)
+  IF rueck&=&X100000 THEN ! Timer
+    IF kstate&=hot_key% THEN
+      @main
+    ENDIF
+  ELSE ! Accessory, hoffentlich das Richtige
+    IF buff&(1)=ac_open& THEN
+      @main
+    ENDIF
+  ENDIF
+  rueck&=0
+  buff&(1)=0
+RETURN ! abfrage
+'
+PROCEDURE main
+  LOCAL i%,w$,tail$,p%,x%,y%
+  '
+  BMOVE XBIOS(2),scrn_buf%,153600
+  x%=CRSCOL
+  y%=CRSLIN
+  CLS
+  PRINT inv$;vers$;norm$
+  SPOKE &H484,&X1111 ! Status-Umschalttasten
+  '
+  drv$=CHR$(65+GEMDOS(&H19))
+  path$=DIR$(0)
+  '
+  DO
+    ~FRE(0)
+    @befehls_anzeige
+    PRINT drv$;":";path$;"> ";inv$;" Welcher Befehl ? ";norm$;" ";
+    IF NOT merken! THEN
+      w$=""
+    ENDIF
+    FORM INPUT 120 AS w$
+    w$=TRIM$(UPPER$(w$))
+    EXIT IF LEFT$(w$,4)="EXIT"
+    '
+    fehler!=FALSE
+    PRINT
+    IF MID$(w$,2,1)=":" THEN
+      befehl|=3
+      tail$=w$
+    ELSE
+      befehl|=0
+      REPEAT
+        INC befehl|
+      UNTIL INSTR(w$,befehl$(befehl|))=1 OR befehl|>befehls|
+    ENDIF
+    IF befehl|>befehls| THEN
+      PRINT " ";inv$;" Unbekannt: ";norm$;w$;beep$
+    ELSE
+      path$=DIR$(0)
+      drv$=CHR$(65+GEMDOS(&H19))
+      p%=INSTR(w$,befehl$(befehl|))
+      IF p%=1 THEN
+        tail$=RIGHT$(w$,LEN(w$)-LEN(befehl$(befehl|)))
+      ENDIF
+      tail$=TRIM$(tail$)
+      SELECT befehl|
+      CASE 1 ! DIR
+        @dir_anz(tail$)
+      CASE 2 ! CHDIR
+        @dir_change(tail$)
+      CASE 3 ! CHDRV
+        @drv_change(tail$)
+      CASE 4 ! COPY
+        @kopiere(FALSE,tail$,FALSE)
+      CASE 5 ! DEL
+        @del_file(tail$)
+      CASE 6 ! TYPE
+        @show_asc(tail$)
+      CASE 7 ! MD
+        @md(tail$)
+      CASE 8 ! HOTKEY
+        @neu_hot_key
+      CASE 9 ! STATE
+        @state
+      CASE 10 ! DUMP
+        @hex_dump(tail$)
+      CASE 37 ! MEM
+        @mem_dump(tail$)
+      CASE 12 ! CLS
+        CLS
+        PRINT inv$;vers$;norm$
+      CASE 13 ! RD
+        @rd(tail$)
+      CASE 14 ! REN
+        @kopiere(TRUE,tail$,FALSE)
+      CASE 15 ! HELP
+        @hilfe
+      CASE 16 ! DARK
+        ~C:dark_l%(L:XBIOS(2),L:153600 DIV 4)
+        x$=INPUT$(1)
+        PRINT AT(1,1);
+      CASE 17 ! MOVE
+        @kopiere(FALSE,tail$,TRUE)
+      CASE 18 ! DMON
+        @disk_mon(tail$)
+      CASE 19 ! CALC
+        @calc(tail$)
+      CASE 20 ! INV
+        ~C:invert_l%(L:XBIOS(2),L:153600 DIV 4)
+      CASE 21 ! MERK
+        merken!=NOT merken!
+      CASE 22 ! XBIOS
+        @xb
+      CASE 23 ! BIOS
+        @b
+      CASE 24 ! GEMDOS
+        @g
+      CASE 25 ! FIND
+        PRINT " Finde e.Wert (3A45/'d4000': DEC!), e.ASC-Zeichenkette ('$Hallo') oder e.Zeichenkette mit 2-stell.-HEX-Werten ('0007E5) ? ";
+        FORM INPUT 120 AS such$
+        IF LEFT$(such$,1)="$" THEN
+          such$=RIGHT$(such$,LEN(such$)-1)
+          such%=0
+        ELSE IF LEFT$(such$,1)="'"
+          such$=RIGHT$(such$,LEN(such$)-1)
+          IF ODD(LEN(such$)) THEN
+            such$=LEFT$(such$,LEN(such$)-1)
+          ENDIF
+          w$=""
+          FOR i%=1 TO LEN(such$) STEP 2
+            w$=w$+CHR$(VAL("&H"+MID$(such$,i%,2)))
+          NEXT i%
+          such$=w$
+          w$=""
+          such%=0
+        ELSE
+          IF LEFT$(such$,1)="d" THEN
+            such%=VAL(MID$(such$,2,255))
+          ELSE
+            such%=VAL("&H"+such$)
+          ENDIF
+          such$=""
+        ENDIF
+        INPUT " Startpunkt Speicheradresse/Dateioffset/Sektornummer (in HEX) ";w$
+        IF w$="" THEN
+          sstart%=0
+        ELSE
+          sstart%=VAL("&H"+w$)
+        ENDIF
+        PRINT " Suche im ";inv$;"S";norm$;"peicher, in einer ";inv$;"D";norm$;"atei oder auf dem ";inv$;"M";norm$;"assenspeicher ";
+        w$=UPPER$(INPUT$(1))
+        SELECT w$
+        CASE "S"
+          @find_in_mem
+        CASE "D"
+          @find_in_file
+        CASE "M"
+          @find_on_disk
+        ENDSELECT
+      CASE 26 ! ASC
+        @asc_tab
+      CASE 27 ! SHIP
+        @quasi_ship
+      CASE 28 ! POKE
+        @poken
+      CASE 29
+        PRINT " Bild VOR dem Aufruf von SideKick.GFA ";inv$;"S";norm$;"peichern oder irgendein Bild ";inv$;"L";norm$;"aden ? ";
+        w$=UPPER$(INPUT$(1))
+        PRINT
+        SELECT w$
+        CASE "S"
+          @bild_speichern
+        CASE "L"
+          @bild_laden
+        ENDSELECT
+      CASE 30 ! CLUST
+        @cluster(tail$)
+        fehler!=FALSE
+      CASE 31 ! TIME
+        @timeset(tail$)
+      CASE 32 ! DATE
+        @dateset(tail$)
+      CASE 33 ! TIME
+        @test(tail$)
+      CASE 34 ! PRINT
+        @printer
+      CASE 35 ! WO
+        @wo(tail$)
+      CASE 36 ! ATTRB
+        @attrb(tail$)
+      CASE 11 ! MEMO
+        @memo(tail$)
+      CASE 38 ! EXIT
+        ' Niemals
+      DEFAULT
+        PRINT inv$;"Befehl ";befehl|;" = ";befehl$(befehl|);" noch nicht eingebaut!";norm$
+      ENDSELECT
+    ENDIF
+  LOOP
+  '
+  IF prnt! THEN
+    CLOSE #3
+  ENDIF
+  '
+  ~FRE(0)
+  abbruch!=(LEFT$(w$,4)="EXIT") ! Programmversion
+  BMOVE scrn_buf%,XBIOS(2),153600
+  PRINT AT(x%,y%);
+RETURN ! main
+PROCEDURE befehls_anzeige
+  PRINT
+  PRINT " ";inv$;" *** Befehle *** ";
+  PRINT " HOT-Key: ";norm$;hot_key$;inv$;" MERK: ";norm$;
+  IF merken! THEN
+    PRINT "ON";
+  ELSE
+    PRINT "OFF";
+  ENDIF
+  PRINT inv$;" MITSCHREIBEN: ";norm$;
+  IF prnt! THEN
+    PRINT "ON";
+  ELSE
+    PRINT "OFF";
+  ENDIF
+  PRINT
+  PRINT STRING$(150,".");inv$
+  FOR befehl|=1 TO befehls|
+    IF CRSCOL>149 THEN
+      PRINT
+    ENDIF
+    PRINT LEFT$(befehl$(befehl|)+"        ",8);norm$;"  ";inv$;
+  NEXT befehl|
+  PRINT
+  PRINT norm$;STRING$(150,".")
+RETURN ! befehls_anzeige
+'
+PROCEDURE memo(in$)
+  IF in$="" THEN
+    PRINT " ";inv$;"MEMO aaa";norm$;" hÑngt 'aaa' an die MEMO-Zeichenkette an. ";inv$;"MEMO";norm$;" zeigt die Zeichenkette an und bietet sie zur Editierung an:"
+    PRINT " ";
+    FORM INPUT 150 AS memo$
+  ELSE
+    memo$=memo$+" "+in$
+  ENDIF
+RETURN ! memo
+'
+PROCEDURE wo(in$)
+  LOCAL p%,dr%,w$,dta%
+  ' Abgeschaut v.Cl.Brod/A.Stepper,Scheibenkleister,S.52f
+  IF in$="" THEN
+    PRINT " Suchmuster [laufw:][pfad(e)]maske, z.B. 'C:\*.S' ? ";
+    INPUT "",in$
+    in$=TRIM$(UPPER$(in$))
+  ENDIF
+  IF in$>"" THEN
+    ~FRE(0)
+    tiefe%=0
+    ord%=0
+    datein%=0
+    dta%=FGETDTA()
+    p%=INSTR(in$,":")
+    IF p%>0 THEN
+      IF p%=2 THEN
+        dr%=ASC(LEFT$(in$,1))-65
+        IF BTST(dr_v%,dr%) THEN
+          w$=@set_path$(LEFT$(in$,2)+"\")
+          CLS
+          PRINT " ";inv$;" WO sind alle '";in$;"'? ";norm$
+          in$=MID$(in$,3,255)
+          @tree("",in$)
+          ~FSETDTA(dta%)
+          PRINT ord%;" Ordner, ";datein%;" Dateien"
+          IF CRSLIN>54 THEN
+            PRINT inv$;" Press a Key! ";norm$;
+            w$=INPUT$(1)
+          ENDIF
+          @set_path_org
+        ELSE
+          @melde("Dieses Laufwerk ist nicht angeschlossen")
+        ENDIF
+      ELSE
+        @melde("Falsche Drive-Angabe")
+      ENDIF
+    ELSE
+      CLS
+      PRINT " ";inv$;" WO sind alle '";in$;"'? ";norm$
+      @tree("",in$)
+      ~FSETDTA(dta%)
+      PRINT ord%;" Ordner, ";datein%;" Dateien"
+      IF CRSLIN>54 THEN
+        PRINT inv$;" Press a Key! ";norm$;
+        w$=INPUT$(1)
+      ENDIF
+    ENDIF
+    ~FRE(0)
+  ENDIF
+  fehler!=FALSE
+RETURN ! wo
+PROCEDURE tree(ord$,in$)
+  LOCAL p$,p%,fehler%,buf$,buf%,n$,h$,x$,f!
+  INC tiefe%
+  buf$=STRING$(44,CHR$(0))
+  buf%=VARPTR(buf$)
+  ~FSETDTA(buf%)
+  p%=RINSTR(in$,"\")
+  IF p%>0 THEN
+    p$=LEFT$(in$,p%)
+    in$=MID$(in$,p%+1,255)
+  ENDIF
+  fehler%=FSFIRST(p$+in$,0)
+  f!=FALSE
+  IF fehler%>=0 THEN
+    f!=TRUE
+    IF ord$>"" THEN
+      PRINT ord$
+      @prnt(ord$,TRUE)
+      INC ord%
+      PRINT SPACE$(tiefe%);
+      @prnt(SPACE$(tiefe%),FALSE)
+    ENDIF
+    h$=CHAR{buf%+30}
+    p%=INSTR(h$,".")
+    IF CRSLIN>58 THEN
+      x$=INPUT$(1)
+      CLS
+    ENDIF
+    IF CRSCOL>140 THEN
+      PRINT
+      @prnt("",TRUE)
+      PRINT SPACE$(tiefe%);
+      @prnt(SPACE$(tiefe%),FALSE)
+    ENDIF
+    INC datein%
+    IF p% THEN
+      PRINT LEFT$(LEFT$(h$,p%-1)+"________",8);".";LEFT$(MID$(h$,p%+1,3)+"___",3);" ";
+      @prnt(LEFT$(LEFT$(h$,p%-1)+"________",8)+"."+LEFT$(MID$(h$,p%+1,3)+"___",3)+" ",FALSE)
+    ELSE
+      PRINT LEFT$(h$+"________",8);".___ ";
+      @prnt(LEFT$(h$+"________",8)+".___ ",FALSE)
+    ENDIF
+    fehler%=FSNEXT()
+    WHILE fehler%>=0
+      INC datein%
+      h$=CHAR{buf%+30}
+      p%=INSTR(h$,".")
+      IF CRSLIN>58 THEN
+        x$=INPUT$(1)
+        CLS
+      ENDIF
+      IF CRSCOL>140 THEN
+        PRINT
+        @prnt("",TRUE)
+        PRINT SPACE$(tiefe%);
+        @prnt(SPACE$(tiefe%),FALSE)
+      ENDIF
+      IF p% THEN
+        PRINT LEFT$(LEFT$(h$,p%-1)+"________",8);".";LEFT$(MID$(h$,p%+1,3)+"___",3);" ";
+        @prnt(LEFT$(LEFT$(h$,p%-1)+"________",8)+"."+LEFT$(MID$(h$,p%+1,3)+"___",3)+" ",FALSE)
+      ELSE
+        PRINT LEFT$(h$+"________",8);".___ ";
+        @prnt(LEFT$(h$+"________",8)+".___ ",FALSE)
+      ENDIF
+      fehler%=FSNEXT()
+    WEND
+  ENDIF
+  IF f! THEN
+    PRINT
+  ENDIF
+  ' Ordner-Suche
+  fehler%=FSFIRST(p$+"*.*",16)
+  IF fehler%>=0 THEN
+    IF BYTE{buf%+21}=16 THEN
+      n$=CHAR{buf%+30}
+      IF n$<>"." AND n$<>".." THEN
+        IF CRSLIN>58 THEN
+          x$=INPUT$(1)
+          CLS
+        ENDIF
+        h$=SPACE$(tiefe%-1)+inv$+p$+n$+"\"+norm$
+        @tree(h$,p$+n$+"\"+in$)
+        ~FSETDTA(buf%)
+      ENDIF
+    ENDIF
+    fehler%=FSNEXT()
+    WHILE fehler%>=0
+      IF BYTE{buf%+21}=16 THEN
+        n$=CHAR{buf%+30}
+        IF n$<>"." AND n$<>".." THEN
+          IF CRSLIN>58 THEN
+            x$=INPUT$(1)
+            CLS
+          ENDIF
+          h$=SPACE$(tiefe%-1)+inv$+p$+n$+"\"+norm$
+          @tree(h$,p$+n$+"\"+in$)
+          ~FSETDTA(buf%)
+        ENDIF
+      ENDIF
+      fehler%=FSNEXT()
+    WEND
+  ENDIF
+  DEC tiefe%
+RETURN ! find
+'
+PROCEDURE attrb(in$)
+  LOCAL e%,dta%,h$,t$,attr%,i%,w$,a%,nach!
+  IF in$="" THEN
+    PRINT " Welche Datei? ";
+    INPUT "",in$
+  ENDIF
+  fehler!=FALSE
+  @check_drv(in$)
+  IF NOT fehler! THEN
+    t$=MID$(@set_path$(in$),3,255)+"\"
+    IF INSTR(in$,"*") OR INSTR(in$,"?") THEN
+      nach!=TRUE
+    ELSE
+      nach!=FALSE
+    ENDIF
+    dta%=FGETDTA()
+    e%=FSFIRST(in$,-1)
+    IF e%<0 THEN
+      PRINT inv$;" *** Keine Datei gefunden! *** ";norm$;beep$
+    ELSE
+      FOR i%=0 TO 5
+        PRINT " ";i%;":";attr$(i%);" ";
+      NEXT i%
+      PRINT inv$;"Welches Bit wollen Sie wechseln ? ";norm$;" ";
+      w$=INPUT$(1)
+      PRINT
+      IF w$>"/" AND w$<"6" THEN
+        a%=VAL(w$)
+      ENDIF
+    ENDIF
+    DO
+      EXIT IF e%<0
+      h$=CHAR{dta%+30}
+      h$=t$+h$+CHR$(0)
+      i%=INSTR(h$,"\\")
+      IF i% THEN
+        h$=LEFT$(h$,i%)+MID$(h$,i%+2,255)
+      ENDIF
+      attr%=GEMDOS(&H43,L:VARPTR(h$),0,0) AND 63
+      IF attr%<>&X11111 THEN
+        IF nach! THEN
+          PRINT " ";inv$;h$;norm$;" hat die Attribute ";
+          PRINT BIN$(attr%,6);"=";
+          FOR i%=0 TO 5
+            IF BTST(attr%,i%) THEN
+              PRINT attr$(i%);" ";
+            ENDIF
+          NEXT i%
+          PRINT " ";attr$(a%);" ";
+          IF BTST(attr%,a%) THEN
+            PRINT "Lîschen ? ";
+          ELSE
+            PRINT "Setzen ? ";
+          ENDIF
+          PRINT " ['j',...] ";
+          w$=UPPER$(INPUT$(1))
+          PRINT
+        ELSE
+          w$="J"
+        ENDIF
+        IF w$="J" THEN
+          attr%=BCHG(attr%,a%)
+          ~GEMDOS(&H43,L:VARPTR(h$),1,attr%)
+        ENDIF
+      ENDIF
+      e%=FSNEXT()
+    LOOP
+    @set_path_org
+  ENDIF
+  fehler!=FALSE
+RETURN ! attrb
+'
+PROCEDURE timeset(in$)
+  LOCAL p%
+  IF in$=""
+    PRINT TIME$;" hh.mm ? ";
+    INPUT "",in$
+  ENDIF
+  IF in$>"" THEN
+    p%=INSTR(in$,".")
+    IF p%=0 THEN
+      p%=INSTR(in$,",")
+      IF p%=0 THEN
+        p%=INSTR(in$,":")
+        IF p%=0 THEN
+          p%=INSTR(in$," ")
+          IF p%=0 THEN
+            p%=1
+          ENDIF
+        ENDIF
+      ENDIF
+    ENDIF
+    hh$=LEFT$(in$,p%-1)
+    mm$=MID$(in$,p%+1,255)
+    TIME$=hh$+":"+mm$+":00"
+  ENDIF ! Eingabe vorhanden
+RETURN ! timeset
+PROCEDURE dateset(in$)
+  LOCAL p%,pp%
+  IF in$=""
+    PRINT DATE$;" tt.mm.jjjj ";
+    INPUT "",in$
+  ENDIF
+  IF in$>"" THEN
+    p%=INSTR(in$,".")
+    pp%=RINSTR(in$,".")
+    IF p%>0 AND pp%>0 THEN
+      DATE$=LEFT$(in$,p%)+MID$(in$,p%+1,pp%-p%)+MID$(in$,pp%+1,4)
+    ELSE
+      PRINT inv$;" *** Falsche Angabe! '.' nur erlaubt! *** ";norm$;beep$
+    ENDIF
+  ENDIF ! Eingabe vorhanden
+RETURN ! dateset
+'
+PROCEDURE hilfe
+  LOCAL x$,dr%,b&,dd%
+  CLS
+  PRINT inv$;vers$;norm$;" --- arbeitet wie folgt: ---"
+  PRINT " SideKick.GFA ist ein Accessory, das vom GEM-Dispatcher alle 0.1 Sekunden aufgerufen wird (EVNT_TIMER). SideKick.GFA stellt nun fest, ob die letzte Steuer~"
+  PRINT "   tastenkombination dem sog. 'HOT-KEY' entspricht. Traf dies zu, wird die Hauptschleife aufgerufen."
+  PRINT " Das Programm, aus dem SideKick.GFA aufgerufen werden soll, muû seinerseits den GEMDOS-Dispatcher ab und zu aufrufen. Jedes GEM-Programm macht dies. In"
+  PRINT "   eigenen Programmen mÅssen Sie dazu Aufrufe an das AES mit EVNT_~ tÑtigen. Der Befehl ON MENU macht dies z.B. in GFABasic."
+  PRINT " Der Bildschirm-Hintergrund von 150 KByte wird von SideKick.GFA in einen eigenen Puffer gerettet. Dieser Puffer wird schon beim Booten belegt! TOS-Pro~"
+  PRINT "   gramme oder GFABasic-Compilate reagieren z.T. nicht auf die Update-Aufforderung nach FORM_DIAL(finished) oder hinterlassen einen schwarzen Bildschirm."
+  PRINT " Im Fehler-Fall (ON ERROR GOSUB), der bei einem Dialog mit einem Benutzer immer auftreten kann, wird der Hintergrund restauriert und SideKick.GFA geht in"
+  PRINT "   eine Endlosschleife (EVNT_TIMER(-1)). SideKick.GFA lÑût sich nun Åberhaupt nicht mehr aufrufen, aber der TT arbeitet anstandslos weiter!!!"
+  PRINT "                  ";inv$;" *** SYNTAX der Befehle *** ";norm$
+  PRINT "   --- Die Befehle mÅssen immer VOLLSTéNDIG ausgeschrieben werden! --- Groû-/Klein-Schreibung sind bedeutungslos! ---"
+  PRINT " ";inv$;"COPY datei1 datei2";norm$;" kopiert die Datei-1 zur Datei-2. Ist diese bereits vorhanden, erfolgt eine Sicherheitsabfrage. 'datei1','datei2' sind vollstÑndige"
+  PRINT "   Dateinamen mit Pfadangabe. Die 'Wildcards' '*' und '?' kînnen verwendet werden. Wenn Sie im aktuellen Verzeichnis bleiben, brauchen Sie den Pfad nicht"
+  PRINT "   anzugeben! ";inv$;"MOVE datei1 datei2";norm$;" lîscht 'datei1' nach dem Kopiervorgang. Wieder kînnen '*' und '?' verwendet werden."
+  PRINT " ";inv$;"REN altname neuname";norm$;" arbeitet Ñhnlich wie COPY. Ist 'neuname' schon vorhanden, wird nachgefragt, ob Sie diesen Namen doch verwenden wollen. Wenn ja, wird die"
+  PRINT "   bereits vorhandene Datei 'neuname' GELôSCHT (!) und die Datei 'altname' umbenannt in 'neuname'. Auch hier sind '*' und '?' mîglich!"
+  PRINT " ";inv$;"MERK";norm$;" schaltet die Option 'Kommando-Zeile Merken' wechselweise EIN/AUS. Ist MERK eingeschaltet, wird die alte Kommandozeile zum Editieren angeboten, ESC"
+  PRINT "   lîscht die Eingabe, DEL/BACKSPACE, <-/-> arbeiten wie gewohnt, ^ stellt auf den Anfang, v auf das Ende der Zeile (FORM INPUT AS)."
+  PRINT " ";inv$;"TYPE datei";norm$;", ";inv$;"DUMP datei";norm$;", ";inv$;"DEL datei";norm$;" stellen eine Datei in ASC_II-Form oder als HEX-Dump dar oder lîschen die angegebene Datei. Zum Namen siehe COPY."
+  PRINT " ";inv$;"MEM adresse";norm$;" oder ";inv$;"MEM dadresse";norm$;" zeigen den Hauptspeicher-Inhalt ab der Adresse HEX-adresse oder DECIMAL-Adresse. Im 2.Fall muû ein kleines 'd' vorangestellt"
+  PRINT "   werden. Da LPEEK im Supervisor-Mode arbeitet, kann auch auf geschÅtzte Bereiche zugegriffen werden."
+  PRINT " ";inv$;"DMON sektor";norm$;" liest ab HEX 'sektor' vom aktuellen Laufwerk mittels ReadWriteAbsolute (BIOS 4) immer jeweils 3 Sektoren zu 512 Bytes ein und stellt sie als HEX-"
+  PRINT "   Dump dar. Steht vor 'sektor' ein kleines 'd', wird die Sektorangabe als DECIMAL verstanden."
+  PRINT " ";inv$;"CLUSTER datei";norm$;" gibt die Cluster-Nummern einer Datei aus und stellt die Plattenbelegung grafisch dar. Directories mit mehr als 32 EintrÑgen (1 Cluster) kann"
+  PRINT "   SideKick.GFA nicht durchsuchen!"
+  PRINT " ";inv$;"FIND";norm$;" sucht nach einer Zeichenkette oder einem Zahlenwert im Speicher, auf der Diskette oder in einer Datei. Beim Aufruf erscheinen ErlÑuterungen."
+  PRINT " ";inv$;"DARK";norm$;" 'schaltet' den TT-MONOCHROM-Bildschirm dunkel und wartet dann auf irgendeinen Tastendruck. INNERHALB von SideKick.GFA erfolgt kein Aufruf an den GEM-"
+  PRINT "   Dispatcher. Das Accessory SCRSAV_H.GFA (Vom selben Autor) kann deshalb nicht eingreifen. Nach DARK bleibt der Bildschirm invertiert, mit ";inv$;"CLS";norm$;" kînnen Sie das"
+  PRINT "   Ñndern. ";inv$;"INV";norm$;" invertiert den gesamten Bildschirm."
+  PRINT " Mit ";inv$;"DIR [pfad][muster]";norm$;" erhalten Sie die Dateienanzeige von 'pfad' nach dem 'muster'. Beide Angaben sind optional. Fehlt 'pfad', wird der aktuelle Pfad ge-"
+  PRINT "   nommen. Fehlt 'muster', wird das Muster '*.*' verwendet. Da nur GFABasic_3.5E-Befehle verwendet werden, ist nur das Wildcard-Zeichen '*' erlaubt, das nur"
+  PRINT "   am Ende des Namens oder der Extension einen Sinn macht: '*.S', 'S*.*', 'E*.P*' sind zugelassene Muster, '*S.*', '*.*G' aber nicht! In 'pfad' darf ein"
+  PRINT "   Laufwerksbezeicher wie 'c:' erscheinen!"
+  PRINT " ";inv$;"CD pfad";norm$;" arbeitet NUR auf dem aktuellen Laufwerk! Damit kînnen Sie das Laufwerk NICHT wechseln. In 'pfad' darf auch '..' vorkommen."
+  PRINT " ";inv$;"a:";norm$;" wechselt das Laufwerk, wobei 'a' der Buchstabe des Laufwerks ist."
+  PRINT " ";inv$;"PRINT";norm$;" îffnet die (vorhandene) Datei MTSCHRFT.ASC und hÑngt die mitprotokollierten Bildschirmausgaben an das Ende dieser Datei. Wird durch ein 2.'PRINT' die"
+  PRINT "   Datei MTSCHRFT.ASC wieder geschlossen, kînnen Sie diese auf Nachfrage auf Ihrem Drucker ausgeben lassen."
+  PRINT " ";inv$;"CALC formel";norm$;" berechnet 'formel' und speichert das Ergebnis zur weiteren Verwendung bei erneutem Aufruf von CALC ab. 'formel' darf REAL-Zahlen mit '.' und"
+  PRINT "   ',' enthalten, aber keine Exponenten. Beliebig viele Klammerebenen sind erlaubt. Alle 4 Grundrechenarten '+','-','*','/' dÅrfen vorkommen. Das Ergebnis"
+  PRINT "   wird decimal, hexadecimal, binÑr und oktal ausgegeben. Wenn vor 'formel' '&h', '&x', '&o' steht, wird 'formel' als einfache Hexadecimal-/BinÑr-/Oktal-Zahl"
+  PRINT "   verstanden und in allen 4 Zahlensystemen - umgerechnet - ausgegeben."
+  PRINT " ";inv$;"XBIOS";norm$;",";inv$;"BIOS";norm$;",";inv$;"GEMDOS";norm$;" rufen die entsprechenden Routinen des TOS auf. Neben der Funktionsnummer kînnen max. 2 NUMERISCHE Parameter Åbergeben werden. * Vorsicht! *"
+  PRINT " ";inv$;"TIME";norm$;" und ";inv$;"DATE";norm$;" geben die Zeit aus und erlauben die Neueinstellung."
+  PRINT " Mit ";inv$;"POKE";norm$;" kînnen Sie eine Speicherstelle, auch eine im Supervisor-Bereich!, verÑndern, wahlweise LONG-, WORD- oder BYTE-weise."
+  PRINT " ";inv$;"SHIP";norm$;" fÑhrt einen der letzten Sektoren auf der letzten Partition Ihrer Festplatte an als Ersatz fÅr ein regulÑres PARK-Programm (&H1B an HD-Controller)."
+  PRINT " ";inv$;"WO laufw:+pfad+maske";norm$;" sucht auf dem angegebenen 'laufw' ab dem 'pfad' alle Dateien, die 'maske' entsprechen. 'laufw' und 'pfad' sind optional. In 'maske'"
+  PRINT "   stehen die Åblichen Zeichen '*' und '?'."
+  PRINT " ";inv$;"ATTR datei";norm$;" gibt die Attribute einer Datei aus und gestattet diese zu Ñndern. Die Zeichen '*' und '?' sind in 'datei' erlaubt."
+  PRINT " ";inv$;"HOTKEY";norm$;" Ñndert die Kombination der Steuertasten, mit der SideKick.GFA aufgerufen wird. Bei allen Abfragen belÑût einfaches RETURN die alten Werte!"
+  PRINT "   Folgende Zahlenwerte gelten: RShift=01, LSchift=02, CTRL=04, ALT=08, CAPS=20,in HEX. GFABasic-Compilate liefern oft nicht die Steuertasten oder tÑtigen"
+  PRINT "   Åberhaupt keinen Aufruf an das AES. Dann lÑût sich SideKick.GFA nicht aufrufen!"
+  PRINT " Die anderen, angezeigten Befehle sind noch nicht implementiert! Sorry."
+  PRINT
+  FOR b&=2 TO 15
+    IF drive!(b&) THEN
+      dd%=DFREE(b&+1)
+      IF CRSCOL>120 THEN
+        PRINT
+      ENDIF
+      PRINT " Drive ";inv$;CHR$(65+b&);norm$;":";STR$(dd%,8);" Bytes ";STR$(dd% DIV 1024,4);" KB ";STR$(dd%/1024/1024,4,2);" MB ";
+    ENDIF
+  NEXT b&
+  PRINT
+  PRINT
+  PRINT " SideKick.GFA ist ein Public-Domain-Programm! ";inv$;" DrÅcken Sie irgendeine Taste! ";norm$;" ";
+  x$=INPUT$(1)
+  PRINT
+RETURN ! hilfe
+PROCEDURE asc_tab
+  LOCAL i%
+  PRINT " Zeichen ";inv$;" ASC_II-Wert: Dec/Hex/Bin/Oct ";norm$
+  PRINT
+  FOR i%=0 TO 255
+    IF CRSCOL>140 THEN
+      PRINT
+    ENDIF
+    PRINT " ";
+    OUT 5,i%
+    PRINT " ";inv$;STR$(i%,3);norm$;" ";inv$;HEX$(i%,2);norm$;" ";inv$;BIN$(i%,8);norm$;" ";inv$;OCT$(i%,3);norm$;
+  NEXT i%
+  PRINT
+RETURN ! asc_tab
+'
+PROCEDURE bild_speichern
+  LOCAL w$,i%,j%,aus$,teil$,start%
+  PRINT " Bild speichern: ";inv$;"T";norm$;"T-Grîûe (153600 Bytes) oder 4x";inv$;"S";norm$;"T-Grîûe (32000 Bytes) ? ";
+  w$=UPPER$(INPUT$(1))
+  PRINT
+  IF w$="S" THEN
+    PRINT " Name der 4 ST-Bilder, um 1 Buchstaben gekÅrzt: ? ";
+    INPUT "",aus$
+    fehler!=FALSE
+    @check_drv(aus$)
+    @check_make(aus$)
+    @check_fre(aus$,160000)
+    IF NOT fehler! THEN
+      FOR i%=0 TO 3
+        teil$=aus$+STR$(i%,1)
+        OPEN "O",#1,teil$
+        start%=scrn_buf%
+        SELECT i%
+        CASE 0
+        CASE 1
+          ADD start%,80
+        CASE 2
+          ADD start%,399*160
+        CASE 3
+          ADD start%,399*160+80
+        ENDSELECT
+        FOR j%=0 TO 399
+          BPUT #1,start%+j%*160,80
+        NEXT j%
+        CLOSE #1
+      NEXT i%
+    ENDIF
+    fehler!=FALSE
+  ELSE
+    PRINT " Name des TT-Bildes ";
+    INPUT "",aus$
+    fehler!=FALSE
+    @check_drv(aus$)
+    @check_make(aus$)
+    @check_fre(aus$,155000)
+    IF NOT fehler! THEN
+      BSAVE aus$,scrn_buf%,153600
+    ENDIF
+    fehler!=FALSE
+  ENDIF
+RETURN ! bild_speichern
+PROCEDURE bild_laden
+  LOCAL in$,x$,i%
+  PRINT " Welche Datei ? ";
+  INPUT "",in$
+  fehler!=FALSE
+  @check_drv(in$)
+  IF NOT fehler! THEN
+    IF EXIST(in$) THEN
+      OPEN "I",#1,in$
+      l%=LOF(#1)
+      IF l%=32000 THEN
+        CLS
+        FOR i%=0 TO 399
+          BGET #1,XBIOS(2)+i%*160,80
+        NEXT i%
+        PRINT AT(1,26);
+      ELSE IF l%=153600
+        BGET #1,XBIOS(2),l%
+        x$=INPUT$(1)
+      ELSE
+      ENDIF
+      CLOSE #1
+    ENDIF
+    fehler!=FALSE
+  ENDIF
+RETURN ! bild_laden
+'
+PROCEDURE dir_change(in$)
+  IF in$="" THEN
+    PRINT inv$;" Aktuell:";norm$;drv$;":";path$;inv$;" Neues Directory ? ..\ ";norm$;" ";
+    INPUT "",in$
+  ENDIF
+  IF in$>"" THEN
+    fehler!=FALSE
+    @check_drv(in$)
+    IF NOT fehler! THEN
+      in$=in$+CHR$(0)
+      IF GEMDOS(&H3B,L:VARPTR(in$))=0 THEN
+        path$=DIR$(0)
+        @dir_anz("*.*")
+      ELSE
+        IF UPPER$(LEFT$(in$,1))<>drv$ THEN
+          PRINT inv$;" *** Pfad nur auf aktuellem Laufwerk einstellbar ! *** ";norm$;beep$
+        ELSE
+          PRINT inv$;" *** Pfad nicht gefunden ! *** ";norm$;beep$
+        ENDIF
+      ENDIF
+    ENDIF
+    fehler!=FALSE
+  ENDIF
+RETURN ! dir_change
+PROCEDURE drv_change(in$)
+  LOCAL a%
+  IF in$="" THEN
+    PRINT inv$;" Aktuell:";norm$;drv$;inv$;" Neues Laufwerk A..P ";norm$;" ";
+    INPUT "",in$
+  ENDIF
+  IF in$>"" THEN
+    fehler!=FALSE
+    @check_drv(in$)
+    IF NOT fehler! THEN
+      CHDRIVE in$
+      drv$=CHR$(65+GEMDOS(&H19))
+      path$=DIR$(0)
+      @dir_anz("\*.*")
+    ENDIF
+    fehler!=FALSE
+  ENDIF
+RETURN ! drv_change
+'
+PROCEDURE printer
+  LOCAL h$
+  IF prnt! THEN
+    prnt!=FALSE
+    CLOSE #3
+    PRINT " Wollen Sie MTSCHRFT.ASC ausdrucken lassen? j ";
+    IF UPPER$(INPUT$(1))="J" THEN
+      IF EXIST("MTSCHRFT.ASC") THEN
+        OPEN "I",#1,"MTSCHRFT.ASC"
+        WHILE NOT EOF(#1)
+          LINE INPUT #1,h$
+          LPRINT h$
+        WEND
+        CLOSE #1
+      ELSE
+        @melde("Konnte MTSCHRFT.ASC nicht finden!")
+        fehler!=FALSE
+      ENDIF
+    ENDIF
+  ELSE
+    IF EXIST("MTSCHRFT.ASC") THEN
+      OPEN "A",#3,"MTSCHRFT.ASC"
+      PRINT inv$;" ôffne MTSCHRFT.ASC und hÑnge die Protokoll-Daten an! ";norm$;beep$
+    ELSE
+      OPEN "O",#3,"MTSCHRFT.ASC"
+      PRINT inv$;" ôffne MTSCHRFT.ASC und trage die Protokoll-Daten ein! ";norm$;beep$
+    ENDIF
+    prnt!=TRUE
+  ENDIF
+RETURN ! printer
+PROCEDURE prnt(in$,lf!)
+  IF prnt! THEN
+    PRINT #3,in$;
+    IF lf! THEN
+      PRINT #3
+    ENDIF
+  ENDIF
+RETURN ! prnt
+'
+PROCEDURE dir_anz(in$)
+  LOCAL dta%,e%,attr%,len%,datum$,zeit$
+  IF in$="" OR RIGHT$(in$,1)=":" OR RIGHT$(in$)="\" THEN
+    in$=in$+"*.*"
+  ENDIF
+  IF INSTR(in$,".")=0 THEN
+    in$=in$+"\*.*"
+  ENDIF
+  fehler!=FALSE
+  @check_drv(in$)
+  IF NOT fehler! THEN
+    PRINT "DIR ";in$
+    PRINT STRING$(120,"-")
+    dta%=FGETDTA()
+    e%=FSFIRST(in$,-1)
+    DO
+      EXIT IF e%<>0
+      attr%=BYTE{dta%+21}
+      len%={dta%+26}
+      datum$=@dta_2_date$(INT{dta%+24})
+      zeit$=@dta_2_zeit$(INT{dta%+22})
+      IF CRSCOL>90 THEN
+        PRINT
+      ENDIF
+      IF attr% AND 16 THEN
+        PRINT inv$;"*";
+        @prnt("*",FALSE)
+      ELSE
+        PRINT norm$;" ";
+        @prnt(" ",FALSE)
+      ENDIF
+      PRINT LEFT$(CHAR{dta%+30}+"             ",14);STR$(len%,8);"/";HEX$(len%,6);" ";datum$;" ";zeit$;" ";BIN$(attr%,6);norm$;"  ";
+      @prnt(LEFT$(CHAR{dta%+30}+"             ",14)+STR$(len%,8)+"/"+HEX$(len%,6)+" "+datum$+" "+zeit$+" "+BIN$(attr%,6)+"  ",TRUE)
+      e%=FSNEXT()
+    LOOP
+    PRINT
+    PRINT norm$;STRING$(120,"-")
+  ENDIF
+  fehler!=FALSE
+RETURN ! dir_anz
+FUNCTION dta_2_date$(in&)
+  RETURN STR$(in& AND &X11111,2)+"."+STR$(SHR(in& AND &X111100000,5),2)+"."+STR$(1980+SHR(in& AND &X1111111000000000,9),4)
+ENDFUNC
+FUNCTION dta_2_zeit$(in&)
+  RETURN STR$(SHR(in& AND &X1111100000000000,11),2)+"."+STR$(SHR(in& AND &X11111100000,5),2)
+ENDFUNC
+'
+PROCEDURE md(in$)
+  IF in$="" THEN
+    PRINT " Name des NEUEN Directories? ";
+    INPUT "",in$
+  ENDIF
+  IF in$>"" THEN
+    MKDIR in$
+  ENDIF
+RETURN ! md
+PROCEDURE rd(in$)
+  IF in$="" THEN
+    PRINT " Welches VORHANDENE Directory wollen Sie LôSCHEN ";
+    INPUT "",in$
+  ENDIF
+  IF in$>"" THEN
+    in$=in$+CHR$(0)
+    IF GEMDOS(&H3A,L:VARPTR(in$))<>0 THEN
+      PRINT inv$;" *** Directory konnte NICHT gelîscht werden! *** ";norm$;beep$
+    ENDIF
+  ENDIF
+RETURN ! rd
+'
+PROCEDURE s_maske(in$)
+  LOCAL p%,nam$,ext$,i%
+  wildcard!=FALSE
+  IF INSTR(in$,"?")>0 OR INSTR(in$,"*")>0 THEN
+    wildcard!=TRUE
+    ' Isolierung des eigentlichen Dateinamens
+    IF INSTR(in$,"\") THEN
+      s_startp%=RINSTR(in$,"\")+1
+    ELSE IF INSTR(in$,":")
+      s_startp%=INSTR(in$,":")+1
+    ELSE
+      s_startp%=1
+    ENDIF
+    in$=TRIM$(MID$(in$,s_startp%,255))
+    ' Aufteilung in NAME.EXT
+    p%=INSTR(in$,".")
+    IF p%>0 THEN
+      nam$=LEFT$(in$,p%-1)
+      ext$=MID$(in$,p%+1,3)
+    ELSE
+      nam$=LEFT$(in$,8)
+      ext$=""
+    ENDIF
+    ' NAME scannen
+    p%=INSTR(nam$,"*")
+    IF p%>0 THEN
+      nam$=LEFT$(LEFT$(nam$,p%-1)+"????????",8)
+    ENDIF
+    ' EXT scannen
+    p%=INSTR(ext$,"*")
+    IF p%>0 THEN
+      ext$=LEFT$(LEFT$(ext$,p%-1)+"???",3)
+    ENDIF
+    ' Maske Setzen
+    FOR i%=1 TO 8
+      IF MID$(nam$,i%,1)="?" THEN
+        s_nam_mask!(i%)=TRUE
+      ELSE
+        s_nam_mask!(i%)=FALSE
+      ENDIF
+    NEXT i%
+    FOR i%=1 TO 3
+      IF MID$(ext$,i%,1)="?" THEN
+        s_ext_mask!(i%)=TRUE
+      ELSE
+        s_ext_mask!(i%)=FALSE
+      ENDIF
+    NEXT i%
+  ENDIF
+RETURN ! s_maske
+FUNCTION d_maske$(h$,aus$)
+  LOCAL i%,j%,old$,nam$,ext$,fuell_nam$,fuell_ext$,p%,f$
+  IF wildcard! THEN
+    ' Zerlegen des gefundenen Eintrags
+    p%=INSTR(h$,".")
+    IF p%>0 THEN
+      nam$=LEFT$(h$,p%-1)
+      ext$=MID$(h$,p%+1,3)
+    ELSE
+      nam$=h$
+      ext$=""
+    ENDIF
+    fuell_nam$=""
+    FOR p%=1 TO LEN(nam$)
+      IF s_nam_mask!(p%) THEN
+        fuell_nam$=fuell_nam$+MID$(nam$,p%,1)
+      ENDIF
+    NEXT p%
+    fuell_ext$=""
+    FOR p%=1 TO LEN(ext$)
+      IF s_ext_mask!(p%) THEN
+        fuell_ext$=fuell_ext$+MID$(ext$,p%,1)
+      ENDIF
+    NEXT p%
+    '
+    ' Isolierung des eigentlichen ZIEL-Dateinamens
+    old$=aus$
+    IF INSTR(aus$,"\") THEN
+      d_startp%=RINSTR(aus$,"\")+1
+    ELSE IF INSTR(aus$,":")
+      d_startp%=INSTR(aus$,":")+1
+    ELSE
+      d_startp%=1
+    ENDIF
+    aus$=TRIM$(MID$(aus$,d_startp%,255))
+    ' Aufteilung in NAME.EXT
+    p%=INSTR(aus$,".")
+    IF p%>0 THEN
+      nam$=LEFT$(aus$,p%-1)
+      ext$=MID$(aus$,p%+1,3)
+    ELSE
+      nam$=LEFT$(aus$,8)
+      ext$=""
+    ENDIF
+    ' NAME scannen
+    p%=INSTR(nam$,"*")
+    IF p%>0 THEN
+      nam$=LEFT$(LEFT$(nam$,p%-1)+"????????",8)
+    ENDIF
+    ' EXT scannen
+    p%=INSTR(ext$,"*")
+    IF p%>0 THEN
+      ext$=LEFT$(LEFT$(ext$,p%-1)+"???",3)
+    ENDIF
+    ' Maske Setzen
+    i%=0
+    j%=1
+    DO
+      INC i%
+      EXIT IF j%>LEN(fuell_nam$) OR i%>8
+      IF MID$(nam$,i%,1)="?" THEN
+        MID$(nam$,i%,1)=MID$(fuell_nam$,j%,1)
+        INC j%
+      ENDIF
+    LOOP
+    i%=INSTR(nam$,"?")
+    IF i% THEN
+      nam$=LEFT$(nam$,i%-1)
+    ENDIF
+    i%=0
+    j%=1
+    DO
+      INC i%
+      EXIT IF j%>LEN(fuell_ext$) OR i%>3
+      IF MID$(ext$,i%,1)="?" THEN
+        MID$(ext$,i%,1)=MID$(fuell_ext$,j%,1)
+        INC j%
+      ENDIF
+    LOOP
+    i%=INSTR(ext$,"?")
+    IF i% THEN
+      ext$=LEFT$(ext$,i%-1)
+    ENDIF
+    '
+    f$=LEFT$(old$,d_startp%-1)+nam$+"."+ext$
+    RETURN f$
+  ELSE
+    RETURN aus$
+  ENDIF
+ENDFUNC ! d_maske$
+'
+PROCEDURE kopiere(ren!,in$,weg!)
+  LOCAL aus$,f$,w$,blks%,rest%,l%,b%,e%,dta%,h$,s_dir$,d_dir$,t$
+  '
+  ' Aufspaltung des Eingangs in Quell- und Zieldatei-Namen
+  IF in$>"" THEN
+    p%=INSTR(in$," ")
+    IF p%>0 THEN
+      aus$=TRIM$(MID$(in$,p%+1,255))
+      in$=LEFT$(in$,p%-1)
+    ELSE
+      aus$=""
+    ENDIF
+  ELSE
+    PRINT " Quelldatei ? ";
+    INPUT "",in$
+  ENDIF
+  '
+  ' Wurde ein Quelldatei-Name angegeben?
+  IF in$>"" THEN
+    fehler!=FALSE
+    @check_drv(in$)
+    '
+    ' Kein falsches Drive in Quelldatei-Namen
+    IF NOT fehler! THEN
+      '
+      ' Bestimmung der QuellDatei-Maske
+      @s_maske(in$)
+      s_dir$=@set_path$(in$)
+      IF s_dir$<>"\" THEN
+        s_dir$=s_dir$+"\"
+      ENDIF
+      p%=INSTR(s_dir$,"\\")
+      IF p% THEN
+        s_dir$=LEFT$(s_dir$,p%-1)+MID$(s_dir$,p%+1,255)
+      ENDIF
+      '
+      ' Vorbereitung der Suche nach Wildcards
+      dta%=FGETDTA()
+      e%=FSFIRST(in$,-1)
+      '
+      ' Wurde wenigstens 1 Datei gefunden?
+      IF e%<0 THEN
+        PRINT inv$;" *** Keine Datei gefunden! *** ";norm$;beep$
+        @set_path_org
+        '
+        ' Mindestens 1 Datei passt
+      ELSE
+        '
+        ' Angabe des Zieldatei-Namens vergessen?
+        IF aus$="" THEN
+          PRINT
+          PRINT " Zieldatei ? ";
+          INPUT "",aus$
+          aus$=TRIM$(UPPER$(aus$))
+        ENDIF
+        '
+        ' Zieldatei-Name bekannt
+        IF aus$>"" THEN !
+          '
+          ' Falsches Drive im Zieldatei-Namen?
+          fehler!=FALSE
+          @check_drv(f$)
+          '
+          ' Kein falsches Drive im Zieldatei-Namen
+          IF NOT fehler! THEN
+            '
+            ' Suchschleife aufgrund FSFIRST(in$,-1)
+            ' 1.Durchgang
+            datein%=0
+            fehler!=FALSE
+            DO
+              EXIT IF e%<0 OR fehler! ! Negative Fehlernummer
+              INC datein%
+              '
+              ' Finde vollstaendigen Quelldatei-Namen
+              h$=CHAR{dta%+30}
+              s_file$(datein%)=s_dir$+h$
+              '
+              ' Finde vollstaendigen Zieldatei-Namen
+              f$=@d_maske$(h$,aus$)
+              d_dir$=@set_path$(f$)
+              IF d_dir$<>"\" THEN
+                d_dir$=d_dir$+"\"
+              ENDIF
+              IF INSTR(f$,":") THEN
+                d_dir$=""
+              ELSE IF INSTR(f$,"\")
+                d_dir$=LEFT$(d_dir$,2)
+              ELSE
+              ENDIF
+              d_file$(datein%)=d_dir$+f$
+              t$=@set_path$(in$)
+              '
+              IF s_file$(datein%)=d_file$(datein%) THEN
+                @melde("öbereinstimmung zwischen Quell- und Zieldatei-Namen")
+              ENDIF
+              '
+              IF ren! THEN
+                IF LEFT$(s_file$(datein%),1)<>LEFT$(d_file$(datein%),1) THEN
+                  @melde("RENAME nur auf ein und demselben Laufwerk!")
+                ENDIF
+              ENDIF
+              '
+              IF datein%>fnams% THEN
+                @melde("Kopierroutine ist auf "+norm$+STR$(fnams%)+inv$+" Dateien beschrÑnkt")
+              ENDIF
+              '
+              e%=FSNEXT()
+            LOOP
+            @set_path_org
+            '
+            ' Fehler im 1.Durchgang aufgetaucht?
+            IF NOT fehler ! then
+              '
+              ' 2.Durchgang
+              FOR e%=1 TO datein%
+                '
+                ' Anzeige fuer den Benutzer
+                PRINT inv$;
+                IF ren! THEN
+                  PRINT " RENAME ";
+                ELSE
+                  IF weg! THEN
+                    PRINT " MOVE ";
+                  ELSE
+                    PRINT " COPY ";
+                  ENDIF
+                ENDIF
+                PRINT norm$;s_file$(e%);inv$;" TO ";norm$;d_file$(e%)
+                '
+                ' Zieldatei bereits vorhanden?
+                w$="J"
+                IF EXIST(d_file$(e%)) THEN
+                  PRINT
+                  PRINT " ";d_file$(e%);" ";inv$;" existiert bereits, dennoch Kopieren/Umbenennen ? [J,j,..] ";norm$;" "
+                  w$=UPPER$(CHR$(GEMDOS(7)))
+                  '
+                  ' Im RENAME-Modus: DEL
+                  IF ren! AND w$="J" THEN
+                    KILL d_file$(e%)
+                  ENDIF
+                  '
+                ENDIF
+                '
+                ' Kopiere
+                IF w$="J" THEN
+                  '
+                  ' RENAME ?
+                  IF ren! THEN
+                    NAME s_file$(e%) AS d_file$(e%)
+                    '
+                    ' COPY/MOVE
+                  ELSE
+                    '
+                    OPEN "I",#1,s_file$(e%)
+                    l%=LOF(#1)
+                    '
+                    ' Reicht Diskettenplatz?
+                    fehler!=FALSE
+                    @check_make(d_file$(e%))
+                    @check_fre(d_file$(e%),l%)
+                    '
+                    ' Diskettenplatz reicht
+                    IF NOT fehler! THEN
+                      OPEN "O",#2,d_file$(e%)
+                      blks%=l% DIV 32768
+                      rest%=l% MOD 32768
+                      IF blks%>0 THEN
+                        FOR b%=1 TO blks%
+                          BGET #1,kop_buf%,32768
+                          BPUT #2,kop_buf%,32768
+                        NEXT b%
+                      ENDIF ! blks%>0
+                      IF rest%>0 THEN
+                        BGET #1,kop_buf%,rest%
+                        BPUT #2,kop_buf%,rest%
+                      ENDIF ! rest%>0
+                      CLOSE #1
+                      CLOSE #2
+                      '
+                      ' MOVE ?
+                      IF weg! THEN
+                        KILL s_file$(e%)
+                      ENDIF ! weg!
+                      '
+                    ELSE ! Kein ausreichender Platz
+                      CLOSE #1
+                    ENDIF ! NOT fehler! = Platz reicht nicht
+                  ENDIF ! ren! = RENAME oder COPY/MOVE ?
+                ENDIF ! w$="J" = (Trotzdem) Kopieren
+              NEXT e%
+            ENDIF ! NOT fehler! = Fehler in der Suchschleife, 1.Durchgang
+          ENDIF ! NOT fehler! = Drive-Angabe in Zieldatei-Namen
+        ENDIF ! aus$>"" = Zieldatei-Name vorhanden
+      ENDIF ! e%<0 = Mindestens 1 Datei gefunden
+    ENDIF ! NOT fehler! = Drive-Angabe in Quelldatei-Namen
+    fehler!=FALSE
+    @set_path_org
+  ENDIF ! in$>""
+RETURN ! kopiere
+FUNCTION set_path$(in$)
+  LOCAL p%,temp_drive%,temp_path$,back!,t$,dr$
+  ' ALERT 1,"in:'"+in$+"'",1,"R",d%
+  dr$=CHR$(GEMDOS(&H19)+65)
+  p%=INSTR(in$,":")
+  back!=FALSE
+  IF p%=2 THEN
+    temp_drive%=ASC(LEFT$(in$,1))-65
+    IF temp_drive%<0 OR temp_drive%>15 THEN
+      @melde("Source-Drive nicht mîglich")
+    ELSE
+      IF NOT drive!(temp_drive%) THEN
+        @melde("Source-Drive nicht angemeldet")
+      ELSE
+        ~GEMDOS(&HE,temp_drive%)
+        dr$=CHR$(GEMDOS(&H19)+65)
+        back!=TRUE
+      ENDIF
+    ENDIF
+    in$=MID$(in$,3,255)
+  ELSE IF p%>0
+    fehler!=TRUE
+    in$=""
+  ELSE
+    ' Kein anderes Laufwerk
+  ENDIF
+  IF NOT fehler! THEN
+    IF INSTR(in$,"\") THEN
+      temp_path$=LEFT$(in$,RINSTR(in$,"\"))
+      IF back! AND LEFT$(temp_path$,1)<>"\" THEN
+        temp_path$="\"+temp_path$
+      ENDIF
+      t$=temp_path$+CHR$(0)
+      IF GEMDOS(&H3B,L:VARPTR(t$))<>0 THEN
+        @melde("Source-Path nicht gefunden")
+        RETURN dr$+":"+path$
+      ELSE
+        RETURN dr$+":"+temp_path$
+      ENDIF
+    ELSE
+      CHDRIVE drv$
+      CHDIR path$
+      RETURN dr$+":"+path$
+    ENDIF
+  ELSE
+    RETURN dr$+":"+path$
+  ENDIF
+ENDFUNC! set_path$(in$)
+PROCEDURE set_path_org
+  CHDRIVE drv$
+  CHDIR path$
+RETURN ! set_path_org
+'
+PROCEDURE neu_hot_key
+  LOCAL t%,w$
+  PRINT inv$;" Bisher: $";HEX$(hot_key%,8);" [";hot_key$;"] Ihre NEUE Tastenkombination: ? ";norm$;
+  PRINT "  RShift=01,LSchift=02,CTRL=04,ALT=08,CAPS=20,in HEX"
+  PRINT " Geben Sie nun den Wert (in HEX wie dargestellt) ein: ";
+  INPUT "",w$
+  IF w$>"" THEN
+    hot_key%=VAL("&H"+w$)
+  ENDIF
+  PRINT inv$;" Mit welchem NEUEN BEZEICHNER wird diese Kombination '$";HEX$(hot_key%,8);"' belegt: ";norm$
+  INPUT "",w$
+  IF w$>"" THEN
+    hot_key$=w$
+  ENDIF
+RETURN ! neu_hot_key
+'
+PROCEDURE quasi_ship
+  LOCAL x$
+  ~C:dark_l%(L:XBIOS(2),L:153600 DIV 4)
+  IF BIOS(4,2,L:kop_buf%,1,end_sector%,end_drive%)=0 THEN
+    PRINT AT(1,1);inv$;"  *** Sektor ";end_sector%;" auf Partition ";CHR$(end_drive%+65);":\ angefahren! AUSSCHALTEN *** ";norm$
+    x$=INPUT$(1)
+  ELSE
+    PRINT " ";inv$;" *** Konnte Quasi-SHIP nicht ausfÅhren! *** ";norm$;beep$
+  ENDIF
+RETURN ! ship
+'
+PROCEDURE state
+  LOCAL st%,tt%
+  PRINT " SideKick hat noch ";FRE(0);" Bytes"
+  st%=GEMDOS(&H44,L:-1,0)
+  tt%=GEMDOS(&H44,L:-1,1)
+  PRINT " ST-RAM:";STR$(st%,8);" Bytes ";STR$(st% DIV 1024,4);" KB ";STR$(st%/1024/1024,4,2);" MB"
+  PRINT " TT-RAM:";STR$(tt%,8);" Bytes ";STR$(tt% DIV 1024,4);" KB ";STR$(tt%/1024/1024,4,2);" MB"
+  PRINT
+RETURN ! state
+'
+PROCEDURE show_asc(in$)
+  LOCAL w$,h$
+  IF in$="" THEN
+    PRINT " Welche Datei? ";
+    INPUT "",in$
+  ENDIF
+  IF in$>"" THEN
+    fehler!=FALSE
+    @check_drv(in$)
+    IF NOT fehler! THEN
+      IF EXIST(in$) THEN
+        OPEN "I",#1,in$
+        CLS
+        w$=""
+        WHILE (NOT EOF(#1)) AND (w$<>"X")
+          IF CRSLIN>=58 THEN
+            PRINT
+            PRINT inv$;" DrÅcken Sie irgendeine Taste! ('X' bricht ab!) ";norm$;" ";
+            w$=UPPER$(INPUT$(1))
+            IF w$<>"X" THEN
+              CLS
+            ENDIF
+          ENDIF
+          IF CRSCOL>150 THEN
+            PRINT
+          ELSE
+            PRINT INPUT$(1,#1);
+          ENDIF
+        WEND
+        CLOSE #1
+      ELSE
+        PRINT
+        PRINT inv$;in$;" war nicht zu finden!";norm$;beep$
+      ENDIF
+    ENDIF
+    fehler!=FALSE
+  ENDIF
+RETURN ! show_asc
+'
+PROCEDURE hex_dump(in$)
+  LOCAL w$,h$,l%,blks%,rest%,b%,z%
+  IF in$="" THEN
+    PRINT " Welche Datei? ";
+    INPUT "",in$
+  ENDIF
+  IF in$>"" THEN
+    fehler!=FALSE
+    @check_drv(in$)
+    IF NOT fehler! THEN
+      IF EXIST(in$) THEN
+        OPEN "I",#1,in$
+        l%=LOF(#1)
+        blks%=l% DIV 32
+        rest%=l% MOD 32
+        CLS
+        z%=0
+        w$=""
+        IF blks%>0 THEN
+          b%=0
+          DO
+            INC b%
+            EXIT IF b%>blks% OR w$="X"
+            IF CRSLIN>=59 THEN
+              PRINT inv$;" DrÅcken Sie irgendeine Taste! ('X' bricht ab!) ";norm$;" ";
+              w$=UPPER$(INPUT$(1))
+              IF w$<>"X" THEN
+                CLS
+              ENDIF
+            ENDIF
+            PRINT inv$;HEX$(z%,6);norm$;": ";
+            @prnt(HEX$(z%,6)+": ",FALSE)
+            ADD z%,32
+            h$=INPUT$(32,#1)
+            @hex32(h$)
+          LOOP
+        ENDIF
+        IF rest%>0 AND w$<>"X" THEN
+          PRINT inv$;HEX$(z%,6);norm$;": ";
+          @prnt(HEX$(z%,6)+": ",FALSE)
+          h$=INPUT$(rest%,#1)
+          @hex32(h$)
+        ENDIF
+        CLOSE #1
+      ELSE
+        PRINT
+        PRINT inv$;in$;" war nicht zu finden!";norm$
+      ENDIF
+    ENDIF
+    fehler!=FALSE
+  ENDIF
+RETURN ! hex_dump
+PROCEDURE mem_dump(in$)
+  LOCAL w$,adr%,sp$,c%,w%
+  sp$=SPACE$(32)
+  IF in$="" THEN
+    PRINT inv$;" Ab welcher Adresse? (Dezimal bitte mit fÅhrendem 'd'!) ";norm$;" ";
+    INPUT "",in$
+  ENDIF
+  IF LEFT$(in$,1)="d" THEN
+    adr%=VAL(RIGHT$(in$,LEN(in$)-1))
+  ELSE
+    adr%=VAL("&H"+in$)
+  ENDIF
+  IF adr%>-1 THEN
+    IF ODD(adr%) THEN
+      DEC adr%
+    ENDIF
+    w$=""
+    CLS
+    DO
+      IF CRSLIN>=59 THEN
+        PRINT inv$;" DrÅcken Sie irgendeine Taste! ('X' bricht ab!) ";norm$;" ";
+        w$=UPPER$(INPUT$(1))
+        IF w$<>"X" THEN
+          CLS
+        ENDIF
+      ENDIF
+      EXIT IF w$="X"
+      PRINT inv$;HEX$(adr%,6);norm$;": ";
+      @prnt(HEX$(adr%,6)+": ",FALSE)
+      w%=V:sp$
+      FOR c%=0 TO 31 STEP 4
+        {ADD(w%,c%)}=LPEEK(ADD(adr%,c%))
+      NEXT c%
+      ADD adr%,32
+      @hex32(sp$)
+    LOOP
+  ENDIF
+RETURN ! mem_dump
+PROCEDURE disk_mon(in$)
+  LOCAL sect%,w$,dr%,sp$,z%,s%
+  IF in$="" THEN
+    PRINT " Suche ab Sektor (in HEX!) ";
+    INPUT "",in$
+  ENDIF
+  IF in$>"" THEN
+    IF LEFT$(in$,1)="d" THEN
+      sect%=VAL(RIGHT$(in$,LEN(in$)-1))
+    ELSE
+      sect%=VAL("&H"+in$)
+    ENDIF
+    IF sect%>-1 THEN
+      dr%=GEMDOS(&H19)
+      w$=""
+      DO
+        sp$=STRING$(32,CHR$(0))
+        IF BIOS(4,2,L:kop_buf%,3,sect%,dr%)<>0 THEN
+          PRINT " ";inv$;" *** ERROR RWAbs *** ";norm$
+        ENDIF
+        s%=sect%
+        FOR z%=0 TO 47
+          IF ((z%) MOD 16)=0 THEN
+            PRINT " Sektor = $";HEX$(sect%)
+            @prnt("Sektor = $"+HEX$(sect%),TRUE)
+            INC sect%
+          ENDIF
+          PRINT inv$;HEX$(ADD(SHL(z%,5),SHL(s%,9)),8);norm$;": ";
+          @prnt(HEX$(ADD(SHL(z%,5),SHL(s%,9)),8)+": ",FALSE)
+          BMOVE ADD(kop_buf%,SHL(z%,5)),V:sp$,32
+          @hex32(sp$)
+        NEXT z%
+        PRINT inv$;" Abbrechen mit 'X' ";norm$;" ";
+        w$=UPPER$(INPUT$(1))
+        PRINT
+        EXIT IF w$="X"
+      LOOP
+    ENDIF
+  ENDIF
+RETURN ! disk_mon
+PROCEDURE hex32(in$)
+  LOCAL c%,w$,l%
+  l%=LEN(in$)
+  FOR c%=1 TO l%
+    PRINT HEX$(ASC(MID$(in$,c%,1)),2);" ";
+    @prnt(HEX$(ASC(MID$(in$,c%,1)),2)+" ",FALSE)
+    IF (c% MOD 4)=0 THEN
+      PRINT " ";
+      @prnt(" ",FALSE)
+    ENDIF
+  NEXT c%
+  PRINT inv$;
+  FOR c%=1 TO l%
+    w$=MID$(in$,c%,1)
+    IF w$>CHR$(31) AND w$<CHR$(127) THEN
+      PRINT w$;
+      @prnt(w$,FALSE)
+    ELSE
+      PRINT ".";
+      @prnt(".",FALSE)
+    ENDIF
+  NEXT c%
+  PRINT norm$
+  @prnt("",TRUE)
+RETURN ! hex32
+'
+PROCEDURE such_2_strng
+  LOCAL wandel$,i%,w%
+  wandel$=HEX$(such%)
+  IF ODD(LEN(wandel$)) THEN
+    wandel$="0"+wandel$
+  ENDIF
+  such$=""
+  FOR i%=1 TO LEN(wandel$) STEP 2
+    w%=VAL("&H"+MID$(wandel$,i%,2))
+    such$=such$+CHR$(w%)
+  NEXT i%
+  PRINT
+  PRINT " Suche nach: ";
+  FOR i%=1 TO LEN(such$)
+    PRINT HEX$(ASC(MID$(such$,i%,1)),2);" ";
+  NEXT i%
+  PRINT
+  such%=0
+RETURN ! such_2_strng
+PROCEDURE find_in_mem
+  LOCAL fundstelle%
+  IF such$="" THEN
+    @such_2_strng
+  ENDIF
+  IF ODD(sstart%) THEN
+    DEC sstart%
+  ENDIF
+  IF sstart%>LPEEK(&H42E) THEN
+    PRINT inv$;" *** Supervisor-Bereich, Keine Suche mîglich! *** ";norm$;beep$
+  ELSE IF sstart%<2048
+    FOR i%=0 TO 2047 STEP 4
+      {kop_buf%+i%}=LPEEK(i%)
+    NEXT i%
+    fundstelle%=C:thhust%(L:kop_buf%+sstart%,L:2047,L:VARPTR(such$),L:LEN(such$),0)
+    IF fundstelle%=0 THEN
+      sstart%=2048
+      fundstelle%=C:thhust%(L:sstart%,L:LPEEK(&H42E)-sstart%-1,L:VARPTR(such$),L:LEN(such$),0)
+    ELSE
+    ENDIF
+  ELSE
+    fundstelle%=C:thhust%(L:sstart%,L:LPEEK(&H42E)-sstart%-1,L:VARPTR(such$),L:LEN(such$),0)
+  ENDIF
+  IF fundstelle%>0 THEN
+    ADD fundstelle%,sstart%-1
+    @mem_dump(HEX$(fundstelle%))
+  ELSE
+    PRINT " Nicht gefunden! ";beep$
+  ENDIF
+RETURN ! find_in_mem
+PROCEDURE find_in_file
+  LOCAL in$,l%,blks%,rest%,b%,fundstelle%,found!,err!,w$,y%,z%,h$
+  PRINT
+  PRINT " Welche Datei? ";
+  FORM INPUT 120 AS suchfile$
+  in$=suchfile$
+  fehler!=FALSE
+  @check_drv(in$)
+  IF NOT fehler! THEN
+    IF EXIST(in$) THEN
+      IF such$="" THEN
+        @such_2_strng
+      ENDIF
+      PRINT
+      y%=CRSLIN
+      OPEN "I",#1,in$
+      l%=LOF(#1)
+      IF sstart%<l% THEN
+        SEEK #1,sstart%
+      ENDIF
+      SUB l%,sstart%
+      blks%=l% DIV 32768
+      rest%=l% MOD 32768
+      w$=""
+      found!=FALSE
+      IF blks%>0 THEN
+        b%=0
+        DO
+          INC b%
+          PRINT AT(1,y%);STR$(ADD(SHL(SUB(b%,1),15),sstart%),8);" Bytes";
+          EXIT IF b%>blks% OR w$="X"
+          BGET #1,kop_buf%,32768
+          fundstelle%=C:thhust%(L:kop_buf%,L:32768,L:VARPTR(such$),L:LEN(such$),0)
+          IF fundstelle%>0 THEN
+            found!=TRUE
+            ADD sstart%,(b%-1)*32768+fundstelle%-1
+          ENDIF
+          EXIT IF found!
+          w$=UPPER$(INKEY$)
+        LOOP
+      ENDIF
+      IF rest%>0 AND (NOT found!) THEN
+        BGET #1,kop_buf%,rest%
+        fundstelle%=C:thhust%(L:kop_buf%,L:rest%,L:VARPTR(such$),L:LEN(such$),0)
+        IF fundstelle%>0 THEN
+          found!=TRUE
+          ADD sstart%,(b%-1)*32768+fundstelle%-1
+        ENDIF
+      ENDIF
+      CLOSE #1
+      PRINT
+      IF found! THEN
+        OPEN "I",#1,in$
+        l%=LOF(#1)
+        IF ODD(sstart%) THEN
+          DEC sstart%
+        ENDIF
+        SEEK #1,sstart%
+        SUB l%,sstart%
+        blks%=l% DIV 32
+        rest%=l% MOD 32
+        CLS
+        z%=0
+        w$=""
+        IF blks%>0 THEN
+          b%=0
+          DO
+            INC b%
+            EXIT IF b%>blks% OR w$="X"
+            IF CRSLIN>=59 THEN
+              PRINT inv$;" DrÅcken Sie irgendeine Taste! ('X' bricht ab!) ";norm$;" ";
+              w$=UPPER$(INPUT$(1))
+              IF w$<>"X" THEN
+                CLS
+              ENDIF
+            ENDIF
+            PRINT inv$;HEX$(z%+sstart%,6);norm$;": ";
+            @prnt(HEX$(z%+sstart%,6)+": ",FALSE)
+            ADD z%,32
+            h$=INPUT$(32,#1)
+            @hex32(h$)
+          LOOP
+        ENDIF
+        IF rest%>0 AND w$<>"X" THEN
+          PRINT inv$;HEX$(z%,6);norm$;": ";
+          @prnt(HEX$(z%,6)+": ",FALSE)
+          h$=INPUT$(rest%,#1)
+          @hex32(h$)
+        ENDIF
+        CLOSE #1
+      ENDIF
+    ELSE
+      PRINT inv$;" *** Datei nicht vorhanden! *** ";norm$;beep$
+    ENDIF
+    fehler!=FALSE
+  ENDIF
+RETURN ! find_in_file
+PROCEDURE find_on_disk
+  LOCAL sect%,ferr!,found!,y%,w$,fundstelle%
+  IF such$="" THEN
+    @such_2_strng
+  ENDIF
+  PRINT
+  dr%=GEMDOS(&H19)
+  sect%=sstart%
+  ferr!=FALSE
+  found!=FALSE
+  y%=CRSLIN
+  w$=""
+  DO
+    PRINT AT(1,y%);" Sektor: ";STR$(sect%,8);"=&H";HEX$(sect%,7);"=";SHL(sect%,9);
+    IF BIOS(4,2,L:kop_buf%,64,sect%,dr%)<>0 THEN
+      @melde("RWAbsolute fehlgeschlagen")
+      ferr!=TRUE
+    ENDIF
+    fundstelle%=C:thhust%(L:kop_buf%,L:32768,L:VARPTR(such$),L:LEN(such$),0)
+    w$=UPPER$(INKEY$)
+    IF fundstelle%>0 THEN
+      found!=TRUE
+      ADD sect%,fundstelle% DIV 512
+    ENDIF
+    EXIT IF found! OR ferr! OR w$="X"
+    ADD sect%,64
+  LOOP
+  PRINT
+  IF found! THEN
+    @disk_mon(HEX$(sect%))
+  ENDIF
+RETURN ! find_on_disk
+'
+PROCEDURE cluster(in$)
+  fehler!=FALSE
+  IF in$="" THEN
+    PRINT " ";inv$;" Name der Datei ";norm$;" ? ";
+    INPUT "",in$
+    in$=TRIM$(UPPER$(in$))
+  ENDIF
+  IF in$>"" THEN
+    IF EXIST(in$) THEN
+      PRINT
+      @clust_drive(in$)
+      @to_dir(in$)
+    ELSE
+      @melde("Datei "+in$+" nicht gefunden")
+    ENDIF
+  ENDIF
+RETURN ! clust
+PROCEDURE clust_drive(nam$)
+  IF NOT fehler! THEN
+    IF MID$(nam$,2,1)=":" THEN
+      CHDRIVE LEFT$(nam$,1)
+    ENDIF
+    drv%=GEMDOS(&H19)
+    BMOVE BIOS(7,drv%),bpb%,18
+    sectsize%=bpb&(0)
+    fat%=bpb&(5)
+    fatsize%=bpb&(4)
+    IF fatsize%*sectsize%>32768 THEN
+      @melde("FAT zu groû")
+    ENDIF
+    root%=fat%+fatsize%
+    rootsize%=2 ! Nur 1 Cluster mit 30 EintrÑgen!
+    offset%=bpb&(6)
+    IF (bpb&(8) AND 1)=0 THEN
+      @melde("Nur 16-Bit-FAT erlaubt")
+    ENDIF
+    IF NOT fehler! THEN
+      ~BIOS(4,2,L:kop_buf%,fatsize%,fat%,drv%)
+      ~BIOS(4,2,L:ddir_buf%,rootsize%,root%,drv%)
+    ENDIF
+  ENDIF
+RETURN ! clust_drive
+PROCEDURE to_dir(nam$)
+  LOCAL p%,t_path$
+  IF NOT fehler! THEN
+    DO
+      p%=INSTR(nam$,"\")
+      EXIT IF p%=0 OR fehler!
+      INC p%
+      nam$=MID$(nam$,p%,255)
+      p%=INSTR(nam$,"\")
+      IF p% THEN
+        t_path$=LEFT$(nam$,p%-1)
+        PRINT " Path: '";t_path$;"'"
+        nam$=MID$(nam$,p%+1,255)
+        @find_in_dir(t_path$)
+      ENDIF
+    LOOP
+    PRINT " Datei: '";nam$;"'"
+    @nam_normalisierung(nam$)
+    @find_first_clust(nam$)
+  ENDIF
+RETURN ! to_dir
+PROCEDURE find_in_dir(p$)
+  LOCAL fundstelle%,a%,sect%,clust%
+  IF NOT fehler! THEN
+    fundstelle%=C:thhust%(L:ddir_buf%,L:rootsize%*sectsize%,L:VARPTR(p$),L:LEN(p$),0)-1
+    IF fundstelle%=-1 THEN
+      @melde("Pfad "+p$+" nicht auffindbar, nur 32 EintrÑge")
+      @show(ddir_buf%,ddir_buf%+1023)
+    ELSE
+      a%=ddir_buf%+fundstelle%
+      ADD a%,26 ! 1.Cluster des neuen Directories
+      clust%=BYTE{a%}+256*BYTE{a%+1}
+      sect%=offset%+2*clust%-4
+      rootsize%=2 ! Pfui, nur 32 EintrÑge im Directory damit erfasst!
+      ~BIOS(4,2,L:ddir_buf%,rootsize%,sect%,drv%)
+    ENDIF
+  ENDIF
+RETURN ! find_in_dir
+PROCEDURE nam_normalisierung(VAR f$)
+  LOCAL p%
+  p%=INSTR(f$,".")
+  IF p% THEN
+    f$=LEFT$(LEFT$(f$,p%-1)+"        ",8)+LEFT$(MID$(f$,p%+1,3)+"   ",3)
+  ENDIF
+RETURN ! punkt_weg
+PROCEDURE find_first_clust(f$)
+  LOCAL a%,fundstelle%,clust%,sect%,fat_start%,x$
+  IF NOT fehler! THEN
+    fundstelle%=C:thhust%(L:ddir_buf%,L:rootsize%*sectsize%,L:VARPTR(f$),L:LEN(f$),0)-1
+    IF fundstelle%=-1 THEN
+      @melde("Datei "+f$+" nicht auffindbar. Nur 32 EintrÑge")
+      @show(ddir_buf%,ddir_buf%+1023)
+    ELSE
+      a%=ddir_buf%+fundstelle%
+      ADD a%,26 ! 1.Cluster der Datei
+      clust%=BYTE{a%}+256*BYTE{a%+1}
+      sect%=offset%+2*clust%-4
+      fat_start%=clust%*2
+      PRINT " Die Datei ";f$;" beginnt bei Cluster $";HEX$(clust%);", bei Sektor (BIOS 4) $";HEX$(sect%);", in der FAT bei FAT+$";
+      PRINT HEX$(fat_start%);" = $";HEX$(fat_start%+fat%*sectsize%)
+      @cluster_ausgabe(clust%)
+      @grafik(clust%)
+    ENDIF
+  ENDIF
+RETURN ! find_first_clust
+PROCEDURE cluster_ausgabe(s%)
+  LOCAL a%,nxt%,sum%,w$
+  IF NOT fehler! THEN
+    PRINT " ";inv$;" Cluster-Nummern in HEX ";norm$
+    PRINT HEX$(s%,4);" ";
+    a%=kop_buf%+s%*2
+    sum%=1
+    w$=""
+    DO
+      nxt%=BYTE{a%}+256*BYTE{a%+1}
+      EXIT IF nxt%=&HFFFF OR w$="X" ! Ende der FAT-Schnur
+      IF CRSCOL>154 THEN
+        PRINT
+        @prnt("",TRUE)
+      ENDIF
+      IF CRSLIN>=58 THEN
+        PRINT
+        PRINT inv$;" Press a Key! ";norm$;" ";
+        w$=UPPER$(INPUT$(1))
+        CLS
+      ENDIF
+      PRINT HEX$(nxt%,4);" ";
+      @prnt(HEX$(nxt%,4)+" ",FALSE)
+      INC sum%
+      a%=kop_buf%+nxt%*2
+    LOOP
+    PRINT
+    PRINT " Das waren ";sum%+1;" Cluster"
+    @prnt(" Das waren "+STR$(sum%+1)+" Cluster",TRUE)
+  ENDIF
+RETURN ! cluster_ausgabe
+PROCEDURE grafik(ab%)
+  LOCAL z%,a%,next%,x%,y%,x$,w$
+  IF CRSLIN>41 THEN
+    z%=40
+    PRINT inv$;" Press a Key! ";norm$;" ";
+    x$=INPUT$(1)
+  ELSE
+    z%=CRSLIN+1
+  ENDIF
+  PRINT AT(1,z%);cltoeop$;
+  LINE 16,z%*16,1015,z%*16
+  x%=(ab% MOD 1000)+16
+  y%=(ab% DIV 1000)*16+z%*16
+  a%=kop_buf%+ab%*2
+  LINE x%,y%,x%,y%+15
+  w$=""
+  DO
+    nxt%=BYTE{a%}+256*BYTE{a%+1}
+    EXIT IF nxt%=&HFFFF OR w$="X" ! Ende der FAT-Schnur
+    x%=(nxt% MOD 1000)+16
+    y%=(nxt% DIV 1000)*16+z%*16
+    LINE x%,y%,x%,y%+15
+    a%=kop_buf%+nxt%*2
+    w$=UPPER$(INKEY$)
+  LOOP
+  LINE 16,(z%+17)*16,1015,(z%+17)*16
+  PRINT AT(1,z%+18);
+RETURN ! grafik
+PROCEDURE melde(in$)
+  PRINT inv$;" *** ";in$;"! *** ";norm$;beep$
+  fehler!=TRUE
+RETURN ! melde
+PROCEDURE show(anfang%,ende%)
+  LOCAL z%,j%,i%,c%,x$
+  z%=(ende%-anfang%) DIV 32
+  FOR j%=0 TO z%
+    FOR i%=0 TO 31
+      PRINT HEX$(BYTE{anfang%+i%+j%*32},2);" ";
+    NEXT i%
+    FOR i%=0 TO 31
+      c%=BYTE{anfang%+i%+j%*32}
+      IF c%>31 AND c%<127 THEN
+        PRINT CHR$(c%);
+      ELSE
+        PRINT ".";
+      ENDIF
+    NEXT i%
+    PRINT
+  NEXT j%
+  PRINT
+RETURN ! show
+'
+PROCEDURE poken
+  LOCAL w$,adr%,wert%
+  PRINT inv$;" Speicherstelle (in HEX bitte!) ";norm$;" ";
+  INPUT "",w$
+  IF w$>"" THEN
+    adr%=VAL("&H"+w$)
+    PRINT inv$;" Wert ";norm$;" lnn, wnn, bnn fÅr LONG,WORD,BYTE, nn jeweils eine HEX-Zahl! ";
+    INPUT "",w$
+    IF w$>"" THEN
+      wert%=VAL("&H"+MID$(w$,2,255))
+      w$=LEFT$(w$,1)
+      SELECT w$
+      CASE "L"
+        IF EVEN(adr%) THEN
+          SLPOKE adr%,wert%
+        ELSE
+          PRINT inv$;" *** Ungerade Speicheradresse ! *** ";norm$;beep$
+        ENDIF
+      CASE "W"
+        IF EVEN(adr%) THEN
+          SDPOKE adr%,wert%
+        ELSE
+          PRINT inv$;" *** Ungerade Speicheradresse ! *** ";norm$;beep$
+        ENDIF
+      CASE "B"
+        SPOKE adr%,wert%
+      ENDSELECT
+    ENDIF
+  ENDIF
+RETURN ! poken
+'
+PROCEDURE del_file(in$)
+  LOCAL e%,dta%,h$,t$
+  IF in$="" THEN
+    PRINT " Welche Datei? ";
+    INPUT "",in$
+  ENDIF
+  fehler!=FALSE
+  @check_drv(in$)
+  IF NOT fehler! THEN
+    dta%=FGETDTA()
+    t$=@set_path$(in$)
+    e%=FSFIRST(in$,-1)
+    IF e%<0 THEN
+      PRINT inv$;" *** Keine Datei gefunden! *** ";norm$;beep$
+    ENDIF
+    DO
+      EXIT IF e%<0
+      h$=CHAR{dta%+30}
+      PRINT " ";h$;" ";inv$;" *** Wirklich Lîschen *** ";norm$;" ['J,j'] ";
+      IF UPPER$(INPUT$(1))="J" THEN
+        KILL h$
+      ENDIF
+      PRINT
+      e%=FSNEXT()
+    LOOP
+    @set_path_org
+    fehler!=FALSE
+  ENDIF
+  PRINT
+RETURN ! del_file
+'
+PROCEDURE calc(in$)
+  LOCAL r,h$
+  IF in$="" THEN
+    PRINT " Welche Formel soll berechnet werden? ";
+    FORM INPUT 150 AS calc$
+    in$=calc$
+  ENDIF
+  in$=UPPER$(in$)
+  h$=LEFT$(in$,2)
+  IF in$>"" THEN
+    IF h$="&H" OR h$="&X" OR h$="&O" THEN
+      r=VAL(in$)
+    ELSE
+      r=@evaluate(in$)
+    ENDIF
+    calc$=STR$(r)
+    PRINT in$;" = ";calc$
+    PRINT "(INT ";INT(r);" &H_";HEX$(r,8);" &X_";BIN$(r,32);" &O_";OCT$(r,11);")"
+    @prnt(in$+" = "+calc$,TRUE)
+    @prnt("(INT "+STR$(INT(r))+" &H_"+HEX$(r,8)+" &X_"+BIN$(r,32)+" &O_"+OCT$(r,11)+")",TRUE)
+  ENDIF
+RETURN ! calc
+FUNCTION evaluate(in$)
+  LOCAL i%,c%,w%,s%,falsch!,priority%
+  ' GLOBAL rechns%->rechn%,rechn$, rechnarts%->rechnart$
+  ' Berechnet REAL-Zahlen
+  ' Eingangsstring wird auf unerlaubte Zeichen untersucht
+  rhilf$=in$
+  i%=0
+  FOR c%=1 TO LEN(in$)
+    SELECT MID$(in$,c%,1)
+    CASE ","
+      INC i%
+      MID$(rhilf$,i%,1)="."
+    CASE ".","0" TO "9","+","-","*","/","(",")"
+      INC i%
+      MID$(rhilf$,i%,1)=MID$(in$,c%,1)
+    ENDSELECT
+  NEXT c%
+  in$=LEFT$(rhilf$,i%)
+  ' Ruecksetzung aller Variabeln
+  ARRAYFILL rechn(),0
+  ARRAYFILL priority%(),0
+  FOR i%=0 TO rechns%
+    rechn$(i%)=""
+  NEXT i%
+  priority%=1
+  s%=1
+  falsch!=FALSE
+  rhilf$=""
+  ' 1.Schleife
+  c%=0
+  DO
+    INC c%
+    EXIT IF c%>LEN(in$) OR falsch! OR s%>rechns%
+    w%=ASC(MID$(in$,c%,1))
+    SELECT w%
+    CASE 44,46,48 TO 57 ! ,.0 bis 9
+      rhilf$=rhilf$+CHR$(w%)
+    CASE 40 ! (
+      ADD priority%,2 ! Hoeher als */, INC reicht nicht!
+    CASE 41 ! )
+      SUB priority%,2
+    CASE 42,43,45,47 ! *+-/
+      SELECT w%
+      CASE 42,47 ! */
+        priority%(s%)=priority%+1
+      CASE 43,45 ! +-
+        priority%(s%)=priority%
+      ENDSELECT
+      rechn$(s%)=CHR$(w%)
+      rechn(s%)=VAL(rhilf$)
+      INC s%
+      rhilf$=""
+    DEFAULT
+      falsch!=TRUE
+    ENDSELECT
+  LOOP
+  IF falsch! OR priority%<>1 THEN ! Klammern nicht geschlossen
+    rechn(1)=VAL(in$)+0.123456789
+    rechn_err!=TRUE
+    PRINT beep$;
+  ELSE
+    ' Letzter Wert
+    rechn(s%)=VAL(rhilf$)
+    priority%(s%)=0
+    ' Hoechste Priority finden
+    priority%=0
+    FOR i%=1 TO s%
+      priority%=MAX(priority%,priority%(i%))
+    NEXT i%
+    ' Prioritaeten von oben nach unten durchlaufen
+    INC priority%
+    DO
+      DEC priority%
+      EXIT IF priority%=0
+      ' Array durchforsten
+      i%=0
+      DO
+        INC i%
+        EXIT IF i%>s%
+        ' Arraywert hat entsprechende Prioritaet
+        IF priority%(i%)=priority% THEN
+          rechn(i%+1)=@wert(rechn(i%),rechn(i%+1),rechn$(i%))
+          DELETE rechn(i%)
+          DELETE priority%(i%)
+          FOR c%=i% TO s%
+            ' rechn(c%)=rechn(c%+1)
+            rechn$(c%)=rechn$(c%+1)
+            ' priority%(c%)=priority%(c%+1)
+          NEXT c%
+          DEC s%
+          DEC i%
+        ENDIF
+      LOOP
+    LOOP
+  ENDIF
+  RETURN rechn(1)
+ENDFUNC ! evaluate
+FUNCTION wert(w1,w2,z$)
+  ' Berechnet REAL-Zahlen
+  SELECT z$
+  CASE "+"
+    RETURN w1+w2
+  CASE "-"
+    RETURN w1-w2
+  CASE "*"
+    RETURN w1*w2
+  CASE "/"
+    IF w2<>0 THEN
+      RETURN w1/w2
+    ELSE ! Notloesung
+      PRINT beep$;
+      RETURN 123456789.12
+    ENDIF
+  DEFAULT
+    RETURN 0
+  ENDSELECT
+ENDFUNC ! wert
+'
+PROCEDURE xb
+  LOCAL in$,nr%,er%,p1%,p2%,l1!,l2!
+  PRINT inv$;" --- 'Sie spielen mit dem Feuer!' --- ";norm$;beep$;" Nur bis zu 2 Parameter mîglich, z.B.: XBIOS(n,L:p1,p2), mehr nicht! KEINE öberprÅfungen!"
+  INPUT " Nummer der XBIOS-Routine ('&H' voranstellen fÅr HEX, RETURN bricht ab, LETZTE CHANCE!) ";in$
+  IF in$>"" THEN
+    nr%=VAL(in$)
+    INPUT " 1.Parameter ('l' voranstellen fÅr long, '&H' fÅr HEX!) ";in$
+    IF in$="" THEN
+      @ergebnis(XBIOS(nr%))
+    ELSE
+      IF LEFT$(in$,1)="l" THEN
+        l1!=TRUE
+        in$=MID$(in$,2,255)
+      ELSE
+        l1!=FALSE
+      ENDIF
+      p1%=VAL(in$)
+      INPUT " 2.Parameter ('l' voranstellen fÅr long, '&H' fÅr HEX!) ";in$
+      IF in$="" THEN
+        IF l1! THEN
+          er%=XBIOS(nr%,L:p1%)
+        ELSE
+          er%=XBIOS(nr%,p1%)
+        ENDIF
+        @ergebnis(er%)
+      ELSE
+        IF LEFT$(in$,1)="l" THEN
+          l2!=TRUE
+          in$=MID$(in$,2,255)
+        ELSE
+          l2!=FALSE
+        ENDIF
+        p2%=VAL(in$)
+        IF l1! THEN
+          IF l2! THEN
+            er%=XBIOS(nr%,L:p1%,L:p2%)
+          ELSE
+            er%=XBIOS(nr%,L:p1%,p2%)
+          ENDIF
+        ELSE
+          IF l2! THEN
+            er%=XBIOS(nr%,p1%,L:p2%)
+          ELSE
+            er%=XBIOS(nr%,p1%,p2%)
+          ENDIF
+        ENDIF
+        @ergebnis(er%)
+      ENDIF
+    ENDIF
+  ENDIF
+RETURN ! xb
+PROCEDURE b
+  LOCAL in$,nr%,er%,p1%,p2%,l1!,l2!
+  PRINT inv$;" --- 'Sie spielen mit dem Feuer!' --- ";norm$;beep$;" Nur bis zu 2 Parameter mîglich, z.B.: BIOS(n,L:p1,p2), mehr nicht! KEINE öberprÅfungen!"
+  INPUT " Nummer der BIOS-Routine ('&H' voranstellen fÅr HEX, RETURN bricht ab, LETZTE CHANCE!) ";in$
+  IF in$>"" THEN
+    nr%=VAL(in$)
+    INPUT " 1.Parameter ('l' voranstellen fÅr long, '&H' fÅr HEX!) ";in$
+    IF in$="" THEN
+      @ergebnis(BIOS(nr%))
+    ELSE
+      IF LEFT$(in$,1)="l" THEN
+        l1!=TRUE
+        in$=MID$(in$,2,255)
+      ELSE
+        l1!=FALSE
+      ENDIF
+      p1%=VAL(in$)
+      INPUT " 2.Parameter ('l' voranstellen fÅr long, '&H' fÅr HEX!) ";in$
+      IF in$="" THEN
+        IF l1! THEN
+          er%=BIOS(nr%,L:p1%)
+        ELSE
+          er%=BIOS(nr%,p1%)
+        ENDIF
+        @ergebnis(er%)
+      ELSE
+        IF LEFT$(in$,1)="l" THEN
+          l2!=TRUE
+          in$=MID$(in$,2,255)
+        ELSE
+          l2!=FALSE
+        ENDIF
+        p2%=VAL(in$)
+        IF l1! THEN
+          IF l2! THEN
+            er%=BIOS(nr%,L:p1%,L:p2%)
+          ELSE
+            er%=BIOS(nr%,L:p1%,p2%)
+          ENDIF
+        ELSE
+          IF l2! THEN
+            er%=BIOS(nr%,p1%,L:p2%)
+          ELSE
+            er%=BIOS(nr%,p1%,p2%)
+          ENDIF
+        ENDIF
+        @ergebnis(er%)
+      ENDIF
+    ENDIF
+  ENDIF
+RETURN ! b
+PROCEDURE g
+  LOCAL in$,nr%,er%,p1%,p2%,l1!,l2!
+  PRINT inv$;" --- 'Sie spielen mit dem Feuer!' --- ";norm$;beep$;" Nur bis zu 2 Parameter mîglich, z.B.: GEMDOS(n,L:p1,p2), mehr nicht! KEINE öberprÅfungen!"
+  INPUT " Nummer der GEMDOS-Routine ('&H' voranstellen fÅr HEX, RETURN bricht ab, LETZTE CHANCE!) ";in$
+  IF in$>"" THEN
+    nr%=VAL(in$)
+    INPUT " 1.Parameter ('l' voranstellen fÅr long, '&H' fÅr HEX!) ";in$
+    IF in$="" THEN
+      @ergebnis(GEMDOS(nr%))
+    ELSE
+      IF LEFT$(in$,1)="l" THEN
+        l1!=TRUE
+        in$=MID$(in$,2,255)
+      ELSE
+        l1!=FALSE
+      ENDIF
+      p1%=VAL(in$)
+      INPUT " 2.Parameter ('l' voranstellen fÅr long, '&H' fÅr HEX!) ";in$
+      IF in$="" THEN
+        IF l1! THEN
+          er%=GEMDOS(nr%,L:p1%)
+        ELSE
+          er%=GEMDOS(nr%,p1%)
+        ENDIF
+        @ergebnis(er%)
+      ELSE
+        IF LEFT$(in$,1)="l" THEN
+          l2!=TRUE
+          in$=MID$(in$,2,255)
+        ELSE
+          l2!=FALSE
+        ENDIF
+        p2%=VAL(in$)
+        IF l1! THEN
+          IF l2! THEN
+            er%=GEMDOS(nr%,L:p1%,L:p2%)
+          ELSE
+            er%=GEMDOS(nr%,L:p1%,p2%)
+          ENDIF
+        ELSE
+          IF l2! THEN
+            er%=GEMDOS(nr%,p1%,L:p2%)
+          ELSE
+            er%=GEMDOS(nr%,p1%,p2%)
+          ENDIF
+        ENDIF
+        @ergebnis(er%)
+      ENDIF
+    ENDIF
+  ENDIF
+RETURN ! g
+PROCEDURE ergebnis(in%)
+  PRINT " Ergebnis: d";in%;"=&H";HEX$(in%,8);"=&X";BIN$(in%,32)
+  @prnt(" Ergebnis: d"+STR$(in%)+"=&H"+HEX$(in%,8)+"=&X"+BIN$(in%,32),TRUE)
+RETURN ! ergebnis
+'
+PROCEDURE check_drv(in$)
+  LOCAL p%
+  p%=INSTR(in$,":")
+  IF p%>0 THEN
+    IF p%<>2 THEN
+      PRINT inv$;" *** Falsche Syntax bei Drive-Angabe ! *** ";norm$;beep$
+      fehler!=TRUE
+    ELSE
+      p%=ASC(UPPER$(LEFT$(in$,1)))-65
+      IF p%<0 OR p%>15 THEN
+        PRINT inv$;" *** Kein mîgliches Drive unter TOS ! *** ";norm$;beep$
+        fehler!=TRUE
+      ELSE
+        IF NOT drive!(p%) THEN
+          PRINT inv$;" *** Drive nicht angemeldet ! *** ";norm$;beep$
+          fehler!=TRUE
+        ENDIF
+      ENDIF
+    ENDIF
+  ENDIF
+RETURN ! check_drv
+PROCEDURE check_make(in$)
+  LOCAL fh&
+  IF NOT fehler! THEN
+    in$=in$+CHR$(0)
+    fh&=GEMDOS(&H3C,L:VARPTR(in$),0) ! FCreate
+    IF fh&>0 THEN
+      fh&=GEMDOS(&H3E,fh&) ! FClose
+      ~GEMDOS(&H41,L:V:in$) ! FDelete
+    ELSE
+      PRINT inv$;" *** Datei konnte nicht zum Schreiben geîffnet werden! Pfad? *** ";norm$;beep$
+      fehler!=TRUE
+    ENDIF
+  ENDIF
+RETURN ! check_make
+PROCEDURE check_fre(in$,gefordert%)
+  LOCAL p%
+  IF NOT fehler! THEN
+    IF MID$(in$,2,1)=":" THEN
+      p%=ASC(UPPER$(LEFT$(in$,1)))-64
+    ELSE
+      p%=0
+    ENDIF
+    IF DFREE(p%)<gefordert% THEN
+      PRINT inv$;" *** Massenspeicher zu klein! *** ";norm$;beep$
+      fehler!=TRUE
+    ENDIF
+  ENDIF
+RETURN ! check_fre
+'
+PROCEDURE fehler
+  ALERT 3,"** FATALER Fehler **|in SideKick.GFA|Kein Aufruf mehr!|TT arbeitet weiter.",1,"WEITER",dummy%
+  BMOVE scrn_buf%,XBIOS(2),153600
+  IF debug! THEN
+    END ! Schlicht!
+  ELSE ! Accessory: END verboten!
+    DO
+      ~EVNT_TIMER(-1)
+    LOOP
+  ENDIF
+RETURN ! fehler
+'
+PROCEDURE test(in$)
+  PRINT "TEST nur zu Entwicklungszwecken eingebaut!"
+RETURN ! test
+'
