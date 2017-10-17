@@ -1,0 +1,396 @@
+******************************************************************************
+*	Mc.68k		Machine code system wrappers
+******************************************************************************
+*
+
+; Mc - machine code assist for 68000 Unix. T.Barnaby 27-4-85
+;	Included is the system call, process switch and
+;	user function call wrappers which saves and recovers the
+;	state of the proccessor.
+;
+
+	globl   _proclen
+	globl   _wrapper, _cur_proc
+	globl	_smaskon, _smaskoff
+
+******************************************************************************
+*	Wrapper		System call wrapper
+******************************************************************************
+*
+
+;	The wrapper saves the current processes state onto the system stack
+;	and into the process table.
+;	It is passed on the system stack:-
+;
+;		Return address		- 4
+;		Processor status	- 2
+;		Function address	- 4	C function to call
+;		Return address 		- 4	Return to wrapper calling func
+;
+;		Registers d0, a0, d1, a1 contain arguments for the function
+;
+; 	global variable 'cur_proc' points to the process table
+;	structure the first element (register pointer),of
+;	which points to the last state on the users system stack.
+;	The processors registers are stored onto
+;	this stack and the register pointer is set to point to them.
+;	They are layed out as follows:-
+;
+
+;/*
+; *	U_regs		Proccesor registers as held on system stack
+; */
+;struct u_regs {
+;0	long		laststate;	/* Previous state pointer */
+;4	long		d0;		/* Data registers */
+;8	long		d1;
+;12	long		d2;
+;16	long		d3;
+;20	long		d4;
+;24	long		d5;
+;28	long		d6;
+;32	long		d7;
+;
+;36	long		a0;	/* Address registers (you don't say!) */
+;40	long		a1;
+;44	long		a2;
+;48	long		a3;
+;52	long		a4;
+;56	long		a5;
+;60	long		a6;
+;
+;64	long		usp;		/* User stack pointer */
+;68	long		ret;		/* Return to wrapper calling func */
+;72	long		func;		/* Function to call */
+;76	short		sr;		/* Status register */
+;78	long		pc;		/* Program counter */
+;};
+
+; Main system entry point via trap #0, process switch vi trap #1, and
+; faults via other traps.
+; Saves onto curent system stack all registers, and user sp, saves
+; last system state (registers) onto stack and sets curent state
+; pointer to new value of system stack (ie pointing to present state)
+; If old states pointer is 0 (first system call) then it is set
+; to point to the end of the system stack for this process.
+; Note the global varible "_proclen" is used to determin the size
+; of the process table, and hence the top of the system stack for
+; this process.
+; 
+; Recovers present state pointer, and recovers registers from here.
+
+_wrapper:
+	movem.l	d0-a7,-(a7)	;Saves all registers
+	jsr	_spl6		;Interupts off
+	move.l	d0,d1		;Save last interupt state in d1
+	move.l	usp,a1		;Gets user stack pointer
+	move.l	a1,60(a7)	;Saves
+	movea.l	_cur_proc,a0	;Sets a0 to start of cur_proc table
+	move.l	(a0),-(a7)	;Saves last system sp on stack
+	cmpi.l	#0,(a7)		;Checks if first access to stack
+	bne	snotfirst	;Not first access
+	move.l	_proclen,d0	;Gets process table length
+	add.l	_cur_proc,d0	;Offsets from start of process table
+	move.l	d0,(a7)		;Sets value on stack to equal start of sys stack
+snotfirst:
+	move.l	a7,(a0)		;Saves system stack pointer in proc table
+	movea.l	a7,a6		;Puts stack pointer into a6
+	move.l	40(a6),-(a7)	;Saves arguments on stack a1
+	move.l	8(a6),-(a7)	;Saves arguments on stack d1
+	move.l	36(a6),-(a7)	;Saves arguments on stack a0
+	move.l	4(a6),-(a7)	;Saves arguments on stack d0
+	movea.l	72(a6),a1	;Gets function address into a1
+	move.l	d1,-(a7)	;Returns interupts to previous state
+	jsr	_splx
+	addq.l	#4,a7
+
+	jsr	(a1)		;System call
+
+	jsr	_spl6		;Interupts off
+	move.l	d0,d1		;Save last interupt state in d1
+	adda.l	#16,a7		;Recovers stack due to arguments
+	movea.l	_cur_proc,a0	;Sets a0 to start of cur_proc table
+	movea.l (a0),a7		;Resets system stack pointer
+	move.l  (a7)+,(a0)	;Recover previous system sp
+	movea.l	60(a7),a1	;Gets user sp
+	move.l	a1,usp
+	move.l	d1,-(a7)	;Returns interupts to previous state
+	jsr	_splx
+	addq.l	#4,a7
+	movem.l	(a7)+,d0-a6	;Recovers all registers except a7 mega crash!
+	addq.l	#4,a7		;Ignore user stack pointer
+	rts
+
+******************************************************************************
+*	Pswtch	Process switch call	Called via wrapper with new
+*					Process pointer on stack
+******************************************************************************
+*
+	globl	_pswtch
+
+_pswtch:
+	jsr	_spl6		;Disable all interupts until return from trap
+	move.l	4(a7),_cur_proc	;Switches to new process
+	rts			;Returns from wrapper
+
+******************************************************************************
+* Calluser()	Call user routine in user state from kernal (for signals)
+******************************************************************************
+*
+*	Calls a user function emulating a trap call in user state
+*
+*	called -	callfunc(function, arg1, arg2, arg3)
+*			function = function address to call
+*			arg1, arg2, arg3 = arguments to function called
+*
+*
+*	Calluser()	Calls a user function caught via a signal
+*
+*	This bit is extremely and uterly horible, because it is legit
+*	to long jump from a caught signal to another user function.
+*	What this bit does is first save the process state via the system
+*	wrapper, then copy the complete state of the processor as
+*	saved on the system stack, onto the user stack so
+*	that the long jump bit can get rid of it if so required.
+*	The system stack is set back to the top and the call
+*	is made to the user function. If this call returns (no long jump)
+*	then the state on the user stack will be retrieved and the system
+*	will return.
+*	If called using _callu() then the process state will not be saved
+*	this should only be done assuming that the state has been saved
+*	elsewhere.
+*
+	globl	_calluser, _callu
+
+*	Calluser	First saves process state on stack via wrapper
+*			Wrapper jumps to callu which jumps to user function
+*
+_calluser:
+	move.l	4(a7),d0	;Put arguments into registers
+	movea.l	8(a7),a0
+	move.l	12(a7),d1
+	movea.l	16(a7),a1
+	move.l	#_callu,-(a7)	;Saves function address on stack
+	jsr	_wrapper	;Jumps to wrapper
+	addq.l	#4,a7		;Recovers stack
+	rts
+
+_callu:
+	link	a6,#0		;Saves a6 and sets a6 to new sp
+	movem.l	d0-a6,-(a7)	;Saves all registers except a7
+	jsr _spl6		;No interupts
+	move.l	d0,-(a7)	;Saves interupt state on user stack
+
+	move.l	#0,-(a7)	;Renables process switch if off
+	move.l	_cur_proc,-(a7)
+	jsr	_smaskoff
+	addq.l	#8,a7
+	move.l	d0,-(a7)	;Saves on swtch state on stack
+
+* Works out how many bytes on super stack
+
+	movea.l	_cur_proc,a0	;Gets process table start address
+	movea.l	(a0),a0		;Gets address of state on stack
+
+	move.l	_cur_proc,d0	;Gets process table start address
+	add.l	_proclen,d0	;Offsets from start of process table top stack
+	movea.l	d0,a3		;Saves top of stack in a3
+
+	sub.l	a7,d0		;Gets number of bytes on super stack
+	move.l	d0,-(a7)	;Saves number on super s(to be placed on user s)
+	move.l	a0,-(a7)	;Saves last state pointer on super stack
+	addq.l	#8,d0		;Adds 8 to d0 to include last entries
+
+
+* Then copies user state from system stack to user stack
+* a3 has top of sys stack, a2 is set to current usp
+
+	movea.l	64(a0),a2	;Sets user stack pointer
+	move.l	a2,usp 
+
+copy:				;Copies state to user stack
+	move.w	-(a3),-(a2)
+	subq.l	#2,d0		;D0 is number of words on stack
+	bne	copy
+	
+
+* Sets system stack pointer to top of stack
+
+	move.l	_cur_proc,d0	;Gets process table start address
+	add.l	_proclen,d0	;Offsets from start of process table
+	movea.l	d0,a7		;Sets stack pointer to top of stack
+	movea.l	_cur_proc,a0	;Process table start address
+	move.l	d0,(a0)		;Sets value of last state entry in process tab
+
+* Saves arguments and return address to enter user prog
+	move.l	20(a6),-(a2)	;User arguments to function on user stack
+	move.l	16(a6),-(a2)	;User arguments to function
+	move.l	12(a6),-(a2)
+	movea.l	8(a6),a1	;Gets function address
+
+	move.l	#callret,-(a2)	;Saves return address
+	move.w	sr,-(a2)	;Saves status register for return super state
+	move.l	a2,usp		;Sets up new user stack pointer
+	move.w	#0,sr		;Sets user state interupts on
+	jmp	(a1)		;Jumps to routine(emulates a trap in user state)
+
+*	The super stack has been set to the top of its working area in
+*	the process table.
+*	The user stack, has the complete sysstack on it + the following
+*		No of bytes which are sysstack
+*		Last state pointer from cur_proc table
+*		3 x 4 arguments
+*
+*	If caught signal returns it returns here which will return from
+*	the previous system call with the super stack state on the user stack
+*	Note returns in user state with super stack pointer at top of stack.
+
+callret:
+	trap	#2		;Sets super state
+	jsr	_spl6
+
+	move.l	usp,a2		;Gets usp
+	adda.l	#12,a2		;Ignore arguments passed
+	movea.l	(a2)+,a1	;Gets last state pointer for process table
+	move.l	(a2)+,d0	;Get number of bytes on sysstack
+	adda.l	d0,a2		;Sets a2 to point to top of sysstack data
+	move.l	a2,usp		;Sets user stack pointer to previous state
+
+rcopy:				;Copies state to super stack
+	move.w	-(a2),-(a7)
+	subq.l	#2,d0		;D0 is number of words on stack
+	bne	rcopy
+
+	movea.l	_cur_proc,a0	;Gets process table start address
+	move.l	a1,(a0)		;Saves last state pointer in process table
+	
+* System is now in state as before user call with state on super stack
+* and usp as before
+
+* Returns smask (process switch state) to previous value *
+* Previous state is already on stack at sp *
+
+	move.l	_cur_proc,-(a7)
+	jsr	_smaskoff
+	addq.l	#8,a7
+
+	move.l	(a7),-(a7)	;Returns interupts to previous state
+	jsr	_splx
+	addq.l	#4,a7
+	addq.l	#4,a7		;Remove user state info for interupts
+	movem.l	(a7)+,d0-a6	;Recovers all registers except a7 mega crash!
+	movea.l	(a7)+,a6	;Recovers a6 from link operation
+	rts			;Returns to calling function
+
+******************************************************************************
+*	Miscalainious routines
+******************************************************************************
+*
+
+	globl	_getstack, _setstack, _getusp, _setusp, _getst, _setsr
+	globl	_spl7,	_spl6,	_spl5,	_spl4,	_spl3,	_spl2
+	globl	_spl1,	_spl0,	_splx
+
+_getstack:
+	move.l a7,d0
+	rts
+
+_setstack:
+	movea.l	(a7),a6		;Saves new sp in a6
+	move.l (a7)+,-(a6)	;Saves old return address onto new stack
+	movea.l a6,a7		;Sets to new sp
+	rts
+
+_getusp:
+	move.l	a0,-(a7)	;Saves a0
+	move.l	usp,a0		;Gets user stack pointer
+	move.l	a0,d0
+	movea.l (a7)+,a0	;Recovers stack
+	rts
+
+_setusp:
+	move.l	a0,-(a7)	;Saves a0
+	movea.l	8(a7),a0	;Sets user stack pointer
+	move.l	a0,usp
+	movea.l (a7)+,a0	;Recovers stack
+	rts
+
+_getsr:
+	move.w sr,d0		;Gets status information
+	rts
+
+_setsr:
+	move.w 6(a7),sr		;Sets status register
+	rts
+
+*
+*	Sets interupt levels	returns present status register
+*				for use with splx.
+
+_spl7:				;Sets NMI
+	move.w sr,d0
+	move.w #$2700,sr
+	rts
+
+_spl6:				;Sets NMI as well
+	move.w sr,d0
+	move.w #$2600,sr
+	rts
+
+_spl5:
+	move.w sr,d0
+	move.w #$2500,sr
+	rts
+
+_spl4:
+	move.w sr,d0
+	move.w #$2400,sr
+	rts
+
+_spl3:
+	move.w sr,d0
+	move.w #$2300,sr
+	rts
+
+_spl2:
+	move.w sr,d0
+	move.w #$2200,sr
+	rts
+
+_spl1:
+	move.w sr,d0
+	move.w #$2100,sr
+	rts
+
+_spl0:
+	move.w sr,d0
+	move.w #$2000,sr
+	rts
+
+_splx:				;Returns to interupt level given
+	move.l 4(a7),d0
+	ori.l #$2000,d0
+	move.w d0,sr
+	rts
+
+
+
+******************************************************************************
+*	Intvect		Sets up an interupt vector to point to the required
+*			location. Codata C interface,
+*			<vector (0x40 ..)><address pointing to>
+******************************************************************************
+
+	globl	_intvect
+
+_intvect:
+	link a6,#-4
+	movem.l a5,-4(a6)
+	move.l 8(a6),d0
+	asl.l #2,d0
+	movea.l d0,a5
+	move.l 12(a6),(a5)
+	movem.l -4(a6),a5
+	unlk a6
+	rts
+

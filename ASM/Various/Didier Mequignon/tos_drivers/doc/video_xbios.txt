@@ -1,0 +1,479 @@
+*************************************************************************
+ CT60 XBIOS Drivers functions v1.01
+*************************************************************************
+XBIOS Functions list:
+
+ct60_vmalloc()               XBIOS Function 0xc60e, Radeon driver v1.01.
+Vsetscreen()                 XBIOS Function 5.
+
+*************************************************************************
+			ct60_vmalloc (Radeon driver)
+*************************************************************************
+
+  Opcode:
+       XBIOS 0xc60e
+
+  Syntax:
+       long ct60_vmalloc(short mode, long value);
+
+  Description:
+          This function is used to allocate memory inside the offscreen area.
+
+  mode:
+          mode = 0, value <=> malloc size, return address or null if memory full.
+                    value = -1 => return bytes free ct60_vmalloc(0, -1L).
+          mode = 1, value <=> address of previous malloc to free.
+          mode = 2, null value for init.
+                    (normally never used excepted by radeon.sys or Vsetscreen)
+
+  Binding:
+          move.l  value,-(sp)
+          move.w  mode,-(sp)
+          move.w  #$c60e,-(sp)
+          trap    #14
+          addq.l  #8,sp
+
+  Return: Returns address or null if memory full.
+
+  Note: Only valid with internal TOS Radeon driver (DRIVERS.HEX).
+
+*************************************************************************
+			Vsetscreen (Radeon driver)
+*************************************************************************
+
+  Opcode:
+       XBIOS 5
+
+  Syntax:
+       void Vsetscreen(void *par1, void *par2, short rez, short command);
+
+  Description:
+          This function is nearest the MilanTOS, it's an extended call of Vsetscreen.  
+          There are some differences:
+          - rez is always at 0x564E ('VN' for Vsetscreen New), an invalid modecode.
+          - devId used below inside a structure is just the modecode.
+          You can use this function like the TOS:
+          Vsetscreen(long logaddr, long physaddr, short rez, short modecode);
+          some flags inside modecode are added:
+
+#define HORFLAG         0x200 /* double width */
+#define HORFLAG2        0x400 /* width increased */
+#define VESA_600        0x800 /* SVGA 600 lines */
+#define VESA_768       0x1000 /* SVGA 768 lines */
+#define VERTFLAG2      0x2000 /* double height */
+#define DEVID          0x4000 /* bits 11-3 used for devID */
+#define VIRTUAL_SCREEN 0x8000 /* width * 2 and height * 2, 2048 x 2048 max */
+#define BPS32 5
+
+OVERSCAN and PAL flags are used for select refresh frequency:
+ OVERSCAN | PAL | Freq
+ ---------+-----+-----
+        0 |  0  | 56
+        0 |  1  | 60
+        1 |  0  | 70
+        1 |  1  | 85 
+
+  par1: used or not by each command.   
+
+  par2: used or not by each comm 
+
+  rez: always 0x564E (Vsetscreen New) 
+
+  command:
+
+          CMD_GETMODE (0) Getting current mode
+
+              long modecode;
+              Vsetscreen(-1,&modecode,0x564E,CMD_GETMODE);
+              This function is identical to Vsetmode(-1);
+
+          CMD_SETMODE (1) Set new graphic mode
+
+              long modecode=VESA_600+HORFLAG2+VGA+COL80+BPS32; /* 800*600*16M */
+              Vsetscreen(-1,modecode,0x564E,CMD_SETMODE)
+
+              This function is identical to Vsetscreen(0,0,3,modecode);
+              BIOS and VDI are initialised.
+
+          CMD_GETINFO (2) Get screen info structure for mode
+
+              SCREENINFO si;
+              si.size = sizeof(SCREENINFO); /* Structure size has to be set */
+              si.devID = VESA_600+HORFLAG2+VGA+COL80+BPS32; /* 800*600*16M */
+              /* mode or 0 for current mode */
+              si.scrFlags=0; /* status of the operation */
+              Vsetscreen(-1,&si,0x564E,CMD_GETINFO);
+              if(si.scrFlags & SCRINFO_OK)
+                puts("OK");
+              else
+                puts("Error");
+
+          CMD_ALLOCPAGE (3) Allocate screenpage
+
+              long addr=0; /* Frame address or -1 */
+              Vsetscreen(&addr,modecode,0x564E,CMD_ALLOCPAGE);
+              if(addr)
+                puts("OK");
+              else
+                puts("Error");
+
+              This only allocates one page. A further call will only 
+              return the frame address. 
+
+          CMD_FREEPAGE (4) Release screenpage
+
+              Vsetscreen(-1,-1,0x564E,CMD_FREEPAGE);
+
+              The graphics card memory will be released again. If the 
+              second page had still been active the call will switch
+              back to the first page with Logbase and Physbase set.
+
+          CMD_FLIPPAGE (5) Switch screenpage
+
+              Vsetscreen(-1,-1,0x564E,CMD_FLIPPAGE);
+
+              Will switch to the second screenpage.
+              Logbase and Physbase will be set.
+
+          CMD_ALLOCMEM (6) Allocate memory on the graphics card
+
+              SCRMEMBLK blk;
+              blk.size=sizeof(SCRMEMBLK);
+              blk.blk_y=200; /* alloc a block of 200 lines*/
+              Vsetscreen(-1,&blk,0x564E,CMD_ALLOCMEM);
+              if(blk.blk_start)
+                puts("OK");
+              else
+                puts("Out of memory");
+              
+              The width of the block is currently always the width of 
+              the virtual screen, and blk_x returned is always 0.
+
+          CMD_FREEMEM (7) Release graphics card memory
+
+              Vsetscreen(-1,&blk,0x564E,CMD_FREEMEM);
+
+              blk of the block to be released.
+
+          CMD_SETADR (8) Set screen to fixed address
+
+              long logbase=blk.blk_start;  /* logical address or -1  */
+              long physbase=blk.blk_start; /* physical address or -1 */
+              Vsetscreen(logbase,physbase,0x564E,CMD_SETADR);
+                          
+              This function is identical to Vsetscreen(logbase,physbase,-1,-1);
+
+          CMD_ENUMMODES (9) Requests all available modes
+
+              long cdecl enumfunc(SCREENINFO *inf,long flag)
+              {
+                printf("%s\n",inf->name);
+                return ENUMMODE_CONT;
+              }
+              Vsetscreen(-1,&enumfunc,0x564E,CMD_ENUMMODES);
+
+              The function "enumfunc" will be called once for every 
+              available mode. ENUMMODE_EXIT (0) will cancel 
+              CMD_ENUMMODES. ENUMMODE_CONT (1) will continue. The 
+              parameters are handed over to the stack using the C 
+              standard. flag is undocumented inside the MilanTOS.
+
+          CMD_TESTMODE (10) Test a graphic mode
+
+              long modecode=VESA_600+HORFLAG2+VGA+COL80+BPS32; /* 800*600*16M */
+              Vsetscreen(-1,modecode,0x564E,CMD_TESTMODE);
+
+              Only the BIOS is initialised, and a screen test arrives 
+              with colored wide lines. This function not exist inside 
+              the MilanTOS.
+
+          CMD_COPYPAGE (11) Copy screenpage
+           
+              Vsetscreen(-1,0,0x564E,CMD_COPYPAGE);
+              Copy with the GPU first screenpage to second screenpage
+              Vsetscreen(-1,1,0x564E,CMD_COPYPAGE);
+              Copy with the GPU second screenpage to first screenpage        
+              
+              This function not exist inside the MilanTOS.
+
+          The next sub-functions exists since the version 0x0101 
+          of the video XBIOS.
+
+          CMD_FILLMEM (12) Fill memory on the graphics card
+           
+              SCRFILLMEMBLK blk;
+              blk.size=sizeof(SCRFILLMEMBLK);
+              blk.blk_op = BLK_COPY;
+              blk.blk_color = 0x112233;  /* background fill color */
+
+              Vsetscreen(-1,&blk,0x564E,CMD_SETMEM);
+              if(blk.blk_status == BLK_OK)
+                puts("OK");
+              
+              Fill a block with a color with the GPU at (blk_x, 
+              blk_y), size is blk_w, blk_h.
+              Note that this structure has the same size and same entry
+              the the structure SCRMEMBLK for the entry for size, 
+              blk_status, blk_x, blk_y, blk_y, blk_w and blk_h for use 
+              the allocated structure with a cast.
+
+          CMD_COPYMEM (13) Copy memory on the graphics card
+
+              SCRCOPYMEMBLK blk;
+              blk.size=sizeof(SCRCOPYMEMBLK);
+ 
+              Vsetscreen(-1,&blk,0x564E,CMD_COPYMEM);
+              if(blk.blk_status == BLK_OK)
+                puts("OK");
+                
+              Copy a block with the GPU at (blk_src_x, blk_src_y) 
+              to (blk_dst_x, blk_dst_y), size is blk_w, blk_h.           
+              Note that this structure has the same size and same entry
+              the the structure SCRMEMBLK for the entry for size, 
+              blk_status, blk_x, blk_y, blk_y, blk_w and blk_h for use 
+              the allocated structure with a cast when blk_x is 
+              blk_dst_x and blk_y is blk_dst_y.
+
+              This function not exist inside the MilanTOS.
+
+          CMD_TEXTUREMEM (14)  Put texture in memory on the graphics card
+
+              SCRTEXTUREMEMBLK blk;
+              blk.size=sizeof(SCRTEXTUREMEMBLK);
+
+              Vsetscreen(-1,&blk,0x564E,CMD_TEXTUREMEM);
+              if(blk.blk_status == BLK_OK)
+                puts("OK");              
+              
+              Copy a 65K texture from CPU local area to a 65K screen 
+              or an ARGB texture to a 32M screen pixel format multiple 
+              times (best results are with little source texture and 
+              big screen for destination).
+              
+              This function need a texture support inside the TOS.
+              This function not exist inside the MilanTOS.
+
+          CMD_GETVERSION (15)
+
+              /* if the function is not implemented, 0x0100 is the first release */
+              long version = 0x0100;
+              Vsetscreen(-1,&version,0x564E,CMD_GETVERSION);
+              
+              Return the version of the video XBIOS.
+              
+              This function not exist inside the MilanTOS.
+
+          CMD_LINEMEM (16) Draw line on the graphics card
+           
+              SCRFILLMEMBLK blk;
+              blk.size=sizeof(SCRLINEMEMBLK);
+              blk.blk_op = BLK_COPY;
+              blk.blk_fbcolor = 0x112233;  /* foreground fill color */
+              blk.blk_bgcolor = 0;  /* background fill color */
+              blk.blk_pattern = 0xffffffff;  /* solid line */
+
+              Vsetscreen(-1,&blk,0x564E,CMD_LINEMEM);
+              if(blk.blk_status == BLK_OK)
+                puts("OK");
+              
+              Draw a line with colors with the GPU at (blk_x1, 
+              blk_y1) to (blk_x2, blk_y2).
+
+              This function not exist inside the MilanTOS.
+
+          CMD_CLIPMEM (17)  Set clipping rectangle on the graphic card
+
+              SCRCLIPMEMBLK blk;
+              blk.size=sizeof(SCRCLIPMEMBLK);
+              blk.blk_clip_on = 1; /* clipping flag 1:on, 0:off    */
+
+              Vsetscreen(-1,&blk,0x564E,CMD_CLIPMEM);
+              if(blk.blk_status == BLK_OK)
+                puts("OK");
+              
+              Enable or diable clipping rectange at (blk_x, blk_y), 
+              size is blk_w, blk_h.
+
+              This function not exist inside the MilanTOS.
+
+          CMD_SYNCMEM (18) Wait an empty GPU fifo for sync the drawing 
+                           engine with the memory.
+                    
+              Vsetscreen(-1,-1,0x564E,CMD_SYNCMEM);
+
+              This function not exist inside the MilanTOS.
+
+          CMD_BLANK (19) Blank / unblank screen.
+                    
+              long blank = 1; /* (0): unblank
+                                 (1): blank normal
+                                 (2): VSYNC suspend
+                                 (3): HSYNC suspend
+                                 (4): powerdown */
+              Vsetscreen(-1,blank,0x564E,CMD_BLANK);
+
+              This function not exist inside the MilanTOS.
+
+  Binding:
+          move.w  command,-(sp)
+          move.w  rez,-(sp)
+          move.l  par2,-(sp)
+          move.l  par1,-(sp)
+          move.w  #5,-(sp)
+          trap    #14
+          lea     14(sp),sp
+
+          or
+
+          move.w  modecode,-(sp)
+          move.w  rez,-(sp)
+          move.l  physaddr,-(sp)
+          move.l  logaddr,-(sp)
+          move.w  #5,-(sp)
+          trap    #14
+          lea     14(sp),sp
+
+  Return: nothing (or current modecode in TOS mode).
+
+  Note: Only valid with internal TOS Radeon driver (DRIVERS.HEX).
+
+/* scrFlags */
+#define SCRINFO_OK 1
+
+/* scrClut */
+#define NO_CLUT    0
+#define HARD_CLUT  1
+#define SOFT_CLUT  2
+
+/* scrFormat */
+#define INTERLEAVE_PLANES  0
+#define STANDARD_PLANES    1
+#define PACKEDPIX_PLANES   2
+
+/* bitFlags */
+#define STANDARD_BITS  1
+#define FALCON_BITS    2
+#define INTEL_BITS     8
+
+typedef struct screeninfo
+{
+  long size;        /* Size of structure          */
+  long devID;       /* modecode                   */
+  char name[64];    /* Friendly name of Screen    */
+  long scrFlags;    /* some Flags                 */
+  long frameadr;    /* Address of framebuffer     */
+  long scrHeight;   /* visible X res              */
+  long scrWidth;    /* visible Y res              */
+  long virtHeight;  /* virtual X res              */
+  long virtWidth;   /* virtual Y res              */
+  long scrPlanes;   /* color Planes               */
+  long scrColors;   /* # of colors                */
+  long lineWrap;    /* # of Bytes to next line    */
+  long planeWarp;   /* # of Bytes to next plane   */
+  long scrFormat;   /* screen Format              */
+  long scrClut;     /* type of clut               */
+  long redBits;     /* Mask of Red Bits           */
+  long greenBits;   /* Mask of Green Bits         */
+  long blueBits;    /* Mask of Blue Bits          */
+  long alphaBits;   /* Mask of Alpha Bits         */
+  long genlockBits; /* Mask of Genlock Bits       */
+  long unusedBits;  /* Mask of unused Bits        */
+  long bitFlags;    /* Bits organisation flags    */
+  long maxmem;      /* max. memory in this mode   */
+  long pagemem;     /* needed memory for one page */
+  long max_x;       /* max. possible width        */
+  long max_y;       /* max. possible heigth       */
+} SCREENINFO;
+
+#define BLK_ERR      0
+#define BLK_OK       1
+#define BLK_CLEARED  2
+
+typedef struct _scrblk
+{
+  long size;                  /* size of structure           */
+  long blk_status;            /* status bits of blk          */
+  long blk_start;             /* Start Address               */
+  long blk_len;               /* length of memblk            */
+  long blk_x;                 /* x pos in total screen       */
+  long blk_y;                 /* y pos in total screen       */
+  long blk_w;                 /* width                       */
+  long blk_h;                 /* height                      */
+  long blk_wrap;              /* width in bytes              */
+} SCRMEMBLK;
+
+/* operations */
+#define BLK_CLEAR        0
+#define BLK_AND          1
+#define BLK_ANDREVERSE   2
+#define BLK_COPY         3
+#define BLK_ANDINVERTED  4
+#define BLK_NOOP         5
+#define BLK_XOR          6
+#define BLK_OR           7
+#define BLK_XNOR         8
+#define BLK_EQUIV        9
+#define BLK_INVERT       10
+#define BLK_ORREVERSE    11
+#define BLK_COPYINVERTED 12
+#define BLK_ORINVERTED   13
+#define BLK_NAND         14
+#define BLK_SET          15
+
+typedef struct _scrsetblk
+{
+  long size;                  /* size of structure           */
+  long blk_status;            /* status bits of blk          */
+  long blk_op;                /* mode operation              */
+  long blk_color;             /* background fill color       */
+  long blk_x;                 /* x pos in total screen       */
+  long blk_y;                 /* y pos in total screen       */
+  long blk_w;                 /* width                       */
+  long blk_h;                 /* height                      */
+  long blk_unused;
+} SCRFILLMEMBLK;
+             
+typedef struct _scrcopyblk
+{
+  long size;                 /* size of structure            */
+  long blk_status;           /* status bits of blk           */
+  long blk_src_x;            /* x pos source in total screen */
+  long blk_src_y;            /* y pos source in total screen */
+  long blk_dst_x;            /* x pos dest in total screen   */
+  long blk_dst_y;            /* y pos dest in total screen   */
+  long blk_w;                /* width                        */
+  long blk_h;                /* height                       */
+  long blk_op;               /* mode operation               */
+} SCRCOPYMEMBLK;
+
+typedef struct _scrtextureblk
+{
+  long size;                /* size of structure             */
+  long blk_status;          /* status bits of blk            */
+  long blk_src_x;           /* x pos source                  */
+  long blk_src_y;           /* y pos source                  */
+  long blk_dst_x;           /* x pos dest in total screen    */
+  long blk_dst_y;           /* y pos dest in total screen    */
+  long blk_w;               /* width                         */
+  long blk_h;               /* height                        */
+  long blk_op;              /* mode operation                */
+  long blk_src_tex;         /* source texture address        */
+  long blk_w_tex;           /* width texture                 */
+  long blk_h_tex;           /* height texture                */
+}SCRTEXTUREMEMBLK;
+
+typedef struct _scrlineblk
+{
+  long size;        /* size of structure            */
+  long blk_status;  /* status bits of blk           */
+  long blk_fgcolor; /* foreground fill color        */
+  long blk_bgcolor; /* background fill color        */
+  long blk_x1;      /* x1 pos dest in total screen  */
+  long blk_y1;      /* y1 pos dest in total screen  */
+  long blk_x2;      /* x2 pos dest in total screen  */
+  long blk_y2;      /* y2 pos dest in total screen  */
+  long blk_op;      /* mode operation               */
+  long blk_pattern; /* pattern (-1: solid line)     */
+} SCRLINEMEMBLK;
+
+*************************************************************************

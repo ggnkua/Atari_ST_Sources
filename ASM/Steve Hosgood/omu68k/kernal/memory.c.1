@@ -1,0 +1,187 @@
+/******************************************************************************
+ *	Memory.c	Memory usage control
+ *			T.Barnaby, Made 22/7/85
+ ******************************************************************************
+ *
+ *	This section of code allocates system memory into Major segments
+ *	that are used for different tasks.
+ *	The segment areas are defined in the memory structure,
+ *	the entries for which are:-
+ *
+ *		short	inuse	-	Indicates segment is in use ie
+ *					contains data, that is required.
+ *		caddr_t	start	-	Start address of segment
+ *		caddr_t	end	-	End address of segment
+ *
+ *	The standard segment uses are:-
+ *
+ *		0	-	All of memory	Special case
+ *		1	-	Kernal area
+ *		2	-	Process workspace
+ *		3	-	Process 2 workspace
+ *		4	-	Swap space
+ *		5	-	Ramdisk space
+ *		6	-	User addon device driver space
+ *
+ *	Special system calls available to super-user only allow modifiaction
+ *	to these entries, but only when the segment concerned is not in use.
+ *	Note segments can never be made to overlap one another, so to
+ *	increase the size of one, a neigbour has to be made smaller.
+ *	
+ *	NOTE checking if an address is within an area is not quite right
+ *	to make it so it would be nesecary to have end pointing to
+ *	the last address available, not the first address that is unavailable.
+ */
+
+# include	"../include/param.h"
+# include	<sys/types.h>
+# include	"../include/inode.h"
+# include	"../include/signal.h"
+# include	"../include/procs.h"
+# include	"../include/memory.h"
+# include	<errno.h>
+
+/* Initial memory segment sizes in c.c */
+
+extern	caddr_t segarray[];
+struct memory mem_all[NMSEGS];
+
+/*
+ *	Meminit()	Initialises major memory segments
+ */
+mem_init(){
+	int n, c;
+
+	/* Initialise memory segments to default values
+	 * NOTE 0 is special case ie all of available memory containing
+	 * all other segments.
+	 */
+	c=0;
+	for(n=0; n<NMSEGS; n++){
+		mem_all[n].m_inuse = 0;
+		mem_all[n].m_start = segarray[c++];
+		mem_all[n].m_end = segarray[c++];
+	}
+	mem_all[0].m_inuse = 1;	/* Total memory in use */
+}
+/*
+ *	Getseg()	Gets a segment entry if valid
+ */
+getseg(seg, mem)
+int seg;
+struct memory *mem;
+{
+	if(memget(seg, mem)) return error(-1);
+	return 0;
+}
+/*
+ *	Setseg()	Sets a segment entry if valid and super-user
+ */
+setseg(seg, mem)
+int seg;
+struct memory *mem;
+{
+	if(cur_proc->euid) return error(EPERM);
+	if(memset(seg, mem)) return error(-1);
+	return 0;
+}
+/*
+ *	Memget()	Gets a segment entry if valid
+ */
+memget(seg, mem)
+int seg;
+struct memory *mem;
+{
+	if((seg < 0) || (seg >= NMSEGS)) return -1;
+	bytecp(&mem_all[seg], mem, sizeof(struct memory));
+	return 0;
+}
+
+/*
+ *	Memset()	Sets a segment entry if valid
+ */
+memset(seg, mem)
+int seg;
+struct memory *mem;
+{
+	/* Checks if segment is valid */
+	if((seg < 0) || (seg >= NMSEGS)) return -1;
+
+	swapclr();	/* Clears swap area of sticky processes */
+
+	/* Checks if new setting is valid */
+	if(segscheck(mem->m_end, seg)) return -1;
+	if(segscheck(mem->m_start, seg)) return -1;
+
+	/* Checks if start or end addresses are being altered */
+	if((mem->m_start != mem_all[seg].m_start) ||
+		(mem->m_end != mem_all[seg].m_end)){
+
+		/* Only allowed if segment not in use */
+		if(mem_all[seg].m_inuse) return -1;
+
+		/* Set start and end addresses */
+		mem_all[seg].m_end = mem->m_end;
+		mem_all[seg].m_start = mem->m_start;
+	}
+	return 0;
+}
+/*
+ *	Segscheck()	Checks if an address is in any memory segment
+ *			if so returns segment number, else returns 0.
+ *			Ignores segment number given, 0 for all segments
+ *			Segment 0 is never checked.
+ */
+segscheck(address, nseg)
+caddr_t	address;
+int nseg;
+{
+	int seg;
+
+	for(seg = 1; seg < NMSEGS; seg++){
+		if((seg != nseg) && (address > mem_all[seg].m_start) &&
+			(address < mem_all[seg].m_end)) return seg;
+	}
+	return 0;
+}
+/*
+ *	Segcheck()	Checks if an address is in the given memory segment
+ *			if so returns 1, else returns 0.
+ */
+segcheck(address, nseg)
+caddr_t	address;
+int nseg;
+{
+	if((address >= mem_all[nseg].m_start) && (address <= mem_all[nseg].m_end))
+		return 1;
+	return 0;
+}
+/*
+ *	Memuse()	Set memory segment in use flag
+ */
+memuse(seg)
+int seg;
+{
+	if((seg < 0) || (seg >= NMSEGS)) return -1;
+	mem_all[seg].m_inuse++;
+	return 0;
+}
+/*
+ *	Memnuse()	Deset memory segment in use flag
+ */
+memnuse(seg)
+int seg;
+{
+	if((seg < 0) || (seg >= NMSEGS)) return -1;
+	if(!mem_all[seg].m_inuse--) mem_all[seg].m_inuse = 0;
+	return 0;
+}
+/*
+ *	Meminuse()	Returns flag indicating memory is in use
+ */
+meminuse(seg)
+int seg;
+{
+	if((seg < 0) || (seg >= NMSEGS)) return -1;
+	return mem_all[seg].m_inuse;
+}
