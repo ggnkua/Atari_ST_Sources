@@ -1,0 +1,16 @@
+COMP tcharcla.mod -v
+COMP tstrings.mod -v
+COMP tsyscloc.mod -v
+COMP tlowlong.mod -v
+COMP tlowreal.mod -v
+COMP tlongsup.mod -v
+COMP trealsup.mod -v
+COMP tmath.mod -v
+COMP txmath.mod -v
+COMP tcmath.mod -v
+COMP tlmath.mod -v
+COMP tlxmath.mod -v
+COMP tlcmath.mod -v
+COMP twconv.mod -v
+COMP tfconv.mod -v
+COMP printarg.mod -v

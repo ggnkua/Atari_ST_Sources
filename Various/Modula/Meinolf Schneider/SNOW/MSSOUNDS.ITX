@@ -1,0 +1,1106 @@
+IMPLEMENTATION MODULE MSSounds;
+
+(*----------------------------------------------------------------------------
+ * System-Version: MOS 3.5
+ *----------------------------------------------------------------------------
+ * Version       : 1.0
+ *----------------------------------------------------------------------------
+ * Text-Version  : V#00019
+ *----------------------------------------------------------------------------
+ * Modul-Holder  : Meinolf Schneider
+ *----------------------------------------------------------------------------
+ * Copyright May 1990 by Digital Art Meinolf Schneider
+ *----------------------------------------------------------------------------
+ * MS  : Meinolf Schneider
+ *----------------------------------------------------------------------------
+ * Datum    Autor Version Bemerkung (Arbeitsbericht)
+ *----------------------------------------------------------------------------
+ * 03.05.90 MS    1.0     Grundversion
+ * 30.06.90 MS    1.1     ...
+ *----------------------------------------------------------------------------
+ * Modul-Beschreibung:
+ *
+ * Digitale Soundausgabe.
+ *----------------------------------------------------------------------------
+ *) (*$C-,M-,R-,S-,N+*)
+
+
+FROM    System                  IMPORT  ADDRESS, ADR, BYTE, TSIZE;
+
+FROM    MSSystems               IMPORT  Allocate, EnterSuperVisorMode;
+
+
+TYPE    Sound           =       POINTER TO RECORD
+                                  SampleStartADR        : ADDRESS;
+                                  WithLoop              : BOOLEAN;
+                                  LoopStartADR          : ADDRESS;
+                                END;
+
+
+VAR     SoundPrioOfChannelA     : CARDINAL;
+        SoundPrioOfChannelB     : CARDINAL;
+        SoundOfChannelA         : Sound;
+        SoundOfChannelB         : Sound;
+        TimerADelay             : BYTE;
+
+       
+
+(*$L-*)
+PROCEDURE StartASound ( WhichSound   : Sound;
+                        Priority     : CARDINAL );
+BEGIN
+  ASSEMBLER
+  move.w        SR,D2
+  ori.w         #$700,SR        ; Interrupts sperren
+  
+  move.w        -(A3),D0
+  move.l        -(A3),A0
+  cmpa.l        Null(PC),A0
+  beq.w         ED
+  
+  move.l        Sound.SampleStartADR(A0),D1
+  lea           SI(PC),A2
+  
+  tst.w         SoundPrioOfChannelA
+  beq           UseChannelA
+  tst.w         SoundPrioOfChannelB
+  beq           UseChannelB
+  cmp.w         SoundPrioOfChannelA,D0
+  bcc           UseChannelALetB
+  cmp.w         SoundPrioOfChannelB,D0
+  bcc           UseChannelB
+  bra.w         UseNoChannel
+ 
+ !Null
+  dc.l          0
+  
+ !UseChannelA
+  move.w        D0,SoundPrioOfChannelA
+  move.l        A0,SoundOfChannelA
+  move.l        D1,(A2)
+  lea           YMOneSoundIRQ(PC),A1
+  move.l        A1,$134
+  bra           Goon
+ !UseChannelALetB
+  move.w        D0,SoundPrioOfChannelA
+  move.l        A0,SoundOfChannelA
+  move.l        D1,(A2)
+  bra           Goon2
+ !UseChannelB
+  move.w        D0,SoundPrioOfChannelB
+  move.l        A0,SoundOfChannelB
+  move.l        D1,4(A2)
+ !Goon2
+  lea           YMTwoSoundIRQ(PC),A1
+  move.l        A1,$134
+  
+  
+ !Goon
+  lea           $FFFFFA00,A1
+  
+  bclr          #5,$B(A1)               ; Timer A Pending
+  move.b        #$1,$19(A1)             ; Timer A Delay /4
+  bset          #5,$13(A1)              ; Timer A Interruptmask on
+  move.b        TimerADelay,$1F(A1)     ; ca. 9000 Hz
+  bset          #5,$7(A1)               ; Enable Timer A
+  lea           $FFFF8800,A0
+  move.b        #$7,(A0)                ; Alle Tongeneratoren an und
+  move.b        (A0),D0                 ; alle Rauschgeneratoren aus!
+  ori.b         #$3F,D0
+  move.b        D0,2(A0)
+ 
+ !UseNoChannel
+ !ED
+  move.w        D2,SR                   ; Interrupts wieder freigeben!
+  rts
+ 
+ ;--------------------------------------------------
+ ; Hier beginnen die eigentlichen Interrupt-Routinen
+ ;--------------------------------------------------
+ 
+ !OneSoundFinito
+  move.l        SoundOfChannelA,A0
+  tst.w         Sound.WithLoop(A0)
+  beq           OneSoundWithOutLoop
+  move.l        Sound.LoopStartADR(A0),D1
+  lea           SI(PC),A0
+  move.l        D1,(A0)
+  bra.w         OneSoundLoop
+ !OneSoundWithOutLoop
+  clr.w         SoundPrioOfChannelA
+  clr.l         SoundOfChannelA
+  lea           YMOffSoundIRQ(PC),A0
+  move.l        A0,$134
+  move.l        HardADR(PC),A0
+  bclr          #5,$FFFFFA07                    ; Disable Timer A
+  bra.w         OneSoundEd
+ 
+ 
+ !TwoSoundFinito1
+  move.l        SoundOfChannelA,A0
+  tst.w         Sound.WithLoop(A0)
+  beq           TwoSound1WithOutLoop
+  move.l        Sound.LoopStartADR(A0),D1
+  lea           SI(PC),A0
+  move.l        D1,(A0)
+  bra           TwoSoundLoop
+ !TwoSound1WithOutLoop
+  move.w        SoundPrioOfChannelB,SoundPrioOfChannelA
+  move.l        SoundOfChannelB,SoundOfChannelA
+  lea           SI(PC),A0
+  move.l        4(A0),(A0)
+ !TwoSound2WithOutLoop
+  clr.w         SoundPrioOfChannelB
+  clr.l         SoundOfChannelB
+  lea           YMOneSoundIRQ(PC),A0
+  move.l        A0,$134
+  movem.l       (A7)+,A0/D1/D2/A1
+  bra.w         YMOneSoundIRQ
+ !TwoSoundFinito2
+  move.l        SoundOfChannelB,A0
+  tst.w         Sound.WithLoop(A0)
+  beq           TwoSound2WithOutLoop
+  move.l        Sound.LoopStartADR(A0),D1
+  lea           SI(PC),A0
+  move.l        D1,4(A0)
+  bra           TwoSoundLoop
+ 
+ 
+ !YMOffSoundIRQ
+  bclr          #5,$FFFFFA0F
+  bclr          #5,$FFFFFA07                    ; Disable Timer A
+  rte
+ 
+ !HardADR
+  dc.l          $FFFF8800
+ !SI
+  dc.l          $00000000
+  dc.l          $00000000
+  
+ 
+ !YMTwoSoundIRQ
+  movem.l       A0/D1/D2/A1,-(A7)
+ !TwoSoundLoop
+  moveq         #0,D1
+  moveq         #0,D2
+  lea           SI(PC),A0
+  addq.l        #1,4(A0)
+  move.l        4(A0),A1
+  move.b        (A1),D2                  ; Null ist Endemarkierung
+  beq           TwoSoundFinito2
+  addq.l        #1,(A0)
+  move.l        (A0),A0
+  move.b        (A0),D1
+  beq           TwoSoundFinito1
+  add.w         D2,D1                   ; Beide Kan„le mischen
+  sub.w         N80(PC),D1              ; Nullinie abziehen
+  btst          #8,D1                   ; šber die Bytegrenze ?
+  bne           over                    ; ja!
+  lsl.w         #4,D1
+ !goout
+  move.l        HardADR(PC),A0
+  move.l        YMTAB1(PC,D1.W),(A0)    ; Lautst„rke setzen
+  move.l        YMTAB2(PC,D1.W),(A0)
+  move.l        YMTAB3(PC,D1.W),(A0)
+  move.b        #$7,(A0)                ; Alle Tongeneratoren und
+  move.b        (A0),D1                 ; alle Rauschgeneratoren aus!
+  ori.b         #$3F,D1                 ; => nicht die Ports umschalten!
+  move.b        D1,2(A0)
+  bclr          #5,$720F(A0)            ; Interrupt Service
+  movem.l       (A7)+,A0/D1/D2/A1
+  rte
+ !over
+  bpl           NoNegative
+  moveq.l       #0,D1
+  bra           goout
+ !NoNegative
+  move.w        NFF(PC),D1
+  bra           goout
+ 
+ !NFF
+  dc.w          $FF0
+ !N80
+  dc.w          $80
+ 
+ !YMOneSoundIRQ
+  pea           (A0)
+  move.l        D1,-(A7)
+ !OneSoundLoop
+  moveq         #0,D1
+  lea           SI(PC),A0
+  addq.l        #1,(A0)
+  move.l        (A0),A0
+  move.b        (A0),D1                  ; Null ist Endemarkierung
+  beq           OneSoundFinito
+  lsl.w         #4,D1
+  move.l        HardADR(PC),A0
+  move.l        YMTAB1(PC,D1.W),(A0)    ; Lautst„rke setzen
+  move.l        YMTAB2(PC,D1.W),(A0)
+  move.l        YMTAB3(PC,D1.W),(A0)
+  move.b        #$7,(A0)                ; Alle Tongeneratoren und
+  move.b        (A0),D1                 ; alle Rauschgeneratoren aus!
+  ori.b         #$3F,D1                 ; => nicht die Ports umschalten!
+  move.b        D1,2(A0)
+ !OneSoundEd
+  bclr          #5,$720F(A0)
+  move.l        (A7)+,D1
+  move.l        (A7)+,A0
+  rte
+  
+  
+ !YMTAB1
+  dc.l $08000000
+ !YMTAB2
+  dc.l $09000000
+ !YMTAB3
+  dc.l $0A000000,0
+  dc.l $08000200,$09000000,$0A000000,0
+  dc.l $08000200,$09000100,$0A000000,0
+  dc.l $08000300,$09000100,$0A000000,0
+  dc.l $08000400,$09000100,$0A000000,0
+  dc.l $08000500,$09000100,$0A000000,0
+  dc.l $08000600,$09000000,$0A000000,0
+  dc.l $08000600,$09000100,$0A000000,0
+  dc.l $08000600,$09000300,$0A000000,0
+  dc.l $08000700,$09000100,$0A000000,0
+  dc.l $08000700,$09000200,$0A000000,0
+  dc.l $08000700,$09000300,$0A000100,0
+  dc.l $08000700,$09000400,$0A000100,0
+  dc.l $08000800,$09000100,$0A000000,0
+  dc.l $08000800,$09000200,$0A000000,0
+  dc.l $08000800,$09000300,$0A000100,0
+  dc.l $08000800,$09000400,$0A000100,0
+  dc.l $08000900,$09000000,$0A000000,0
+  dc.l $08000900,$09000100,$0A000000,0
+  dc.l $08000900,$09000300,$0A000000,0
+  dc.l $08000900,$09000400,$0A000000,0
+  dc.l $08000900,$09000500,$0A000000,0
+  dc.l $08000900,$09000500,$0A000100,0
+  dc.l $08000900,$09000500,$0A000300,0
+  dc.l $08000900,$09000600,$0A000200,0
+  dc.l $08000900,$09000600,$0A000300,0
+  dc.l $08000A00,$09000100,$0A000000,0
+  dc.l $08000A00,$09000300,$0A000000,0
+  dc.l $08000A00,$09000300,$0A000100,0
+  dc.l $08000A00,$09000500,$0A000000,0
+  dc.l $08000A00,$09000500,$0A000200,0
+  dc.l $08000A00,$09000500,$0A000300,0
+  dc.l $08000A00,$09000600,$0A000200,0
+  dc.l $08000A00,$09000700,$0A000000,0
+  dc.l $08000A00,$09000700,$0A000200,0
+  dc.l $08000B00,$09000100,$0A000000,0
+  dc.l $08000B00,$09000300,$0A000000,0
+  dc.l $08000B00,$09000300,$0A000100,0
+  dc.l $08000B00,$09000400,$0A000100,0
+  dc.l $08000B00,$09000500,$0A000100,0
+  dc.l $08000B00,$09000500,$0A000300,0
+  dc.l $08000B00,$09000600,$0A000200,0
+  dc.l $08000B00,$09000600,$0A000300,0
+  dc.l $08000B00,$09000700,$0A000200,0
+  dc.l $08000B00,$09000700,$0A000400,0
+  dc.l $08000B00,$09000800,$0A000000,0
+  dc.l $08000B00,$09000800,$0A000100,0
+  dc.l $08000B00,$09000800,$0A000300,0
+  dc.l $08000B00,$09000800,$0A000400,0
+  dc.l $08000B00,$09000800,$0A000500,0
+  dc.l $08000B00,$09000900,$0A000100,0
+  dc.l $08000B00,$09000900,$0A000300,0
+  dc.l $08000B00,$09000900,$0A000400,0
+  dc.l $08000C00,$09000200,$0A000000,0
+  dc.l $08000C00,$09000200,$0A000100,0
+  dc.l $08000C00,$09000400,$0A000100,0
+  dc.l $08000C00,$09000500,$0A000100,0
+  dc.l $08000C00,$09000500,$0A000300,0
+  dc.l $08000C00,$09000600,$0A000200,0
+  dc.l $08000C00,$09000700,$0A000000,0
+  dc.l $08000C00,$09000700,$0A000200,0
+  dc.l $08000C00,$09000700,$0A000400,0
+  dc.l $08000C00,$09000700,$0A000500,0
+  dc.l $08000C00,$09000800,$0A000200,0
+  dc.l $08000C00,$09000800,$0A000400,0
+  dc.l $08000C00,$09000800,$0A000500,0
+  dc.l $08000C00,$09000900,$0A000000,0
+  dc.l $08000C00,$09000900,$0A000200,0
+  dc.l $08000C00,$09000900,$0A000400,0
+  dc.l $08000C00,$09000900,$0A000500,0
+  dc.l $08000C00,$09000900,$0A000600,0
+  dc.l $08000C00,$09000900,$0A000700,0
+  dc.l $08000C00,$09000900,$0A000700,0
+  dc.l $08000C00,$09000A00,$0A000000,0
+  dc.l $08000C00,$09000A00,$0A000300,0
+  dc.l $08000D00,$09000200,$0A000000,0
+  dc.l $08000D00,$09000300,$0A000100,0
+  dc.l $08000D00,$09000500,$0A000000,0
+  dc.l $08000D00,$09000500,$0A000200,0
+  dc.l $08000D00,$09000600,$0A000100,0
+  dc.l $08000D00,$09000700,$0A000000,0
+  dc.l $08000D00,$09000700,$0A000200,0
+  dc.l $08000D00,$09000700,$0A000400,0
+  dc.l $08000D00,$09000700,$0A000500,0
+  dc.l $08000D00,$09000800,$0A000200,0
+  dc.l $08000D00,$09000800,$0A000400,0
+  dc.l $08000D00,$09000900,$0A000000,0
+  dc.l $08000D00,$09000900,$0A000100,0
+  dc.l $08000D00,$09000900,$0A000400,0
+  dc.l $08000D00,$09000900,$0A000500,0
+  dc.l $08000D00,$09000900,$0A000600,0
+  dc.l $08000D00,$09000900,$0A000700,0
+  dc.l $08000D00,$09000A00,$0A000000,0
+  dc.l $08000D00,$09000A00,$0A000000,0
+  dc.l $08000D00,$09000A00,$0A000300,0
+  dc.l $08000D00,$09000A00,$0A000500,0
+  dc.l $08000D00,$09000A00,$0A000600,0
+  dc.l $08000D00,$09000A00,$0A000700,0
+  dc.l $08000D00,$09000A00,$0A000800,0
+  dc.l $08000D00,$09000A00,$0A000800,0
+  dc.l $08000D00,$09000A00,$0A000800,0
+  dc.l $08000D00,$09000B00,$0A000100,0
+  dc.l $08000D00,$09000B00,$0A000400,0
+  dc.l $08000D00,$09000B00,$0A000600,0
+  dc.l $08000D00,$09000B00,$0A000700,0
+  dc.l $08000D00,$09000B00,$0A000700,0
+  dc.l $08000D00,$09000B00,$0A000800,0
+  dc.l $08000D00,$09000B00,$0A000800,0
+  dc.l $08000D00,$09000B00,$0A000900,0
+  dc.l $08000D00,$09000B00,$0A000900,0
+  dc.l $08000D00,$09000B00,$0A000900,0
+  dc.l $08000D00,$09000B00,$0A000A00,0
+  dc.l $08000D00,$09000B00,$0A000A00,0
+  dc.l $08000D00,$09000B00,$0A000A00,0
+  dc.l $08000D00,$09000B00,$0A000A00,0
+  dc.l $08000D00,$09000B00,$0A000A00,0
+  dc.l $08000D00,$09000C00,$0A000200,0
+  dc.l $08000D00,$09000C00,$0A000500,0
+  dc.l $08000D00,$09000C00,$0A000600,0
+  dc.l $08000E00,$09000000,$0A000000,0
+  dc.l $08000E00,$09000300,$0A000100,0
+  dc.l $08000E00,$09000500,$0A000200,0
+  dc.l $08000E00,$09000600,$0A000200,0
+  dc.l $08000E00,$09000700,$0A000200,0
+  dc.l $08000E00,$09000700,$0A000500,0
+  dc.l $08000E00,$09000800,$0A000100,0
+  dc.l $08000E00,$09000800,$0A000500,0
+  dc.l $08000E00,$09000900,$0A000000,0
+  dc.l $08000E00,$09000900,$0A000300,0
+  dc.l $08000E00,$09000900,$0A000600,0
+  dc.l $08000E00,$09000900,$0A000700,0
+  dc.l $08000E00,$09000900,$0A000800,0
+  dc.l $08000E00,$09000900,$0A000800,0
+  dc.l $08000E00,$09000A00,$0A000200,0
+  dc.l $08000E00,$09000A00,$0A000600,0
+  dc.l $08000E00,$09000A00,$0A000700,0
+  dc.l $08000E00,$09000A00,$0A000800,0
+  dc.l $08000E00,$09000A00,$0A000900,0
+  dc.l $08000E00,$09000A00,$0A000900,0
+  dc.l $08000E00,$09000A00,$0A000900,0
+  dc.l $08000E00,$09000B00,$0A000300,0
+  dc.l $08000E00,$09000B00,$0A000700,0
+  dc.l $08000E00,$09000B00,$0A000800,0
+  dc.l $08000E00,$09000B00,$0A000900,0
+  dc.l $08000E00,$09000B00,$0A000900,0
+  dc.l $08000E00,$09000B00,$0A000A00,0
+  dc.l $08000E00,$09000B00,$0A000A00,0
+  dc.l $08000E00,$09000B00,$0A000A00,0
+  dc.l $08000E00,$09000B00,$0A000A00,0
+  dc.l $08000E00,$09000C00,$0A000000,0
+  dc.l $08000E00,$09000C00,$0A000000,0
+  dc.l $08000E00,$09000C00,$0A000000,0
+  dc.l $08000E00,$09000C00,$0A000700,0
+  dc.l $08000E00,$09000C00,$0A000700,0
+  dc.l $08000E00,$09000C00,$0A000800,0
+  dc.l $08000E00,$09000C00,$0A000800,0
+  dc.l $08000E00,$09000C00,$0A000900,0
+  dc.l $08000E00,$09000C00,$0A000A00,0
+  dc.l $08000E00,$09000C00,$0A000A00,0
+  dc.l $08000E00,$09000C00,$0A000A00,0
+  dc.l $08000E00,$09000C00,$0A000A00,0
+  dc.l $08000E00,$09000C00,$0A000B00,0
+  dc.l $08000E00,$09000C00,$0A000B00,0
+  dc.l $08000E00,$09000C00,$0A000B00,0
+  dc.l $08000E00,$09000D00,$0A000000,0
+  dc.l $08000E00,$09000D00,$0A000000,0
+  dc.l $08000E00,$09000D00,$0A000000,0
+  dc.l $08000E00,$09000D00,$0A000700,0
+  dc.l $08000E00,$09000D00,$0A000700,0
+  dc.l $08000E00,$09000D00,$0A000700,0
+  dc.l $08000E00,$09000D00,$0A000900,0
+  dc.l $08000E00,$09000D00,$0A000900,0
+  dc.l $08000E00,$09000D00,$0A000900,0
+  dc.l $08000E00,$09000D00,$0A000A00,0
+  dc.l $08000E00,$09000D00,$0A000A00,0
+  dc.l $08000E00,$09000D00,$0A000A00,0
+  dc.l $08000E00,$09000D00,$0A000B00,0
+  dc.l $08000E00,$09000D00,$0A000B00,0
+  dc.l $08000E00,$09000D00,$0A000B00,0
+  dc.l $08000F00,$09000000,$0A000000,0
+  dc.l $08000F00,$09000000,$0A000000,0
+  dc.l $08000F00,$09000000,$0A000000,0
+  dc.l $08000F00,$09000700,$0A000000,0
+  dc.l $08000F00,$09000700,$0A000000,0
+  dc.l $08000F00,$09000900,$0A000000,0
+  dc.l $08000F00,$09000900,$0A000000,0
+  dc.l $08000F00,$09000900,$0A000000,0
+  dc.l $08000F00,$09000A00,$0A000000,0
+  dc.l $08000F00,$09000A00,$0A000000,0
+  dc.l $08000F00,$09000A00,$0A000900,0
+  dc.l $08000F00,$09000B00,$0A000000,0
+  dc.l $08000F00,$09000B00,$0A000000,0
+  dc.l $08000F00,$09000B00,$0A000000,0
+  dc.l $08000F00,$09000B00,$0A000A00,0
+  dc.l $08000F00,$09000B00,$0A000A00,0
+  dc.l $08000F00,$09000C00,$0A000000,0
+  dc.l $08000F00,$09000C00,$0A000000,0
+  dc.l $08000F00,$09000C00,$0A000900,0
+  dc.l $08000F00,$09000C00,$0A000900,0
+  dc.l $08000F00,$09000C00,$0A000A00,0
+  dc.l $08000F00,$09000C00,$0A000A00,0
+  dc.l $08000F00,$09000C00,$0A000A00,0
+  dc.l $08000F00,$09000C00,$0A000B00,0
+  dc.l $08000F00,$09000C00,$0A000B00,0
+  dc.l $08000F00,$09000C00,$0A000B00,0
+  dc.l $08000F00,$09000C00,$0A000C00,0
+  dc.l $08000F00,$09000C00,$0A000C00,0
+  dc.l $08000F00,$09000C00,$0A000C00,0
+  dc.l $08000F00,$09000D00,$0A000000,0
+  dc.l $08000F00,$09000D00,$0A000000,0
+  dc.l $08000F00,$09000D00,$0A000000,0
+  dc.l $08000F00,$09000D00,$0A000000,0
+  dc.l $08000F00,$09000D00,$0A000000,0
+  dc.l $08000F00,$09000D00,$0A000000,0
+  dc.l $08000F00,$09000D00,$0A000000,0
+  dc.l $08000F00,$09000D00,$0A000B00,0
+  dc.l $08000F00,$09000D00,$0A000B00,0
+  dc.l $08000F00,$09000D00,$0A000B00,0
+  dc.l $08000F00,$09000D00,$0A000B00,0
+  dc.l $08000F00,$09000D00,$0A000B00,0
+  dc.l $08000F00,$09000D00,$0A000B00,0
+  dc.l $08000F00,$09000D00,$0A000B00,0
+  dc.l $08000F00,$09000D00,$0A000C00,0
+  dc.l $08000F00,$09000D00,$0A000C00,0
+  dc.l $08000F00,$09000D00,$0A000C00,0
+  dc.l $08000F00,$09000D00,$0A000C00,0
+  dc.l $08000F00,$09000D00,$0A000C00,0
+  dc.l $08000F00,$09000D00,$0A000C00,0
+  dc.l $08000F00,$09000D00,$0A000D00,0
+  dc.l $08000F00,$09000D00,$0A000D00,0
+  dc.l $08000F00,$09000D00,$0A000D00,0
+  dc.l $08000F00,$09000D00,$0A000D00,0
+  dc.l $08000F00,$09000D00,$0A000D00,0
+  dc.l $08000F00,$09000D00,$0A000D00,0
+  dc.l $08000F00,$09000E00,$0A000000,0
+  dc.l $08000F00,$09000E00,$0A000000,0
+  dc.l $08000F00,$09000E00,$0A000000,0
+  dc.l $08000F00,$09000E00,$0A000000,0
+  dc.l $08000F00,$09000E00,$0A000000,0
+  dc.l $08000F00,$09000E00,$0A000000,0
+  dc.l $08000F00,$09000E00,$0A000000,0
+  dc.l $08000F00,$09000E00,$0A000000,0
+  dc.l $08000F00,$09000E00,$0A000000,0
+  dc.l $08000F00,$09000E00,$0A000C00,0
+  dc.l $08000F00,$09000E00,$0A000C00,0
+  dc.l $08000F00,$09000E00,$0A000C00,0
+  dc.l $08000F00,$09000E00,$0A000C00,0
+  dc.l $08000F00,$09000E00,$0A000C00,0
+  dc.l $08000F00,$09000E00,$0A000C00,0
+  dc.l $08000F00,$09000E00,$0A000D00,0
+  dc.l $08000F00,$09000E00,$0A000D00,0
+  dc.l $08000F00,$09000E00,$0A000D00,0
+  dc.l $08000F00,$09000E00,$0A000D00,0
+  dc.l $08000F00,$09000E00,$0A000D00,0
+  dc.l $08000F00,$09000E00,$0A000D00,0
+  dc.l $08000F00,$09000E00,$0A000D00,0
+  
+  
+  
+  ;-------------------------------
+ !DoStopASound
+  move.l        -(A3),A0
+  cmpa.l        SoundOfChannelA,A0
+  bne           NotCA
+  
+  move.w        SR,-(A7)
+  ori.w         #$0700,SR
+  clr.l         SoundOfChannelA
+  clr.w         SoundPrioOfChannelA
+  lea           YMOffSoundIRQ(PC),A0
+  move.l        A0,$134
+  bclr          #5,$FFFFFA07                    ; Disable Timer A
+  move.w        (A7)+,SR
+  rts
+  
+  
+ !NotCA
+  cmpa.l        SoundOfChannelB,A0
+  bne           NotCB
+ 
+  move.w        SR,-(A7)
+  ori.w         #$0700,SR
+  move.w        SoundPrioOfChannelB,SoundPrioOfChannelA
+  move.l        SoundOfChannelB,SoundOfChannelA
+  lea           SI(PC),A0
+  move.l        4(A0),(A0)
+  clr.w         SoundPrioOfChannelB
+  clr.l         SoundOfChannelB
+  lea           YMOneSoundIRQ(PC),A0
+  move.l        A0,$134
+  move.w        (A7)+,SR
+ 
+ !NotCB
+  rts
+  ;-------------------------------
+  
+  bra.w         DoStopASound
+  END;
+END StartASound;
+(*$L+*)
+
+
+(*$L-*)
+PROCEDURE StopASound ( WhichSound     : Sound );
+BEGIN
+  ASSEMBLER
+  lea           StopASound,A0
+  jmp           -6(A0)
+  END;
+END StopASound;
+(*$L+*)
+
+
+(*$L-*)
+PROCEDURE ASoundIsActive ( WhichSound     : Sound ): BOOLEAN;
+BEGIN
+  ASSEMBLER
+  move.l   -(A3),D1
+  clr.w    D0
+  cmp.l    SoundOfChannelA,D1
+  beq      Ok
+  cmp.l    SoundOfChannelB,D1
+  bne      ED
+  
+ !Ok
+  move.w   #1,D0
+ !ED
+  move.w   D0,(A3)+
+  END;
+END ASoundIsActive;
+(*$L+*)
+
+
+PROCEDURE NewSound ( VAR TheNewSound            : Sound;
+                         pSampleStartADR        : ADDRESS;
+                         pWithLoop              : BOOLEAN;
+                         pLoopStartADR          : ADDRESS );
+BEGIN
+  New ( TheNewSound );
+  WITH TheNewSound^ DO
+    SampleStartADR := pSampleStartADR;
+    WithLoop := pWithLoop;
+    LoopStartADR := pLoopStartADR;
+  END;
+END NewSound;
+
+
+
+(*$L-*)
+PROCEDURE SetSampleFrequency ( SampleFrequencyInHz  : CARDINAL );
+BEGIN
+  ASSEMBLER
+  move.w   -(A3),D1
+  beq      Err
+  
+  move.l   #614400,D0
+  divu     D1,D0
+  bra      Goon
+  
+ !Err
+  move.w   #$FF,D0
+ 
+ !Goon
+  move.b   D0,TimerADelay
+  
+  
+  ; Mittels Bus-Error Microwire-Interface erkennen:
+  jsr           EnterSuperVisorMode
+  move.w        SR,D2
+  ori.w         #$0700,SR                 ; Interrupts abschalten
+  lea           $FF8900,A2
+  move.l        $8,A1                     ; Bus-Error-Vektor retten
+  pea           BusErr(PC)
+  move.l        (A7)+,$8                  ; und eigenen setzen
+  move.l        A7,A0                     ; war wohl nix...
+  tst.b         (A2)
+  bra           NoBusErrThere
+ !BusErr
+  move.l        A0,A7                     ; war wohl nix...
+  bra.w         GoonMicro
+ !NoBusErrThere
+  move.w        #$07FF,$24(A2)
+  move.w        #10011101000%,D1          ; Master Volume 0 dB
+  bsr.s         MicrowireWrite
+  move.w        #10101010011%,D1          ; Left Volume 0 dB
+  bsr.s         MicrowireWrite
+  move.w        #10100010100%,D1          ; Right Volume 0 dB
+  bsr.s         MicrowireWrite
+  move.w        #10010001100%,D1          ; Treble -6 dB
+  bsr.s         MicrowireWrite
+  move.w        #10001000110%,D1          ; Bass  0 dB
+  bsr.s         MicrowireWrite
+  move.w        #10000000001%,D1          ; MIX GI
+  bsr.s         MicrowireWrite
+  bra           GoonMicro
+ !MicrowireWrite
+  cmpi.w        #$07FF,$24(A2)
+  bne.s         MicrowireWrite
+  move.w        D1,$22(A2)
+  rts
+ !GoonMicro
+  move.l        A1,$8
+  move.w        D2,SR
+  andi.w        #$DFFF,SR       ; SuperMode verlassen
+  END;
+END SetSampleFrequency;
+(*$L+*)
+
+
+(*$L-*)
+PROCEDURE StartSound ( WhichSound   : ADDRESS;
+                       Priority     : CARDINAL );
+BEGIN
+  ASSEMBLER
+  move.w        SR,D2
+  ori.w         #$700,SR        ; Interrupts sperren
+  
+  move.w        -(A3),D0
+  move.l        -(A3),A0
+  cmpa.l        Null(PC),A0
+  beq.w         ED
+  
+  move.l        A0,D1
+  lea           SI(PC),A2
+  
+  tst.w         SoundPrioOfChannelA
+  beq           UseChannelA
+  tst.w         SoundPrioOfChannelB
+  beq           UseChannelB
+  cmp.w         SoundPrioOfChannelA,D0
+  bcc           UseChannelALetB
+  cmp.w         SoundPrioOfChannelB,D0
+  bcc           UseChannelB
+  bra.w         UseNoChannel
+ 
+ !Null
+  dc.l          0
+  
+ !UseChannelA
+  move.w        D0,SoundPrioOfChannelA
+  move.l        D1,(A2)
+  lea           YMOneSoundIRQ(PC),A1
+  move.l        A1,$134
+  bra           Goon
+ !UseChannelALetB
+  move.w        D0,SoundPrioOfChannelA
+  move.l        D1,(A2)
+  bra           Goon2
+ !UseChannelB
+  move.w        D0,SoundPrioOfChannelB
+  move.l        D1,4(A2)
+ !Goon2
+  lea           YMTwoSoundIRQ(PC),A1
+  move.l        A1,$134
+  
+  
+ !Goon
+  lea           $FFFFFA00,A1
+  
+  bclr          #5,$B(A1)               ; Timer A Pending
+  move.b        #$1,$19(A1)             ; Timer A Delay /4
+  bset          #5,$13(A1)              ; Timer A Interruptmask on
+  move.b        TimerADelay,$1F(A1)     ; ca. 9000 Hz
+  bset          #5,$7(A1)               ; Enable Timer A
+  lea           $FFFF8800,A0
+  move.b        #$7,(A0)                ; Alle Tongeneratoren an und
+  move.b        (A0),D0                 ; alle Rauschgeneratoren aus!
+  ori.b         #$3F,D0
+  move.b        D0,2(A0)
+ 
+ !UseNoChannel
+ !ED
+  move.w        D2,SR                   ; Interrupts wieder freigeben!
+  rts
+ 
+ ;--------------------------------------------------
+ ; Hier beginnen die eigentlichen Interrupt-Routinen
+ ;--------------------------------------------------
+ 
+ !OneSoundFinito
+  clr.w         SoundPrioOfChannelA
+  lea           YMOffSoundIRQ(PC),A0
+  move.l        A0,$134
+  move.l        HardADR(PC),A0
+  bclr          #5,$FFFFFA07                    ; Disable Timer A
+  bra.w         OneSoundEd
+ 
+ 
+ !TwoSoundFinito1
+  move.w        SoundPrioOfChannelB,SoundPrioOfChannelA
+  lea           SI(PC),A0
+  move.l        4(A0),(A0)
+ !TwoSoundFinito2
+  clr.w         SoundPrioOfChannelB
+  lea           YMOneSoundIRQ(PC),A0
+  move.l        A0,$134
+  movem.l       (A7)+,A0/D1/D2/A1
+  bra.w         YMOneSoundIRQ
+ 
+ 
+ !YMOffSoundIRQ
+  bclr          #5,$FFFFFA0F
+  bclr          #5,$FFFFFA07                    ; Disable Timer A
+  rte
+ 
+ !HardADR
+  dc.l          $FFFF8800
+ !SI
+  dc.l          $00000000
+  dc.l          $00000000
+  
+ 
+ !YMTwoSoundIRQ
+  movem.l       A0/D1/D2/A1,-(A7)
+  moveq         #0,D1
+  moveq         #0,D2
+  lea           SI(PC),A0
+  addq.l        #1,4(A0)
+  move.l        4(A0),A1
+  move.b        (A1),D2                  ; Null ist Endemarkierung
+  beq           TwoSoundFinito2
+  addq.l        #1,(A0)
+  move.l        (A0),A0
+  move.b        (A0),D1
+  beq           TwoSoundFinito1
+  add.w         D2,D1                   ; Beide Kan„le mischen
+  sub.w         N80(PC),D1              ; Nullinie abziehen
+  btst          #8,D1                   ; šber die Bytegrenze ?
+  bne           over                    ; ja!
+  lsl.w         #4,D1
+ !goout
+  move.l        HardADR(PC),A0
+  move.l        YMTAB1(PC,D1.W),(A0)    ; Lautst„rke setzen
+  move.l        YMTAB2(PC,D1.W),(A0)
+  move.l        YMTAB3(PC,D1.W),(A0)
+  move.b        #$7,(A0)                ; Alle Tongeneratoren und
+  move.b        (A0),D1                 ; alle Rauschgeneratoren aus!
+  ori.b         #$3F,D1                 ; => nicht die Ports umschalten!
+  move.b        D1,2(A0)
+  bclr          #5,$720F(A0)            ; Interrupt Service
+  movem.l       (A7)+,A0/D1/D2/A1
+  rte
+ !over
+  bpl           NoNegative
+  moveq.l       #0,D1
+  bra           goout
+ !NoNegative
+  move.w        NFF(PC),D1
+  bra           goout
+ 
+ !NFF
+  dc.w          $FF0
+ !N80
+  dc.w          $80
+ 
+ !YMOneSoundIRQ
+  pea           (A0)
+  move.l        D1,-(A7)
+  moveq         #0,D1
+  lea           SI(PC),A0
+  addq.l        #1,(A0)
+  move.l        (A0),A0
+  move.b        (A0),D1                  ; Null ist Endemarkierung
+  beq           OneSoundFinito
+  lsl.w         #4,D1
+  move.l        HardADR(PC),A0
+  move.l        YMTAB1(PC,D1.W),(A0)    ; Lautst„rke setzen
+  move.l        YMTAB2(PC,D1.W),(A0)
+  move.l        YMTAB3(PC,D1.W),(A0)
+  move.b        #$7,(A0)                ; Alle Tongeneratoren und
+  move.b        (A0),D1                 ; alle Rauschgeneratoren aus!
+  ori.b         #$3F,D1                 ; => nicht die Ports umschalten!
+  move.b        D1,2(A0)
+ !OneSoundEd
+  bclr          #5,$720F(A0)
+  move.l        (A7)+,D1
+  move.l        (A7)+,A0
+  rte
+  
+  
+ !YMTAB1
+  dc.l $08000000
+ !YMTAB2
+  dc.l $09000000
+ !YMTAB3
+  dc.l $0A000000,0
+  dc.l $08000200,$09000000,$0A000000,0
+  dc.l $08000200,$09000100,$0A000000,0
+  dc.l $08000300,$09000100,$0A000000,0
+  dc.l $08000400,$09000100,$0A000000,0
+  dc.l $08000500,$09000100,$0A000000,0
+  dc.l $08000600,$09000000,$0A000000,0
+  dc.l $08000600,$09000100,$0A000000,0
+  dc.l $08000600,$09000300,$0A000000,0
+  dc.l $08000700,$09000100,$0A000000,0
+  dc.l $08000700,$09000200,$0A000000,0
+  dc.l $08000700,$09000300,$0A000100,0
+  dc.l $08000700,$09000400,$0A000100,0
+  dc.l $08000800,$09000100,$0A000000,0
+  dc.l $08000800,$09000200,$0A000000,0
+  dc.l $08000800,$09000300,$0A000100,0
+  dc.l $08000800,$09000400,$0A000100,0
+  dc.l $08000900,$09000000,$0A000000,0
+  dc.l $08000900,$09000100,$0A000000,0
+  dc.l $08000900,$09000300,$0A000000,0
+  dc.l $08000900,$09000400,$0A000000,0
+  dc.l $08000900,$09000500,$0A000000,0
+  dc.l $08000900,$09000500,$0A000100,0
+  dc.l $08000900,$09000500,$0A000300,0
+  dc.l $08000900,$09000600,$0A000200,0
+  dc.l $08000900,$09000600,$0A000300,0
+  dc.l $08000A00,$09000100,$0A000000,0
+  dc.l $08000A00,$09000300,$0A000000,0
+  dc.l $08000A00,$09000300,$0A000100,0
+  dc.l $08000A00,$09000500,$0A000000,0
+  dc.l $08000A00,$09000500,$0A000200,0
+  dc.l $08000A00,$09000500,$0A000300,0
+  dc.l $08000A00,$09000600,$0A000200,0
+  dc.l $08000A00,$09000700,$0A000000,0
+  dc.l $08000A00,$09000700,$0A000200,0
+  dc.l $08000B00,$09000100,$0A000000,0
+  dc.l $08000B00,$09000300,$0A000000,0
+  dc.l $08000B00,$09000300,$0A000100,0
+  dc.l $08000B00,$09000400,$0A000100,0
+  dc.l $08000B00,$09000500,$0A000100,0
+  dc.l $08000B00,$09000500,$0A000300,0
+  dc.l $08000B00,$09000600,$0A000200,0
+  dc.l $08000B00,$09000600,$0A000300,0
+  dc.l $08000B00,$09000700,$0A000200,0
+  dc.l $08000B00,$09000700,$0A000400,0
+  dc.l $08000B00,$09000800,$0A000000,0
+  dc.l $08000B00,$09000800,$0A000100,0
+  dc.l $08000B00,$09000800,$0A000300,0
+  dc.l $08000B00,$09000800,$0A000400,0
+  dc.l $08000B00,$09000800,$0A000500,0
+  dc.l $08000B00,$09000900,$0A000100,0
+  dc.l $08000B00,$09000900,$0A000300,0
+  dc.l $08000B00,$09000900,$0A000400,0
+  dc.l $08000C00,$09000200,$0A000000,0
+  dc.l $08000C00,$09000200,$0A000100,0
+  dc.l $08000C00,$09000400,$0A000100,0
+  dc.l $08000C00,$09000500,$0A000100,0
+  dc.l $08000C00,$09000500,$0A000300,0
+  dc.l $08000C00,$09000600,$0A000200,0
+  dc.l $08000C00,$09000700,$0A000000,0
+  dc.l $08000C00,$09000700,$0A000200,0
+  dc.l $08000C00,$09000700,$0A000400,0
+  dc.l $08000C00,$09000700,$0A000500,0
+  dc.l $08000C00,$09000800,$0A000200,0
+  dc.l $08000C00,$09000800,$0A000400,0
+  dc.l $08000C00,$09000800,$0A000500,0
+  dc.l $08000C00,$09000900,$0A000000,0
+  dc.l $08000C00,$09000900,$0A000200,0
+  dc.l $08000C00,$09000900,$0A000400,0
+  dc.l $08000C00,$09000900,$0A000500,0
+  dc.l $08000C00,$09000900,$0A000600,0
+  dc.l $08000C00,$09000900,$0A000700,0
+  dc.l $08000C00,$09000900,$0A000700,0
+  dc.l $08000C00,$09000A00,$0A000000,0
+  dc.l $08000C00,$09000A00,$0A000300,0
+  dc.l $08000D00,$09000200,$0A000000,0
+  dc.l $08000D00,$09000300,$0A000100,0
+  dc.l $08000D00,$09000500,$0A000000,0
+  dc.l $08000D00,$09000500,$0A000200,0
+  dc.l $08000D00,$09000600,$0A000100,0
+  dc.l $08000D00,$09000700,$0A000000,0
+  dc.l $08000D00,$09000700,$0A000200,0
+  dc.l $08000D00,$09000700,$0A000400,0
+  dc.l $08000D00,$09000700,$0A000500,0
+  dc.l $08000D00,$09000800,$0A000200,0
+  dc.l $08000D00,$09000800,$0A000400,0
+  dc.l $08000D00,$09000900,$0A000000,0
+  dc.l $08000D00,$09000900,$0A000100,0
+  dc.l $08000D00,$09000900,$0A000400,0
+  dc.l $08000D00,$09000900,$0A000500,0
+  dc.l $08000D00,$09000900,$0A000600,0
+  dc.l $08000D00,$09000900,$0A000700,0
+  dc.l $08000D00,$09000A00,$0A000000,0
+  dc.l $08000D00,$09000A00,$0A000000,0
+  dc.l $08000D00,$09000A00,$0A000300,0
+  dc.l $08000D00,$09000A00,$0A000500,0
+  dc.l $08000D00,$09000A00,$0A000600,0
+  dc.l $08000D00,$09000A00,$0A000700,0
+  dc.l $08000D00,$09000A00,$0A000800,0
+  dc.l $08000D00,$09000A00,$0A000800,0
+  dc.l $08000D00,$09000A00,$0A000800,0
+  dc.l $08000D00,$09000B00,$0A000100,0
+  dc.l $08000D00,$09000B00,$0A000400,0
+  dc.l $08000D00,$09000B00,$0A000600,0
+  dc.l $08000D00,$09000B00,$0A000700,0
+  dc.l $08000D00,$09000B00,$0A000700,0
+  dc.l $08000D00,$09000B00,$0A000800,0
+  dc.l $08000D00,$09000B00,$0A000800,0
+  dc.l $08000D00,$09000B00,$0A000900,0
+  dc.l $08000D00,$09000B00,$0A000900,0
+  dc.l $08000D00,$09000B00,$0A000900,0
+  dc.l $08000D00,$09000B00,$0A000A00,0
+  dc.l $08000D00,$09000B00,$0A000A00,0
+  dc.l $08000D00,$09000B00,$0A000A00,0
+  dc.l $08000D00,$09000B00,$0A000A00,0
+  dc.l $08000D00,$09000B00,$0A000A00,0
+  dc.l $08000D00,$09000C00,$0A000200,0
+  dc.l $08000D00,$09000C00,$0A000500,0
+  dc.l $08000D00,$09000C00,$0A000600,0
+  dc.l $08000E00,$09000000,$0A000000,0
+  dc.l $08000E00,$09000300,$0A000100,0
+  dc.l $08000E00,$09000500,$0A000200,0
+  dc.l $08000E00,$09000600,$0A000200,0
+  dc.l $08000E00,$09000700,$0A000200,0
+  dc.l $08000E00,$09000700,$0A000500,0
+  dc.l $08000E00,$09000800,$0A000100,0
+  dc.l $08000E00,$09000800,$0A000500,0
+  dc.l $08000E00,$09000900,$0A000000,0
+  dc.l $08000E00,$09000900,$0A000300,0
+  dc.l $08000E00,$09000900,$0A000600,0
+  dc.l $08000E00,$09000900,$0A000700,0
+  dc.l $08000E00,$09000900,$0A000800,0
+  dc.l $08000E00,$09000900,$0A000800,0
+  dc.l $08000E00,$09000A00,$0A000200,0
+  dc.l $08000E00,$09000A00,$0A000600,0
+  dc.l $08000E00,$09000A00,$0A000700,0
+  dc.l $08000E00,$09000A00,$0A000800,0
+  dc.l $08000E00,$09000A00,$0A000900,0
+  dc.l $08000E00,$09000A00,$0A000900,0
+  dc.l $08000E00,$09000A00,$0A000900,0
+  dc.l $08000E00,$09000B00,$0A000300,0
+  dc.l $08000E00,$09000B00,$0A000700,0
+  dc.l $08000E00,$09000B00,$0A000800,0
+  dc.l $08000E00,$09000B00,$0A000900,0
+  dc.l $08000E00,$09000B00,$0A000900,0
+  dc.l $08000E00,$09000B00,$0A000A00,0
+  dc.l $08000E00,$09000B00,$0A000A00,0
+  dc.l $08000E00,$09000B00,$0A000A00,0
+  dc.l $08000E00,$09000B00,$0A000A00,0
+  dc.l $08000E00,$09000C00,$0A000000,0
+  dc.l $08000E00,$09000C00,$0A000000,0
+  dc.l $08000E00,$09000C00,$0A000000,0
+  dc.l $08000E00,$09000C00,$0A000700,0
+  dc.l $08000E00,$09000C00,$0A000700,0
+  dc.l $08000E00,$09000C00,$0A000800,0
+  dc.l $08000E00,$09000C00,$0A000800,0
+  dc.l $08000E00,$09000C00,$0A000900,0
+  dc.l $08000E00,$09000C00,$0A000A00,0
+  dc.l $08000E00,$09000C00,$0A000A00,0
+  dc.l $08000E00,$09000C00,$0A000A00,0
+  dc.l $08000E00,$09000C00,$0A000A00,0
+  dc.l $08000E00,$09000C00,$0A000B00,0
+  dc.l $08000E00,$09000C00,$0A000B00,0
+  dc.l $08000E00,$09000C00,$0A000B00,0
+  dc.l $08000E00,$09000D00,$0A000000,0
+  dc.l $08000E00,$09000D00,$0A000000,0
+  dc.l $08000E00,$09000D00,$0A000000,0
+  dc.l $08000E00,$09000D00,$0A000700,0
+  dc.l $08000E00,$09000D00,$0A000700,0
+  dc.l $08000E00,$09000D00,$0A000700,0
+  dc.l $08000E00,$09000D00,$0A000900,0
+  dc.l $08000E00,$09000D00,$0A000900,0
+  dc.l $08000E00,$09000D00,$0A000900,0
+  dc.l $08000E00,$09000D00,$0A000A00,0
+  dc.l $08000E00,$09000D00,$0A000A00,0
+  dc.l $08000E00,$09000D00,$0A000A00,0
+  dc.l $08000E00,$09000D00,$0A000B00,0
+  dc.l $08000E00,$09000D00,$0A000B00,0
+  dc.l $08000E00,$09000D00,$0A000B00,0
+  dc.l $08000F00,$09000000,$0A000000,0
+  dc.l $08000F00,$09000000,$0A000000,0
+  dc.l $08000F00,$09000000,$0A000000,0
+  dc.l $08000F00,$09000700,$0A000000,0
+  dc.l $08000F00,$09000700,$0A000000,0
+  dc.l $08000F00,$09000900,$0A000000,0
+  dc.l $08000F00,$09000900,$0A000000,0
+  dc.l $08000F00,$09000900,$0A000000,0
+  dc.l $08000F00,$09000A00,$0A000000,0
+  dc.l $08000F00,$09000A00,$0A000000,0
+  dc.l $08000F00,$09000A00,$0A000900,0
+  dc.l $08000F00,$09000B00,$0A000000,0
+  dc.l $08000F00,$09000B00,$0A000000,0
+  dc.l $08000F00,$09000B00,$0A000000,0
+  dc.l $08000F00,$09000B00,$0A000A00,0
+  dc.l $08000F00,$09000B00,$0A000A00,0
+  dc.l $08000F00,$09000C00,$0A000000,0
+  dc.l $08000F00,$09000C00,$0A000000,0
+  dc.l $08000F00,$09000C00,$0A000900,0
+  dc.l $08000F00,$09000C00,$0A000900,0
+  dc.l $08000F00,$09000C00,$0A000A00,0
+  dc.l $08000F00,$09000C00,$0A000A00,0
+  dc.l $08000F00,$09000C00,$0A000A00,0
+  dc.l $08000F00,$09000C00,$0A000B00,0
+  dc.l $08000F00,$09000C00,$0A000B00,0
+  dc.l $08000F00,$09000C00,$0A000B00,0
+  dc.l $08000F00,$09000C00,$0A000C00,0
+  dc.l $08000F00,$09000C00,$0A000C00,0
+  dc.l $08000F00,$09000C00,$0A000C00,0
+  dc.l $08000F00,$09000D00,$0A000000,0
+  dc.l $08000F00,$09000D00,$0A000000,0
+  dc.l $08000F00,$09000D00,$0A000000,0
+  dc.l $08000F00,$09000D00,$0A000000,0
+  dc.l $08000F00,$09000D00,$0A000000,0
+  dc.l $08000F00,$09000D00,$0A000000,0
+  dc.l $08000F00,$09000D00,$0A000000,0
+  dc.l $08000F00,$09000D00,$0A000B00,0
+  dc.l $08000F00,$09000D00,$0A000B00,0
+  dc.l $08000F00,$09000D00,$0A000B00,0
+  dc.l $08000F00,$09000D00,$0A000B00,0
+  dc.l $08000F00,$09000D00,$0A000B00,0
+  dc.l $08000F00,$09000D00,$0A000B00,0
+  dc.l $08000F00,$09000D00,$0A000B00,0
+  dc.l $08000F00,$09000D00,$0A000C00,0
+  dc.l $08000F00,$09000D00,$0A000C00,0
+  dc.l $08000F00,$09000D00,$0A000C00,0
+  dc.l $08000F00,$09000D00,$0A000C00,0
+  dc.l $08000F00,$09000D00,$0A000C00,0
+  dc.l $08000F00,$09000D00,$0A000C00,0
+  dc.l $08000F00,$09000D00,$0A000D00,0
+  dc.l $08000F00,$09000D00,$0A000D00,0
+  dc.l $08000F00,$09000D00,$0A000D00,0
+  dc.l $08000F00,$09000D00,$0A000D00,0
+  dc.l $08000F00,$09000D00,$0A000D00,0
+  dc.l $08000F00,$09000D00,$0A000D00,0
+  dc.l $08000F00,$09000E00,$0A000000,0
+  dc.l $08000F00,$09000E00,$0A000000,0
+  dc.l $08000F00,$09000E00,$0A000000,0
+  dc.l $08000F00,$09000E00,$0A000000,0
+  dc.l $08000F00,$09000E00,$0A000000,0
+  dc.l $08000F00,$09000E00,$0A000000,0
+  dc.l $08000F00,$09000E00,$0A000000,0
+  dc.l $08000F00,$09000E00,$0A000000,0
+  dc.l $08000F00,$09000E00,$0A000000,0
+  dc.l $08000F00,$09000E00,$0A000C00,0
+  dc.l $08000F00,$09000E00,$0A000C00,0
+  dc.l $08000F00,$09000E00,$0A000C00,0
+  dc.l $08000F00,$09000E00,$0A000C00,0
+  dc.l $08000F00,$09000E00,$0A000C00,0
+  dc.l $08000F00,$09000E00,$0A000C00,0
+  dc.l $08000F00,$09000E00,$0A000D00,0
+  dc.l $08000F00,$09000E00,$0A000D00,0
+  dc.l $08000F00,$09000E00,$0A000D00,0
+  dc.l $08000F00,$09000E00,$0A000D00,0
+  dc.l $08000F00,$09000E00,$0A000D00,0
+  dc.l $08000F00,$09000E00,$0A000D00,0
+  dc.l $08000F00,$09000E00,$0A000D00,0
+  
+  END;
+END StartSound;
+(*$L+*)
+
+
+
+END MSSounds.
+
+

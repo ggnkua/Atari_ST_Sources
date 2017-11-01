@@ -1,0 +1,441 @@
+DEFINITION MODULE DosSupport;
+__DEF_SWITCHES__
+#ifdef HM2
+#ifdef __LONG_WHOLE__
+(*$!i+: Modul muss mit $i- uebersetzt werden! *)
+(*$!w+: Modul muss mit $w- uebersetzt werden! *)
+#else
+(*$!i-: Modul muss mit $i+ uebersetzt werden! *)
+(*$!w-: Modul muss mit $w+ uebersetzt werden! *)
+#endif
+#endif
+(*****************************************************************************)
+(* Falls die Environmentvariable "STDERR" nicht existiert, und der Standard- *)
+(* kanal zwei (stdaux) nicht auf eine Datei umgelenkt ist (wird mit          *)
+(* "IsDevice()" festgestellt), wird Kanal zwei auf Handle -1 umgelenkt (CON) *)
+(* sodass Kanal zwei wie unter "*IX" als Standardfehlerkanal benutzt werden  *)
+(* kann.                                                                     *)
+(* --------------------------------------------------------------------------*)
+(* 18-Mai-94, Holger Kleinschmidt                                            *)
+(*****************************************************************************)
+
+FROM PORTAB IMPORT
+(* TYPE *) SIGNEDLONG, UNSIGNEDLONG, UNSIGNEDWORD, SIGNEDWORD, WORDSET;
+
+FROM types IMPORT
+(* TYPE *) PathName, StrPtr, StrRange;
+
+(*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*)
+
+CONST
+  (* Anzahl der Zeichen, um die die Pfade nach Umwandlung durch
+   * "UnixToDos()" oder "DosToUnix()" maximal laenger bzw. kuerzer werden.
+   * Die Werte sind etwas groesser als notwendig.
+   *)
+  DINCR = 10;
+  XDECR = 10;
+
+
+CONST
+#ifdef __GEMDOS__
+  EXECSUFFIX = "tos,ttp,prg,app,gtp";
+  TOSEXT     = "tos,ttp";
+  GEMEXT     = "prg,app,gtp";
+  ACCEXT     = "acc";
+#elif (defined __PCDOS__) (* ?? *)
+  EXECSUFFIX = "EXE,COM,APP";
+  DOSEXT     = "EXE,COM";
+  GEMEXT     = "APP";
+#endif
+
+TYPE
+#if reverse_set
+  FileAttributes = (
+    fa15, fa14, fa13, fa12, fa11,
+    fa10, fa9,  fa8,  fa7,  fa6,  (* --> keine 8-Bit-Menge *)
+    faCHANGED,
+    faSUBDIR,
+    faVOLUME,
+    faSYSTEM,
+    faHIDDEN,
+    faRDONLY
+  );
+#else
+  FileAttributes = (
+    faRDONLY,
+    faHIDDEN,
+    faSYSTEM,
+    faVOLUME,
+    faSUBDIR,
+    faCHANGED,
+    fa6,  fa7,  fa8,  fa9,  fa10,
+    fa11, fa12, fa13, fa14, fa15  (* --> keine 8-Bit-Menge *)
+  );
+#endif /* reverse_set */
+
+  FileAttribute = PACKEDSET OF FileAttributes;
+
+CONST
+  FINDALL = FileAttribute{faRDONLY, faHIDDEN, faSYSTEM, faSUBDIR, faCHANGED};
+
+TYPE
+  DTAPtr = POINTER TO DTA;
+
+  DTA = RECORD
+    fill : ARRAY [0..19] OF CHAR;
+    attr : FileAttribute;
+    time : WORDSET;
+    date : WORDSET;
+    size : UNSIGNEDLONG;
+    name : ARRAY [0..13] OF CHAR;
+  END;
+
+CONST
+#if (defined __GEMDOS__)
+  MinHandle = -5; (* wegen MiNT-MIDI-InOut *)
+  MaxHandle = 80;
+#elif (defined __PCDOS__)
+  MinHandle = 0;
+  MaxHandle = 31; (* je nach FILES in CONFIG.SYS ?? *)
+#endif
+
+TYPE
+  HandleRange = [MinHandle..MaxHandle];
+
+TYPE
+  FileType = (unknown, istty, notty);
+
+TYPE
+#if reverse_set
+  DosFlags = (
+    Dos15, Dos14, Dos13,
+    noctty,
+    excl,
+    trunc,
+    creat,
+    nonblock,
+    crmod, cbreak, echo, raw,
+    append,
+    Dos2,
+    ac1,
+    ac0
+  );
+#else
+  DosFlags = (
+    ac0,
+    ac1,
+    Dos2,
+    append,
+    raw, echo, cbreak, crmod,
+    nonblock,
+    create,
+    trunc,
+    excl,
+    noctty,
+    Dos13, Dos14, Dos15
+  );
+#endif
+
+  DosFlag = PACKEDSET OF DosFlags;
+
+CONST
+  getmask = DosFlag{ac0,ac1,append,nonblock,create,trunc,excl,noctty};
+  setmask = DosFlag{ac0,ac1,raw,echo,cbreak,crmod};
+
+TYPE
+  FdRec = RECORD
+    ftype : FileType;  (* Fuer schellere Bestimmung von "isatty()" *)
+    cloex : BOOLEAN;   (* vor 'Pexec' schliessen, nur fuer TOS *)
+    flags : DosFlag;   (* Attribute der offenen Datei, nur fuer TOS *)
+  END;
+
+
+(* Eigentlich muesste man getrennt nach Attributen fuer Dateikennungen und
+   Dateibeschreibungsbloecken (DBB) aufteilen, da zu einem DBB mehrere
+   Dateikennungen gehoeren koennen, und Aenderungen des DBB alle diese
+   Dateikennungen betreffen.
+   So entstehen beim Duplizieren von Dateikennungen unabhaengige DBB,
+   und das Aendern z.B. des oAPPEND-Flags einer Datei ueber die eine
+   Dateikennung hat keine Auswirkungen, wenn die Datei ueber die zweite
+   Kennung angesprochen wird. Dies sollte kein grosses Problem sein, und es
+   vereinfacht die Verwaltung, da sonst auch noch mitgezaehlt werden muesste,
+   wieviel Dateikennungen auf einen bestimmten DBB zugreifen, und bei jedem
+   'open' muesste auch ein freier DBB gesucht werden.
+
+   Unter MiNT ist das kein Problem, da hier nur 'ftype' verwendet wird.
+ *)
+
+VAR
+  FD : ARRAY HandleRange OF FdRec;
+
+VAR
+  INODE      : UNSIGNEDLONG;
+  ROOTDIR    : CHAR;    (* 'r<x>' in UNIXMODE gesetzt, ROOTDIR := x *)
+  BINIO      : BOOLEAN; (* 'b' in UNIXMODE gesetzt *)
+
+
+CONST
+  MINSIG = 0;
+  MAXSIG = 30; (* MiNT verwaltet nur 31, nicht 32 Signale ! *)
+
+TYPE
+  DosHandler = ARRAY [MINSIG..MAXSIG] OF
+                 RECORD
+                   HANDLER : SIGNEDLONG;
+                   MASK    : UNSIGNEDLONG;
+                   FLAGS   : WORDSET;
+                 END;
+
+VAR
+  SIGMASK    : UNSIGNEDLONG;
+  SIGPENDING : UNSIGNEDLONG;
+  SIGHANDLER : DosHandler;
+
+
+CONST
+  SECSPERMIN  = LC(60);       (*                  60  *)
+  SECSPERHOUR = LC(3600);     (*             60 * 60  *)
+  SECSPERDAY  = LC(86400);    (*        24 * 60 * 60  *)
+  SECSPERYEAR = LC(31536000); (*  365 * 24 * 60 * 60  *)
+
+TYPE
+  DayMonth = ARRAY [FALSE..TRUE] OF
+               ARRAY [0..11] OF UNSIGNEDWORD;
+
+TYPE
+  DosDate = RECORD
+    year : UNSIGNEDWORD; (* [1980..2099] *)
+    mon  : UNSIGNEDWORD; (* [0..11] *)
+    day  : UNSIGNEDWORD; (* [1..31] *)
+    hour : UNSIGNEDWORD; (* [0..23] *)
+    min  : UNSIGNEDWORD; (* [0..59] *)
+    sec  : UNSIGNEDWORD; (* [0..58] *)
+    (* Nicht von DOS unterstuetzt: *)
+    yday : UNSIGNEDWORD; (* [0..365] *)
+    wday : UNSIGNEDWORD; (* [0..6] *)
+  END;
+
+VAR
+  DaysPerMonth : DayMonth; (* Tage im Monat *)
+  MonthDays    : DayMonth; (* Tage im Jahr bis zum Monat *)
+
+(*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*)
+
+ PROCEDURE IsExec ((* EIN/ -- *) path : StrPtr ): BOOLEAN;
+
+ PROCEDURE IsDosExec ((* EIN/ -- *) path : StrPtr ): BOOLEAN;
+
+ PROCEDURE IsGEMExec ((* EIN/ -- *) path : StrPtr ): BOOLEAN;
+
+(*--------------------------------------------------------------------------
+ | Diese Prozeduren stellen anhand der Extension des Dateinamens fest, ob   |
+ | die Datei ausfuehrbar ist. <path>^ muss im DOS-Format sein.              |
+ | Falls die Environment-Variablen "SUFFIX" bzw. "GEMEXT"/"TOSEXT" existie- |
+ | ren, wird geprueft, ob die Extension mit einer aus der durch Semikolon   |
+ | oder Komma getrennten Liste der Environment-Variablen uebereinstimmt.    |
+ | Existieren diese Variablen nicht, wird geprueft, ob eine der Extensionen |
+ | aus 'EXECSUFFIX' bzw. 'GEMEXT'/'TOSEXT' vorliegt. Die Gross-, Klein-     |
+ | schreibung wird nicht beachtet.                                          |
+  --------------------------------------------------------------------------*)
+
+
+ PROCEDURE IsDosDevice ((* EIN/ -- *) path : StrPtr ): BOOLEAN;
+
+(*--------------------------------------------------------------------------
+ | IsDosDevice  <=>  <path> = "xx...:"  ,  x weder \ noch /.                |
+  --------------------------------------------------------------------------*)
+
+
+ PROCEDURE CompletePath ((* EIN/ -- *)     path  : StrPtr;
+                         (* EIN/ -- *)     fSize : StrRange;
+                         (* -- /AUS *)     full  : StrPtr;
+                         (* -- /AUS *) VAR fLen  : INTEGER;
+                         (* -- /AUS *) VAR err   : INTEGER  ): BOOLEAN;
+
+(*--------------------------------------------------------------------------
+ | Falls die Laufwerksangabe in <path>^ fehlt, und/oder nur ein relativer   |
+ | Pfad angegeben ist, werden Laufwerk und/oder aktueller Pfad ergaenzt.    |
+ | <full>^ enthaelt die vervollstaendigte Pfadangabe. <fSize> gibt den Platz|
+ | in <full> fuer den Pfad einschliesslich Nullbyte an. <fLen> ist die      |
+ | Laenge des Pfades in <full>^; da <full>^ mindestens die Laufwerksangabe  |
+ | und das Wurzelverzeichnis enthaelt, ist <fLen> mindestens gleich drei.   |
+ | <full>^ ist immer mit einem Nullbyte abgeschlossen.                      |
+ | <fSize> muss mindestens 4 sein, sonst wird ein Fehler gemeldet.          |
+ | Wenn ein Fehler aufgetreten ist, wird FALSE als Funktionswert geliefert  |
+ | und <err> enthaelt den Fehlercode; <fLen> und <full>^ sind dann nicht    |
+ | definiert.                                                               |
+ | !ACHTUNG: <fSize> wird nur beachtet, wenn der 'Dgetcwd'-Aufruf unter-    |
+ | stuetzt wird (z.B. ab MiNT 0.96), sonst muss <full> ausreichend gross    |
+ | sein (mindestens 128 Zeichen)!                                           |
+  --------------------------------------------------------------------------*)
+
+
+
+ PROCEDURE DosToUnix ((* EIN/ -- *)     dpath : StrPtr;
+                      (* EIN/ -- *)     xSize : StrRange;
+                      (* EIN/ -- *)     xpath : StrPtr;
+                      (* -- /AUS *) VAR dlen  : INTEGER;
+                      (* -- /AUS *) VAR xlen  : INTEGER  );
+
+(*--------------------------------------------------------------------------
+ | Die Prozedur dient dazu, die "DOS"-spezifischen Elemente eines Pfadnamens|
+ | in "*IX"-Aequivalente zu wandeln, falls dies moeglich ist. Im einzelnen  |
+ | werden folgende Umwandlungen vorgenommen:                                |
+ |                                                                          |
+ |     \                                 -->  /                             |
+ |     Der Pfad wird in Kleinbuchstaben gewandelt, falls der 'Dpathconf'-   |
+ |     Aufruf nicht unterstuetzt wird.                                      |
+ |     v:\...                            -->  /dev/...                      |
+ |     q:\...                            -->  /pipe/...                     |
+ |     u:\dev\...                        -->  /dev/...                      |
+ |     u:\pipe\...                       -->  /pipe/...                     |
+ |     u:\x, u:\x\...                    -->  wie x:, x:\...                |
+ |     x:                                -->  /x         , ROOTDIR = 'u'    |
+ |                                       -->  /          , ROOTDIR = 'x'    |
+ |                                       -->  /dev/x     , sonst            |
+ |     x:\..., x:...                     -->  /x/...     , ROOTDIR = 'u'    |
+ |                                       -->  /...       , ROOTDIR = 'x'    |
+ |                                       -->  /dev/x/... , sonst            |
+ |     con:                              -->  /dev/tty                      |
+ |     xx...:..                          -->  /dev/xx...                    |
+ |                                                                          |
+ | <xpath>^ enthaelt soviel vom umgewandelten Pfad wie moeglich. <xlen> ent-|
+ | haelt die Laenge des UNGEKUERZTEN Pfades. Falls also <xlen> groesser als |
+ | der Platz in <xpath>^ ist, musste gekuerzt werden. <xSize> gibt den Platz|
+ | in <xpath>^ an. <xpath>^ ist nur dann mit einem Nullbyte abgeschlossen,  |
+ | wenn der Platz dafuer ausreicht (<xlen> < <xSize>).                      |
+ | Es ist moeglich fuer <xSize> Null und <xpath> NULL anzugeben, dann wird  |
+ | lediglich die Laenge ermittelt, die der umgewandelte Pfad haben wuerde.  |
+ | <dlen> enthaelt die Laenge von <dpath>.                                  |
+ | <xpath>^ ist hoechstens 'XDECR' Zeichen kuerzer als <dpath>^.            |
+ | Da die Umsetzungen, die die Laenge des Pfades veraendern, nur von den    |
+ | ersten Zeichen von <dpath>^ abhaengen, braucht kein vollstaendiger DOS-  |
+ | Pfad angegeben werden, um zu ermitteln, wieviele Zeichen der *IX-Pfad    |
+ | laenger oder kuerzer werden wuerde (<xlen> - <dlen>).                    |
+ | Da <dpath>^ veraendert wird, muss der Pfad vorher kopiert werden, wenn er|
+ | noch gebraucht wird.                                                     |
+  --------------------------------------------------------------------------*)
+
+ PROCEDURE UnixToDos ((* EIN/ -- *)     xpath : StrPtr;
+                      (* EIN/ -- *)     xlen  : CARDINAL;
+                      (* EIN/ -- *)     dSize : StrRange;
+                      (* EIN/ -- *)     dpath : StrPtr;
+                      (* -- /AUS *) VAR dot   : BOOLEAN;
+                      (* -- /AUS *) VAR done  : BOOLEAN       );
+
+(*--------------------------------------------------------------------------
+ | Die Prozedur dient dazu, die "*IX"-spezifischen Elemente eines Pfadnamens|
+ | in "DOS"-Aequivalente zu wandeln, falls dies moeglich ist. Im einzelnen  |
+ | werden folgende Umwandlungen vorgenommen:                                |
+ |                                                                          |
+ |     /                                 -->  \                             |
+ |                                                                          |
+ |     /., /..                           -->  /                             |
+ |     /./xx, /../xx                     -->  /xx                           |
+ | falls das aktuelle Verzeichnis das Wurzelverzeichnis ist, auch:          |
+ |     ., ..                             -->  /                             |
+ |     ./xx, ../xx                       -->  /xx,                          |
+ |                                                                          |
+ |     /dev/x                            -->  x:                            |
+ |     /dev/x/..., /dev/x\...            -->  x:\...                        |
+ |     /dev/tty                          -->  con:                          |
+ |     /dev/xx...                        -->  xx...:                        |
+ | falls MiNT aktiv                                                         |
+ |     /dev/xx...                        -->  U:\dev\...                    |
+ |     /pipe/...                         -->  U:\pipe\...                   |
+ |                                                                          |
+ | <dpath>^ wird immer mit einem Nullbyte abgeschlossen.                    |
+ | <xlen> ist die Laenge von <xpath>^, <xpath>^ muss nicht mit einem Null-  |
+ | byte abgeschlossen sein, also kann auch einfach die Adresse eines M2-    |
+ | Strings uebergeben werden; fuer die Laenge des Strings wird nur <xlen>   |
+ | beachtet.                                                                |
+ | <dSize> gibt den Platz in <dpath^> an.                                   |
+ | <dot> == <dpath>^ = ("." | "xxx\." | "x:." | ".." | "xxx\.." | "x:..")   |
+ |                                                                          |
+ | Falls in der Environmentvariablen UNIXMODE der Teilstring "rX" enthalten |
+ | ist, wird eine Pfadangabe der Form "\..." zu "X:\..." umgewandelt,       |
+ | allerdings nicht, wenn der \ durch die Umwandlung von '.' oder '..'      |
+ | entstanden ist (siehe oben).                                             |
+ |                                                                          |
+ | Wenn <dpath>^ den vollstaendigen umgewandelten Pfad aufnehmen konnte     |
+ | (einschliesslich dem abschliessenden Nullbyte), ist <done> = TRUE, sonst |
+ | ist <done> = FALSE, und 'e.errno' wird auf 'ENAMETOOLONG' gesetzt;       |
+ | <dpath>^ und <dot> sind dann undefiniert.                                |
+ | <dSize> gibt den Platz in <dpath^> an und muss mindestens 1 sein.        |
+ | Falls <xpath>^ der Leerstring ist, wird 'e.errno' auf 'ENOENT' gesetzt,  |
+ | und <done> ist ebenfalls FALSE.                                          |
+ | <dpath>^ ist maximal 'DINCR' Zeichen (incl. Nullbyte) laenger als        |
+ | <xpath>^.                                                                |
+  --------------------------------------------------------------------------*)
+
+
+
+ PROCEDURE FindFirst ((* EIN/ -- *)     path : StrPtr;
+                      (* EIN/ -- *)     attr : FileAttribute;
+                      (* EIN/AUS *) VAR dta  : DTA;
+                      (* -- /AUS *) VAR res  : INTEGER       ): BOOLEAN;
+
+ PROCEDURE FindNext ((* EIN/AUS *) VAR dta : DTA;
+                     (* -- /AUS *) VAR res : INTEGER ): BOOLEAN;
+
+(*--------------------------------------------------------------------------
+ | Fuehren ein "GEMDOS-Fsfirst" bzw. "Fsnext" aus. Der Funktionswert ist    |
+ | TRUE, falls eine Datei gefunden wurde, falls nicht, enthaelt <err> den   |
+ | Fehlercode. <dta> bei "FindNext()" muss die gleiche wie bei "FindFirst()"|
+ | sein. Da die DTA jedesmal explizit gesetzt wird, kann sie zwischendurch  |
+ | auch beliebig umgesetzt werden.                                          |
+  --------------------------------------------------------------------------*)
+
+ PROCEDURE IsTerm ((* EIN/ -- *) h : INTEGER ): BOOLEAN;
+
+(*--------------------------------------------------------------------------
+ | Es wird genau dann "TRUE" geliefert, wenn auf das (gueltige) Handle kein |
+ | "Seek" angewendet werden kann, dabei aber kein Fehler gemeldet wird.     |
+  --------------------------------------------------------------------------*)
+
+ PROCEDURE IsCTerm ((* EIN/ -- *) h : INTEGER ): BOOLEAN;
+
+(*--------------------------------------------------------------------------
+ | Testet, ob die ueber <h> referenzierte Datei ein Kontrollterminal ist,   |
+ | was aber nur unter MiNT einigermassen zuverlaessig funktioniert.         |
+  --------------------------------------------------------------------------*)
+
+ PROCEDURE Disconnect ((* EIN/ -- *)     h   : INTEGER;
+                       (* -- /AUS *) VAR res : INTEGER ): BOOLEAN;
+
+(*--------------------------------------------------------------------------
+ | Wenn <h> ein Kontrollterminal gemaess "IsCTerm()" ist, wird versucht,    |
+ | die Kennung <h> und die Kennung -1 auf das Null-Device (-> "u:\dev\null")|
+ | umzulenken, was einer Trennung des Prozesses von seinem Kontrollterminal |
+ | nahe kommt; dies funktioniert nur unter MiNT einigermassen zuverlaessig. |
+  --------------------------------------------------------------------------*)
+
+
+ PROCEDURE DecodeDate ((* EIN/ -- *)     date    : WORDSET;
+                       (* EIN/ -- *)     time    : WORDSET;
+                       (* -- /AUS *) VAR decoded : DosDate );
+
+ PROCEDURE EncodeDate ((* EIN/ -- *) VAR encoded : DosDate;
+                       (* -- /AUS *) VAR date    : WORDSET;
+                       (* -- /AUS *) VAR time    : WORDSET );
+
+(*--------------------------------------------------------------------------
+ | Konvertieren ein Datum zwischen dem Typ 'DosDate' und den Formaten, die  |
+ | bei 'Tgetdate' und 'Tgetdate' verwendet werden. Die Felder 'wday' und    |
+ | 'yday' von 'Dosdate' werden nicht beruecksichtigt.                       |
+  --------------------------------------------------------------------------*)
+
+ PROCEDURE DateToSeconds ((* EIN/ -- *) VAR date : DosDate ): UNSIGNEDLONG;
+
+ PROCEDURE SecondsToDate ((* EIN/ -- *)     time : UNSIGNEDLONG;
+                          (* -- /AUS *) VAR date : DosDate      );
+
+(*--------------------------------------------------------------------------
+ | Konvertieren ein Datum zwischen dem Typ 'DosDate' und der Anzahl von     |
+ | Sekunden seit dem 1.1.1970 0:00 Uhr lokaler Zeit, also ohne Zeitzonen-   |
+ | korrektur zu UTC. Die Felder 'wday' und 'yday' von <date> werden bei     |
+ | "DateToSeconds()" nicht verwendet aber von "SecondsToDate()" korrekt     |
+ | gesetzt.                                                                 |
+  --------------------------------------------------------------------------*)
+
+END DosSupport.

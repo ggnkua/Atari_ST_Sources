@@ -1,0 +1,438 @@
+MODULE Idents;
+__IMP_SWITCHES__
+__DEBUG__
+#ifdef HM2
+#ifdef __LONG_WHOLE__
+(*$!i+: Modul muss mit $i- uebersetzt werden! *)
+(*$!w+: Modul muss mit $w- uebersetzt werden! *)
+#else
+(*$!i-: Modul muss mit $i+ uebersetzt werden! *)
+(*$!w-: Modul muss mit $w+ uebersetzt werden! *)
+#endif
+#endif
+
+(* Dieses Modul erstellt aus einem syntaktisch korrekten Definitionsmodul
+ * eine Liste der exportierten Bezeichner. Bei Aufzaehlungstypen wird
+ * nur der Typname, nicht jedoch die einzelnen Konstanten, aufgenommen.
+ *
+ * Es ist wichtig, dass das Definitionsmodul syntaktisch korrekt ist, da
+ * der verwendete Parser keine Fehlerbehandlung besitzt!
+ *
+ * Aufruf: idents [infile [outfile]]
+ *
+ * Wenn 'infile' und/oder 'outfile' nicht angegeben sind oder nicht
+ * geoeffnet/angelegt werden k”nnen, werden Standardeingabe und Standard-
+ * ausgabe verwendet.
+ *
+ * 03-Jan-96; Holger Kleinschmidt
+ *)
+
+
+(* Interessant fuer die vorliegende Aufgabe sind nur die folgenden Symbole:
+ *
+ *  - ;
+ *    das Semikolon schliesst eine Deklaration bzw. Definition ab.
+ *
+ *  - , :
+ *    das Komma trennt die Bezeichner in einer Liste von Variablen mit
+ *    gemeinsamem Typ, und der Doppelpunkt beendet eine solche Liste.
+ *
+ *  - (*, *), Apostroph, Hochkomma
+ *    (Geschachtelte) Kommentare und Stringkonstanten muessen ueberlesen
+ *    werden, da sie beliebigen Text enthalten koennen. Das macht bereits
+ *    der Scanner.
+ *
+ *  - CONST, TYPE, VAR
+ *    Leiten eine (moeglicherweise leere) Liste von Deklarationen/Definitionen
+ *    ein, bzw. schliessen eine vorhergehende Deklarationsliste ab.
+ *
+ *  - PROCEDURE
+ *    Leitet eine Prozedurdeklaration ein oder schliesst eine vorhergehende
+ *    Deklarationsliste ab.
+ *
+ *  - END
+ *    Schliesst als einzelnes Symbol (Ende des Definitionsmoduls) eine
+ *    vorhergehende Deklarationsliste ab.
+ *
+ *  - Die Paare  RECORD...END und CASE...END
+ *    eroeffnen bei einer Typ- oder Variablendeklaration eine neue Ebene, in
+ *    der wiederum Deklarationen auftreten koennen, die mit einem Semikolon
+ *    abgeschlossen sind.
+ *
+ *  - Das Paar (...)
+ *    eroeffnet bei einer Prozedurdeklaration die (moeglicherweise leere)
+ *    Parameterliste, deren Elemente durch Semikolon voneinander getrennt
+ *    sind.
+ *
+ * Alle anderen Symbole werden einfach ueberlesen.
+ *)
+#if (defined MM2)
+(*$E MTP *)
+#if (defined __DEBUG_CODE__)
+IMPORT TOSDebug;
+#endif
+#endif
+
+VAL_INTRINSIC
+
+
+FROM SYSTEM IMPORT
+(* PROC *) ADR, TSIZE;
+
+FROM PORTAB IMPORT
+(* TYPE *) UNSIGNED;
+
+FROM types IMPORT
+(* TYPE *) PathName;
+
+FROM ProgramArgs IMPORT
+(* PROC *) ArgChan, IsArgPresent, NextArg;
+
+FROM StreamFile IMPORT
+(* CONST*) write, old,
+(* TYPE *) ChanId, OpenResults,
+(* PROC *) Open, Close;
+
+FROM StdChans IMPORT
+(* PROC *) OutChan, ErrChan;
+
+FROM TextIO IMPORT
+(* PROC *) ReadString, WriteString, WriteChar, WriteLn;
+
+FROM WholeIO IMPORT
+(* PROC *) WriteCard;
+
+FROM M2Input IMPORT
+(* TYPE *) InputPos,
+(* PROC *) OpenInput, CloseInput, InitInput, NextToken, SkipUntil;
+
+FROM M2Syms IMPORT
+(* TYPE *) Symbols, SymbolSet,
+(* PROC *) Clear, Incl, IsElem, GetSymStr;
+
+FROM M2StrTable IMPORT
+(* TYPE *) StrRepr,
+(* PROC *) GetStrRepr, StrReprLen, IsStrRepr, EmptyStrRepr;
+
+IMPORT Queues;
+
+FROM DosSystem IMPORT
+(* PROC *) exit;
+
+(*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*)
+
+CONST
+  MaxLineLen  = 79; (* fuer Zeilenumbruch *)
+
+CONST
+  QBlkSize = 100;
+
+(* Stoppmengen fuer den Parser *)
+VAR
+  SDecl    : SymbolSet; (* SDecl    ::= CONST | VAR | TYPE | PROCEDURE | END | eof *)
+  SConst   : SymbolSet; (* SConst   ::= ; | eof *)
+  SType    : SymbolSet; (* SType    ::= ; | RECORD | CASE | END | eof *)
+  SVarList : SymbolSet; (* SVarList ::= , | : | eof *)
+  SVar     : SymbolSet; (* SVar     ::= ; | RECORD | CASE | END | eof *)
+  SProc1   : SymbolSet; (* SProc1   ::= ; | ( | eof *)
+  SProc2   : SymbolSet; (* SProc2   ::= ) | eof *)
+  SProc3   : SymbolSet; (* SProc3   ::= ; | eof *)
+
+VAR
+  DeclLevel : INTEGER;
+  FileName  : PathName;
+  FileRes   : OpenResults;
+  OutFile   : ChanId;
+  OutOpen   : BOOLEAN;
+  QC        : Queues.Queue;
+  QT        : Queues.Queue;
+  QV        : Queues.Queue;
+  QP        : Queues.Queue;
+
+VAR
+  done   : BOOLEAN;
+  sym    : Symbols;
+  esym   : Symbols;
+  pos    : InputPos;
+  repr   : StrRepr;
+  status : INTEGER;
+
+(*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*)
+
+PROCEDURE ErrNoMem;
+BEGIN
+ WriteString(ErrChan(), "No memory"); WriteLn(ErrChan());
+ exit(2);
+END ErrNoMem;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE WriteError ((* EIN/ -- *) sym  : Symbols;
+                      (* EIN/ -- *) pos  : InputPos;
+                      (* EIN/ -- *) repr : StrRepr );
+(* Wird aufgerufen, falls das erste Symbol einer Deklaration kein
+ * Bezeichner ist; gibt das fehlerhafte Symbol und gegebenenfalls
+ * die Stringrepraesentation auf dem Fehlerkanal aus.
+ *)
+VAR done : BOOLEAN;
+    str  : ARRAY [0..128] OF CHAR;
+
+BEGIN
+ WriteString(ErrChan(), "*** Erroneous symbol ");
+ WriteChar(ErrChan(), "[");
+ WriteCard(ErrChan(), VAL(UNSIGNED,pos.line), 4);
+ WriteChar(ErrChan(), ',');
+ WriteCard(ErrChan(), VAL(UNSIGNED,pos.col), 4);
+ WriteString(ErrChan(), "] : ");
+ GetSymStr(sym, str, done);
+ WriteString(ErrChan(), str);
+ IF (sym >= NumberSym) & (sym <= IdentSym) & IsStrRepr(repr) THEN
+   WriteString(ErrChan(), " : ");
+   GetStrRepr(repr, str, done);
+   WriteString(ErrChan(), str);
+ END;
+ WriteLn(ErrChan());
+ status := 1;
+END WriteError;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE WriteList ((* EIN/ -- *) REF s    : ARRAY OF CHAR;
+                     (* EIN/ -- *)     Q    : Queues.Queue;
+                     (* EIN/ -- *)     last : BOOLEAN );
+
+VAR str     : ARRAY [0..128] OF CHAR;
+    done    : BOOLEAN;
+    idlen   : CARDINAL;
+    linelen : CARDINAL;
+    first   : BOOLEAN;
+    repr    : StrRepr;
+
+BEGIN
+ IF ~Queues.IsEmpty(Q) THEN
+   WriteString(OutFile, s);
+   first   := TRUE;
+   linelen := 9;
+   REPEAT
+     Queues.Remove(Q, repr);
+     IF first THEN
+       first := FALSE;
+     ELSE
+       WriteChar(OutFile, ',');
+     END;
+     idlen := StrReprLen(repr);
+     IF linelen + idlen + 2 >= MaxLineLen THEN
+       WriteLn(OutFile);
+       linelen := idlen + 11;
+       WriteString(OutFile, "           ");
+     ELSE
+       INC(linelen, idlen + 2);
+       WriteChar(OutFile, ' ');
+     END;
+     GetStrRepr(repr, str, done);
+     WriteString(OutFile, str);
+     IF ~done THEN
+       WriteString(OutFile, "...");
+     END;
+   UNTIL Queues.IsEmpty(Q);
+   IF last THEN
+     WriteChar(OutFile, ';');
+   ELSE
+     WriteChar(OutFile, ',');
+   END;
+   WriteLn(OutFile);
+ END;
+END WriteList;
+
+(*---------------------------------------------------------------------------*)
+
+BEGIN (* Idents *)
+ status := 0;
+
+ Clear(SDecl);
+ Incl(ConstSym, SDecl);
+ Incl(VarSym, SDecl);
+ Incl(TypeSym, SDecl);
+ Incl(ProcedureSym, SDecl);
+ Incl(EndSym, SDecl);
+ Incl(EofSym, SDecl);
+ Incl(UnexpectedEof, SDecl);
+
+ Clear(SConst);
+ Incl(SemicolonSym, SConst);
+ Incl(EofSym, SConst);
+ Incl(UnexpectedEof, SConst);
+
+ SType := SConst;
+ Incl(RecordSym, SType);
+ Incl(CaseSym, SType);
+ Incl(EndSym, SType);
+
+ SVar := SType;
+
+ Clear(SVarList);
+ Incl(CommaSym, SVarList);
+ Incl(ColonSym, SVarList);
+ Incl(EofSym, SVarList);
+ Incl(UnexpectedEof, SVarList);
+
+ SProc3 := SConst;
+
+ SProc1 := SConst;
+ Incl(LeftParenSym, SProc1);
+
+ Clear(SProc2);
+ Incl(RightParenSym, SProc2);
+ Incl(EofSym, SProc2);
+ Incl(UnexpectedEof, SProc2);
+
+ Queues.Create(TSIZE(StrRepr),QBlkSize,QC,done); IF ~done THEN ErrNoMem; END;
+ Queues.Create(TSIZE(StrRepr),QBlkSize,QT,done); IF ~done THEN ErrNoMem; END;
+ Queues.Create(TSIZE(StrRepr),QBlkSize,QV,done); IF ~done THEN ErrNoMem; END;
+ Queues.Create(TSIZE(StrRepr),QBlkSize,QP,done); IF ~done THEN ErrNoMem; END;
+
+ OutOpen := FALSE;
+ IF IsArgPresent() THEN
+   NextArg; (* Programmnamen ueberlesen *)
+   IF IsArgPresent() THEN
+     ReadString(ArgChan(), FileName);
+     IF ~OpenInput(FileName) THEN
+       WriteString(ErrChan(), "Using StdIn, could not open input file: ");
+       WriteString(ErrChan(), FileName);
+       WriteLn(ErrChan());
+     END;
+     NextArg;
+     IF IsArgPresent() THEN
+       ReadString(ArgChan(), FileName);
+       Open(OutFile, FileName, write+old, FileRes);
+       IF FileRes = opened THEN
+         OutOpen := TRUE;
+       ELSE
+         WriteString(ErrChan(), "Using StdOut, could not open output file: ");
+         WriteString(ErrChan(), FileName);
+         WriteLn(ErrChan());
+       END;
+     END;
+   END;
+ END;
+ IF ~OutOpen THEN
+   OutFile := OutChan();
+ END;
+
+ InitInput;
+ DeclLevel := 0;
+
+ (* Minimal-Parser fuer Deklarationen und Definitionen *)
+ NextToken(sym, esym, pos, repr);
+ REPEAT
+   CASE sym OF
+     ConstSym :
+       NextToken(sym, esym, pos, repr);
+       WHILE ~IsElem(sym, SDecl) DO
+         IF sym = IdentSym THEN
+           Queues.Insert(QC, repr);
+         ELSE
+           WriteError(sym, pos, repr);
+         END;
+
+         (* Konstantenwert ueberlesen *)
+         SkipUntil(SConst, sym, esym, pos, repr);
+         NextToken(sym, esym, pos, repr);
+       END;
+
+    |TypeSym :
+       NextToken(sym, esym, pos, repr);
+       WHILE ~IsElem(sym, SDecl) DO
+         IF sym = IdentSym THEN
+           Queues.Insert(QT, repr);
+         ELSE
+           WriteError(sym, pos, repr);
+         END;
+
+         (* Typ ueberlesen *)
+         REPEAT
+           SkipUntil(SType, sym, esym, pos, repr);
+           IF (sym = RecordSym) OR (sym = CaseSym) THEN
+             INC(DeclLevel);
+           ELSIF sym = EndSym THEN
+             DEC(DeclLevel);
+           END;
+         UNTIL (sym=SemicolonSym) & (DeclLevel<=0) OR (sym>=UnexpectedEof);
+         NextToken(sym, esym, pos, repr);
+       END;
+
+    |VarSym :
+       NextToken(sym, esym, pos, repr);
+       WHILE ~IsElem(sym, SDecl) DO
+         IF sym = IdentSym THEN
+           Queues.Insert(QV, repr);
+         ELSE
+           WriteError(sym, pos, repr);
+         END;
+
+         REPEAT
+           SkipUntil(SVarList, sym, esym, pos, repr);
+           IF sym = CommaSym THEN
+             (* Liste von Variablen *)
+             NextToken(sym, esym, pos, repr);
+             IF sym = IdentSym THEN
+               Queues.Insert(QV, repr);
+             ELSE
+               WriteError(sym, pos, repr);
+             END;
+           END;
+         UNTIL (sym=ColonSym) OR (sym>=UnexpectedEof);
+
+         (* Typ ueberlesen *)
+         REPEAT
+           SkipUntil(SVar, sym, esym, pos, repr);
+           IF (sym = RecordSym) OR (sym = CaseSym) THEN
+             INC(DeclLevel);
+           ELSIF sym = EndSym THEN
+             DEC(DeclLevel);
+           END;
+         UNTIL (sym=SemicolonSym) & (DeclLevel<=0) OR (sym>=UnexpectedEof);
+         NextToken(sym, esym, pos, repr);
+       END;
+
+    |ProcedureSym :
+       NextToken(sym, esym, pos, repr);
+       IF sym = IdentSym THEN
+         Queues.Insert(QP, repr);
+       ELSE
+         WriteError(sym, pos, repr);
+       END;
+       SkipUntil(SProc1, sym, esym, pos, repr);
+       IF sym = LeftParenSym THEN
+         (* (Moeglicherweise leere) Parameterliste *)
+         SkipUntil(SProc2, sym, esym, pos, repr);
+         IF sym = RightParenSym THEN
+           SkipUntil(SProc3, sym, esym, pos, repr);
+         END;
+       END;
+       NextToken(sym, esym, pos, repr);
+   ELSE
+     IF sym < UnexpectedEof THEN
+       NextToken(sym, esym, pos, repr);
+     END;
+   END; (* CASE *)
+ UNTIL (sym = EndSym) OR (sym >= UnexpectedEof);
+
+ CloseInput;
+
+ WriteList("(* CONST*)", QC, Queues.IsEmpty(QT) & Queues.IsEmpty(QV) & Queues.IsEmpty(QP));
+ WriteList("(* TYPE *)", QT, Queues.IsEmpty(QV) & Queues.IsEmpty(QP));
+ WriteList("(* VAR  *)", QV, Queues.IsEmpty(QP));
+ WriteList("(* PROC *)", QP, TRUE);
+
+ Queues.Delete(QC);
+ Queues.Delete(QT);
+ Queues.Delete(QV);
+ Queues.Delete(QP);
+
+ IF OutOpen THEN
+   Close(OutFile);
+ END;
+
+ exit(status);
+END Idents.

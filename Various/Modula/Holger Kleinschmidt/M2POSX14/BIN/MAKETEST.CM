@@ -1,0 +1,15 @@
+tsys.mod
+forkexec.mod
+spawn.mod
+listdir.mod
+tdossyst.mod
+showcmd.mod
+showids.mod
+tfile.mod
+tlib.mod
+tthread.mod
+tvfork.mod
+showsig.mod
+tsighand.mod
+tsigtime.mod
+showdate.mod

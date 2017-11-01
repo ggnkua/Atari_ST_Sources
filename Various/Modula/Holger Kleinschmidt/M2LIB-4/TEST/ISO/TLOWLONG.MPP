@@ -1,0 +1,416 @@
+MODULE TLowLong;
+__IMP_SWITCHES__
+__DEBUG__
+#ifdef HM2
+#ifdef __LONG_WHOLE__
+(*$!i+: Modul muss mit $i- uebersetzt werden! *)
+(*$!w+: Modul muss mit $w- uebersetzt werden! *)
+#else
+(*$!i-: Modul muss mit $i+ uebersetzt werden! *)
+(*$!w-: Modul muss mit $w+ uebersetzt werden! *)
+#endif
+#endif
+
+(* Tests fuer ISO-LowLong.
+ * Die Tests gelten nur fuer diese Implementierung. Insbesondere wird
+ * 'radix' = 2 vorausgesetzt.
+ *
+ * 24-Jul-96, Holger Kleinschmidt
+ *)
+
+#if (defined MM2)
+IMPORT GEMDOSIO; (*$E MOS *)
+#if (defined __DEBUG_CODE__)
+IMPORT TOSDebug;
+#endif
+#endif
+
+FROM LowLong IMPORT
+(* TYPE *) Modes,
+(* CONST*) radix, places, expoMin, expoMax, large, small, IEC559, LIA1, rounds,
+           gUnderflow, exception, extend, nModes,
+           fpcrBSUN, fpcrSNAN, fpcrOPERR, fpcrOVFL, fpcrUNFL, fpcrDZ,
+           fpcrINEX2, fpcrINEX1, fpcrPREC1, fpcrPREC0, fpcrMODE1, fpcrMODE0,
+           PrecMask, PrecExtended, PrecSingle, PrecDouble,
+           ModeMask, ModeNearest, ModeZero, ModeNegInf, ModePosInf,
+(* PROC *) exponent, fraction, sign, succ, ulp, pred, intpart, fractpart,
+           scale, trunc, round, synthesize, currentMode;
+
+FROM InOut IMPORT
+(* PROC *) Write, WriteCard, WriteInt, WriteString, WriteLn;
+
+FROM pOUT IMPORT
+(* PROC *) PutLReal, PutLRealHex;
+
+(*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*)
+
+CONST
+  WIDTH  = 25;
+  HWIDTH = 20;
+
+#if LONGREAL_var
+TYPE
+  lrc = RECORD
+    CASE : BOOLEAN OF
+      FALSE : lr  : LONGREAL;
+     |TRUE  : lc1 : LONGCARD;
+              lc2 : LONGCARD;
+    END;
+  END;
+
+VAR
+  r1 : lrc;
+#endif
+
+VAR
+  ERROR  : BOOLEAN;
+  ERR    : BOOLEAN;
+  x      : LONGREAL;
+  fract  : LONGREAL;
+  rnd    : LONGREAL;
+  last   : LONGREAL;
+  rest   : LONGREAL;
+  int    : LONGREAL;
+  basemant : LONGREAL;
+  baseexpo : INTEGER;
+  expo   : INTEGER;
+  dummy1 : LONGCARD;
+  y      : LONGREAL;
+  dummy2 : LONGCARD;
+  i, e   : INTEGER;
+  place  : CARDINAL;
+  p, s   : CARDINAL;
+  null   : LONGREAL;
+  nullm  : LONGREAL;
+  one    : LONGREAL;
+  two    : LONGREAL;
+
+(*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*)
+
+PROCEDURE PutBool (REF val : ARRAY OF CHAR; x : BOOLEAN);
+BEGIN
+ WriteString(val);
+ IF x THEN
+   WriteString(": TRUE");
+ ELSE
+   WriteString(": FALSE");
+ END;
+ WriteLn;
+END PutBool;
+
+PROCEDURE PutMode (m : Modes);
+BEGIN
+ WriteString("Rundungsgenauigkeit: ");
+ IF m * PrecMask = PrecExtended THEN
+   WriteString("Erweiterte Genauigkeit");
+ ELSIF m * PrecMask = PrecSingle THEN
+   WriteString("Einfache Genauigkeit");
+ ELSIF m * PrecMask = PrecDouble THEN
+   WriteString("Doppelte Genauigkeit");
+ ELSE
+   WriteString("*** Unknown Precision ***");
+ END;
+ WriteLn;
+ WriteString("Rundungsmodus: ");
+ IF m * ModeMask = ModeNearest THEN
+   WriteString("zur naechsten, geraden Zahl");
+ ELSIF m * ModeMask = ModeZero THEN
+   WriteString("nach Null");
+ ELSIF m * ModeMask = ModeNegInf THEN
+   WriteString("nach Minus Unendlich");
+ ELSIF m * ModeMask = ModePosInf THEN
+   WriteString("nach Plus Unendlich");
+ END;
+ WriteLn;
+ WriteString("Exceptions: ");
+ IF fpcrBSUN IN m THEN
+   WriteString("BSUN,");
+ END;
+ IF fpcrSNAN IN m THEN
+   WriteString("SNAN,");
+ END;
+ IF fpcrOPERR IN m THEN
+   WriteString("OPERR,");
+ END;
+ IF fpcrOVFL IN m THEN
+   WriteString("OVFL,");
+ END;
+ IF fpcrUNFL IN m THEN
+   WriteString("UNFL,");
+ END;
+ IF fpcrDZ IN m THEN
+   WriteString("DZ,");
+ END;
+ IF fpcrINEX2 IN m THEN
+   WriteString("INEX2,");
+ END;
+ IF fpcrINEX1 IN m THEN
+   WriteString("INEX1,");
+ END;
+ WriteLn;
+END PutMode;
+
+PROCEDURE unit (x : LONGREAL; place : INTEGER): LONGREAL;
+BEGIN
+ RETURN(scale(basemant, exponent(x) - place + 1));
+END unit;
+
+PROCEDURE oddplace (x : LONGREAL; place : INTEGER): BOOLEAN;
+BEGIN
+ RETURN(trunc(x, place) # trunc(x, place - 1));
+END oddplace;
+
+(*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*)
+
+BEGIN
+#if LONGREAL_var
+ r1.lc2 := 0;
+ r1.lc1 := 0;
+ null   := r1.lr;
+ r1.lc1 := 80000000H;
+ nullm  := r1.lr;
+ r1.lc1 := 3FF00000H;
+ one    := r1.lr;
+ r1.lc1 := 40000000H;
+ two    := r1.lr;
+#else
+ null  := LRC(0.0,0);
+ nullm := LRC(-0.0,0);
+ one   := LRC(1.0,0);
+ two   := LRC(2.0,0);
+#endif
+ basemant := fraction(one);
+ baseexpo := exponent(one);
+
+ WriteString("     radix: "); WriteInt(radix, 1); WriteLn;
+ WriteString("    places: "); WriteInt(places, 1); WriteLn;
+ WriteString("   expoMin: "); WriteInt(expoMin, 1); WriteLn;
+ WriteString("   expoMax: "); WriteInt(expoMax, 1); WriteLn;
+ PutBool("    IEC559", IEC559);
+ PutBool("      LIA1", LIA1);
+ PutBool("    rounds", rounds);
+ PutBool("gUnderflow", gUnderflow);
+ PutBool(" exception", exception);
+ PutBool("    extend", extend);
+ WriteString("    nModes: "); WriteInt(nModes, 1); WriteLn;
+ PutMode(currentMode());
+
+ WriteLn;
+ WriteString("            0.0:"); PutLRealHex(null, HWIDTH); WriteLn;
+ WriteString("           -0.0:"); PutLRealHex(-null, HWIDTH); WriteLn;
+ WriteString("          small:"); PutLRealHex(small, HWIDTH); WriteLn;
+ WriteString("         -small:"); PutLRealHex(-small, HWIDTH); WriteLn;
+ WriteString("          large:"); PutLRealHex(large, HWIDTH); WriteLn;
+ WriteString("         -large:"); PutLRealHex(-large, HWIDTH); WriteLn;
+ WriteString("      succ(0.0):"); PutLRealHex(succ(null), HWIDTH); WriteLn;
+ WriteString("   succ(-small):"); PutLRealHex(succ(-small), HWIDTH); WriteLn;
+ WriteString("    succ(large):"); PutLRealHex(succ(large), HWIDTH); WriteLn;
+ WriteString("      pred(0.0):"); PutLRealHex(pred(null), HWIDTH); WriteLn;
+ WriteString("    pred(small):"); PutLRealHex(pred(small), HWIDTH); WriteLn;
+ WriteString("   pred(-large):"); PutLRealHex(pred(-large), HWIDTH); WriteLn;
+ WriteString("   scale(0.0,1):"); PutLRealHex(scale(null,1), HWIDTH); WriteLn;
+ WriteString("  scale(0.0,-1):"); PutLRealHex(scale(null,-1), HWIDTH); WriteLn;
+ WriteString(" scale(large,1):"); PutLRealHex(scale(large,1), HWIDTH); WriteLn;
+ WriteString("scale(small,-1):"); PutLRealHex(scale(small,-1), HWIDTH); WriteLn;
+ WriteString("      sign(0.0):"); PutLReal(sign(null), WIDTH); WriteLn;
+ WriteString("     sign(-0.0):"); PutLReal(sign(-null), WIDTH); WriteLn;
+ WriteString("    sign(small):"); PutLReal(sign(small), WIDTH); WriteLn;
+ WriteString("   sign(-small):"); PutLReal(sign(-small), WIDTH); WriteLn;
+ WriteString("    sign(large):"); PutLReal(sign(large), WIDTH); WriteLn;
+ WriteString("   sign(-large):"); PutLReal(sign(-large), WIDTH); WriteLn;
+ WriteLn;
+
+
+ WriteString("Test1: ");
+#ifdef MM2
+ x     := 0.98765432109876543210;
+#else
+ x     := LRC(1.98765432109876543210,0);
+#endif
+ fract := fraction(x);
+ ERR   := FALSE;
+ ERROR := FALSE;
+ FOR i := expoMin + places - 1 TO expoMax DO
+   y   := scale(x, i);
+   ERR := exponent(y) # i;
+   ERR := ERR OR (fraction(y) # fract);
+   ERR := ERR OR (y # synthesize(exponent(y), fraction(y)));
+   ERR := ERR OR (ulp(y) # unit(y, places));
+   IF ERR THEN
+     ERR   := FALSE;
+     ERROR := TRUE;
+     WriteString("         i: "); WriteInt(i, 1); WriteLn;
+     WriteString("  exponent: "); WriteInt(exponent(y), 1); WriteLn;
+     WriteString("  fraction: "); PutLRealHex(fraction(y), HWIDTH); WriteLn;
+     WriteString("         y: "); PutLRealHex(y, HWIDTH); WriteLn;
+     WriteString("       ulp: "); PutLRealHex(ulp(y), HWIDTH); WriteLn;
+     WriteString("      unit: "); PutLRealHex(unit(y, places), HWIDTH); WriteLn;
+     WriteString("synthesize: "); PutLRealHex(synthesize(exponent(y), fraction(y)), HWIDTH); WriteLn;
+   END;
+ END;
+ IF ERROR THEN
+   WriteString("** error(s)");
+ ELSE
+   WriteString("OK");
+ END;
+ WriteLn;
+
+ WriteString("Test2: ");
+ x := trunc(pred(two), places - 8); (* 2^8 = 256 *)
+ ERR   := FALSE;
+ ERROR := FALSE;
+ FOR i := 0 TO 500 DO
+   y   := ulp(x);
+   ERR := (y # succ(x) - x) & (y # x - pred(x));
+   ERR := ERR OR (succ(x) # -pred(-x));
+   IF ERR THEN
+     ERR   := FALSE;
+     ERROR := TRUE;
+     WriteString("   x:"); PutLRealHex(x, HWIDTH); WriteLn;
+     WriteString(" ulp:"); PutLRealHex(ulp(x), HWIDTH); WriteLn;
+     WriteString("succ:"); PutLRealHex(succ(x), HWIDTH); WriteLn;
+     WriteString("pred:"); PutLRealHex(pred(x), HWIDTH); WriteLn;
+   END;
+   x := succ(x);
+ END;
+ IF ERROR THEN
+   WriteString("** error(s)");
+ ELSE
+   WriteString("OK");
+ END;
+ WriteLn;
+
+
+ WriteString("Test3: ");
+ x := pred(two);
+ ERROR := FALSE;
+ ERR   := FALSE;
+ FOR i := 1 TO places - 1 DO
+   ERR := trunc(x, i + 1) < trunc(x, i);
+   ERR := ERR OR (trunc(x, i + 1) # trunc(x, i) + unit(x, i + 1));
+   IF ERR THEN
+     ERR   := FALSE;
+     ERROR := TRUE;
+     WriteString("         i:"); WriteInt(i,1); WriteLn;
+     WriteString("         x:"); PutLRealHex(x, HWIDTH); WriteLn;
+     WriteString("     trunc:"); PutLRealHex(trunc(x,i), HWIDTH); WriteLn;
+     WriteString("trunc(i+1):"); PutLRealHex(trunc(x,i+1), HWIDTH); WriteLn;
+     WriteString(" unit(i+1):"); PutLRealHex(unit(x,i+1), HWIDTH); WriteLn;
+     WriteString(" trunc(i)+unit(i+1):"); PutLRealHex(trunc(x,i)+unit(x,i+1), HWIDTH); WriteLn;
+   END;
+ END;
+ IF ERROR THEN
+   WriteString("** error(s)");
+ ELSE
+   WriteString("OK");
+ END;
+ WriteLn;
+
+
+ WriteString("Test41: ");
+ x := pred(two);
+ ERROR := FALSE;
+ ERR   := FALSE;
+ FOR i := 1 TO places - 1 DO
+   int  := trunc(x, i);
+   rest := x - int;
+   rnd  := unit(x, i + 1);
+   last := unit(x, i);
+
+   IF rest > rnd THEN
+     y := int + last; Write('>');
+   ELSIF (rest = rnd) & oddplace(x, i) THEN
+     y := int + last; Write('*');
+   ELSE
+     y := int; Write('=');
+   END;
+
+   ERR := y # round(x, i);
+   IF ERR THEN
+     ERR   := FALSE;
+     ERROR := TRUE;
+     WriteString("         i:"); WriteInt(i, 1); WriteLn;
+     WriteString("         x:"); PutLRealHex(x, HWIDTH); WriteLn;
+     WriteString("      rest:"); PutLRealHex(rest, HWIDTH); WriteLn;
+     WriteString("       rnd:"); PutLRealHex(rnd, HWIDTH); WriteLn;
+     WriteString("         y:"); PutLRealHex(y, HWIDTH); WriteLn;
+     WriteString("     round:"); PutLRealHex(round(x, i), HWIDTH); WriteLn;
+     WriteString("     trunc:"); PutLRealHex(trunc(x, i), HWIDTH); WriteLn;
+     WriteString("trunc(i+1):"); PutLRealHex(trunc(x, i+1), HWIDTH); WriteLn;
+     WriteString(" unit(i+1):"); PutLRealHex(unit(x, i+1), HWIDTH); WriteLn;
+   END;
+ END;
+ IF ERROR THEN
+   WriteString("** error(s)");
+ ELSE
+   WriteString("OK");
+ END;
+ WriteLn;
+
+ WriteString("Test42: ");
+ x := LRC(0.2222222222222,0);
+ ERROR := FALSE;
+ ERR   := FALSE;
+ FOR i := 1 TO places - 1 DO
+   int  := trunc(x, i);
+   rest := x - int;
+   rnd  := unit(x, i + 1);
+   last := unit(x, i);
+
+   IF rest > rnd THEN
+     y := int + last; Write('>');
+   ELSIF (rest = rnd) & oddplace(x, i) THEN
+     y := int + last; Write('*');
+   ELSE
+     y := int; Write('=');
+   END;
+
+   ERR := (y # round(x, i));
+   IF ERR THEN
+     ERR   := FALSE;
+     ERROR := TRUE;
+     WriteString("         i:"); WriteInt(i, 1); WriteLn;
+     WriteString("         x:"); PutLRealHex(x, HWIDTH); WriteLn;
+     WriteString("      rest:"); PutLRealHex(rest, HWIDTH); WriteLn;
+     WriteString("       rnd:"); PutLRealHex(rnd, HWIDTH); WriteLn;
+     WriteString("         y:"); PutLRealHex(y, HWIDTH); WriteLn;
+     WriteString("     round:"); PutLRealHex(round(x, i), HWIDTH); WriteLn;
+     WriteString("     trunc:"); PutLRealHex(trunc(x, i), HWIDTH); WriteLn;
+     WriteString("trunc(i+1):"); PutLRealHex(trunc(x, i+1), HWIDTH); WriteLn;
+     WriteString(" unit(i+1):"); PutLRealHex(unit(x, i+1), HWIDTH); WriteLn;
+   END;
+ END;
+ IF ERROR THEN
+   WriteString("** error(s)");
+ ELSE
+   WriteString("OK");
+ END;
+ WriteLn;
+
+
+ WriteString("Test5: ");
+ x := LRC(0.33333333333,-10);
+ ERROR := FALSE;
+ ERR   := FALSE;
+ FOR i := 0 TO 5000 DO
+   ERR := intpart(x) # trunc(x, exponent(x) - baseexpo + 1);
+   ERR := ERR OR (x - intpart(x) # fractpart(x));
+   IF ERR THEN
+     ERR   := FALSE;
+     ERROR := TRUE;
+     WriteString("        i:"); WriteInt(i, 1); WriteLn;
+     WriteString("        x:"); PutLRealHex(x, HWIDTH); WriteLn;
+     WriteString("    trunc:"); PutLRealHex(trunc(x, exponent(x)-baseexpo+1), HWIDTH); WriteLn;
+     WriteString("  intpart:"); PutLRealHex(intpart(x), HWIDTH); WriteLn;
+     WriteString("fractpart:"); PutLRealHex(fractpart(x), HWIDTH); WriteLn;
+     WriteString("x-intpart:"); PutLRealHex(x-intpart(x), HWIDTH); WriteLn;
+   END;
+   x := x * LRC(1.1,0);
+ END;
+ IF ERROR THEN
+   WriteString("** error(s)");
+ ELSE
+   WriteString("OK");
+ END;
+ WriteLn;
+END TLowLong.

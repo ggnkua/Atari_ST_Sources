@@ -1,0 +1,173 @@
+MODULE Daemon1;
+__IMP_SWITCHES__
+__DEBUG__
+#ifdef HM2
+#ifdef __LONG_WHOLE__
+(*$!i+: Modul muss mit $i- uebersetzt werden! *)
+(*$!w+: Modul muss mit $w- uebersetzt werden! *)
+#else
+(*$!i-: Modul muss mit $i+ uebersetzt werden! *)
+(*$!w-: Modul muss mit $w+ uebersetzt werden! *)
+#endif
+#endif
+
+#if (defined MM2)
+(*$E MOS*)
+#if (defined __DEBUG_CODE__)
+IMPORT TOSDebug;
+#endif
+#endif
+
+VAL_INTRINSIC
+CAST_IMPORT
+
+(* Programm zur Demonstration der Anwendung von "ExitSys()" und
+ * "SetMain()" bei Hintergrundprozessen.
+ *
+ * Das Programm tut nichts, ausser zu existieren und Speicher zu
+ * verschwenden. Rechenzeit benoetigt es praktisch keine.
+ *
+ * Starten kann man es nur als gelinktes Programm unter MiNT/MultiTOS,
+ * entweder aus einer Kommandoshell heraus oder gleich im MINT.CNF
+ * (z.B.: exec c:\daemon1.tos).
+ *
+ * Bei einem richtigen Daemon-Prozess muessten vor Erzeugen des
+ * Unterprozesses alle Signalhandler gesichert und dann im Unterprozess
+ * wieder gesetzt werden. Ebenso muesste bei allen offenen Dateien das
+ * FD_CLOEXEC-Flag geloescht und dessen alter Zustand gesichert werden
+ * und dann im Unterprozess wieder gesetzt werden. Diese Dinge sind
+ * notwendig, da "tfork()" ueber 'Pexec' realisiert wird. Bei einem
+ * mit 'Pexec' erzeugten Prozess wird bei allen Signalen, fuer die
+ * im erzeugenden Prozess ein Handler existiert hat, wieder die Default-
+ * aktion eingesetzt (Signale, die ignoriert wurden, werden auch weiterhin
+ * ignoriert). Ausserdem werden alle offenen Dateien, bei denen das
+ * FD_CLOEXEC-Flag gesetzt ist, geschlossen; um die Dateien aber an den
+ * Unterprozess zu vererben, muessen sie geoeffnet bleiben.
+ *
+ * 30-Apr-96, Holger Kleinschmidt
+ *)
+
+FROM PORTAB IMPORT
+(* CONST*) NULL,
+(* TYPE *) UNSIGNEDLONG, ANYLONG;
+
+FROM DosSystem IMPORT
+(* PROC *) ExitSys, Exit, exit, atexit, MiNTVersion, SetMain;
+
+FROM lib IMPORT
+(* PROC *) void, ptr;
+
+FROM jump IMPORT
+(* TYPE *) JmpBuf,
+(* PROC *) setjmp, longjmp;
+
+FROM sig IMPORT
+(* CONST*) SIGTERM, SigIgn,
+(* TYPE *) SaFlags, SigactionRec, SignalHandler, SigBlockType, sigsetT,
+(* PROC *) sigemptyset, sigfillset, sigdelset, sigprocmask, sigaction,
+           sleep;
+
+FROM proc IMPORT
+(* PROC *) getppid, tfork;
+
+FROM DosIO IMPORT WriteString, WriteLn, Write;
+
+(*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*)
+
+VAR
+  new  : SigactionRec;
+  quit : BOOLEAN;
+  jbuf : JmpBuf;
+  mask : sigsetT;
+
+(*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*)
+#ifdef HM2
+(*$E+*)
+#endif
+PROCEDURE ex;
+BEGIN
+ (* Kann auch von Hintergrundprozess ausgegeben werden, da SIGTTOU
+  * blockiert ist.
+  *)
+ WriteString("Daemon1 beendet"); WriteLn;
+END ex;
+
+PROCEDURE wait ( arg : ANYLONG ): INTEGER;
+(* Warten, bis der Hauptprozess beendet ist, dann ins Hauptprogramm
+ * springen, um das Programm selbst weiter auszufuehren.
+ *)
+BEGIN
+ WHILE getppid() > 1 DO
+   void(sleep(1));
+ END;
+ longjmp(jbuf, 1);
+ RETURN(0); (* Dummy-RETURN, damit der Compiler nicht meckert *)
+END wait;
+
+#ifdef HM2
+(*$K+*)
+#endif
+PROCEDURE sighandler ( which : UNSIGNEDLONG );
+(* Flag setzen: Programm beenden *)
+BEGIN
+ quit := TRUE;
+END sighandler;
+#ifdef HM2
+(*$E=,$K=*)
+#endif
+
+PROCEDURE action;
+END action;
+
+BEGIN
+ IF MiNTVersion() = 0 THEN
+   exit(1);
+ END;
+ IF atexit(ex) # 0 THEN
+   WriteString("*** Keine Modulterminierung"); WriteLn;
+ END;
+
+ quit := FALSE;
+
+ (* Alle Signale blockieren bis nach dem "SetMain" *)
+ sigfillset(mask);
+ void(sigprocmask(SigSetMask, ptr(mask), NULL));
+
+ IF setjmp(jbuf) = 0 THEN
+   (* Hauptprozess: Unterprozess erzeugen und sich selbst beenden.
+    * "ExitSys()" muss statt "Exit()" benutzt werden, damit keine
+    * (System)Terminierungsroutinen ausgefuehrt werden, denn die werden
+    * noch fuer den Unterprozess bzw. zukuenftigen Hauptprozess
+    * benoetigt.
+    *)
+   void(tfork(wait, 0));
+   ExitSys(0);
+ END;
+
+ (* Dieser Prozess ist jetzt der Hauptprozess, mit dessen Ende auch das
+  * Programm beendet wird. "SetMain()" ist notwendig, da dies nicht
+  * automatisch erkannt werden kann.
+  *)
+ SetMain;
+
+ WITH new DO
+   saHandler := sighandler;
+   saFlags   := SaFlags{};
+   sigemptyset(saMask);
+ END;
+ void(sigaction(SIGTERM, ptr(new), NULL));
+
+ (* Jetzt kann SIGTERM wieder zugelassen werden *)
+ void(sigdelset(mask, SIGTERM));
+ void(sigprocmask(SigSetMask, ptr(mask), NULL));
+
+ (* Ab jetzt kann der Hintergrundprozess seine eigentliche Arbeit erledigen.
+  * Hier wird er z.B. jede Sekunde aktiviert, um "action()" auszufuehren.
+  * Dies geschieht solange, bis er durch ein entsprechendes Signal
+  * aufgefordert wird, sich zu beenden.
+  *)
+ WHILE ~quit DO
+   action;
+   void(sleep(1));
+ END;
+END Daemon1.

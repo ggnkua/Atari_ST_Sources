@@ -1,0 +1,4 @@
+MODULE ReC;
+(* ½ RS. 16.2.96 *)
+IMPORT BIOX;
+BEGIN  BIOX.ResetCold END ReC.

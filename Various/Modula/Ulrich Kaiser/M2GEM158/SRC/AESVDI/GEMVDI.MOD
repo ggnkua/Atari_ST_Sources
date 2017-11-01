@@ -1,0 +1,11 @@
+DEFINITION MODULE GEMVDI;
+
+(*
+GEMVDI Definitions.
+
+UK __DATE__ __TIME__
+*)
+
+(*DEF_SWITCHES*)
+
+END GEMVDI.

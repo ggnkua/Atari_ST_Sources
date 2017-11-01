@@ -1,0 +1,318 @@
+DEFINITION MODULE LowLong;
+
+(* required separate library module *)
+
+__DEF_SWITCHES__
+#ifdef HM2
+#ifdef __LONG_WHOLE__
+(*$!i+: Modul muss mit $i- uebersetzt werden! *)
+(*$!w+: Modul muss mit $w- uebersetzt werden! *)
+#else
+(*$!i-: Modul muss mit $i+ uebersetzt werden! *)
+(*$!w-: Modul muss mit $w+ uebersetzt werden! *)
+#endif
+#endif
+(*****************************************************************************)
+(* ISO-LowLong                                                               *)
+(* --------------------------------------------------------------------------*)
+(* Zugriff auf die Interna reeller Zahlen                                    *)
+(* --------------------------------------------------------------------------*)
+(* 27-Aug-96, Holger Kleinschmidt                                            *)
+(*****************************************************************************)
+
+(*============== IMPLEMENTIERUNGSHINWEIS ====================================*)
+(* Fuer diese Implementierung gilt:                                          *)
+(* - IEEE: Denormalisierte Zahlen, negative Null und NaN werden nicht        *)
+(*         unterstuetzt. Von den Funktionen "succ()", "pred()", "round()"    *)
+(*         und "scale()" kann allerdings +/- Inf erzeugt werden.             *)
+(*         Eine Zahl wird als Null betrachtet, wenn der Exponent Null ist.   *)
+(* - MM2 : Von den Funktionen "succ()", "pred()", "round()" und "scale()"    *)
+(*         kann ein Wert erzeugt werden, der ungefaehr dem +/- Inf der       *)
+(*         IEEE-Darstellung entspricht, er wird jedenfalls nicht mehr        *)
+(*         von den Arithmetikroutinen des Laufzeitsystems akzeptiert         *)
+(*         (aequivalent zu Null, bzw. Ueberlauf).                            *)
+(*                                                                           *)
+(* "setMode()" und "currentMode()" haben nur eine Funktion, wenn eine FPU    *)
+(* vorhanden ist; sie beziehen sich auf die gleichnamigen Bits in FPCR.      *)
+(* Es werden keine (emulierten) Ausnahmen ausgeloest -- "IsLowException()"   *)
+(* = FALSE. Wenn jedoch die entsprechenden FPU-Exceptions durch "setMode()"  *)
+(* aktiviert werden, kann die FPU Interrupts erzeugen.                       *)
+(*===========================================================================*)
+
+(* Die folgenden Konstanten gelten fuer die Defaultdarstellung reeller
+   Zahlen, falls es mehrere Moeglichkeiten gibt, und auch nur fuer die
+   Darstellung gespeicherter Werte.
+
+  radix      : Basis der verwendeten Zahlendarstellung
+  places     : Anzahl der 'radix'-Stellen zur Speicherung der Werte
+  expoMin    : Kleinstmoeglicher Exponent
+  expoMax    : Groesstmoeglicher Exponent
+  large      : Groesste darstellbare Zahl
+  small      : Kleinste (normalisierte) darstellbare Zahl
+  IEC559     : vollstaendig IEC 559:1989 (IEEE 754:1987) kompatibel, d.h.
+               NaN, neg. Null usw.
+  LIA1       : vollstaendig ISO/IEC 10967-1:199x-kompatibel,
+               (Information technology -- Language Independent Arithmetic)
+  rounds     : Liefert jede Operation die dem mathematischen Resultat
+               naechstmoegliche Darstellung ?
+  gUnderflow : Gibt es Werte zwischen 0.0 und 'small' (denormalisierte Zahlen) ?
+  exception  : Loest jede Operation, die ein Resultat ausserhalb des
+               Wertebereichs erzeugt, eine Ausnahme aus ?
+  extend     : Werden Werte mit einer hoeheren Genauigkeit berechnet als
+               gespeichert ?
+  nModes     : Anzahl der Bits, die fuer das Statusfeld benoetigt werden
+*)
+
+CONST
+#if (defined LPRM2)
+  radix      = 2;
+  places     = 53; (* 52 + 'hidden bit' *)
+  expoMin    = -1022;
+  expoMax    = 1023;
+  large      = MAX(LONGREAL);
+  small      = 2.2250738585072026D-308;
+  IEC559     = FALSE;
+  LIA1       = FALSE;
+  rounds     = FALSE;
+  gUnderflow = FALSE;
+  exception  = FALSE;
+  extend     = FALSE;
+  nModes     = 16;
+#elif (defined SPCM2)
+  radix      = 2;
+  places     = 53; (* 52 + 'hidden bit' *)
+  expoMin    = -1022;
+  expoMax    = 1023;
+  large      = MAX(LONGREAL);
+VAR (* READ ONLY ! *)
+  small      : LONGREAL;
+CONST
+  IEC559     = FALSE;
+  LIA1       = FALSE;
+  rounds     = FALSE;
+  gUnderflow = FALSE;
+  exception  = FALSE;
+  extend     = FALSE;
+  nModes     = 16;
+#elif (defined HM2)
+  radix      = 2;
+  places     = 53; (* 52 + 'hidden bit' *)
+  expoMin    = -1022;
+  expoMax    = 1023;
+  large      = MAX(LONGREAL);
+  small      = MIN(LONGREAL);
+  IEC559     = FALSE;
+  LIA1       = FALSE;
+  rounds     = FALSE;
+  gUnderflow = FALSE;
+  exception  = FALSE;
+  extend     = FALSE;
+  nModes     = 16;
+#elif (defined TDIM2)
+  radix      = 2;
+  places     = 53; (* 52 + 'hidden bit' *)
+  expoMin    = -1022;
+  expoMax    = 1023;
+VAR (* READ ONLY ! *)
+  large      : LONGREAL;
+  small      : LONGREAL;
+CONST
+  IEC559     = FALSE;
+  LIA1       = FALSE;
+  rounds     = FALSE;
+  gUnderflow = FALSE;
+  exception  = FALSE;
+  extend     = FALSE;
+  nModes     = 16;
+#elif (defined MM2)
+  radix      = 2;
+  places     = 48;
+  expoMin    = -4095; (* -4096 *)
+  expoMax    = 4094;  (*  4095 *)
+VAR (* READ ONLY ! *)
+  large      : LONGREAL;
+  small      : LONGREAL;
+CONST
+  IEC559     = FALSE;
+  LIA1       = FALSE;
+  rounds     = FALSE;
+  gUnderflow = FALSE;
+  exception  = FALSE;
+  extend     = FALSE;
+  nModes     = 16;
+#endif
+
+TYPE
+  Modes = PACKEDSET OF [0..nModes-1];
+
+(* Nicht von ISO festgelegt: *)
+CONST
+  (* Exception Enable *)
+  fpcrBSUN  = 15; (* Branch/Set on Unordered *)
+  fpcrSNAN  = 14; (* Signalling Not a Number *)
+  fpcrOPERR = 13; (* Operand Error *)
+  fpcrOVFL  = 12; (* Overflow *)
+  fpcrUNFL  = 11; (* Underflow *)
+  fpcrDZ    = 10; (* Divide by Zero *)
+  fpcrINEX2 = 9;  (* Inexact Operation *)
+  fpcrINEX1 = 8;  (* Inexact Decimal Input *)
+
+  (* Rounding Precision *)
+  fpcrPREC1 = 7;
+  fpcrPREC0 = 6;
+
+  (* Rounding Mode *)
+  fpcrMODE1 = 5;
+  fpcrMODE0 = 4;
+
+CONST
+  PrecMask     = Modes{fpcrPREC1,fpcrPREC0};
+
+  PrecExtended = Modes{};
+    (* Rundung auf max. Genauigkeit *)
+  PrecSingle   = Modes{fpcrPREC0};
+    (* Rundung auf einfache Genauigkeit *)
+  PrecDouble   = Modes{fpcrPREC1};
+    (* Rundung auf doppelte Genauigkeit *)
+
+
+CONST
+  ModeMask    = Modes{fpcrMODE1,fpcrMODE0};
+
+  ModeNearest = Modes{};
+    (* Rundung zur naechsten geraden Zahl *)
+  ModeZero    = Modes{fpcrMODE0};
+    (* Rundung nach Null (= Abschneiden, Trunc) *)
+  ModeNegInf  = Modes{fpcrMODE1};
+    (* Rundung nach Minus Unendlich (floor(), entier()) *)
+  ModePosInf  = Modes{fpcrMODE1,fpcrMODE0};
+    (* Rundung nach Plus Unendlich (ceil()) *)
+
+(*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*)
+
+PROCEDURE exponent ((* EIN/ -- *) x : LONGREAL ): INTEGER;
+
+(* Liefert den Exponenten von <x> im Bereich [expoMin..expoMax].
+   Eine Ausnahme kann ausgeloest werden, falls <x> = 0.0.
+ *)
+
+
+PROCEDURE fraction ((* EIN/ -- *) x : LONGREAL ): LONGREAL;
+
+(* Liefert den signifikanten Teil (Mantisse) von <x> *)
+
+
+PROCEDURE sign ((* EIN/ -- *) x : LONGREAL ): LONGREAL;
+
+(* Liefert folgende Werte.
+
+   -1.0, falls <x> kleiner als Null
+    1.0, falls <x> groesser als Null
+   und 1.0 oder -1.0, falls x gleich 0.0, um zwischen +0.0 und
+   -0.0 unterscheiden zu koennen, falls die Darstellung reeller
+   Zahlen dies erlaubt.
+ *)
+
+
+PROCEDURE succ ((* EIN/ -- *) x : LONGREAL ): LONGREAL;
+
+(* Liefert den naechstgroesseren Wert von <x>, falls dieser existiert,
+   andernfalls kann eine Ausnahme ausgeloest werden.
+ *)
+
+
+PROCEDURE ulp ((* EIN/ -- *) x : LONGREAL ): LONGREAL;
+
+(* Liefert den Wert der letzten Stelle von <x>, falls ein solcher
+   Wert existiert, andernfalls kann eine Ausnahme ausgeloest werden.
+   (ulp <=> Unit in the Last Place.)
+
+   Es gilt: ulp(x) = succ(x) - x, oder ulp(x) = x - pred(x), oder beides.
+ *)
+
+
+PROCEDURE pred ((* EIN/ -- *) x : LONGREAL ): LONGREAL;
+
+(* Liefert den naechstkleineren Wert von <x>, falls dieser existiert,
+   andernfalls kann eine Ausnahme ausgeloest werden.
+ *)
+
+
+PROCEDURE intpart ((* EIN/ -- *) x : LONGREAL ): LONGREAL;
+
+(* Liefert den ganzzahligen Anteil von <x>. Falls <x> negativ ist, wird
+   -intpart(abs(x)) zurueckgeliefert.
+ *)
+
+
+PROCEDURE fractpart ((* EIN/ -- *) x : LONGREAL ): LONGREAL;
+
+(* Liefert den gebrochenen Anteil von <x>.
+
+   Es gilt: x = intpart(x) + fractpart(x).
+ *)
+
+
+PROCEDURE scale ((* EIN/ -- *) x : LONGREAL;
+                 (* EIN/ -- *) n : INTEGER  ): LONGREAL;
+
+(* Liefert: x * radix^n, falls ein solcher Wert existiert, andernfalls
+   kann eine Ausnahme ausgeloest werden.
+ *)
+
+
+PROCEDURE trunc ((* EIN/ -- *) x : LONGREAL;
+                 (* EIN/ -- *) n : INTEGER  ): LONGREAL;
+
+(* Liefert die <n> hoechstwertigen signifikanten Stellen von <x>.
+   Falls n <= 0, kann eine Ausnahme ausgeloest werden.
+ *)
+
+
+PROCEDURE round ((* EIN/ -- *) x : LONGREAL;
+                 (* EIN/ -- *) n : INTEGER  ): LONGREAL;
+
+(* Liefert <x> auf die <n> hoechstwertigen signifikanten Stellen gerundet.
+   Falls ein solcher Wert nicht existiert, oder n <= 0 ist, kann
+   eine Ausnahme ausgeloest werden.
+ *)
+
+
+PROCEDURE synthesize ((* EIN/ -- *) expart  : INTEGER;
+                      (* EIN/ -- *) frapart : LONGREAL ): LONGREAL;
+
+(* Setzt einen Wert aus <frapart> und <expart> zusammen.
+
+   Es gilt: x = synthesize(exponent(x), fraction(x))
+ *)
+
+
+PROCEDURE setMode ((* EIN/ -- *) m : Modes );
+
+(* Setzt die Statusflags auf den Wert <m> entsprechend der verwendeten
+   Gleitkommaarithmetik.
+
+   Imp: Setzt das "Exception Enable Byte" und das "Mode Control Byte"
+        des Registers FPCR, wenn eine FPU vorhanden ist.
+ *)
+
+
+PROCEDURE currentMode ( ): Modes;
+
+(* Liefert die momentane Einstellung der Statusflags.
+
+   Imp: Fragt das "Exception Enable Byte" und das "Mode Control Byte"
+        des Registers FPCR ab, wenn eine FPU vorhanden ist. Sonst
+        wird konstant "Rundung zur naechsten geraden Zahl mit doppelter
+        Genauigkeit" zurueckgeliefert.
+
+ *)
+
+
+PROCEDURE IsLowException ( ): BOOLEAN;
+
+(* Testet, ob die aufrufende Koroutine in einer Ausnahmebehandlung ist,
+   weil die 'LowLong'-Exception ausgeloest wurde.
+ *)
+
+END LowLong.

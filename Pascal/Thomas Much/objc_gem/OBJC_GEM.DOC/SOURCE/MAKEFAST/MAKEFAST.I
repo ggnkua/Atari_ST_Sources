@@ -1,0 +1,21 @@
+(* Resource Datei Indizes fÅr MAKEFAST *)
+CONST
+
+    MFDLG            =   0; (* Formular/Dialog *)
+    MFVER            =   1; (* TEXT in Baum MFDLG *)
+    MFNAME           =   4; (* BOXTEXT in Baum MFDLG *)
+    MFFAST           =   5; (* BUTTON in Baum MFDLG *)
+    MFMINT           =   6; (* BUTTON in Baum MFDLG *)
+    MFPROG           =   7; (* BUTTON in Baum MFDLG *)
+    MFMEM            =   8; (* BUTTON in Baum MFDLG *)
+    MFMINDT          =   9; (* STRING in Baum MFDLG *)
+    MFLESS           =  10; (* BUTTON in Baum MFDLG *)
+    MFAMOUNT         =  11; (* BOXTEXT in Baum MFDLG *)
+    MFMORE           =  12; (* BUTTON in Baum MFDLG *)
+    MFDATEI          =  13; (* BUTTON in Baum MFDLG *)
+    MFMAKE           =  14; (* BUTTON in Baum MFDLG *)
+    MFOK             =  15; (* BUTTON in Baum MFDLG *)
+    MFHELP           =  16; (* BOXTEXT in Baum MFDLG *)
+
+    MFICON           =   1; (* Formular/Dialog *)
+    MFIFAST          =   1; (* IMAGE in Baum MFICON *)

@@ -1,0 +1,51 @@
+MODULE MKPOSIX;
+(* Kann als Hauptmodul bei HM2 und MM2 angegeben werden, damit durch das
+ * `Make' alle Module auf einmal uebersetzt werden.
+ *)
+IMPORT
+PORTAB,
+types,
+ISOStrings,
+StringsX,
+er,
+LCTypes,
+LCPOSIX,
+LCen,
+LCde,
+LCfr,
+LCnl,
+LC,
+blk,
+pLONGSET,
+OSCALLS,
+DosFile,
+DosTime,
+DosSystem,
+DosText,
+ctype,
+str,
+lib,
+mem,
+pSTORAGE,
+args,
+DosDir,
+Socket,
+loc,
+jump,
+sys,
+tim,
+file,
+dir,
+proc,
+term,
+sig,
+fcrypt,
+ANSIC,
+POSIX1,
+POSIX2,
+iX,
+pOUT,
+DosIO;
+
+END MKPOSIX.
+

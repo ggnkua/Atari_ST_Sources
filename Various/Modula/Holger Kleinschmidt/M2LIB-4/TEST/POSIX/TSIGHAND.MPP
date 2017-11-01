@@ -1,0 +1,445 @@
+MODULE tsighandler;
+__IMP_SWITCHES__
+__DEBUG__
+#ifdef HM2
+#ifdef __LONG_WHOLE__
+(*$!i+: Modul muss mit $i- uebersetzt werden! *)
+(*$!w+: Modul muss mit $w- uebersetzt werden! *)
+#else
+(*$!i-: Modul muss mit $i+ uebersetzt werden! *)
+(*$!w-: Modul muss mit $w+ uebersetzt werden! *)
+#endif
+#endif
+VAL_INTRINSIC
+CAST_IMPORT
+
+(* Test und Anwendungsbeispiel fuer Signalfunktionen, die direkt mit
+ * Signalhandlern zu tun haben. Laeuft unter TOS und MiNT.
+ *
+ * 30-Apr-96, Holger Kleinschmidt
+ *)
+
+#if (defined MM2)
+(*$E MOS *)
+#if (defined __DEBUG_CODE__)
+IMPORT TOSDebug;
+#endif
+#endif
+
+FROM SYSTEM IMPORT
+(* PROC *) ADR;
+
+FROM PORTAB IMPORT
+(* CONST*) NULL,
+(* TYPE *) SIGNEDLONG, UNSIGNEDLONG;
+
+FROM types IMPORT
+(* TYPE *) int;
+
+FROM er IMPORT
+(* VAR  *) errno;
+
+FROM OSCALLS IMPORT
+(* PROC *) Cconws;
+
+FROM str IMPORT
+(* PROC *) strerror, AssignCToM2;
+
+FROM jump IMPORT
+(* CONST*) SAVE, NOSAVE,
+(* TYPE *) SigJmpBuf,
+(* PROC *) sigsetjmp, siglongjmp;
+
+FROM sig IMPORT
+(* CONST*) SigDfl, SigIgn, SIGUSR1, SIGUSR2,
+(* TYPE *) sigsetT, SignalHandler, SigactionRec, SigBlockType, SaFlags,
+           SigsetPtr,
+(* PROC *) signal, raise, sigemptyset, sigaddset, sigismember, sigaction,
+           sigprocmask, sigpending, sigmask, sigblock, sigsetmask;
+
+FROM DosIO IMPORT
+(* PROC *) WriteString, WriteLn;
+
+(*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*)
+
+CONST JUMPVAL = 42;
+
+TYPE
+  SetCast = RECORD
+    CASE TAG_COLON BOOLEAN OF
+      FALSE: sigset  : sigsetT;
+     |TRUE : siglong : UNSIGNEDLONG;
+    END;
+  END;
+
+VAR newh, oldh : SignalHandler;
+    new, old   : SigactionRec;
+    oldm, newm : SetCast;
+    save       : UNSIGNEDLONG;
+    c          : CHAR;
+    handled    : BOOLEAN;
+    buf        : SigJmpBuf;
+    jmpval     : INTEGER;
+    void       : INTEGER;
+    errmsg     : ARRAY [0..50] OF CHAR;
+
+(*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*)
+
+PROCEDURE tsignal ((* EIN/ -- *) REF par      : ARRAY OF CHAR;
+                   (* EIN/ -- *)     sig      : int;
+                   (* EIN/ -- *)     newh     : SignalHandler;
+                   (* EIN/ -- *)     expected : SignalHandler );
+
+VAR oldh : SignalHandler;
+
+BEGIN
+ WriteString("tsignal["); WriteString(par); WriteString("]: ");
+ IF signal(sig, newh, oldh) < 0 THEN
+   AssignCToM2(strerror(errno), 0, errmsg);
+   WriteString("***: "); WriteString(errmsg);
+ ELSIF CAST(SIGNEDLONG,oldh) # CAST(SIGNEDLONG,expected) THEN
+   WriteString("***: unexpected old handler");
+ ELSE
+   WriteString("OK");
+ END;
+ WriteLn;
+END tsignal;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE tsigaction ((* EIN/ -- *) REF par      : ARRAY OF CHAR;
+                      (* EIN/ -- *)     sig      : int;
+                      (* EIN/ -- *)     new      : SigactionRec;
+                      (* EIN/ -- *)     expected : SigactionRec );
+
+VAR old  : SigactionRec;
+    set1 : SetCast;
+    set2 : SetCast;
+
+BEGIN
+ WriteString("tsigaction["); WriteString(par); WriteString("]: ");
+ IF sigaction(sig, ADR(new), ADR(old)) < 0 THEN
+   AssignCToM2(strerror(errno), 0, errmsg);
+   WriteString("***: "); WriteString(errmsg);
+ ELSIF CAST(SIGNEDLONG,old.saHandler) # CAST(SIGNEDLONG,expected.saHandler) THEN
+   WriteString("***: unexpected old handler");
+ ELSIF old.saFlags # expected.saFlags THEN
+   WriteString("***: unexpected old flags");
+ ELSE
+   set1.sigset := old.saMask;
+   set2.sigset := expected.saMask;
+   IF set1.siglong # set2.siglong THEN
+     WriteString("***: unexpected old mask");
+   ELSE
+     WriteString("OK");
+   END;
+ END;
+ WriteLn;
+END tsigaction;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE tsigprocmask ((* EIN/ -- *) how : SigBlockType;
+                        (* EIN/ -- *) new : SigsetPtr;
+                        (* EIN/ -- *) old : SigsetPtr );
+
+BEGIN
+ IF sigprocmask(how, new, old) < 0 THEN
+   errmsg := "*** tsigprocmask: ";
+   Cconws(ADR(errmsg));
+   AssignCToM2(strerror(errno), 0, errmsg);
+   Cconws(ADR(errmsg));
+ END;
+END tsigprocmask;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE tsigpending ((* EIN/ -- *) REF par      : ARRAY OF CHAR;
+                       (* EIN/ -- *)     expected : SetCast       );
+
+VAR old : SetCast;
+
+BEGIN
+ WriteString("tsigpending["); WriteString(par); WriteString("]: ");
+ IF sigpending(old.sigset) < 0 THEN
+   AssignCToM2(strerror(errno), 0, errmsg);
+   WriteString("***: "); WriteString(errmsg);
+ ELSIF old.siglong # expected.siglong THEN
+   WriteString("***: unexpected pending signals");
+ ELSE
+   WriteString("OK");
+ END;
+ WriteLn;
+END tsigpending;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE traise ((* EIN/ -- *) REF par : ARRAY OF CHAR;
+                  (* EIN/ -- *)     now : BOOLEAN;
+                  (* EIN/ -- *)     sig : int           );
+BEGIN
+ WriteString("traise["); WriteString(par); WriteString("]: ");
+ handled := FALSE;
+ IF raise(sig) < 0 THEN
+   AssignCToM2(strerror(errno), 0, errmsg);
+   WriteString("***: "); WriteString(errmsg);
+   WriteLn;
+ ELSIF now & ~handled THEN
+   WriteString("***: signal not handled");
+ ELSIF ~now & handled THEN
+   WriteString("***: signal handled");
+ ELSE
+   WriteString("OK");
+ END;
+ WriteLn;
+END traise;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE traisejump ((* EIN/ -- *) REF par  : ARRAY OF CHAR;
+                      (* EIN/ -- *)     sig  : int;
+                      (* EIN/ -- *)     save : BOOLEAN       );
+
+BEGIN
+ WriteString("traisejump["); WriteString(par); WriteString("]: ");
+ handled := FALSE;
+ jmpval  := sigsetjmp(buf, ORD(save));
+ IF jmpval = 0 THEN
+   (* Wenn alles stimmt, kehrt der Aufruf nicht zurueck! *)
+   IF raise(sig) < 0 THEN
+     AssignCToM2(strerror(errno), 0, errmsg);
+     WriteString("***: "); WriteString(errmsg);
+   ELSE
+     WriteString("***: jump failed");
+   END;
+   WriteLn;
+ ELSIF jmpval # JUMPVAL THEN
+   WriteString("***: unexpected jump-val");
+ ELSIF ~handled THEN
+   WriteString("***: signal not handled");
+ ELSE
+   WriteString("OK");
+ END;
+ WriteLn;
+END traisejump;
+
+(*---------------------------------------------------------------------------*)
+
+#ifdef HM2
+(*$E+,$K+*)
+#endif
+PROCEDURE handler1 (sig : UNSIGNEDLONG);
+(* ``normaler'' Signalhandler *)
+BEGIN
+ handled := TRUE;
+END handler1;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE handler2 (sig : UNSIGNEDLONG);
+(* Signalhandler, der nicht zurueckkehrt *)
+VAR mask : SetCast;
+    cmp  : SetCast;
+    save : INTEGER;
+    void : INTEGER;
+
+BEGIN
+ handled := TRUE;
+ save := errno; (* Hier eigtl. nicht noetig *)
+ sigemptyset(cmp.sigset);
+ void := sigaddset(cmp.sigset, INT(sig));
+ tsigprocmask(SigSetMask, NULL, ADR(mask.sigset));
+ IF mask.siglong # cmp.siglong THEN
+   errmsg := "<< *** handler2: unexpected signal mask >> ";
+ ELSE
+   errmsg := "<< handler2: signal mask OK >> ";
+ END;
+ Cconws(ADR(errmsg));
+ errno := save;
+ siglongjmp(buf, JUMPVAL);
+END handler2;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE handler3 (sig : UNSIGNEDLONG);
+(* Signalhandler, der nicht zurueckkehrt *)
+VAR mask : SetCast;
+    cmp  : SetCast;
+    save : INTEGER;
+    void : INTEGER;
+
+BEGIN
+ handled := TRUE;
+ save := errno; (* Hier eigtl. nicht noetig *)
+ sigemptyset(cmp.sigset);
+ void := sigaddset(cmp.sigset, INT(sig));
+ void := sigaddset(cmp.sigset, SIGUSR2);
+ tsigprocmask(SigSetMask, NULL, ADR(mask.sigset));
+ IF mask.siglong # cmp.siglong THEN
+   errmsg := "<< *** handler3: unexpected signal mask >> ";
+ ELSE
+   errmsg := "<< handler3: signal mask OK >> ";
+ END;
+ Cconws(ADR(errmsg));
+ errno := save;
+ siglongjmp(buf, JUMPVAL);
+END handler3;
+#ifdef HM2
+(*$E=,$K-*)
+#endif
+
+(*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*)
+
+BEGIN
+ (* 'handler1' als Signalhandler fuer SIGUSR1 installieren. Der alte Handler
+  * muss die Defaultaktion sein.
+  *)
+ tsignal("sig=SIGUSR1 new=handler1 old=SIG_DFL", SIGUSR1, handler1, SigDfl);
+
+ (* Am Anfang steht kein Signal an *)
+ sigemptyset(newm.sigset);
+ tsigpending("pending={}", newm);
+
+ (* SIGUSR1 blockieren *)
+ void := sigaddset(newm.sigset, SIGUSR1);
+ tsigprocmask(SigBlock, ADR(newm.sigset), NULL);
+
+ (* SIGUSR1 ausloesen, Signal darf aber nicht gesendet werden, nur vermerkt *)
+ traise("sig=SIGUSR1", FALSE, SIGUSR1);
+
+ (* SIGUSR1 muss jetzt anstehen *)
+ tsigpending("pending={SIGUSR1}", newm);
+
+ (* Blockierung fuer SIGUSR1 aufheben, Signal muss jetzt gesendet werden *)
+ handled := FALSE;
+ tsigprocmask(SigUnblock, ADR(newm.sigset), NULL);
+ IF ~handled THEN
+   WriteString("*** Signal not handled");
+ ELSE
+   WriteString("Signal handled OK");
+ END;
+ WriteLn;
+
+ (* jetzt darf kein Signal mehr anstehen *)
+ sigemptyset(oldm.sigset);
+ tsigpending("pending={}", oldm);
+
+ tsigprocmask(SigSetMask, NULL, ADR(newm.sigset));
+ sigemptyset(oldm.sigset);
+ IF oldm.siglong = newm.siglong THEN
+   WriteString("sigprocmask: signal mask OK");
+ ELSE
+   WriteString("*** sigprocmask: unexpected signal mask");
+ END;
+ WriteLn;
+
+
+ (* SIGUSR1 blockieren *)
+ save := sigblock(sigmask(SIGUSR1));
+
+ (* SIGUSR1 ausloesen, Signal darf aber nicht gesendet werden, nur
+  * vermerkt.
+  *)
+ traise("sig=SIGUSR1", FALSE, SIGUSR1);
+
+ (* Blockierung fuer SIGUSR1 aufheben, Signal muss jetzt gesendet werden *)
+ handled := FALSE;
+ save    := sigsetmask(save);
+ IF ~handled THEN
+   WriteString("*** Signal not handled");
+ ELSE
+   WriteString("Signal handled OK");
+ END;
+ WriteLn;
+
+ (* 'handler2' als Signalhandler fuer SIGUSR1 installieren. Der alte Handler
+  * muss 'handler1' sein.
+  *)
+ tsignal("sig=SIGUSR1 new=handler2 old=handler1)", SIGUSR1, handler2, handler1);
+
+ (* Die Signalmaske beim "sigsetjmp()" sichern. SIGUSR1 synchron ausloesen.
+  * Mit "siglongjmp()" den Signalhandler verlassen.
+  *)
+ traisejump("sig=SIGUSR1 savemask=TRUE", SIGUSR1, TRUE);
+
+ (* Die Signalmaske beim "sigsetjmp()" nicht sichern. SIGUSR1 synchron
+  * ausloesen. Mit "siglongjmp()" den Signalhandler verlassen.
+  *)
+ traisejump("sig=SIGUSR1 savemask=FALSE", SIGUSR1, FALSE);
+ WriteLn;
+
+
+ (* Defaultaktion fuer SIGUSR1 installieren, der alte Handler muss
+  * 'handler2' sein.
+  *)
+ WITH new DO
+   saHandler := SigDfl;
+   saFlags   := SaFlags{};
+   sigemptyset(saMask);
+ END;
+ WITH old DO
+   saHandler := handler2;
+   saFlags   := SaFlags{};
+   sigemptyset(saMask);
+ END;
+ tsigaction("sig=SIGUSR1 new=SIG_DFL,mask={} old=handler2,mask={}",
+            SIGUSR1, new, old);
+
+
+ (* 'handler3' als Signalhandler fuer SIGUSR1 installieren. Innerhalb
+  * des Handlers soll zusaetzlich zu SIGUSR1 auch noch SIGUSR2 blockiert
+  * sein. Der alte Handler muss die Defaultaktion sein.
+  *)
+ WITH new DO
+   saHandler := handler3;
+   saFlags   := SaFlags{};
+   sigemptyset(saMask);
+   void := sigaddset(saMask, SIGUSR2);
+ END;
+ WITH old DO
+   saHandler := SigDfl;
+   saFlags   := SaFlags{};
+   sigemptyset(saMask);
+ END;
+ tsigaction("sig=SIGUSR1 new=handler3,mask={SIGUSR2} old=SIG_DFL,mask={}",
+            SIGUSR1, new, old);
+
+
+ (* Die Signalmaske beim "sigsetjmp()" sichern. SIGUSR1 synchron ausloesen.
+  * Mit "siglongjmp()" den Signalhandler verlassen. Nach Verlassen des
+  * Handlers muss die Signalmaske wieder den Wert vor dem "sigsetjmp()" haben,
+  * hier also leer sein.
+  *)
+ traisejump("sig=SIGUSR1 savemask=TRUE", SIGUSR1, TRUE);
+ tsigprocmask(SigSetMask, NULL, ADR(newm.sigset));
+ sigemptyset(oldm.sigset);
+ IF oldm.siglong = newm.siglong THEN
+   WriteString("sigprocmask: signal mask OK");
+ ELSE
+   WriteString("*** sigprocmask: unexpected signal mask");
+ END;
+ WriteLn;
+
+ (* Die Signalmaske beim "sigsetjmp()" nicht sichern. SIGUSR1 synchron
+  * ausloesen. Mit "siglongjmp()" den Signalhandler verlassen. Nach Verlassen
+  * des Handlers muss die Signalmaske mindestens SIGUSR2 enthalten (und SIGUSR1
+  * unter TOS).
+  *)
+ traisejump("sig=SIGUSR1 savemask=FALSE", SIGUSR1, FALSE);
+ tsigprocmask(SigSetMask, NULL, ADR(newm.sigset));
+ IF sigismember(newm.sigset, SIGUSR2) > 0 THEN
+   WriteString("sigprocmask: signal mask OK");
+ ELSE
+   WriteString("*** sigprocmask: unexpected signal mask");
+ END;
+ WriteLn;
+
+ (* Alle Handler zuruecksetzen *)
+ WITH new DO
+   saHandler := SigDfl;
+   saFlags   := SaFlags{};
+   sigemptyset(saMask);
+ END;
+ void := sigaction(SIGUSR1, ADR(new), NULL);
+ void := sigaction(SIGUSR2, ADR(new), NULL);
+END tsighandler.

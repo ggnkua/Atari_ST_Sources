@@ -1,0 +1,71 @@
+module AESSYS
+
+segment C_AESSYS(FCODE,28H); group G_AESSYS(C_AESSYS); select C_AESSYS
+;
+
+public AESSYS$aes:
+
+push bp
+mov bp,sp
+mov ax,[bp][6]
+mov bx,[bp][4]
+mov cx,200
+mov dx,0
+mov es,ax
+int 0EFH
+mov sp,bp
+pop bp
+ret far 4
+
+public AESSYS$applyield:
+
+mov cx,201
+mov dx,0
+int 0EFH
+ret far 0
+
+public AESSYS$FrameCode:
+
+push bp
+mov bp,sp
+
+push ds
+push es
+push si
+push di
+                            (* ax:bx = seg(PB):ofs(PB) *)
+mov es,ax                   (* es:= ax                 *)
+
+(*lds si,es:[bx+1AH]           ds:si:= es:bx+PBParm    *)
+dw 026C5H,0771AH
+(*mov ds,ax*)
+
+(*mov di,bx*)
+(*add di,26*)
+(*mov si,[di]*)
+
+push es                     (* push seg(PB)            *)
+mov ax,bx                   (* ax:= bx                 *)
+push ax                     (* push ofs(PB)            *)
+(*call ds:[si]*)
+
+call dword [si]
+(*dw 0FF1CH*)
+
+pop di
+pop si
+pop es
+pop ds
+
+mov sp,bp
+pop bp
+ret far 0
+
+drawsp: dw 0
+drawss: dw 0
+
+section; segment D_AESSYS(M_DATA,28H); select D_AESSYS
+
+drawstack: org 512
+
+end

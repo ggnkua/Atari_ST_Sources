@@ -1,0 +1,19 @@
+COMP bigsets.def -v
+COMP bigsets.mod -v
+COMP pvt52.def -v
+COMP pvt52.mod -v
+COMP datelib.def -v
+COMP datelib.mod -v
+COMP adtbase.def -v
+COMP adtbase.mod -v
+COMP dlists.def -v
+COMP dlists.mod -v
+COMP queues.def -v
+COMP queues.mod -v
+COMP stacks.def -v
+COMP stacks.mod -v
+COMP rbtrees.def -v
+COMP rbtrees.mod -v
+COMP ptimer.def -v
+COMP ptimer.mod -v
+

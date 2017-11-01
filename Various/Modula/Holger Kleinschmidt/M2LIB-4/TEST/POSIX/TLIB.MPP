@@ -1,0 +1,959 @@
+MODULE tlib;
+__IMP_SWITCHES__
+__DEBUG__
+#ifdef HM2
+(*$E+ Prozeduren als Parameter moeglich *)
+#ifdef __LONG_WHOLE__
+(*$!i+: Modul muss mit $i- uebersetzt werden! *)
+(*$!w+: Modul muss mit $w- uebersetzt werden! *)
+#else
+(*$!i-: Modul muss mit $i+ uebersetzt werden! *)
+(*$!w-: Modul muss mit $w+ uebersetzt werden! *)
+#endif
+#endif
+
+(* Test der Module 'lib', 'blk' und 'jump'.
+ *
+ * 10-Aug-96, Holger Kleinschmidt
+ *)
+
+#if (defined MM2)
+(*$E MOS *)
+#if (defined __DEBUG_CODE__)
+IMPORT TOSDebug;
+#endif
+#endif
+
+CAST_IMPORT
+VAL_INTRINSIC
+PTR_ARITH_IMPORT
+REGISTER_IMPORT
+
+FROM SYSTEM IMPORT
+(* TYPE *) ADDRESS,
+(* PROC *) TSIZE, ADR;
+
+FROM PORTAB IMPORT
+(* TYPE *) UNSIGNEDLONG, SIGNEDLONG, UNSIGNEDWORD, SIGNEDWORD;
+
+FROM types IMPORT
+(* CONST*) NULL,
+(* TYPE *) StrPtr;
+
+FROM ISOStrings IMPORT
+(* PROC *) Equal;
+
+FROM jump IMPORT
+(* TYPE *) JmpBuf,
+(* PROC *) setjmp, longjmp;
+
+FROM lib IMPORT
+(* TYPE *) CompareProc,
+(* PROC *) lfind, bsearch, qsort, ltoa, ultoa, rand;
+
+FROM OSCALLS IMPORT
+(* PROC *) Malloc, Mfree;
+
+FROM blk IMPORT
+(* PROC *) memswap, memmove, memset, memfill, memchr, memcmp, memalloc,
+           memdealloc;
+
+FROM DosIO IMPORT
+(* PROC *) Read, Write, WriteInt, WriteString, WriteLn;
+
+(*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*)
+
+TYPE
+  FillProc = PROCEDURE(SIGNEDWORD,SIGNEDWORD): UNSIGNEDLONG;
+
+CONST
+  BEFORE = 10;
+  AFTER  = 10;
+  MAXLEN = 100;
+
+CONST
+  MINLINT  = 80000000H;
+  MAXLINT  = 7FFFFFFFH;
+  MAXLCARD = 0FFFFFFFFH;
+
+CONST
+  CPATTERN = 377C;
+  LPATTERN = 5E5E5E5EH;
+  MAXCBUF  = 799;
+  MAXLBUF  = 299;
+
+CONST
+  LONGJUMPVAL = 42;
+  GLOBALVAL   = 12345678H;
+  LOCALVAL    = 87654321H;
+
+TYPE LBuf = ARRAY [0..MAXLBUF] OF UNSIGNEDLONG;
+     CBuf = ARRAY [0..MAXCBUF] OF CHAR;
+
+VAR cbuf      : CBuf;
+    lbuf      : LBuf;
+    lbuf2     : LBuf;
+    test      : UNSIGNEDLONG;
+    found     : POINTER TO UNSIGNEDLONG;
+    i         : UNSIGNEDWORD;
+    BusyBuf   : ARRAY [0..4] OF CHAR;
+    BusyIdx   : [0..4];
+    ch        : CHAR;
+    ERROR     : BOOLEAN;
+    jmpbuf    : JmpBuf;
+    globalvar : UNSIGNEDLONG;
+
+(*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*)
+
+PROCEDURE OK (REF proc : ARRAY OF CHAR);
+BEGIN
+ IF ~ERROR THEN
+   WriteString(proc); WriteString(": OK"); WriteLn;
+ END;
+END OK;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE Busy;
+BEGIN
+ Write(CHR(8));
+ Write(BusyBuf[BusyIdx]);
+ BusyIdx := (BusyIdx + 1) MOD 4;
+END Busy;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE ClearBusy;
+BEGIN
+ Write(CHR(8));
+ Write(' ');
+ Write(CHR(8));
+END ClearBusy;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE fillinc ((* EIN/ -- *) i   : SIGNEDWORD;
+                   (* EIN/ -- *) max : SIGNEDWORD ): UNSIGNEDLONG;
+BEGIN
+ RETURN(VAL(UNSIGNEDLONG,i));
+END fillinc;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE filldec ((* EIN/ -- *) i   : SIGNEDWORD;
+                   (* EIN/ -- *) max : SIGNEDWORD ): UNSIGNEDLONG;
+BEGIN
+ RETURN(VAL(UNSIGNEDLONG,max - i));
+END filldec;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE fillrnd ((* EIN/ -- *) i   : SIGNEDWORD;
+                   (* EIN/ -- *) max : SIGNEDWORD ): UNSIGNEDLONG;
+BEGIN
+ RETURN(VAL(UNSIGNEDLONG,rand()));
+END fillrnd;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE cmp ((* EIN/ -- *) a : ADDRESS;
+               (* EIN/ -- *) b : ADDRESS ): INTEGER;
+
+VAR __REG__ A : POINTER TO UNSIGNEDLONG;
+    __REG__ B : POINTER TO UNSIGNEDLONG;
+    
+BEGIN
+ A := a;
+ B := b;
+ IF A^ > B^ THEN
+   RETURN(1);
+ ELSIF A^ < B^ THEN
+   RETURN(-1);
+ ELSE
+   RETURN(0);
+ END;
+END cmp;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE SlowSort ((* EIN/ -- *)     from : UNSIGNEDWORD;
+                    (* EIN/ -- *)     to   : UNSIGNEDWORD;
+                    (* EIN/AUS *) VAR buf  : ARRAY OF UNSIGNEDLONG );
+(* langsam, aber durchschaubar...zum testen von "qsort()".
+ * Es wird der Reihe nach fuer jedes Element ausser dem letzten das
+ * Minimum von diesem Element und allen rechts von ihm stehenden
+ * Elementen gesucht, und dann das Element und das Minimum ausgetauscht.
+ *)
+VAR __REG__ i    : UNSIGNEDWORD;
+    __REG__ j    : UNSIGNEDWORD;
+    __REG__ min  : UNSIGNEDWORD;
+    __REG__ tmp  : UNSIGNEDLONG;
+
+BEGIN
+ FOR i := from TO to - 1 DO
+   min := i;
+   FOR j := i + 1 TO to DO
+     IF buf[j] < buf[min] THEN
+       min := j;
+     END;
+   END;
+   IF i # min THEN
+     tmp      := buf[i];
+     buf[i]   := buf[min];
+     buf[min] := tmp;
+   END;
+ END;
+END SlowSort;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE tmemchr ((* EIN/ -- *) REF proc : ARRAY OF CHAR );
+
+CONST MEMSIZE = 10020H; (* > 64kB *)
+
+TYPE CHARPTR = POINTER TO CHAR;
+
+VAR mem  : CHARPTR;
+    res  : INTEGER;
+    void : BOOLEAN;
+
+PROCEDURE test (offset : UNSIGNEDLONG; len : UNSIGNEDLONG; exp : CHARPTR): BOOLEAN;
+VAR tmp1 : CHARPTR;
+    tmp2 : CHARPTR;
+BEGIN
+ tmp1  := ADDADR(mem, offset);
+ tmp1^ := CPATTERN;
+ tmp2  := memchr(mem, ORD(CPATTERN), len);
+ tmp1^ := 0C;
+ RETURN(tmp2 = exp);
+END test;
+
+BEGIN
+ IF Malloc(MEMSIZE, mem) THEN
+   WriteString(proc);
+   memset(mem, 0, MEMSIZE); (* Annahme: "memset()" funktioniert *)
+   (* Ein paar Stichproben an den Raendern genuegen *)
+   IF ~test(0, 0, NULL) THEN
+     WriteString("*** 1");
+     RETURN;
+   END;
+   IF ~test(0, 1, mem) THEN
+     WriteString("*** 2");
+     RETURN;
+   END;
+   IF ~test(1, 1, NULL) THEN
+     WriteString("*** 3");
+     RETURN;
+   END;
+   IF ~test(1, 10, CAST(CHARPTR,ADDADR(mem, 1))) THEN
+     WriteString("*** 4");
+     RETURN;
+   END;
+   IF ~test(10000H, 10000H, NULL) THEN
+     WriteString("*** 5");
+     RETURN;
+   END;
+   IF ~test(10000H, 10001H, CAST(CHARPTR,ADDADR(mem, 10000H))) THEN
+     WriteString("*** 6");
+     RETURN;
+   END;
+   IF ~test(10010H, 10010H, NULL) THEN
+     WriteString("*** 7");
+     RETURN;
+   END;
+   IF ~test(10010H, 10011H, CAST(CHARPTR,ADDADR(mem, 10010H))) THEN
+     WriteString("*** 8");
+     RETURN;
+   END;
+   void := Mfree(mem, res);
+   WriteString("OK");
+   WriteLn;
+ END;
+END tmemchr;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE tmemswap ((* EIN/ -- *) REF proc   : ARRAY OF CHAR;
+                    (* EIN/ -- *)     blk1   : SIGNEDWORD;
+                    (* EIN/ -- *)     blk2   : SIGNEDWORD;
+                    (* EIN/ -- *)     maxlen : SIGNEDWORD );
+
+VAR __REG__ len : SIGNEDWORD;
+    __REG__ i   : SIGNEDWORD;
+
+PROCEDURE WriteMsg (i, len : SIGNEDWORD; exp : CHAR; REF msg : ARRAY OF CHAR);
+BEGIN
+ ClearBusy;
+ WriteLn;
+ WriteString(msg); WriteLn;
+ WriteString("blk1: "); WriteInt(VAL(SIGNEDLONG,blk1), 1); WriteLn;
+ WriteString("blk2: "); WriteInt(VAL(SIGNEDLONG,blk2), 1); WriteLn;
+ WriteString(" len: "); WriteInt(VAL(SIGNEDLONG,len), 1); WriteLn;
+ WriteString("cbuf["); WriteInt(VAL(SIGNEDLONG,i), 1); WriteString("]: ");
+ WriteInt(VAL(SIGNEDLONG,cbuf[i]),1); WriteString(" (expected: ");
+ WriteInt(VAL(SIGNEDLONG,exp),1); Write(')');
+ WriteLn;
+ Read(ch);
+END WriteMsg;
+
+
+BEGIN
+ WriteString(proc);
+ FOR len := 0 TO maxlen DO
+   Busy;
+   FOR i := 0 TO MAXCBUF DO
+     cbuf[i] := 0C;
+   END;
+   FOR i := blk1 TO blk1+len-1 DO
+     cbuf[i] := CHR(i);
+   END;
+   FOR i := blk2 TO blk2+len-1 DO
+     cbuf[i] := CHR(i);
+   END;
+   memswap(ADR(cbuf[blk1]), ADR(cbuf[blk2]), VAL(UNSIGNEDLONG,len));
+   FOR i := 0 TO blk1-1 DO
+     IF cbuf[i] # 0C THEN
+       WriteMsg(i, len, 0C,"*** cbuf[i=0..blk1-1]:");
+       RETURN;
+     END;
+   END;
+   FOR i := blk1 TO blk1+len-1 DO
+     (* Steht Block2 an der Stelle des ehemaligen Block1? *)
+     IF cbuf[i] # CHR(blk2+i-blk1) THEN
+       WriteMsg(i, len, CHR(blk2+i-blk1),"*** cbuf[i=blk1..blk1+len-1]:");
+       RETURN;
+     END;
+   END;
+   FOR i := blk1+len TO blk2-1 DO
+     IF cbuf[i] # 0C THEN
+       WriteMsg(i, len, 0C,"*** cbuf[i=blk1+len..blk2-1]:");
+       RETURN;
+     END;
+   END;
+   FOR i := blk2 TO blk2+len-1 DO
+     (* Steht Block1 an der Stelle des ehemaligen Block2? *)
+     IF cbuf[i] # CHR(blk1+i-blk2) THEN
+       WriteMsg(i, len, CHR(blk1+i-blk2),"*** cbuf[i=blk2..blk2+len-1]:");
+       RETURN;
+     END;
+   END;
+   FOR i := blk2+len TO MAXCBUF DO
+     IF cbuf[i] # 0C THEN
+       WriteMsg(i, len, 0C,"*** cbuf[i=blk2+len..CMAXBUF]:");
+       RETURN;
+     END;
+   END;
+ END;
+ ClearBusy;
+ WriteString(" OK");
+ WriteLn;
+END tmemswap;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE tmemcmp ((* EIN/ -- *) REF proc   : ARRAY OF CHAR;
+                   (* EIN/ -- *)     blk1   : SIGNEDWORD;
+                   (* EIN/ -- *)     blk2   : SIGNEDWORD;
+                   (* EIN/ -- *)     maxlen : SIGNEDWORD );
+
+VAR __REG__ len : SIGNEDWORD;
+    __REG__ i   : SIGNEDWORD;
+            res : INTEGER;
+
+PROCEDURE WriteMsg (len : SIGNEDWORD; REF exp : ARRAY OF CHAR);
+BEGIN
+ ClearBusy;
+ WriteLn;
+ WriteString("**********"); WriteLn;
+ WriteString("blk1: "); WriteInt(VAL(SIGNEDLONG,blk1), 1); WriteLn;
+ WriteString("blk2: "); WriteInt(VAL(SIGNEDLONG,blk2), 1); WriteLn;
+ WriteString(" len: "); WriteInt(VAL(SIGNEDLONG,len), 1); WriteLn;
+ WriteString("cmp: "); WriteInt(VAL(SIGNEDLONG,res), 1);
+ WriteString(" (expected: "); WriteString(exp); Write(')');
+ WriteLn;
+ Read(ch);
+END WriteMsg;
+
+
+BEGIN
+ WriteString(proc);
+ FOR len := 0 TO maxlen DO
+   Busy;
+(* Test auf = *)
+   FOR i := blk1 TO blk1+len-1 DO
+     cbuf[i] := CHR(10);;
+   END;
+   cbuf[blk1+len] := CHR(11);
+   FOR i := blk2 TO blk2+len-1 DO
+     cbuf[i] := CHR(10);
+   END;
+   cbuf[blk2+len] := CHR(9);
+   res := memcmp(ADR(cbuf[blk1]), ADR(cbuf[blk2]), VAL(UNSIGNEDLONG,len));
+   IF res # 0 THEN
+     WriteMsg(len, "= 0");
+     RETURN;
+   END;
+   IF len > 0 THEN
+(* Test auf < *)
+     FOR i := blk1 TO blk1+len-2 DO
+       cbuf[i] := CHR(10);;
+     END;
+     cbuf[blk1+len-1] := CHR(9);
+     FOR i := blk2 TO blk2+len-2 DO
+       cbuf[i] := CHR(10);
+     END;
+     cbuf[blk2+len-1] := CHR(11);
+     res := memcmp(ADR(cbuf[blk1]), ADR(cbuf[blk2]), VAL(UNSIGNEDLONG,len));
+     IF res >= 0 THEN
+       WriteMsg(len, "< 0");
+       RETURN;
+     END;
+(* Test auf > *)
+     FOR i := blk1 TO blk1+len-2 DO
+       cbuf[i] := CHR(10);;
+     END;
+     cbuf[blk1+len-1] := CHR(11);
+     FOR i := blk2 TO blk2+len-2 DO
+       cbuf[i] := CHR(10);
+     END;
+     cbuf[blk2+len-1] := CHR(9);
+     res := memcmp(ADR(cbuf[blk1]), ADR(cbuf[blk2]), VAL(UNSIGNEDLONG,len));
+     IF res <= 0 THEN
+       WriteMsg(len, "> 0");
+       RETURN;
+     END;
+   END;
+ END;
+ ClearBusy;
+ WriteString(" OK");
+ WriteLn;
+END tmemcmp;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE tmemset ((* EIN/ -- *) REF proc   : ARRAY OF CHAR;
+                   (* EIN/ -- *)     from   : SIGNEDWORD;
+                   (* EIN/ -- *)     maxlen : SIGNEDWORD    );
+
+VAR __REG__ len : SIGNEDWORD;
+    __REG__ i   : SIGNEDWORD;
+
+PROCEDURE WriteMsg (i, len: SIGNEDWORD; exp : CHAR; REF msg : ARRAY OF CHAR);
+BEGIN
+ ClearBusy;
+ WriteLn;
+ WriteString(msg); WriteLn;
+ WriteString("from: "); WriteInt(VAL(SIGNEDLONG,from), 1); WriteLn;
+ WriteString(" len: "); WriteInt(VAL(SIGNEDLONG,len), 1); WriteLn;
+ WriteString("cbuf["); WriteInt(VAL(SIGNEDLONG,i), 1); WriteString("]: ");
+ WriteInt(VAL(SIGNEDLONG,cbuf[i]),1); WriteString(" (expected: ");
+ WriteInt(VAL(SIGNEDLONG,exp),1); Write(')');
+ WriteLn;
+ Read(ch);
+END WriteMsg;
+
+BEGIN
+ WriteString(proc);
+ FOR len := 0 TO maxlen DO
+   Busy;
+   FOR i := 0 TO MAXCBUF DO
+     cbuf[i] := CPATTERN;
+   END;
+   memset(ADR(cbuf[from]), 5, VAL(UNSIGNEDLONG,len));
+   FOR i := 0 TO from-1 DO
+     IF cbuf[i] # CPATTERN THEN
+       WriteMsg(i, len, CPATTERN,"*** cbuf[i=0..from-1]:");
+       RETURN;
+     END;
+   END;
+   FOR i := from TO from+len-1 DO
+     IF cbuf[i] # 5C THEN
+       WriteMsg(i, len, 5C,"*** cbuf[i=from..from+len-1]:");
+       RETURN;
+     END;
+   END;
+   FOR i := from+len TO MAXCBUF DO
+     IF cbuf[i] # CPATTERN THEN
+       WriteMsg(i, len, CPATTERN,"*** cbuf[i=from+len..MAXCBUF]:");
+       RETURN;
+     END;
+   END;
+ END;
+ ClearBusy;
+ WriteString(" OK");
+ WriteLn;
+END tmemset;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE tmemfill ((* EIN/ -- *) REF proc   : ARRAY OF CHAR;
+                    (* EIN/ -- *)     from   : SIGNEDWORD;
+                    (* EIN/ -- *)     maxlen : SIGNEDWORD    );
+
+VAR __REG__ len : SIGNEDWORD;
+    __REG__ i   : SIGNEDWORD;
+    __REG__ ip  : UNSIGNEDWORD;
+
+PROCEDURE WriteMsg (i, len: SIGNEDWORD; exp : CHAR; REF msg : ARRAY OF CHAR);
+BEGIN
+ ClearBusy;
+ WriteLn;
+ WriteString(msg); WriteLn;
+ WriteString("from: "); WriteInt(VAL(SIGNEDLONG,from), 1); WriteLn;
+ WriteString(" len: "); WriteInt(VAL(SIGNEDLONG,len), 1); WriteLn;
+ WriteString("cbuf["); WriteInt(VAL(SIGNEDLONG,i), 1); WriteString("]: ");
+ WriteInt(VAL(SIGNEDLONG,cbuf[i]),1); WriteString(" (expected: ");
+ WriteInt(VAL(SIGNEDLONG,exp),1); Write(')');
+ WriteLn;
+ Read(ch);
+END WriteMsg;
+
+BEGIN
+ WriteString(proc);
+ FOR len := 0 TO maxlen DO
+   Busy;
+   FOR i := 0 TO MAXCBUF DO
+     cbuf[i] := CPATTERN;
+   END;
+   memfill(ADR(cbuf[from]), 00010203H, VAL(UNSIGNEDLONG,len));
+   FOR i := 0 TO from-1 DO
+     IF cbuf[i] # CPATTERN THEN
+       WriteMsg(i, len, CPATTERN,"*** cbuf[i=0..from-1]:");
+       RETURN;
+     END;
+   END;
+   ip := 0;
+   FOR i := from TO from+len-1 DO
+     IF cbuf[i] # CHR(ip) THEN
+       WriteMsg(i, len, CHR(ip),"*** cbuf[i=from..from+len-1]:");
+       RETURN;
+     END;
+     ip := (ip + 1) MOD 4;
+   END;
+   FOR i := from+len TO MAXCBUF DO
+     IF cbuf[i] # CPATTERN THEN
+       WriteMsg(i, len, CPATTERN,"*** cbuf[i=from+len..MAXCBUF]:");
+       RETURN;
+     END;
+   END;
+ END;
+ ClearBusy;
+ WriteString(" OK");
+ WriteLn;
+END tmemfill;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE tmemmove ((* EIN/ -- *) REF proc    : ARRAY OF CHAR;
+                    (* EIN/ -- *)     from    : SIGNEDWORD;
+                    (* EIN/ -- *)     to      : SIGNEDWORD;
+                    (* EIN/ -- *)     maxlen  : SIGNEDWORD );
+
+VAR __REG__ len       : SIGNEDWORD;
+    __REG__ i         : SIGNEDWORD;
+            high, low : SIGNEDWORD;
+            min, max  : SIGNEDWORD;
+            dist      : SIGNEDWORD;
+
+PROCEDURE WriteMsg (i, len : SIGNEDWORD; exp : CHAR; REF msg : ARRAY OF CHAR);
+BEGIN
+ ClearBusy;
+ WriteLn;
+ WriteString(msg); WriteLn;
+ WriteString("from: "); WriteInt(VAL(SIGNEDLONG,from), 1); WriteLn;
+ WriteString("  to: "); WriteInt(VAL(SIGNEDLONG,to), 1); WriteLn;
+ WriteString(" len: "); WriteInt(VAL(SIGNEDLONG,len), 1); WriteLn;
+ WriteString("cbuf["); WriteInt(VAL(SIGNEDLONG,i), 1); WriteString("]: ");
+ WriteInt(VAL(SIGNEDLONG,cbuf[i]),1); WriteString(" (expected: ");
+ WriteInt(VAL(SIGNEDLONG,exp),1); Write(')');
+ WriteLn;
+ Read(ch);
+END WriteMsg;
+
+BEGIN
+ WriteString(proc);
+ dist := ABS(from - to);
+ FOR len := 0 TO maxlen DO
+   Busy;
+   FOR i := 0 TO MAXCBUF DO
+     cbuf[i] := 0C;
+   END;
+   FOR i := from TO from+len-1 DO
+     cbuf[i] := CHR(i MOD 256);
+   END;
+   memmove(ADR(cbuf[to]), ADR(cbuf[from]), VAL(UNSIGNEDLONG,len));
+   IF from <= to THEN
+     low  := from;
+     high := to;
+     min  := from;
+     (* Maximale Anzahl von Elementen, die noch im Quellbereich stehen *)
+     IF dist < len THEN
+       (* Zielbereich ueberlappt den oberen Teil des Quellbereichs,
+        * es sind noch soviele Elemente des Quellbereichs erhalten
+        * wie die beiden Bereich auseinander sind.
+        *)
+       max := dist;
+     ELSE
+       (* Keine Ueberlappung, also ist der volle Quellbereich erhalten *)
+       max := len;
+     END;
+   ELSE
+     low  := to;
+     high := from;
+     max  := len;
+     (* Kleinster Index, an dem noch Elemente des Quellbereichs stehen *)
+     IF dist < len THEN
+       (* Zielbereich ueberlappt den unteren Teil des Quellbereichs,
+        * erst nach dem Ende des Zielbereichs stehen die restlichen
+        * Elemente des Quellbereichs.
+        *)
+       min := to + len
+     ELSE
+       (* Keine Ueberlappung, also ist der volle Quellbereich erhalten *)
+       min := from;
+     END;
+   END;
+   FOR i := 0 TO low-1 DO
+     IF cbuf[i] # 0C THEN
+       WriteMsg(i, len, 0C,"*** cbuf[i=0..low-1]:");
+       RETURN;
+     END;
+   END;
+   FOR i := min TO from+max-1 DO
+     (* Quellbereich (teilweise) erhalten? *)
+     IF cbuf[i] # CHR(i MOD 256) THEN
+       WriteMsg(i, len, CHR(i MOD 256),"*** cbuf[i=min..from+max-1]:");
+       RETURN;
+     END;
+   END;
+   FOR i := low+len TO high-1 DO
+     IF cbuf[i] # 0C THEN
+       WriteMsg(i, len, 0C,"*** cbuf[i=low+len..high-1]:");
+       RETURN;
+     END;
+   END;
+   FOR i := to TO to+len-1 DO
+     (* Enthaelt der Zielbereich den Quellbereich? *)
+     IF cbuf[i] # CHR((from+i-to) MOD 256) THEN
+       WriteMsg(i, len, CHR((from+i-to) MOD 256),"*** cbuf[i=to..to+len-1]:");
+       RETURN;
+     END;
+   END;
+   FOR i := high+len TO MAXCBUF DO
+     IF cbuf[i] # 0C THEN
+       WriteMsg(i, len, 0C,"*** cbuf[i=high+len..MAXCBUF]:");
+       RETURN;
+     END;
+   END;
+ END;
+ ClearBusy;
+ WriteString(" OK");
+ WriteLn;
+END tmemmove;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE tltoa ((* EIN/ -- *) REF proc     : ARRAY OF CHAR;
+                 (* EIN/ -- *)     val      : UNSIGNEDLONG;
+                 (* EIN/ -- *)     base     : CARDINAL;
+                 (* EIN/ -- *)     signed   : BOOLEAN;
+                 (* EIN/ -- *) REF expected : ARRAY OF CHAR );
+BEGIN
+ IF signed THEN
+   ltoa(CAST(SIGNEDLONG,val), ADR(cbuf), base);
+ ELSE
+   ultoa(val, ADR(cbuf), base);
+ END;
+ IF ~Equal(cbuf, expected) THEN
+   WriteString(proc);
+   WriteString(": expected: '");
+   WriteString(expected);
+   WriteString("', got: '");
+   WriteString(cbuf);
+   WriteString("'.");
+   WriteLn;
+   ERROR := TRUE;
+ END;
+END tltoa;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE tqsort ((* EIN/ -- *) REF proc   : ARRAY OF CHAR;
+                  (* EIN/ -- *)     maxlen : SIGNEDWORD;
+                  (* EIN/ -- *)     fill   : FillProc   );
+
+VAR __REG__ len : SIGNEDWORD;
+    __REG__ i   : SIGNEDWORD;
+
+PROCEDURE WriteMsg (i, len : SIGNEDWORD; REF msg : ARRAY OF CHAR);
+BEGIN
+ ClearBusy;
+ WriteLn;
+ WriteString(msg); WriteLn;
+ WriteString("BEFORE: "); WriteInt(BEFORE, 1); WriteLn;
+ WriteString(" AFTER: "); WriteInt(AFTER, 1); WriteLn;
+ WriteString("   len: "); WriteInt(VAL(SIGNEDLONG,len), 1); WriteLn;
+ WriteString("lbuf["); WriteInt(VAL(SIGNEDLONG,i), 1); WriteString("]: ");
+ WriteInt(VAL(SIGNEDLONG,lbuf[i]), 1); WriteString(" (expected: ");
+ WriteInt(VAL(SIGNEDLONG,lbuf2[i]), 1); Write(')');
+ WriteLn;
+ Read(ch);
+END WriteMsg;
+
+BEGIN
+ WriteString(proc); Write(' ');
+ FOR len := 0 TO maxlen DO
+   Busy;
+   FOR i := 0 TO BEFORE-1 DO
+     lbuf[i] := VAL(UNSIGNEDLONG,i);
+   END;
+   FOR i := 0 TO len - 1 DO
+     lbuf[i+BEFORE] := fill(i, len);
+   END;
+   FOR i:=0 TO AFTER-1 DO
+     lbuf[i+len+BEFORE] := VAL(UNSIGNEDLONG,i);
+   END;
+   FOR i := BEFORE+len+AFTER TO MAXLBUF DO
+     lbuf[i] := LPATTERN;
+   END;
+   lbuf2 := lbuf;
+   SlowSort(BEFORE, BEFORE+len-1, lbuf2);
+   qsort(ADR(lbuf[BEFORE]), VAL(UNSIGNEDLONG,len), VAL(UNSIGNEDLONG,TSIZE(UNSIGNEDLONG)), cmp);
+   FOR i:=0 TO BEFORE-1 DO
+     IF lbuf[i] # VAL(UNSIGNEDLONG,i) THEN
+       WriteMsg(i, len, "*** lbuf[i=0..BEFORE-1]:");
+       RETURN;
+     END;
+   END;
+   FOR i:=BEFORE TO BEFORE+len-1 DO
+     IF lbuf[i] # lbuf2[i] THEN
+       WriteMsg(i, len, "*** lbuf[i=BEFORE..BEFORE+len-1]:");
+       RETURN;
+     END;
+   END;
+   FOR i:=BEFORE+len TO BEFORE+len+AFTER-1 DO
+     IF lbuf[i] # VAL(UNSIGNEDLONG,i-len-BEFORE) THEN
+       WriteMsg(i, len, "*** lbuf[i=BEFORE+len..BEFORE+len+AFTER-1]:");
+       RETURN;
+     END;
+   END;
+   FOR i := BEFORE+len+AFTER TO MAXLBUF DO
+     IF lbuf[i] # LPATTERN THEN
+       WriteMsg(i, len, "*** lbuf[i=BEFORE+len+AFTER..MAXLBUF]:");
+       RETURN;
+     END;
+   END;
+ END;
+ ClearBusy;
+ WriteString("OK");
+ WriteLn;
+END tqsort;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE initsearch;
+VAR __REG__ i : SIGNEDWORD;
+BEGIN
+ FOR i:=0 TO BEFORE-1 DO
+   lbuf[i] := 0;
+ END;
+ FOR i:=BEFORE TO BEFORE+MAXLEN-1 DO
+   lbuf[i] := VAL(UNSIGNEDLONG,i+i);
+ END;
+ FOR i:=BEFORE+MAXLEN TO BEFORE+MAXLEN+AFTER-1 DO
+   lbuf[i] := (BEFORE+MAXLEN)*2+AFTER;
+ END;
+END initsearch;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE tsearch ((* EIN/ -- *) REF proc     : ARRAY OF CHAR;
+                   (* EIN/ -- *)     bin      : BOOLEAN;
+                   (* EIN/ -- *)     element  : UNSIGNEDLONG;
+                   (* EIN/ -- *)     expected : ADDRESS      );
+
+VAR place : ADDRESS;
+
+BEGIN
+ IF bin THEN
+   place := bsearch(ADR(element), ADR(lbuf[BEFORE]), MAXLEN, 4, cmp);
+ ELSE
+   place := lfind(ADR(element), ADR(lbuf[BEFORE]), MAXLEN, 4, cmp);
+ END;
+ IF place # expected THEN
+   ultoa(CAST(UNSIGNEDLONG,expected), ADR(cbuf), 16);
+   WriteString(proc);
+   WriteString(": expected: '$");
+   WriteString(cbuf);
+   WriteString("', got: '$");
+   ultoa(CAST(UNSIGNEDLONG,place), ADR(cbuf), 16);
+   WriteString(cbuf);
+   WriteString("'.");
+   WriteLn;
+   ERROR := TRUE;
+ END;
+END tsearch;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE action;
+BEGIN
+ WriteString("action ");
+ longjmp(jmpbuf, LONGJUMPVAL);
+END action;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE tjump;
+
+VAR localvar : UNSIGNEDLONG;
+    jumped   : BOOLEAN;
+    val      : INTEGER;
+
+BEGIN
+ jumped   := FALSE;
+ localvar := LOCALVAL;
+
+ val := setjmp(jmpbuf);
+ IF val = 0 THEN
+   WriteString("setjmp ");
+   action;
+ ELSE
+   WriteString("longjmp ");
+   jumped := TRUE;
+ END;
+ IF  jumped                   (* Ruecksprungadresse OK ? *)
+   & (val       = LONGJUMPVAL)(* Funktionswert OK ? *)
+   & (globalvar = GLOBALVAL)  (* Zeiger auf globale Var. OK ? *)
+   & (localvar  = LOCALVAL)   (* Zeiger auf lokale Var. OK ? *)
+ THEN
+   WriteString("OK");
+ ELSE
+   (* Wohl eher Absturz... *)
+   WriteString("**failed**");
+ END;
+ WriteLn;
+END tjump;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE talloc;
+
+CONST ALLOCSIZE = 256;
+
+VAR sp1   : ADDRESS;
+    sp2   : ADDRESS;
+    old1  : ADDRESS;
+    old2  : ADDRESS;
+    res1  : ADDRESS;
+    res2  : ADDRESS;
+
+
+BEGIN
+ WriteString("memalloc: ");
+ GETREGADR(15, sp1);
+ memalloc(ALLOCSIZE, old1, res1);
+ ERROR := (sp1 # old1) OR (SUBADR(sp1, ALLOCSIZE) # res1);
+ GETREGADR(15, sp2);
+ ERROR := ERROR OR (sp2 # res1);
+
+ memalloc(ALLOCSIZE, old2, res2);
+ ERROR := ERROR OR (sp2 # old2) OR (SUBADR(sp2, ALLOCSIZE) # res2);
+ GETREGADR(15, sp2);
+ ERROR := ERROR OR (sp2 # res2);
+ IF ERROR THEN
+   WriteString("**failed**");
+ ELSE
+   WriteString("OK"); WriteLn;
+   WriteString("memdealloc: ");
+   memdealloc(old1);
+   GETREGADR(15, sp2);
+   IF sp1 # sp2 THEN
+     WriteString("**failed**");
+   ELSE
+     WriteString("OK");
+   END;
+   WriteLn;
+ END;
+ WriteLn;
+END talloc;
+
+(*===========================================================================*)
+
+BEGIN
+ BusyBuf   := "-\|/";
+ BusyIdx   := 0;
+ globalvar := GLOBALVAL;
+
+
+ tmemmove("memmove[SRC < DST, EVEN->EVEN]: ", 200 ,350, 300);
+ tmemmove("memmove[SRC < DST, EVEN->ODD]: ", 200, 351, 300);
+ tmemmove("memmove[SRC < DST, ODD->EVEN]: ", 201, 350, 300);
+ tmemmove("memmove[SRC < DST, ODD->ODD]: ", 201, 351, 300);
+ tmemmove("memmove[SRC > DST, EVEN->EVEN]: ", 350, 200, 300);
+ tmemmove("memmove[SRC > DST, EVEN->ODD]: ", 350, 201, 300);
+ tmemmove("memmove[SRC > DST, ODD->EVEN]: ", 351, 200, 300);
+ tmemmove("memmove[SRC > DST, ODD->ODD]: ", 351, 201, 300);
+
+ tmemset("memset[EVEN]: ", 200, 300);
+ tmemset("memset[ODD]: ", 201, 300);
+
+ tmemfill("memfill[EVEN]: ", 200, 300);
+ tmemfill("memfill[ODD]: ", 201, 300);
+
+ tmemswap("memswap[EVEN -> EVEN]: ", 200, 300, 60);
+ tmemswap("memswap[EVEN -> ODD]: ", 200, 301, 60);
+ tmemswap("memswap[ODD -> EVEN]: ", 201, 300, 60);
+ tmemswap("memswap[ODD -> ODD]: ", 201, 301, 60);
+
+ tmemchr("memchr: ");
+
+ tmemcmp("memcmp[EVEN -> EVEN]: ", 200, 300, 60);
+ tmemcmp("memcmp[EVEN -> ODD]: ", 200, 301, 60);
+ tmemcmp("memcmp[ODD -> EVEN]: ", 201, 300, 60);
+ tmemcmp("memcmp[ODD -> ODD]: ", 201, 301, 60);
+
+ tqsort("qsort[INC]: ", MAXLEN, fillinc); (* bereits aufsteigend sortiertes Feld *)
+ tqsort("qsort[DEC]: ", MAXLEN, filldec); (* bereits absteigend sortiertes Feld *)
+ tqsort("qsort[RND]: ", MAXLEN, fillrnd); (* Zufallszahlen *)
+
+
+ ERROR := FALSE;
+ tltoa("ltoa", 0, 10, TRUE, "0");
+ tltoa("ltoa", MAXLINT, 10, TRUE, "2147483647");
+ tltoa("ltoa", MAXLINT, 16, TRUE, "7fffffff");
+ tltoa("ltoa", MINLINT, 10, TRUE, "-2147483648");
+ tltoa("ltoa", MINLINT, 16, TRUE, "80000000");
+ tltoa("ltoa", MAXLCARD, 10, TRUE, "-1");
+ tltoa("ltoa", MAXLCARD, 16, TRUE, "ffffffff");
+ OK("ltoa");
+
+ ERROR := FALSE;
+ tltoa("ultoa", 0, 10, FALSE, "0");
+ tltoa("ultoa", MAXLINT, 10, FALSE, "2147483647");
+ tltoa("ultoa", MAXLINT, 16, FALSE, "7fffffff");
+ tltoa("ultoa", MINLINT, 10, FALSE, "2147483648");
+ tltoa("ultoa", MINLINT, 16, FALSE, "80000000");
+ tltoa("ultoa", MAXLCARD, 10, FALSE, "4294967295");
+ tltoa("ultoa", MAXLCARD, 16, FALSE, "ffffffff");
+ OK("ultoa");
+
+ initsearch;
+ ERROR := FALSE;
+ tsearch("bsearch", TRUE, 0, NULL); (* vor dem Feld *)
+ tsearch("bsearch", TRUE, (BEFORE+5)*2, ADR(lbuf[BEFORE+5])); (* gerade Zahl *)
+ tsearch("bsearch", TRUE, (BEFORE+5)*2+1, NULL); (* ungerade Zahl *)
+ tsearch("bsearch", TRUE, (BEFORE+MAXLEN)*2+AFTER, NULL); (* hinter dem Feld *)
+ OK("bsearch");
+
+ ERROR := FALSE;
+ tsearch("lfind", FALSE, 0, NULL); (* vor dem Feld *)
+ tsearch("lfind", FALSE, (BEFORE+5)*2, ADR(lbuf[BEFORE+5])); (* gerade Zahl *)
+ tsearch("lfind", FALSE, (BEFORE+5)*2+1, NULL); (* ungerade Zahl *)
+ tsearch("lfind", FALSE, (BEFORE+MAXLEN)*2+AFTER, NULL); (* hinter dem Feld *)
+ OK("lfind");
+
+ tjump;
+
+ talloc;
+END tlib.

@@ -1,0 +1,319 @@
+MODULE ListDir;
+__IMP_SWITCHES__
+__DEBUG__
+#ifdef HM2
+#ifdef __LONG_WHOLE__
+(*$!i+: Modul muss mit $i- uebersetzt werden! *)
+(*$!w+: Modul muss mit $w- uebersetzt werden! *)
+#else
+(*$!i-: Modul muss mit $i+ uebersetzt werden! *)
+(*$!w-: Modul muss mit $w+ uebersetzt werden! *)
+#endif
+#endif
+(* Test und Anwendungsbeispiel fuer die Verzeichnisprozeduren
+ *
+ * Benutzung: listdir [ Muster [ Verzeichnis ... ]]
+ *
+ * Vorsicht beim Aufruf in einer Kommandoshell: Das Muster muss hier
+ * ``gequoted'' werden!
+ * Bei der Angabe des Musters ist zu beachten, dass zwischen Gross- und
+ * Kleinschreibung unterschieden wird.
+ *
+ * Die Variablen fuer Pfade und Dateinamen sind der Einfachheit halber
+ * alle statisch. In einem richtigen Programm muesste die maximale
+ * Laenge der Pfade und Dateinamen mit "pathconf()" ermittelt
+ * und dann entsprechend Speicher dynamisch angefordert werden.
+ *
+ * 29-Mai-94, Holger Kleinschmidt
+ *)
+
+#if (defined MM2) && (defined __DEBUG_CODE__)
+IMPORT Debug;
+#endif
+
+VAL_INTRINSIC
+CAST_IMPORT
+PTR_ARITH_IMPORT
+
+FROM SYSTEM IMPORT
+(* TYPE *) ADDRESS,
+(* PROC *) ADR;
+
+FROM PORTAB IMPORT
+(* CONST*) NULL,
+(* TYPE *) WORDSET, SIGNEDWORD, UNSIGNEDWORD, UNSIGNEDLONG;
+
+IMPORT e;
+
+FROM types IMPORT
+(* CONST*) PATHMAX, EOS,
+(* TYPE *) FileName, PathName, StrPtr, offT;
+
+FROM file IMPORT
+(* TYPE *) FileModes, modeT, StatRec,
+(* PROC *) stat, lstat, sISCHR, sISDIR, sISBLK, sISREG, sISFIFO, sISLNK;
+
+FROM dir IMPORT
+(* TYPE *) DIR, DirentPtr, DirentRec,
+(* PROC *) opendir, readdir, rewinddir, closedir, telldir, readlink;
+
+FROM proc IMPORT
+(* PROC *) chdir, getcwd;
+
+FROM cmdline IMPORT
+(* PROC *) ArgCount, GetArg;
+
+FROM cstr IMPORT
+(* PROC *) AssignCToM2, strerror;
+
+FROM pSTRING IMPORT
+(* PROC *) COMPARE;
+
+FROM POSIX2 IMPORT
+(* TYPE *) FNMFlags,
+(* PROC *) fnmatch;
+
+FROM lib IMPORT
+(* PROC *) qsort;
+
+FROM InOut IMPORT
+(* PROC *) Read, Write, WriteString, WriteLn, WriteCard;
+
+FROM pOUT IMPORT
+(* PROC *) PutCard;
+
+(*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*)
+
+CONST
+  MAXCOUNT = 511;
+
+VAR
+  CWD   : PathName;
+  list  : ARRAY [0..MAXCOUNT] OF RECORD
+            name : FileName;
+            off  : offT;
+          END;
+
+(*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*)
+#ifdef HM2
+(*$E+ Prozedur als Parameter erlaubt *)
+#endif
+PROCEDURE CompStr ((* EIN/ -- *) cmp1 : ADDRESS;
+                   (* EIN/ -- *) cmp2 : ADDRESS ): INTEGER;
+
+VAR p1, p2 : POINTER TO FileName;
+
+BEGIN
+ p1 := cmp1;
+ p2 := cmp2;
+ RETURN(COMPARE(p1^, p2^));
+END CompStr;
+#ifdef HM2
+(*$E=*)
+#endif
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE DoList ((* EIN/ -- *) dir     : PathName;
+                  (* EIN/ -- *) pattern : ARRAY OF CHAR );
+
+CONST SEP = "==============================================";
+
+VAR void    : INTEGER;
+    dirp    : DIR;
+    dp      : DirentPtr;
+    count   : SIGNEDWORD;
+    i       : SIGNEDWORD;
+    symlink : BOOLEAN;
+    errstr  : ARRAY [0..40] OF CHAR;
+    attr    : ARRAY [0..11] OF CHAR;
+    st      : StatRec;
+    t       : CHAR;
+    total   : offT;
+    offset  : offT;
+    file    : FileName;
+    link    : PathName;
+    llen    : INTEGER;
+
+BEGIN
+  WriteString("Dateimuster: "); WriteString(pattern); WriteLn;
+  WriteString("Verzeichnis: "); WriteString(dir); WriteLn;
+
+  dirp := opendir(dir);
+  IF dirp = NULL THEN
+    AssignCToM2(strerror(e.errno), 0, errstr);
+    WriteString("opendir: "); WriteString(errstr); WriteLn;
+    RETURN;
+  END;
+
+  count  := 0;
+  offset := telldir(dirp);
+  dp     := readdir(dirp);
+  WHILE dp <> NULL DO
+    AssignCToM2(dp^.dName, 0, file);
+    IF fnmatch(file, pattern, FNMFlags{}) = 0 THEN
+      IF count < MAXCOUNT THEN
+        list[count].name := file;
+        list[count].off  := offset;
+        INC(count);
+      ELSE
+        void := closedir(dirp);
+        void := chdir(CWD);
+        WriteString("DoList: tab overflow"); WriteLn;
+        RETURN;
+      END;
+    END; (* IF fnmatch() *)
+    offset := telldir(dirp);
+    dp     := readdir(dirp);
+  END;
+  void := closedir(dirp);
+
+  qsort(ADR(list),
+        VAL(UNSIGNEDLONG,count),
+        VAL(UNSIGNEDLONG,ABS(DIFADR(ADR(list[1]), ADR(list[0])))),
+        CompStr);
+
+  WriteString("  # Dateien: "); WriteCard(VAL(CARDINAL,count), 0); WriteLn;
+  WriteLn;
+  WriteString(" inode       attr lnk  uid  gid   pos     size"); WriteLn;
+  WriteString(SEP); WriteLn;
+  void  := chdir(dir); (* damit "lstat()" die Dateien findet *)
+  total := 0;
+  FOR i := 0 TO count - 1 DO
+    IF lstat(list[i].name, st) < 0 THEN
+      AssignCToM2(strerror(e.errno), 0, errstr);
+      WriteString("lstat: "); WriteString(list[i].name); WriteString(": ");
+      WriteString(errstr); WriteLn;
+    ELSE
+      WITH st DO
+        attr    := " ----------";
+        t       := ' ';
+        symlink := FALSE;
+
+        IF sISREG(stMode) THEN
+          IF sIXUSR IN stMode THEN
+            t := '*';
+          END;
+        ELSIF sISDIR(stMode) THEN
+          attr[1] := 'd'; t := '/';
+        ELSIF sISCHR(stMode) THEN
+          attr[1] := 'c';
+        ELSIF sISLNK(stMode) THEN
+          attr[1] := 'l'; symlink := TRUE;
+        ELSIF sISFIFO(stMode) THEN
+          attr[1] := 'p'; t := '|';
+        ELSIF sISBLK(stMode) THEN
+          attr[1] := 'b';
+        ELSE
+          attr[1] := '?';
+        END;
+
+        IF sIRUSR IN stMode THEN
+          attr[2] := 'r';
+        END;
+        IF sIRGRP IN stMode THEN
+          attr[5] := 'r';
+        END;
+        IF sIROTH IN stMode THEN
+          attr[8] := 'r';
+        END;
+        IF sIWUSR IN stMode THEN
+          attr[3] := 'w';
+        END;
+        IF sIWGRP IN stMode THEN
+          attr[6] := 'w';
+        END;
+        IF sIWOTH IN stMode THEN
+          attr[9] := 'w';
+        END;
+        IF sIXUSR IN stMode THEN
+          attr[4] := 'x';
+        END;
+        IF sIXGRP IN stMode THEN
+          attr[7] := 'x';
+        END;
+        IF sIXOTH IN stMode THEN
+          attr[10] := 'x';
+        END;
+        PutCard(stIno, 6);
+        WriteString(attr);
+        Write(' ');
+        WriteCard(VAL(CARDINAL,stNlink), 3);
+        Write(' ');
+        WriteCard(VAL(CARDINAL,stUid), 4);
+        Write(' ');
+        WriteCard(VAL(CARDINAL,stGid), 4);
+        Write(' ');
+        WriteCard(VAL(CARDINAL,list[i].off), 5);
+        Write(' ');
+        PutCard(stSize, 8);
+        INC(total, stSize);
+        Write(' ');
+        WriteString(list[i].name); Write(t);
+        IF symlink THEN
+          WriteString("-> ");
+          llen := readlink(list[i].name, CAST(StrPtr,ADR(link)), PATHMAX);
+          IF llen < 0 THEN
+            AssignCToM2(strerror(e.errno), 0, errstr);
+            WriteString("readlink: "); WriteString(errstr);
+          ELSE
+            link[VAL(UNSIGNEDWORD,llen)] := EOS;
+            WriteString(link);
+            IF stat(list[i].name, st) < 0 THEN
+              AssignCToM2(strerror(e.errno), 0, errstr);
+              WriteString("stat: "); WriteString(errstr);
+            ELSIF sISREG(stMode) AND (sIXUSR IN stMode) THEN
+              Write('*');
+            ELSIF sISDIR(stMode) THEN
+              Write('/');
+            ELSIF sISFIFO(stMode) THEN
+              Write('|');
+            END;
+          END;
+        END;
+        WriteLn;
+      END; (* WITH *)
+    END; (* IF lstat *)
+  END; (* FOR *)
+  WriteString(SEP); WriteLn;
+  PutCard(total, 46);
+  WriteString(" Bytes total"); WriteLn;
+  void := chdir(CWD);
+END DoList;
+
+(*===========================================================================*)
+
+VAR
+  voidp : StrPtr;
+  i     : INTEGER;
+  ch    : CHAR;
+  argc  : INTEGER;
+  DIRS  : PathName;
+  PAT   : PathName;
+
+BEGIN
+  voidp := getcwd(CAST(StrPtr,ADR(CWD)), PATHMAX+1);
+  WriteString("akt. Verzeichnis: ");
+  WriteString(CWD);
+  WriteLn;
+  WriteLn;
+
+  DIRS := ".";
+  PAT  := "*";
+
+  argc := ArgCount();
+  IF argc <= 1 THEN
+    DoList(DIRS, PAT);
+  ELSIF argc <= 2 THEN
+    GetArg(1, PAT);
+    DoList(DIRS, PAT);
+  ELSE
+    GetArg(1, PAT);
+    FOR i := 2 TO argc - 1 DO
+      GetArg(i, DIRS);
+      DoList(DIRS, PAT);
+      WriteLn;
+    END;
+  END;
+  Read(ch);
+END ListDir.

@@ -1,0 +1,786 @@
+MODULE Snow;
+
+(*----------------------------------------------------------------------------
+ * System-Version: MOS 3.5
+ *----------------------------------------------------------------------------
+ * Version       : 1.0
+ *----------------------------------------------------------------------------
+ * Text-Version  : V#00034
+ *----------------------------------------------------------------------------
+ * Modul-Holder  : Meinolf Schneider
+ *----------------------------------------------------------------------------
+ * Copyright July 1990 by Digital Art Meinolf Schneider
+ *----------------------------------------------------------------------------
+ * MS  : Meinolf Schneider
+ *----------------------------------------------------------------------------
+ * Datum    Autor Version Bemerkung (Arbeitsbericht)
+ *----------------------------------------------------------------------------
+ * 27.07.90 MS    1.0     Grundversion
+ *----------------------------------------------------------------------------
+ * Modul-Beschreibung:
+ *
+ * Residentes Gimmick-Programm fr Atari ST mit monochromen Monitor, bei dem
+ * Schneefall und Vereisung simuliert wird. Die Vereisung kann mit einem
+ * Eiskratzer entfernt werden.
+ *----------------------------------------------------------------------------
+ *) (*$S-,R-,C-,N+,M-*)
+
+
+FROM    System          IMPORT  ADDRESS, ADR, BYTE;
+
+FROM    MSSystems       IMPORT  MinMaxRandom, EnterSupervisorMode,
+                                Allocate;
+
+FROM    MSGraphics      IMPORT  Sprite, CopyScreen, Switch, SwitchSides,
+                                DisplayScreen, WorkScreen,
+                                DrawText, GetSystemScreen, FillScreen,
+                                ClearScreen;
+
+FROM    MSMouse         IMPORT  MouseRec, ReadMouse;
+
+FROM    MSSounds        IMPORT  Sound, StartASound, StopASound, NewSound,
+                                ASoundIsActive, SetSampleFrequency;
+
+
+CONST   PicFreq                 =       4; (* Alle vier VBLs ein Bild malen *)
+        PicsPerSec              =       72 DIV PicFreq;
+         
+        sTRUE                   =       BYTE ( $00 );
+        sFALSE                  =       BYTE ( $FF );
+        
+        TitleTime               =       3 * 60 * PicsPerSec;
+                                        (* 3 Minuten *)
+        SnowBegin               =       60 * PicsPerSec;
+                                        (* 1 Minute *)
+        
+        MaxNoOfSnowFlakes       =       200;
+ 
+ 
+TYPE     Bool            =       BYTE; (* 00=FALSE, FF=TRUE *)
+         
+         SnowFlake       =       RECORD
+                                  IsThere                       : Bool;
+                                  
+                                  WordPosition                  : CARDINAL;
+                                  FallOffset                    : CARDINAL;
+                                  (* Offset in Bytes fr neue Fallposition der
+                                   * Schneeflocke *)
+                                  
+                                  HorPosition                   : CARDINAL;
+                                  HorCenterLongWordPosition     : CARDINAL;
+                                  
+                                  ThreePointPattern             : LONGCARD;
+                                  OnePointPattern               : LONGCARD;
+                                
+                                  CheckANDPattern               : LONGCARD;
+                                  CheckStopValue                : LONGCARD;
+                                  CheckRightFallValue           : LONGCARD;
+                                  CheckLeftFallValue            : LONGCARD;
+                                  CheckRightLeftOrStopValue     : LONGCARD;
+                                END;
+ 
+ 
+VAR     VBLStack                : ARRAY[0..99] OF CARDINAL;
+        VBLTimer                : CARDINAL;
+        OldVBLIRQ               : ADDRESS;
+        
+        TOSScreen               : ADDRESS;
+        
+        TOSScreenOnDisplay      : BOOLEAN;
+        DirectTOSScreenShow     : BOOLEAN;
+        
+        SnowScreen              : ADDRESS;
+        SnowSpriteList          : ADDRESS;
+        
+        SnowRate                : CARDINAL;
+        (* 0 = jedes mal eine neue Schneeflocke
+         * x = M”glichkeit einer neuer Schneeflocke 1:x
+         *)
+        SnowFlakes              : ARRAY[0..MaxNoOfSnowFlakes] OF SnowFlake;
+        SnowLines               : ARRAY[0..400] OF Byte;
+        SnowThere               : BOOLEAN;
+        (* TRUE, wenn es anf„ngt zu schneien *)
+        SnowWait                : CARDINAL;
+        (* Wartezeit, bis es anf„ngt zu schneien *)
+        
+        ShowTitle               : BOOLEAN;
+        (* TRUE, wenn die Copyright-Meldung zu sehen ist. *)
+        TitleWasThere           : BOOLEAN;
+        (* TRUE, wenn die Copyright-Meldung zu sehen war. *)
+        TitleTimer              : CARDINAL;
+        
+        ScratchSoundADR         : ADDRESS;
+        ScratchSound            : Sound;
+        
+        IceScratchThere         : BOOLEAN;
+        MyMouse                 : MouseRec;
+        
+        
+(*---------------------------------------------------------------------------*)
+
+TABLE.L  TabSnowSpriteList:
+         $0000061C, $00028000, $00000010, $00000460, $FFF7FFF7, $00120012,
+         $00080001, $0000004C, $0000008A, $000000C8, $00000106, $00000144,
+         $00000182, $000001C0, $000001FE, $0000024E, $0000028C, $000002CA,
+         $00000308, $00000346, $00000384, $000003C2, $00000400, $0000003E,
+         $00030012, $00010107, $071E1D7A, $756A351A, $0D060301, $000000C0,
+         $E0B058AC, $56AB55AA, $55AB56AC, $58B0E000, $00000000, $00000000,
+         $80808000, $00000000, $00000000, $003E0003, $00120000, $0003030F,
+         $0E3D3A35, $1A0D0603, $01000000, $00E0F0D8, $AC56AB55, $AA55AA55,
+         $AB56ACD8, $70000000, $00000000, $0080C040, $C0800000, $00000000,
+         $0000003E, $00030012, $00000001, $0107071E, $1D1A0D06, $03010000,
+         $00000070, $78ECD6AB, $55AA55AA, $55AA55AB, $D66C3800, $00000000,
+         $000080C0, $60A060C0, $80000000, $00000000, $003E0003, $00120000,
+         $00000003, $030F0E0D, $06030100, $00000000, $00383CF6, $EBD5AA55,
+         $AA55AA55, $AAD56B36, $1C000000, $00000080, $C060B050, $B060C080,
+         $00000000, $0000003E, $00030012, $00000000, $00010107, $07060301,
+         $00000000, $0000001C, $1E7B75EA, $D5AA55AA, $55AAD56A, $351B0E00,
+         $00000000, $80C060B0, $58A858B0, $60C08000, $00000000, $003E0003,
+         $00120000, $00000000, $00030303, $01000000, $00000000, $000E0F3D,
+         $3AF5EAD5, $AA55AAD5, $6A351A0D, $07000000, $0080C060, $B058AC54,
+         $AC58B060, $C0800000, $0000003E, $00030012, $00000000, $00000001,
+         $01010000, $00000000, $00000007, $071E1D7A, $75EAD5AA, $D56A351A,
+         $0D060300, $000080C0, $60B058AC, $56AA56AC, $58B060C0, $80000000,
+         $00500004, $00120000, $00000000, $00000000, $00000000, $00000000,
+         $0003030F, $0E3D3AF5, $EAD56A35, $1A0D0603, $01000080, $C060B058,
+         $AC56AB55, $AB56AC58, $B060C000, $00000000, $00000000, $00000000,
+         $00000000, $00000000, $003E0003, $0012FCFC, $F0F0C0C0, $00000000,
+         $0080C0E0, $F0F8FCFE, $1F0F0703, $01000000, $00000000, $00000103,
+         $070FFFFF, $FFFFFFFF, $7F3F3F3F, $3F3F7FFF, $FFFFFFFF, $0000003E,
+         $00030012, $FEFEF8F8, $E0E08080, $808080C0, $E0F0F8FC, $FEFF0F07,
+         $03010000, $00000000, $00000000, $00010307, $FFFFFFFF, $FF7F3F1F,
+         $1F1F1F1F, $3F7FFFFF, $FFFF0000, $003E0003, $0012FFFF, $FCFCF0F0,
+         $C0C0C0C0, $C0E0F0F8, $FCFEFFFF, $07030100, $00000000, $00000000,
+         $00000000, $0183FFFF, $FFFF7F3F, $1F0F0F0F, $0F0F1F3F, $7FFFFFFF,
+         $0000003E, $00030012, $FFFFFEFE, $F8F8E0E0, $E0E0E0F0, $F8FCFEFF,
+         $FFFF8381, $00000000, $00000000, $00000000, $000080C1, $FFFFFF7F,
+         $3F1F0F07, $07070707, $0F1F3F7F, $FFFF0000, $003E0003, $0012FFFF,
+         $FFFFFCFC, $F0F0F0F0, $F0F8FCFE, $FFFFFFFF, $C1C00000, $00000000,
+         $00000000, $00000080, $C0E0FFFF, $7F3F1F0F, $07030303, $0303070F,
+         $1F3F7FFF, $0000003E, $00030012, $FFFFFFFF, $FEFEF8F8, $F8F8F8FC,
+         $FEFFFFFF, $FFFFE0E0, $80800000, $00000000, $00000000, $80C0E0F0,
+         $FF7F3F1F, $0F070301, $01010101, $03070F1F, $3F7F0000, $003E0003,
+         $0012FFFF, $FFFFFFFF, $FCFCFCFC, $FCFEFFFF, $FFFFFFFF, $F0F0C0C0,
+         $00000000, $00000000, $0080C0E0, $F0F87F3F, $1F0F0703, $01000000,
+         $00000103, $070F1F3F, $00000050, $00040012, $FFFFFFFF, $FFFFFEFE,
+         $FEFEFEFF, $FFFFFFFF, $FFFFF8F8, $E0E08080, $00000000, $000080C0,
+         $E0F0F8FC, $3F1F0F07, $03010000, $00000000, $00010307, $0F1FFFFF,
+         $FFFFFFFF, $FF7F7F7F, $7F7FFFFF, $FFFFFFFF, $FFF7FFF7, $00080008,
+         $00080001, $0000004C, $0000005C, $00000074, $0000008C, $000000A4,
+         $000000BC, $000000D4, $000000EC, $00000104, $00000114, $0000012C,
+         $00000144, $0000015C, $00000174, $0000018C, $000001A4, $00000010,
+         $00010008, $03030C0C, $3030C0C0, $00000018, $00020008, $01010606,
+         $18186060, $80800000, $00000000, $00000018, $00020008, $00000303,
+         $0C0C3030, $C0C00000, $00000000, $00000018, $00020008, $00000101,
+         $06061818, $60608080, $00000000, $00000018, $00020008, $00000000,
+         $03030C0C, $3030C0C0, $00000000, $00000018, $00020008, $00000000,
+         $01010606, $18186060, $80800000, $00000018, $00020008, $00000000,
+         $00000303, $0C0C3030, $C0C00000, $00000018, $00020008, $00000000,
+         $00000101, $06061818, $60608080, $00000010, $00010008, $FCFCF3F3,
+         $CFCF3F3F, $00000018, $00020008, $FEFEF9F9, $E7E79F9F, $7F7FFFFF,
+         $FFFFFFFF, $00000018, $00020008, $FFFFFCFC, $F3F3CFCF, $3F3FFFFF,
+         $FFFFFFFF, $00000018, $00020008, $FFFFFEFE, $F9F9E7E7, $9F9F7F7F,
+         $FFFFFFFF, $00000018, $00020008, $FFFFFFFF, $FCFCF3F3, $CFCF3F3F,
+         $FFFFFFFF, $00000018, $00020008, $FFFFFFFF, $FEFEF9F9, $E7E79F9F,
+         $7F7FFFFF, $00000018, $00020008, $FFFFFFFF, $FFFFFCFC, $F3F3CFCF,
+         $3F3FFFFF, $00000018, $00020008, $FFFFFFFF, $FFFFFEFE, $F9F9E7E7,
+         $9F9F7F7F;
+         
+         TabScratchSound:
+         $7F7F7F7F, $7F7F8080, $80808080, $81828282, $83848484, $86868889,
+         $898A8B8C, $8D8E9091, $92929496, $97979899, $9A9B9C9D, $9E9E9E9F,
+         $A0A1A2A4, $A5A7A8A9, $A9AAACAC, $AEAFB2B4, $B7BABCBE, $C2C5C9CC,
+         $D0D4D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8,
+         $D8D8D8D8, $D8D8D8D4, $CCC5C1BD, $BDBDBFC1, $C3C5C9CF, $D6D8D8D8,
+         $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D2D4D8D8, $D8D8D8D8, $D8D8D8D8,
+         $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D2, $B596817E,
+         $8797A3A4, $9B8F898B, $92A2BAD0, $D8D8D8D8, $D4BCA08B, $7E777576,
+         $7A7F8382, $7E808B96, $A7A6977B, $502D2727, $375A788D, $97928E94,
+         $A5B3BABC, $C1D3D8D8, $D8D8D8D8, $D8C5B2B0, $B7C2D1D8, $D8D8D8D8,
+         $D09E7567, $80B1CDCB, $C0B6AEA5, $94806242, $2F344559, $68696358,
+         $4236342B, $27272727, $3A779C81, $46272727, $27577E73, $634B3B38,
+         $46482A27, $2727347D, $BCC8B092, $77574654, $5E56698B, $9C896E47,
+         $27272727, $27272727, $27273B52, $6C7C5227, $2727272D, $739FA27E,
+         $67524D40, $34364341, $272B4881, $9981582B, $27273B6C, $81705B55,
+         $6167798D, $A9AEB0B0, $BEC38C52, $2A2A3546, $6E878C89, $7A643C28,
+         $27272728, $47798A57, $2C272727, $27272D46, $5D8DCCD5, $C3A9772F,
+         $27273862, $756C5E46, $2A272727, $27272738, $4D6C8F80, $7A603B39,
+         $608CB4D8, $D8BB7130, $27272727, $27272727, $27272727, $27272727,
+         $27272727, $27272727, $27272727, $27272727, $27272727, $283C363D,
+         $4A617D86, $68272727, $27272A28, $27272727, $27272727, $27272727,
+         $27272727, $27272727, $27272727, $27272727, $27272727, $27272727,
+         $27272727, $27272727, $27272727, $27272727, $27272727, $27272727,
+         $27272727, $27272727, $27272727, $27272A39, $2C272727, $27272727,
+         $27272727, $27272727, $27272727, $27272727, $27272727, $27272727,
+         $27272727, $27272727, $27272727, $27272727, $27272727, $27272838,
+         $28272727, $27272727, $27272727, $27272727, $27272727, $27272A38,
+         $28272727, $2728507A, $7A4E2727, $272A5C8B, $86584468, $A5C9B273,
+         $2F272738, $78B3D6D8, $D8D7B88A, $65666C56, $41364472, $B7D8D8CA,
+         $8C645962, $7A8F9EAC, $C7D8D8D8, $BB90777A, $8B9FA79D, $866F6264,
+         $625D5756, $5771A0C8, $D8D8D3AF, $868093B0, $C8CAB9A2, $9AA9BDCC,
+         $D0BD9772, $5956636D, $65493644, $77BED8D8, $D8D8D8D8, $D3CDD8D8,
+         $D8D7CAC6, $D4D8D8D8, $D8D8D0AD, $A2B6D6D8, $D8D8D8D8, $D8D8D8D8,
+         $D8D8D8D8, $D8D8D3AD, $94898074, $6C7389A8, $C8D8D8D8, $D8D8D8D8,
+         $D8D8BEAB, $ACC1D7D8, $D8D8D7CE, $C6BDB1A0, $908DA9D4, $D8D8D8D8,
+         $D8D4AE93, $8D9AB0C7, $D6D8D8D8, $D8D8D7CF, $CDD6D8D8, $D8D8D8D8,
+         $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8,
+         $D8D8D8D7, $D7D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8,
+         $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8,
+         $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8,
+         $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8,
+         $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8,
+         $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8,
+         $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8,
+         $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8,
+         $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8,
+         $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8,
+         $D8D8D8D8, $D8D8D8D8, $D6D4D2D0, $CDCBC8C6, $C5C3C1C0, $BEBDBCBB,
+         $BAB8B7B6, $B5B3B2B1, $B0AEADAC, $AAA9A7A5, $A2A1A09E, $9D9C9B9A,
+         $99989796, $94949290, $908E8D8C, $8B8A8988, $87868585, $84848300;
+
+
+         
+
+(*---------------------------------------------------------------------------*)
+  
+(*$L-*)
+PROCEDURE CopySnowScreen;
+BEGIN
+  ASSEMBLER
+  movem.l       A3-A6/D2-D7,-(A7)
+  
+  move.l        SnowScreen,A4
+  move.l        WorkScreen,A5
+  move.l        TOSScreen,A6
+  lea           SnowLines,A0
+  bra           NextLine
+  
+ !ED
+  movem.l       (A7)+,A3-A6/D2-D7
+  rts
+  
+ !NextLine
+  tst.b         (A0)+
+  bmi.s         ED
+ 
+  movem.l       (A4)+,D0-D3
+  movem.l       (A6)+,D4-D7
+  and.l         D0,D4
+  and.l         D1,D5
+  and.l         D2,D6
+  and.l         D3,D7
+  movem.l       D4-D7,(A5)
+  lea           16(A5),A5
+  
+  movem.l       (A4)+,D0-D3
+  movem.l       (A6)+,D4-D7
+  and.l         D0,D4
+  and.l         D1,D5
+  and.l         D2,D6
+  and.l         D3,D7
+  movem.l       D4-D7,(A5)
+  lea           16(A5),A5
+  
+  movem.l       (A4)+,D0-D3
+  movem.l       (A6)+,D4-D7
+  and.l         D0,D4
+  and.l         D1,D5
+  and.l         D2,D6
+  and.l         D3,D7
+  movem.l       D4-D7,(A5)
+  lea           16(A5),A5
+  
+  movem.l       (A4)+,D0-D3
+  movem.l       (A6)+,D4-D7
+  and.l         D0,D4
+  and.l         D1,D5
+  and.l         D2,D6
+  and.l         D3,D7
+  movem.l       D4-D7,(A5)
+  lea           16(A5),A5
+  
+  movem.l       (A4)+,D0-D3
+  movem.l       (A6)+,D4-D7
+  and.l         D0,D4
+  and.l         D1,D5
+  and.l         D2,D6
+  and.l         D3,D7
+  movem.l       D4-D7,(A5)
+  lea           16(A5),A5
+  
+  bra           NextLine
+  END;
+END CopySnowScreen;
+(*$L+*)
+
+
+(*$L-*)
+PROCEDURE DrawAndAnimateSnowFlakes;
+BEGIN
+  ASSEMBLER
+  movem.l       D6/D7/A4,-(A7)
+  
+  lea           SnowFlakes,A0
+  move.l        WorkScreen,A1
+  move.l        TOSScreen,A2
+  move.l        SnowScreen,A4
+  
+  move.w        #MaxNoOfSnowFlakes,D7
+ 
+ !NextSnowFlake
+  tst.b         SnowFlake.IsThere(A0)
+  beq.w         NewSnowFlake
+  
+  move.w        SnowFlake.FallOffset(A0),D6
+  add.w         SnowFlake.WordPosition(A0),D6
+  move.w        D6,SnowFlake.WordPosition(A0)
+  
+ !DrawSnowFlake ; --> auf die WorkScreen
+  move.l        SnowFlake.ThreePointPattern(A0),D1
+  and.l         D1,0(A1,D6.W)
+  move.l        SnowFlake.OnePointPattern(A0),D1
+  and.l         D1,-80(A1,D6.W)
+  and.l         D1,80(A1,D6.W)
+  
+  ; Testen, ob Schneeflocke liegen bleibt oder weiter f„llt:
+  move.l        80(A2,D6.W),D1  ; Zeile unter der Schneeflocke auf TOSScreen
+  and.l         SnowFlake.CheckANDPattern(A0),D1
+  beq.w         StopSnowFlake
+  cmp.l         SnowFlake.CheckStopValue(A0),D1
+  beq.w         StopSnowFlake
+  cmp.l         SnowFlake.CheckLeftFallValue(A0),D1
+  beq           SnowFlakeLeftFall
+  cmp.l         SnowFlake.CheckRightFallValue(A0),D1
+  beq           SnowFlakeRightFall
+  move.l        80(A4,D6.W),D1  ; Zeile unter der Schneeflocke auf SnowScreen
+  not.l         D1
+  and.l         SnowFlake.CheckANDPattern(A0),D1
+  cmp.l         SnowFlake.CheckStopValue(A0),D1
+  beq.w         StopSnowFlake
+  cmp.l         SnowFlake.CheckRightLeftOrStopValue(A0),D1
+  beq           SnowFlakeRightLeftOrStop
+  cmp.l         SnowFlake.CheckRightFallValue(A0),D1
+  beq           SnowFlakeRightFall
+  cmp.l         SnowFlake.CheckLeftFallValue(A0),D1
+  beq           SnowFlakeLeftFall
+  
+ !SnowFlakeGoon
+ !NoSnowFlakeChanges
+ !NoSnowFlake
+  lea           38(A0),A0
+  dbf           D7,NextSnowFlake
+  movem.l       (A7)+,A4/D6/D7
+  rts
+ 
+ 
+ !SnowFlakeLeftFall
+  ; Schneeflocke ein Pixel nach links schieben
+  subq.w        #1,SnowFlake.HorPosition(A0)
+  beq.w         NewSnowFlake
+  addq.w        #1,SnowFlake.HorCenterLongWordPosition(A0)
+  cmpi.w        #31,SnowFlake.HorCenterLongWordPosition(A0)
+  bne           SetUpPatterns
+  ; Wordberlauf:
+  subq.w        #2,SnowFlake.WordPosition(A0)
+  subi.w        #16,SnowFlake.HorCenterLongWordPosition(A0)
+  bra           SetUpPatterns
+ 
+ 
+ !SnowFlakeRightFall
+  ; Schneeflocke ein Pixel nach rechts schieben
+  addq.w        #1,SnowFlake.HorPosition(A0)
+  cmpi.w        #639,SnowFlake.HorPosition(A0)
+  beq           NewSnowFlake
+  subq.w        #1,SnowFlake.HorCenterLongWordPosition(A0)
+  bne           SetUpPatterns
+  ; Wordberlauf:
+  addq.w        #2,SnowFlake.WordPosition(A0)
+  addi.w        #16,SnowFlake.HorCenterLongWordPosition(A0)
+  bra           SetUpPatterns
+ 
+ 
+ !SnowFlakeRightLeftOrStop
+  move.w        #0,(A3)+
+  move.w        #1,(A3)+
+  jsr           MinMaxRandom
+  move.w        -(A3),D1
+  beq           SnowFlakeLeftFall
+  bra.w         SnowFlakeRightFall
+  
+ 
+ !SetUpPatterns
+  move.w        SnowFlake.HorCenterLongWordPosition(A0),D6
+  moveq.l       #-1,D1
+  bclr          D6,D1
+  move.l        D1,SnowFlake.OnePointPattern(A0)
+  not.l         D1
+  move.l        D1,SnowFlake.CheckRightLeftOrStopValue(A0)
+  subq.w        #1,D6
+  bset          D6,D1
+  move.l        D1,SnowFlake.CheckLeftFallValue(A0)
+  bclr          D6,D1
+  addq.w        #2,D6
+  bset          D6,D1
+  move.l        D1,SnowFlake.CheckRightFallValue(A0)
+  subq.w        #2,D6
+  bset          D6,D1
+  move.l        D1,SnowFlake.CheckANDPattern(A0)
+  move.l        D1,SnowFlake.CheckStopValue(A0)
+  not.l         D1
+  move.l        D1,SnowFlake.ThreePointPattern(A0)
+  bra           SnowFlakeGoon
+  
+ !NewSnowFlake
+  move.w        #0,(A3)+
+  move.w        SnowRate,(A3)+
+  jsr           MinMaxRandom
+  tst.w         -(A3)
+  bne.w         SnowFlakeGoon
+  
+  move.w        #1,(A3)+
+  move.w        #3,(A3)+
+  jsr           MinMaxRandom
+  move.w        -(A3),D6
+  mulu          #80,D6
+  move.w        D6,SnowFlake.FallOffset(A0)
+  st            SnowFlake.IsThere(A0)
+  
+  move.w        #1,(A3)+
+  move.w        #638,(A3)+
+  jsr           MinMaxRandom            ; horizontale Position der Flocke
+  move.w        #2,(A3)+
+  move.w        #360,(A3)+
+  jsr           MinMaxRandom            ; Startzeile der Flocke
+  move.w        -(A3),D6
+  mulu          #80,D6
+  moveq.l       #0,D1
+  move.w        -(A3),D1
+  move.w        D1,SnowFlake.HorPosition(A0)
+  divu          #16,D1
+  add.w         D1,D1
+  cmpi.w        #78,D1
+  bne           IsNotLastWord
+  add.w         D1,D6
+  subq.w        #2,D6
+  move.w        D6,SnowFlake.WordPosition(A0)
+  swap          D1
+  not.w         D1
+  andi.w        #$F,D1
+  move.w        D1,SnowFlake.HorCenterLongWordPosition(A0)
+  bra           SetUpPatterns
+  
+ !IsNotLastWord
+  add.w         D1,D6
+  move.w        D6,SnowFlake.WordPosition(A0)
+  swap          D1
+  not.w         D1
+  andi.w        #$F,D1
+  add.w         #$10,D1
+  cmpi.w        #$1F,D1
+  beq           IsWordBoundary
+  move.w        D1,SnowFlake.HorCenterLongWordPosition(A0)
+  bra           SetUpPatterns
+ !IsWordBoundary
+  subq.w        #2,SnowFlake.WordPosition(A0)
+  subi.w        #16,D1
+  move.w        D1,SnowFlake.HorCenterLongWordPosition(A0)
+  bra           SetUpPatterns
+ 
+ 
+ 
+ !StopSnowFlake
+  sf            SnowFlake.IsThere(A0)
+  move.w        #0,(A3)+
+  move.w        #1,(A3)+
+  jsr           MinMaxRandom
+  tst.w         -(A3)
+  beq           BIGSnowFlake
+  move.l        SnowFlake.OnePointPattern(A0),D1
+  and.l         D1,0(A4,D6.W)                   ; Einzeichnen in die SnowScreen
+  bra           SnowFlakeGoon
+ !BIGSnowFlake
+  move.l        SnowFlake.OnePointPattern(A0),D1
+  and.l         D1,-80(A4,D6.W)                   ; Einzeichnen in die SnowScreen
+  and.l         D1,80(A4,D6.W)                   ; Einzeichnen in die SnowScreen
+  move.l        SnowFlake.ThreePointPattern(A0),D1
+  and.l         D1,0(A4,D6.W)                   ; Einzeichnen in die SnowScreen
+  bra           SnowFlakeGoon
+  END;
+END DrawAndAnimateSnowFlakes;
+(*$L+*)
+
+
+
+PROCEDURE DrawTitle;
+BEGIN
+  DrawText ( WorkScreen, 14, 9, TRUE,
+  '                       S N O W                     ' );
+  DrawText ( WorkScreen, 14, 10, TRUE,
+  ' Written with MEGAMAX MODULA-2 for the TOS-Magazin ' );
+  DrawText ( WorkScreen, 14, 11, TRUE,
+  '           ½ July 1990 by Meinolf Schneider        ' );
+END DrawTitle;
+
+
+PROCEDURE MakeSnow;
+BEGIN
+  IF ~TitleWasThere
+  THEN
+    IF ShowTitle
+    THEN
+      DrawTitle;
+      IF MyMouse.RightButton.JustPressed
+      THEN
+        TitleWasThere := TRUE;
+        ShowTitle := FALSE;
+      END;
+    ELSE
+      INC ( TitleTimer );
+      ShowTitle := (TitleTimer > TitleTime);
+    END;
+  END;
+  DrawAndAnimateSnowFlakes;
+END MakeSnow;
+
+
+PROCEDURE IceScratchSteering;
+BEGIN
+  ReadMouse ( MyMouse );
+  WITH MyMouse DO
+    IF RightButton.Pressed
+    THEN
+      IF RightButton.JustPressed
+      THEN
+        IceScratchThere := TRUE;
+        ASSEMBLER
+        dc.w      $A00A         ; Hide Mouse
+        END;
+      END;
+    ELSIF RightButton.JustReleased
+    THEN
+      StopASound ( ScratchSound );
+      IceScratchThere := FALSE;
+      ASSEMBLER
+      dc.w      $A009   ; Mauscursor wieder einschalten
+      END;
+    END;
+  END;
+END IceScratchSteering;
+
+
+
+PROCEDURE WaitForSnow;
+BEGIN
+  INC ( SnowWait );
+  IF SnowWait > SnowBegin
+  THEN
+    SnowThere := TRUE;
+  END;
+END WaitForSnow;
+  
+  
+PROCEDURE ScratchLine ( x1, y1, x2, y2    : INTEGER );
+VAR     dx, dy, t, vx, vy       : INTEGER;
+BEGIN
+  dx := ABS ( x2 - x1 );
+  dy := ABS ( y2 - y1 );
+  IF (x2-x1) < 0
+  THEN
+    vx := -1;
+  ELSE
+    vx := 1;
+  END;
+  IF (y2-y1) < 0
+  THEN
+    vy := -1;
+  ELSE
+    vy := 1;
+  END;
+  dx := dx + 1;
+  dy := dy + 1;
+  Sprite ( SnowScreen, SnowSpriteList, 1, x1, y1 );
+  IF dx > dy
+  THEN
+    t := dx - dy;
+    REPEAT
+      IF x1 # x2
+      THEN
+        x1 := x1 + vx;
+        t := t - dy;
+        IF t < 0
+        THEN
+          t := t + dx;
+          y1 := y1 + vy;
+        END;
+        Sprite ( SnowScreen, SnowSpriteList, 1, x1, y1 );
+      END;
+    UNTIL x1 = x2;
+  ELSE
+    t := dy - dx;
+    REPEAT
+      IF y1 # y2
+      THEN
+        y1 := y1 + vy;
+        t := t - dx;
+        IF t < 0
+        THEN
+          t := t + dy;
+          x1 := x1 + vx
+        END;
+        Sprite ( SnowScreen, SnowSpriteList, 1, x1, y1 );
+      END;
+    UNTIL y1 = y2;
+  END;
+END ScratchLine;
+  
+  
+PROCEDURE MakePicture;
+BEGIN
+  IF TOSScreenOnDisplay
+  THEN
+    IceScratchSteering;
+    IF DirectTOSScreenShow
+    THEN
+      IF SnowThere OR IceScratchThere
+      THEN
+        DirectTOSScreenShow := FALSE;
+      ELSE
+        WaitForSnow;
+      END;
+      Switch ( TOSScreen );
+    ELSE
+      IF IceScratchThere
+      THEN (* Eis entfernen *)
+        ScratchLine ( MyMouse.Position.X.I, MyMouse.Position.Y.I,
+                      MyMouse.OldPosition.X.I, MyMouse.OldPosition.Y.I );
+        IF (MyMouse.Speed.X.I = 0) & (MyMouse.Speed.Y.I = 0)
+        THEN
+          StopASound ( ScratchSound );
+        ELSIF ~ASoundIsActive ( ScratchSound )
+        THEN
+          StartASound ( ScratchSound, 10 );
+        END;
+      END;
+      IF SnowThere
+      THEN
+        IF SnowRate # 0
+        THEN
+          DEC ( SnowRate );
+        END;
+        CopySnowScreen;
+        MakeSnow;
+      ELSE
+        CopyScreen ( TOSScreen, WorkScreen );
+        WaitForSnow;
+      END;
+      IF IceScratchThere
+      THEN (* Eiskratzer einzeichnen *)
+        Sprite ( WorkScreen, SnowSpriteList, 0,
+                 MyMouse.Position.X.I, MyMouse.Position.Y.I );
+      END;
+      DirectTOSScreenShow := ~SnowThere & ~IceScratchThere;
+      SwitchSides;
+    END;
+  END;
+END MakePicture;
+
+
+(*---------------------------- VBL - Interrupt -----------------------------*)
+
+(*$L-*)
+PROCEDURE VBLXBRA;
+BEGIN
+  ASSEMBLER
+  asc           'XBRA'
+  asc           'SNOW'
+  dc.w          0
+  END;
+END VBLXBRA;
+(*$L+*)
+
+(*$L-*)
+PROCEDURE VBLIRQ;
+BEGIN
+  ASSEMBLER
+  subq.w        #1,$452
+  bmi.w         ED                      ; VBLHandler gesperrt
+  
+  subi.w        #1,VBLTimer
+  bpl.w         ED                      ; Bildaufbau nur bei jedem
+                                        ; 3. Monitorbild
+  
+  move.w        #PicFreq-1,VBLTimer             ; Timer zurcksetzen
+  
+  movem.l       D0-D7/A0-A6,-(A7)
+  
+  clr.l         D0                      ; Lesen der aktuellen Bildschirmadresse
+  move.l        #$FF8201,A0
+  movep.w       0(A0),D0
+  lsl.l         #8,D0
+  
+  move.w        #1,TOSScreenOnDisplay
+  cmp.l         TOSScreen,D0
+  beq           go
+  cmp.l         DisplayScreen,D0
+  beq           go
+  clr.w         TOSScreenOnDisplay      ; Bildschirm wurde von jemand
+                                        ; anderes umgesetzt
+ !go
+  lea           VBLStack,A3             ; Jetzt nehmen wir unseren Stack,
+  jsr           MakePicture             ; und malen das neue Bild
+  
+  movem.l       (A7)+,D0-D7/A0-A6
+ 
+ !ED
+  addq.w        #1,$452
+  move.l        OldVBLIRQ,-(A7)      ; alte VBL-Routine macht weiter...
+  END;
+END VBLIRQ;
+(*$L+*)
+
+
+(*$L-*)
+PROCEDURE InstallVBLIRQ;
+BEGIN
+  ASSEMBLER
+  jsr           EnterSupervisorMode
+  move.w        SR,-(A7)
+  ori.w         #$0700,SR
+  
+  move.l        $70,OldVBLIRQ
+  lea           VBLXBRA,A0
+  lea           VBLIRQ,A0
+  move.l        $70,-4(A0)              ; XBRA-Vektor setzen
+  move.l        A0,$70
+  
+  move.w        (A7)+,SR
+  andi.w        #$DFFF,SR
+  END;
+END InstallVBLIRQ;
+(*$L+*)
+
+(*--------------------------------------------------------------------------*)
+
+
+BEGIN
+  ReadMouse ( MyMouse );
+  ReadMouse ( MyMouse );
+  ASSEMBLER
+  move.l        #TabSnowSpriteList,SnowSpriteList
+  move.l        #TabScratchSound,ScratchSoundADR
+  lea           SnowLines,A0
+  st            400(A0)         ; Endekennung
+  END;
+  SnowRate := 30 * PicsPerSec;
+  Allocate ( SnowScreen, 32560L );
+  NewSound ( ScratchSound, ScratchSoundADR, FALSE, 0L );
+  ClearScreen ( SnowScreen + 560L );
+  FillScreen ( SnowScreen );
+  SetSampleFrequency ( 6269 );
+  TOSScreen := GetSystemScreen();
+  TOSScreenOnDisplay := TRUE;
+  DirectTOSScreenShow := TRUE;
+  VBLTimer := PicFreq;
+  InstallVBLIRQ;
+END Snow.
+

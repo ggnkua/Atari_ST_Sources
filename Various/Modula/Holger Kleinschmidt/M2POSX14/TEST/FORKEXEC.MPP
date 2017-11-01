@@ -1,0 +1,225 @@
+MODULE ForkExec;
+__IMP_SWITCHES__
+__DEBUG__
+#ifdef HM2
+#ifdef __LONG_WHOLE__
+(*$!i+: Modul muss mit $i- uebersetzt werden! *)
+(*$!w+: Modul muss mit $w- uebersetzt werden! *)
+#else
+(*$!i-: Modul muss mit $i+ uebersetzt werden! *)
+(*$!w-: Modul muss mit $w+ uebersetzt werden! *)
+#endif
+#endif
+(* Test und Anwendungsbeispiel fuer Modul 'proc'.
+ *
+ * Das Programm 'showcmd.ttp' muss sich in einem Verzeichnis befinden,
+ * das in der Environmentvariablen PATH steht.
+ *
+ * Das Programm laeuft unter MiNT und GEMDOS. Mit MM2 laeuft es jedoch
+ * nur unter MiNT.
+ *
+ * 29-Mai-94, Holger Kleinschmidt
+ *)
+
+#if (defined MM2) && (defined __DEBUG_CODE__)
+IMPORT Debug;
+#endif
+
+VAL_INTRINSIC
+CAST_IMPORT
+
+FROM SYSTEM IMPORT
+(* PROC *) ADR;
+
+FROM PORTAB IMPORT
+(* CONST*) NULL,
+(* TYPE *) UNSIGNEDLONG, UNSIGNEDWORD, SIGNEDWORD;
+
+FROM types IMPORT
+(* TYPE *) StrPtr, StrArray, StrRange;
+
+IMPORT e;
+
+FROM proc IMPORT
+(* TYPE *) WaitVal, WaitOptions, WaitOption, RusageRec, TimevalRec,
+(* PROC *) vfork, execvp, wait4, getpid, getppid, Exit, WEXITSTATUS,
+           WIFSIGNALED, WTERMSIG, WIFSTOPPED, WSTOPSIG;
+
+FROM sig IMPORT
+(* CONST*) SIGCHLD, SIGINT, SIGQUIT, SigIgn,
+(* TYPE *) SignalHandler, sigsetT, SigsetPtr, SaFlag, SaFlags, SigactionPtr,
+           SigactionRec, SigBlockType,
+(* PROC *) sigaction, sigemptyset;
+
+FROM cstr IMPORT
+(* PROC *) strsignal, strerror, AssignCToM2;
+
+FROM InOut IMPORT
+(* PROC *) Read, Write, WriteInt, WriteString, WriteLn;
+
+FROM pOUT IMPORT
+(* PROC *) PutInt;
+
+(*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*)
+
+CONST
+  MaxArgv = 15;
+
+TYPE
+  String = ARRAY [0..10] OF CHAR;
+
+VAR
+  ret     : INTEGER;
+  res     : INTEGER;
+  pid     : INTEGER;
+  sa      : SigactionRec;
+  savintr : SigactionRec;
+  savquit : SigactionRec;
+  ch      : CHAR;
+  state   : WaitVal;
+  usage   : RusageRec;
+  errstr  : ARRAY [0..60] OF CHAR;
+
+  idx     : StrRange;
+  prg     : String;
+  null    : String;
+  space   : String;
+  arg2    : String;
+  arg3    : String;
+  arg13   : String;
+  argv    : ARRAY [0..MaxArgv] OF StrPtr;
+
+(*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*)
+
+#ifdef HM2
+(*$E+,$K+**)
+#endif
+PROCEDURE handler ((* EIN/ -- *) sig : UNSIGNEDLONG );
+BEGIN
+ WriteLn;
+ WriteString("<<<<<<<<<<<<<<<<<<<<<<<"); WriteLn;
+ WriteString("PARENT: SIGCHLD handled"); WriteLn;
+ WriteString(">>>>>>>>>>>>>>>>>>>>>>>"); WriteLn;
+END handler;
+#ifdef HM2
+(*$E=,$K-*)
+#endif
+
+(*===========================================================================*)
+
+BEGIN (* ForkExec *)
+ (* SIGCHLD abfangen, aber nicht bei ^Z *)
+ sa.saHandler.proc := handler;
+ sa.saFlags        := SaFlags{SaNoCldStop};
+ sigemptyset(sa.saMask);
+ res := sigaction(SIGCHLD, ADR(sa), NULL);
+
+ (* SIGINT und SIGQUIT im Elternprozess ignorieren, waehrend auf den
+  * Kindprozess gewartet wird.
+  *)
+ sa.saHandler.long := SigIgn;
+ sa.saFlags        := SaFlags{};
+ sigemptyset(sa.saMask);
+ res := sigaction(SIGINT, ADR(sa), ADR(savintr));
+ res := sigaction(SIGQUIT, ADR(sa), ADR(savquit));
+
+ pid := vfork();
+ IF pid < 0 THEN (* parent *)
+   WriteString("PARENT(pid = "); WriteInt(getpid(), 0);
+   WriteString("): ");
+   AssignCToM2(strerror(e.errno), 0, errstr);
+   WriteString(errstr);
+   WriteLn;
+   ret := -1;
+ ELSIF pid > 0 THEN (* parent *)
+   WriteString("PARENT(pid = "); WriteInt(getpid(), 0);
+   WriteString("): child(pid = "); WriteInt(pid, 0);
+   WriteString(") created");
+   WriteLn;
+
+   (* Auf die Beendigung des Kindprozesses warten, aber nicht auf ein
+    * Stoppen (^Z), deshalb ist bei den Optionen WUNTRACED nicht enthalten.
+    * Die Schleife ist hier eigentlich unnoetig, da nur ein Unterprozess
+    * gestartet wurde.
+    *)
+   REPEAT
+     ret := wait4(0, state, WaitOption{}, usage);
+   UNTIL (ret = -1) OR (ret = pid);
+   WriteLn;
+   WriteString("-----------------------------------"); WriteLn;
+ ELSE (* child *)
+   (* Der Kindprozess soll SIGINT und SIGQUIT nicht ignorieren *)
+   res := sigaction(SIGINT, ADR(savintr), NULL);
+   res := sigaction(SIGQUIT, ADR(savquit), NULL);
+
+   prg   := "showcmd";
+   null  := "";
+   space := " ";
+   arg2  := "-2-";
+   arg3  := "-3-";
+   arg13 := "-13-";
+
+   argv[0] := CAST(StrPtr,ADR(prg));
+   FOR idx := 1 TO MaxArgv DO
+     argv[idx] := CAST(StrPtr,ADR(null));
+   END;
+   argv[2]       := CAST(StrPtr,ADR(arg2));
+   argv[3]       := CAST(StrPtr,ADR(arg3));
+   argv[4]       := CAST(StrPtr,ADR(space));
+   argv[13]      := CAST(StrPtr,ADR(arg13));
+   argv[MaxArgv] := NULL;
+
+   WriteString("CHILD(pid = "); WriteInt(getpid(), 0);
+   WriteString("), executing: "); WriteString(prg); WriteLn;
+   WriteString("-----------------------------------"); WriteLn;
+
+   res := execvp(prg, ADR(argv));
+   (* Wenn "execvp()" zurueckkehrt, ist ein Fehler aufgetreten *)
+   WriteString("*** CHILD-error: ");
+   AssignCToM2(strerror(e.errno), 0, errstr);
+   WriteString(errstr); WriteLn;
+   WriteString("*** CHILD-exit: 127"); WriteLn;
+   Exit(127);
+ END;
+
+ (* Signale nicht mehr ignorieren *)
+ res := sigaction(SIGINT, ADR(savintr), NULL);
+ res := sigaction(SIGQUIT, ADR(savquit), NULL);
+
+ WriteLn;
+ WriteString("PARENT(pid = "); WriteInt(getpid(), 0);
+ IF ret < 0 THEN
+   WriteString("): error: ");
+   AssignCToM2(strerror(e.errno), 0, errstr);
+   WriteString(errstr);
+   WriteLn;
+ ELSE
+   WriteString("): child(pid = "); WriteInt(pid, 0);
+   WriteString(")-returncode = "); WriteInt(INT(CAST(SIGNEDWORD,state)), 0);
+   WriteLn;
+
+   WITH usage DO
+     WriteString("  Child user time: ");
+     PutInt(ruUtime.tvSec, 0); WriteString(" seconds + ");
+     PutInt(ruUtime.tvUSec, 0); WriteString(" microseconds");
+     WriteLn;
+     WriteString("Child system time: ");
+     PutInt(ruStime.tvSec, 0); WriteString(" seconds + ");
+     PutInt(ruStime.tvUSec, 0); WriteString(" microseconds");
+     WriteLn;
+   END;
+
+   IF WIFSIGNALED(state) THEN
+     WriteString("Child terminated by Signal: ");
+     AssignCToM2(strsignal(WTERMSIG(state)), 0, errstr);
+     WriteString(errstr);
+     WriteLn;
+   ELSE
+     WriteString("Child exit status: "); WriteInt(WEXITSTATUS(state), 0);
+   END;
+ END;
+ WriteLn;
+ Read(ch);
+END ForkExec.
+
+

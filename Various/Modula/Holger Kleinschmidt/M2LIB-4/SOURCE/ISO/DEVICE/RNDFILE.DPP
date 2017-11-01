@@ -1,0 +1,283 @@
+DEFINITION MODULE RndFile;
+
+(* standard library module *)
+
+__DEF_SWITCHES__
+#ifdef HM2
+#ifdef __LONG_WHOLE__
+(*$!i+: Modul muss mit $i- uebersetzt werden! *)
+(*$!w+: Modul muss mit $w- uebersetzt werden! *)
+#else
+(*$!i-: Modul muss mit $i+ uebersetzt werden! *)
+(*$!w-: Modul muss mit $w+ uebersetzt werden! *)
+#endif
+#endif
+(*****************************************************************************)
+(* ISO-RndFile                                                               *)
+(* --------------------------------------------------------------------------*)
+(* Geraetetreiber fuer Dateien mit wahlfreiem Zugriff                        *)
+(* --------------------------------------------------------------------------*)
+(* 10-Aug-96, Holger Kleinschmidt                                            *)
+(*****************************************************************************)
+
+(*============== IMPLEMENTIERUNGSHINWEIS ====================================*)
+(* Fuer das Verhalten der Geraeteprozeduren dieser Implementierung gilt:     *)
+(* 'Look', 'Skip', 'SkipLook', 'TextRead':                                   *)
+(*     Sowohl die Kombination CR + LF als auch alleinstehende LFs gelten als *)
+(*     Zeilenende, alle anderen Zeichen -- auch separat stehende CRs -- haben*)
+(*     keine Sonderbedeutung und werden unveraendert uebertragen.            *)
+(* 'Look', 'SkipLook':                                                       *)
+(*     Bei Zeilenende oder Dateiende ist das zurueckgelieferte Zeichen nicht *)
+(*     undefiniert, sondern garantiert 0C.                                   *)
+(* 'TextWrite', 'WriteLn':                                                   *)
+(*     Falls in der Environmentvariablen 'UNIXMODE' das Flag 'b' gesetzt ist,*)
+(*     entspricht 'TextWrite' der Prozedur 'RawWrite' und 'WriteLn' schreibt *)
+(*     ein LF. Falls 'b' nicht gesetzt ist, werden LFs, denen kein CR voran- *)
+(*     geht, in die Kombination CR + LF umgewandelt, und 'WriteLn' schreibt  *)
+(*     ebenfalls CR + LF. Alle anderen Zeichen werden unveraendert uebertra- *)
+(*     gen.                                                                  *)
+(* 'RawRead', 'RawWrite':                                                    *)
+(*     Keine Besonderheiten.                                                 *)
+(* 'GetName':                                                                *)
+(*     Liefert den bei "Open*()" angegebenen Namen.                          *)
+(* 'Reset', 'Free', 'Flush':                                                 *)
+(*     Keine Besonderheiten.                                                 *)
+(*                                                                           *)
+(* o Ein- und Ausgabe sind gepuffert.                                        *)
+(* o Es ist ohne Ausfuehrung der 'Flush'-Operation moeglich, zwischen Lese-  *)
+(*   und Schreiboperationen zu wechseln (wenn der Kanal beide Operationen    *)
+(*   erlaubt).                                                               *)
+(* o Ebenfalls ist ein Wechsel zwischen 'Raw'- und 'Text'-Operationen        *)
+(*   moeglich (aber nicht sinnvoll).                                         *)
+(* o Ein Zeilenende sollte nur mit der 'WriteLn'-Operation erzeugt werden.   *)
+(*   Soll trotzdem mit einer 'TextWrite'-Operation ein Zeilenende aus        *)
+(*   CR + LF erzeugt werden, muessen beide Zeichen mit demselben 'TextWrite'-*)
+(*   Aufruf geschrieben werden; es darf also nicht mit dem ersten Aufruf als *)
+(*   letztes Zeichen ein CR und mit dem naechsten Aufruf als erstes Zeichen  *)
+(*   ein LF geschrieben werden.                                              *)
+(*                                                                           *)
+(* Es koennen nur regulaere Dateien (keine FIFOs, Terminals o.ae.) mit diesem*)
+(* Geraetetreiber verwendet werden, da nur diese (auf portable Weise) einen  *)
+(* wahlfreien Zugriff (explizite Aenderung der Lese/Schreibposition) ermoeg- *)
+(* lichen.                                                                   *)
+(*===========================================================================*)
+
+FROM PORTAB IMPORT
+(* TYPE *) ANYLONG, SIGNED, UNSIGNED;
+
+IMPORT IOChan, ChanConsts;
+#ifdef ISOM2
+IMPORT SYSTEM;
+#endif
+(*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*)
+
+TYPE
+  ChanId      = IOChan.ChanId;
+  FlagSet     = ChanConsts.FlagSet;
+  OpenResults = ChanConsts.OpenResults;
+
+(* Folgende einelementige Werte von 'FlagSet' werden bei "Open*()"
+ * akzeptiert:
+ *)
+CONST
+  read  = FlagSet{ChanConsts.readFlag};
+          (* Eingabeoperationen sind verlangt/verfuegbar *)
+  write = FlagSet{ChanConsts.writeFlag};
+          (* Ausgabeoperationen sind verlangt/verfuegbar *)
+  old   = FlagSet{ChanConsts.oldFlag};
+          (* Eine Datei darf/muss existieren, oder existierte, vor der
+             Oeffnung eines Kanals. *)
+  text  = FlagSet{ChanConsts.textFlag};
+          (* Textoperationen sind verlangt/verfuegbar *)
+  raw   = FlagSet{ChanConsts.rawFlag};
+          (* Binaeroperationen sind verlangt/verfuegbar *)
+
+(*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*)
+
+(* Kanaele, die mit einer Datei mit wahlfreiem Zugriff verbunden sind,
+   haben eine zugehoerige Lese/Schreibposition. Die Lese/Schreibposition
+   befindet sich nach dem Oeffnen oder einer Reset-Operation auf dem
+   Kanal am Beginn der Datei. Die Position wird um soviele Zeichen
+   nach vorne verschoben, wie die Daten einer Ein- oder Ausgabeoperation
+   belegen.
+
+   Eine Datei mit wahlfreiem Zugriff hat eine Laenge, die der Position nach
+   der hoechsten Lese/Schreibposition entspricht, zu der Daten geschrieben
+   wurden. Diese Laenge ist Null, falls noch keine Daten auf die Datei
+   geschrieben wurden. Wenn die Lese/Schreibposition auf die augenblickliche
+   Dateilaenge gesetzt wird, entweder implizit durch eine Ein- oder
+   Ausgabeoperation, oder explizit durch eine Positionierungsoperation,
+   verhaelt sich eine Eingabeoperation wie beim Lesen am Ende des Kanals.
+ *)
+
+PROCEDURE OpenOld ((* -- /AUS *) VAR cid   : ChanId;
+                   (* EIN/ -- *) REF name  : ARRAY OF CHAR;
+                   (* EIN/ -- *)     flags : FlagSet;
+                   (* -- /AUS *) VAR res   : OpenResults   );
+
+(* Versucht einen Kanal zu oeffnen, der mit einer Datei <name> mit
+   wahlfreiem Zugriff verbunden ist.
+   Falls der Kanal wie verlangt geoeffnet werden kann, enthaelt <cid>
+   die Kennung des Kanals, und <res> ist gleich 'opened'. Sonst enthaelt
+   <cid> die Kennung des ungueltigen Kanals, und <res> einen
+   entsprechenden Wert. Die Lese/Schreibposition wird auf den Anfang der
+   Datei gesetzt.
+
+   - Das Flag 'old' wird implizit gesetzt.
+     Eine Datei mit dem angegebenen Namen muss bereits existieren.
+   - Falls 'write' nicht gesetzt ist, wird automatisch 'read' gesetzt.
+   - Falls 'text' nicht gesetzt ist, wird automatisch 'raw' gesetzt.
+
+   Insgesamt ergeben sich, unabhaengig von 'raw'/'text', folgende
+   Kombinationen:
+
+   o Von einer existierenden Datei lesen:
+
+     read         old          read+old
+
+   o Auf eine existierende Datei schreiben:
+
+     write        write+old
+
+   o Lesen/Schreiben auf/von existierende/r Datei:
+
+     read+write   read+write+old
+ *)
+
+
+PROCEDURE OpenClean ((* -- /AUS *) VAR cid   : ChanId;
+                     (* EIN/ -- *) REF name  : ARRAY OF CHAR;
+                     (* EIN/ -- *)     flags : FlagSet;
+                     (* -- /AUS *) VAR res   : OpenResults   );
+
+(* Versucht einen Kanal zu oeffnen, der mit einer Datei <name> mit
+   wahlfreiem Zugriff verbunden ist.
+   Falls der Kanal wie verlangt geoeffnet werden kann, enthaelt <cid>
+   die Kennung des Kanals, und <res> ist gleich 'opened'. Sonst enthaelt
+   <cid> die Kennung des ungueltigen Kanals, und <res> einen
+   entsprechenden Wert. Die Datei wird auf Laenge Null gekuerzt.
+
+   - Das Flag 'write' wird implizit gesetzt.
+     Eine Datei mit dem angegebenen Namen darf noch nicht existieren,
+     es sei denn 'old' ist gesetzt.
+   - Falls 'text' nicht gesetzt ist, wird automatisch 'raw' gesetzt.
+
+   Insgesamt ergeben sich, unabhaengig von 'raw'/'text', folgende
+   Kombinationen:
+
+   o Auf eine neue Datei schreiben:
+
+     write
+
+   o Auf eine neue oder auf Null gekuerzte vorhandene Datei schreiben:
+
+     old         write+old
+
+   o Auf eine neue Datei schreiben, Leseoperationen moeglich:
+
+     read        write+read
+
+   o Auf eine neue oder auf Null gekuerzte vorhandene Datei schreiben,
+     Leseoperationen moeglich:
+
+     old+read    write+old+read
+ *)
+
+
+PROCEDURE IsRndFile ((* EIN/ -- *) cid : ChanId ): BOOLEAN;
+
+(* Testet, ob der Kanal <cid> als Datei mit wahlfreiem Zugriff von diesem
+   Geraetetreiber geoeffnet wurde.
+ *)
+
+
+PROCEDURE IsRndFileException ( ): BOOLEAN;
+
+(* Testet, ob die aufrufende Koroutine in einer Ausnahmebehandlung ist,
+   weil die 'RndFile'-Ausnahme ausgeloest wurde.
+ *)
+
+
+CONST
+  FilePosSize = 4; (* Implementierungsspezifische Zahl groesser Null *)
+
+TYPE
+#ifdef ISOM2
+  FilePos = ARRAY [1..FilePosSize] OF SYSTEM.LOC;
+#else
+  FilePos = ANYLONG;
+#endif
+
+
+PROCEDURE StartPos ((* EIN/ -- *) cid : ChanId ): FilePos;
+
+(* Falls der Kanal <cid> als Datei mit wahlfreiem Zugriff von diesem
+   Geraetetreiber geoeffnet wurde, wird die Startposition der Datei
+   zurueckgeliefert, andernfalls wird die Ausnahme 'wrongDevice' ausgeloest.
+ *)
+
+PROCEDURE CurrentPos ((* EIN/ -- *) cid : ChanId ): FilePos;
+
+(* Falls der Kanal <cid> als Datei mit wahlfreiem Zugriff von diesem
+   Geraetetreiber geoeffnet wurde, wird die augenblickliche
+   Lese/Schreibposition zurueckgeliefert, andernfalls wird die Ausnahme
+   'wrongDevice' ausgeloest.
+ *)
+
+PROCEDURE EndPos ((* EIN/ -- *) cid : ChanId ): FilePos;
+
+(* Falls der Kanal <cid> als Datei mit wahlfreiem Zugriff von diesem
+   Geraetetreiber geoeffnet wurde, wird die erste Position der Datei
+   zurueckgeliefert, auf die noch nicht geschrieben wurde, andernfalls
+   wird die Ausnahme 'wrongDevice' ausgeloest.
+ *)
+
+PROCEDURE NewPos ((* EIN/ -- *) cid       : ChanId;
+                  (* EIN/ -- *) chunks    : SIGNED;
+                  (* EIN/ -- *) chunkSize : UNSIGNED;
+                  (* EIN/ -- *) from      : FilePos  ): FilePos;
+
+(* Falls der Kanal <cid> nicht als Datei mit wahlfreiem Zugriff von diesem
+   Geraetetreiber geoeffnet wurde, wird die Ausnahme 'wrongDevice' ausgeloest.
+   Sonst wird die Position geliefert, die <chunks> * <chunkSize> Positionen
+   relativ zu <from> ist. Die 'RndFile'-Ausnahme wird ausgeloest, falls
+   die Position nicht innerhalb des Wertebereichs von 'FilePos' liegt.
+
+   Die Berechnung von Dateipositionen bei Dateien, auf denen Textoperationen
+   ausgefuehrt werden sollen, haengt von der Kenntnis der externen
+   Repraesentation von Textdaten auf der Datei ab, da sich durch die Umsetzung
+   zwischen interner und externer Repraesentation evtl. die Groesse der
+   Daten aendert.
+ *)
+
+
+PROCEDURE SetPos ((* EIN/ -- *) cid : ChanId;
+                  (* EIN/ -- *) pos : FilePos );
+
+(* Falls der Kanal <cid> als Datei mit wahlfreiem Zugriff von diesem
+   Geraetetreiber geoeffnet wurde, wird die Lese/Schreibposition auf den
+   Wert <pos> gesetzt, andernfalls wird die Ausnahme 'wrongDevice' ausgeloest.
+
+   Wenn die neue Position hinter dem von "EndPos()" gelieferten Wert liegt,
+   ist 'read <= IOChan.CurrentFlags()' gleich FALSE, und eine Eingabeoperation
+   loest die Ausnahme 'notAvailable' aus. Der Wert von
+   'write <= IOChan.CurrentFlags()' haengt davon ab, ob die Implementierung
+   in einem solchen Fall Ausgabeoperationen erlaubt. Falls Daten an diese
+   Position geschrieben werden, werden die evtl. dazwischen liegenden
+   Dateipositionen auf implementierungsspezifische Weise aufgefuellt.
+
+   Das Setzen der Lese/Schreibposition hinter das augenblickliche Dateiende
+   alleine veraendert noch nicht die Groesse der Datei, erst das Schreiben
+   veraendert die Groesse.
+ *)
+
+
+PROCEDURE Close ((* EIN/AUS *) VAR cid : ChanId );
+
+(* Falls der Kanal <cid> als Datei mit wahlfreiem Zugriff von diesem
+   Geraetetreiber geoeffnet wurde, wird der Kanal geschlossen, und <cid>
+   erhaelt den Wert des ungueltigen Kanals "StdChans.InvalidChan()",
+   andernfalls wird die Ausnahme 'wrongDevice' ausgeloest.
+ *)
+
+END RndFile.

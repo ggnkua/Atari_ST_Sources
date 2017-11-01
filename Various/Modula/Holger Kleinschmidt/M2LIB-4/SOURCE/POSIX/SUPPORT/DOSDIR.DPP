@@ -1,0 +1,400 @@
+DEFINITION MODULE DosDir;
+__DEF_SWITCHES__
+#ifdef HM2
+#ifdef __LONG_WHOLE__
+(*$!i+: Modul muss mit $i- uebersetzt werden! *)
+(*$!w+: Modul muss mit $w- uebersetzt werden! *)
+#else
+(*$!i-: Modul muss mit $i+ uebersetzt werden! *)
+(*$!w-: Modul muss mit $w+ uebersetzt werden! *)
+#endif
+#endif
+(*****************************************************************************)
+(* Falls die Environmentvariable "STDERR" nicht existiert, und der Standard- *)
+(* kanal Zwei (stdaux) nicht auf eine Datei umgelenkt ist (wird mit          *)
+(* "IsTerm()" festgestellt), wird Kanal Zwei auf die Konsole umgelenkt(CON:),*)
+(* so dass er wie unter "*IX" als Standardfehlerkanal benutzt werden kann.   *)
+(* --------------------------------------------------------------------------*)
+(* 10-Aug-96, Holger Kleinschmidt                                            *)
+(*****************************************************************************)
+
+FROM PORTAB IMPORT
+(* TYPE *) UNSIGNEDLONG, UNSIGNEDWORD, SIGNEDLONG, SIGNEDWORD, WORDSET;
+
+FROM types IMPORT
+(* TYPE *) modeT, StrPtr, StrRange;
+
+(*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*)
+
+CONST
+  (* Anzahl der Zeichen, um die die Pfade nach Umwandlung durch
+   * "UnixToDos()" oder "DosToUnix()" maximal laenger bzw. kuerzer werden.
+   * Die Werte sind etwas groesser als notwendig.
+   *)
+  DINCR = 20;
+  XDECR = 20;
+
+CONST
+  XDEVPREFIX  = "/dev/"; (* nur *IX; z.B.: /dev/tty, /dev/null *)
+  GDEVPOSTFIX = ':';     (* nur "GEMDOS"; z.B.: CON:, PRN: *)
+  DDRVPOSTFIX = ':';     (* "DOS" und "GEMDOS"; z.B.: A: *)
+
+CONST
+#ifdef __GEMDOS__
+  EXECSUFFIX = "tos,ttp,prg,app,gtp,acc";
+  TOSEXT     = "tos,ttp";
+  GEMEXT     = "prg,app,gtp,acc";
+  ACCEXT     = "acc";
+#elif (defined __PCDOS__) (* ?? *)
+  EXECSUFFIX = "EXE,COM,APP";
+  DOSEXT     = "EXE,COM";
+  GEMEXT     = "APP";
+#endif
+
+TYPE
+#if reverse_set
+  FileAttribute = (
+    fa15, fa14, fa13, fa12, fa11,
+    fa10, fa9,  fa8,  fa7,  fa6,  (* --> keine 8-Bit-Menge *)
+    faCHANGED,
+    faSUBDIR,
+    faVOLUME,
+    faSYSTEM,
+    faHIDDEN,
+    faRDONLY
+  );
+#else
+  FileAttribute = (
+    faRDONLY,
+    faHIDDEN,
+    faSYSTEM,
+    faVOLUME,
+    faSUBDIR,
+    faCHANGED,
+    fa6,  fa7,  fa8,  fa9,  fa10,
+    fa11, fa12, fa13, fa14, fa15  (* --> keine 8-Bit-Menge *)
+  );
+#endif /* reverse_set */
+
+  FileAttributes = PACKEDSET OF FileAttribute;
+
+CONST
+  NormalFiles  = FileAttributes{};
+  DirsAndFiles = FileAttributes{faSUBDIR};
+  EveryFile    = FileAttributes{faHIDDEN,faSYSTEM};
+  AllEntries   = FileAttributes{faRDONLY,faHIDDEN,faSYSTEM,faSUBDIR,faCHANGED};
+
+  (* 'faCHANGED'- und 'faRDONLY'-Dateien werden immer gefunden, egal,
+   * ob die Attribute gesetzt sind.
+   *)
+
+TYPE
+  DTAPtr = POINTER TO DTA;
+
+  DTA = RECORD
+    fill : ARRAY [0..19] OF CHAR;
+    attr : FileAttributes;
+    time : WORDSET;
+    date : WORDSET;
+    size : UNSIGNEDLONG;
+    name : ARRAY [0..13] OF CHAR;
+  END;
+
+TYPE
+  XATTR = RECORD
+    mode    : modeT;
+    index   : UNSIGNEDLONG;
+    dev     : UNSIGNEDWORD;
+    rdev    : UNSIGNEDWORD; (* Ab MiNT 1.10 mit sinnvollem Wert *)
+    nlink   : UNSIGNEDWORD;
+    uid     : UNSIGNEDWORD;
+    gid     : UNSIGNEDWORD;
+    size    : SIGNEDLONG;
+    blksize : SIGNEDLONG;
+    nblocks : SIGNEDLONG;
+    mtime   : WORDSET;
+    mdate   : WORDSET;
+    atime   : WORDSET;
+    adate   : WORDSET;
+    ctime   : WORDSET;
+    cdate   : WORDSET;
+    attr    : WORDSET;
+    res1    : SIGNEDWORD;
+    res2    : ARRAY [0..1] OF SIGNEDLONG;
+  END;
+
+VAR
+  INODE   : UNSIGNEDLONG;
+  ROOTDIR : CHAR;    (* 'r<x>' in UNIXMODE gesetzt, ROOTDIR := x *)
+  BINIO   : BOOLEAN; (* 'b' in UNIXMODE gesetzt *)
+  DRVU    : BOOLEAN; (* Laufwerk U: existiert *)
+  UMASK   : modeT;   (* Dateierstellungsmaske *)
+
+(*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*)
+
+PROCEDURE IsExec ((* EIN/ -- *) path : StrPtr ): BOOLEAN;
+
+PROCEDURE IsDosExec ((* EIN/ -- *) path : StrPtr ): BOOLEAN;
+
+PROCEDURE IsGEMExec ((* EIN/ -- *) path : StrPtr ): BOOLEAN;
+
+(* Diese Prozeduren stellen anhand der Extension des Dateinamens fest, ob
+   die Datei ausfuehrbar ist. <path>^ muss im DOS-Format sein.
+   Falls die Environment-Variablen "SUFFIX" bzw. "GEMEXT"/"TOSEXT"
+   existieren, wird geprueft, ob die Extension mit einer aus der durch
+   Semikola oder Kommata getrennten Liste der Environment-Variablen
+   uebereinstimmt.
+   Existieren diese Variablen nicht, wird geprueft, ob eine der Extensionen
+   aus 'EXECSUFFIX' bzw. 'GEMEXT'/'TOSEXT' vorliegt. Die Gross/Kleinschreibung
+   wird nicht beachtet.
+ *)
+
+
+PROCEDURE IsDosDevice ((* EIN/ -- *) path : StrPtr ): BOOLEAN;
+
+(* IsDosDevice <=> <path> = "xx...:", x ungleich \. <path> im DOS-Format *)
+
+
+PROCEDURE SplitPath ((* EIN/ -- *)     full  : StrPtr;
+                     (* -- /AUS *) VAR drive : SIGNEDWORD;
+                     (* -- /AUS *) VAR path  : SIGNEDWORD;
+                     (* -- /AUS *) VAR file  : SIGNEDWORD;
+                     (* -- /AUS *) VAR ext   : SIGNEDWORD;
+                     (* -- /AUS *) VAR flen  : SIGNEDWORD );
+
+(* <full>^ ist eine Pfadangabe im DOS-Format. Die Prozedur liefert
+   die Anfangsindizes der einzelnen Pfad-Komponenten, falls diese
+   existieren, oder -1, falls eine Komponente nicht existiert. <full>^
+   wird nicht veraendert.
+
+   o <drive> ist der Index der Laufwerkskomponente. Diese existiert,
+     wenn das erste Zeichen des Pfades ein Buchstabe und das zweite
+     Zeichen ein ':' ist. Wenn sie existiert, ist <drive> gleich Null.
+
+   o <path> ist der Index der Verzeichniskomponente. Diese existiert,
+     wenn in <path>^ mindestens ein \ vorkommt. Wenn sie existiert,
+     dann ist sie gleich Zwei, wenn auch eine Laufwerkskomponente existiert,
+     sonst Null.
+
+   o <file> ist der Index der Dateikomponente. Diese existiert, wenn
+     der Pfad nicht mit der Laufwerks- oder Verzeichniskomponente endet.
+
+   o <ext> ist der Index der Extension, d.h. dem letzten durch '.'
+     eingeleiteten Teil der Dateikomponente. Sie existiert, wenn die
+     Dateikomponente existiert, und das '.' nicht das erste oder letzte
+     Zeichen der Dateikomponente ist. In diesem Fall ist <ext> groesser
+     als <file>.
+
+   o <flen> ist die Laenge von <path>^.
+
+   Der Pfad besteht aus den Komponenten, deren Startindex groesser gleich
+   Null ist. Die vorhandenen Komponenten stehen in der angegebenen
+   Reihenfolge direkt hintereinander.
+ *)
+
+
+PROCEDURE CompletePath ((* EIN/ -- *)     path  : StrPtr;
+                        (* EIN/ -- *)     fSize : StrRange;
+                        (* EIN/ -- *)     full  : StrPtr;
+                        (* -- /AUS *) VAR fLen  : INTEGER;
+                        (* -- /AUS *) VAR err   : INTEGER  ): BOOLEAN;
+
+(* Falls die Laufwerksangabe in <path>^ fehlt, und/oder nur ein relativer
+   Pfad angegeben ist, werden Laufwerk und/oder aktueller Pfad ergaenzt.
+   <full>^ enthaelt die vervollstaendigte Pfadangabe. <fSize> gibt den Platz
+   in <full> fuer den Pfad einschliesslich Nullbyte an. <fLen> ist die
+   Laenge des Pfades in <full>^; da <full>^ mindestens die Laufwerksangabe
+   und das Wurzelverzeichnis enthaelt, ist <fLen> mindestens gleich drei.
+   <full>^ ist immer mit einem Nullbyte abgeschlossen.
+   <fSize> muss mindestens 4 sein, sonst wird ein Fehler gemeldet.
+   Wenn ein Fehler aufgetreten ist, wird FALSE als Funktionswert geliefert
+   und <err> enthaelt den Fehlercode; <fLen> und <full>^ sind dann nicht
+   definiert.
+   !ACHTUNG: <fSize> wird nur beachtet, wenn der 'Dgetcwd'-Aufruf
+   unterstuetzt wird (z.B. ab MiNT 0.96), sonst muss <full> ausreichend
+   gross sein (mindestens PATHMAX Zeichen)!
+   <path> im DOS-Format.
+ *)
+
+
+PROCEDURE PathToken ((* EIN/ -- *)     str  : StrPtr;
+                     (* EIN/ -- *)     slen : StrRange;
+                     (* EIN/AUS *) VAR idx  : StrRange;
+                     (* -- /AUS *) VAR plen : StrRange;
+                     (* -- /AUS *) VAR path : StrPtr ): BOOLEAN;
+
+(* Hat die gleiche Funktion wie "str.Token()", nur ist die Prozedur
+   speziell auf die Analyse von Pfadangaben, wie sie z.B. in PATH
+   vorkommen, ausgelegt.
+
+   Das Format der einzelnen Pfade ist unwichtig. Sowohl UNIX-Pfadtrenner (':')
+   als auch DOS-Laufwerkskennungen ("a:...") und DOS-Pfadtrenner (',' und ';')
+   sind moeglich mit folgenden Einschraenkungen:
+
+   o ',' und ';' gelten immer als Pfadtrenner, duerfen also nicht innerhalb
+     eines Pfades auftauchen.
+
+   o ':' wird als Laufwerkskennung angesehen, wenn folgendes gilt:
+     - es ist das zweite Zeichen im Pfad
+     - das erste Zeichen ist ein Buchstabe
+     - das dritte Zeichen ist ein \, '/', ';', ',' oder <str>^ ist beendet
+     sonst wird ':' als UNIX-Pfadtrenner betrachtet.
+
+   o Wenn relative Verzeichnisse (relativ zum aktuellen Verzeichnis) mit
+     einem Buchstaben angegeben und ':' als Pfadtrenner benutzt werden
+     sollen, muss das in der Form :./v: oder :.\v:, statt :v: geschehen.
+ *)
+
+
+PROCEDURE DosToUnix ((* EIN/ -- *)     dpath : StrPtr;
+                     (* EIN/ -- *)     conv  : BOOLEAN;
+                     (* EIN/ -- *)     xSize : StrRange;
+                     (* EIN/ -- *)     xpath : StrPtr;
+                     (* -- /AUS *) VAR dlen  : INTEGER;
+                     (* -- /AUS *) VAR xlen  : INTEGER  );
+
+(* Die Prozedur dient dazu, die "DOS"-spezifischen Elemente eines Pfadnamens
+   in "*IX"-Aequivalente zu wandeln, falls dies moeglich ist. Im einzelnen
+   werden folgende Umwandlungen vorgenommen:
+
+       \                                 -->  /
+       Der Pfad wird in Kleinbuchstaben gewandelt, falls <conv> gleich TRUE
+       ist.
+       u:\dev\...                        -->  /dev/...
+       u:\pipe\...                       -->  /pipe/...
+       u:\x, u:\x\...                    -->  wie x:, x:\...
+       x:                                -->  /x         , ROOTDIR = 'u'
+                                         -->  /          , ROOTDIR = 'x'
+                                         -->  /dev/x     , sonst
+       x:\..., x:...                     -->  /x/...     , ROOTDIR = 'u'
+                                         -->  /...       , ROOTDIR = 'x'
+                                         -->  /dev/x/... , sonst
+       con:                              -->  /dev/tty
+       xx...:..                          -->  /dev/xx...
+
+   <xpath>^ enthaelt soviel vom umgewandelten Pfad wie moeglich. <xlen>
+   enthaelt die Laenge des UNGEKUERZTEN Pfades. Falls also <xlen> groesser
+   als der Platz in <xpath>^ ist, musste gekuerzt werden. <xSize> gibt den
+   Platz in <xpath>^ an. <xpath>^ ist nur dann mit einem Nullbyte
+   abgeschlossen, wenn der Platz dafuer ausreicht (<xlen> < <xSize>).
+   Es ist moeglich fuer <xSize> Null und <xpath> NULL anzugeben, dann wird
+   lediglich die Laenge ermittelt, die der umgewandelte Pfad haben wuerde.
+   <dlen> enthaelt die Laenge von <dpath>.
+   <xpath>^ ist hoechstens 'XDECR' Zeichen kuerzer als <dpath>^.
+   Da die Umsetzungen, die die Laenge des Pfades veraendern, nur von den
+   ersten Zeichen von <dpath>^ abhaengen, braucht kein vollstaendiger
+   DOS-Pfad angegeben werden, um zu ermitteln, wieviele Zeichen der *IX-Pfad
+   laenger oder kuerzer werden wuerde (<xlen> - <dlen>).
+   Da <dpath>^ veraendert wird, muss der Pfad vorher kopiert werden, wenn er
+   noch gebraucht wird.
+ *)
+
+
+PROCEDURE UnixToDos ((* EIN/ -- *)     xpath : StrPtr;
+                     (* EIN/ -- *)     xlen  : CARDINAL;
+                     (* EIN/ -- *)     dSize : StrRange;
+                     (* EIN/ -- *)     dpath : StrPtr;
+                     (* -- /AUS *) VAR dot   : BOOLEAN;
+                     (* -- /AUS *) VAR done  : BOOLEAN );
+
+(* Die Prozedur dient dazu, die "*IX"-spezifischen Elemente eines Pfadnamens
+   in "DOS"-Aequivalente zu wandeln, falls dies moeglich ist. Im einzelnen
+   werden folgende Umwandlungen vorgenommen:
+
+       /                                 -->  \
+
+       /., /..                           -->  /
+       /./xx, /../xx                     -->  /xx
+   falls das aktuelle Verzeichnis das Wurzelverzeichnis ist, auch:
+       ., ..                             -->  /
+       ./xx, ../xx                       -->  /xx,
+
+       /dev/x                            -->  x:
+       /dev/x/..., /dev/x\...            -->  x:\...
+       /dev/tty                          -->  con:
+       /dev/xx...                        -->  xx...:
+   falls Laufwerk U: existiert, auch:
+       /dev/xx...                        -->  U:\dev\...
+       /pipe/...                         -->  U:\pipe\...
+
+   <dpath>^ wird immer mit einem Nullbyte abgeschlossen.
+   <xlen> ist die Laenge von <xpath>^, <xpath>^ muss nicht mit einem
+   Nullbyte abgeschlossen sein, also kann auch einfach die Adresse eines
+   M2-Strings uebergeben werden; fuer die Laenge des Strings wird nur <xlen>
+   beachtet.
+   <dot> == <dpath>^ = ("."   "xxx\."   "x:."   ".."   "xxx\.."   "x:..")
+
+   Falls in der Environmentvariablen UNIXMODE der Teilstring "rX" enthalten
+   ist, wird eine Pfadangabe der Form "\..." zu "X:\..." umgewandelt,
+   allerdings nicht, wenn der \ durch die Umwandlung von '.' oder '..'
+   entstanden ist (siehe oben).
+
+   Wenn <dpath>^ den vollstaendigen umgewandelten Pfad aufnehmen konnte
+   (einschliesslich dem abschliessenden Nullbyte), ist <done> = TRUE, sonst
+   ist <done> = FALSE, und 'er.errno' wird auf 'ENAMETOOLONG' gesetzt;
+   <dpath>^ und <dot> sind dann undefiniert.
+   <dSize> gibt den Platz in <dpath>^ an und muss mindestens 1 sein.
+   Falls <xpath>^ der Leerstring ist, wird 'er.errno' auf 'ENOENT' gesetzt,
+   und <done> ist ebenfalls FALSE.
+   <dpath>^ ist maximal 'DINCR' Zeichen (incl. Nullbyte) laenger als
+   <xpath>^.
+ *)
+
+
+PROCEDURE FindFirst ((* EIN/ -- *)     path : StrPtr;
+                     (* EIN/ -- *)     attr : FileAttributes;
+                     (* EIN/AUS *) VAR dta  : DTA;
+                     (* -- /AUS *) VAR res  : INTEGER ): BOOLEAN;
+
+PROCEDURE FindNext ((* EIN/AUS *) VAR dta : DTA;
+                    (* -- /AUS *) VAR res : INTEGER ): BOOLEAN;
+
+(* Fuehren ein "GEMDOS-Fsfirst" bzw. "Fsnext" aus. Der Funktionswert ist
+   TRUE, falls eine Datei gefunden wurde, falls nicht, enthaelt <err> den
+   Fehlercode. <dta> bei "FindNext()" muss die gleiche wie bei "FindFirst()"
+   sein. Da die DTA jedesmal explizit gesetzt wird, kann sie zwischendurch
+   auch beliebig umgesetzt werden. <path> muss im DOS-Format sein.
+ *)
+
+
+PROCEDURE FileExists ((* EIN/ -- *)     path : StrPtr;
+                      (* EIN/ -- *)     sym  : BOOLEAN;
+                      (* -- /AUS *) VAR res  : INTEGER ): BOOLEAN;
+
+(* Liefert 'TRUE', wenn <path>^ existiert. Wenn <sym> gleich TRUE ist,
+   wird ein symbolischer Link, sofern vorhanden, selbst getestet, nicht
+   die Datei, auf die er verweist.
+   Fuer <res> gilt:
+     2: <path> existiert und ist weder normale Datei noch Verzeichnis.
+     1: <path> existiert und ist eine normale Datei
+     0: <path> existiert und ist ein Verzeichnis.
+   < 0: <path> existiert nicht (oder anderer Fehler). GEMDOS-Fehlercode.
+
+   Falls moeglich, wird 'Fxattr' benutzt, sonst "FindFirst()".
+   <path> muss im DOS-Format sein.
+ *)
+
+
+PROCEDURE TstENOTDIR ((* EIN/ -- *)     path : StrPtr;
+                      (* EIN/ -- *)     last : BOOLEAN;
+                      (* EIN/AUS *) VAR err  : INTEGER );
+
+(* Manchmal liefern GEMDOS-Funktionen den Fehler er.ePTHNF (= er.ENOTDIR)
+   zurueck, waehrend *IX er.eFILNF (= er.ENOENT) liefern wuerde und umgekehrt.
+   Diese Funktion testet, ob Verzeichniskomponenten von <path> zwar
+   existieren aber keine Verzeichnisse sind. Wenn dem so ist, wird
+   <err> auf er.ENOTDIR gesetzt, sonst auf er.ENOENT.
+   Wenn <last> gleich TRUE ist, wird auch bei der letzten, nicht mit \
+   abgeschlossenen Komponente auf Verzeichnis getestet.
+   Wenn beim Aufruf <err> weder gleich er.eFILNF noch gleich er.ePTHNF ist,
+   wird nichts gemacht.
+ *)
+
+
+PROCEDURE IsDosDir ((* EIN/ -- *) path : StrPtr ): BOOLEAN;
+
+(* Testet, ob <path>^ ein Verzeichnis auf einem DOS-Dateisystem ist.
+   Dies wird ueber 'Dpathconf(DOSTRUNC)' und "FileExists()" festgestellt.
+ *)
+
+END DosDir.

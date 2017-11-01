@@ -1,0 +1,314 @@
+DEFINITION MODULE Processes;
+
+(* part of standard library *)
+
+__DEF_SWITCHES__
+#ifdef HM2
+#ifdef __LONG_WHOLE__
+(*$!i+: Modul muss mit $i- uebersetzt werden! *)
+(*$!w+: Modul muss mit $w- uebersetzt werden! *)
+#else
+(*$!i-: Modul muss mit $i+ uebersetzt werden! *)
+(*$!w-: Modul muss mit $w+ uebersetzt werden! *)
+#endif
+#endif
+(*****************************************************************************)
+(* ISO-Processes                                                             *)
+(* --------------------------------------------------------------------------*)
+(* Funktionen fuer nebenlaeufige Programme.                                  *)
+(* --------------------------------------------------------------------------*)
+(* 27-Dez-94, Holger Kleinschmidt                                            *)
+(*****************************************************************************)
+
+(* Ein nebenlaeufiges Programm besteht aus einem oder mehreren Prozessen,
+   die eindeutig unterscheidbar sind und die Moeglichkeit haben,
+   parallel zueinander zu laufen. Jeder Prozess ist in einem von vier
+   Zustaenden:
+
+   o 'laufend': Der Prozess hat einen Prozessor und laeuft gerade.
+   o 'bereit' : Der Prozess ist bereit zu laufen, hat aber im Moment
+                keinen Prozessor.
+   o 'passiv' : Der Prozess bleibt solange inaktiv, d.h. bekommt keinen
+                Prozessor, bis er von einem anderen Prozess aktiviert wird.
+   o 'wartend': Der Prozess bleibt solange inaktiv bis eins der Ereignisse
+                auftritt, auf das der Prozess wartet.
+
+   Es muss immer mindestens einen Prozess geben, der den Prozessor benutzt.
+   Wenn es keinen Prozess gibt, der bereit zum Laufen ist, muss es mindestens
+   einen Prozess geben, der auf ein Ereignis wartet.
+
+
+   Zwischen den einzelnen Zustaenden kann auf folgende Weise gewechselt
+   werden:
+
+
+                                           ^
+                                          /
+                                         /  "StopMe()"
+    +---------+     "Wait()"    +---------+
+    | wartend |<--------------- | laufend |<----
+    +---------+                 +---------+     |
+         |                    ^      |          |
+         |                   /       |          |
+         |                  /        |          |
+         |                 /         |          |
+         |                /          |          |
+     (Ereignis)          /           |          |
+         |              /            |          |
+    "Activate()"       /       "SuspendMe()"    | "Switch()"
+         |            /              |          |
+         |           /               |          |
+         |          /                |          |
+         |     (Dispatcher, intern)  |          |
+         |        /                  |          |
+         |       /                   |          |
+         |      /                    |          |
+         V     V                     V          |
+    +---------+                 +---------+     |
+    | bereit  |<----------------| passiv  |<----
+    +---------+   "Activate()"  +---------+
+             ^                  ^
+              \                /
+               \              /
+            "Start()"      "Create()"
+
+  Statt "Activate()" und "SuspendMe()" kann auch "SuspendMeAndActivate()"
+  verwendet werden.
+
+
+  Es gibt zwei grundsaetzliche Arten von Prozessen, die aber auch gemeinsam
+  in einem Programm auftreten koennen. Die Arten unterscheiden sich in der
+  Art wie ein Prozesswechsel herbeigefuehrt wird:
+
+  o Bei Benutzung von "Switch()" handelt es sich um eng gekoppelte
+    Prozesse, die selbst explizit den naechsten auszufuehrenden Prozess
+    auswaehlen und dabei auch Informationen weitergeben koennen. Dies
+    entspricht der Verwendung von Prozessen gleicher Prioritaet als
+    Koroutinen auf einem etwas hoeheren Abstraktionsniveau.
+
+  o Bei Benutzung von "SuspendMe()", "Activate()" und "SuspendMeAndActivate()"
+    haben die Prozesse eine groessere Unabhaengigkeit voneinander.
+    Welcher der lauffaehigen Prozesse als naechster an die Reihe kommt
+    wird durch ein internes Auswahlverfahren (Dispatcher) geregelt, wobei
+    sichergestellt wird, dass kein lauffaehiger Prozess eine groessere
+    Prioritaet hat als die Prozesse, die tatsaechlich gerade laufen.
+    Diese Prioritaet ist statisch und wird bei "Start()" oder "Create()"
+    festgelegt. Der Dispatcher wird genau dann aufgerufen, wenn ein Prozess
+    suspendiert oder reaktiviert (z.B. durch ein Ereignis) wird. Der
+    Dispatcher waehlt lediglich zwischen den lauffaehigen Prozessen aus!
+
+
+  Wenn ein Prozess sich selbst suspendiert, um auf ein Ereignis zu warten,
+  muss er zuvor mit einem oder mehreren Ereignissen assoziiert werden
+  ("Attach()"). Es ist lediglich festgelegt, dass nicht mehr als ein
+  Prozess gleichzeitig mit einem Ereignis assoziiert sein darf, und dass
+  Ereignisse auf den Typ CARDINAL abgebildet werden. Was Ereignisse sind
+  und wie und wann sie auftreten ist nicht festgelegt!
+
+  Wenn ein preemptiver Dispatcher verwendet wird (was aber nicht sein
+  muss!), kann es mehr als einen laufenden Prozess geben. Zwischen den
+  laufenden Prozessen (und nur zwischen diesen!) wird dann zeitgesteuert
+  umgeschaltet.
+
+
+  Wenn ein Programm dieses Modul benutzt, sollte es nicht explizit
+  Koroutinen (aus COROUTINES) verwenden.
+*)
+
+IMPORT SYSTEM;
+
+(*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*)
+
+TYPE
+  ProcessId;
+    (* Identifikation eines Prozesses *)
+  Parameter = SYSTEM.ADDRESS;
+    (* Fuer den Datenaustausch zwischen Prozessen *)
+  Body      = PROC;
+    (* Enthaelt den Programmcode des Prozesses *)
+  Urgency   = INTEGER;
+    (* Wird intern fuer die Verteilung der Rechenzeit auf die Prozesse
+       verwendet. Groessere Werte entsprechen hoeherer Prioritaet.
+       Das Hauptprogramm hat die Prioritaet Null. *)
+  Sources   = CARDINAL;
+    (* Fuer die Identifikation eines externen Ereignisses (``Event'') *)
+
+  (* Das Modul kann die folgenden Ausnahmen ausloesen: *)
+  ProcessesExceptions = (
+    passiveProgram,
+    processError
+  );
+
+(*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*)
+
+
+(* Die folgenden Prozeduren erzeugen Prozesse und schalten zwischen diesen
+ * um.
+ *)
+
+PROCEDURE Create ((* EIN/ -- *)     procBody   : Body;
+                  (* EIN/ -- *)     extraSpace : CARDINAL;
+                  (* EIN/ -- *)     procUrg    : Urgency;
+                  (* EIN/ -- *)     procParams : Parameter;
+                  (* -- /AUS *) VAR procId     : ProcessId );
+
+(* Erzeugt aus <procBody> einen neuen Prozess mit der Prioritaet
+   <procUrg> und den Parametern <procParams>. Der neue Prozess hat
+   mindestens <extraSpace> LOC's zur Verfuegung. In <procId> wird die
+   Kennung des neuen Prozesses zurueckgeliefert. Der neue Prozess befindet
+   sich im passiven Zustand, d.h. er kommt nicht zur Ausfuehrung bis er
+   explizit von einem anderen Prozess durch den Aufruf von "Switch()",
+   "Activate()" oder "SuspendMeAndAcivate()" aktiviert wird.
+
+   Bei Ende der Prozedur, entweder implizit oder explizit durch RETURN,
+   wird das Aequivalent von "StopMe()" ausgefuehrt.
+ *)
+
+PROCEDURE Start ((* EIN/ -- *)     procBody   : Body;
+                 (* EIN/ -- *)     extraSpace : CARDINAL;
+                 (* EIN/ -- *)     procUrg    : Urgency;
+                 (* EIN/ -- *)     procParams : Parameter;
+                 (* -- /AUS *) VAR procId     : ProcessId );
+
+(* Wie "Create()", aber der neue Prozess ist sofort lauffaehig. *)
+
+
+PROCEDURE StopMe ( );
+
+(* Beendet den aufrufenden Prozess und entfernt ihn aus dem System, d.h. er
+   kann nicht wieder aktiviert werden. Diese Prozedur kehrt nicht zum
+   Aufrufer zurueck. Es wird der naechste lauffaehige Prozess aktiviert.
+   Gibt es keine weiteren Prozesse, wird das Programm beendet. Gibt es
+   weitere Prozesse, die aber nicht lauffaehig sind oder auf ein externes
+   Ereignis warten, wird die Ausnahme 'passiveProgram' ausgeloest.
+
+   Der aufrufende Prozess darf keine Quelle von externen ``Events'' sein
+   (-> "Attach()").
+ *)
+
+
+PROCEDURE SuspendMe ( );
+
+(* Der aufrufende Prozess wird in den passiven Zustand versetzt.
+   Die Prozedur kehrt erst wieder zurueck, wenn der aufrufende Prozess
+   durch einen anderen Prozess explizit wieder aktiviert wird, was durch
+   "Switch()", "Activate()" oder "SuspendMeAndAcivate()" geschehen kann.
+
+   Der naechste lauffaehige Prozess wird aktiviert. Gibt es keine weiteren
+   Prozesse, die lauffaehig sind oder auf ein externes Ereignis warten,
+   wird die Ausnahme 'passiveProgram' ausgeloest.
+ *)
+
+
+PROCEDURE Activate ((* EIN/ -- *) procId : ProcessId );
+
+(* Versetzt den Prozess mit der Kennung <procId> in den lauffaehigen
+   Zustand.
+ *)
+
+
+PROCEDURE SuspendMeAndActivate ((* EIN/ -- *) procId : ProcessId );
+
+(* Fuehrt eine unteilbare Sequenz von "Suspend()" und "Activate()" aus.
+   <procId> kann auch die eigene Prozesskennung sein.
+ *)
+
+
+PROCEDURE Switch ((* EIN/ -- *)     procId : ProcessId;
+                  (* EIN/AUS *) VAR info   : Parameter );
+
+(* Wenn der aufrufende Prozess eine Prioritaet hat, die nicht groesser
+   als die des Prozesses <procId> ist, wird er in den passiven Zustand
+   versetzt, und der Prozess mit der Kennung <procId> wird zum aktuellen
+   Prozess. Die Ausnahme 'processError' kann ausgeloest werden, wenn
+   <procId> bereits lauffaehig ist.
+   Beim Aufruf dieser Prozedur werden dem aktivierten Prozess ueber
+   <info> Parameter uebergeben; bei der Rueckkehr der Prozedur enthaelt
+   <info> Informationen, von dem Prozess, der mittels "Switch()" zu diesem
+   Prozess geschaltet hat, oder NIL, falls "Activate()" oder
+   "SuspendMeAndActivate()" benutzt wurden, um zu diesem Prozess zurueck-
+   zukehren.
+ *)
+
+
+
+PROCEDURE Wait ( );
+
+(* Wenn der aufrufende Prozess mit einer Quelle von Ereignissen assoziiert
+   ist, wird er in den Wartezustand versetzt. Die Prozedur kehrt erst
+   zurueck, wenn der Prozess durch einen anderen Prozess wieder aktiviert
+   wurde oder das Ereignis aufgetreten ist.
+ *)
+
+
+
+(* Die folgenden Prozeduren behandeln die Verbindung zwischen Prozessen
+ * und externen Ereignissen.
+ *)
+
+PROCEDURE Attach ((* EIN/ -- *) eventSource : Sources );
+
+(* Assoziiert den aufrufenden Prozess mit dem Ereignis <eventSource>.
+   Wenn <eventSource> bereits mit einem anderen Prozess verbunden ist, wird
+   diese Verbindung zuerst geloest.
+ *)
+
+PROCEDURE Detach ((* EIN/ -- *) eventSource : Sources );
+
+(* Loest die Verbindung zwischen dem Ereignis <eventSource> und dem
+   Programm, egal, von welchem Prozess diese Prozedur aufgerufen wird.
+ *)
+
+PROCEDURE IsAttached ((* EIN/ -- *) eventSource : Sources ): BOOLEAN;
+
+(* Testet, ob das Ereignis <eventSource> mit einem Prozess des Programms
+   verbunden ist.
+ *)
+
+PROCEDURE Handler ((* EIN/ -- *) eventSource : Sources ): ProcessId;
+
+(* Wenn das Ereignis <eventSource> mit einem Prozess des Programms
+   verbunden ist, wird die Kennung dieses Prozesses geliefert, sonst
+   ein implementierungsspezifischer Wert.
+ *)
+
+
+(* Mit den folgenden Prozeduren kann ein Prozess seine eigenen Kennwerte
+ * erfahren:
+ *)
+
+PROCEDURE Me ( ): ProcessId;
+
+(* Liefert die eigene Prozesskennung *)
+
+
+PROCEDURE MyParam ( ): Parameter;
+
+(* Liefert den Wert von <procParam> beim Start des Prozesses mit "Create()"
+   oder "Start()".
+ *)
+
+
+PROCEDURE UrgencyOf ((* EIN/ -- *) proc : ProcessId ): Urgency;
+
+(* Liefert die Prioritaet des Prozesses bei seiner Erzeugung. *)
+
+
+
+(* Prozeduren fuer Exception-Handler *)
+
+PROCEDURE IsProcessesException ( ): BOOLEAN;
+
+(* Testet, ob die aufrufende Koroutine in einer Ausnahmebehandlung ist,
+   weil eine Ausnahme vom Typ 'ProcessesExceptions' ausgeloest wurde.
+ *)
+
+PROCEDURE ProcessesException ( ): ProcessesExceptions;
+
+(* Falls die ausfuehrende Koroutine in einer Ausnahmebehandlung ist,
+   weil eine Ausnahme vom Typ 'ProcessesExceptions' ausgeloest wurde,
+   wird der entsprechende Wert zurueckgeliefert, ansonsten wird eine
+   Ausnahme ausgeloest.
+ *)
+
+END Processes.

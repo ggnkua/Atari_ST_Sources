@@ -1,0 +1,531 @@
+DEFINITION MODULE sig;
+__DEF_SWITCHES__
+#ifdef HM2
+#ifdef __LONG_WHOLE__
+(*$!i+: Modul muss mit $i- uebersetzt werden! *)
+(*$!w+: Modul muss mit $w- uebersetzt werden! *)
+#else
+(*$!i-: Modul muss mit $i+ uebersetzt werden! *)
+(*$!w-: Modul muss mit $w+ uebersetzt werden! *)
+#endif
+#endif
+(*****************************************************************************)
+(* Signalbehandlung.                                                         *)
+(*                                                                           *)
+(* Ein Fehler ist immer dann aufgetreten, wenn bei Funktionen ein negativer  *)
+(* Wert (-1) bzw. NULL zurueckgegeben wird. Die genaue Fehlerursache kann bei*)
+(* Bedarf ueber "e.errno" und die entsprechenden Konstanten ermittelt werden.*)
+(* Die Funktionen veraendern "errno" nur dann, wenn ein Fehler aufgetreten   *)
+(* ist, bei erfolgreicher Ausfuehrung wird "errno" nicht veraendert.         *)
+(*                                                                           *)
+(* GEMDOS/MiNT:                                                              *)
+(* Die Eigenschaften der Funktionen unter dem ``blanken'' GEMDOS sind z.T.   *)
+(* stark eingeschraenkt; unter dem Stichwort GEMDOS ist deswegen immer       *)
+(* angegeben, in wieweit die Funktion emuliert werden kann.                  *)
+(* Unter der Betriebssystemerweiterung MiNT bzw. einer anderen Erweiterung,  *)
+(* die ebenfalls zumindest teilweise die neuen MiNT-Funktionen zur Verfuegung*)
+(* stellt, ist eine bessere Unterstuetzung der Funktionen zu erwarten; wie   *)
+(* weit diese geht, ist unter dem Stichwort MiNT angegeben.                  *)
+(* --------------------------------------------------------------------------*)
+(* 28-Jun-96, Holger Kleinschmidt                                            *)
+(*****************************************************************************)
+
+#if (defined LPRM2) || (defined SPCM2) || (defined MM2)
+VAL_INTRINSIC
+CAST_IMPORT
+#endif
+
+FROM PORTAB IMPORT
+(* TYPE *) SIGNEDLONG, UNSIGNEDLONG, UNSIGNEDWORD, WORDSET;
+
+FROM types IMPORT
+(* TYPE *) unsignedlong, unsigned, int, long, pidT, TimevalRec;
+
+(*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*)
+
+(* Nicht POSIX: Das Setzen einer Variable dieses Typs ist atomar bzgl.
+ * Unterbrechung durch (asynchrone) Signale.
+ *)
+TYPE
+  SigAtomicT = int;
+
+CONST
+  SIGNULL   =  0; (* Kein ``richtiges'' Signal, nicht POSIX *)
+  SIGHUP    =  1;
+  SIGINT    =  2;
+  SIGQUIT   =  3;
+  SIGILL    =  4;
+  SIGTRAP   =  5; (* Nicht POSIX *)
+  SIGABRT   =  6;
+  SIGIOT    = SIGABRT; (* Nicht POSIX *)
+  SIGPRIV   =  7; (* Nicht POSIX *)
+  SIGEMT    = SIGPRIV; (* Nicht POSIX *)
+  SIGFPE    =  8;
+  SIGKILL   =  9;
+  SIGBUS    = 10; (* Nicht POSIX *)
+  SIGSEGV   = 11;
+  SIGSYS    = 12; (* Nicht POSIX *)
+  SIGPIPE   = 13;
+  SIGALRM   = 14;
+  SIGTERM   = 15;
+  SIGURG    = 16; (* Nicht POSIX *)
+  SIGSTOP   = 17; (* Nur unterstuetzt, falls ``Job Control'' vorhanden *)
+  SIGTSTP   = 18; (* Nur unterstuetzt, falls ``Job Control'' vorhanden *)
+  SIGCONT   = 19; (* Nur unterstuetzt, falls ``Job Control'' vorhanden *)
+  SIGCHLD   = 20; (* Nur unterstuetzt, falls ``Job Control'' vorhanden *)
+  SIGTTIN   = 21; (* Nur unterstuetzt, falls ``Job Control'' vorhanden *)
+  SIGTTOU   = 22; (* Nur unterstuetzt, falls ``Job Control'' vorhanden *)
+  SIGIO     = 23; (* Nicht POSIX *)
+  SIGXCPU   = 24; (* Nicht POSIX *)
+  SIGXFSZ   = 25; (* Nicht POSIX *)
+  SIGVTALRM = 26; (* Nicht POSIX *)
+  SIGPROF   = 27; (* Nicht POSIX *)
+  SIGWINCH  = 28; (* Nicht POSIX *)
+  SIGUSR1   = 29;
+  SIGUSR2   = 30;
+
+CONST
+  NSIG = 31; (* Nicht POSIX *)
+
+(* Die folgende Konstante muss je nach Anzahl der Signale von Hand
+ * neu berechnet werden.
+ *)
+CONST
+  MAXSIGSET = 1; (* := (NSIG - 1) DIV (ORD(MAX(WORDSETRANGE))+1) *)
+
+TYPE
+  SigsetRange = [0..MAXSIGSET];
+
+TYPE
+  SigsetPtr = POINTER TO sigsetT;
+
+TYPE
+  (* Implementierung des Typs nur zur Benutzung innerhalb dieses Moduls *)
+  sigsetT = ARRAY SigsetRange OF WORDSET;
+
+
+TYPE
+#ifdef HM2
+(*$K+ Signalhandler muessen mit dieser Option uebersetzt werden *)
+#endif
+  (* Die Signalnummer wird als Langwort uebergeben *)
+  SignalHandler = PROCEDURE((* EIN/ -- ) sig : *)UNSIGNEDLONG );
+#ifdef HM2
+(*$K- Danach aber wieder zuruecksetzen *)
+#endif
+
+TYPE
+#if reverse_set
+  SaFlag = (
+    Sa15, Sa14, Sa13, Sa12, Sa11, Sa10,
+    Sa9, Sa8, Sa7, Sa6, Sa5, Sa4, Sa3, Sa2, Sa1,
+    SaNoCldStop (* Stoppen eines Unterprozesses erzeugt kein Signal *)
+  );
+#else
+  SaFlag = (
+    SaNoCldStop, (* Stoppen eines Unterprozesses erzeugt kein Signal *)
+    Sa1, Sa2, Sa3, Sa4, Sa5, Sa6, Sa7, Sa8, Sa9,
+    Sa10, Sa11, Sa12, Sa13, Sa14, Sa15
+  );
+#endif
+
+  SaFlags = PACKEDSET OF SaFlag;
+
+TYPE
+  SigactionPtr = POINTER TO SigactionRec;
+
+  SigactionRec = RECORD
+    saHandler : SignalHandler;(* Funktion fuer Signalbehandlung *)
+    saMask    : sigsetT;      (* Zusaetzlich blockierte Signale waehrend
+                                 der Abarbeitung des Signals *)
+    saFlags   : SaFlags;      (* Flags,die die Signalbehandlung beeinflussen *)
+  END;
+
+
+TYPE
+  SigBlockType = (
+    SigBlock,   (* Angegebene Signale zusaetzlich blockieren *)
+    SigUnblock, (* Angegebene Signale nicht blockieren *)
+    SigSetMask  (* Ausschliesslich die angegebenen Signale blockieren *)
+  );
+
+#if (defined LPRM2) || (defined SPCM2) || (defined MM2)
+CONST
+  SigDfl = CAST(SignalHandler,0);
+  SigIgn = CAST(SignalHandler,1);
+#else
+VAR (* READ ONLY! *)
+  SigDfl : SignalHandler;
+  SigIgn : SignalHandler;
+#endif
+
+CONST (* Nicht POSIX, aber Ansi-C *)
+  SigErr = -1;
+
+(* Nicht POSIX: *)
+(*===================== "get/setitimer()" ===================================*)
+
+TYPE
+  ItimervalPtr = POINTER TO ItimervalRec;
+  ItimervalRec = RECORD
+    itInterval : TimevalRec; (* Zeit zwischen den Signalen *)
+    itValue    : TimevalRec; (* Zeit bis zum naechsten Signal *)
+  END;
+
+TYPE
+  TimerType = (
+    ItimerReal,
+      (* Das Signal SIGALRM wird ausgeloest, wenn das angegebene Intervall
+       * in der realen Zeit abgelaufen ist, unabhaengig davon wielange
+       * der Prozess in dieser Zeit gelaufen ist.
+       *)
+    ItimerVirtual,
+      (* Das Signal SIGVTALRM wird ausgeloest, wenn das angegebene Intervall
+       * in der virtuellen Prozesszeit abgelaufen ist, d.h. der Timer ist
+       * nur aktiv solange der Prozess laeuft.
+       *)
+    ItimerProf
+      (* Das Signal SIGPROF wird ausgeloest, wenn das angegebene Intervall
+       * in der virtuellen Prozesszeit und in der Zeit, die das System
+       * selbst aufgrund des Prozesses laeuft, abgelaufen ist.
+       *)
+  );
+
+TYPE
+  TimevalCmp = (
+    tvlt, (* <  *)
+    tvle, (* <= *)
+    tvgt, (* >  *)
+    tvge, (* >= *)
+    tveq, (* =  *)
+    tvne  (* <> *)
+  );
+
+(*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*)
+
+PROCEDURE sigemptyset ((* -- /AUS *) VAR set : sigsetT );
+
+PROCEDURE sigfillset ((* -- /AUS *) VAR set : sigsetT );
+
+PROCEDURE sigaddset ((* EIN/AUS *) VAR set : sigsetT;
+                     (* EIN/ -- *)     sig : int     ): int;
+
+PROCEDURE sigdelset ((* EIN/AUS *) VAR set : sigsetT;
+                     (* EIN/ -- *)     sig : int     ): int;
+
+PROCEDURE sigismember ((* EIN/ -- *) set : sigsetT;
+                       (* EIN/ -- *) sig : int     ): int;
+
+(* Die Funktionen stellen Operationen fuer das Arbeiten mit dem Typ
+   'sigsetT' dar. Es MUESSEN(!) ausschliesslich diese Funktionen benutzt
+   werden, um Variablen vom Typ 'sigsetT' zu manipulieren, da die Zuordnung
+   von Elementen zur unterliegenden Bitrepraesentation NICHT festgelegt ist!
+   Es werden nur die uebergebenen Variablen manipuliert, fuer das Aendern
+   Signalmaske des Prozesses ist z.B. "sigprocmask()" zu verwenden!
+   Im Original haben alle Funktionen einen Funktionswert, den ich aber nicht
+   fuer sonderlich sinnvoll halte.
+
+   "sigemptyset": erstellt eine Signalmaske, in der kein Signal gesetzt ist.
+   "sigfillset" : erstellt eine Signalmaske, in der alle Signale gesetzt
+                  sind.
+   "sigaddset"  : Fuegt das Signal <sig> zur Signalmaske hinzu.
+   "sigdelset"  : Entfernt das Signal <sig> aus der Signalmaske.
+   "sigismember": Testet, ob das Signal <sig> in der Signalmaske enthalten
+                  ist; liefert als Funktionswert eins, falls das Signal
+                  enthalten ist, Null sonst.
+
+   GEMDOS: Keine Besonderheiten.
+     MiNT: -""-
+ *)
+
+
+(* Nicht POSIX, aber Ansi-C: *)
+PROCEDURE signal ((* EIN/ -- *)     sig     : int;
+                  (* EIN/ -- *)     handler : SignalHandler;
+                  (* -- /AUS *) VAR old     : SignalHandler ): int;
+
+(* Installiert einen Handler, der aufgerufen wird, wenn das Signal <sig>
+   auftritt. In <old> wird der alte Handler zurueckgeliefert.
+   Der Handler bleibt installiert bis er wieder explizit mit einem erneuten
+   "signal()" entfernt wird, und das entsprechende Signal bleibt waehrend
+   der Ausfuehrung des Handlers blockiert; das entspricht der
+   BSD-Funktionsweise.
+   <handler> muss auf jeden Fall reentrant sein, bzw. reentrante Funktionen
+   verwenden (Vorsicht bei Bibliotheksfunktionen)!
+   Wenn innerhalb von <handler> eine Funktion aufgerufen wird, die 'e.errno'
+   veraendert, sollte 'e.errno' vorher gesichert und nach einer evtl.
+   noetigen Fehlerbehandlung der Funktion wieder zurueckgesetzt werden.
+   Entgegen der in ``C'' ueblichen Deklaration der Funktion wird der alte
+   Handler nicht als Funktionswert, sondern in einem zusaetzlichen Parameter
+   geliefert. Ein Fehler wird hier nicht ueber einen alten Handler mit dem
+   Wert 'SigErr' signalisiert, sondern ueber einen zusaetzlichen
+   Funktionswert; der Inhalt von <old> ist bei einem Fehler nicht definiert.
+
+   GEMDOS/MiNT: Durch den Aufruf der Funktion wird das Signal <sig> aus der
+                Signalmaske entfernt, und so auf jeden Fall ein blockiertes
+                Signal an den Prozess weitergereicht.
+   GEMDOS: Es gibt nur synchrone Signale, d.h. ein Programm kann sich nur
+           selbst mittels "kill()" Signale schicken.
+     MiNT: Keine Besonderheiten.
+ *)
+
+
+PROCEDURE sigaction ((* EIN/ -- *) sig  : int;
+                     (* EIN/ -- *) act  : SigactionPtr;
+                     (* EIN/ -- *) oact : SigactionPtr ): int;
+
+(* Mit dieser Funktion kann festgelegt werden, welche Funktion beim
+   Auftreten eines bestimmten Signals ausgefuehrt werden soll, und welche
+   Signale waehrend der Ausfuehrung des ``Signalhandlers'' zusaetzlich zum
+   ausloesenden Signal blockiert werden sollen (siehe Definition von
+   'SigactionRec'). In <oact>^ werden die bisherigen Werte zurueckgeliefert.
+   Falls <act> oder <oact> gleich NULL sind (nicht NIL!), werden sie
+   ignoriert.
+   Ansonsten gilt das schon zu "signal()" Geschriebene.
+
+   GEMDOS/MiNT: Durch den Aufruf der Funktion wird das Signal <sig> aus der
+                Signalmaske entfernt, und so auf jeden Fall ein blockiertes
+                Signal an den Prozess weitergereicht.
+   GEMDOS: Es gibt nur synchrone Signale, d.h. ein Programm kann sich nur
+           selbst mittels "kill()" Signale schicken.
+     MiNT: Keine Besonderheiten.
+ *)
+
+
+PROCEDURE sigprocmask ((* EIN/ -- *) how  : SigBlockType;
+                       (* EIN/ -- *) set  : SigsetPtr;
+                       (* EIN/ -- *) oset : SigsetPtr    ): int;
+
+(* Mit dieser Funktion kann der aufrufende Prozess seine Signalmaske
+   veraendern, d.h. festlegen, welche Signale blockiert werden sollen.
+
+   <how> = SigBlock  : Die Signalmaske ist die Vereinigung der bisherigen
+                       Maske mit <set>.
+   <how> = SigUnblock: Die Signalmaske ist die Differenz der bisherigen
+                       Maske und <set>.
+   <how> = SigSetMask: <set> wird zur aktuellen Signalmaske.
+
+   In <oset>^ wird die bisherige Signalmaske zurueckgeliefert.
+   Falls <set> oder <oset> gleich NULL sind (nicht NIL!), werden sie
+   ignoriert.
+
+   GEMDOS: Keine Besonderheiten.
+     MiNT: -""-
+ *)
+
+
+PROCEDURE sigpending ((* -- /AUS *) VAR set : sigsetT ): int;
+
+(* Ermittelt, welche Signale fuer den Prozess generiert wurden, aber zur
+   Zeit blockiert sind.
+
+   GEMDOS: Keine Besonderheiten.
+     MiNT: -""-
+ *)
+
+
+PROCEDURE kill ((* EIN/ -- *) pid : pidT;
+                (* EIN/ -- *) sig : int  ): int;
+
+(* Sendet das Signal <sig> an den Prozess oder die Prozessgruppe <pid>.
+
+   <pid> >  0: <sig> wird an den Prozess mit der Kennung <pid> gesendet.
+   <pid> =  0: <sig> wird an alle Prozesse gesendet, die in der gleichen
+               Prozessgruppe wie der aufrufende Prozess sind.
+   <pid> = -1: systemspezifische Aktion.
+   <pid> < -1: <sig> wird an alle Prozesse gesendet, die in der
+               Prozessgruppe <pid> sind.
+
+   Falls <sig> gleich Null, wird kein Signal an einen Prozess gesendet,
+   sondern es wird festgestellt, ob der durch <pid> angegebene Prozess
+   existiert.
+   Um ein Signal zu senden, muss der sendende Prozess entweder die
+   entsprechenden Rechte haben (-> Superuser) oder die gleiche reale oder
+   effektive Kennung wie der Zielprozess. Falls es ``saved set IDs'' gibt,
+   wird nicht die effektive Kennung des Zielprozesses, sondern dessen saved
+   set ID ueberprueft.
+
+   GEMDOS: Ein Signal kann nur an sich selbst gesendet werden.
+     MiNT: Es kann Unterschiede dabei geben, wann ein Prozess berechtigt ist
+           ein Signal zu senden.
+ *)
+
+
+PROCEDURE abort;
+
+(* Das Programm wird sofort beendet, ohne dass die mit "atexit()"
+   installierten Terminierungsroutinen ausgefÅhrt werden, so als ob
+   "kill(getpid(), SIGABRT)" aufgerufen worden waere. Dies funktioniert
+   auch, wenn das Signal blockiert oder ignoriert wird, oder ein Handler
+   installiert ist, der zurueckkehrt. Kehrt der Handler nicht zurueck,
+   haengt das weitere nicht mehr von "abort()" ab.
+
+   GEMDOS/MiNT: Keine Besonderheiten.
+ *)
+
+
+(* Nicht POSIX, aber Ansi-C: *)
+PROCEDURE raise ((* EIN/ -- *) sig : int ): int;
+
+(* Entspricht: "kill(getpid(), sig)" *)
+
+
+(* Nicht POSIX: *)
+PROCEDURE killpg ((* EIN/ -- *) pgrp : pidT;
+                  (* EIN/ -- *) sig  : int  ): int;
+
+(* Entspricht (im wesentlichen): "kill(-pgrp, sig)" *)
+
+
+PROCEDURE pause;
+
+PROCEDURE sigsuspend ((* EIN/ -- *) sigmask : sigsetT );
+
+(* "pause()" suspendiert den aufrufenden Prozess bis ein Signal auftritt.
+   Bei "sigsuspend()" kann festgelegt werden, welche Signale waehrend des
+   Wartens blockiert sind.
+   Falls das Signal durch einen Handler abgefangen wird, der normal
+   zurueckkehrt, kehren auch die Funktionen zurueck, sonst wird der Prozess
+   terminiert.
+
+   Eigentlich haben die Funktionen bei POSIX noch einen Rueckgabewert, da
+   dieser aber immer -1 ist, mit 'e.errno' auf 'e.EINTR' gesetzt, habe ich
+   ihn hier eingespart; 'errno' wird aber trotzdem noch gesetzt.
+
+   GEMDOS: kehren immer zurueck.
+     MiNT: Keine Besonderheiten.
+ *)
+
+
+PROCEDURE sleep ((* EIN/ -- *) seconds : unsigned ): unsigned;
+
+(* Suspendiert den aufrufenden Prozess fuer <seconds> Sekunden oder bis
+   ein Signal auftritt. Als Funktionswert wird Null zurueckgegeben oder, bei
+   Auftreten eines Signals, die Differenz der bisher verstrichenen Zeit zu
+   <seconds>.
+   "sleep()" und "alarm()" sollten moeglichst nicht beide in einem Programm
+   benutzt werden, da die Funktionen durch die jeweils andere Funktion
+   implementiert sein koennten, so dass sich Konflikte ergeben.
+   Aus Portabilitaetsgruenden sollte <seconds> nicht groesser als 65535 sein
+
+   GEMDOS: Es wird ein ``Busy waiting'' durchgefuehrt.
+     MiNT: Keine Besonderheiten
+ *)
+
+
+(* Nicht POSIX: *)
+PROCEDURE usleep ((* EIN/ -- *) useconds : long ): long;
+
+(* Wie "sleep()", aber die Zeit ist in Mikrosekunden angegeben.
+
+   GEMDOS/MiNT: Zeitaufloesung in Millisekunden.
+   GEMDOS: Es wird ein ``Busy waiting'' durchgefuehrt.
+     MiNT: Funktioniert erst ab MiNT 1.10. Wegen der geringeren Aufloesung
+           kann auch ein Wert ungleich Null zurueckgeliefert werden, obwohl
+           kein Signal aufgetreten ist.
+ *)
+
+
+PROCEDURE alarm ((* EIN/ -- *) seconds : unsigned ): unsigned;
+
+(* Sendet das Signal 'SIGALRM' nach <seconds> Sekunden an den aufrufenden
+   Prozess. Wenn kein entsprechender Handler installiert wurde, wird der
+   Prozess nach der angegebenen Zeit terminiert. Ist <seconds> gleich Null,
+   wird ein zuvor in Auftrag gegebener Alarm zurueckgesetzt.
+   Als Funktionswert werden die Anzahl Sekunden bis zu einem evtl. frueher
+   eingeplanten Alarm zurueckgeliefert.
+   "sleep()" und "alarm()" sollten moeglichst nicht beide in einem Programm
+   benutzt werden, da die Funktionen durch die jeweils andere Funktion
+   implementiert sein koennten, so dass sich Konflikte ergeben.
+   Aus Portabilitaetsgruenden sollte <seconds> nicht groesser als 65535 sein
+
+   GEMDOS: Es wird Null zurueckgegeben und nichts passiert.
+     MiNT: Keine Besonderheiten.
+ *)
+
+
+(* Nicht POSIX: *)
+PROCEDURE timerclear ((* -- /AUS *) VAR tv : TimevalRec );
+
+PROCEDURE timerisset ((* EIN/ -- *) tv : TimevalRec ): BOOLEAN;
+
+PROCEDURE timercmp ((* EIN/ -- *) tv1   : TimevalRec;
+                    (* EIN/ -- *) tv2   : TimevalRec;
+                    (* EIN/ -- *) tvcmp : TimevalCmp ): BOOLEAN;
+
+(* Funktionen zur Manipulation von Variablen des Typs 'TimevalRec'.
+   Die Funktionen sind unter *IX als Makros definiert.
+
+   "timerclear()" : Setzt den Parameter auf den Wert Null.
+   "timerisset()" : Testet, ob der Parameter einen Wert ungleich Null hat.
+   "timercmp()"   : Vergleicht die beiden Parameter gemaess der angegebenen
+                    Relation. Im Gegensatz zu *IX koennen auch '<=' und '>='
+                    verwendet werden.
+
+   GEMDOS: Keine Besonderheiten.
+     MiNT: -""-
+ *)
+
+
+(* Nicht POSIX: *)
+PROCEDURE getitimer ((* EIN/ -- *)     which : TimerType;
+                     (* -- /AUS *) VAR value : ItimervalRec ): int;
+
+PROCEDURE setitimer ((* EIN/ -- *) which  : TimerType;
+                     (* EIN/ -- *) value  : ItimervalPtr;
+                     (* EIN/ -- *) ovalue : ItimervalPtr ): int;
+
+(* Jeder Prozess besitzt drei Intervall-Zeitgeber, die dafuer benutzt werden
+   koennen, dem Prozess in regelmaessigen Abstaenden ein bestimmtes Signal
+   zu senden. Welches Signal gesendet wird und welche Zeitmessung dabei
+   zugrunde liegt, wird ueber 'TimerType' festgelegt. In ItimervalRec.itValue
+   steht die Zeit bis zum naechsten Signal, waehrend in itIntervall die Zeit
+   zwischen den Signalen steht. Wird itValue auf Null gesetzt, so wird der
+   Zeitgeber sofort ausgeschaltet, wird itIntervall auf Null gesetzt, wird
+   der Zeitgeber nach dem naechsten Signal ausgeschaltet.
+   Mit "setitimer()" wird ein Zeitgeber ueber <value> gesetzt, und ueber
+   <ovalue> kann der alte Wert abgefragt werden, falls <ovalue> nicht gleich
+   NULL ist. Mit "getitimer()" wird lediglich der augenblickliche Wert
+   abgefragt, ohne den Zeitgeber neu zu setzen.
+
+   GEMDOS: Liefert immer -1 (errno = 'ENOSYS').
+     MiNT: Keine Besonderheiten.
+ *)
+
+
+(* Nicht POSIX: *)
+PROCEDURE sigmask ((* EIN/ -- *) sig : int ): unsignedlong;
+
+(* Die Funktion liefert eine Maske, in der das Signal <sig> gesetzt ist.
+   Unter der Voraussetzung, dass unterschiedliche(!) Signale verwendet
+   werden, kann mit dieser Funktion durch Addition der Ergebnisse eine
+   Signalmaske fuer mehrere Signale gebildet werden.
+
+   Beispiel: mask := sigmask(SIGUSR1) + sigmask(SIGUSR2);
+
+   Die Signalmasken fuer "sigsetmask()", "sigblock()" und "sigpause()"
+   MUESSEN(!) mit dieser Funktion erzeugt werden, da die Zuordnung von
+   Signalen zur unterliegenden Bitrepraesentation NICHT festgelegt ist!
+   Die Funktion ist unter *IX als Makro definiert, und die Ergebnisse
+   koennen in ``C'' beliebig durch ein bitweises Oder (-> ) verknuepft
+   werden.
+ *)
+
+
+(* Nicht POSIX: *)
+PROCEDURE sigsetmask ((* EIN/ -- *) mask : unsignedlong ): unsignedlong;
+
+PROCEDURE sigblock ((* EIN/ -- *) mask : unsignedlong ): unsignedlong;
+
+(* Die Funktionen entsprechen "sigprocmask()" mit den Befehlen 'SigSetMask'
+   bzw. 'SigBlock' und liefern die alte Signalmaske zurueck.
+ *)
+
+
+(* Nicht POSIX: *)
+PROCEDURE sigpause ((* EIN/ -- *) mask : unsignedlong );
+
+(* Die Funktion entspricht "sigsuspend()" *)
+
+END sig.
+

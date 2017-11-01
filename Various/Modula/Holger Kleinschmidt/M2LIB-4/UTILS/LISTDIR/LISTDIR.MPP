@@ -1,0 +1,694 @@
+MODULE ListDir;
+__IMP_SWITCHES__
+__DEBUG__
+#ifdef HM2
+#ifdef __LONG_WHOLE__
+(*$!i+: Modul muss mit $i- uebersetzt werden! *)
+(*$!w+: Modul muss mit $w- uebersetzt werden! *)
+#else
+(*$!i-: Modul muss mit $i+ uebersetzt werden! *)
+(*$!w-: Modul muss mit $w+ uebersetzt werden! *)
+#endif
+#endif
+(* Listing von Dateiverzeichnissen.
+ *
+ * Benutzung: listdir [-p Muster] [Verzeichnis ... ]
+ *
+ * Vorsicht beim Aufruf in einer Kommandoshell: Das Muster muss hier
+ * ``gequoted'' werden!
+ * Bei der Angabe des Musters ist zu beachten, dass zwischen Gross- und
+ * Kleinschreibung unterschieden wird.
+ * Die einzelnen Zeilen entsprechen dem, was GNU-ls bei:
+ *
+ *   ls -alFks
+ *
+ * ausgibt.
+ *
+ * 28-Aug-96, Holger Kleinschmidt
+ *)
+
+#if (defined MM2)
+(*$E MTP *)
+#if (defined __DEBUG_CODE__)
+IMPORT TOSDebug;
+#endif
+#endif
+
+VAL_INTRINSIC
+CAST_IMPORT
+PTR_ARITH_IMPORT
+
+FROM SYSTEM IMPORT
+(* TYPE *) ADDRESS,
+(* PROC *) ADR, TSIZE;
+
+FROM PORTAB IMPORT
+(* CONST*) NULL,
+(* TYPE *) WORDSET, SIGNEDWORD, UNSIGNEDWORD, UNSIGNEDLONG, UNSIGNED;
+
+IMPORT er;
+
+FROM types IMPORT
+(* CONST*) PATHMAX, EOS,
+(* TYPE *) FileName, PathName, StrPtr, offT, uidT, gidT, timeT, devT, long,
+           FileMode, modeT, sizeT, ArrayRange, StrArray;
+
+FROM DosSystem IMPORT
+(* PROC *) exit;
+
+FROM dir IMPORT
+(* TYPE *) DIR, DirentPtr, DirentRec, StatRec,
+(* PROC *) opendir, readdir, xreaddir, rewinddir, closedir, telldir, readlink,
+           stat, lstat, sISCHR, sISDIR, sISBLK, sISREG, sISFIFO, sISLNK,
+           major, minor;
+
+FROM proc IMPORT
+(* PROC *) chdir, getcwd;
+
+FROM sys IMPORT
+(* TYPE *) GroupRec, GroupPtr, PasswdRec, PasswdPtr,
+(* PROC *) getpwuid, getgrgid, time;
+
+FROM args IMPORT
+(* PROC *) main;
+
+FROM str IMPORT
+(* PROC *) AssignCToM2, strerror, strcpy, strcmp, strlen;
+
+FROM tim IMPORT
+(* PROC *) ctime;
+
+FROM POSIX2 IMPORT
+(* TYPE *) FNMFlags,
+(* VAR  *) optopt, optarg, optind,
+(* PROC *) fnmatch, getopt;
+
+FROM lib IMPORT
+(* TYPE *) arg1, arg9,
+(* PROC *) void, qsort, sprintf;
+
+FROM blk IMPORT
+(* PROC *) memmove;
+
+FROM STextIO IMPORT
+(* PROC *) WriteChar, WriteString, WriteLn;
+
+FROM SWholeIO IMPORT
+(* PROC *) WriteCard;
+
+FROM mem IMPORT
+(* PROC *) malloc, realloc, free;
+
+(*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*)
+
+CONST
+  PAST   = LIC(15552000); (*  6 * 30 * 24 * 60 * 60  (~ 6 Monate) *)
+  FUTURE = LIC(3600);     (*                60 * 60  (1 Stunde) *)
+
+TYPE
+  ModeStr = ARRAY [0..10] OF CHAR;
+
+TYPE
+  FileRecPtr = POINTER TO FileRec;
+  FileRec = RECORD
+    fName : UNSIGNEDLONG;
+    fStat : StatRec;
+    CASE slink : BOOLEAN OF
+      TRUE: lName : UNSIGNEDLONG;
+            lMode : modeT;
+    ELSE
+    END;
+  END;
+
+(* Da sowieso nur max. acht (bei String) bzw. zehn (bei Zahl) Zeichen der
+ * Benutzer/Gruppenkennung geschrieben werden, ist eine dynamische
+ * Stringverwaltung unnoetig.
+ *)
+
+CONST
+  MAXIDNAME = 10;
+
+TYPE
+  IdName = ARRAY [0..MAXIDNAME] OF CHAR;
+
+TYPE
+  UserIdRec = RECORD
+    id   : UNSIGNEDLONG;
+    name : IdName;
+  END;
+
+  GroupIdRec = RECORD
+    id   : UNSIGNEDLONG;
+    name : IdName;
+  END;
+
+CONST
+  MinStrTableSize  = 1000;
+  MinFileTableSize = 100;
+  MinIdTableSize   = 10;
+
+VAR
+  StrTable       : StrPtr;
+  StrTableNext   : UNSIGNEDLONG;
+  StrTableSize   : UNSIGNEDLONG;
+
+  FileTable      : FileRecPtr;
+  FileTableNext  : UNSIGNEDWORD;
+  FileTableSize  : UNSIGNEDWORD;
+
+  UserTable      : POINTER TO ARRAY [0..100] OF UserIdRec;
+  UserTableNext  : UNSIGNEDWORD;
+  UserTableSize  : UNSIGNEDWORD;
+
+  GroupTable     : POINTER TO ARRAY [0..100] OF GroupIdRec;
+  GroupTableNext : UNSIGNEDWORD;
+  GroupTableSize : UNSIGNEDWORD;
+
+  progname  : PathName;
+  now       : timeT;
+  cwd       : PathName;
+  status    : INTEGER;
+
+(*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*)
+
+PROCEDURE NoMem;
+BEGIN
+ WriteString(progname);
+ WriteString(": ");
+ WriteString("No more memory");
+ WriteLn;
+ exit(2);
+END NoMem;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE Error ((* EIN/ -- *) msg : ARRAY OF CHAR );
+
+VAR errstr  : ARRAY [0..100] OF CHAR;
+
+BEGIN
+ WriteString(progname);
+ WriteString(": ");
+ WriteString(msg);
+ WriteString(": ");
+ AssignCToM2(strerror(er.errno), 0, errstr);
+ WriteString(errstr);
+ WriteLn;
+ status := 1;
+END Error;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE xrealloc ((* EIN/AUS *) VAR adr  : ADDRESS;
+                    (* EIN/ -- *)     snew : UNSIGNEDLONG );
+
+BEGIN
+ adr := realloc(adr, snew);
+ IF adr = NULL THEN
+   NoMem;
+ END;
+END xrealloc;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE EnlargeStrTable;
+BEGIN
+ INC(StrTableSize, StrTableSize);
+ xrealloc(StrTable, StrTableSize);
+END EnlargeStrTable;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE EnlargeFileTable;
+BEGIN
+ INC(FileTableSize, FileTableSize);
+ xrealloc(FileTable,
+          VAL(UNSIGNEDLONG,FileTableSize) * VAL(UNSIGNEDLONG,TSIZE(FileRec)));
+END EnlargeFileTable;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE EnlargeUserTable;
+BEGIN
+ INC(UserTableSize, UserTableSize);
+ xrealloc(UserTable,
+          VAL(UNSIGNEDLONG,UserTableSize) * VAL(UNSIGNEDLONG,TSIZE(UserIdRec)));
+END EnlargeUserTable;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE EnlargeGroupTable;
+BEGIN
+ INC(GroupTableSize, GroupTableSize);
+ xrealloc(GroupTable,
+          VAL(UNSIGNEDLONG,GroupTableSize) * VAL(UNSIGNEDLONG,TSIZE(GroupIdRec)));
+END EnlargeGroupTable;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE InitTables;
+BEGIN
+ StrTable      := malloc(MinStrTableSize);
+ FileTable     := malloc(MinFileTableSize * TSIZE(FileRec));
+ StrTableSize  := MinStrTableSize;
+ StrTableNext  := 0;
+ FileTableSize := MinFileTableSize;
+ FileTableNext := 0;
+ IF (StrTable = NULL) OR (FileTable = NULL) THEN
+   NoMem;
+ END;
+END InitTables;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE ReleaseTables;
+BEGIN
+ free(StrTable);
+ free(FileTable);
+END ReleaseTables;
+
+(*---------------------------------------------------------------------------*)
+
+#ifdef HM2
+(*$E+ Prozedur als Parameter erlaubt *)
+#endif
+PROCEDURE CmpName ((* EIN/ -- *) p1 : ADDRESS;
+                   (* EIN/ -- *) p2 : ADDRESS ): INTEGER;
+
+VAR r1 : POINTER TO FileRec;
+    r2 : POINTER TO FileRec;
+
+BEGIN
+ r1 := p1;
+ r2 := p2;
+ RETURN(strcmp(ADDADR(StrTable, r1^.fName), ADDADR(StrTable, r2^.fName)));
+END CmpName;
+#ifdef HM2
+(*$E=*)
+#endif
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE GetUser ((* EIN/ -- *) uid : uidT ): StrPtr;
+
+VAR i    : SIGNEDWORD;
+    pw   : PasswdPtr;
+    args : arg1;
+
+BEGIN
+ FOR i := CAST(SIGNEDWORD,UserTableNext) - 1 TO 0 BY -1 DO
+   IF uid = VAL(uidT,UserTable^[i].id) THEN
+     RETURN(ADR(UserTable^[i].name));
+   END;
+ END;
+
+ IF UserTableNext >= UserTableSize THEN
+   EnlargeUserTable;
+ END;
+
+ pw := getpwuid(uid);
+ WITH UserTable^[UserTableNext] DO
+   id := VAL(UNSIGNEDLONG,uid);
+   IF pw = NULL THEN
+     args[0] := ADR(id);
+     void(sprintf(ADR(name), "%-8lu", args));
+   ELSE
+     args[0] := pw^.pwName;
+     void(sprintf(ADR(name), "%-8.8s", args));
+   END;
+ END;
+ INC(UserTableNext);
+ RETURN(ADR(UserTable^[UserTableNext-1].name));
+END GetUser;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE GetGroup ((* EIN/ -- *) gid : gidT ): StrPtr;
+
+VAR i    : SIGNEDWORD;
+    gr   : GroupPtr;
+    args : arg1;
+
+BEGIN
+ FOR i := CAST(SIGNEDWORD,GroupTableNext) - 1 TO 0 BY -1 DO
+   IF gid = VAL(gidT,GroupTable^[i].id) THEN
+     RETURN(ADR(GroupTable^[i].name));
+   END;
+ END;
+
+ IF GroupTableNext >= GroupTableSize THEN
+   EnlargeGroupTable;
+ END;
+
+ gr := getgrgid(gid);
+ WITH GroupTable^[GroupTableNext] DO
+   id := VAL(UNSIGNEDLONG,gid);
+   IF gr = NULL THEN
+     args[0] := ADR(id);
+     void(sprintf(ADR(name), "%-8lu", args));
+   ELSE
+     args[0] := gr^.grName;
+     void(sprintf(ADR(name), "%-8.8s", args));
+   END;
+ END;
+ INC(GroupTableNext);
+ RETURN(ADR(GroupTable^[GroupTableNext-1].name));
+END GetGroup;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE WriteType ((* EIN/ -- *) mode : modeT );
+BEGIN
+ IF sISREG(mode) THEN
+   IF (sIXUSR IN mode) OR (sIXGRP IN mode) OR (sIXOTH IN mode) THEN
+     WriteChar('*');
+   END;
+ ELSIF sISDIR(mode) THEN
+   WriteChar('/');
+ ELSIF sISLNK(mode) THEN
+   WriteChar('@');
+ ELSIF sISFIFO(mode) THEN
+   WriteChar('|');
+ END;
+END WriteType;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE ModeToStr ((* EIN/ -- *)     mode : modeT;
+                     (* -- /AUS *) VAR str  : ModeStr );
+
+BEGIN
+ str := "?---------";
+
+ IF sISREG(mode) THEN
+   str[0] := '-';
+ ELSIF sISDIR(mode) THEN
+   str[0] := 'd';
+ ELSIF sISLNK(mode) THEN
+   str[0] := 'l';
+ ELSIF sISFIFO(mode) THEN
+   str[0] := 'p';
+ ELSIF sISCHR(mode) THEN
+   str[0] := 'c';
+ ELSIF sISBLK(mode) THEN
+   str[0] := 'b';
+ END;
+
+ IF sIRUSR IN mode THEN
+   str[1] := 'r';
+ END;
+ IF sIRGRP IN mode THEN
+   str[4] := 'r';
+ END;
+ IF sIROTH IN mode THEN
+   str[7] := 'r';
+ END;
+
+ IF sIWUSR IN mode THEN
+   str[2] := 'w';
+ END;
+ IF sIWGRP IN mode THEN
+   str[5] := 'w';
+ END;
+ IF sIWOTH IN mode THEN
+   str[8] := 'w';
+ END;
+
+ IF sIXUSR IN mode THEN
+   str[3] := 'x';
+ END;
+ IF sISUID IN mode THEN
+   IF sIXUSR IN mode THEN
+     str[3] := 's';
+   ELSE
+     str[3] := 'S';
+   END;
+ END;
+ IF sIXGRP IN mode THEN
+   str[6] := 'x';
+ END;
+ IF sISGID IN mode THEN
+   IF sIXGRP IN mode THEN
+     str[6] := 's';
+   ELSE
+     str[6] := 'S';
+   END;
+ END;
+ IF sIXOTH IN mode THEN
+   str[9] := 'x';
+ END;
+ IF sISVTX IN mode THEN
+   IF sIXOTH IN mode THEN
+     str[9] := 't';
+   ELSE
+     str[9] := 'T';
+   END;
+ END;
+END ModeToStr;
+
+(*---------------------------------------------------------------------------*)
+
+PROCEDURE DoList ((* EIN/ -- *) REF dir     : ARRAY OF CHAR;
+                  (* EIN/ -- *) REF pattern : ARRAY OF CHAR );
+
+CONST SEP = "===========================================================";
+
+VAR dirp    : DIR;
+    dp      : DirentPtr;
+    sp      : StrPtr;
+    args    : arg9;
+    i       : UNSIGNEDWORD;
+    timebuf : ARRAY [0..39] OF CHAR;
+    linebuf : ARRAY [0..255] OF CHAR;
+    lineidx : SIGNEDWORD;
+    maj     : UNSIGNEDWORD;
+    min     : UNSIGNEDWORD;
+    nblocks : UNSIGNEDLONG;
+    attr    : ModeStr;
+    st      : StatRec;
+    t       : CHAR;
+    total   : offT;
+    totalB  : UNSIGNEDLONG;
+    slen    : UNSIGNEDLONG;
+    llen    : INTEGER;
+    aktfile : FileRecPtr;
+    (* Hier kommt leider eine Laengenbegrenzung der Dateinamen
+     * wegen der festen Groesse von M2-Strings ins Spiel...
+     *)
+    file    : PathName;
+    link    : PathName;
+
+
+BEGIN
+ InitTables;
+
+ WriteString("      Pattern: "); WriteString(pattern); WriteLn;
+ WriteString("    Directory: "); WriteString(dir); WriteLn;
+
+ dirp := opendir(dir);
+ IF dirp = NULL THEN
+   Error(dir);
+   ReleaseTables;
+   RETURN;
+ END;
+
+ total  := 0;
+ totalB := 0;
+ void(chdir(dir)); (* damit "[l]stat()" die Dateien findet *)
+ dp := xreaddir(dirp);
+ WHILE dp <> NULL DO
+   AssignCToM2(dp^.dName, 0, file);
+   IF fnmatch(file, pattern, FNMFlags{}) = 0 THEN
+     IF FileTableNext >= FileTableSize THEN
+       EnlargeFileTable;
+     END;
+
+     slen := strlen(dp^.dName) + VAL(sizeT,1); (* + 0C *)
+     WHILE StrTableNext + slen > StrTableSize DO
+       EnlargeStrTable;
+     END;
+
+     aktfile := ADDADR(FileTable,VAL(UNSIGNEDLONG,FileTableNext) * VAL(UNSIGNEDLONG,TSIZE(FileRec)));
+
+     WITH aktfile^ DO
+       IF dp^.dStatValid THEN
+         fStat := dp^.dStat;
+       END;
+       IF ~dp^.dStatValid & (lstat(file, fStat) < 0) THEN
+         Error(file);
+       ELSE
+         slink := FALSE;
+         fName := StrTableNext;
+         strcpy(ADDADR(StrTable, StrTableNext), dp^.dName);
+         INC(FileTableNext);
+         INC(StrTableNext, slen);
+         INC(total, fStat.stSize);
+         (* 512-Byte-Bloecke in 1024-Byte-Bloecke *)
+         INC(totalB, VAL(UNSIGNEDLONG,fStat.stBlocks + VAL(offT,1)) DIV VAL(UNSIGNEDLONG,2));
+
+         IF sISLNK(fStat.stMode) THEN
+           llen := readlink(file, ADR(link), PATHMAX);
+           IF llen < 0 THEN
+             Error(file);
+           ELSE
+             link[VAL(UNSIGNEDWORD,llen)] := 0C;
+             INC(llen);
+             WHILE StrTableNext + VAL(UNSIGNEDLONG,llen) > StrTableSize DO
+               EnlargeStrTable;
+             END;
+             slink := TRUE;
+             lName := StrTableNext;
+             strcpy(ADDADR(StrTable, StrTableNext), ADR(link));
+             INC(StrTableNext, VAL(UNSIGNEDLONG,llen));
+             (* Funktioniert auch mit relativen Links, da mit "chdir()"
+              * in dieses Verzeichnis gewechselt wurde. Sonst muesste
+              * noch der Pfad vorne dran gehaengt werden.
+              *)
+             IF stat(file, st) = 0 THEN
+               lMode := st.stMode;
+             ELSE
+               (* Vielleicht existiert das Ziel des Symbolischen Links
+                * nicht, trotzdem kein Fehler.
+                *)
+               lMode := modeT{};
+             END;
+           END;
+         END;
+       END;
+     END; (* WITH aktfile^ *)
+   END; (* IF fnmatch() *)
+   dp := xreaddir(dirp);
+ END;
+ void(chdir(cwd));
+ void(closedir(dirp));
+
+ qsort(FileTable,
+       VAL(UNSIGNEDLONG,FileTableNext),
+       VAL(UNSIGNEDLONG,TSIZE(FileRec)),
+       CmpName);
+
+ WriteString("      # Files: "); WriteCard(VAL(UNSIGNED,FileTableNext), 1); WriteLn;
+ WriteString("  Bytes total: "); WriteCard(total, 1); WriteLn;
+ WriteString(" Blocks total: "); WriteCard(totalB, 1); WriteLn;
+ WriteLn;
+ WriteString(" blk attribute  lnk user     group    size/dev mtime"); WriteLn;
+ WriteString(SEP); WriteLn;
+ aktfile := FileTable;
+ FOR i := 1 TO FileTableNext DO
+   AssignCToM2(ADDADR(StrTable, aktfile^.fName), 0, file);
+   WITH aktfile^.fStat DO
+     lineidx := 0;
+     ModeToStr(stMode, attr);
+     nblocks := VAL(UNSIGNEDLONG,stBlocks + VAL(offT,1)) DIV VAL(UNSIGNEDLONG,2);
+     args[0] := ADR(nblocks);
+     args[1] := ADR(attr);
+     args[2] := ADR(stNlink);
+     args[3] := GetUser(stUid);
+     args[4] := GetGroup(stGid);
+     lineidx := VAL(SIGNEDWORD,sprintf(ADR(linebuf), "%4lu %s %3hu %s %s ", args));
+
+     IF sISCHR(stMode) OR sISBLK(stMode) THEN
+       maj := major(stRdev); args[0] := ADR(maj);
+       min := minor(stRdev); args[1] := ADR(min);
+       INC(lineidx, VAL(SIGNEDWORD,sprintf(ADR(linebuf[lineidx]), "%3hu, %3hu ", args)));
+     ELSE
+       args[0] := ADR(stSize);
+       INC(lineidx, VAL(SIGNEDWORD,sprintf(ADR(linebuf[lineidx]), "%8lu ", args)));
+     END;
+
+     AssignCToM2(ctime(stMtime), 0, timebuf);
+     IF (stMtime + PAST < now) OR (now + FUTURE < stMtime) THEN
+       (* Schon ein halbes Jahr alt oder erst zukuenftig, keine Uhrzeit *)
+       strcpy(ADR(timebuf[11]), ADR(timebuf[19]));
+     END;
+     timebuf[16] := 0C;
+     args[0] := ADR(timebuf[4]);
+     INC(lineidx, VAL(SIGNEDWORD,sprintf(ADR(linebuf[lineidx]), "%s ", args)));
+
+     WriteString(linebuf);
+     WriteString(file);
+
+     IF aktfile^.slink THEN
+       WriteString(" -> ");
+       AssignCToM2(ADDADR(StrTable, aktfile^.lName), 0, file);
+       WriteString(file);
+       WriteType(aktfile^.lMode);
+     ELSE
+       WriteType(stMode);
+     END;
+     WriteLn;
+   END; (* WITH *)
+   aktfile := ADDADR(aktfile, TSIZE(FileRec));
+ END; (* FOR *)
+ WriteString(SEP); WriteLn;
+ ReleaseTables;
+END DoList;
+
+(*===========================================================================*)
+
+VAR
+  voidp     : StrPtr;
+  i         : ArrayRange;
+  argc      : ArrayRange;
+  argv      : StrArray;
+  c         : INTEGER;
+  directory : PathName;
+  pattern   : PathName;
+
+BEGIN
+ status     := 0;
+ UserTable  := malloc(MinIdTableSize * TSIZE(UserIdRec));
+ GroupTable := malloc(MinIdTableSize * TSIZE(GroupIdRec));
+ IF (UserTable = NULL) OR (GroupTable = NULL) THEN
+   NoMem;
+ END;
+ UserTableSize  := MinIdTableSize;
+ UserTableNext  := 0;
+ GroupTableSize := MinIdTableSize;
+ GroupTableNext := 0;
+
+ now   := time(NULL);
+ voidp := getcwd(ADR(cwd), PATHMAX+1);
+
+ pattern := "*";
+ main(argc, argv);
+ LOOP
+   c := getopt(argc, argv, ":p:");
+   IF c = -1 THEN
+     EXIT;
+   END;
+   CASE CHR(c) OF
+     'p': AssignCToM2(optarg, 0, pattern);
+    |':': WriteString("*** option requires argument: ");
+          WriteChar(CHR(optopt));
+          WriteLn;
+    |'?': WriteString("*** unknown option: ");
+          WriteChar(CHR(optopt));
+          WriteLn;
+   ELSE   WriteString("??: "); WriteChar(CHR(c)); WriteLn;
+   END;
+ END;
+
+ IF argc > 0 THEN
+   AssignCToM2(argv^[0], 0, progname);
+   IF progname[0] = EOS THEN
+     (* Wenn Programmname nicht festgestellt werden kann,
+      * einfach Modulname verwenden.
+      *)
+     progname := "ListDir";
+   END;
+ END;
+
+ IF optind = INT(argc) THEN
+   DoList(".", pattern);
+ ELSE
+   WHILE optind < INT(argc) DO
+     AssignCToM2(argv^[VAL(ArrayRange,optind)], 0, directory);
+     DoList(directory, pattern);
+     WriteLn;
+     INC(optind);
+   END;
+ END;
+
+ exit(status);
+END ListDir.

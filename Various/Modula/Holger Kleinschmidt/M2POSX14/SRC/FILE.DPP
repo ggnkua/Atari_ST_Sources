@@ -1,0 +1,683 @@
+DEFINITION MODULE file;
+__DEF_SWITCHES__
+#ifdef HM2
+#ifdef __LONG_WHOLE__
+(*$!i+: Modul muss mit $i- uebersetzt werden! *)
+(*$!w+: Modul muss mit $w- uebersetzt werden! *)
+#else
+(*$!i-: Modul muss mit $i+ uebersetzt werden! *)
+(*$!w-: Modul muss mit $w+ uebersetzt werden! *)
+#endif
+#endif
+(*****************************************************************************)
+(* Funktionen, die ``normale'' Dateien bearbeiten.                           *)
+(*                                                                           *)
+(* Ein Fehler ist immer dann aufgetreten, wenn bei Funktionen mit Typ INTEGER*)
+(* ein negativer Wert zurueckgegeben wird.                                   *)
+(* Die genaue Fehlerursache kann bei Bedarf ueber "err.errno" und die ent-   *)
+(* sprechenden Konstanten ermittelt werden. Die Funktionen veraendern "errno"*)
+(* nur dann, wenn ein Fehler aufgetreten ist, bei erfolgreicher Ausfuehrung  *)
+(* wird "errno" nicht veraendert.                                            *)
+(*                                                                           *)
+(* GEMDOS:                                                                   *)
+(* Die Eigenschaften der Funktionen unter dem ``blanken'' GEMDOS sind z.T.   *)
+(* stark eingeschraenkt; unter dem Stichwort GEMDOS ist deswegen immer       *)
+(* angegeben, in wieweit die Funktion emuliert werden kann. Ist MiNT-Unter-  *)
+(* stuetzung angegeben, so ist unter der Betriebssystemerweiterung MiNT      *)
+(* eine bessere Unterstuetzung der Funktionen zu erwarten; wie weit diese    *)
+(* geht, ist unter dem Stichwort MiNT angegeben.                             *)
+(* --------------------------------------------------------------------------*)
+(* 18-Apr-94, Holger Kleinschmidt                                            *)
+(*****************************************************************************)
+
+FROM SYSTEM IMPORT
+(* TYPE *) ADDRESS;
+
+FROM types IMPORT
+(* TYPE *) int, uidT, gidT, inoT, timeT, offT, sizeT, ssizeT, devT, nlinkT,
+           pidT;
+
+(*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*)
+
+(*======= "stat()", "open()", "creat()", "umask()", "chmod()" ===============*)
+
+TYPE
+#if reverse_set
+  FileModes = (
+    Type15,   (* = 100000B *)
+    Type14,   (* = 040000B *)
+    Type13,   (* = 020000B *)
+    Type12,   (* = 010000B *)
+
+    sISUID,   (* = 004000B, Effektive Benutzer-ID bei Ausfuehrung setzen *)
+    sISGID,   (* = 002000B, Effektive Gruppen-ID bei Ausfuehrung setzen *)
+    sISVTX,   (* = 001000B  Reserviert, nicht POSIX *)
+
+    sIRUSR,   (* = 000400B, Besitzer: Leseberechtigung *)
+    sIWUSR,   (* = 000200B, Besitzer: Schreibberechtigung *)
+    sIXUSR,   (* = 000100B, Besitzer: Ausfuehr/Suchberechtigung *)
+    sIRGRP,   (* = 000040B, Gruppe  : Leseberechtigung *)
+    sIWGRP,   (* = 000020B, Gruppe  : Schreibberechtigung *)
+    sIXGRP,   (* = 000010B, Gruppe  : Ausfuehr/Suchberechtigung *)
+    sIROTH,   (* = 000004B, Andere  : Leseberechtigung *)
+    sIWOTH,   (* = 000002B, Andere  : Schreibberechtigung *)
+    sIXOTH    (* = 000001B, Andere  : Ausfuehr/Suchberechtigung *)
+  );
+#else
+  FileModes = (
+    sIXOTH,   (* = 000001B, Andere  : Ausfuehr/Suchberechtigung *)
+    sIWOTH,   (* = 000002B, Andere  : Schreibberechtigung *)
+    sIROTH,   (* = 000004B, Andere  : Leseberechtigung *)
+    sIXGRP,   (* = 000010B, Gruppe  : Ausfuehr/Suchberechtigung *)
+    sIWGRP,   (* = 000020B, Gruppe  : Schreibberechtigung *)
+    sIRGRP,   (* = 000040B, Gruppe  : Leseberechtigung *)
+    sIXUSR,   (* = 000100B, Besitzer: Ausfuehr/Suchberechtigung *)
+    sIWUSR,   (* = 000200B, Besitzer: Schreibberechtigung *)
+    sIRUSR,   (* = 000400B, Besitzer: Leseberechtigung *)
+
+    sISVTX,   (* = 001000B  Reserviert, nicht POSIX *)
+    sISGID,   (* = 002000B, Effektive Gruppen-ID bei Ausfuehrung setzen *)
+    sISUID,   (* = 004000B, Effektive Benutzer-ID bei Ausfuehrung setzen *)
+
+    Type12,   (* = 010000B *)
+    Type13,   (* = 020000B *)
+    Type14,   (* = 040000B *)
+    Type15    (* = 100000B *)
+  );
+#endif
+  modeT = PACKEDSET OF FileModes;
+
+
+CONST
+  sIRWXU = modeT{sIRUSR, sIWUSR, sIXUSR};
+  sIRWXG = modeT{sIRGRP, sIWGRP, sIXGRP};
+  sIRWXO = modeT{sIROTH, sIWOTH, sIXOTH};
+
+(* Die folgenden Konstanten sind nicht POSIX: *)
+CONST
+#if reverse_set
+  sIFMT  = modeT{Type15..Type12};         (* 170000B, Maske fuer Dateityp *)
+#else
+  sIFMT  = modeT{Type12..Type15};         (* 170000B, Maske fuer Dateityp *)
+#endif
+  sIFCHR = modeT{Type13};                 (* 020000B, Zeichenor. Geraet *)
+  sIFDIR = modeT{Type14};                 (* 040000B, Verzeichnis *)
+  sIFBLK = modeT{Type13, Type14};         (* 060000B, Blockor. Geraet *)
+  sIFREG = modeT{Type15};                 (* 100000B, Normale Datei *)
+  sIFIFO = modeT{Type13, Type15};         (* 120000B, Pipe *)
+  sIFLNK = modeT{Type13, Type14, Type15}; (* 160000B, Symb. Link, *)
+
+(* IF st.stMode * sIFMT = sIFCHR THEN
+ *           ...
+ *)
+
+
+TYPE
+  StatRec = RECORD
+    stMode    : modeT; (* Dateityp & Zugriffsberechtigung *)
+    stIno     : inoT;  (* Inode, zus. mit 'stDev' eindeutiger Index *)
+    stDev     : devT;  (* Geraet, auf dem die Datei liegt *)
+    stRdev    : devT;  (* Nicht POSIX: Typ des Geraets *)
+    stNlink   : nlinkT;(* Anzahl der Links *)
+    stUid     : uidT;  (* Benutzerkennung des Besitzers *)
+    stGid     : gidT;  (* Gruppenkennung des Besitzers *)
+    stSize    : offT;  (* Dateilaenge in Bytes *)
+    stBlksize : offT;  (* Nicht POSIX: Optimale Blockgroesse fuer I/O *)
+    stBlocks  : offT;  (* Nicht POSIX: Von Datei belegte (512 Byte)-Bloecke *)
+    stAtime   : timeT; (* Datum/Zeit des letzten Dateizugriffs *)
+    stMtime   : timeT; (* Datum/Zeit der letzten Dateiveraenderung *)
+    stCtime   : timeT; (* Datum/Zeit der letzten INODE-Aenderung *)
+  END;
+
+(*======================= "access()" ========================================*)
+
+TYPE
+#if reverse_set
+  AccessModes = (
+    Access15,Access14,Access13,Access12,Access11, (* --> keine 8-Bit-Menge *)
+    Access10,Access9, Access8, Access7,
+    Access6, Access5, Access4, Access3,
+    rOK,        (* = 0004H, Leseberechtigung *)
+    wOK,        (* = 0002H, Schreibberechtigung *)
+    xOK         (* = 0001H, Ausfuehr/Suchberechtigung *)
+  );
+#else
+  AccessModes = (
+    xOK,        (* = 0001H, Ausfuehr/Suchberechtigung *)
+    wOK,        (* = 0002H, Schreibberechtigung *)
+    rOK,        (* = 0004H, Leseberechtigung *)
+    Access3, Access4, Access5, Access6,
+    Access7, Access8, Access9, Access10,
+    Access11,Access12,Access13,Access14,Access15  (* --> Keine 8-Bit-Menge *)
+  );
+#endif
+
+  AccessMode = PACKEDSET OF AccessModes;
+
+CONST
+  fOK = AccessMode{}; (* = 0000H, Existenz *)
+
+
+(*======================= "utime()" =========================================*)
+
+TYPE
+  UTimBuf = RECORD
+    actime  : timeT;
+    modtime : timeT;
+  END;
+
+  UTimPtr = POINTER TO UTimBuf;
+
+(*======================= "open()" ==========================================*)
+
+TYPE
+#if reverse_set
+  OpenModes = (
+    Open15, Open14, Open13,
+    oNOCTTY,    (* Falls die zu oeffnende Datei ein (Pseudo)Terminal ist,
+                   wird es nicht zum Kontroll-Terminal, wenn der Prozess
+                   im Moment kein Kontrollterminal hat. *)
+    oEXCL,      (* Neu Anlegen nicht erlaubt, falls schon vorhanden *)
+    oTRUNC,     (* Vorhandene Datei auf Laenge 0 kuerzen *)
+    oCREAT,     (* Datei anlegen, falls nicht vorhanden *)
+    oNONBLOCK,  (* Nicht blockieren beim Lesen/Schreiben/Oeffnen *)
+    Open7, Open6, Open5, Open4,
+    oAPPEND,    (* Schreiben immer ans Ende des Files *)
+    Open2,
+    rw1,
+    rw0
+  );
+#else
+  OpenModes = (
+    rw0,
+    rw1,
+    Open2,
+    oAPPEND,    (* Schreiben immer ans Ende des Files *)
+    Open4, Open5, Open6, Open7,
+    oNONBLOCK,  (* Nicht blockieren beim Lesen/Schreiben/Oeffnen *)
+    oCREAT,     (* Datei anlegen, falls nicht vorhanden *)
+    oTRUNC,     (* Vorhandene Datei auf Laenge 0 kuerzen *)
+    oEXCL,      (* Neu Anlegen nicht erlaubt, falls schon vorhanden *)
+    oNOCTTY,    (* Falls die zu oeffnende Datei ein (Pseudo)Terminal ist,
+                   wird es nicht zum Kontroll-Terminal, wenn der Prozess
+                   im Moment kein Kontrollterminal hat. *)
+    Open13, Open14, Open15
+  );
+#endif
+
+  OpenMode = PACKEDSET OF OpenModes;
+
+CONST
+  oACCMODE = OpenMode{rw0, rw1}; (* Maske fuer erlaubte Operationen *)
+
+  oRDONLY  = OpenMode{ };   (* 0000H, Nur Lesen erlaubt *)
+  oWRONLY  = OpenMode{rw0}; (* 0001H, Nur Schreiben erlaubt *)
+  oRDWR    = OpenMode{rw1}; (* 0002H, Lesen und Schreiben erlaubt *)
+
+(*======================= "lseek()" =========================================*)
+
+TYPE
+  SeekMode = (
+    SeekSet, (* = 0, Absolute Positionsangabe *)
+    SeekCur, (* = 1, Positionsangabe relativ zur augenblicklichen Position *)
+    SeekEnd  (* = 2, Positionsangabe relativ zum Dateiende *)
+  );
+
+(*======================== "fcntl()" ========================================*)
+
+TYPE
+#if reverse_set
+  FDFlags = (
+    FD15, FD14, FD13, FD12, FD11, FD10, FD9,
+    FD8,  FD7,  FD6,  FD5,  FD4,  FD3,  FD2, FD1,
+    FdCloExec  (* Bei "exec*()" Dateikennung schliessen *)
+  );
+#else
+  FDFlags = (
+    FdCloExec, (* Bei "exec*()" Dateikennung schliessen *)
+    FD1,  FD2,  FD3,  FD4,  FD5,  FD6,  FD7, FD8,
+    FD9,  FD10, FD11, FD12, FD13, FD14, FD15
+  );
+#endif
+  FDFlag = PACKEDSET OF FDFlags;
+
+TYPE
+  FcntlCmd = (
+    fDUPFD, (* Neue Dateikennung liefern (-> "dup()") *)
+    fGETFD, (* Flags der Dateikennung ermitteln (-> FDFlags) *)
+    fSETFD, (* Flags der Dateikennung setzen (-> FDFlags ) *)
+    fGETFL, (* Flags des Dateibeschreibungsblocks liefern *)
+    fSETFL, (* Flags des Beschreibungsblocks setzen,ausser Lese/Schreibmodus *)
+    fGETLK, (* Informationen ueber einen ``Lock'' liefern *)
+    fSETLK, (* ``Lock'' setzen, sofort zurueck, falls nicht moeglich *)
+    fSETLKW (* ``Lock'' setzen, blockieren, bis moeglich *)
+  );
+
+TYPE
+  LockType = (
+    fRDLCK, (* (set) read/shared lock *)
+    fWRLCK, (* (set) write/exclusive lock *)
+    fUNLCK  (* unlock/unlocked *)
+  );
+
+TYPE
+  FlockRec = RECORD
+    lType   : LockType; (* Typ des ``Locks'' *)
+    lWhence : SeekMode; (* Offset, von dem 'lStart' gerechnet wird *)
+    lStart  : offT;     (* Start des ``Locks'' *)
+    lLen    : offT;     (* Groesse des ``Locks'' (0 = bis zum Dateiende) *)
+    lPid    : pidT;     (* Prozess-Kennung des ``Lock-Besitzers'' *)
+  END;
+
+TYPE
+  FcntlArg = RECORD
+    CASE TAG_COLON FcntlCmd OF
+      fDUPFD  : handle  : int;      (* in & out *)
+     |fGETFD,                       (* out *)
+      fSETFD  : fdflags : FDFlag;   (* in *)
+     |fGETFL,                       (* out *)
+      fSETFL  : mode    : OpenMode; (* in *)
+     |fGETLK,                       (* in & out *)
+      fSETLK,                       (* in & out *)
+      fSETLKW : flock   : FlockRec; (* in & out *)
+    END;
+  END;
+
+(*======================= "pipe()" ==========================================*)
+
+TYPE
+  PipeBuf = RECORD
+    readh  : int;
+    writeh : int;
+  END;
+
+(*===================== "open()", "creat()" =================================*)
+
+CONST (* Kleinstes gueltiges Handle, nicht POSIX: *)
+#ifdef __GEMDOS__
+  MINHANDLE = -5; (* Wegen MIDI-in/out *)
+#else
+  MINHANDLE = 0;
+#endif
+
+(*===========================================================================*)
+
+CONST (* Die immer geoeffneten Standardkanaele *)
+  StdinFileNo  = 0;
+  StdoutFileNo = 1;
+  StderrFileNo = 2; (* "GEMDOS": Durch 'DosSupport' sichergestellt *)
+
+(*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*)
+
+ PROCEDURE creat ((* EIN/ -- *) REF file : ARRAY OF CHAR;
+                  (* EIN/ -- *)     mode : modeT         ): int;
+
+ PROCEDURE open ((* EIN/ -- *) REF file   : ARRAY OF CHAR;
+                 (* EIN/ -- *)     access : OpenMode;
+                 (* EIN/ -- *)     mode   : modeT         ): int;
+
+(*--------------------------------------------------------------------------
+ | "open()" oeffnet eine bereits vorhandene Datei namens <file> in dem durch|
+ | <access> festgelegten Modus (Funktionalitaet siehe Def. von 'OpenModes'),|
+ | bzw. erzeugt eine neue mit den Attributen aus <mode>, falls in <access>  |
+ | 'oCREAT' gesetzt ist. Die Datei ist ueber die als Funktionswert zurueck- |
+ | gelieferte Kennung referenzierbar. Es wird die kleinste Kennung gelie-   |
+ | fert, die frei ist.                                                      |
+ | "creat()" entspricht: "open(file,oWRONLY+OpenMode{oCREAT,oTRUNC},mode)"  |
+ |                                                                          |
+ | Oeffnen einer Datei bedeutet folgendes: Es wird ein Dateibeschreibungs-  |
+ | block fuer die Datei <file> angelegt, und eine Kennung geliefert, ueber  |
+ | die dieser Block angesprochen werden kann. Die gleiche Datei kann mehr-  |
+ | fach geoeffnet sein und damit mehrere Dateibeschreibungsbloecke besitzen.|
+ | Jeder Beschreibungsblock kann wiederum mehrere Dateikennungen erhalten.  |
+ | Die Statusflags und der Zugriffsmodus aus <access> sind Attribute des    |
+ | Beschreibungsblocks, ebenso wie die Position des Lese/Schreibzeigers. Die|
+ | Statusflags koennen mit "fcntl(fGETFL/fSETFL)" abgefragt und veraendert  |
+ | (ausser dem Zugriffsmodus) werden, der Lese/Schreibzeiger wird durch     |
+ | "read()", "write()" und "lseek()" veraendert. Eine neue Kennung fuer     |
+ | denselben Beschreibungsblock kann mit "dup()" oder "fcntl(fDUPFD)"       |
+ | erzeugt werden. Mit "dup2()" laesst sich eine Dateikennung auf einen     |
+ | anderen Beschreibungsblock umleiten.                                     |
+ | Mit "fcntl(fGETFD/fSETFD)" laesst sich das ``Schliessen bei exec''-Flag  |
+ | abfragen und setzen, das ein Attribut der Dateikennung ist; dieses Flag  |
+ | ist nach dem Oeffnen einer Datei geloescht. Nur falls eine neue Datei    |
+ | angelegt wird, wird <mode> verwendet, das ein Attribut der Datei ist.    |
+ |                                                                          |
+ | GEMDOS: <access>: oNOCTTY und oNONBLOCK und oAPPEND werden ignoriert.    |
+ |         <mode>: Die Datei kann lediglich schreibgeschuetzt werden.       |
+ |         Die kleinste Kennung fuer eine normale Datei ist 6.              |
+ |         Eine Datei kann nur zum Lesen mehrfach geoeffnet werden.         |
+ |   MiNT: oNOCTTY und oAPPEND werden unterstuetzt, fuer oNONBLOCK wird     |
+ |         oNDELAY verwendet. Die Unterstuetzung von <mode> haengt vom      |
+ |         Dateisystem ab.                                                  |
+ |                                                                          |
+ | Es koennen auch Geraete geoeffnet werden, sodass auch negative Werte     |
+ | auftreten koennen. Ein Fehler ist erst aufgetreten, falls der Funktions- |
+ | wert 'MINHANDLE' unterschreitet.                                         |
+  --------------------------------------------------------------------------*)
+
+
+ PROCEDURE fcntl ((* EIN/ -- *)     h   : int;
+                  (* EIN/ -- *)     cmd : FcntlCmd;
+                  (* EIN/AUS *) VAR arg : FcntlArg ): int;
+
+(*--------------------------------------------------------------------------
+ | Fuehrt je nach <cmd> eine Funktion auf der ueber <h> erreichbaren Datei  |
+ | aus. Argumente und Ergebnisse werden ueber <arg> mitgeteilt:             |
+ |                                                                          |
+ |  cmd = fDUPFD : zweite Dateikennung zu <h> liefern ( -> "dup()").        |
+ |    arg.handle:                                                           |
+ |      Eingabe: kleinster Wert fuer neue Kennung                           |
+ |      Ausgabe: neue Kennung                                               |
+ |                                                                          |
+ |  cmd = fGETFD : Flags der Dateikennung ermitteln (Dateikennung schliessen|
+ |                 bei Ausfuehren von ``exec'').                            |
+ |    arg.fdflags:                                                          |
+ |      Eingabe: --------                                                   |
+ |      Ausgabe: Flags                                                      |
+ |                                                                          |
+ |  cmd = fSETFD : Flags der Dateikennung setzen.                           |
+ |    arg.fdflags:                                                          |
+ |      Eingabe: Flags                                                      |
+ |      Ausgabe: --------                                                   |
+ |                                                                          |
+ |  cmd = fGETFL : Flags des Dateibeschreibungsblocks liefern.              |
+ |    arg.mode:                                                             |
+ |      Eingabe: --------                                                   |
+ |      Ausgabe: Modus-Flags                                                |
+ |                                                                          |
+ |  cmd = fSETFL : Flags des Dateibeschreibungsblocks setzen, bis auf den   |
+ |                 Lese/Schreibmodus, der nicht veraendert werden kann.     |
+ |    arg.mode:                                                             |
+ |      Eingabe: Modus-Flags                                                |
+ |      Ausgabe: --------                                                   |
+ |                                                                          |
+ |  cmd = fGETLK : Liefert Informationen, ob ein bestimmter Bereich der     |
+ |                 Datei fuer konkurrierenden Zugriff gesperrt ist.         |
+ |    arg.flock:                                                            |
+ |      Eingabe: Typ, Position und Laenge des in Frage kommenden ``Locks''. |
+ |      Ausgabe: Typ, Position und Laenge eines ``Locks'', der sich         |
+ |               (teilweise) mit dem angegeben Bereich ueberschneidet, oder |
+ |               Information, dass der Bereich frei ist ('lType' = fUNLCK). |
+ |                                                                          |
+ |  cmd = fSETLK                                                            |
+ |    arg.flock:                                                            |
+ |      Eingabe:                                                            |
+ |      Ausgabe:                                                            |
+ |                                                                          |
+ |  cmd = fSETLKW : wie 'fSETLK', aber warten, bis ``Lock'' gesetzt werden  |
+ |                  kann.                                                   |
+ |                                                                          |
+ |                                                                          |
+ | GEMDOS: Bisher wird nur 'fDUPFD' unterstuetzt. Falls der GEMDOS-Aufruf   |
+ |         "Flock()" existiert, wird auch 'fSETLK' (teilweise) unterstÅtzt. |
+ |   MiNT: Die Unterstuetzung von ``Locks'' haengt vom Dateisystem ab.      |
+ |         Bei 'fGETFL'/'fSETFL' wird fuer 'oNONBLOCK' 'oNDELAY' verwendet. |
+  --------------------------------------------------------------------------*)
+
+
+
+
+ PROCEDURE close ((* EIN/ -- *) h : int ): int;
+
+(*--------------------------------------------------------------------------
+ | Die Datei mit der Kennung <h> wird geschlossen. Danach kann nicht mehr   |
+ | ueber <h> auf die Datei zugegriffen werden. Die Kennung <h> ist jetzt    |
+ | ``frei'', sodass sie wieder mit einer anderen Datei verbunden werden     |
+ | kann.                                                                    |
+ |                                                                          |
+ | GEMDOS: Keine Besonderheiten.                                            |
+ |   MiNT: -""-                                                             |
+  --------------------------------------------------------------------------*)
+
+
+
+ PROCEDURE read ((* EIN/ -- *) h   : int;
+                 (* EIN/ -- *) buf : ADDRESS;
+                 (* EIN/ -- *) len : sizeT   ): ssizeT;
+
+ PROCEDURE write ((* EIN/ -- *) h   : int;
+                  (* EIN/ -- *) buf : ADDRESS;
+                  (* EIN/ -- *) len : sizeT   ): ssizeT;
+
+(*--------------------------------------------------------------------------
+ | "read()" liest <len> Bytes aus der Datei mit der Kennung <h> in den Puf- |
+ | fer ab der Adresse <buf>. Als Funktionswert wird die Anzahl der gelesenen|
+ | Bytes zurueckgeliefert (0 = Dateiende, -1 = Fehler).                     |
+ | "write()" schreibt <len> Bytes aus dem Puffer mit der Startadresse <buf> |
+ | in die Datei mit der Kennung <h>. Als Funktionswert wird die Anzahl der  |
+ | geschriebenen Bytes zurueckgeliefert (<> len = Fehler).                  |
+ | Aus Portabilitaetsgruenden ('ssizeT' = 16 Bit ist moeglich) sollte <len> |
+ | nicht groesser als 32767 sein.                                           |
+ |                                                                          |
+ | GEMDOS: Das Lesen/Schreiben von/auf Terminals kann nicht beeinflusst     |
+ |         werden (Interpretation von ^C u.ae.).                            |
+ |   MiNT: Keine Besonderheiten.                                            |
+  --------------------------------------------------------------------------*)
+
+
+ PROCEDURE lseek ((* EIN/ -- *) h    : int;
+                  (* EIN/ -- *) off  : offT;
+                  (* EIN/ -- *) mode : SeekMode ): offT;
+
+(*--------------------------------------------------------------------------
+ | Die aktuelle Lese/Schreibposition der Datei mit der Kennung <h> wird, je |
+ | nach <mode>, Beschreibung siehe dort, um <off> Bytes verschoben, bzw.    |
+ | auf Position <off> gesetzt. Hierbei kann auch ueber das Ende der Datei   |
+ | positioniert werden, die Datei wird aber erst dann (virtuell) verlaengert|
+ | (-> ``gap'') wenn ein Schreibvorgang hinter dem tatsaechlichen bisherigen|
+ | Dateiende stattfindet.                                                   |
+ | Als Funktionswert wird die aktuelle Schreib/Leseposition geliefert.      |
+ |                                                                          |
+ | GEMDOS: Es ist kein Verlaengern der Datei durch ein "Fseek" hinter das   |
+ |         augenblickliche Dateiende moeglich, daher wird bei "lseek" das   |
+ |         Verlaengern durch blockweises (jeweils 1kB) Schreiben mit Null-  |
+ |         bytes realisiert; das kann natuerlich je nach Umfang der Erwei-  |
+ |         terung ein bisschen dauern.                                      |
+ |   MiNT: Unterstuetzung der Dateiverlaengerung haengt vom Dateisystem ab. |
+  --------------------------------------------------------------------------*)
+
+
+(* Noch nicht POSIX: *)
+ PROCEDURE ftruncate ((* EIN/ -- *) h   : int;
+                      (* EIN/ -- *) len : offT ): int;
+
+(*--------------------------------------------------------------------------
+ | Wenn <h> eine geoffnete regulaere Datei kennzeichnet, die groesser als   |
+ | <len> Bytes ist, wird die Datei auf <len> Bytes gekuerzt. Wenn die Datei |
+ | kuerzer als <len> ist, ist das Verhalten systemspezifisch.               |
+ |                                                                          |
+ | GEMDOS: Liefert immer -1 (errno = 'ENOSYS').                             |
+ |   MiNT: Unterstuetzung haengt vom Dateisystem ab.                        |
+  --------------------------------------------------------------------------*)
+
+
+
+ PROCEDURE dup ((* EIN/ -- *) h : int ): int;
+
+ PROCEDURE dup2 ((* EIN/ -- *) oldh : int;
+                 (* EIN/ -- *) newh : int ): int;
+
+(*--------------------------------------------------------------------------
+ | "dup()" liefert zur Dateikennung <h> eine zweite Kennung (die kleinste   |
+ | freie Kennung), sodass die entsprechende Datei ueber beide Kennungen an- |
+ | gesprochen werden kann. Das 'FdCloExec'-Flag der Dateikennung ist ge-    |
+ | loescht.                                                                 |
+ | Bei "dup2()" kann die neue Kennung (<newh>) vorgegeben werden; wenn      |
+ | <newh> nicht frei ist, wird die entsprechende Datei zuerst geschlossen.  |
+ | Falls <newh> gleich <oldh> ist, wird nichts getan.                       |
+ | Als Funktionswert wird <newh> zurueckgeliefert.                          |
+ |                                                                          |
+ | GEMDOS: Hier funktionieren die Umlenkungen erst ab TOS 1.04 einiger-     |
+ |         massen, aber auch nicht voellig korrekt (z.B. keine mehrfache    |
+ |         Umlenkung, kein Pexec nach "dup()").                             |
+ |         "dup()" : <h> muss die Nummer eines Standardkanals sein, also    |
+ |         0 <= h <= 5. Die kleinstmoegliche neue Kennung ist 6.            |
+ |         "dup2()": <newh> muss die Nummer eines Standardkanals sein, also |
+ |         0 <= <newh> <= 5; weiterhin muss <oldh> ein Nicht-Standard-Handle|
+ |         (normales Datei- oder Geraetehandle) sein.                       |
+ |   MiNT: Keine Besonderheiten.                                            |
+  --------------------------------------------------------------------------*)
+
+
+
+ PROCEDURE umask ((* EIN/ -- *) excl : modeT ): modeT;
+
+(*--------------------------------------------------------------------------
+ | Setzt die Dateierstellungsmaske, die als Filter fuer die Zugriffsberech- |
+ | tigung benutzt wird, wenn eine Datei mit "open()" oder "creat()" neu     |
+ | erstellt, oder ein Verzeichnis mit "mkdir()" angelegt wird: Von der ange-|
+ | gebenen Zugriffsberechtigung wird immer zuerst die Maske subtrahiert,    |
+ | sodass Dateien z.B. grundsaetzlich fuer Gruppe und andere schreibge-     |
+ | schuetzt werden koennen.                                                 |
+ | Als Funktionswert wird die alte Maske zurueckgeliefert.                  |
+ |                                                                          |
+ | GEMDOS: Keine Besonderheiten, aber nicht sonderlich sinnvoll.            |
+ |   MiNT: Keine Besonderheiten.                                            |
+  --------------------------------------------------------------------------*)
+
+
+ PROCEDURE chmod ((* EIN/ -- *) REF file : ARRAY OF CHAR;
+                  (* EIN/ -- *)     mode : modeT         ): int;
+
+(*--------------------------------------------------------------------------
+ | Setzt die Schreib-, Lese- und Ausfuehrungsrechte und die ``set user id'' |
+ | und ``set group id'' Flags der Datei <file>.                             |
+ |                                                                          |
+ | GEMDOS: Es wird nur sIWUSR ausgewertet: wenn das Bit gesetzt ist, wird   |
+ |         'faRDONLY' im Dateiattribut geloescht und umgekehrt.             |
+ |         Das Dateiattribut 'faCHANGED' wird nicht geaendert. Attribute    |
+ |         von Verzeichnissen koennen nicht geaendert werden (ist aber kein |
+ |         Fehler).                                                         |
+ |   MiNT: Unterstuetzung haengt vom Dateisystem ab.                        |
+  --------------------------------------------------------------------------*)
+
+
+ PROCEDURE chown ((* EIN/ -- *) REF file : ARRAY OF CHAR;
+                  (* EIN/ -- *)     uid  : uidT;
+                  (* EIN/ -- *)     gid  : gidT          ): int;
+
+(*--------------------------------------------------------------------------
+ | Setzt die Besitzer- und Gruppenkennung der Datei <file>.                 |
+ |                                                                          |
+ | GEMDOS: Falls <uid> und <gid> ungleich Null sind, wird -1 geliefert      |
+ |         (errno = 'EINVAL').                                              |
+ |   MiNT: Unterstuetzung haengt vom Dateisystem ab.                        |
+  --------------------------------------------------------------------------*)
+
+
+ PROCEDURE utime ((* EIN/ -- *) REF file : ARRAY OF CHAR;
+                  (* EIN/ -- *)     time : UTimPtr       ): int;
+
+(*--------------------------------------------------------------------------
+ | Setzt die Zeit des letzten Dateizugriffs (st.stAtime) der Datei <file>   |
+ | auf <time^.actime> und die Zeit der letzten Dateiveraenderung(st.stMtime)|
+ | auf <time^.modtime>. Die Zeit der letzten Statusaenderung (st.stCtime)   |
+ | wird automatisch auf das aktuelle Datum gesetzt. Ist <time> gleich NULL, |
+ | wird das aktuelle Datum eingesetzt.                                      |
+ |                                                                          |
+ | GEMDOS: Es wird nur <time^.modtime> ausgewertet. Verzeichnisse koennen   |
+ |         nicht beruecksichtigt werden, es wird aber kein Fehler gemeldet. |
+ |   MiNT: Bei geeignetem Dateisystem werden 'modtime' und 'actime' ausge-  |
+ |         wertet. Falls moeglich werden auch Verzeichnisse beruecksichtigt.|
+  --------------------------------------------------------------------------*)
+
+
+ PROCEDURE stat ((* EIN/ -- *) REF file : ARRAY OF CHAR;
+                 (* -- /AUS *) VAR st   : StatRec       ): int;
+
+ PROCEDURE fstat ((* EIN/ -- *)     hndl : int;
+                  (* -- /AUS *) VAR st   : StatRec ): int;
+
+(* Noch nicht POSIX: *)
+ PROCEDURE lstat ((* EIN/ -- *) REF file : ARRAY OF CHAR;
+                  (* -- /AUS *) VAR st   : StatRec       ): int;
+
+(*--------------------------------------------------------------------------
+ | Die Prozeduren liefern zum Namen <file> einer Datei bzw. einer Datei-    |
+ | kennung <hndl> die Informationen aus dem INODE (siehe Def. von 'modeT'   |
+ | und 'StatRec'.                                                           |
+ | Bei einem 'Symbolischen Link' liefert "stat()" Informationen ueber die   |
+ | physikalisch referenzierte Datei, "lstat()" Informationen ueber den Link |
+ | selber, ansonsten sind die beiden Funktionen identisch.                  |
+ |                                                                          |
+ | GEMDOS:                                                                  |
+ |          o 'stMode': Die Berechtigungen fuer Besitzer, Gruppe und Andere |
+ |            sind identisch; Leseberechtigung ist immer gegeben, Schreib-  |
+ |            berechtigung ist vorhanden, falls 'faRDONLY' im Dateiattribut |
+ |            nicht gesetzt ist, die Ausfuehrberechtigung bei regulaeren    |
+ |            Dateien wird mit 'DosSupport.IsExec' festgestellt, Verzeich-  |
+ |            nisse haben immer Suchberechtigung. Geraete werden mit        |
+ |            'DosSupport.IsDosDevice' ermittelt, Verzeichnisse durch ein   |
+ |            gesetztes 'faSUBDIR' im Dateiattribut, alles andere sind      |
+ |            regulaere Dateien.                                            |
+ |          o 'stIno': ein fortlaufender Wert, der keine Beziehung zur Datei|
+ |            hat.                                                          |
+ |          o 'stDev': die (aktuelle) Laufwerksnummer (A = 0, B = 1...).    |
+ |          o 'stNlink': bei Verzeichnissen zwei (wegen ".."), sonst eins.  |
+ |          o 'stSize': bei Verzeichnissen konstant 1024.                   |
+ |          o 'stAtime', 'stMtime', 'stCtime': die Zeiten sind identisch.   |
+ |            Bei Geraeten werden aktuelle Zeit und aktuelles Datum genommen|
+ |            Bei Wurzelverzeichnissen ist der Wert Null.                   |
+ |                                                                          |
+ |          "lstat()": ohne MiNT ist diese Funktion mit "stat()" identisch. |
+ |          Diese Funktion ist noch nicht POSIX-Standard.                   |
+ |                                                                          |
+ |          "fstat()": ohne MiNT sind die einzigen zuverlaessigen Informa-  |
+ |          tionen 'stSize' und 'stMtime', falls <hndl> eine gueltige Ken-  |
+ |          nung einer regulaeren Datei ist.                                |
+ |                                                                          |
+ |   MiNT: Unterstuetzung haengt vom Dateisystem ab.                        |
+  --------------------------------------------------------------------------*)
+
+ PROCEDURE sISCHR  ((* EIN/ -- *) stMode : modeT ): BOOLEAN;
+ PROCEDURE sISDIR  ((* EIN/ -- *) stMode : modeT ): BOOLEAN;
+ PROCEDURE sISBLK  ((* EIN/ -- *) stMode : modeT ): BOOLEAN;
+ PROCEDURE sISREG  ((* EIN/ -- *) stMode : modeT ): BOOLEAN;
+ PROCEDURE sISFIFO ((* EIN/ -- *) stMode : modeT ): BOOLEAN;
+ (* Noch nicht POSIX: *)
+ PROCEDURE sISLNK  ((* EIN/ -- *) stMode : modeT ): BOOLEAN;
+
+(*--------------------------------------------------------------------------
+ | Diese Funktionen sind bei POSIX als Makros definiert, und liefern TRUE,  |
+ | falls der im 'stMode'-Feld der StatRec-Struktur kodierte Dateityp dem    |
+ | durch den Prozedurnamen angedeuteten entspricht.                         |
+ | Es sollten nur diese Prozeduren verwendet werden, um den Dateityp zu     |
+ | bestimmen.                                                               |
+ |                                                                          |
+ | GEMDOS: Keine Besonderheiten.                                            |
+ |   MiNT: -""-                                                             |
+  --------------------------------------------------------------------------*)
+
+
+
+ PROCEDURE access ((* EIN/ -- *) REF file : ARRAY OF CHAR;
+                   (* EIN/ -- *)     acc  : AccessMode    ): int;
+
+(*--------------------------------------------------------------------------
+ | Es wird die Existenz (<acc> = fOK) oder die Lese-, Schreib oder Ausfuehr-|
+ | bzw. Suchberechtigung einer Datei getestet. Beim Test wird beruecksich-  |
+ | tigt, ob der ausfuehrende Prozess der Besitzer der Datei ist, der Gruppe |
+ | des Besitzers angehoert oder ein Aussenstehender ist (Es werden die      |
+ | realen Kennungen getestet). Es ist nicht festgelegt, ob der ``Superuser''|
+ | besondere Rechte hat, d.h. alle Zugriffsrechte besitzt.                  |
+ |                                                                          |
+ | GEMDOS: Die bei "stat()" genannten Einschraenkungen gelten.              |
+ |   MiNT: -""-                                                             |
+  --------------------------------------------------------------------------*)
+
+
+ PROCEDURE pipe ((* -- /AUS *) VAR ph : PipeBuf ): int;
+
+(*--------------------------------------------------------------------------
+ | Generiert einen Kommunikationskanal zwischen zwei (Unter)Prozessen. Der  |
+ | eine Prozess kann ueber <ph.writeh> etwas schreiben, das der andere      |
+ | ueber <ph.readh> lesen kann. Die Groesse einer ``Pipe'' ist intern be-   |
+ | grenzt (z.B. auf 2kB oder 4kB), sodass der schreibende Prozess zeitweise |
+ | gestoppt werden kann, bis wieder etwas Platz in der Pipe vorhanden ist.  |
+ |                                                                          |
+ | GEMDOS: Liefert immer -1 (errno = 'ENOSYS').                             |
+ |   MiNT: Keine Besonderheiten.                                            |
+  --------------------------------------------------------------------------*)
+
+END file.
