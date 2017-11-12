@@ -1,0 +1,83 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>Engine</title>
+<meta http-equiv="content-type" content="text/html;charset=utf-8" />
+<link type="text/css" rel="stylesheet" media="all" href="style.css" />
+</head>
+<body>
+<h1>Engine</h1>
+<h2>Game time</h2>
+<p>The game time is an integer and starts at 0. The game time is incremented by 1 tick when any of the following player activity takes place:</p>
+<ul><li>Turn</li>
+<li>Move (if movement is not blocked, for example by a wall or a creature)</li>
+<li>Grab an object on the floor</li>
+<li>Put an object on the floor</li>
+<li>Throw the leader hand object (in CSB21EN only, this was missing in previous versions)</li>
+<li>Click on a door button</li>
+<li>Click on a wall (only if at least one sensor was triggered)</li>
+<li>Trigger an action of the object in the action hand (only if the action was actually triggered)</li>
+<li>Cast spell (only if the spell cast succeeds)</li>
+<li>Opening or closing the inventory</li>
+<li>Wake Up</li></ul>
+<p>If the player does not perform any of the activities above for 11 vertical blank interrupt cycles (which occur at 60Hz for North American systems / 50Hz for European systems) then the game time is incremented.</p>
+<h2>Mouse</h2>
+<p>Each time the user moves the mouse or clicks on a button, it triggers an interruption.<br/>
+The exception handler <code>F075_xxxx_MOUSE_Exception70Handler_IKBD_MIDI_MouseStatus</code> updates the cursor coordinates if the mouse moved, and if the buttons status changed since the last interruption (meaning a button was pressed or released), it calls <code>S076_aaal_MOUSE_OnMouseButtonsStatusChange</code>.<br/>
+If the status changed because a button was released: if the eye or mouth was being pressed then a variable is set to stop pressing it.<br/>
+If the status changed because a button was pressed: <code>F359_hzzz_COMMAND_ProcessClick_COPYPROTECTIONC</code> is called.<br/>
+The purpose of this function is to detect if the click occured while the mouse pointer was in one of the active areas on screen. When this is the case, the command associated to the active area is added in the command queue (otherwise the click is ignored).<br/>
+The game implements a semaphore to avoid concurrent accesses to the command queue: if the command queue is locked then the mouse click is buffered in dedicated variables for delayed processing until <code>F360_xxxx_COMMAND_ProcessPendingClick</code> is called. However because of a bug this feature is never used.</p>
+<h2>Light management</h2>
+<p>The game engine draws the dungeon view on screen using one of 6 color palettes with various brightness levels to simulate various levels of lighting.<br/>
+On dungeon maps where the 'Difficulty' value is 0 (like the 'Hall of Champions' in Dungeon Master and the first map of the 'Prison' in Chaos Strikes Back) the dungeon view is always drawn with the brightest color palette.<br/>
+On dungeon maps where the 'Difficulty' value is not 0 (all other maps in the original dungeons) the dungeon view is drawn with the darkest color palette by default and the party has to produce its own light to have a better view. Light is produced by several sources and the total amount of light produced determines the color palette that the engine will use to draw the dungeon view on screen.</p>
+<p>Each way to produce light has an associated 'LightPower', which is a value between 0 and 15. This value is used as an index in table <code>G039_ai_Graphic562_LightPowerToLightAmount</code> to get the corresponding LightAmount value:</p>
+<pre>LightPower (index in table): 0   1   2   3   4   5   6   7   8   9  10  11  12  13  14  15
+LightAmount (data in table): 0   5  12  24  33  40  46  51  59  68  76  82  89  94  97 100</pre>
+<p>Here is the list of all light sources with their associated LightPower and Duration:</p>
+<ul><li>Object 'Torch'. LightPower is stored in the Torch object itself, ranging from 0 to 15. Duration: The LightPower of each Torch object held in hand is decreased by 1 (if not already 0) every 512 clock ticks in function <code>F338_atzz_INVENTORY_DecreaseTorchesLightPower_COPYPROTECTIONE</code>.</li>
+<li>Object 'Illumulet'. LightPower is 2. Duration: As long as worn around a champion's neck.<br/>
+<code>F300_aozz_CHAMPION_GetObjectRemovedFromSlot</code><br/>
+<code>F301_apzz_CHAMPION_AddObjectInSlot</code></li>
+<li>Action 'Light' on objects 'Yew Staff' and 'Sceptre of Lyf'. LightPower is 2. Duration: 2500 clock ticks<br/>
+<code>F407_xxxx_MENUS_IsActionPerformed</code></li>
+<li>Spell 'Torch'. LightPower is 3, 4, 5, 6, 7 or 8 based on spell power. Duration: 2640, 3152, 3664, 4176, 4688 or 5200 clock ticks based on spell power<br/>
+<code>F412_xxxx_MENUS_GetChampionSpellCastResult</code></li>
+<li>Spell 'Light'. LightPower is 3, 5, 7, 9, 11 or 13 based on spell power. Duration: 10000, 12048, 14096, 16144, 18192 or 20240 clock ticks based on spell power<br/>
+<code>F412_xxxx_MENUS_GetChampionSpellCastResult</code></li>
+<li>Spell 'Darkness'. LightPower is 2, 3, 4 ,5 ,6 or 7 based on spell power. Duration: 98 clock ticks<br/>
+<code>F412_xxxx_MENUS_GetChampionSpellCastResult</code></li></ul>
+<p>The engine stores the total sum of LightAmount produced by all light sources except 'Torch' objects in the variable MagicalLightAmount of the <code>G407_s_Party</code> structure. LightAmount produced by magic is fully cumulative: the effects of several spells, 'Light' actions and 'Illumulet' objects are always added to variable MagicalLightAmount.<br/>
+There is no variable storing the total LightAmount including the LightAmount produced by 'Torch' objects. Function <code>F337_akzz_INVENTORY_SetDungeonViewPalette</code> computes this total.</p>
+<p>The LightAmount produced by 'Torch' objects is computed in the following way:<br/>
+The LightPower of all 'Torch' objects held in champion hands are stored in an array. The four highest values are in the first four entries, sorted from highest to smallest. The four smallest values are placed in the last four entries and are not sorted. Only the first five entries in the array are used and their corresponding LightAmount values are multiplied by modifiers before being added:<br/>
+LightAmount of the Torch with the highest LightPower is multiplied by 1<br/>
+LightAmount of the Torch with the 2nd highest LightPower is multiplied by 1/2<br/>
+LightAmount of the Torch with the 3rd highest LightPower is multiplied by 1/4<br/>
+LightAmount of the Torch with the 4th highest LightPower is multiplied by 1/8<br/>
+LightAmount of the 5th Torch (whose LightPower is among the four smallest but not necessarily the highest of them) is multiplied by 1/16</p>
+<p>The modified LightAmount of all 'Torch' objects are added together along with variable MagicalLightAmount and the resulting value is used with table <code>G040_ai_Graphic562_PaletteIndexToLightAmount</code> to get the palette index to use to draw the dungeon view:<br/>
+99	75	50	25	1	0</p>
+<p>If the total LightAmount is 0 or negative, palette #5 (the darkest) will be selected.<br/>
+If the total LightAmount is between 1 and 24, palette #4 will be selected.<br/>
+...<br/>
+If the total LightAmount is 99 or more, then palette #0 (the brightest) will be selected.</p>
+<p>The only exception is for dungeon maps where the difficulty is 0 in which case the function does not care about LightAmount and always selects Palette #0 (the brightest).</p>
+<p>Note:</p>
+<ul><li>The function <code>F446_zzzz_STARTEND_FuseSequence</code> sets MagicalLightAmount to 200 to enforce the maximum brightness during the end of the game.</li>
+<li>The spells and the 'Light' action have limited durations. This is accomplished with events of type 70. These events are created by function <code>F404_xxxx_MENUS_CreateEvent70_Light</code>. They are processed by function <code>F257_xxxx_TIMELINE_ProcessEvent70_Light</code> which creates a fading effect by applying changes of LightPower one step at a time (every 4 clock ticks) until the LightPower reaches 0.</li>
+<li>When an event of type <code>C70_EVENT_LIGHT</code> is created, the map number in the event is set to the current map but this value is not used. The last two bytes of the event are not set and may contain any value present in the stack at the moment the event was created.</li></ul>
+<h2>Balance issues</h2>
+<p>A Rock shot with a Sling never moves farther than three squares, which is much less than when thrown by hand.</p>
+<p>The Punch action can be abused because it is too fast. Most creatures can be killed by clicking repeatedly on this action.</p>
+<p>Creatures that cannot see an invisible party never fight back when hit as long as the party is invisible.</p>
+<h2>Limits</h2>
+<p>The game has many limits that are not be enforced or checked at runtime: the game simply assumes that these "rules" are followed. Going over these limits will often cause issues and crashes:</p>
+<ul><li>64 maps per dungeon. Map indices are stored in a 6 bits field in scents, which limits the practical number of maps to 64. Otherwise, the limit would be 255 because everywhere else map indices are stored in 8 bit fields.</li>
+<li>Maximum 60 groups on the party map. The game stores an additional data structure named ACTIVE_GROUP for each group on the same map as the party. There can be up to 60 of these structures. The functions to add/remove ACTIVE_GROUP to the groups do take into account the maximum number of ACTIVE_GROUP so that if there are more than 60 groups on the party map, some of them do not have an associated ACTIVE_GROUP. However, all functions needing to access the ACTIVE_GROUP structure for groups on the same map as the party assume that there is one. This would cause issues like reading or writing the ACTIVE_GROUP of another group or outside the bounds of the array of ACTIVE_GROUP (memory corruption).</li>
+<li>Only a single text thing on a square. Text things other than the first are ignored. Because of a bug, it is not possible to have different texts on each side of a wall square.</li>
+<li>Only a single teleporter thing on a teleporter square. Teleporter things other than the first are ignored.</li>
+<li>Only a single group thing on square.</li></ul>
+</body>
+</html>
