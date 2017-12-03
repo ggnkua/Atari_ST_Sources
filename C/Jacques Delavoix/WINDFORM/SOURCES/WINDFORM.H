@@ -1,0 +1,45 @@
+/************************************************************************/
+/*																		*/
+/*	WINDFORM.H : D‚finitions utilis‚es par les proc‚dures WIND_FORM.	*/
+/*																		*/
+/************************************************************************/
+
+#define min(A, B) ((A) < (B) ? (A) : (B))
+#define max(A, B) ((A) > (B) ? (A) : (B))
+
+#define TRUE 1
+#define FALSE 0
+/* #define _GemParBlk _VDIParBlk	*/
+#define flag_multitache _GemParBlk.global[1]
+
+typedef struct
+{
+	OBJECT	*adr_form;	/* adresse du formulaire */
+	int		w_handle;	/* handle de fenˆtre, sert aussi de t‚moin d'ouverture. */
+	int		w_x;		/* Coordonn‚es et dimensions de la fenˆtre. */
+	int		w_y;
+	int		w_w;
+	int		w_h;
+	int		offset;		/* D‚calage x et y pour boite "OUTLINED". */
+	int		edit_objc;	/* Objet ‚ditable courant. */
+	int		edit_pos;	/* Position courante du curseur d'‚dition. */
+} WINDFORM_VAR;
+
+#define FW_ATTRIB	NAME|CLOSER|MOVER
+#define OPEN_DIAL	8192
+#define CLOSE_DIAL	-1
+
+#define UNDER_B 18
+#define SMALL_B 22
+
+/* *** Prototypes des Fonctions de Dialogue : *** */
+
+void init_var(WINDFORM_VAR *ptr_var, int form_index, int inf_x, int inf_y);
+void open_dialog(WINDFORM_VAR *ptr, char *w_title, int edit_index);
+int windform_do(WINDFORM_VAR *ptr, int evnt);
+void close_dialog(WINDFORM_VAR *ptr);
+
+/*	**	Autres fonctions ........	**	*/
+
+int rc_intersect(GRECT *p1, GRECT *p2);
+int stdkey(int key_code);
