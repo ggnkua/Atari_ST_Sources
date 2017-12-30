@@ -989,9 +989,9 @@ pal	dc.w	$000,$111,$222,$333,$444,$555,$666,$777
 	dc.w	$310,$111,$222,$333,$444,$555,$666,$777
 counter	ds.l	2
 StalAdr	ds.l	18
-way	include	\aurora17\funkcja2.s
-	include	\aurora17\okrag.s
-	include	\aurora17\petla2.s
+way	include	funkcja2.s
+	include	okrag.s
+	include	petla2.s
 	dc.l	-1
 skroll	moveq	#0,d5
 	tst.w	control
@@ -1705,7 +1705,7 @@ Plan1	moveq	#0,d0
 	move.l	a6,a0
 	dbf	d7,Plan1
 	rts
-FaLaSiN	include	\aurora17\sinus.s
+FaLaSiN	include	sinus.s
 	dc.l	-1,-1
 AdrFala1 ds.l	18
 AdrFala2 ds.l	18
@@ -2070,17 +2070,17 @@ letter	dc.l	32*16*00,32*16*01,32*16*02,32*16*03,32*16*04,32*16*05,32*16*06,32*16
 	dc.l	32*16*30,32*16*31,32*16*32,32*16*33,32*16*34,32*16*35,32*16*36,32*16*37,32*16*38,32*16*39
 	dc.l	32*16*40,32*16*41,32*16*42,32*16*43,32*16*44,32*16*45,32*16*46,32*16*47,32*16*48,32*16*49
 	dc.l	32*16*50,32*16*51,32*16*52,32*16*53,32*16*54,32*16*55,32*16*56,32*16*57,32*16*58,32*16*59
-aurora	incbin	\aurora17\au-spr.img
-auroraT	incbin	\aurora17\au-tlo.img
-fonts	incbin	\aurora17\fonts.cod
-Medal	incbin	\aurora17\medal.img
-STart1	incbin	\aurora17\credits1.img
-STart2	incbin	\aurora17\credits2.img
-STart3	incbin	\aurora17\credits3.img
-STart4	incbin	\aurora17\credits4.img
-STart5	incbin	\aurora17\credits5.img
-P_Tale	incbin	\aurora17\P_Tale.mus
-MonST	incbin	\aurora17\monst.img
-Stalin	incbin	\aurora17\stalin.img
-music	incbin	\aurora17\wingsd.muz
+aurora	incbin	au-spr.img
+auroraT	incbin	au-tlo.img
+fonts	incbin	fonts.cod
+Medal	incbin	medal.img
+STart1	incbin	credits1.img
+STart2	incbin	credits2.img
+STart3	incbin	credits3.img
+STart4	incbin	credits4.img
+STart5	incbin	credits5.img
+P_Tale	incbin	P_Tale.mus
+MonST	incbin	monst.img
+Stalin	incbin	stalin.img
+music	incbin	wingsd.muz
 End_Muz	end

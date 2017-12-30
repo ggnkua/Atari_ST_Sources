@@ -1,0 +1,1284 @@
+; interpolated voxel, for the damo and earx demo.
+; proof-of-concept cpu-only version.
+;
+; todo:
+; - algorithmic optimisation:
+;   - pre-perspectivation [8:8] of fov, occlu
+;     - feasibility study -> count pls!
+;   - kill rendundant span coords
+;   - project top to cut landscape ceiling?
+; - most important assembly level optimisations
+; - heavy dsp optimisations
+;
+; optimisations:
+; - 1/sin 1/cos multiplies may be replaced by consequent additions of 1/sin,
+;   1/cos respectively!
+; - fogging/blending lut?
+
+;- object equates ----------------------------------------------------------
+
+; map definition
+Voxel.MAP_DIM_LOG:=	6
+Voxel.MAP_DIM:=		1<<Voxel.MAP_DIM_LOG
+Voxel.MAP_SIZE:=	Voxel.MAP_DIM*Voxel.MAP_DIM
+Voxel.MAP_MASK:=	Voxel.MAP_SIZE-1
+Voxel.U_MASK:=		Voxel.MAP_DIM-1
+Voxel.V_MASK:=		Voxel.U_MASK*Voxel.MAP_DIM
+
+; rendering settings
+Voxel.RAY_STEPS:=	45				; rendering depth
+Voxel.FRAME_WIDTH:=	320				; screen width
+Voxel.SCREEN_HEIGHT:=	200				; screen height
+Voxel.FOG_OFFSET:=	-$1000
+Voxel.FOGGING:=		1				; fogging on/off
+
+; rendering equates
+Voxel.HOR_FLAG:=	%01
+Voxel.VER_FLAG:=	%10
+
+;- object table ------------------------------------------------------------
+
+	ifnd	DEMO_SYSTEM
+testmode:	=	0
+	move.l	#Voxel.table,fxAdr
+	include	tstlight.s
+	text
+	include	txtlight.i
+	text
+	endc
+
+; must be first in object!!
+Voxel.table:
+	dc.l	Voxel.mainLoop
+	dc.l	Voxel.init
+	dc.l	Voxel.init_rt
+	dc.l	Voxel.deinit_rt
+	dc.l	Voxel.go_up
+	dc.l	Voxel.go_down
+	dc.l	Voxel.tilt_up
+	dc.l	Voxel.tilt_down
+	dc.l	0
+
+;- init subroutine ---------------------------------------------------------
+
+; output:
+; d0.l: 0 = all clear; neg = error, not initialized!
+Voxel.init:
+	ifne	1
+;	lea	Voxel.pal,a0
+;	lea	Voxel.photoshop_pal,a1
+;	move.l	#256,d7
+;	bsr	convertTc2Hc
+	else
+	lea	Voxel.pal_inst_table,a1
+	lea	Voxel.pal,a0
+	bsr.l	Pal.makeGradientHc
+	endc
+
+	bsr	Voxel.init_tan_tables
+	bsr	Voxel.init_inv_sincos_tables
+	bsr	Voxel.create_cos_table
+
+	lea	Voxel.map,a0
+
+	ifne	1
+
+	moveq	#Voxel.MAP_DIM_LOG,d0
+	moveq	#3,d1
+	move.l	#$1702311E,d2	#$0702301E,d2
+	bsr	Texture.createBytes2
+
+	else
+
+;	move.w	#Voxel.MAP_SIZE/2-1,d7
+;.loop:	move.w	#$007F,(a0)+
+;	dbf	d7,.loop
+
+	move.w	#Voxel.MAP_DIM-1,d7
+
+.loop:	move.w	#Voxel.MAP_DIM-1,d6
+.xloop0:move.b	d6,d0
+	add.b	d0,d0
+	move.b	d0,(a0)+
+	dbf	d6,.xloop0
+
+	dbf	d7,.loop
+
+	endc
+
+	ifne	0
+	bsr	Voxel.gen_crap_map
+	else
+	bsr	Voxel.gen_shade_map
+	endc
+
+	bsr	Voxel.combine_maps
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+;- real-time init subroutine -----------------------------------------------
+
+Voxel.init_rt:
+	move.l	#Voxel.read_controls,vbl_gfx
+
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+; Unknown monitormode..
+.end:	rts
+.vga60:	move.l	#vga60_16bit_320_200,resRout
+	rts
+.vga100:move.l	#vga60_16bit_320_200,resRout
+	rts
+.rgb50:	move.l	#rgb50_16bit_320_200,resRout
+	rts
+
+;- deinitialisation routine ------------------------------------------------
+
+Voxel.deinit_rt:
+	rts
+
+;- screen init subroutine --------------------------------------------------
+
+;Voxel.init_screen:
+;	rts
+
+;- main loop sub-routine ---------------------------------------------------
+
+Voxel.mainLoop:
+	move.w	$0468.w,old468
+
+;	move.l	frmcnt,d0
+;	sub.l	lastframecount,d0
+;	cmpi.l	#3,d0
+;	bhs.s	.end_screeninit
+;	bsr.s	Voxel.init_screen
+.end_screeninit:
+
+; control
+	move.w	Voxel.log_playerx,Voxel.playerx
+	move.w	Voxel.log_playery,Voxel.playery
+	move.w	Voxel.log_player_arc,Voxel.player_arc
+
+	bsr	getTime
+	move.w	d0,d1
+	lsr.w	#1,d1
+;	move.w	d1,Voxel.player_arc
+;	move.w	#-512,Voxel.player_arc
+	mulu.w	#3,d0
+	neg.w	d0
+;	move.w	d0,Voxel.playery
+;	mulu.w	#3,d0
+;	move.w	d0,Voxel.playerx
+;	move.w	#$155,Voxel.playerx
+;	move.w	#Voxel.MAP_DIM<<7,Voxel.playery
+	
+;	move.l	#200,Voxel.elevation
+;	move.w	#200,Voxel.tilt
+
+; rendering
+	bsr	Voxel.paint
+
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+	movea.l	resRout,a0
+	suba.l	a1,a1
+	movea.l	d0,a2
+	bsr.w	Screen.requestUpdate
+	clr.l	resRout
+
+	move.w	old468,d0
+.wait:	cmp.w	$0468.w,d0
+	beq.s	.wait
+
+	rts
+
+;- object sub-routines -----------------------------------------------------
+
+Voxel.go_up:
+	addi.l	#10000,Voxel.elevation
+	rts
+
+Voxel.go_down:
+	subi.l	#10000,Voxel.elevation
+	rts
+
+Voxel.tilt_up:
+	addi.w	#10,Voxel.tilt
+	rts
+
+Voxel.tilt_down:
+	subi.w	#10,Voxel.tilt
+	rts
+
+Voxel.read_controls:
+	move.b	$FFFFFC02.w,d0
+.try_left:
+	cmpi.w	#$4B,d0
+	bne.s	.try_right
+	subq.w	#8,Voxel.log_player_arc
+	subi.l	#20,Voxel.roll_add
+	bra.s	.key_done
+.try_right:
+	cmpi.w	#$4D,d0
+	bne.s	.try_up
+	addq.w	#8,Voxel.log_player_arc
+	addi.l	#20,Voxel.roll_add
+	bra.s	.key_done
+.try_up:
+
+	move.l	Voxel.roll_add(pc),d0
+	clr.l	d1
+	muls.l	#$F,d0
+	asr.l	#4,d0
+	addx.l	d1,d0
+	move.l	d0,Voxel.roll_add
+
+.key_done:
+	move.w	Voxel.log_player_arc,d1
+	Do_SinModulo	d1
+	Get_SinCos	sine_tbl,d1,d1,d2
+	moveq	#10,d3
+	asr.w	d3,d1
+	asr.w	d3,d2
+	add.w	d1,Voxel.log_playerx
+	neg.w	d2
+	add.w	d2,Voxel.log_playery
+	move.l	Voxel.roll_add(pc),d0
+	muls.l	#160,d0
+	neg.l	d0
+	move.l	d0,Voxel.roll
+.exit:	rts
+
+Voxel.gen_crap_map:
+	lea	Voxel.pal,a2
+	lea	Voxel.map,a1
+	lea	Voxel.color_map,a0
+	move.w	#Voxel.MAP_SIZE-1,d7
+	clr.l	d0
+.loop:	move.b	(a1)+,d0
+	move.w	(a2,d0.l*2),(a0)+
+	dbf	d7,.loop
+	rts
+
+Voxel.gen_shade_map:
+	lea	Voxel.pal,a2
+	lea	Voxel.map,a1
+	lea	Voxel.color_map+Voxel.MAP_SIZE,a0
+	move.w	#Voxel.MAP_DIM-1,d7
+
+.yloop:	move.w	#Voxel.MAP_DIM-1,d6
+
+.xloop:	clr.l	d0
+
+; vertical diff calculation.
+	move.w	d7,d1
+	move.w	d6,d0
+	addq.w	#2,d1
+	bsr	.get_texel
+	clr.w	d2
+	move.b	d0,d2
+
+	move.w	d7,d1
+	move.w	d6,d0
+	addq.w	#1,d1
+	bsr.s	.get_texel
+	clr.w	d3
+	move.b	d0,d3
+
+	move.w	d7,d1
+	move.w	d6,d0
+	subq.w	#1,d1
+	bsr.s	.get_texel
+	clr.w	d4
+	move.b	d0,d4
+
+	move.w	d7,d1
+	move.w	d6,d0
+	subq.w	#2,d1
+	bsr.s	.get_texel
+	clr.w	d5
+	move.b	d0,d5
+
+	sub.w	d4,d3
+	add.w	d2,d3
+	sub.w	d5,d3
+	move.w	d3,a3
+
+; horizontal diff calculation.
+	move.w	d7,d1
+	move.w	d6,d0
+	addq.w	#2,d0
+	bsr.s	.get_texel
+	clr.w	d2
+	move.b	d0,d2
+
+	move.w	d7,d1
+	move.w	d6,d0
+	addq.w	#1,d0
+	bsr.s	.get_texel
+	clr.w	d3
+	move.b	d0,d3
+
+	move.w	d7,d1
+	move.w	d6,d0
+	subq.w	#1,d0
+	bsr.s	.get_texel
+	clr.w	d4
+	move.b	d0,d4
+
+	move.w	d7,d1
+	move.w	d6,d0
+	subq.w	#2,d0
+	bsr.s	.get_texel
+	clr.w	d5
+	move.b	d0,d5
+
+	sub.w	d4,d3
+	add.w	d2,d3
+	sub.w	d5,d3
+	move.w	a3,d2
+
+	muls.w	d2,d2
+	muls.w	d3,d3
+	add.l	d2,d3
+	add.l	d3,d3
+	move.l	d3,d1
+	bsr	Math.sqrt
+	swap	d0
+
+	move.b	d0,-(a0)
+	dbf	d6,.xloop
+
+	dbf	d7,.yloop
+	rts
+
+;---------------------------------------------------------------------------
+; offset calculation routine, includes wrapping
+; input:
+; d0.l=x_val[n] [int]
+; d1.l=y_val[n] [int]
+; output:
+; d0.b=texel
+.get_texel:
+	andi.w	#Voxel.U_MASK,d0
+	andi.w	#Voxel.U_MASK,d1
+	lsl.w	#Voxel.MAP_DIM_LOG,d1
+	or.w	d1,d0
+	move.b	(a1,d0.l),d0
+	rts
+
+Voxel.combine_maps:
+	lea	Voxel.combined_map,a0
+	lea	Voxel.map,a1
+	lea	Voxel.color_map,a2
+	move.w	#Voxel.MAP_SIZE-1,d7
+.loop:	move.b	(a1)+,(a0)+
+	move.b	(a2)+,(a0)+
+	dbf	d7,.loop
+	rts
+
+Voxel.create_cos_table:
+; copy cos..
+	lea	sine_tbl+2,a1				;cos
+	lea	Voxel.cos_table,a0
+	lea	Voxel.cos_table+sintbllen*2,a2
+	move.w	#sintbllen-1,d7
+.loop:	move.w	(a1),(a0)+
+	move.w	(a1),(a2)+
+	addq	#4,a1
+	dbf	d7,.loop
+	rts
+
+Voxel.init_tan_tables:
+* First, precalc the tan and inverse tan tables..
+	lea	Voxel.inv_tan_table,a2
+	lea	Voxel.tan_table,a0
+	lea	sine_tbl,a1
+	move.w	#sintbllen-1,d7
+.loop:	movem.w	(a1)+,d0-d1			* Get sin(i) and cos(i).
+	move.l	d1,d2
+	lsl.l	#8,d1
+	move.w	d0,d0
+	beq.s	.notandiv
+	divs.w	d0,d1				* 1/tan(i) = cos(i)/sin(i)
+	bra.s	.endtandiv
+.notandiv:
+
+;	asr.l	#8,d1
+	tst.l	d1
+	bmi.s	.neg1
+	move.w	#$7FFF,d1
+	bra.s	.pos1
+.neg1:	move.w	#$8001,d1
+.pos1:
+
+.endtandiv:
+	lsl.l	#8,d0
+	move.w	d2,d2
+	beq.s	.noitandiv
+	divs.w	d2,d0				* tan(i) = sin(i)/cos(i)
+	bra.s	.enditandiv
+.noitandiv:
+
+;	asr.l	#8,d0
+	tst.l	d0
+	bmi.s	.neg2
+	move.w	#$7FFF,d0
+	bra.s	.pos2
+.neg2:	move.w	#$8001,d0
+.pos2:	
+
+.enditandiv:
+	move.w	d0,(a0)+			* STore tan(i).
+	move.w	d1,(a2)+			* STore 1/tan(i).
+	dbra	d7,.loop
+
+* Second, precalc the Xstep table (based on tan table).
+* 1st and 2nd quadrants must be positive.
+; Note: we add resp. subtract 2 to compensate for 'invisible-corner' bug.
+	lea	Voxel.xy_step_table,a0
+	lea	Voxel.tan_table,a1
+	move.w	#sintbllen/2-1,d7
+.xsteploop1:
+	move.w	(a1)+,d0
+	bpl.s	.xpos
+	neg.w	d0
+.xpos:	;addq.w	#2,d0
+	move.w	d0,(a0)
+	addq	#4,a0
+	dbf	d7,.xsteploop1
+* 3rd and 4th quadrants must be negative.
+	move.w	#sintbllen/2-1,d7
+.xsteploop2:
+	move.w	(a1)+,d0
+	bmi.s	.xneg
+	neg.w	d0
+.xneg:	;subq.w	#2,d0
+	move.w	d0,(a0)
+	addq	#4,a0
+	dbf	d7,.xsteploop2
+
+* Third, precalc the Ystep table (based on itan table).
+* 1st quadrant must be negative.
+	lea	Voxel.xy_step_table+2,a0
+	lea	Voxel.inv_tan_table,a1
+	move.w	#sintbllen/4-1,d7
+.ysteploop1:
+	move.w	(a1)+,d0
+	bmi.s	.yneg1
+	neg.w	d0
+.yneg1:	;subq.w	#2,d0
+	move.w	d0,(a0)
+	addq	#4,a0
+	dbra	d7,.ysteploop1
+* 2nd and 3rd quadrants must be positive.
+	move.w	#sintbllen/2-1,d7
+.ysteploop2:
+	move.w	(a1)+,d0
+	bpl.s	.ypos
+	neg.w	d0
+.ypos:	;addq.w	#2,d0
+	move.w	d0,(a0)
+	addq	#4,a0
+	dbra	d7,.ysteploop2
+* 4th quadrant must be negative.
+	move.w	#sintbllen/4-1,d7
+.ysteploop3:
+	move.w	(a1)+,d0
+	bmi.s	.yneg2
+	neg.w	d0
+.yneg2:	;subq.w	#2,d0
+	move.w	d0,(a0)
+	addq	#4,a0
+	dbra	d7,.ysteploop3
+
+; repeat it
+	lea	Voxel.xy_step_table+sintbllen*4,a0
+	lea	Voxel.xy_step_table,a1
+	move.w	#sintbllen-1,d7
+.repeat:move.l	(a1)+,(a0)+
+	dbf	d7,.repeat
+	rts
+
+Voxel.init_inv_sincos_tables:
+	lea	sine_tbl,a1
+	lea	Voxel.inv_sin_table,a0
+	move.w	#sintbllen*2-1,d7
+	move.l	#$007FFFFF,d0
+
+.loop:	move.l	d0,d1
+	move.w	(a1)+,d2
+	bpl.s	.pos
+	neg.w	d2
+.pos:	divu.w	d2,d1
+	bcc.s	.endsindiv
+	move.w	#$ffff,d1
+.endsindiv:
+	move.w	d1,(a0)+
+	dbf	d7,.loop
+
+; repeat it once..
+	move.w	#sintbllen-1,d7
+	lea	Voxel.inv_sin_table,a1
+
+.loop2:	move.l	(a1)+,(a0)+
+	dbf	d7,.loop2
+	rts
+
+PAINT_W:=	320
+
+;---------------------------------------------------------------------------
+; renders to voxel to screen.
+; 0] prepare intersection start and ray steps
+;    1] bilinear interpolation of height at player position
+;       a. projection
+;    2] horizontal start and step
+;    3] vertical start and step
+; 1] span loop
+;    1] calc next hor intersection
+;    2] calc next ver intersection
+;    3] select closest intersection
+;    4] calculate projected height
+;    5] paint span
+;---------------------------------------------------------------------------
+Voxel.paint:
+	move.w	Voxel.player_arc,d7
+	subi.w	#Voxel.FRAME_WIDTH,d7
+	andi.w	#sintbllen-1,d7
+	lea	Voxel.cos_table+(sintbllen-Voxel.FRAME_WIDTH)*2,a4
+							; a4: cos(ray[0])
+	lea	Voxel.combined_map,a3			; a3: height map
+	lea	Voxel.pal,a5				; a5: palette
+	lea	Voxel.xy_step_table,a1
+	lea	Voxel.inv_sin_table,a2
+	move.w	d7,d0
+	lsl.w	#2,d0
+	adda.w	d0,a1					; a1: xy_step(a[0])
+	adda.w	d0,a2					; a2: inv_sincos(a[0])
+	movea.l	scr,a6
+	adda.l	#(320*199+PAINT_W)*2,a6			; a6: south east position in screen
+	move.l	a6,.scr_end_adr				; store south east position
+	suba.w	#PAINT_W*2,a6				; a6: south west position in screen
+	move.l	Voxel.roll,Voxel.roll1
+	
+.columnloop:
+
+;---------------------------------------------------------------------------
+; step 0.2
+; start and step calculation for intersections with horizontal 'wall'.
+	move.w	(a1)+,d0			; d0.w=xstep [8:8]
+	movem.w	Voxel.playerx(pc),d1/d6		; d1.l=playerx [8:8], d6.l=playery [8:8]
+	move.l	d6,d2				; d2.l=playery [8:8]
+	clr.b	d6				; d6.l=playery<<8 [int]
+	sub.l	d6,d2				; d2.l=frac[playery] [8:8]
+
+; for negative and positive y step there are special initialisers.
+	tst.w	(a1)
+	bmi.s	.h_quad_2_or_3
+
+; ray in quadrant 1 or 4
+; .|.
+; -+-
+; 4|1
+	move.w	#$0100,d5			; d5.w=+1.0 [8:8]
+	add.w	d5,d6				; d6.w=[playery+1]<<8 [int]
+	not.b	d2				; d2.w=0.FF-frac[playery] [8:8]
+	bra.s	.end_find_h_quad
+
+.h_quad_2_or_3:
+; ray in quadrant 2 or 3.
+; 3|2
+; -+-
+; .|.
+	move.w	#$FF00,d5			; d5.w=-1.0 [8:8]
+.end_find_h_quad:
+
+; d2.w=y_frac [8:8]
+; d5.w=y_int_step [8:8]
+; d6.w=h_intersect[0].y [8:8]
+	muls.w	d0,d2				; d2.l=xstep*y_frac [16:16]
+	asr.l	#8,d2				; d2.l=xstep*y_frac [24:8]
+	add.w	d2,d1				; d1.w=h_intersect[0].x=playerx+xstep*y_frac [8:8]
+
+; tidy stuff..
+	move.w	d0,Voxel.x_step
+	move.w	d6,Voxel.h_inter_y
+	move.w	d5,Voxel.y_int_step
+	move.w	d1,Voxel.h_inter_x
+
+;---------------------------------------------------------------------------
+; step 0.3
+; start and step calculation for intersections with vertical 'wall'.
+	move.w	(a1)+,d0			; d0.w=ystep [8:8]
+	addq	#4,a1				; a1: next xy step
+	movem.w	Voxel.playerx(pc),d1/d6		; d1.l=playerx [8:8], d6.l=playery [8:8]
+	move.w	d1,d2				; d2.l=playerx [8:8]
+	clr.b	d1				; d1.l=playerx<<8 [int]
+	sub.w	d1,d2				; d2.l=frac[playerx] [8:8]
+
+; for negative and positive x step there are special initialisers.
+	cmpi.w	#sintbllen/2,d7
+	bhs.s	.v_test_quad_3_4
+
+; ray in quadrant 1 or 2
+; .|2
+; -+-
+; .|1
+	move.w	#$0100,d5			; d5.w=+1.0 [8:8]
+	add.w	d5,d1				; d1.w=[playerx+1]<<8 [int]
+	not.b	d2				; d2.w=0.FF-frac[playery] [8:8]
+	bra.s	.end_find_v_quad
+
+; ray in quadrant 3 or 4
+; 3|.
+; -+-
+; 4|.
+.v_test_quad_3_4
+	move.w	#$FF00,d5			; d5.w=-1.0 [8:8]
+
+; d2.w=xfrac [8:8]
+; d5.w=x_int_step [8:8]
+; d6.w=v_intersect[0].y [8:8]
+.end_find_v_quad:
+	muls.w	d0,d2				; d2.l=ystep*x_frac [16:16]
+	asr.l	#8,d2				; d2.l=ystep*x_frac [24:8]
+	add.w	d2,d6				; d6.w=v_intersect[0].y=playery+ystep*x_frac [8:8]
+
+; tidy stuff..
+	move.w	d0,Voxel.y_step
+	move.w	d1,Voxel.v_inter_x
+	move.w	d5,Voxel.x_int_step
+	move.w	d6,Voxel.v_inter_y
+
+; prepare for the span loop.
+	clr.w	Voxel.screen_top_y
+	clr.w	Voxel.screen_y
+	clr.l	Voxel.shade
+	move.l	#Voxel.FOG_OFFSET+$100*2,Voxel.old_z
+	movea.l	a6,a0				; a0: screen column bottom
+	clr.w	.axis_flags			; no intersection previously chosen.
+	swap	d7				; d7.l=col_count<<16
+	move.w	#Voxel.RAY_STEPS-1,d7		; d7.l=col_count<<16|ray_count
+
+;---------------------------------------------------------------------------
+; step 1: the span loop
+.span_loop:
+
+;---------------------------------------------------------------------------
+; step 1.1
+; calculate next intersection with a horizontal 'wall'.
+
+	move.w	.axis_flags(pc),d0
+	andi.w	#Voxel.VER_FLAG,d0		; only vertical chosen last time?
+	bne.s	.end_h_intersect		; -> keep currect horizontal intersection.
+	move.w	Voxel.h_inter_x(pc),d1
+	move.w	Voxel.h_inter_y(pc),d6
+	bsr	.calc_map_offset
+	move.w	Voxel.x_step(pc),d0
+	move.w	Voxel.y_int_step(pc),d5
+	add.w	d0,Voxel.h_inter_x
+	add.w	d5,Voxel.h_inter_y
+	bsr	.intersect_h
+.end_h_intersect:
+
+;---------------------------------------------------------------------------
+; step 1.2
+; calculate next intersection with a vertical 'wall'.
+
+	move.w	.axis_flags(pc),d0
+	andi.w	#Voxel.HOR_FLAG,d0		; only horizontal chosen last time?
+	bne.s	.end_v_intersect		; -> keep currect vertical intersection.
+	move.w	Voxel.v_inter_x(pc),d1
+	move.w	Voxel.v_inter_y(pc),d6
+	bsr.s	.calc_map_offset
+	move.w	Voxel.x_int_step(pc),d0
+	move.w	Voxel.y_step(pc),d5
+	add.w	d0,Voxel.v_inter_x
+	add.w	d5,Voxel.v_inter_y
+	bsr	.intersect_v
+.end_v_intersect:
+
+;---------------------------------------------------------------------------
+; step 1.3:
+; find out which intersection is nearest...
+; the horizontal or the vertical...
+	bsr	.get_closest_dist
+
+;---------------------------------------------------------------------------
+; step 1.4: calculate projected height
+	bsr	.project_height
+; d0.w=screen_y[n] [int], d6.w=z [8:8]
+
+;---------------------------------------------------------------------------
+; step 1.5: keep track of new span and render when necessary
+	bsr	Voxel.process_new_span
+	dbmi	d7,.span_loop
+.end_span_loop:
+
+;---------------------------------------------------------------------------
+; step 1.6: paint sky.
+	move.w	#Voxel.SCREEN_HEIGHT-1,d0
+	sub.w	Voxel.screen_top_y(pc),d0
+	bmi.s	.reached_top
+	move.w	#$EFDF,d1
+	move.l	#320*2,d2
+.sky_loop:
+	move.w	d1,(a0)				; paint pixel.
+	suba.l	d2,a0				; a0: next pixel
+	dbf	d0,.sky_loop
+.reached_top:
+
+	swap	d7
+
+; next column..
+.endcolumnloop:
+	addq.w	#2,d7
+	andi.w	#sintbllen-1,d7
+
+	move.l	Voxel.roll_add(pc),d0
+	add.l	d0,Voxel.roll1
+
+	addq	#8,a2				; a2: next inv sin cos entry
+	addq	#4,a4				; a4: next cos
+
+	addq	#2,a6
+	cmpa.l	.scr_end_adr(pc),a6
+	blt	.columnloop
+
+	rts
+
+.scr_end_adr:
+	dc.l	0
+.axis_flags:
+	dc.w	0
+
+;---------------------------------------------------------------------------
+; offset calculation routine
+; input:
+; d1.w=x_val[n] [8:8]
+; d6.w=y_val[n] [8:8]
+; output:
+; d2.w=map offset [int]
+.calc_map_offset:
+	move.l	d6,d2				; d2.w=h_intersect[n].y [8:8]
+	clr.b	d2				; d2.w=[h_intersect[n].y]<<8 [int]
+	move.w	d1,d3				; d3.w=h_intersect[n].x [8:8]
+	lsr.w	#Voxel.MAP_DIM_LOG,d3		; d3.w=h_intersect[n].x/dim [8+dl:8-dl]
+	move.b	d3,d2				; d2.w=[[i[n].y/dim]&FF]+i[n].x [int]
+	lsr.w	#8-Voxel.MAP_DIM_LOG,d2		; d2.w=offset=[i[n].y/dim+i[n].x]/dim [int]
+	andi.w	#Voxel.MAP_MASK,d2
+	rts
+
+;---------------------------------------------------------------------------
+; horizontal intersection routine
+.intersect_h:
+	clr.w	d4
+	move.b	d1,d4				; d4.w=x_frac [8]
+	sub.w	Voxel.playery(pc),d6		; d6.w=dy=h_intersect.y-playery [8:8]
+	bpl.s	.ypos
+	neg.w	d6
+.ypos:	move.w	d6,.dy_abs
+
+; fetch heights at sides of horizontal edge.
+; d1.w=|dx| [8:8]
+; d2.w=west grid point index
+; d4.w=x_frac [8]
+	clr.w	d0
+	clr.w	d1
+	move.b	(a3,d2.w*2),d0			; d0.w=west height
+	move.b	1(a3,d2.w*2),d1			; d1.w=west shade
+	move.w	d2,d3
+	andi.w	#Voxel.U_MASK,d2		; d2.w=u [int]
+	sub.w	d2,d3				; d3.w=v*dim [int]
+	addq.w	#1,d2				; d2.w=u+1 
+	andi.w	#Voxel.U_MASK,d2		; d2.w=wrap[u+1]
+	or.w	d3,d2				; d2.w=v*dim+wrap[u+1]
+	clr.w	d3
+	clr.w	d5
+	move.b	(a3,d2.w*2),d3			; d3.w=east height
+	move.b	1(a3,d2.w*2),d5			; d5.w=east shade
+
+; interpolate height of intersection.
+	mulu.w	d4,d3				; d0.l=x_val*w_h [16]
+	mulu.w	d4,d5
+	not.b	d4				; d4.w=[255-x_val]
+	mulu.w	d4,d0				; d3.l=[255-x_val]*e_h [16]
+	mulu.w	d4,d1
+	add.l	d0,d3				; d3.l=x_val*w_h+[255-x_val]*e_h [16]
+	add.l	d1,d5
+	move.w	d3,.h_inter_height
+	move.w	d5,.h_inter_shade
+	rts
+
+;---------------------------------------------------------------------------
+; vertical intersection routine
+.intersect_v:
+	clr.w	d4
+	move.b	d6,d4				; d6.w=y_frac [8]
+	sub.w	Voxel.playerx(pc),d1		; d6.w=dx=h_intersect.x-playerx [8:8]
+	bpl.s	.xpos
+	neg.w	d1
+.xpos:	move.w	d1,.dx_abs
+
+; fetch heights at sides of vertical edge.
+; d2.w=north grid point index
+; d4.w=x_frac [8]
+; d6.w=|dy| [8:8]
+	clr.w	d0
+	clr.w	d3
+	move.b	(a3,d2.w*2),d0			; d0.b=north height
+	move.b	1(a3,d2.w*2),d3			; d3.b=north shade
+	addi.w	#Voxel.MAP_DIM,d2		; d2.w=[v+1]*dim+u
+	andi.w	#Voxel.MAP_MASK,d2		; d2.w=wrap[v+1]*dim+u
+	clr.w	d1
+	clr.w	d5
+	move.b	(a3,d2.w*2),d1			; d1.b=south height
+	move.b	1(a3,d2.w*2),d5			; d5.b=south shade
+
+; interpolate height of intersection.
+	mulu.w	d4,d1				; d0.l=x_val*w_h [16]
+	mulu.w	d4,d5
+	not.b	d4				; d4.w=[255-x_val]
+	mulu.w	d4,d0				; d1.l=[255-x_val]*e_h [16]
+	mulu.w	d4,d3
+	add.l	d0,d1				; d1.l=x_val*w_h+[255-x_val]*e_h [16]
+	add.l	d3,d5
+	move.w	d1,.v_inter_height
+	move.w	d5,.v_inter_shade
+	rts
+
+;---------------------------------------------------------------------------
+; calculate closest intersection.
+.get_closest_dist:
+	clr.l	d0
+	move.w	.dx_abs(pc),d1			; d1.w=|dx| [8:8]
+	move.w	.dy_abs(pc),d6			; d6.w=|dy| [8:8]
+
+	cmpi.w	#$3FFF,(a2)
+	bhs.s	.its_h
+
+	mulu.w	(a2),d1				; d1.l=v_raylen=|dx|/sin [9:23]
+
+	cmpi.w	#$3FFF,2(a2)
+	bhs.s	.its_v
+
+	mulu.w	2(a2),d6			; d6.l=h_raylen=|dy|/cos [9:23]
+	cmp.l	d1,d6				; v_raylen < h_raylen ?
+	bgt.s	.calc_verdist			; -> take the vertical intersection
+
+.calc_hordist:
+	move.w	.h_inter_height(pc),d0		; d0.w=interpolated height of h edge [16]
+	clr.l	d5
+	move.w	.h_inter_shade(pc),d5
+	move.w	#Voxel.HOR_FLAG,.axis_flags	; indicate horizontal was closest.
+	bra.s	.end
+
+.its_v:
+.calc_verdist:
+	move.l	d1,d6				; d6.l=raylen=v_raylen [9:23]
+	move.w	.v_inter_height(pc),d0		; d0.w=interpolated height of v edge [16]
+	clr.l	d5
+	move.w	.v_inter_shade(pc),d5
+	move.w	#Voxel.VER_FLAG,.axis_flags	; indicate vertical was closest.
+.end:	rts
+
+.its_h:	mulu.w	2(a2),d6			; d6.l=h_raylen=|dy|/cos [9:23]
+	bra.s	.calc_hordist
+
+;---------------------------------------------------------------------------
+; d0.l=interpolated height [8:8]
+; d6.l=ray length [9:23]
+; output:
+; d0.w=projected height
+.project_height:
+	lsr.l	#7,d6				; d6.l=raylen [16:16]
+; range checking on raylen anyone?
+
+	lsl.l	#4,d0
+
+; compensate fishfuck effect.
+	mulu.w	(a4),d6				; d6.l=z=raylen*cos(ray)
+	clr.w	d6
+	swap	d6				; d6.l=z [int]
+	add.w	#$0100,d6
+
+; then calculate the slice height.
+	add.l	Voxel.roll1,d0
+	sub.l	Voxel.elevation(pc),d0
+	divs.w	d6,d0				; d0.l=h'=height/z [int]
+	add.w	Voxel.tilt(pc),d0
+	rts
+
+; x,y distance to h, v intersection respectively
+.dx_abs:dc.w	0
+.dy_abs:dc.w	0
+
+; h,v intersection height
+.h_inter_height:
+	dc.w	0
+.h_inter_shade:
+	dc.w	0
+.v_inter_height:
+	dc.w	0
+.v_inter_shade:
+	dc.w	0
+
+; input:
+; d0.w=screen_y[n]
+; d5.l=shade
+; d6.l=z
+; output:
+; d0.l=result code
+Voxel.process_new_span:
+; first, the logic.
+	bsr.s	Voxel.add_new_span
+
+;	move.w	Voxel.screen_top_y(pc),d0
+;	cmp.w	Voxel.span_start(pc),d0
+	cmp.w	d1,d2
+	ble.s	.done
+
+; then, the rendering.
+	bsr	Voxel.paint_new_span
+	move.w	Voxel.screen_top_y(pc),d0
+	cmpi.w	#Voxel.SCREEN_HEIGHT,d0
+	bge.s	.last
+
+.done:	moveq	#0,d0
+	rts
+.last:	moveq	#-1,d0
+	rts
+
+;---------------------------------------------------------------------------
+; step 1.5: paint span.
+;
+; span dimension before clipping:
+;
+; d_screen_y[n]=screen_y[n]-screen_y[n-1]
+;
+; span dimension after clipping:
+;
+; span_height[n]=span_end[n]-span_start[n]
+; span_start[n]=screen_y_top[n-1]
+; span_end[n]=min(screen_y[n],Voxel.SCREEN_HEIGHT)
+;
+; screen_y_top[n]=max(screen_y[n], screen_y[n-1], ..., screen_y[0], 0)
+; screen_y_top[n+1]=max(screen_y_top[n],screen_y[n])
+; screen_y_top[-1]=0
+;
+; pre:
+; screen_y_top[-1]=0
+; input:
+; d0.w=screen_y[n]
+; d5.l=shade
+; d6.w=z
+Voxel.add_new_span:
+; first, update all logic. do the whole segment occlusion thing.
+	move.w	Voxel.screen_y(pc),Voxel.old_screen_y
+	move.w	d0,Voxel.screen_y
+; calc d_screen_y[n].
+	move.w	d0,d1
+	move.w	d0,d2
+	sub.w	Voxel.old_screen_y(pc),d1	; d1.w=d_screen_y[n]
+	move.w	d1,Voxel.d_screen_y		; store d_screen_y[n].
+
+; calculate span_end[n].
+	cmpi.w	#Voxel.SCREEN_HEIGHT,d0		; screen_y[n] >= 200 ?
+	ble.s	.span_end_clipped
+	move.w	#Voxel.SCREEN_HEIGHT,d0		; -> clip it..
+.span_end_clipped:
+	move.w	d0,Voxel.span_end		; store span_end[n].
+
+; calculate span_height[n].
+	move.w	Voxel.screen_top_y(pc),d1
+	move.w	d1,Voxel.span_start
+	sub.w	d1,d0				; d0.w=span_height[n]=span_end[n]-span_start[n]
+	move.w	d0,Voxel.span_height		; store span_height[n].
+
+; calculate screen_top_y[n].
+	cmp.w	Voxel.screen_top_y(pc),d2	; screen_y[n] > screen_top_y[n-1] ?
+	blt.s	.screen_top_calced
+	move.w	d2,Voxel.screen_top_y		; screen_top_y[n]=screen_y[n]
+.screen_top_calced:
+
+	lsl.l	#3,d6
+	add.l	#Voxel.FOG_OFFSET,d6		; d6.l=offset+z[n]*scale unclipped
+	move.l	Voxel.z(pc),Voxel.old_z
+	move.l	d6,Voxel.z
+
+	move.l	Voxel.shade(pc),Voxel.old_shade
+	move.l	d5,Voxel.shade
+	rts
+
+Voxel.ADDX:	=	0
+
+;---------------------------------------------------------------------------
+; span shading:
+;
+; g0[n] = g_step[n]( span_start[n] - screen_top_y[n-1] ) + g[n-1]
+; g_step[n]=dg[n]/d_screen_y[n]=(g[n]-g[n-1])/d_screen_y[n]
+; g[n]=clip[ shade[n]+offset+z_scale*z[n] ]
+;
+; pre:
+; new span is added, logic vars are set:
+; . span_height[n] > 0
+Voxel.paint_new_span:
+	move.l	Voxel.old_shade(pc),d4		; d4.w=shade[n-1] [8:8]
+	move.l	Voxel.shade(pc),d5		; d5.w=shade[n] [8:8]
+	ifne	Voxel.FOGGING
+	move.l	Voxel.old_z(pc),d2		; d2.l=z[n-1]*scale+offset
+	move.l	Voxel.z(pc),d6
+	endc
+	cmpi.w	#Voxel.RAY_STEPS-1,d7
+	blt.s	.normal
+;	add.l	d5,d5				; todo: only for testing
+	move.l	d5,d4
+	move.l	d6,d2
+.normal:
+
+	ifne	Voxel.FOGGING
+; this is very coslty!
+
+	clr.l	d3
+	not.w	d3				; d3.l=$0000FFFF
+	tst.l	d6
+	bmi.s	.one_neg
+	cmp.l	d3,d6
+	ble.s	.one_pos
+	move.l	d3,d5
+	bra.s	.do_two
+
+.one_pos:
+	add.w	d6,d5
+	bcc.s	.one_pos_ok
+	move.l	d3,d5
+.one_pos_ok:
+	bra.s	.do_two
+.one_neg:
+	add.w	d6,d5
+	bcs.s	.one_neg_ok
+	clr.l	d5
+.one_neg_ok:
+; d5.l=g[n]
+
+.do_two:tst.l	d2
+	bmi.s	.two_neg
+	cmp.l	d3,d2
+	blt.s	.two_pos
+	move.l	d3,d4
+	bra.s	.two_ok
+
+.two_pos:
+	add.w	d2,d4
+	bcc.s	.two_pos_ok
+	move.l	d3,d4
+.two_pos_ok:
+	bra.s	.two_ok
+.two_neg:
+	add.w	d2,d4
+	bcs.s	.two_ok
+	clr.l	d4
+.two_ok:
+; d4.l=g[n-1]
+
+	else
+
+; fogging by offset and scale.
+;	subi.w	#$8000,d4
+;	subi.w	#$8000,d5
+;	muls.l	d2,d4
+;	muls.l	d6,d5
+;	clr.w	d4
+;	clr.w	d5
+;	swap	d4
+;	swap	d5
+
+	endc
+
+; clip against screen height! take in to account original pre-clip slope!
+	sub.l	d4,d5				; d5.l=dg[n]=g[n]-g[n-1] [8:8]
+	divs.w	Voxel.d_screen_y(pc),d5		; d5.w=dg/dy[n]
+
+; add offset to gouraud start when span start is occluded..
+	move.w	Voxel.span_start(pc),d1
+	sub.w	Voxel.old_screen_y(pc),d1
+	muls.w	d5,d1
+	add.l	d1,d4
+
+	ifne	Voxel.ADDX
+	ror.l	#8,d4
+	and.l	d3,d5
+	ror.l	#8,d5
+	ext.w	d5
+	endc
+	
+	move.l	#320*2,d0
+	move.w	Voxel.span_height(pc),d3
+	subq.w	#1,d3				; d3.w=clipped span height-1
+	
+.pix_loop:
+	ifeq	Voxel.ADDX
+	move.w	d4,d1
+	lsr.w	#8,d1
+	move.w	(a5,d1.w*2),(a0)		; paint pixel.
+	add.w	d5,d4
+	else
+	move.w	(a5,d4.w*2),(a0)		; paint pixel.
+	addx.l	d5,d4
+	endc
+
+	suba.l	d0,a0				; a0: next pixel
+	dbf	d3,.pix_loop
+.span_done:
+
+.end:	rts
+
+Voxel.screen_top_y:
+	dc.w	0
+Voxel.d_screen_y:
+	dc.w	0
+Voxel.span_height:
+	dc.w	0
+Voxel.span_start:
+	dc.w	0
+Voxel.span_end:
+	dc.w	0
+Voxel.screen_y:
+	dc.w	0
+Voxel.old_screen_y:
+	dc.w	0
+
+; span shading variables.
+Voxel.z:
+	dc.l	0
+Voxel.old_z:
+	dc.l	0
+Voxel.shade:
+	dc.l	0
+Voxel.old_shade:
+	dc.l	0
+
+; horizontal intersection variables
+Voxel.x_step:
+	dc.w	0
+Voxel.y_int_step:
+	dc.w	0
+Voxel.h_inter_x:
+	dc.w	0
+Voxel.h_inter_y:
+	dc.w	0
+Voxel.h_col:
+	dc.w	0
+
+; vertical intersection variables
+Voxel.x_int_step:
+	dc.w	0
+Voxel.y_step:
+	dc.w	0
+Voxel.v_inter_x:
+	dc.w	0
+Voxel.v_inter_y:
+	dc.w	0
+Voxel.v_col:
+	dc.w	0
+
+;- object data -------------------------------------------------------------
+
+; control parameters
+Voxel.playerx:
+	ds.w	1
+Voxel.playery:
+	ds.w	1
+Voxel.log_playerx:
+	dc.w	0
+Voxel.log_playery:
+	dc.w	0
+Voxel.player_arc:
+	ds.w	1
+Voxel.log_player_arc:
+	ds.w	1
+Voxel.tilt:
+	dc.w	$00B0				;
+Voxel.elevation:
+	dc.l	500000				;
+
+Voxel.roll:
+	ds.l	1
+Voxel.roll1:
+	ds.l	1
+Voxel.roll_add:
+	ds.l	1
+
+	data
+
+	ifne	0
+
+Voxel.pal_inst_table:
+	DC.W	(.end-.start)/4-1
+	DC.W	4
+.start:	dc.l	$00000000
+	dc.l	$00000000
+	dc.l	$0F0F0000
+	dc.l	$2F2F0000
+	dc.l	$4F4F0000
+	dc.l	$7F7F002F
+	dc.l	$5FBF002F
+	dc.l	$5FBF002F
+	dc.l	$7F7F007F
+	dc.l	$9F9F009F
+	dc.l	$BFBF00BF
+	dc.l	$DFDF00DF
+	dc.l	$FFFF00FF
+	dc.l	$FFFF00FF
+	dc.l	$FFFF00FF
+	dc.l	$FFFF00FF
+	dc.l	$FFFF00FF
+.end:
+
+	endc
+
+;Voxel.photoshop_pal:
+;	incbin	pal.raw
+Voxel.pal:
+	incbin	palh.dat
+
+;- object bss -------------------------------------------------------------
+
+	bss
+
+; rendering tables
+;Voxel.pal:
+;	ds.l	256
+
+; trig tables
+Voxel.cos_table:
+	ds.l	sintbllen
+Voxel.inv_sin_table:
+	ds.l	sintbllen*2
+Voxel.inv_tan_table:
+	ds.w	sintbllen
+Voxel.tan_table:
+	ds.w	sintbllen
+Voxel.xy_step_table:
+	ds.l	sintbllen*2
+
+; world buffers
+Voxel.map:
+	ds.b	Voxel.MAP_SIZE
+Voxel.color_map:
+	ds.b	Voxel.MAP_SIZE
+Voxel.combined_map:
+	ds.w	Voxel.MAP_SIZE
