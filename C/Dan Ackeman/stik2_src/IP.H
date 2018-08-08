@@ -1,0 +1,4 @@
+struct ip_options 
+{	short		pri;		/* priority 		*/	uint8		ttl;		/* Time to live 	*/	uint8		tos;		/* Type of Service 	*/	unsigned 	hdrincl:1;	/* header included? */};
+
+/* * Options for use with [gs]etsockopt at the IP level. * First word of comment is data type; bool is stored in int. */#define	IP_OPTIONS	1	/* buf/ip_opts; set/get IP per-packet options */#define	IP_HDRINCL	2	/* int; header is included with data (raw) */#define	IP_TOS		3	/* int; IP type of service and precedence */#define	IP_TTL		4	/* int; IP time to live */#define	IP_RECVOPTS	5	/* bool; receive all IP options w/datagram */#define	IP_RECVRETOPTS	6	/* bool; receive IP options for response */#define	IP_RECVDSTADDR	7	/* bool; receive IP dst addr w/datagram */#define	IP_RETOPTS	8	/* ip_opts; set/get IP per-packet options */
