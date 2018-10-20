@@ -1,2 +1,0 @@
-EXTRA_DIST = ChangeLog FILES2 README.asm README.b README.book README.gl \
-	README.sound TODO
