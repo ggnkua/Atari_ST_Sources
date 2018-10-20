@@ -1,0 +1,85 @@
+
+*-------------------------------------------------------*
+			rsreset
+*-------------------------------------------------------*
+config_version_id	rs.l	1
+*-------------------------------------------------------*
+config_cache_ic		rs.w	1
+config_cache_dc		rs.w	1
+config_cache_pmmu	rs.w	1
+config_cache_cbc	rs.w	1
+config_cache_fast	rs.w	1
+config_rom_fast		rs.w	1
+config_rom_cache	rs.w	1
+config_rom_mogr		rs.w	1
+config_rom_cacr		rs.w	1
+config_rom_nem		rs.w	1
+config_rom_pmmu		rs.w	1
+config_rom_movem	rs.w	1
+config_ram_fast		rs.w	1
+config_ram_cache	rs.w	1
+config_ram_check	rs.w	1
+config_mask_v4m		rs.w	1
+config_mask_v14m	rs.w	1
+config_mask_nova	rs.w	1
+config_mask_novac	rs.w	1
+config_mask_novam	rs.w	1
+config_disk_ifrb	rs.w	1
+config_disk_xfrb	rs.w	1
+config_patch_13		rs.w	1
+config_patch_13h	rs.w	1
+config_patch_14		rs.w	1
+config_patch_nem	rs.w	1
+config_frb_a		rs.w	1
+config_frb_b		rs.w	1
+config_frb_c		rs.w	1
+config_frb_d		rs.w	1
+config_frb_e		rs.w	1
+config_frb_f		rs.w	1
+config_frb_g		rs.w	1
+config_frb_h		rs.w	1
+config_frb_i		rs.w	1
+config_frb_j		rs.w	1
+config_frb_k		rs.w	1
+config_frb_l		rs.w	1
+config_frb_m		rs.w	1
+config_frb_n		rs.w	1
+config_frb_o		rs.w	1
+config_frb_p		rs.w	1
+config_dc_a		rs.w	1
+config_dc_b		rs.w	1
+config_dc_c		rs.w	1
+config_dc_d		rs.w	1
+config_dc_e		rs.w	1
+config_dc_f		rs.w	1
+config_dc_g		rs.w	1
+config_dc_h		rs.w	1
+config_dc_i		rs.w	1
+config_dc_j		rs.w	1
+config_dc_k		rs.w	1
+config_dc_l		rs.w	1
+config_dc_m		rs.w	1
+config_dc_n		rs.w	1
+config_dc_o		rs.w	1
+config_dc_p		rs.w	1
+config_ic_a		rs.w	1
+config_ic_b		rs.w	1
+config_ic_c		rs.w	1
+config_ic_d		rs.w	1
+config_ic_e		rs.w	1
+config_ic_f		rs.w	1
+config_ic_g		rs.w	1
+config_ic_h		rs.w	1
+config_ic_i		rs.w	1
+config_ic_j		rs.w	1
+config_ic_k		rs.w	1
+config_ic_l		rs.w	1
+config_ic_m		rs.w	1
+config_ic_n		rs.w	1
+config_ic_o		rs.w	1
+config_ic_p		rs.w	1
+config_slen		rs.b	0
+
+config_id		=	$68040402
+config_offset		=	34
+
