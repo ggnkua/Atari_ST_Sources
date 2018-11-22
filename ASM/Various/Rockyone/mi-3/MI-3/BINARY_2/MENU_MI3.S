@@ -1,34 +1,49 @@
-;rockyone			 pour MI-3	    		  02/03/2017
+;rockyone			 pour MI-3	    		 02/03/2017
 ;
-;correction				  			  28.02.2018
+;correction				  			 28.02.2018
 ;
 ;				Menu On / Off
 ;				-------------
 ;
-;		call Art_cycle( L source , W position% ,W on_off%)
-;		--------------------------------------------------
+;Buf_menu   Buffer contenant les data du menu haut et bas
 ;
-; d1 =  0 menu position bas 
-;       1 menu position haut
-; d2 =  0 menu_off
-;    =  1 menu_on
-;
-;
-;  Buffer menu: avec ses 2 lignes de s‚paration
-;
-; MENU ON __________________________ligne 182/364 visible si menu bas ‚cran 
-;                     
-;line 3/6   |----|----|---------|--         mis dans le buffer par le basic
-;           | FR | GB |         |           
-;line 13/26 |----|----|-------   	
+; buf_ecr   Adresse buffer image pour Off
+;	    0 pour ON
 ;	
-;      _____________________________ligne 17/34 visible si menu haut ‚cran.
-; MENU OFF____________________________  
-;					   mit dans le buffer par 68k
-;           |----|----|---------|--          
-;           | FR | GB |         |      	Premiere et derniŠre ligne ‚cran
-;           |----|----|-------          non recopiŠ dans cette partie du
-;        ______________________________ buffer
+; Haut%   = 0 quand le menu est en bas
+;	  = 1 quand le menu est en haut
+;
+; ON_OFF% = 0 pour off
+;	  = 1 pour on 
+;						  d1        d2
+;	call Art_cycle( L buf_menu ,L buf_ecr, W haut% ,W on_off%)
+;	----------------------------------------------------------
+;
+;
+;
+; Buffer menu: avec ses 2 lignes de s‚paration
+; 
+; MENU ON    ___________________________  Ligne 182|364 visible si menu bas 
+;	    |
+;           |      ---haut de l'‚cran---|
+;line 3/6   | |----|----|---------|--   | Mis dans le buffer par le basic
+;           | | FR | GB |         |     |      
+;line 13/26 | |----|----|------------   |	
+;	    |___bas de l'‚cran___	|		
+;					|
+;            ___________________________| Ligne 17|34 visible si menu haut
+;					  
+; Nb nombre de ligne recouverte si menu haut 18|35 ( l'erreur ! )
+;'''''''''''''''''''''''''''''''''''''''''''''''''
+;					  
+; MANU OFF   ___________________________ 
+; 
+;				      --Mis dans le buffer par 68k
+;             |----|----|---------|--   |       
+;             | FR | GB |         |     |  Premiere et derniŠre ligne ‚cran
+;             |----|----|------------   |    du menu non recopiŠ dans cette 
+;				      ---    partie du buffer
+;            ___________________________    
 ;      
 ;
 ; Le d‚placement et de deux lignes en haute r‚solution !
