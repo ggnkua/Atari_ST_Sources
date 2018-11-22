@@ -1,3 +1,0 @@
-
-pack2e TUTBL.606 TUTBL.NRV
-
