@@ -1,0 +1,1132 @@
+Rem
+Rem       Totally original code by:  John Logajan, March 1989.
+Rem                                  4248 Hamline Ave
+Rem                                  Arden Hills, MN 55112
+Rem
+Rem      (john@logajan.mn.org  or  ...rutgers!bungia!logajan!john)
+Rem
+'
+'                *My* Version of uucico; not very powerfull,
+'                but nearly free of bugs.            -Rodney
+'
+Rem
+Rem                Heavily hacked-up by Rodney Volz (2/90)
+Rem
+Rem                           rodney@merkur.UUCP
+Rem
+'
+'
+Xerr=0
+Succ=0
+'
+Void Xbios(21,1)
+Void Xbios(21,4)
+'
+Void Xbios(30,&H10)               ! Drop DTR for 1/2 second.
+Pause 30
+Void Xbios(29,&HEF)               ! Raise DTR.
+Pause 10
+'
+On Error Gosub Err
+If Exist("\uucico.par")=False Then
+  Print "uucico mustn't be called directly!"
+  Print "use uupoll <system> to call other hosts."
+  End
+Endif
+'
+Open "I",#1,"\uucico.par"
+'
+Line Input #1,Mysite$
+Line Input #1,Remote$  ! remote site; unused
+Line Input #1,Minit$   ! Modem Initialization string
+Line Input #1,Baudrate$
+Line Input #1,Siteph$
+Line Input #1,Nametrigger$
+Line Input #1,Myuser$
+Line Input #1,Pwtrigger$
+Line Input #1,Mypw$
+'
+Line Input #1,Sitedir$
+Sitedir$=Left$(Sitedir$,Len(Sitedir$)-1)
+'
+Line Input #1,Sitercv$
+Sitercv$=Left$(Sitercv$,Len(Sitercv$)-1)
+Line Input #1,Tim$
+'
+Line Input #1,Logfile$
+Logfile$=Logfile$+"\uucico"
+Line Input #1,Redanz$
+Redanz=Val(Redanz$)
+'
+Close #1
+'
+'
+'
+Rem LOGFILE-Geschichte
+If Not Exist(Logfile$) Then          ! If there is no logfile
+  Open "O",#9,Logfile$               ! create an empty one
+  Close #9
+Endif
+Open "A",#9,Logfile$                 ! Open logfile as #9
+'
+'
+'
+Retry!=False                    ! Should we retry dialing if busy/no answer.
+Void Fre(0)
+'
+Void Xbios(15,-1,0,&H88,1,1,-1) ! RS232 configuration/baud rate. (See below.)
+'
+Rem Configure RS232 - Xbios(15,baud,flow,ctrl,rst,xst,scr).
+Rem baud = 0/19200, 1/9600, 4/2400, 7/1200, 9/300.
+Rem flow = 0/None. (UUCP forbids xoff/xon! ST's RTS/CTS works goofy!)
+Rem ctrl = 8bits, 1stop, noparity.
+Rem rst = recv enabled.
+Rem xst = xmit enabled.
+Rem scr = not used.
+Rem
+'
+Rwinsiz%=7           ! Number of packets in receive window. (Standard=3)
+Rpktsiz%=64          ! Number of bytes in a receive packet. (Standard=64)
+'
+Rem
+Rpktsizh%=Rpktsiz%+6
+Rem Assembler code for calculating the checksum (speedy.)  Does the check-
+Rem sum calculation on a packetsize worth of data starting at Buffer.
+Rem The control byte is also included in the sum and everthing is sub-
+Rem tracted from AAAA hex.
+Rem            Checksum=C:Chk%(L:buffer,W:packetsize,W:controlbyte)
+Rem
+A$="206F0004322F0008342F000A203C0000FFFF4243E358280042851A18D0453A00B345"
+A$=A$+"D645B0846E02B7400441000166E40242FFFFB142303CAAAA904202800000FFFF4E75"
+'
+Chk%=Gemdos(&H48,L:1024)
+For J%=0 To Len(A$)/2-1
+  Poke Chk%+J%,Val("&H"+Mid$(A$,J%*2+1,2))
+Next J%
+'
+Rem
+Rem Assembler code for RS232 block input (speedy.)  Puts x chars into a
+Rem buffer, or times out after 12 seconds.
+Rem            Remainder=C:Rcv%(L:buffer,W:byteswanted)
+Rem
+A$="286F0004382F000842A73F3C00204E415C8F2E002A39000004BA068500000960"
+A$=A$+"3F3C00013F3C00014E4D588F4A4067143F3C00013F3C00024E4D588F18C05344"
+A$=A$+"670C60DC2C39000004BA9C856DD22F073F3C00204E415C8F20044E75"
+'
+Rcv%=Gemdos(&H48,L:2048)
+For J%=0 To Len(A$)/2-1
+  Poke Rcv%+J%,Val("&H"+Mid$(A$,J%*2+1,2))
+Next J%
+'
+Rcvbf%=Gemdos(&H48,L:256)           ! was: Varptr(Rcxx%(0))
+'
+Wfm=0
+Wfp%=Varptr(Wfm)                    ! Build a frame buffer.
+Rs232p%=Xbios(14,0)                 ! Get RS232 TOS buffer info pointer.
+Rinsiz%=((Rpktsiz%+6)*Rwinsiz%+128)
+'
+Rin=Gemdos(&H48,L:4096)
+Lpoke Rs232p%,Rin
+Dpoke Rs232p%+4,Rinsiz%
+Dpoke Rs232p%+6,0                   ! Flag it empty.
+Dpoke Rs232p%+8,0
+Open "",#2,"AUX:"                   ! Open RS232 port as file #2.
+Rem
+Rem   You will probably need to customize the dialing part of the program,
+Rem   depending upon the quirks of the site you are trying to call, and
+Rem   your modem response codes.
+Rem
+If Upper$(Tim$)<>"ANY" Then
+  If (Len(Tim$)<5) Or (Len(Tim$)>5) Then
+    Tim$="     "
+  Endif
+  '
+  A=Val(Left$(Tim$,2))
+  If A>23 Or A<0 Then
+    Tim$="               "
+  Endif
+  A=Val(Right$(Tim$,2))
+  If A>59 Or A<0
+    Tim$="                 "
+  Endif
+  If Instr(Tim$,":")=0 Then
+    Tim$="             "
+  Endif
+  '
+  '
+  If Len(Tim$)=5 Then
+    Cls
+    Print "UUCICO waiting for specified time."
+    Print
+    Print "Current time:     ";
+    X=Crscol
+    Y=Crslin
+    Print Time$
+    Print "Execution time:   ";Tim$;":00"
+    Do
+      T$=Time$+"           "
+      Exit If Left$(T$,5)=Tim$
+      Print At(X,Y);Time$
+      If Inkey$=Chr$(27) Then
+        Print
+        Print "### Aborted."
+        @Hangup
+      Endif
+    Loop
+    Print
+  Else
+    Print
+    Print "Invalid time specified."
+    @Hangup
+  Endif
+Endif
+'
+@Log(0,"UUCICO started.")
+'
+Prob=0
+If Upper$(Siteph$)="DIR" Then
+  Print "Direct connected tty. Leaving away dial-part."
+  @Log(0,"Direct connect tty.")
+  Goto Goon
+Endif
+'
+Redial:
+Print "Dialing.       Push ESC key to abort connection attempt."
+@Break
+Pause 20
+'
+Tim=Timer
+Do
+  @Ostr("ATZ\0D")
+  @Expect("OK",1)
+  Exit If Found!
+  @Timot(10)
+Loop
+Pause 15
+'
+Tim=Timer
+If Minit$<>"" Then
+  Do
+    @Ostr(Minit$+"\0D")
+    @Expect("OK",1)
+    Exit If Found!
+    @Timot(10)
+  Loop
+  Pause 15
+Endif
+'
+@Ostr("ATD"+Siteph$+"\0D")                  !  Dial remote site.
+@Ex2pect("CONNECT","BUSY",60)
+'
+If Pkey!
+  Print "Break."
+  @Hangup
+Endif
+'
+If Found=0
+  Print "No carrier/No Answer."
+  @Hangup
+Endif
+'
+I=0
+If Found=2 Then
+  If Redanz>0 Then
+    Dec Redanz
+    Print
+    Print "Busy. Retry ";Val(Redanz$)-Redanz;"/";Val(Redanz$)
+    T=Timer+250*20
+    I=0
+    Do
+      Exit If Timer>T
+      If Inp?(2)<>0 Then
+        I=Inp(2)
+      Endif
+      Exit If I=27
+    Loop
+    If I<>27
+      Goto Redial
+    Else
+      Print "Break."
+      @Hangup
+    Endif
+  Else
+    Print
+    Print "Failed ";Val(Redanz$);" retrys."
+    @Hangup
+  Endif
+Endif
+'
+Goon:
+Inc Succ
+Print "Connected to remote site."
+@Log(0,"Connected.")
+Pause 10
+Tim=Timer
+Do
+  Do
+    For I=1 To 4
+      @Ostr("\0D")
+      @Expect(Nametrigger$,3)
+      Exit If Found!
+    Next I
+    '
+    Exit If Found!
+    '
+    If Pkey! Then
+      Print
+      Print "Break."
+      @Hangup
+    Endif
+    '
+    @Timot(45)
+    @Break
+  Loop
+  '
+  Pause 10
+  @Ostr(Myuser$+"\0D")
+  Exit If Mypw$=""
+  @Expect(Pwtrigger$,10)
+  If Pkey! Then
+    Print "Break."
+    @Hangup
+  Endif
+  Exit If Found!
+Loop
+X=Crscol
+Y=Crslin
+'
+If Mypw$<>""
+  Pause 10
+  @Ostr(Mypw$+"\0D")
+  Print At(X,Y);"###### PASSWORD ######"
+Endif
+'
+@Waitfor("Shere",30)
+Print "Logged in."
+@Log(0,"Logged into remote host.")
+Rem
+Rem Initialization sequence.
+Rem
+@Ostr("\10S"+Mysite$+"\0A")
+@Waitfor("ROK",30)
+@Waitfor("P",30)
+@Waitfor("g",5)
+@Ostr("\10Ug\0A")
+Inita!=False
+Initb!=False
+Initc!=False
+For Wf%=1 To 10                 ! INIT with window size / data segement size.
+  If Inita!=False Or Initb!=False
+    Wcc%=&H38 Or Rwinsiz%
+    @Wctlpkt(2)                      ! inita window size.
+  Endif
+  @Waitframe
+  If Found! And (Cntrol% And &HF8)=&H38
+    Inita!=True
+    Xwinsiz%=Cntrol% And 7
+    Rpktcod%=Int(Log(Rpktsiz%)/Log(2)-4.9)
+    Wcc%=&H30 Or Rpktcod%
+    @Wctlpkt(2)                      ! initb packet size.
+    @Waitframe
+  Endif
+  If Found! And (Cntrol% And &HF8)=&H30
+    Initb!=True
+    Xpktcod%=(Cntrol% And 7)+1
+    Xpktsiz%=32*2^(Xpktcod%-1)
+    Xpktsizh%=Xpktsiz%+6
+  Endif
+  Exit If Inita! And Initb!
+Next Wf%
+If Initb!
+  Wcc%=&H28 Or Rwinsiz%
+  @Wctlpkt(2)                        ! initc window size.
+  For Wf%=1 To 3
+    @Waitframe
+    If Found! And (Cntrol% And &HF8)=&H28
+      Initc!=True
+    Endif
+    Exit If Initc!
+  Next Wf%
+Endif
+If Inita!=False Or Initb!=False Or Initc!=False
+  Print "Failed initilization."
+  @Log(0,"Failed initialization.")
+  @Hangup
+Endif
+Print
+Print "They want a sending window size of ";Xwinsiz%;". packets"
+Print "and a sending data packet size of ";Xpktsiz%;". bytes per packet."
+Dim Xbuf%(2*Xpktsizh%)              ! Build an outgoing data buffer.
+Xppt%=Varptr(Xbuf%(0))
+Rseq%=0
+Rrseq%=0
+Xseq%=0
+Xack%=0
+Rem
+Rem Since we called, we are master and send our stuff first.
+Rem
+Sitecfl$=Sitedir$+"\*.C"
+'
+While Exist(Sitecfl$)                  ! Do we have anything to send???
+  Open "I",#3,Sitecfl$
+  While Not Eof(#3)
+    Line Input #3,Wrklin$
+    A=Instr(Wrklin$," ")+1
+    B=Instr(A,Wrklin$," ")-1
+    Cfil$=Sitedir$+"\"+Mid$(Wrklin$,A,(B-A)+1)
+    If Exist(Cfil$)
+      Wrklin$=Wrklin$+Chr$(0)
+      @Log(0,Wrklin$)
+      Print "SEND:"'Wrklin$
+      Xfdone!=False
+      Xrqp%=0
+      While Not Xfdone!         ! Send the workline.
+        @Wrqtpkt
+      Wend
+      @Waitdata
+      If Peek(Rcvbf%)<>Asc("S")
+        Print "Send request failed."
+        @Log(0,"Send request failed.")
+        @Hangup
+      Endif
+      If Peek(Rcvbf%+1)=Asc("Y")
+        Open "I",#1,Cfil$
+        Xfl%=Lof(#1)
+        Xfp%=0
+        Xfdone!=False
+        While Not Xfdone!        ! Send D. or X. file.
+          @Wfilepkt
+        Wend
+        @Waitdata
+        If Peek(Rcvbf%)<>Asc("C") Or Peek(Rcvbf%+1)<>Asc("Y")
+          Print "Send failed."
+          @Log(0,"Send failed.")
+          @Hangup
+        Endif
+        Close #1
+      Else                       ! They won't let us do something.
+        Print "Send request refused by remote site."
+        @Log(0,"Send request refused.")
+      Endif
+      Kill Cfil$
+    Endif
+  Wend
+  Close #3
+  Kill Sitecfl$
+Wend
+Rem
+Rem We are done sending, now we become slave to receive.
+Rem
+@Log(0,"Mode switched Master -> Slave")
+Wrklin$="H"+Chr$(0)
+Xrqp%=0
+@Wrqtpkt
+@Waitdata
+If Peek(Rcvbf%)=Asc("H")
+  If Peek(Rcvbf%+1)=Asc("N")             ! HN means they have mail for us.
+    Do
+      Wrklin$=String$(128," ")
+      Wfz%=Varptr(Wrklin$)
+      Wlv%=0
+      Repeat
+        @Waitdata                        ! Get their workline request.
+        Bmove Rcvbf%,Wfz%+Wlv%,Rpktsiz%
+        Wlv%=Wlv%+Rpktsiz%
+        Wllv%=Instr(Wrklin$,Chr$(0))
+      Until Wllv%<>0
+      Wrklin$=Left$(Wrklin$,Wllv%)
+      Rwff$=Left$(Wrklin$,1)
+      Exit If Rwff$="H"                  ! If H then they are done too.
+      Print "RCV: ";Wrklin$
+      @Log(0,Wrklin$)
+      If Rwff$="S"
+        A=Instr(Wrklin$," ")+1
+        A=Instr(A,Wrklin$," ")+1
+        B=Instr(A,Wrklin$," ")
+        A$=Mid$(Wrklin$,A,B-A)
+        Rfil$="a"+Right$(A$,7)+"."+Left$(A$,1)
+        '
+        '        If the file they wanna send to us already exists, they
+        '        will have a severe reason to send it again.
+        '
+        '        If Exist(Sitercv$+"\"+Rfil$) Then
+        '        Print "File to be received already exists!"
+        '        Rfil$=Str$(Int(Rnd*9))+Left$(Rfil$,Len(Rfil$)-1)
+        '        Endif
+        Open "O",#1,Sitercv$+"\"+Rfil$
+        Wrklin$="SY"+Chr$(0)             ! Tell them it's okay to send.
+        Xrqp%=0
+        @Wrqtpkt
+        Rdone!=False
+        While Not Rdone!                 ! Get D. or X. file contents.
+          @Waitdata
+          If Ptyp%=&H80
+            Bput #1,Rcvbf%,Rpktsiz%
+          Else
+            Dif%=Peek(Rcvbf%)
+            Dfc%=1
+            If Dif%=>128
+              Dif%=Dif%-128+Peek(Rcvbf%+1)*128
+              Dfc%=2
+            Endif
+            Dif%=Rpktsiz%-Dif%
+            If Dif%<>0
+              Bput #1,Rcvbf%+Dfc%,Dif%
+            Else
+              Rdone!=True
+            Endif
+          Endif
+        Wend
+        Close #1
+        Wrklin$="CY"+Chr$(0)             ! Acknowledge successful copy.
+        Xrqp%=0
+        @Wrqtpkt
+      Else
+        Print "Illegal request from remote site:"
+        Print Wrklin$
+        @Log(0,"Illegal request from remote site.")
+        Wrklin$=Rwff$+"N"+Chr$(0)        ! Tell them sorry, but no.
+        Xrqp%=0
+        @Wrqtpkt
+      Endif
+    Loop
+    Wrklin$="HY"+Chr$(0)
+    Xrqp%=0
+    @Wrqtpkt
+    @Waitdata
+    If Peek(Rcvbf%)<>Asc("H") Or Peek(Rcvbf%+1)<>Asc("Y")
+      Print "Failed looking for hangup sequence."
+      @Hangup
+    Endif
+    @Fini
+  Else
+    Wrklin$="HY"+Chr$(0)
+    Xrqp%=0
+    @Wrqtpkt
+    @Fini
+  Endif
+Else
+  Print "Mode switching failed."
+  @Hangup
+Endif
+@Hangup
+'
+'
+' --------------------------- end of main part -----------------------------
+'
+'
+'
+'
+Procedure Fini
+  A$="Session terminated. - "+Str$(Xerr)+". transmission errors"
+  @Log(0,A$)
+  Print A$
+  @Ostr("\10\09\A2\AA\08\09")
+  @Waitframe
+  If Frmcmd%=32
+    @Waitframe
+  Endif
+  If Frmcmd%<>8
+    Print "Failed waiting for CLOSE! "
+    @Hangup
+  Endif
+  @Ostr("\10OOOOOO\0A")
+  @Waitfor("OOO",5)
+  @Ostr("\10OOOOOO\0A")
+  Print "Conversation complete."
+  Inc Succ
+  @Hangup
+Return
+'
+'
+'
+Procedure Ostr(O$) ! Send ASCII or HEX \XX (2 nybbles - uppercase.)
+  L%=Len(O$)
+  J%=0
+  Repeat
+    Inc J%
+    C%=Asc(Mid$(O$,J%,1))
+    If C%=&H5C
+      Inc J%
+      C%=Val("&H"+Mid$(O$,J%,2))
+      Inc J%
+    Endif
+    Out 1,C%
+    Out 2,C%
+  Until J%=L%
+Return
+'
+'
+'
+'
+Procedure Waitfor(O$,Tx%) ! Look for O$ in input stream for Tx seconds.
+  Pkey!=False             ! Pressing space key aborts during dial up part.
+  Found!=False
+  Ol%=Len(O$)
+  Cp%=1
+  T%=Timer+Tx%*200
+  While Timer<T%
+    If Inp?(1)
+      C%=Inp(1) And &H7F
+      Out 2,C%
+      If Asc(Mid$(O$,Cp%,1))=C%
+        If Cp%=Ol%
+          Found!=True
+        Endif
+        Inc Cp%
+      Else
+        If Cp%<>1
+          Cp%=1
+          If Asc(Mid$(O$,Cp%,1))=C%
+            Inc Cp%
+          Endif
+        Endif
+      Endif
+    Endif
+    Exit If Found!
+    If Inp?(2)
+      If Inp(2)=27     ! Abort during login if SPACE key is pressed.
+        Pkey!=True
+      Endif
+    Endif
+    Exit If Pkey!
+  Wend
+  If ((Not Found!) And (Not Retry!)) Or Pkey!
+    Print "Failed waiting for: ";O$
+    @Hangup
+  Endif
+Return
+'
+'
+'
+'
+Procedure Waitframe                 ! Wait for a six byte framing envelope.
+  Found!=False
+  Rr!=False
+  Dpkt!=False
+  Wfr%=C:Rcv%(L:Wfp%,6)
+  Repeat
+    Cntrol%=Peek(Wfp%+4)
+    Rsum1%=Peek(Wfp%+2)
+    Rsum2%=Peek(Wfp%+3)
+    Xs%=Peek(Wfp%+1) Xor Rsum1% Xor Rsum2% Xor Cntrol%
+    If Wfr%=0 And Peek(Wfp%)=&H10 And Xs%=Peek(Wfp%+5)
+      Found!=True
+      Ptyp%=Cntrol% And &HC0
+      If Ptyp%=0
+        Xack%=Cntrol% And 7
+        Frmcmd%=Cntrol% And &H38
+        If Frmcmd%=&H20
+          Rr!=True
+        Endif
+      Else
+        Dpkt!=True
+        Rrseq%=(Cntrol%/8) And 7
+        Rsum%=Rsum2%*256+Rsum1%
+      Endif
+    Else
+      If Wfr%=0
+        Bmove Wfp%+1,Wfp%,5
+        Wfr%=C:Rcv%(L:Wfp%+5,1)
+      Endif
+    Endif
+    Exit If Found!
+  Until Wfr%<>0
+Return
+'
+'
+Rem --------- Das absolute Ende ------------------
+Procedure Hangup               ! Hangup.
+  Print "Hanging Up!"
+  Void Xbios(30,&H10)       ! Drop DTR
+  Pause 5
+  Void Xbios(29,&HEF)       ! Raise DTR.
+  Pause 5
+  '
+  @Ostr("\0D")
+  Pause 100
+  @Ostr("+++")
+  Pause 100
+  @Ostr("\0DATH\0D")
+  Pause 25
+  Void Xbios(30,&H10)               ! Drop DTR for 1/2 second.
+  Pause 30
+  Void Xbios(29,&HEF)               ! Raise DTR.
+  @Ende
+Return
+'
+'
+'
+'
+'
+'
+'
+Procedure Ende                       ! Beenden. Vorher immer HANGUP!!
+  A$="UUCICO terminated"
+  Print A$
+  @Log(0,A$)
+  Close
+  Open "O",#1,"\uucico.bck"
+  Print #1,Succ
+  Close #1
+  End
+Return
+'
+'
+'
+Rem
+Rem Writes:  One data packet, from file opened as #1, to RS232 opened as #2.
+Rem Returns: Xfdone!=True after last packet sent.
+Rem Initial: Xfl%=Lof(#1), Xfp%=0, Xppt%=base packet pointer,
+Rem          xpktsiz%, xpktcod%, xpktsizh%.
+Rem Current: Rseq%=last rcvd packet sequence number, Xseq%=last xmited.
+Rem Updates: Xseq%=xmited packet sequence number, Xfp%=xmited data pointer.
+Rem
+Procedure Wfilepkt
+  Xfpo%=Xfp%
+  Xfp%=Xfp%+Xpktsiz%
+  Xseq%=(Xseq%+1) And 7
+  Xph%=Xppt%+Xseq%*Xpktsizh%
+  Xpd%=Xph%+6
+  Poke Xph%,&H10
+  Poke Xph%+1,Xpktcod%
+  If Xfp%<=Xfl%
+    Bget #1,Xpd%,Xpktsiz%             ! Full Packet.
+    Xctrl%=&H80 Or Xseq%*8 Or Rseq%
+    Xsum%=C:Chk%(L:Xpd%,W:Xpktsiz%,W:Xctrl%)
+    Poke Xph%+2,Xsum%
+    Xf1%=Xsum%/256
+    Poke Xph%+3,Xf1%
+    Poke Xph%+4,Xctrl%
+    Poke Xph%+5,(Xpktcod% Xor Xsum% Xor Xf1% Xor Xctrl%)
+    @Wchkwin(0)
+  Else
+    If Xfpo%<Xfl%
+      Xbun%=Xpktsiz%-(Xfl%-Xfpo%)     ! Short Packet. (If needed.)
+      If Xbun%<128
+        Poke Xpd%,Xbun%
+        Bget #1,Xpd%+1,Xfl%-Xfpo%
+      Else
+        Poke Xpd%,Xbun% And &H7F Or &H80
+        Poke Xpd%+1,Xbun%/128
+        Bget #1,Xpd%+2,Xfl%-Xfpo%
+      Endif
+      Xctrl%=&HC0 Or Xseq%*8 Or Rseq%
+      Xsum%=C:Chk%(L:Xpd%,W:Xpktsiz%,W:Xctrl%)
+      Poke Xph%+2,Xsum%
+      Xf1%=Xsum%/256
+      Poke Xph%+3,Xf1%
+      Poke Xph%+4,Xctrl%
+      Poke Xph%+5,(Xpktcod% Xor Xsum% Xor Xf1% Xor Xctrl%)
+      @Wchkwin(0)
+    Else
+      If Xpktsiz%<128                 ! Empty Packet. (Always sent last.)
+        Poke Xpd%,Xpktsiz%
+      Else
+        Poke Xpd%,Xpktsiz% And &H7F Or &H80
+        Poke Xpd%+1,Xpktsiz%/128
+      Endif
+      Xctrl%=&HC0 Or Xseq%*8 Or Rseq%
+      Xsum%=C:Chk%(L:Xpd%,W:Xpktsiz%,W:Xctrl%)
+      Poke Xph%+2,Xsum%
+      Xf1%=Xsum%/256
+      Poke Xph%+3,Xf1%
+      Poke Xph%+4,Xctrl%
+      Poke Xph%+5,(Xpktcod% Xor Xsum% Xor Xf1% Xor Xctrl%)
+      @Wchkwin(1)
+      Xfdone!=True
+    Endif
+  Endif
+Return
+'
+'
+'
+'
+'
+'
+Rem
+Rem This procedure sends data packets used for H,S,C type signals.
+Rem It differs from the other data packets in that there are no short
+Rem packets.  Instead a zero follows each command string and a zero
+Rem must appear as the last byte in the packet.
+Rem
+Procedure Wrqtpkt             ! Initial: Xrqp%=0, Wrklin$, Xfdone!=False.
+  Xstp%=Varptr(Wrklin$)
+  Xstl%=Len(Wrklin$)
+  Xrqpo%=Xrqp%
+  Xrqp%=Xrqp%+Xpktsiz%
+  Xseq%=(Xseq%+1) And 7
+  Xph%=Xppt%+Xseq%*Xpktsizh%
+  Xpd%=Xph%+6
+  Poke Xph%,&H10
+  Poke Xph%+1,Xpktcod%
+  Bmove Xstp%+Xrqpo%,Xpd%,Xpktsiz%
+  If Xrqp%>Xstl%
+    Poke Xpd%+Xpktsiz%-1,0
+    Xfdone!=True
+  Endif
+  Xctrl%=&H80 Or Xseq%*8 Or Rseq%
+  Xsum%=C:Chk%(L:Xpd%,W:Xpktsiz%,W:Xctrl%)
+  Poke Xph%+2,Xsum%
+  Xf1%=Xsum%/256
+  Poke Xph%+3,Xf1%
+  Poke Xph%+4,Xctrl%
+  Poke Xph%+5,(Xpktcod% Xor Xsum% Xor Xf1% Xor Xctrl%)
+  @Wchkwin(1)
+Return
+'
+'
+'
+'
+Rem
+Rem This procedure sends RR's, RJ's, CLOSE, and INITA,B,C's.
+Rem
+Procedure Wctlpkt(Wct%)       ! wct%=0 for RR, 1 for Rj, 2 for other.
+  If Wct%=0
+    Wcc%=&H20 Or Rseq%
+  Else
+    If Wct%=1
+      Wcc%=&H10 Or Rseq%
+    Endif
+  Endif
+  Wc1%=&HAAAA-Wcc%
+  Wc0%=Wc1% And &HFF
+  Div Wc1%,256
+  Wcx%=9 Xor Wc0% Xor Wc1% Xor Wcc%
+  Out 1,&H10
+  Out 1,&H9
+  Out 1,Wc0%
+  Out 1,Wc1%
+  Out 1,Wcc%
+  Out 1,Wcx%
+Return
+'
+'
+'
+Rem
+Rem This procedure waits to receive a data packet.  It RR's them as soon
+Rem as it sees them.
+Rem
+Procedure Waitdata
+  For Wf%=1 To 20
+    @Waitframe
+    If Dpkt!
+      Nwp%=C:Rcv%(L:Rcvbf%,Rpktsiz%)
+      Csum%=C:Chk%(L:Rcvbf%,Rpktsiz%,Cntrol%)
+      If Rsum%=Csum% And ((Rseq%+1) And 7)=Rrseq%  ! Verify data and seq.
+        Rseq%=Rrseq%
+        @Wctlpkt(0)
+        Found!=True
+      Else
+        Print "- Data failed verification"
+        Inc Xerr
+        Found!=False
+      Endif
+    Else
+      Inc Xerr
+      Print "- No data packet"
+      Found!=False
+    Endif
+    Exit If Found!
+    If Not Rr!                     ! Gets around a Telebit peculiarity.
+      If Not Found! Then
+        While (Inp?(1)<>0)
+          While (Inp?(1)<>0)
+            Void Inp(1)                ! Flush Datastream
+          Wend
+          Pause 10
+        Wend
+      Endif
+      @Wctlpkt(1)
+    Endif
+    Inc Prob
+  Next Wf%
+  '
+  If Not Found!
+    Print "Failed waiting for a data frame."
+    @Hangup
+  Endif
+  If (Prob)
+    Print "- Transmission resumed"
+    Prob=0
+  Endif
+Return
+'
+'
+'
+'
+Rem
+Rem This procedure handles the windowing of sent data packets.
+Rem It sends as many packets as allowed before waiting for RR's.
+Rem
+Procedure Wchkwin(Flush%)
+  If ((Xack%+Xwinsiz%+1) And 7)<>Xseq%
+    Bput #2,Xph%,Xpktsizh%
+  Else
+    For Wf%=1 To 10
+      @Waitframe
+      If Rr!
+        Bput #2,Xph%,Xpktsizh%
+      Else
+        Found!=False
+        For Jr%=1 To Xwinsiz%
+          Xjr%=(Xack%+Jr%) And 7
+          Bput #2,Xppt%+Xjr%*Xpktsizh%,Xpktsizh%
+          Exit If Xjr%=Xseq%
+        Next Jr%
+      Endif
+      Exit If Rr!
+    Next Wf%
+    If Not Found!
+      Print "Failed waiting for RR."
+      @Hangup
+    Endif
+  Endif
+  If Flush%=1
+    While Xack%<>Xseq%
+      For Wf%=1 To 10
+        @Waitframe
+        If Not Rr!
+          Found!=False
+          For Jr%=1 To Xwinsiz%
+            Xjr%=(Xack%+Jr%) And 7
+            Bput #2,Xppt%+Xjr%*Xpktsizh%,Xpktsizh%
+            Exit If Xjr%=Xseq%
+          Next Jr%
+        Endif
+        Exit If Rr!
+      Next Wf%
+      If Not Found!
+        Print "Failed waiting for flushed RR."
+        @Hangup
+      Endif
+    Wend
+  Endif
+Return
+'
+'
+'
+'
+'
+'
+Procedure Expect(O$,Tx%) ! Look for O$ in input stream for Tx seconds.
+  Pkey!=False            ! Pressing space key aborts during dial up part.
+  Found!=False
+  Ol%=Len(O$)
+  Cp%=1
+  T%=Timer+Tx%*200
+  While Timer<T%
+    If Inp?(1)
+      C%=Inp(1) And &H7F
+      Out 2,C%
+      If Asc(Mid$(O$,Cp%,1))=C%
+        If Cp%=Ol%
+          Found!=True
+        Endif
+        Inc Cp%
+      Else
+        If Cp%<>1
+          Cp%=1
+          If Asc(Mid$(O$,Cp%,1))=C%
+            Inc Cp%
+          Endif
+        Endif
+      Endif
+    Endif
+    Exit If Found!
+    If Inp?(2)
+      If Inp(2)=27      ! Abort during login if SPACE key is pressed.
+        Pkey!=True
+      Endif
+    Endif
+    Exit If Pkey!
+  Wend
+  If ((Not Found!) And (Not Retry!)) Or Pkey!
+  Endif
+Return
+'
+'
+'
+'
+'
+Procedure Ex2pect(O$,P$,Tx%) ! Look for O$ in input stream for Tx seconds.
+  Pkey!=False                ! Pressing space key aborts during dial up part.
+  Foundo!=False
+  Foundp!=False
+  Ol%=Len(O$)
+  Pl%=Len(P$)
+  Cp%=1
+  Cpp%=1
+  T%=Timer+Tx%*200
+  While Timer<T%
+    If Inp?(1)
+      C%=Inp(1) And &H7F
+      Out 2,C%
+      '
+      '
+      If Asc(Mid$(O$,Cp%,1))=C%
+        If Cp%=Ol%
+          Foundo!=True
+        Endif
+        Inc Cp%
+      Else
+        If Cp%<>1
+          Cp%=1
+          If Asc(Mid$(O$,Cp%,1))=C%
+            Inc Cp%
+          Endif
+        Endif
+      Endif
+      '
+      '
+      '
+      If Asc(Mid$(P$,Cpp%,1))=C%
+        If Cpp%=Pl%
+          Foundp!=True
+        Endif
+        Inc Cpp%
+      Else
+        If Cpp%<>1
+          Cpp%=1
+          If Asc(Mid$(P$,Cpp%,1))=C%
+            Inc Cpp%
+          Endif
+        Endif
+      Endif
+    Endif
+    '
+    '
+    Exit If (Foundo! Or Foundp!)
+    If Inp?(2)
+      If Inp(2)=27      ! Abort during login if ESC key is pressed.
+        Pkey!=True
+      Endif
+    Endif
+    Exit If Pkey!
+  Wend
+  Found=0
+  If Foundo!
+    Found=1
+  Endif
+  If Foundp!
+    Found=2
+  Endif
+Return
+'
+'
+'
+'
+'
+'
+Procedure Timot(D)
+  If (Timer-Tim)>(D*200)
+    Print
+    Print "Connection timed out."
+    @Hangup
+  Endif
+Return
+'
+'
+'
+Procedure Break
+  Void Xbios(15,-1,-1,-1,-1,9,-1)  !  Send a break for Telebit autobaud reset.
+  Pause 20
+  Void Xbios(15,-1,-1,-1,-1,1,-1)
+Return
+'
+'
+'
+Rem
+Rem                        *** EMERGENCY STOP ***
+Rem
+Procedure Err
+  ' Zuerst mal DTR 'runterziehen -> Notbremse...
+  Void Xbios(30,&H10)
+  @Log(0,"Internal Error - condition: "+Str$(Err))
+  Close
+  '
+  Print
+  Print "### FATAL INTERNAL ERROR OCCURED DURING EXECUTION ###"
+  Print
+  Print "### TIME/DATE:         ";Time$;" - ";Date$
+  Print "### ERROR CONDITION:   ";Err
+  Print
+  For I%=1 To 5
+    Void Xbios(30,&H10)          ! Drop DTR for 1/2 second.
+    Pause 20
+    Void Xbios(29,&HEF)          ! Raise DTR.
+    Pause 20
+  Next I%
+  @Hangup
+Return
+'
+'
+'
+'
+Procedure Log(Level,A$)
+  Print #9,Time$;" ";A$
+Return
+'
+Rem ------------------------------------------------------------------
+Rem CHECKSUM ROUTINE LISTING
+Rem
+Rem 206F0004    start: move.l 4(sp),a0    ; data packet start address.
+Rem 322F0008           move.w 8(sp),d1    ; data packet length.
+Rem 342F000A           move.w 10(sp),d2   ; command byte.
+Rem 203C0000FFFF       move.l #$ffff,d0
+Rem 4243               clr.w d3
+Rem E358        ck1:   rol.w #1,d0        ; do checksum on every
+Rem 2800               move.l d0,d4       ; byte in the data packet.
+Rem 4285               clr.l d5
+Rem 1A18               move.b (a0)+,d5
+Rem D045               add.w d5,d0
+Rem 3A00               move.w d0,d5
+Rem B345               eor.w d1,d5
+Rem D645               add.w d5,d3
+Rem B084               cmp.l d4,d0
+Rem 6E02               bgt.s ovck
+Rem B740               eor.w d3,d0
+Rem 04410001    ovck:  sub.w #1,d1
+Rem 66E4               bne.s ck1
+Rem 0242FFFF           and.w #$ffff,d2
+Rem B142               eor.w d0,d2       ; do checksum on command byte.
+Rem 303CAAAA           move.w #$aaaa,d0
+Rem 9042               sub.w d2,d0       ; subtract everything from AAAA.
+Rem 02800000FFFF       and.l #$ffff,d0
+Rem 4E75               rts
+Rem ---------------------------------------------------------------------
+Rem INPUT ROUTINE LISTING
+Rem
+Rem 286F0004      start:  move.l 4(sp),a4     ; Buffer address.
+Rem 382F0008              move.w 8(sp),d4     ; Packet size.
+Rem 42A7                  clr.l -(sp)         ; Execute in superuser mode.
+Rem 3F3C0020              move.w #$20,-(sp)
+Rem 4E41                  trap #1
+Rem 5C8F                  addq.l #6,sp
+Rem 2E00                  move.l d0,d7        ; Save SUPER stack pointer.
+Rem 2A39000004BA          move.l $4ba,d5      ; Get initial time.
+Rem 068500000960          add.l #2400,d5      ; Twelve second timeout.
+Rem 3F3C0001      next:   move.w #1,-(sp)     ; Test for character.
+Rem 3F3C0001              move.w #1,-(sp)
+Rem 4E4D                  trap #13
+Rem 588F                  addq.l #4,sp
+Rem 4A40                  tst d0
+Rem 6714                  beq.s nomore        ; No character ready.
+Rem 3F3C0001              move.w #1,-(sp)     ; Else, get character.
+Rem 3F3C0002              move.w #2,-(sp)
+Rem 4E4D                  trap #13
+Rem 588F                  addq.l #4,sp
+Rem 18C0                  move.b d0,(a4)+
+Rem 5344                  subq.w #1,d4
+Rem 670C                  beq.s out
+Rem 60DC                  bra.s next
+Rem 2C39000004BA  nomore: move.l $4ba,d6      ; Check timer.
+Rem 9C85                  sub.l d5,d6
+Rem 6DD2                  blt.s next
+Rem 2F07          out:    move.l D7,-(sp)     ; Back to USER mode.
+Rem 3F3C0020              move.w #$20,-(sp)
+Rem 4E41                  trap #1
+Rem 5C8F                  addq.l #6,sp
+Rem 2004                  move.l d4,d0        ; D0=zero for success.
+Rem 4E75                  rts
+Rem -------------------------------------------------------------------

@@ -1,0 +1,1052 @@
+/* 
+ *   Copyright (c) 1990 Rodney Volz
+ *   ALL RIGHTS RESERVED 
+ * 
+ *   THIS SOFTWARE PRODUCT CONTAINS THE
+ *   UNPUBLISHED SOURCE CODE OF RODNEY VOLZ
+ *
+ *   The copyright notices above do not evidence
+ *   intended publication of such source code.
+ *
+ */
+
+/*
+ * MERCURY UUCP SOURCECODE [rn.c]
+ */
+
+#define _RN
+
+#ifndef MWC
+#include "uulib.c"
+overlay "main"
+#else
+#include "define.h"
+#endif
+#include "header.c"
+
+#define DEBUG 0
+
+static unsigned int ng[NEWSANZ];
+static unsigned int rc[NEWSANZ];
+static unsigned int phys_rc[NEWSANZ];
+static char home[LLEN],newsdir[LLEN];
+static char tmpdir[LLEN],temp[LLEN],ctrl[LLEN];
+static char pnews[LLEN];
+static char mail[LLEN];
+static char *ngn[NEWSANZ];
+static int ngc;
+char rot13;
+
+main()
+{
+	int inh,outh,i,n,pointer;
+	int excnt,bored,ext;
+	unsigned int i2;
+	char c,newgrp,eo;
+	
+	static char s[LLEN],s2[LLEN];
+
+	rot13 = 0;
+	pen(WEISS);
+	send("RN - ");
+	send(VERSION);
+	cr(1);
+	
+	getconf(18,newsdir);	/* News-Spooldir */
+	sys_impdirn(newsdir);
+	
+	getconf(21,tmpdir);
+	sys_impdirn(tmpdir);
+	
+	getprof(2,home);	/* User-Homedir */
+	sys_impdirn(home);
+	
+	getconf(26,pnews);
+	getconf(11,mail);
+	newgrp = FALSE;
+	
+	strcpy(newsdir,s);
+	stradd("news.def",s);
+
+	inh = open(s,2);
+	if (inh <= 0)
+	{
+		pen(ROT);
+		send("No news received yet.");
+		cr(1);
+		pen(WEISS);
+		return(0);
+	}
+	
+	ngc = 0;
+	while (getline(inh,s) != -1)
+	{
+		strcpys(s,s2,0,linstr(s,'|') - 1);
+	
+		/* Pray for some storage */
+		ngn[ngc] = (char *)malloc((long)LLEN);
+	
+		strcpy(s2,(char *)ngn[ngc]);
+		
+		strcpys(s,s2,rinstr(s,'|') + 1,strlen(s));
+		ng[ngc] = val(s2);
+		++ngc;
+	}
+	close(inh);
+
+#if DEBUG
+	send("News.def read.");
+	cr(1);
+#endif
+	
+	strcpy(home,s);
+	stradd("news.rc",s);
+
+	strcpy("",s2);
+	inh = open(s,2);
+
+	if (inh > 0)
+	{
+		getline(inh,s2);
+		seek(inh,0l);
+	}
+
+
+	/* Do we have an extended news.rc? */
+	if (linstr(s2,' ') != -1)
+		ext = TRUE;
+	else
+		ext = FALSE;
+	
+
+#if DEBUG
+	if (ext == TRUE)
+		send("extended news.rc");
+	else
+		send("old news.rc");
+	cr(1);
+#endif
+
+	
+	if (ext == FALSE)	/* Cheap version of news.rc */
+	{
+		n = 0;
+		if (inh > 0)
+		{
+			while ((uu_getline(inh,s) != -1) && (n <= ngc))
+			{
+				phys_rc[n] = n;
+				rc[phys_rc[n++]] = val(s);
+			}
+			close(inh);
+		}
+	}
+	else		/* Our user got a newer version... Sigh! */
+	{
+		n = 0;
+		if (inh > 0)
+		{
+			while ((uu_getline(inh,s) != -1) && (n <= ngc))
+			{
+				if (linstr(s,' ') == -1)
+					strcpy("junk 0",s);
+				
+				strcpys(s,s2,0,linstr(s,' ') - 1);
+#if DEBUG
+				send("> ");
+				send(s2);
+				cr(1);
+#endif
+
+				i = getngnr(s2);	/* Get pos. of ng in news.def */
+
+				if (i == -1)
+				{
+					send("Invalid newsgroup name in news.rc: line ");
+					sendd(n);
+					send(".");
+					cr(1);
+					return(-1);
+				}
+					
+				phys_rc[n] = i;
+				strcpys(s,s2,rinstr(s,' ') + 1,strlen(s));
+				rc[phys_rc[n++]] = val(s2);
+			}
+			close(inh);
+		}
+	}
+	
+#if DEBUG
+	send("news.rc read.");
+	cr(1);
+#endif
+
+	
+	if (n < ngc)
+	{
+		pen(ROT);
+		send("New newsgroup(s) received.");
+		cr(1);
+		pen(WEISS);
+		newgrp = TRUE;
+		while (n < ngc)
+		{
+			phys_rc[n] = n;
+			rc[phys_rc[n++]] = 0;
+		}
+	}
+	
+	bored = 0;
+	n = 0;
+	while (n < ngc)
+	{
+		if (ng[phys_rc[n]] > rc[phys_rc[n]])
+		{
+			send("Unread news in ");
+			send(ngn[phys_rc[n]]);
+			strmul(' ',40 - strlen(ngn[phys_rc[n]]),s);
+			send(s);
+			send(" - ");
+			sendd(ng[phys_rc[n]] - rc[phys_rc[n]]);
+			send(" article");
+			if ((ng[phys_rc[n]] - rc[phys_rc[n]]) != 1)
+				send("s");
+			cr(1);
+			++bored;
+		}
+		++n;
+		if (bored > 8)
+			break;
+	}
+ 	
+ 	if (bored > 8)
+ 	{
+ 		send("etc.");
+ 		cr(1);
+ 	}
+
+
+	/* News lesen */
+	pointer = 0;
+	eo = FALSE;
+	excnt = 0;
+	while (eo == FALSE)
+	{
+		++excnt;
+	prev:	strcpy(newsdir,s);
+		if (rc[phys_rc[pointer]] < ng[phys_rc[pointer]])
+		{
+			excnt = 0;
+			cr(1);
+			send("\033p*** ");
+			sendd(ng[phys_rc[pointer]] - rc[phys_rc[pointer]]);
+			send(" unread article");
+
+			if ((ng[phys_rc[pointer]] - rc[phys_rc[pointer]]) != 1)
+				send("s");
+
+			send(" in ");
+			send(ngn[phys_rc[pointer]]);
+			send(" - read now? [Pqncyh]\033q ");
+			c = inp();
+			
+			if (c == ' ')
+				c = 'y';
+			
+			/* Switch start */			
+			switch(c)
+			{
+				case 'g':
+				{
+					rec(s);
+					unspace(s);
+					cr(1);
+					i2 = pointer;
+					i = ngc + 2;
+					while (--i)
+					{
+						++pointer;
+						if (pointer > ngc)
+							pointer = 0;
+						
+						strcpys(ngn[phys_rc[pointer]],s2,0,strlen(s) - 1);
+						
+						if ((strcmp(s,s2) == TRUE) && (rc[phys_rc[pointer]] < ng[phys_rc[pointer]]))
+							break;
+					}
+					
+					if (!i)
+					{
+						pointer = i2;
+						pen(GELB);
+						send("No such newsgroup with unread news.");
+						pen(WEISS);
+						cr(1);
+					}
+					--pointer;
+					break;
+				}
+				
+				case 'G':
+				{
+					rec(s);
+					unspace(s);
+					cr(1);
+					i2 = pointer;
+					i = ngc + 2;
+					while (--i)
+					{
+						++pointer;
+						if (pointer > ngc)
+							pointer = 0;
+						
+						strcpys(ngn[phys_rc[pointer]],s2,0,strlen(s) - 1);
+						
+						if (strcmp(s,s2) == TRUE)
+							break;
+					}
+					
+					if (!i)
+					{
+						pointer = i2;
+						pen(GELB);
+						send("No such newsgroup.");
+						pen(WEISS);
+						cr(1);
+					}
+					else
+					{
+						send("Marking last article of ");
+						send(ngn[phys_rc[pointer]]);
+						send(" as unread;");
+						cr(1);
+						send("Use \"P\" to reach earlier articles.");
+						cr(1);
+						--rc[phys_rc[pointer--]];
+					}
+					break;
+				}
+				
+				case 'q':
+				{
+					eo = TRUE;
+					break;
+				}
+
+				case 'h':
+				{
+					help1();
+					break;
+				}
+		
+				case '?':
+				{
+					help1();
+					break;
+				}
+			
+				case 'P':
+				{
+					while (0 == 0)
+					{
+						if (--pointer < 0)
+							pointer = ngc;
+
+						if (rc[phys_rc[pointer]] < ng[phys_rc[pointer]])
+							break;
+					}
+					
+					goto prev;
+					break;
+				}
+		
+				case 'c':
+				{
+					cr(1);
+					markread(phys_rc[pointer]);
+					break;
+				}
+				
+				case 'y':
+				{
+					cr(1);
+					readnow(pointer);
+					break;
+				}
+
+			} /* Generelles Ende des 'Switch (c)' */
+
+		} /* Ende der If-Abfrage */
+		
+		if (c != 'P')
+		{
+			++pointer;
+		}
+		
+		if (excnt > ngc + 5)
+		{
+			send("\033p End of newsgroups. \033q");
+			cr(1);
+			break;
+		}
+		
+		if (pointer == ngc)
+			pointer = 0;
+	} /* Ende des Lesens generell */
+
+	cr(1);
+	strcpy(home,s);
+	stradd("news.rc",s);
+	outh = open(s,1);
+	if (outh <= 0)
+	{
+		pen(ROT);
+		send("Error opening outfile.");
+		cr(1);
+		pen(WEISS);
+		return(-1);
+	}
+	n = 0;
+	while (n < ngc)
+	{
+		strcpy(ngn[phys_rc[n]],s);
+		stradd(" ",s);
+		str(rc[phys_rc[n++]],s2);
+		stradd(s2,s);
+		uu_putline(outh,s);
+	}
+	close(outh);
+}	
+
+
+
+
+
+
+
+
+
+readnow(pointer)
+int pointer;
+{
+	static char f[500],c,*pchar;
+	long l;
+	static char s[LLEN],s2[LLEN];
+	int inh,outh,cnt;
+
+
+	send("\033E");
+	while (rc[phys_rc[pointer]] <= ng[phys_rc[pointer]])
+	{
+#if OLDFS	/* Old filesystem? */
+		strcpy(newsdir,s);
+		stradd("ng",s);
+		str(phys_rc[pointer] + 1,s2);
+		stradd(s2,s);
+		stradd("\\",s);
+#else
+		munge(newsdir,ngn[phys_rc[pointer]],s);
+#endif /* oldfs */
+		str(rc[phys_rc[pointer]] + 1,s2);
+		stradd(s2,s);
+		if (exist(s) == TRUE)
+			break;
+		pen(GELB);
+		send("\033ESkipping unavailable article.");
+		cr(1);
+		pen(WEISS);
+		++rc[phys_rc[pointer]];
+	}
+			
+	if (rc[phys_rc[pointer]] > ng[phys_rc[pointer]])
+	{
+		rc[phys_rc[pointer]] = ng[phys_rc[pointer]];
+		return(0);
+	}
+	
+	c = ' ';
+	while (rc[phys_rc[pointer]] < ng[phys_rc[pointer]])
+	{
+	first:
+#if OLDFS
+		strcpy(newsdir,s);
+		stradd("ng",s);
+		str(phys_rc[pointer] + 1,s2);
+		stradd(s2,s);
+		stradd("\\",s);
+#else
+		munge(newsdir,ngn[phys_rc[pointer]],s);
+#endif /* Oldfs */
+
+		str(rc[phys_rc[pointer]] + 1,s2);
+		stradd(s2,s);
+		send("\033E");
+		
+		inh = open(s,2);
+		if (inh < 0)
+		{
+			++rc[phys_rc[pointer]];
+			goto first;
+		}
+
+		cnt = 0;
+
+		send("\033p Article ");
+		sendd(rc[phys_rc[pointer]] + 1);
+		send(". (of ");
+		sendd(ng[phys_rc[pointer]]);
+		send(") in ");
+		send(ngn[phys_rc[pointer]]);
+		send(" \033q");
+		cr(1);
+		c = ' ';
+		while (uu_getline(inh,s) != -1)
+		{
+			if (rot13)
+				drot13(s);
+			
+			strcpys(s,s2,0,7);
+			if (strcmp(s2,"Subject:") == TRUE)
+			{
+				send("\033p");
+				send(s);
+				send("\033q");
+			}
+			else
+			{
+				send(s);
+			}
+			
+			cr(1);
+			
+			++cnt;
+#if 0
+			cnt += strlen(s) / 80;
+			if (cnt > 23)
+#endif
+			if (cnt > 18)
+			{
+				c = more();
+
+				if (c == 'j')
+					break;
+				if (c == 'q')
+					break;
+				if (c == 'n')
+					break;
+				if (c == 'P')
+					break;
+				if (c == 'O')
+					break;
+				if (c == 'c')
+				{
+					cr(1);
+					if (markread(phys_rc[pointer]) == TRUE)
+						return(0);
+				}
+				
+				if ((c == 'h') || (c == '?'))
+					help3();
+
+				cnt = 0;
+			}
+		} /* Ende Ausgabe eines Files */
+		close(inh);
+
+		endofart:
+		strcpy("nPO",s);
+		if (linstr(s,c) == -1)
+		{
+			send("\033p End of article ");
+			sendd(rc[phys_rc[pointer]] + 1);
+
+			send(". - what next? [qcFh]\033q ");
+			rot13 = 0;
+			c = inp();
+		}
+		else
+		{
+			if (c == 'n')
+				c = ' ';
+		}
+
+		if ((c == 'F') || (c == 'f'))
+		{
+			followup(c,pointer);
+			goto endofart;
+		}
+
+		if ((c == 'R') || (c == 'r'))
+		{
+			reply(c,pointer);
+			goto endofart;
+		}
+
+		
+		if (c == 'c')
+		{
+			cr(1);
+			if (markread(phys_rc[pointer]) == TRUE)
+				return(0);
+			goto endofart;
+		}
+
+		
+		if ((c == 's') || (c == 'S'))
+		{
+#if OLDFS
+			strcpy(newsdir,s);
+			stradd("ng",s);	
+			str(phys_rc[pointer] + 1,s2);
+			stradd(s2,s);
+			stradd("\\",s);
+#else
+			munge(newsdir,ngn[phys_rc[pointer]],s);
+#endif /* OLDFS */
+			str(rc[phys_rc[pointer]] + 1,s2);
+			stradd(s2,s);
+
+			if (exist(s) == FALSE)
+			{
+				cr(1);
+				pen(ROT);
+				send("Article not available.");	
+				cr(1);
+				pen(WEISS);
+				break;
+			}
+
+			inh = open(s,2);
+			if (inh <= 0)
+			{
+				pen(ROT);
+				send("Error reading input.");
+				cr(1);
+				pen(WEISS);
+				return(-1);
+			}
+			dtaxtr(s,&l);
+
+			strcpy(home,s2);
+			stradd("news\\",s2);
+
+			rec(s);
+			unspace(s);
+			cr(1);
+
+			if (strlen(s) == 0)		
+				strcpy("news",s);
+
+			if (strcmp(s," ") == TRUE)
+				strcpy("news",s);
+
+
+			stradd(s,s2);
+
+			outh = open(s2,4);
+
+			if (outh <= 0)
+			{
+				pen(GELB);
+				send("Creating.");
+				cr(1);
+				pen(WEISS);
+				outh = open(s2,1);	
+			}
+
+			if (outh <= 0)
+			{		
+				strcpy(home,s);
+				stradd("News",s);
+				sys_mkdir(s);
+
+				pen(GELB);
+				send("Creating ");
+				send(s);
+				pen(WEISS);
+				cr(1);
+
+				outh = open(s2,1);
+			}
+
+			if (outh <= 0)
+			{
+				pen(ROT);
+				send("Error opening output: ");
+				send(s2);
+				pen(WEISS);
+				cr(1);
+				return(-1);
+			}		
+			cr(1);
+			send("Writing to ");
+			send(s2);
+			send("... ");
+
+			
+			pchar = (char *)malloc(l);
+			sys_fread(inh,l,pchar);
+			sys_fwrite(outh,l,pchar);
+			mfree(pchar);
+			
+			/*
+			while (uu_getline(inh,f) != -1)
+			{
+				f[LLEN - 10] = '\0';
+				putline(outh,f);
+			}
+			*/
+
+			uu_putline(outh,"");
+			
+			close(outh);
+			close(inh);
+			send("Done.");		
+			cr(1);			
+			c = '\0';	
+			goto endofart;
+		}
+
+		if ((c == '?') || (c == 'h'))
+		{
+			help2();
+			break;
+		}
+
+
+
+		if ((c == '#') || (c == 'D'))
+		{
+#if OLDFS
+			strcpy(newsdir,s);
+			stradd("ng",s);	
+			str(phys_rc[pointer] + 1,s2);
+			stradd(s2,s);
+			stradd("\\",s);
+#else
+			munge(newsdir,ngn[phys_rc[pointer]],s);
+#endif /* OLDFS */
+			str(rc[phys_rc[pointer]] + 1,s2);		
+			stradd(s2,s);
+			if (exist(s) == FALSE)
+			{
+				cr(1);
+				pen(ROT);
+				send("Article not available.");
+				cr(1);
+				pen(WEISS);
+				break;
+			}
+
+			inh = open(s,2);
+			if (inh <= 0)
+			{
+				pen(ROT);
+				send("Error reading input.");
+				cr(1);
+				pen(WEISS);
+				return(-1);
+			}
+
+			strcpy("prn:",s2);
+			outh = open(s2,1);
+			if (outh != -3)
+			{
+				pen(ROT);
+				send("Error opening output: ");
+				send(s2);
+				cr(1);
+				pen(WEISS);
+				return(-1);
+			}
+
+			cr(1);
+			send("Printing... ");
+			while (uu_getline(inh,f) != -1)
+			{
+				f[499] = '\0';
+				while (strlen(f) > 80)
+				{
+					strcpys(f,s,0,79);
+					putline(outh,s);
+					strcpys(f,s,80,strlen(f));
+					strcpy(s,f);
+				}
+
+				putline(outh,f);
+			}
+
+			putline(outh,"");
+
+			close(outh);
+			close(inh);
+			send("Done.");		
+			cr(1);
+			c = '\0';
+			goto endofart;
+		}
+
+		if ((c == 'n') || (c == ' '))
+		{
+			++rc[phys_rc[pointer]];
+		}
+
+		if ((c == 'P') || (c == '-'))
+		{
+			if (--rc[phys_rc[pointer]] == -1)
+				++rc[phys_rc[pointer]];
+		}
+
+		if (c == 'O')
+		{
+			if (rot13 == 1)
+				rot13 = 0;
+			else
+				rot13 = 1;
+			goto first;
+		}
+
+
+		if (c == 'q')
+		{
+			/*eo = TRUE*/;
+			return(0);
+		}
+		cr(1);
+
+	} /* Ende lesen einer Newsgroup */
+}
+
+
+
+markread(ngpoint)
+int ngpoint;
+{
+	pen(ROT);
+	flush();
+	send("Mark everything as read? [yn] ");
+	pen(WEISS);
+	if (inp() == 'y')
+	{
+		cr(1);
+		send("Marking ");
+		send(ngn[ngpoint]);
+		send(" as all read.");
+		cr(1);
+		rc[ngpoint] = ng[ngpoint];
+		return(TRUE);
+	}
+	else
+	{
+		cr(1);
+		send("Keeping settings.");
+		cr(1);
+		return(FALSE);
+	}
+}
+
+
+
+int more()
+{
+	int c;		
+	send("\015\033p --- MORE --- \033q");
+	c = inp();
+	send("\015                     \015");
+	return(c);
+}
+
+
+help1()
+{
+	char c[LLEN];
+	send("\033E");
+	send("Possible keys:");
+	cr(2);
+
+	send("c ........... Mark newsgroup as all read"); cr(1);
+	send("<Space> ..... Read unread news in newsgroup"); cr(1);
+	send("n ........... Goto next newsgroup with unread news"); cr(1);
+	send("q ........... leave rn"); cr(1);
+	send("G <pat> ..... Goto next newsgroup matching pattern"); cr(1);
+	send("g <pat> ..... Goto next newsgroup with unread news matching pattern"); cr(1);
+	send("P ........... Goto previous newsgroup"); cr(1);
+	cr(1);
+
+	send("\033p Hit Return to proceed \033q");
+	rec(c);
+	send("\033E");
+}
+
+
+help2()
+{
+	static char c[LLEN];
+	send("\033E");
+	send("Possible keys:");
+	cr(2);
+
+	send("c .................. Mark newsgroup as all read"); cr(1);
+	send("F .................. Follow-up to current article"); cr(1);
+	send("R .................. Reply to the author of the current"); cr(1);
+	send("                     article via E-mail."); cr(1);
+#if 0
+	send("f .................. Follow-up, bot don't include article"); cr(1);
+#endif
+	send("s <file> ........... Save article to $HOME\\news\\<file>"); cr(1);
+	send("D or # ............. Send article to line-printer"); cr(1);
+	send("<Space> ............ Go to next unread article"); cr(1);
+	send("P .................. Go to previously read article"); cr(1);
+	send("O .................. Display this article again in rot13 mode"); cr(1);
+	
+	cr(1);
+
+	send("\033p Hit Return to proceed \033q");
+	rec(c);
+	send("\033E");
+}
+
+help3()
+{
+	char c[LLEN];
+	send("\033E");
+	send("Possible keys:");
+	cr(2);
+
+	
+	send("j ........... Junk. Mark current article as read"); cr(1);
+	send("c ........... mark this newsgroup as all read"); cr(1);
+	send("n ........... Goto next article"); cr(1);
+	send("q ........... Leave this newsgroup"); cr(1);
+	send("P ........... Goto previously read article"); cr(1);
+	send("O ........... Display this article again in rot13 mode"); cr(1);
+	cr(1);
+
+	
+	send("\033p Hit Return to proceed \033q");
+	rec(c);
+	send("\033E");
+}
+
+nil()
+{
+}
+
+
+
+
+
+
+
+getngnr(ng)
+char ng[];
+{
+	int n;
+	n = 0;
+
+#if 0
+	send(ng);
+	cr(1);
+#endif
+
+	while (n < ngc)
+	{
+		if (strcmp(ng,(char *)ngn[n]) == TRUE)
+			return(n);
+		++n;
+	}
+	return(-1);
+}
+
+
+
+
+followup(c,pointer)
+int pointer;
+char c;
+{
+	static char s[LLEN],s2[LLEN],s3[LLEN],file[LLEN];
+	static char writes[LLEN],id[LLEN];
+	struct header *head;
+	static char f[LLEN];
+	static int inh,outh;
+	
+#if OLDFS
+	strcpy(newsdir,s);
+	stradd("ng",s);	
+	str(phys_rc[pointer] + 1,s2);
+	stradd(s2,s);
+	stradd("\\",s);
+#else
+	munge(newsdir,ngn[phys_rc[pointer]],s);
+#endif /* OLDFS */
+	str(rc[phys_rc[pointer]] + 1,s2);
+	stradd(s2,s);
+	if (exist(s) == FALSE)
+	{
+		cr(1);
+		pen(ROT);
+		send("Article not available.");
+		cr(1);
+		pen(WEISS);
+		return(0);
+	}
+	strcpy(s,file);
+	cr(1);
+
+
+	strcpy("-followup ",s);
+	stradd(file,s);
+	sys_exec(pnews,s);
+	cr(2);
+	send("Re-entering cbreak mode...");
+	cr(1);
+}
+
+
+
+
+
+reply(c,pointer)
+int pointer;
+char c;
+{
+	static char s[LLEN],s2[LLEN],s3[LLEN],file[LLEN];
+	static char writes[LLEN],id[LLEN];
+	struct header *head;
+	static char f[LLEN];
+	static int inh,outh;
+	
+#if OLDFS
+	strcpy(newsdir,s);
+	stradd("ng",s);	
+	str(phys_rc[pointer] + 1,s2);
+	stradd(s2,s);
+	stradd("\\",s);
+#else
+	munge(newsdir,ngn[phys_rc[pointer]],s);
+#endif /* OLDFS */
+	str(rc[phys_rc[pointer]] + 1,s2);
+	stradd(s2,s);
+	if (exist(s) == FALSE)
+	{
+		cr(1);
+		pen(ROT);
+		send("Article not available.");
+		cr(1);
+		pen(WEISS);
+		return(0);
+	}
+	strcpy(s,file);
+	cr(1);
+
+	strcpy("-preply ",s);
+	stradd(file,s);
+	sys_exec(mail,s);
+	cr(2);
+	send("Re-entering cbreak mode...");
+	cr(1);
+}
+
+

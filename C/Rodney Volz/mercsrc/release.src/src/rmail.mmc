@@ -1,0 +1,1514 @@
+/* 
+ *   Copyright (c) 1990 Rodney Volz
+ *   ALL RIGHTS RESERVED 
+ * 
+ *   THIS SOFTWARE PRODUCT CONTAINS THE
+ *   UNPUBLISHED SOURCE CODE OF RODNEY VOLZ
+ *
+ *   The copyright notices above do not evidence
+ *   intended publication of such source code.
+ *
+ */
+
+/*
+ * MERCURY UUCP SOURCECODE [rmail.c]
+ */
+
+#define _RMAIL
+
+#include "uulib.c"
+overlay "main"
+
+#define BLOCK 4096
+#define DEBUG 0
+
+#define SMART		0
+#define REROUTING	1
+#define RELAY		2
+#define DOMAIN		3
+
+char *phash = NULL;	/* Pointer to Hash-list for paths */
+char *phashpt;		/* Pointer to current position */
+char mailspool[LLEN];
+int strategy = 0;	/* Routing strategy */
+char ppath[LLEN],mydomain[LLEN];
+static char *ourdomain[20];
+static char *host[60];
+static char *spool[60]; /*
+				List of spooldir's available for
+				our worthy hosts
+			*/
+int relay;
+
+static int rtx = 0;
+
+
+main(argc,argv)
+int argc;
+char *argv[];
+{
+	int c,n,sc,b,anz,hanz,cs;
+	int inh,outh,ic,i;
+	unsigned char atr,del;
+	char fd[LLEN],dout[LLEN],xout[LLEN],cout[LLEN],rec[LLEN],dfile[LLEN];
+	static char xnam[LLEN],dnam[LLEN],dn2[LLEN];	/* Files, die spaeter jeweils geloescht werden */
+	char sequence[LLEN],*buf,*cp;
+	char logit[LLEN],receivers[LLEN];
+	static char origin[LLEN],ff[LLEN],fline[LLEN * 2];
+	static char s[LLEN * 2],s2[LLEN],s3[LLEN],s4[LLEN],adresse[LLEN],tx[LLEN];
+	static char dest[LLEN];
+	static char tmpdir[LLEN],temp[LLEN];
+	static char domain[LLEN];
+	static char sys_mqueue[LLEN],sys_myname[LLEN],sys_hosts[LLEN];
+	char sys_passwd[LLEN],sys_grelay[LLEN],sys_postmaster[LLEN];
+	long dummy;
+	static char *xfile[21];
+	static char *line[300];
+        
+
+	buf = (char *)malloc((long)BLOCK + 10);
+	setquiet();
+
+	send("Rmail - ");
+	send(VERSION);
+	cr(2);
+	
+	/* See, if it's worth taking care of our user... */
+	getconf(14,sys_mqueue);
+	sys_impdirn(sys_mqueue);
+
+	sprintf(s,"%s*.x",sys_mqueue);
+	if (exist(s) == FALSE)
+	{
+		printf("No work.\n");
+		exit(0);
+	}
+
+
+
+	/* Figure out routing strategy from env. "STRATEGY" */
+	if ((cp = (char *)getenv("STRATEGY")) != NULL)
+	{
+		strcpy(cp,s);
+		lower(s);
+
+		/* Strategys:
+				0 - smart (default)
+				1 - rerouting
+				2 - relay-routing
+		*/
+
+		strategy = 0;
+		
+		if (strcmp(s,"smart") == TRUE)
+		{
+			if (!quiet)
+				printf("Smart routing strategy (default).\n");
+			strategy = SMART;
+		}
+		else
+		if (strcmp(s,"rerouting") == TRUE)
+		{
+			if (!quiet)
+				printf("Rerouting strategy\n");
+			strategy = REROUTING;
+		}
+		else
+		if (strcmp(s,"relay") == TRUE)
+		{
+			if (!quiet)
+				printf("Relay routing strategy\n");
+			strategy = RELAY;
+		}
+		else
+#if 0 /* Show errors even if they want us to be quiet */
+		if (!quiet)
+#endif
+		{
+			printf("Unknown routing strategy '%s' -\n",s);
+			printf("Valid strategies are SMART, REROUTING or RELAY.\n");
+			printf("Using default (SMART) strategy.\n");
+		}
+
+		if (!quiet)
+			cr(1);
+	}
+
+	curs();
+
+	getconf(16,mailspool);
+	sys_impdirn(mailspool);
+
+	getconf(2,sys_myname);
+	getconf(15,sys_hosts);
+	getconf(9,sys_passwd);
+	getconf(17,sys_grelay);
+	getconf(6,sys_postmaster);
+	getconf(4,mydomain);
+	getconf(22,ppath);
+
+	getconf(21,tmpdir);
+	sys_impdirn(tmpdir);
+
+	getdomain();	/* Read Domain-file */
+	gethash();	/* read hash-table */
+
+	if (rtx)
+	{
+		strcpy(tmpdir,s);
+		stradd("rmail.lck",s);
+		if (exist(s) == TRUE)
+			return(0);
+		close(open(s,1));
+	}
+
+
+
+	/* Storage Allocation */
+
+	i = 0;
+	while (i < 20)
+		xfile[i++] = (char *)malloc((long)LLEN);
+
+	/* Got the space! At least hope so */
+
+
+
+	strcpy(sys_mqueue,s);
+	i = 0;
+	stradd("*.x",(char *)s);
+	n = sfirst((char *)s);
+
+
+	while (n >= 0)
+	{
+		dtaxtr((char *)s,&dummy,&atr);
+
+		if (atr != 16)
+		{
+			strcpy((char *)sys_mqueue,(char *)s2);
+			stradd((char *)s,(char *)s2);
+			strcpys((char *)s2,(char *)s,0,strlen((char *)s2) - 3);
+
+			/* get it! */
+			line[i] = (char *)malloc((long)LLEN);
+			strcpy(s,line[i]);
+
+			send(s);
+			cr(1);
+			++i;
+		}
+
+		n = snext();
+	}
+
+	if (i == 0)
+	{
+		send("No work.");
+		cr(1);
+		if (rtx)
+		{
+			strcpy(tmpdir,s);
+			stradd("rmail.lck",s);
+			sys_remove(s);
+		}
+		return(0);
+	}
+
+	cr(1);
+
+
+	anz = i;
+
+	strcpy((char *)sys_hosts,(char *)s);
+
+	strcpy(s,fd);
+	inh = open(fd,2);
+
+
+	if (inh < 0)
+	{
+#ifdef SCR
+		cls();
+#endif
+		send("Error opening host database. Deliver abandoned.");
+		cr(1);
+		send("Failed looking for: ");
+		send(fd);
+		cr(1);
+		return(-1);
+	}
+
+	i = 0;
+	c = 0;
+
+	while (getline(inh,s) != -1)
+	{
+		if (rinstr(s,'|') != -1)
+		{
+			/* First get us some space to work in... */
+			host[i] = (char *)malloc((long)LLEN);
+			spool[i] = (char *)malloc((long)LLEN);
+
+			strcpys((char *)s,(char *)s2,0,linstr((char *)s,'|') - 1);
+			strcpy((char *)s2,(char *)host[i]);
+
+			strcpys((char *)s,(char *)s2,rinstr((char *)s,'|') + 1,strlen((char *)s));
+			sys_impdirn((char *)s2);
+			strcpy((char *)s2,(char *)spool[i]);
+
+			if (++i > 40)
+				printf("Hosts-file has excessive size.\n");
+		}
+	}
+	close(inh);
+
+
+	host[i] = (char *)malloc((long)LLEN);
+	strcpy("-",host[i]);
+
+
+	hanz = i;
+
+	if (hanz == 0)
+	{
+		pen(ROT);
+		send("No entries in host database.");
+		cr(1);
+		pen(WEISS);
+		return(-1);
+	}
+
+	/* deb("Host database read."); */
+
+
+	/* "General relay host" ermitteln */
+
+	i = 0;
+	relay = -1;
+	while (i < hanz)
+	{
+		strcpy((char *)host[i],s);
+		if (strcmp(s,sys_grelay) == TRUE)
+		{
+			relay = i;
+			break;
+		}
+		++i;
+	}
+
+	if (relay == -1)
+	{
+#ifdef SCR
+		cls();
+#endif
+		pen(ROT);
+		send("No general relay host defined!");
+		cr(1);
+		pen(WEISS);
+		exit(0);
+	}
+
+	/* OK, fertig. */
+	/* deb("General relay host allocated."); */
+
+
+
+
+	/*******************************************************/
+	/**** Begin to cope with the stuff they sent to us *****/
+	ic = 0;
+
+	while (ic < anz)
+	{
+		del = FALSE;	/* Default: No delete */
+
+		strcpy((char *)line[ic],(char *)s);
+		strcpy((char *)line[ic],xnam);
+		stradd(".x",xnam);
+
+		/* XNAM steht. */
+
+		strcpy(s,s2);
+
+		stradd(".x",s2);
+		strcpy(s2,fd);
+
+		inh = open(fd,2);
+		if (inh < 0)
+		{
+			pen(ROT);
+			send("Error opening ");
+			send(fd);
+			send(" as input.");
+			cr(1);
+			pen(WEISS);
+			return(-1);
+		}
+		b = 0;
+
+		while (uu_getline(inh,s) != -1)
+			strcpy(s,(char *)xfile[b++]);
+
+		strcpy("-",(char *)xfile[b]);
+
+		close(inh);
+
+
+		/* Das ???.X-File steht jetzt in XFILE[] */
+
+		i = b = 0;
+
+		while (0 == 0)
+		{
+			if(*xfile[b] == '-')
+				break;
+
+			strcpy((char *)xfile[b],s);
+
+			if (s[0] == 'I')
+			{
+				strcpys(s,s2,strlen(s) - 7,strlen(s));
+				strcpy(s2,sequence);
+
+				strcpy("a",xout);
+				stradd(sequence,xout);
+				stradd(".x",xout);
+
+
+				strcpy("a",dfile);
+				stradd(sequence,dfile);
+				stradd(".d",dfile);
+
+				strcpy(sys_mqueue,dnam);
+				stradd(dfile,dnam);
+				strcpy(dfile,dout);
+				strcpy(dnam,dn2);
+
+				/* DNAM steht. */
+
+
+				strcpy("",cout);
+				stradd("a",cout);
+				stradd(sequence,cout);
+				stradd(".c",cout);
+			}
+
+
+			/*
+				Moegliche Zeilen:
+				-----------------
+				
+				C rmail root
+				
+				C rmail rodney@merkur norman@delos
+			*/
+			if (s[0] == 'C')
+			{
+				strcpys(s,s2,linstr(s,' ') + 1,strlen(s));
+				strcpys(s2,s3,0,linstr(s2,' ') - 1);
+				strcpy(s3,rec);
+				/* in <rec> steht 'rmail' oder 'rnews' */
+				
+				strcpys(s,s2,linstr(s,' ') + 1,strlen(s));
+				strcpys(s2,s3,linstr(s2,' ') + 1,strlen(s2));
+
+				/* In <s3> steht 'rodney@merkur norman@delos' */
+
+				trim(s3);
+
+				/* FIXME! */
+				strcpy(s3,receivers);
+				stradd(" ",receivers);
+
+				i = 0;
+				while (linstr(receivers,' ') != -1)
+				{
+					n = linstr(receivers,' ');
+					receivers[n] = ',';
+					++i;
+				}
+			}
+
+			if (s[0] == 'U')
+			{
+				strcpys(s,s2,linstr(s,' ') + 1,strlen(s));
+				strcpys(s2,origin,0,linstr(s2,' ') - 1);
+			}
+			++b;
+		}
+
+
+		if ((i > 1) && !quiet)
+			printf("Mail file for %d receivers.\n",i);
+
+		/* OK, der Kram ist analysiert. Jetzt wird geschafft! */
+
+		cs = 0;
+
+		/* ------------------- Let 'em know ------------------------ */
+		/* they are to use rnews */
+		upper(rec);
+		if (strcmp(rec,"RMAIL") == FALSE)
+		{
+			cs = 1;
+#ifndef SCR
+			if (!quiet)
+			{
+				send("News found - Use Rnews to receive them... ");
+				send("Done.");
+				cr(1);
+			}
+#endif
+		}
+
+
+		
+/* ------- */	/* Hier springen wir 'rein, wenn mehrere Empfaenger
+		   angegeben sind. Ugly kludge... once again. */
+
+exreceive:	strcpys(receivers,adresse,0,linstr(receivers,',') - 1);
+		strcpy(receivers,s);
+		strcpys(s,receivers,linstr(s,',') + 1,strlen(s));
+
+
+		/* I ain't log things such as "mail from news to"... */
+		if (cs != 1)
+		{
+			sprintf(logit,"Rmail: mail for %s (%ld bytes)",adresse,(long)fsize(dnam));
+			log(logit,"rmail");
+		}
+
+
+
+		/*------------------ Delivering ------------------------*/
+
+		/****************************************************************/
+
+		if (cs == 0) /* Do we have a mail-file? */
+		{
+			strcpys(dnam,temp,0,rinstr(dnam,'\\'));
+			
+			mktmp(temp);
+			
+			inh = open(dnam,2);
+			outh = open(temp,1);
+			if ((inh < 0) || (outh < 0))
+			{
+				send("Couldn't insert \"Received-by\"-lines:");
+				cr(1);
+				send("A problem occured with open().");
+				cr(1);
+				goto norec;
+			}
+
+			strcpy("",rec);
+			strcpy("",fline);
+			strcpy("",s4);
+			while (lgetline(inh,s) != -1)
+			{
+				if (strlen(s) < 3)
+					break; /* Kein Glueck, Header's end! */
+				
+				strcpys(s,s2,0,4); /* die ersten 4 Zeichen werden ueberprueft... */
+
+				if ((strcmp(s2,"Recei") == TRUE) && (!valid(rec)))
+					strcpy(s,rec);
+
+				if ((strcmp(s2,"From ") == TRUE) && (!valid(fline)))
+					strcpy(s,fline);
+
+				if ((strcmp(s2,"From:") == TRUE) && (!valid(s4)))
+					strcpy(s,s4);
+
+				if (valid(rec) && valid(fline) && valid(s4))
+					break;
+			}
+			
+			if (strlen(rec) < 3) /* Hatten wir Glueck? */
+			{
+				/* Nein, also Dummy erzeugen. */
+				sprintf(rec,"Received: by %s",sys_myname);
+				bug("Dummy recline created.");
+			}
+
+			/* An dieser Stelle steht in
+			   <rec> die erste Received-by-Zeile. */
+			
+			strcpys(rec,s2,linstr(rec,' ') + 1,strlen(rec));
+			strcpys(s2,s,linstr(s2,' ') + 1,strlen(s2));
+
+			if (linstr(s,' ') != -1)
+				strcpys(s,s2,0,linstr(s,' ') - 1);
+			else
+				strcpy(s,s2);
+
+			sprintf(s3,"<%s>",s4);
+			log(s3,"rmail");
+
+			/*
+			In <s2> steht der Name des Hosts, von dem
+			wir den Kram bekommen haben.
+			*/
+			
+			if (linstr(s2,'.') != -1)
+				strcpys(s2,rec,0,linstr(s2,'.') - 1);
+			else
+				strcpy(s2,rec);
+
+			/* Hostname ohne Domain steht in <s>. */
+			
+			/* FROM-Line schreiben */
+			strcpy("From ",s3);
+			if (strcmp(rec,sys_myname) != TRUE)
+			{
+				/* Die erste From-Line stammt nicht
+				   von uns, also From-Line schreiben. */
+				stradd(rec,s3);
+				stradd("!",s3);
+			}
+			
+			strcpys(fline,s2,linstr(fline,' ') + 1,strlen(fline));
+			strcpys(s2,fline,0,linstr(s2,' ') - 1);
+			stradd(fline,s3);
+			stradd(" ",s3);
+			sd(s2);
+			stradd(s2,s3);
+			stradd(" remote from ",s3);
+			stradd(sys_myname,s3);
+			/* stradd(mydomain,s3); */
+			uu_putline(outh,s3);
+			bug("From-Line written.");
+
+			/* Received einfuegen */
+			strcpy("Received: by ",s3);
+			stradd(sys_myname,s3);
+			stradd(mydomain,s3);
+			stradd(" (",s3);
+			stradd(VERSION,s3);
+			stradd(")",s3);
+			uu_putline(outh,s3);
+			strcpy("	id <",s3);
+			strcpy("dx",s);
+			while(strlen(s) < 10)
+			{
+				str(sys_rnd(9),s2);
+				stradd(s2,s);
+			}
+			stradd(s,s3);
+			stradd("@",s3);
+			stradd(sys_myname,s3);
+			stradd(mydomain,s3);
+			stradd(">; ",s3);
+			sd(s2);
+			stradd(s2,s3);
+			uu_putline(outh,s3);
+#if 0 /* nicht zuviel Werbung... */
+			strcpy("	with <rmail> ATARI uucp utilities",s3);
+			uu_putline(outh,s3);
+			bug("Received-Headerline written.");
+#endif
+
+			seek(inh,0l);
+
+			/* Header schreiben aber Path-Line vergessen. */
+			while(lgetline(inh,s) != -1)
+			{
+				strcpys(s,s2,0,4);
+				if (strcmp(s2,"From ") != TRUE)
+					uu_putline(outh,s);
+				if (strlen(s) < 3)
+					break;
+			}
+			
+			while (1 == 1)
+			{
+				dummy = (long)sys_fread(inh,(long)BLOCK,buf);
+				sys_fwrite(outh,(long)dummy,buf);
+
+				if (dummy < (long)BLOCK)
+					break;
+			}
+			close(inh);
+			close(outh);
+
+#if 0
+			sys_remove(dnam);
+			sys_rename(temp,dnam);
+#endif
+			strcpy(temp,dnam);
+
+
+
+norec:
+			strcpy(adresse,s2);
+			smart(s2);
+			stradd(".",s2);
+			strcpys(s2,s,linstr(s2,'@') + 1,linstr(s2,'.') - 1);
+		} /* Endif cs == 0 */
+
+
+		if ((cs == 0) && (strcmp(s,sys_myname) == TRUE))	/* Lokal */
+		{
+			/*
+				-- Lokale Mail --
+			
+				Das X-File wird vergessen, der Empfaenger
+				gesucht, das Data-File wird ins entsprechende
+				Userdirectory verschoben, und es wird natuerlich
+				kein C-File erstellt.
+
+			*/
+
+			cs = 2;	/* localmail */
+
+			smart(adresse);	/* darf smart-Adresse sein. */
+			strcpy(adresse,s);
+			strcpys(s,adresse,0,linstr(s,'@') - 1);
+
+remail:
+			strcpy("To: ",tx);	/* Adresse == user!!! */
+			stradd(sys_myname,tx);
+			stradd("!",tx);
+			stradd(adresse,tx);
+			stradd("... ",tx);
+#ifndef SCR
+			send(tx);
+#else
+			cls();
+			boxtext(40,10,tx);
+
+#endif
+
+			c = sys_getuid(adresse,s2,logit,logit,logit);
+
+			if (c == -1)
+			{
+#ifndef SCR
+
+				if (!quiet)
+				{
+					cr(1);
+					send("Unknown user. Sending to postmaster.");
+					cr(1);
+				}
+#else
+				boxtext(40,18,"Unknown user.");
+#endif
+				strcpy(sys_postmaster,adresse);
+				goto remail;
+			}
+
+			sys_impdirn(s2);
+
+			while (0 == 0)
+			{
+				strcpy("",s4);
+				while (strlen(s4) < 6)
+				{
+					str(sys_rnd(9),s3);
+					stradd(s3,s4);
+				}
+				strcpy(s2,s);
+				stradd("A",s);
+				stradd(s4,s);
+				stradd(".msg",s);
+
+				if (exist(s) == FALSE)
+					break;
+			}
+			strcpy(s,s3);
+			/* Jetzt steht der Destination-Filename in <s3> */
+			/* Source-Filename: *line[ic] + ".d" */
+
+			b = sys_fcopy(dnam,s3);
+			if (b == -1)
+			{
+#ifdef SCR
+				cls();
+#endif
+				cr(1);
+				send("Unable to deliver message.");
+				cr(1);
+			}
+
+			if (b >= 0)
+				del = TRUE;		/* Es darf geloescht werden. */
+#ifndef SCR
+			send("Done.");
+			cr(1);
+#endif
+		}
+
+
+
+		/*******************************************************
+		   Mail routen, und evtl. re-routen bzw. bang lassen.
+		**********************************************************/
+
+		if (cs == 0)
+		{
+		/*
+		Die Funktion route(adresse) muss 0 (success) oder -1 (failure)
+		zurueckgeben. Wenn 0 zurueckgegeben wird, muss als Adresse
+		der volle (!) Pfad zum Empfaenger in der Adresse stehen; bei
+		-1 muss eine Adresse in der Form "aragon!malcom@tpki.uucp"
+		zurueckgegeben werden. Der Host, der dabei als naechster
+		Host angegeben wird, muss ein Host sein, der gepollt wird.
+		*/
+
+
+			strcpy("To: ",tx);
+			stradd(adresse,tx);
+#ifndef SCR
+			stradd("\015",tx);
+			send(tx);
+#else
+			cls();
+			boxtext(40,10,tx);
+#endif
+
+			n = route(adresse);		/* Smartmailer */
+
+			sprintf(s,"path: %s",adresse);
+			log(s,"rmail");
+
+			/* cr(1); */
+
+			strcpy("Path: ",tx);
+			stradd(adresse,tx);
+#ifndef SCR
+			stradd("... \033K",tx);
+			send(tx);
+#else
+			cls();
+			boxtext(40,10,tx);
+			cr(1);
+			center("* WORKING *");
+#endif
+
+
+			strcpys(adresse,s,0,linstr(adresse,'!') - 1);
+
+			/* Domain abschneiden */
+			if (linstr(s,'.') != -1)
+			{
+				strcpys(s,s2,0,linstr(s,'.') - 1);
+				strcpy(s2,s);
+			}
+
+			i = 0;
+			while (i < hanz)
+			{
+			/*
+			V 0.914 Der empfangende Rechner wird im Hosts-File
+				gesucht, und das Spooldirectory ermittelt.
+				Dann werden das X- und das D-File kopiert;
+				ein C-File wird erstellt. Ausserdem muss beim
+				X-File die Zeile "C rmail user@host" zu
+				"C rmail user" umgebaut werden, damit die
+				Sache auch ankommt.
+			
+			V 09.21 Die Routine sys_uucp(source,dest,host) wird
+				zum Kopieren verwendet.
+			*/
+
+				if (cs != 0)
+					break;
+
+				if (strcmp(s,host[i]) == TRUE)
+				{
+					cs = 3; /* Set mark 'neighbourmail' */
+
+					/* Build temporary filename */
+					strcpy("D.",s);
+					while (strlen(s) < 12)
+					{
+						str(sys_rnd(9),s2);
+						stradd(s2,s);
+					}
+
+					strcpy(s,s4);	/* Remember Dname for Xfile */
+					b = sys_uucp(dnam,s,host[i]);
+					if (b == -1)
+					{
+#ifndef SCR
+						cr(1);
+						send("Unable to <uucp> message.");
+						cr(1);
+#endif
+					}
+
+					/* Xfile in entsprechender Form schreiben */
+
+					strcpy(tmpdir,s);
+					stradd("a",s);
+					b = 0;
+					while (b++ < 8)
+					{
+						str(sys_rnd(9),s2);
+						stradd(s2,s);
+					}
+
+					strcpy(s,s3);	/* Remember filename for
+							sys_uucp(...) */
+					outh = open(s,1);
+					if (outh <= 0)
+					{
+						pen(ROT);
+						send("Error opening ");
+						send(s);
+						send(" as output.");
+						cr(1);
+						pen(WEISS);
+						return(-1);
+					}
+
+
+					b = 0;
+					while (*xfile[b] != '-')
+					{
+						strcpy((char *)xfile[b],s);
+						if (s[0] == 'C')
+						{
+							strcpys(s,s2,0,1);
+							stradd("rmail ",s2);
+							strcpys(adresse,s,linstr(adresse,'!') + 1,strlen(adresse));
+							stradd(s,s2);
+							strcpy(s2,s);
+						}
+
+						if ((s[0] == 'F') || (s[0] == 'I'))
+						{
+							strcpys(s,s2,0,1);
+							stradd(s4,s2);
+							strcpy(s2,s);
+						}
+
+
+						uu_putline(outh,s);
+						++b;
+					}
+					close(outh);
+
+
+					/* Build temporary Xfilename */
+					strcpy("X.",s);
+					while (strlen(s) < 12)
+					{
+						str(sys_rnd(9),s2);
+						stradd(s2,s);
+					}
+
+					n = sys_uucp(s3,s,host[i]);
+					if (n == -1)
+					{
+						cr(1);
+						send("Unable to <uucp> message.");
+						cr(1);
+					}
+
+					if ((b >= 0) && (n >= 0))
+						del = TRUE;
+#ifndef SCR
+					send("Done.");
+					cr(1);
+#endif
+				} /* Ende 'If <host gefunden>' */
+				++i;
+			} /* While durch die Host-Tabelle */
+		} /* If cs == 0 */
+
+
+
+		if (strlen(receivers) > 1)
+		{
+			cs = 0;
+			goto exreceive;
+		}
+
+
+		/* Versandte Messages eventuell loeschen */
+		if (del == FALSE)
+		{
+			send("Keeping.");
+			cr(1);
+		}
+		else
+		{
+#ifndef SCR
+			if (!quiet)
+			{
+				send("Removing.");
+				cr(1);
+			}
+#else
+			boxtext(40,18,"Removing");
+#endif
+			sys_remove(xnam);
+			sys_remove(dnam);
+			sys_remove(dn2);
+		}
+
+		++ic;
+
+		if (ic >= anz)
+			break;
+	}
+
+#ifdef SCR
+	cls();
+#endif
+	if (!quiet)
+	{
+		send("Rmail <");
+		send(VERSION);
+		send("> finished.");
+		cr(1);
+	}
+
+}
+
+
+
+smart(adresse)	/* Adresse formatieren */
+char adresse[];
+{
+	static char s[LLEN],s2[LLEN],s3[LLEN];
+	char sys_myname[LLEN];
+	int c,i;
+
+
+	getconf(2,sys_myname);
+
+
+	c = 0;
+
+
+	strcpy(adresse,s);
+
+
+	/* 'receiver' */
+	if ((linstr(s,'!') == -1) && (linstr(s,'%') == -1) && (linstr(s,'@') == -1))
+	{
+		stradd("@",adresse);
+		stradd(sys_myname,adresse);
+		c = 1;
+	}
+
+	/* a%b%c%d@host */
+	if ((linstr(s,'%') != -1) && (c == 0))
+	{
+		stradd("%",s);
+		strcpys(s,s2,0,linstr(s,'%') - 1);
+		strcpys(s,s3,linstr(s,'%') + 1,strlen(s));
+		strcpy(s3,s);
+		i = linstr(s,'@');
+		if (i == -1)
+			i = LLEN;
+		if (linstr(s,'%') < i)
+			i = linstr(s,'%');
+		strcpys(s,s3,0,i - 1);
+		strcpy(s2,adresse);
+		stradd("@",adresse);
+		stradd(s3,adresse);
+		c = 1;
+	}
+
+
+
+
+	/* 'receiver@endhost' */
+	if ((c == 0) && (linstr(s,'@') != -1) && (linstr(s,'!') == -1))
+	    {
+		c = 1;
+	}
+
+	/* 'a!b!c!d!e!endhost!receiver' */
+	if((c == 0) && (linstr(s,'@') == -1) && (linstr(s,'!') != -1))
+	    {
+		/* Es wird "!!!" davorgesetzt, damit auch "endhost!receiver"
+		   erkannt wird. */
+
+		strcpy(s,s2);
+		    strcpy("!!!",s);
+		    stradd(s2,s);
+
+		    strcpys(s,s2,rinstr(s,'!') + 1,strlen(s));
+		    strcpys(s,s3,0,rinstr(s,'!') - 1);
+		    strcpy(s3,s);
+		    strcpys(s,s3,rinstr(s,'!') + 1,strlen(s));
+
+		    strcpy(s2,adresse);
+		    stradd("@",adresse);
+		    stradd(s3,adresse);
+
+		    c = 1;
+	}
+
+
+
+
+	if (c == 1)
+	{
+		return(0);
+	}
+	else
+	{
+		return(-1);
+	}
+}
+
+
+
+
+route(adr)
+char adr[];
+{
+	char *p1,*p2;
+	static char s[LLEN],s2[LLEN],s3[LLEN];
+	static char full[LLEN],dom[LLEN],hst[LLEN],uname[LLEN],path[LLEN];
+	int i,n,ok,inh;
+	char ourdom;
+
+	/* Ist unser User ein Banger? :-) */
+	strcpy(adr,s);
+
+
+	if ((strategy != RELAY) && (strategy != REROUTING))
+		if (linstr(s,'!') != -1)	/* Seems so! */
+		{
+			strcpys(s,s2,0,linstr(s,'!') - 1);
+			n = 0;
+			while (strcmp(host[n],"-") != TRUE)
+			{
+				if (strcmp(s2,host[n++]) == TRUE)
+					return(0);
+			}
+		} /* Ende Bangmailing-Check */
+
+
+	/*
+	Kein Bangmailing, also fusseln wir jetzt den Hostnamen aus
+	der Adresse. Das geht auch ganz schnell:
+	*/
+	smart(adr);
+	strcpys(adr,s,linstr(adr,'@') + 1,strlen(adr));
+	strcpys(adr,uname,0,linstr(adr,'@') - 1);
+
+	/* Hostname, evtl. mit Domain (!) steht in s. */
+
+	if (linstr(s,'.') == -1)
+		stradd(".UUCP",s);
+
+	/* Definitiv: s == "aragon.gtc.de" */
+
+	strcpys(s,hst,0,linstr(s,'.') - 1);
+	strcpys(s,dom,linstr(s,'.'),strlen(s));
+
+	strcpy(dom,s);
+	upper(s);
+	if (strcmp(s,".UUCP") == TRUE)
+		strcpy("",dom);
+
+	strcpy(hst,full);
+	stradd(dom,full);
+
+	/* full == "aragon.gtc.de"; dom == ".gtc.de"; hst == "aragon" */
+
+	/* See if addressee is in our domain area */
+
+	p1 = dom;
+	if (*p1 == '.')
+		++p1;
+
+#if 0
+	send("Trying to find out if the host is in our domain.");
+	cr(1);
+#endif
+	
+	ourdom = 0;
+	for (n = 0; ourdomain[n] != NULL; n++)
+	{
+		if (strcmp(p1,ourdomain[n]) == TRUE)
+		{
+			++ourdom;
+#if 0
+			cr(2);
+			send("Host is in our domain!!!");
+			cr(2);
+			send(ourdomain[n]);
+			cr(2);
+#endif
+		}
+	}
+
+
+
+	/*
+		Reihenfolge:
+				- Passenden Namen (mit Domain) suchen
+				- Passende Domain suchen, bis Domain == ""
+				- Passenden Namen (ohne Domain) suchen
+				- An General relay host weiterschicken
+	*/
+
+	if (!phash || strategy == RELAY)
+	{
+		goto nopaths;
+	}
+
+
+	/* ---------------------------------------- */
+	/* WENN DIE ZIELKISTE IN UNSRER DOMAIN IST: */
+	/* Auf passenden nur-namen hin suchen       */
+	m_reset();
+	while (ourdom && (m_getline(path) != -1))
+	{
+		if (linstr(path,0x9) == -1)
+			strcpy("x	x",path);
+	
+		p1 = path;
+		n = linstr(path,0x9);
+		path[n++] = 0;
+		p2 = &path[n];
+	
+		/*
+		p1 zeigt auf den Hostnamen; p2 auf den Pfad.
+		*/
+
+		if (strcmp(p1,hst) == TRUE)
+		{
+			strcpy(p2,s);
+			s[rinstr(s,'%')] = '\0';
+#if 0
+			stradd(full,s);
+			stradd("!",s);
+#endif
+			stradd(uname,s);
+			strcpy(s,adr);
+			return(0);
+		}
+	}
+
+
+
+	
+
+	/* ------------------------------------------- */
+	/* Auf passenden Namen (mit Domain) hin suchen */
+	m_reset();
+	while (m_getline(path) != -1)
+	{
+		if (linstr(path,0x9) == -1)
+			strcpy("x	x",path);
+	
+		p1 = path;
+		n = linstr(path,0x9);
+		path[n++] = 0;
+		p2 = &path[n];
+	
+		/*
+		p1 zeigt auf den Hostnamen; p2 auf den Pfad.
+		*/
+
+		if (strcmp(p1,full) == TRUE)
+		{
+			strcpy(p2,s);
+			s[rinstr(s,'%')] = '\0';
+#if 0
+			stradd(full,s);
+			stradd("!",s);
+#endif
+			stradd(uname,s);
+			strcpy(s,adr);
+			return(0);
+		}
+	}
+
+
+	/* ------------------------------------ */
+	/* Nach passender Domain suchen */
+	while(strlen(dom) > 1)
+	{
+		m_reset();
+		while (m_getline(path) != -1)
+		{
+			if (linstr(path,0x9) == -1)
+				strcpy("x	x",path);
+			p1 = path;
+			n = linstr(path,0x9);
+			path[n++] = 0;
+			p2 = &path[n];
+	
+			/*
+			p1 zeigt auf den Hostnamen; p2 auf den Pfad.
+			*/
+	
+			if (strcmp(p1,dom) == TRUE)
+			{
+				strcpy(p2,s);
+				s[rinstr(s,'%')] = '\0';
+				stradd(full,s);
+				stradd("!",s);
+				stradd(uname,s);
+				strcpy(s,adr);
+				return(0);
+			}
+		} /* Ende Schleife durchs Paths-File */
+
+		/* aus ".gtc.de" mach' ".de"! */
+
+		for (n = 1; (dom[n] != '.') && dom[n]; n++);
+
+		strcpys(dom,s,n,strlen(dom));
+		strcpy(s,dom);
+	}
+
+
+	
+	/* ------------------------------------ */
+	/* Auf passenden nur-namen hin suchen */
+	m_reset();
+	while (m_getline(path) != -1)
+	{
+		if (linstr(path,0x9) == -1)
+			strcpy("x	x",path);
+	
+		p1 = path;
+		n = linstr(path,0x9);
+		path[n++] = 0;
+		p2 = &path[n];
+	
+		/*
+		p1 zeigt auf den Hostnamen; p2 auf den Pfad.
+		*/
+
+		if (strcmp(p1,hst) == TRUE)
+		{
+			strcpy(p2,s);
+			s[rinstr(s,'%')] = '\0';
+#if 0
+			stradd(full,s);
+			stradd("!",s);
+#endif
+			stradd(uname,s);
+			strcpy(s,adr);
+			return(0);
+		}
+	}
+
+	
+
+
+	/* Nix gefunden! :-( */
+
+nopaths:
+
+	strcpy(host[relay],s);
+	stradd("!",s);
+	stradd(adr,s);
+	strcpy(s,adr);
+
+	log("Rmail: unroutable message","rmail");
+
+	return(-1);
+}
+
+bug(s)
+char *s;
+{
+#if DEBUG
+	send(s);
+	cr(1);
+#endif
+}
+
+
+
+
+#if 0 /* unused */
+dom(s,adr,domain)
+char s[],adr[],domain[];
+{
+	if (linstr((char *)s,'.') == -1)
+	{
+		strcpy((char *)s,(char *)adr);
+		strcpy("",(char *)domain);
+		cr(1);
+		return(0);
+	}
+
+	strcpys((char *)s,(char *)adr,0,linstr(s,'.') - 1);
+	strcpys((char *)s,(char *)domain,linstr(s,'.') + 1,strlen(s));
+}
+
+#endif
+
+
+
+
+gethash()
+{
+	int inh,outh,age1,age2,d,*dta;
+	char s[LLEN];
+	long l;
+	char atr;
+
+	if (strategy == RELAY)
+		return(0);
+
+	if (exist(ppath) == FALSE)
+	{
+		if (!quiet)
+		{
+			send("No <paths> file. Please read the manual");
+			cr(1);
+			send("and create one.");
+			cr(1);
+		}
+		return(0);
+	}
+
+	inh = open(ppath,2);
+	dtaxtr(s,&l,&atr);
+
+	phash =  (char *)malloc((long)l + 1024l);
+	gemdos(0x3f,inh,(long)l,phash);
+	
+	close(inh);
+	phashpt = phash + l + 1;
+	for (d = 0; d < LLEN; *(phashpt++) = '\0')
+		++d;
+
+	phashpt = phash;
+}
+
+
+
+
+
+m_reset()
+{
+	phashpt = phash;
+}
+
+
+m_getline(buf)		/* Eine Zeile in den <buf> lesen */
+char buf[];
+{
+	long g;
+	int p,c;
+	long rd;
+
+	if (*phashpt == 0)
+		return(-1);
+
+	for (c = 0; (*phashpt != 10) && *phashpt; buf[c++] = *(phashpt++));
+	buf[c] = '\0';
+
+	while ((*phashpt < 14) && *phashpt)
+		++phashpt;
+
+#if 0
+	printf("m_getline: %s\n",buf);
+#endif
+	return(0);
+}
+
+
+
+
+	
+#if 0
+	m_reset();
+	while (m_getline(path) != -1)
+	{
+		if ((linstr(path,0x9) == -1) || (path[0] == '#'))
+			strcpy("xxxx	xxxx",path);
+
+		strcpys(path,s2,0,linstr(path,0x9) - 1);
+		if (strcmp(s2,s) == TRUE)	/* wenn der Hostname 'passt' */
+		{
+			strcpys(path,s,linstr(path,0x9) + 1,rinstr(path,'%') - 2);
+			strcpy(s,s2);
+			stradd(dom,s2);
+			stradd("!",s2);
+
+			strcpys(adr,s,0,linstr(adr,'@') - 1);
+			stradd(s,s2);
+
+			strcpy(s2,adr);
+			return(0);
+		}
+
+		strcpys(path,s2,0,linstr(path,0x9) - 1);
+		if (strcmp(s2,dom) == TRUE)	/* wenn die Domain passt */
+		{
+			strcpys(path,s,linstr(path,0x9) + 1,rinstr(path,'%') - 2);
+			strcpy(s,s2);
+			stradd("!",s2);
+			stradd(hst,s2);
+			stradd(dom,s2);
+
+			stradd("!",s2);
+
+			strcpys(adr,s,0,linstr(adr,'@') - 1);
+			stradd(s,s2);
+
+			strcpy(s2,adr);
+			return(0);
+		}
+	}
+#endif
+
+
+
+
+
+
+getdomain()
+{
+	char s[LLEN],*cp;
+	int n = 0;
+	int inh;
+	
+	getconf(19,s);
+
+	inh = open(s,2);
+
+	if (inh <= 0)
+	{
+		printf("Error opening %s.\n",s);
+		printf("This file should contain the name(s)\n");
+		printf("of the domain(s) you are in; each line one\n");
+		printf("Domain.\n");
+
+		exit(0);
+	}
+	
+	while (getline(inh,s) != -1)
+	{
+		trim(s);
+	
+		if (strlen(s) < 2)
+			continue;
+	
+		cp = s;
+	
+		if (*cp == '.')
+			++cp;
+	
+		ourdomain[n] = (char *)malloc((long)LLEN);
+		strcpy(cp,ourdomain[n]);
+
+		if (++n > 15)
+		{
+			printf("Bad domain file. Too many entries.\n");
+			exit(0);
+		}
+	}
+	close(inh);
+	
+	ourdomain[n] == NULL;
+}

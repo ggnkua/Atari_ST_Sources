@@ -1,0 +1,1358 @@
+/* 
+ *   Copyright (c) 1990 Rodney Volz
+ *   ALL RIGHTS RESERVED 
+ * 
+ *   THIS SOFTWARE PRODUCT CONTAINS THE
+ *   UNPUBLISHED SOURCE CODE OF RODNEY VOLZ
+ *
+ *   The copyright notices above do not evidence
+ *   intended publication of such source code.
+ *
+ */
+
+/*
+ * MERCURY UUCP SOURCECODE [rnews.c]
+ */
+
+#ifndef MWC
+#include "uulib.c"
+overlay "main"
+#else
+#include "define.h"
+#endif
+
+#define DEBUG 0
+
+/* Globals */
+
+#define ASAVE	15	/* Alle <ASAVE> Artikel wird news.def geschrieben */
+#define BLOCK	4096l	/* Blocking factor */
+
+static char *buf;
+char compress[LLEN];
+static char *ngtab[NEWSANZ];
+static int nglast[NEWSANZ];
+char tmpdir[LLEN];
+char sys_newsdir[LLEN];
+static char *act[NEWSANZ];
+int ohandle[60];
+int junked;
+char hostsfile[LLEN];
+static char *xsys[NEWSANZ];
+static char rtx = 0;
+static char *ls = (char *)malloc(4096l);
+static int anz,counter,actanz,acct;
+static long acnt = 0l;
+
+
+main(argc,argv)	/* News empfangen und einordnen */
+int argc;
+char *argv[];
+{
+	char crpt = 0;
+	static char s[LLEN * 2],s2[LLEN],s3[LLEN],s4[LLEN],s5[LLEN];
+	static char s_nbuf[LLEN],s_path[LLEN * 2],s_file[LLEN];
+	static char cross[LLEN * 2];	/* stores NG-Line for crosspostings */
+	char xfile[LLEN],dfile[LLEN],xsysfile[LLEN];
+	char sys_mqueue[LLEN];
+	char ng[LLEN];
+	char active[LLEN];
+	static char myname[LLEN];
+	int work,news,keep,not;
+	char atr;
+	int n,i,c,f,inh,outh,oh,spool;
+	unsigned long len,l;
+	static char save,single;
+	static unsigned long lsum,ll,l2,wr,tml,flen,last,this,next;
+	static char *line[NEWSANZ];
+
+	acnt = 0l;
+
+
+	setquiet();
+	
+	send("Rnews - ");
+	send(VERSION);
+	cr(1);
+
+#if 0	/* Prevent user from too much gibberish!! */
+	log("Rnews started","rnews");
+#endif
+
+	/* See, if it's worth taking care of our user... */
+	getconf(14,sys_mqueue);
+	sys_impdirn(sys_mqueue);
+
+	sprintf(s,"%s*.x",sys_mqueue);
+	if (exist(s) == FALSE)
+	{
+		printf("No work.\n");
+		exit(0);
+	}
+
+
+
+
+	/* Allocate storage */
+	
+	buf = (char *)malloc((long)BLOCK);
+	
+	/* Okay, got it! */
+
+	curs();
+
+
+	
+	getconf(2,myname);
+	getconf(21,tmpdir);
+	sys_impdirn(tmpdir);
+	getconf(8,compress);
+	getconf(18,sys_newsdir);
+	sys_impdirn(sys_newsdir);
+	getconf(13,xsysfile);
+	getconf(15,hostsfile);	
+	getconf(12,active);	/* list of active NG's */
+
+	save = FALSE;
+	strcpy(tmpdir,s);
+	stradd("rnews.lck",s);
+	
+	if ((exist(s) == TRUE) && (rtx != 0))
+		return(0);
+
+
+	strcpy(sys_newsdir,ng);
+	stradd("news.def",ng);
+
+	pen(WEISS);
+
+	strcpy("RNews ",s);
+	stradd(VERSION,s);
+
+
+	/* See, if we ran successful last time */
+
+	strcpy(tmpdir,s);
+	stradd("rnews.lck",s);
+	
+	if (exist(s) == TRUE)
+	{
+		if (repair() == -1)
+			return(-1);
+	}
+	
+	close(open(s,1));	/* Create Lockfile */
+
+
+	/* Aufraeumen */
+	strcpy(tmpdir,s);
+	stradd("a*.*",s);
+	for (i = 20; i != 0; --i)
+	{
+		if (sys_remove(s) < 0)
+			break;
+	}
+
+	
+	/* SYS-File lesen */
+	inh = open(xsysfile,2);
+	if (inh < 0)
+	{
+		send("No sys-file found: ");
+		send(xsysfile);
+		cr(1);
+		return(-1);
+	}
+
+	n = 0;
+	while (readsys(inh,ls) != -1)
+	{
+#if 0
+		send(". ");
+		send(ls);
+		cr(1);
+#endif
+		strcpys(ls,s,0,linstr(ls,':') - 1);
+		if (uucpdir(s,s2) != -1)
+		{
+			xsys[n] = (char *)malloc((long)(strlen(ls) + 2));
+			sys_impdirn(s2);
+			mktmp(s2);
+			stradd(".b",s2);
+
+			if (exist(s2) == TRUE)
+				ohandle[n] = open(s2,4);
+			else
+				ohandle[n] = open(s2,1);
+	
+			if (ohandle[n] > 0)
+			{
+				strcpys(ls,s,rinstr(ls,':') + 1,strlen(ls));
+				uu_putline(ohandle[n],s);
+				strmul('.',40 - strlen(s),s2);
+				uu_putline(ohandle[n],s2);
+
+				strcpy(ls,xsys[n++]);
+			}
+			else
+			{
+				ohandle[n] = -1;
+				send("Couldn't open ");
+				send(s2);
+				send(" as output.");
+				cr(1);
+			}
+
+		}
+		else
+		{
+			send("Invalid line in ");
+			send(hostsfile);
+			cr(1);
+		}
+	}
+	close(inh);
+	xsys[n] = "";
+	/* Sys-File ist drin. */
+	
+	acct = TRUE;
+	
+	inh = open(active,2);	/* Open for input */
+	if (inh <= 0)
+	{
+		send("No active file.");
+		cr(1);
+		acct = FALSE;
+	}
+	
+
+	if (acct == TRUE)
+	{
+		if (!quiet)
+		{
+			send("Using '");
+			send(active);
+			send("' as active list.");
+			cr(1);
+		}
+			
+		n = 0;
+		while (0 == 0)
+		{
+			if (getline(inh,s) == -1)
+				break;
+			
+			/* Allocate some space to move... */
+			act[n] = (char *)malloc((long)(strlen(s) + 2));
+			
+			strcpy(s,act[n]);
+		
+			if (strlen(act[n]) > 3)
+			{
+				++n;
+			}
+			else
+			{
+				bell();
+				pen(ROT);
+				send("Ambigous entry in ");
+				send(active);
+				send(" - line ");
+				sendd(n + 1);
+				pen(WEISS);
+				cr(1);
+			}
+		}
+		close(inh);
+	
+		actanz = n;
+	}
+
+
+
+
+	
+	if (exist(ng) == FALSE)
+	{
+		if (!quiet)
+		{
+			send("Newsgroup definition file does not exist.");
+			cr(1);
+			send("Creating... ");
+		}
+		
+		close(open(ng,1));	/* Create... */
+
+		if (!quiet)
+		{
+			send("Done.");
+			cr(1);
+		}
+	}
+
+		
+	inh = open(ng,2);	/* Open for input */
+		
+	n = 0;
+	while (inh > 0)
+	{
+		if (uu_getline(inh,s) == -1)
+			break;
+		
+		/* Fuck GEM if it isn't willing to give us storage */
+		ngtab[n] = (char *)malloc((long)LLEN);
+		
+		strcpys(s,(char *)ngtab[n],0,linstr(s,'|') - 1);
+		strcpys(s,s2,rinstr(s,'|') + 1,strlen(s));
+		nglast[n] = val(s2);
+		++n;
+	}
+	close(inh);
+	anz = n;
+
+	if (n > (NEWSANZ - 50))
+	{
+		printf("*** Alert: maximum is %d newsgroups\n",NEWSANZ);
+		printf("    Used:  %d        Left: %d entries\n",n,NEWSANZ - n);
+	}
+	
+	/* <anz> zeigt jetzt auf den ersten noch freien Platz */
+	/* in der Newsgroup-Table ngtab[][] */
+
+	if (!quiet)
+	{
+		send("Done. ");
+		cr(1);
+		sendd(anz);
+		send(". Newsgroups currently active.");
+		cr(1);
+	}
+	
+	/* Scan for work */
+	
+	strcpy(sys_mqueue,s);
+	
+	stradd("*.x",s);
+	convert(s);
+	
+	i = 0;
+	
+	n = sfirst(s);
+	counter = 0;
+	
+	while (0 == 0)
+	{
+		if (n < 0)
+			break;	/* Last file. */
+		
+		dtaxtr(s,&ll,&atr);
+		
+		if (atr != 16)
+		{
+			strcpy(sys_mqueue,s2);
+			convert(s2);
+			stradd(s,s2);
+			strcpys(s2,s,0,strlen(s2) - 3);
+		
+			/* Get the space!! */
+			line[i] = (char *)malloc((long)LLEN);
+					
+			strcpy(s,(char *)line[i]);
+			sendd(i);
+			send(") ");
+			send(s);
+			cr(1);
+			
+			++i;
+		}
+		n = snext();
+	}
+
+
+	if (!quiet)
+	{
+		cr(1);
+		send("Grand total of ");
+		sendd(i);
+		send(". files.");
+		cr(1);
+	}
+	
+	work = i;
+	
+	i = 0;
+
+
+	
+	/* Begin processing */
+	
+	while (i < work)
+	{
+		strcpy((char *)line[i],s);
+		stradd(".x",s);
+		strcpy(s,xfile);	/* Xfile ist bekannt. */
+		
+		news = FALSE;
+		inh = open(s,2);
+		
+		if (inh < 0)
+		{
+			beep();
+			send("Error opening ");
+			send(s);
+			send(" as input.");
+			cr(1);
+			return(-1);
+		}
+		
+		strcpy("",dfile);
+		
+		while (0 == 0)
+		{
+			c = uu_getline(inh,s2);
+
+			if (c == -1)
+				break;
+
+			if (s2[0] == 'C')
+			{
+				upper(s2);
+				strcpys(s2,s3,linstr(s2,'R'),rinstr(s2,'S'));
+				
+				if (strcmp(s3,"RNEWS") == TRUE)
+					news = TRUE;
+			}
+
+			if (s2[0] == 'I')
+			{
+				strcpys(s2,s3,strlen(s2) - 7,strlen(s2));
+				stradd(".d",s3);
+				strcpy(s3,s4);
+				strcpy(sys_mqueue,s3);
+				
+				stradd("a",s3);
+				stradd(s4,s3);
+				strcpy(s3,dfile);
+			}
+		}
+		close(inh);
+
+		if (news == FALSE && !quiet)
+		{
+			send("No news file. Call Rmail.");
+			cr(1);
+		}
+		
+		keep = TRUE;
+		inh = open(dfile,2);
+		
+		if (inh < 0)
+		{
+			send("Couldn't find appropriate data-file.");
+			cr(1);
+			
+			sys_remove(xfile);
+			news = FALSE;
+		}
+		else
+		{
+			close(inh);
+		}
+		
+		if (news == TRUE)
+		{
+			sprintf(s,"Rnews: processing %s",dfile);
+			log(s,"rnews");
+			inh = open(dfile,2);	/* Open Newsfile R/O */
+			sfirst(dfile);
+			dtaxtr(s,&flen,&atr);
+			if (!quiet)
+			{
+				send("File size: ");
+				sendl((long)flen);
+				cr(1);
+			}
+
+			/* Compressed? Then decompress it... */
+			uu_getline(inh,s);
+			strcpys(s,s2,0,5);
+			if (strcmp(s2,"#! cun") == TRUE)
+			{
+				close(inh);
+				
+				strcpy(dfile,s);
+				if (cunbatch(s) == -1)
+					return(-1);
+
+				sfirst(s);
+				dtaxtr(s2,&flen,&atr);
+				if (!quiet)
+				{
+					send("New file size: ");
+					sendl((long)flen);
+					send(" bytes");
+					cr(1);
+				}
+			
+				inh = open(s,2);
+			}
+			else
+				seek(inh,0l);
+	
+			this = 0l;
+			next = 0l;
+			
+			lsum = 0l;
+			/* BATCH-Loop */
+		loop:	/* for batched files */
+
+			junked = 0;
+
+			strcpy("-",ng);	/* Ng is unknown */
+			last = this;
+			this = (unsigned long)pos(inh);
+			
+			uu_getline(inh,s);
+			if (linstr(s,' ') != -1)
+				strcpys(s,s2,rinstr(s,' ') + 1,strlen(s));
+			else
+				strcpy("0",s2);
+			
+			len = (long)lval(s2);
+			single = FALSE;
+			this = (unsigned long)pos(inh);
+			
+			if ((len == 0) || (linstr(s,'#') == -1))
+			{
+				if (!quiet)
+				{
+					send("Single article files.");
+					cr(1);
+				}
+				
+				this = 0;
+				len = (long)flen;
+				seek(inh,(long)0l);
+				single = TRUE;
+			}
+			
+			sendl(len);
+			next = (long)((unsigned long)this + (unsigned long)len); /* Zeiger auf naechsten Artikel setzen */
+			
+			send("	- ");
+
+#if 0	/* Path ist nicht zwangslaeufig an erster Stelle!! */
+			lgetline(inh,s_path);
+			strcpys(s_path,ls,linstr(s_path,' ') + 1,strlen(s_path));
+			sprintf(s_path,"Path: %s!%s",myname,ls);
+#endif
+
+			strcpy("",cross);
+			strcpy("",s_path);
+			while (0 == 0)	/* Ethernal looping... :-) */
+			{
+				if ((lgetline(inh,s) == -1) || (strlen(s) < 3))
+				{
+					beep();
+					cr(2);
+					send("Error: Couldn't parse 'Newsgroup:'-");
+					cr(1);
+					send("       and/or 'Path:'-line.");
+					cr(1);
+					send("Junked.");
+					cr(1);
+					strcpy("junk",cross);
+					break;
+				}
+				
+				if (strlen(s) >= 5)
+				{
+					strcpys(s,s2,0,3);
+				}
+				else
+				{
+					strcpy("Dummy",s2);
+				}
+				
+				upper(s2);
+				if (strcmp(s2,"NEWS") == TRUE)
+				{
+					strcpys(s,cross,linstr(s,' ') + 1,strlen(s));
+				}
+
+				if (strcmp(s2,"PATH") == TRUE)
+				{
+					strcpys(s,ls,linstr(s,' ') + 1,strlen(s));
+					sprintf(s_path,"Path: %s!%s",myname,ls);
+				}
+
+				if (valid(s_path) && valid(cross))
+					break;
+			}
+			
+			strcpy(cross,s_nbuf);
+			stradd(",",cross);
+			
+			cross:		/* Loop for crosspostings */
+			
+			strcpys(cross,ng,0,linstr(cross,',') - 1);
+			strcpys(cross,s,linstr(cross,',') + 1,strlen(cross));
+			strcpy(s,cross);
+			
+			send(ng);
+			send(" ");
+			
+			/* Check, if group is in active file, and have it junked otherwise */
+			if (actcheck(ng) && (junked > 1))
+				goto nowrite;
+			
+			c = -1;
+			n = 0;
+			while (0 == 0)
+			{
+				if (n == anz)
+				{
+					sprintf(s4,"Rnews: New newgsroup: %s",ng);
+					log(s4,"rnews");
+					cr(1);
+					send("New newsgroup: ");
+					send(ng);
+					ngtab[n] = (char *)malloc((long)LLEN);
+					strcpy(ng,(char *)ngtab[n]);
+					nglast[n] = 0;
+					save = TRUE;
+					
+#if OLDFS /* Old filesystem? */
+					strcpy(sys_newsdir,s);
+					/* sys_chdir(s); */
+					stradd("ng",s);
+					str(n + 1,s2);
+					stradd(s2,s);
+					
+					gemerror(sys_mkdir(s));
+#else
+					munge(sys_newsdir,ng,s);
+					if (sys_incmkdir(s) == -1)
+					{
+						send("Couldn't create ");
+						send(s);
+						cr(2);
+						send("* Fatal error.");
+						cr(1);
+						return(-1);
+					}
+#endif /* Old filesystem */
+
+					++anz;
+					++acnt;
+					savedef();
+				}
+				
+				if (strcmp(ng,ngtab[n]) == TRUE)
+					break;
+			 	
+
+				++n;
+			}
+
+			
+#if OLDFS /* Old filesystem */
+			strcpy(sys_newsdir,s);
+			stradd("ng",s);
+			str(n + 1,s2);
+			stradd(s2,s);
+			stradd("\\",s);
+#else
+			munge(sys_newsdir,ng,s);
+#endif /* Old filesystem */
+			
+			send("#");
+			sendd(nglast[n] + 1);
+			send("... ");
+			
+			
+			++nglast[n];
+			str(nglast[n],s2);
+			stradd(s2,s);
+			
+			outh = open(s,1);
+			if (outh < 0)
+			{
+				beep();
+				send("Error opening file for output.");	
+				cr(1);
+				return(-1);
+			}
+			strcpy(s,s_file);	/* Remember for spooling */
+
+			seek(inh,(unsigned long)this);
+			
+
+			/* Hier schreiben wir die Path-Zeile */
+			sys_fwrite(outh,(long)strlen(s_path),s_path);
+			s[0] = 10;
+			sys_fwrite(outh,1l,s);
+
+
+			tml = 0l;
+
+			while(1)
+			{
+				lgetline(inh,ls);
+				f = strlen(ls);
+				tml += (long)(f + 1);
+
+				if (strncmp(ls,"Path: ",5))
+				{
+					sys_fwrite(outh,(long)f,ls);
+					ls[0] = 10;
+					sys_fwrite(outh,1l,ls);
+				}
+
+				if (f < 3)
+					break;
+			}
+				
+			
+
+			while (1)
+			{
+				ll = (long)sys_fread(inh,(long)BLOCK,buf);
+
+				if (ll == 0l)
+					break;
+
+				tml += (long)ll;
+				if ((unsigned long)tml > (unsigned long)len)
+					ll -= (unsigned long)((unsigned long)tml - (unsigned long)len);
+				
+				sys_fwrite(outh,(long)ll,buf);
+					
+				if ((unsigned long)tml >= (unsigned long)len)
+					break;
+			}
+			close(outh);
+
+			nowrite:
+
+
+			if (strlen(cross) > 3)	/* Still ng's in nbuf? */
+			{
+				cr(1);
+				seek(inh,(unsigned long)this);
+				send("	  ");	/* TAB senden */
+				goto cross;
+			}
+
+			/*********** SPOOLING ***********/
+
+			for (n = 0; *xsys[n]; ++n)
+			{
+				if (ohandle[n] != -1)
+				{
+					strcpys(xsys[n],s,0,linstr(xsys[n],':') - 1);
+					if (dospool(s_path,s_nbuf,s) == 1)
+					{
+						bug("dospool() == 1");
+						send(s);
+						send("... ");
+						putline(ohandle[n],s_file);
+					} /* Endif spooling */
+				}
+			} /* End host-loop */
+				
+
+			
+			++acnt;		/* One more article! */
+
+			/* Eventuell News.def sichern */
+			if (++counter == ASAVE)
+				savedef();
+
+
+			/* One more article? */
+			if ((long)(next + 100l) < (long)flen)
+			{
+				seek(inh,(unsigned long)next);
+				cr(1);
+				goto loop;
+			}
+			
+			close(inh);
+			cr(1);
+
+			if (!quiet)
+				send("Removing... ");
+
+			sys_remove(xfile);
+			sys_remove(dfile);
+			
+			if (!quiet)
+			{
+				send("Done.");
+				cr(1);
+			}
+			
+		}
+		++i;
+		cr(1);
+	}
+
+
+	if (!quiet)
+		send("Cleaning up... ");
+	/* Close Batch-files */
+	for (n = 0; *xsys[n]; ++n)
+		close(ohandle[n]);
+
+
+	/* Ueberfluessige Batchfiles loeschen */
+	for (n = 0; *xsys[n]; ++n)
+	{
+		strcpys(xsys[n],s,0,linstr(xsys[n],':') - 1);
+		uucpdir(s,s2);
+		strcpy(s2,s);
+		sys_impdirn(s);
+		stradd("*.b",s);
+
+		for (i = sfirst(s); i >= 0; i = snext())
+		{
+			dtaxtr(s2,&l,&atr);
+			if (l < 45l)
+			{
+				strcpys(s,s3,0,rinstr(s,'\\'));
+				stradd(s2,s3);
+				sys_remove(s3);
+#if 0
+				printf("Removing %s\n",s3);
+#endif
+			}
+		}
+	}
+
+	if (!quiet)
+	{
+		send("Done.");
+		cr(1);
+	}
+	
+
+	
+	savedef();
+	cr(1);
+	
+	strcpy(tmpdir,s);
+	stradd("rnews.lck",s);
+	sys_remove(s);
+
+	strcpy("Rnews <",s);
+	stradd(VERSION,s);
+	stradd("> finished.",s);
+	send(s);
+
+	sprintf(s,"Rnews finished; %ld articles written.",acnt);
+
+	if (acnt > 0)
+		log(s,"rnews");
+
+	cr(1);
+}
+
+
+
+
+
+repair()
+{
+	
+	char s[LLEN],s2[LLEN],s3[LLEN],s4[LLEN];
+	char tmpdir[LLEN];
+	char ndir[LLEN];
+	getconf(21,tmpdir);
+	sys_impdirn(tmpdir);
+
+	beep();
+	send("### WARNING ###");
+	cr(2);
+	
+	strcpy("Found illegal termination of last rnews.",s);
+	send(s);
+	cr(2);
+	log(s,"rnews");
+	
+	send("Be sure to have fixed up any damage, and");
+	cr(1);
+	send("then remove '");
+	send(tmpdir);
+	send("rnews.lck");
+	send("'");
+	cr(1);
+	
+	return(-1);
+}
+
+
+
+
+savedef()
+{
+	char s[LLEN],s2[LLEN];
+	int i,n,outh;
+
+	cr(1);
+	strcpy(sys_newsdir,s);
+	stradd("news.def",s);
+
+	if (!acnt)
+	{
+#if 0
+		printf("No need to write news.def\n");
+#endif
+		goto nosavdef;
+	}
+
+	if (!quiet)
+		send("Writing news.def... ");
+	
+	outh = open(s,1);
+
+	if (outh <= 0)
+	{
+		send("Error opening file for output.");	
+		cr(1);
+		return(-1);
+	}
+
+
+
+	i = 0;
+	while (i < anz)
+	{
+		strcpy((char *)ngtab[i],s);
+		stradd("|",s);
+		
+		
+		n = nglast[i];
+		str(n,s2);
+		stradd(s2,s);
+		uu_putline(outh,s);
+		
+		
+		++i;
+	}
+	close(outh);
+
+	if (!quiet)
+	{
+		send("Done. ");
+	}
+	nosavdef:
+	counter = 0;
+}
+
+
+
+
+cunbatch(file)
+char *file;
+{
+	char s[LLEN],s2[LLEN],s3[LLEN];
+	int inh,outh,i;
+	long ll;
+	
+	strcpy(tmpdir,s);
+	mktmp(s);
+	stradd(".z",s);
+
+	inh = open(file,2);
+	if (inh <= 0)
+	{
+		send("Couldn't open ");
+		send(file);
+		send(" as input.");
+		cr(1);
+		return(-1);
+	}
+	
+	outh = open(s,1);
+	if (outh <= 0)
+	{
+		send("Couldn't open output file.");
+		cr(1);
+		return(-1);
+	}
+	
+	getline(inh,s2);	/* Kill first line. */
+	while (1 == 1)
+	{
+		ll = (long)sys_fread(inh,BLOCK,buf);
+		sys_fwrite(outh,ll,buf);
+			
+		if (ll < BLOCK)
+			break;
+	}
+	close(outh);
+	close(inh);
+
+	strcpys(s,s2,0,rinstr(s,'.') - 1);
+
+	strcpy(compress,s);
+	strcpy(" -d ",s3);
+	stradd(s2,s3);
+	
+	send("Decompress running... ");
+	
+	i = noenv_exec(s,s3);
+	if (i != 0)
+	{
+		beep();
+		send("Error running Decompress!!");
+		cr(1);
+		gemerror(i);
+		savedef();
+		return(-1);
+	}
+	send("Done.");
+		
+	if (exist(s2) == FALSE)
+	{
+		beep();
+		cr(1);
+		send("Error running Decompress - Memory problem?");
+		savedef();
+		cr(1);
+		return(-1);
+	}
+	cr(1);
+	strcpy(s2,file);
+
+	sprintf(s2,"Rnews: %s decompressed successfully",file);
+	log(s2,"rnews");
+}
+
+
+
+int actcheck(ng)
+char *ng;
+{
+	int n;
+	char s[LLEN],s2[LLEN],s3[LLEN];
+
+
+	strcpys(ng,s,rinstr(ng,'.'),strlen(ng));
+	if (strcmp(s,".ctl") == TRUE)
+	{
+		sprintf(s2,"Rnews: Control: %s",ng);
+		log(s2,"rnews");
+		strcpy("control",ng);
+		pen(ROT);
+		send("-control- ");
+		pen(WEISS);
+		return(0);
+	}
+
+	
+	if (acct == FALSE)
+		return(0);
+
+	n = 0;
+	while (n < actanz)
+	{
+		strcpy(ng,s3);
+		strcpy(act[n],s);
+		if (s[0] == '!')
+		{
+			strcpys(s,s2,1,strlen(s));
+			strcpy(s2,s);
+		}
+		
+		/* recognize Wildcards */
+		if (linstr(s,'*') != -1)
+		{
+			strcpys(s,s2,0,linstr(s,'*') - 1);
+			strcpy(s2,s);
+			s3[strlen(s)] = '\0';
+		}
+
+		if ((strcmp(s3,s) == TRUE) && (*act[n] == '!'))
+			break;
+		
+		if (strcmp(s3,s) == TRUE)
+			return(0);
+		++n;
+	}
+	strcpy("junk",ng);
+	pen(ROT);
+	send("-ambigous- ");
+	pen(WEISS);
+	++junked;
+	return(1);
+}
+
+
+
+
+bug(s)
+char *s;
+{
+#if DEBUG
+	send(s);
+	cr(1);
+#endif
+}
+
+
+uucpdir(system,dir)
+char *system,*dir;
+{
+	int inh;
+	char s[LLEN],s2[LLEN];
+
+	inh = open(hostsfile,2);
+	if (inh < 0)
+	{
+		send("Couldn't open ");
+		send(hostsfile);
+		cr(1);
+		return(-1);
+	}
+	while (getline(inh,s) != -1)
+	{
+		strcpys(s,s2,0,linstr(s,'|') - 1);
+		if (strcmp(s2,system) == TRUE)
+		{
+			strcpys(s,dir,rinstr(s,'|') + 1,strlen(s));
+			sys_impdirn(dir);
+			return(0);
+		}
+	}
+	close(inh);
+	return(-1);
+}
+
+
+
+
+/* Expects: - the "Path: "-Line of a news article
+            - its "Newsgroup"-Line
+            - a host name
+
+   Returns: - 1 if we should spool;
+            - 0, if they already had it. */
+dospool(path,nbu,host)
+char *nbu,*path,*host;
+{
+	static char nbuf[LLEN * 2];
+	static char s[LLEN * 2],s2[LLEN * 2],s3[LLEN];
+	char not;
+	char spool;
+	char local;
+	char *pchar;
+	int i;
+
+
+	
+	/* Generic path... They won't get 'e stuff twice! :-) */
+	strcpy(path,s);
+	trim(s);
+
+	if (linstr(s,' ') != -1)
+	{
+		strcpys(s,s2,linstr(s,' ') + 1,strlen(s));
+		strcpy(s2,s);
+	}
+	
+
+	strcpys(s,s2,0,rinstr(s,'!'));
+
+	while (rinstr(s,'!') != -1)
+	{
+		strcpys(s,s2,rinstr(s,'!') + 1,strlen(s));
+		if (strcmp(host,s2) == TRUE)
+			return(0);
+		s[rinstr(s,'!')] = '\0';
+	}
+
+	bug("Path parsed.");
+	
+
+	
+	/* Find out, if they have subscribed to one of the newsgroups
+	   in nbuf */
+
+	strcpy(nbu,nbuf);
+	trim(nbuf);
+
+	if (linstr(nbuf,' ') != -1)
+		strcpys(nbuf,s,linstr(nbuf,' ') + 1,strlen(nbuf));
+	else
+		strcpy(nbuf,s);
+		
+	strcpy(",",nbuf);
+	stradd(s,nbuf);
+/*
+	nbuf == ",stgt.test,sub.general,sub.config"
+	nbuf == ",stgt.test"
+*/
+	bug("Nbuf prepared.");
+	bug(nbuf);
+	
+	/* Get sys-line of wanted host */
+	
+	for (i = 0; *xsys[i]; i++)
+	{
+		strcpys(xsys[i],s2,0,linstr(xsys[i],':') - 1);
+		if (strcmp(s2,host) == TRUE)
+			break;
+	}
+	
+	if (strcmp(s2,host) == FALSE) /* They arent mentioned in sys-file */
+		return(0);
+	bug("Host found");
+	bug(s2);
+	
+	multicast:
+	
+	strcpys(xsys[i],ls,linstr(xsys[i],':'),rinstr(xsys[i],':') - 1);
+	trim(ls);
+	if (strlen(ls) == 1)
+		return(0);	/* They aren't subscribed to anything */
+	
+	*ls = ',';
+	
+	/*
+		ls == ",sub,stgt,rec.arts,!rec.arts.books"
+	*/
+#if 0
+	bug("Ls prepared");
+	bug(ls);
+#endif
+	
+	spool = 0;
+	while (*ls)
+	{
+		strcpys(ls,s3,rinstr(ls,',') + 1,strlen(ls));
+		pchar = s3;
+		stradd(".",s3);
+		not = 0;
+		local = 0;
+		/* Parse options */
+		while (linstr("!Ý$%&/=?'*",*pchar) != -1)
+		{
+			switch(*pchar)
+			{
+				case '!': ++not;	break;
+				case '%': ++local;	break;
+			}
+			++pchar;
+		}
+		
+		/*
+			pchar == "sub."
+			pchar == "sub.sys.st."
+		*/
+		bug("Pchar prepared.");
+		bug(pchar);
+
+		if (strcmp(pchar,"all.") == TRUE)
+		{
+			if (not)
+			{
+				send("Nonsens: !all - please correct.");
+				cr(1);
+			}
+			else
+			{
+				if (local)
+				{
+					if (linstr(path,'!') == rinstr(path,'!'))
+						spool = 1;
+				}
+				else
+					spool = 1;
+			}
+			bug("<all.> recognized, spool set.");
+		}
+
+		strcpy(nbuf,s);
+		while (*s)
+		{
+			strcpys(s,s2,rinstr(s,',') + 1,rinstr(s,',') + strlen(pchar));
+			/*
+				s2 == "eune"
+				s2 == "sub."
+				s2 == "sub.sys.st"
+			*/
+			if (s2[strlen(s2) - 1] != '.')
+				stradd(".",s2);
+			/*
+				s2 == "eune."
+				s2 == "sub."
+				s2 == "sub.sys.st."
+			*/
+			if (strcmp(pchar,s2) == TRUE)
+			{
+				if (not)
+					return(0);
+				else
+				{
+					if (local)
+					{
+						if (linstr(path,'!') == rinstr(path,'!'))
+							spool = 1;
+					}
+					else
+						spool = 1;
+				}
+			}
+			bug("Compared.");
+		
+			s[rinstr(s,',')] = '\0';
+		} /* while (*s) */
+		ls[rinstr(ls,',')] = '\0';
+	} /* while (*ls) */
+
+	if (spool == 0)
+		return(0);
+
+	return(1);
+}
+
+
+
+
+
+
+readsys(inh,ls)
+char *ls;
+{
+	char s[LLEN];
+	int n;
+
+	for (;;)
+	{
+		strcpy("",ls);
+		while (0 == 0)
+		{
+			n = getline(inh,s);
+			if (n == -1)
+				break;
+			trim(s);
+			if (*s && (*s != '#'))
+			{
+				stradd(s,ls);
+				if (rinstr(s,'\\') == -1)
+					break;
+				ls[rinstr(ls,'\\')] = '\0';
+			}
+		}
+
+		if (n == -1)
+			return(-1);
+
+		if ((linstr(ls,':') != -1) && (rinstr(ls,':') != linstr(ls,':')))
+			break;
+	}
+	return(0);
+}
+

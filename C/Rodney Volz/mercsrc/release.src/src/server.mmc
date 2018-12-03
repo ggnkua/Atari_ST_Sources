@@ -1,0 +1,622 @@
+/* 
+ *   Copyright (c) 1990 Rodney Volz
+ *   ALL RIGHTS RESERVED 
+ * 
+ *   THIS SOFTWARE PRODUCT CONTAINS THE
+ *   UNPUBLISHED SOURCE CODE OF RODNEY VOLZ
+ *
+ *   The copyright notices above do not evidence
+ *   intended publication of such source code.
+ *
+ */
+
+/*
+ * MERCURY UUCP SOURCECODE [server.c]
+ */
+
+#include "define.h"
+#include "uulib.c"
+#include "header.c"
+overlay "main"
+
+#define BLOCK 4096
+
+static char server[LLEN],servdir[LLEN],servhome[LLEN],servfull[LLEN];
+int outh;
+int sendhelp = 0;
+int sent = 0;
+char *buf = (char *)malloc((long)(BLOCK + 10));
+static char lo[LLEN],sys_myname[LLEN],domain[LLEN];
+
+main()
+{
+	static char s[LLEN],s2[LLEN],s3[LLEN],s4[LLEN];
+	static char file[LLEN],ofile[LLEN],tmpdir[LLEN],com[LLEN],par[LLEN];
+	struct header *hd,*ohd;
+	int inh,n;
+	long len;
+	char atr;
+
+	int dummyproc(),sendfile(),help(),list();
+
+	struct cmds
+	{
+		char *name;
+		int (*func)();
+	};
+
+	static struct cmds cmd[] = {
+		"",		dummyproc,
+		"send",		sendfile,
+		"mail",		sendfile,
+		"request",	sendfile,
+		"get",		sendfile,
+		"help",		help,
+		"info",		help,
+		"list",		help,
+		"?",		help,
+		"_",		dummyproc
+	};
+
+	struct cmds *cmdp;
+
+	getconf(2,(char *)sys_myname);
+	getconf(4,(char *)domain);
+	getconf(27,server);
+	getconf(28,servdir);
+	sys_impdirn(servdir);
+
+	curs();
+	send("Archive-Server <");
+	send(VERSION);
+	send(">");
+	cr(1);
+	
+	if (sys_getuid(server,servhome,servfull,s,s) != 0)
+	{
+		send("Couldn't get information about user ");
+		send(server);
+		send(".");
+		cr(1);
+		exit(2);
+	}
+
+	sys_impdirn(servhome);
+	strcpy(servhome,s4);
+	stradd("*.msg",s4);
+
+	for (n = sfirst(s4); n >= 0; n = sfirst(s4))
+	{
+		dtaxtr(s,&len,&atr);
+		if (atr == 16)
+			continue;
+
+		send("Found: ");
+		send(s);
+		cr(1);
+		strcpy(servhome,file);
+		stradd(s,file);
+
+		if (exist(file) != TRUE)
+		{
+			send("Couldn't open \"");
+			send(file);
+			send("\".");
+			cr(1);
+			exit(2);
+		}
+
+		getconf(21,tmpdir);
+		sys_impdirn(tmpdir);
+
+		strcpy(tmpdir,ofile);
+		mktmp(ofile);
+
+		outh = open(ofile,1);
+		if (outh < 0)
+		{
+			send("Couldn't open ");
+			send(ofile);
+			send(" as output.");
+			cr(1);
+			exit(2);
+		}
+
+		sprintf(lo,"Server: received %s",file);
+		log(lo,"server");
+
+		hd = gethead(file);
+		ohd = gethead(file);
+		bzero(ohd,(long)sizeof(struct header));
+
+
+		/* Get information about the guy who sent us a message */
+
+
+		if (valid(hd->replyto))
+		{
+			strcpy(hd->replyto,ohd->to);
+			if (valid(hd->replytofull))
+				strcpy(hd->replytofull,ohd->tofull);
+			log("<reply-to> accepted","server");
+		}
+		else
+			if (valid(hd->from))
+			{
+				strcpy(hd->from,ohd->to);
+				if (valid(hd->fromfull))
+					strcpy(hd->fromfull,ohd->tofull);
+				log("<from-line> accepted","server");
+			}
+			else
+				if (valid(hd->apparent))
+				{
+					strcpy(hd->apparent,ohd->to);
+					if (valid(hd->apparentfull))
+						strcpy(hd->apparentfull,ohd->tofull);
+					log("<Apparently-from> accepted","server");
+				}
+				else
+					if (valid(hd->sender))
+					{
+						strcpy(hd->sender,ohd->to);
+						if (valid(hd->senderfull))
+							strcpy(hd->senderfull,ohd->tofull);
+						log("<Sender-line> accepted","server");
+					}
+
+
+		sprintf(lo,"Results go to: %s (%s)",ohd->to,ohd->tofull);
+		log(lo,"server");
+		strcpys(ohd->to,s,0,linstr(ohd->to,'@'));
+
+		if (strcmp(s,"MAILER-DAEMON") == TRUE)
+		{
+			sprintf(ohd->to,"root");
+			sprintf(ohd->tofull,"");
+			sprintf(ohd->subject,"<failed mail from server>");
+		}
+
+		if (!valid(ohd->to))
+		{
+			log("Couldn't get sender's name.","server");
+			send("Couldn't get sender's name.");
+			cr(1);
+			continue;
+		}
+
+		sprintf(s,"This is the reply to message %s you sent.",hd->id);
+		uu_putline(outh,s);
+
+		if (*hd->subject && (strlen(hd->subject) > 2))
+		{
+			sprintf(s,"Your subject is ignored.");
+			uu_putline(outh,s);
+		}
+		uu_putline(outh,"");
+
+		inh = open(file,2);
+		while (getline(inh,s) != -1)
+		{
+			if (strlen(s) < 3)
+				break;
+		}
+
+		while (getline(inh,s) != -1)
+		{
+			trim(s);
+
+			if (linstr(s,' ') != -1)
+			{
+				strcpys(s,com,0,linstr(s,' ') - 1);
+				strcpys(s,par,linstr(s,' ') + 1,strlen(s));
+
+				if (linstr(par,' ') != -1)
+				{
+					sprintf(s3,"Bad: %s",s);
+					s3[75] = '\0';
+					uu_putline(outh,s3);
+					continue;
+				}
+			}
+			else
+			{
+				strcpy(s,com);
+				strcpy("",par);
+			}
+
+			trim(com);
+			trim(par);
+
+			if (strcmp(com,"index") == TRUE)
+			{
+				strcpy("send",com);
+				strcpy("index",com);
+			}
+
+			if (strcmp(com,"help") == TRUE)
+			{
+				strcpy("send",com);
+				strcpy("help",com);
+			}
+
+			for (cmdp = cmd; (strcmp(cmdp->name,com) != TRUE) && (strcmp(cmdp->name,"_") == FALSE); cmdp++);
+
+			if (strcmp(cmdp->name,"_") == FALSE)
+			{
+				(*cmdp->func)((char *)par);
+			}
+			else
+			{
+				sprintf(s2,"No such command: %s",s);
+				s2[75] = '\0';
+				uu_putline(outh,s2);
+			}
+		}
+
+		close(inh);
+		close(outh);
+
+		strcpys(file,s,0,rinstr(file,'.'));
+		stradd("old",s);
+		sys_rename(file,s);
+
+		strcpy("Your request",ohd->subject);
+		strcpy(server,ohd->from);
+		strcpy(servfull,ohd->fromfull);
+
+		sprintf(ohd->replyto,"root@%s%s",sys_myname,domain);
+
+		sys_mail(ofile,ohd);
+		sprintf(s,"Server: message sent (%ld bytes)",(long)fsize(ofile));
+		log(s,"server");
+	}
+
+	send("Archive-Server <");
+	send(VERSION);
+	send("> finished.");
+	cr(1);
+}
+
+
+
+dummyproc()
+{
+}
+
+
+
+help()
+{
+	send("Help invoked.");
+	cr(1);
+}
+
+sendfile(p)
+char *p;
+{
+	char s[LLEN],s2[LLEN];
+	int inh;
+	long l;
+
+
+	strcpy(p,s);
+	trim(s);
+
+	strcpy(servdir,s2);
+	stradd(s,s2);
+	strcpy(s2,s);
+
+	if (exist(s) != TRUE)
+	{
+		sprintf(s2,"The file %s you requested is not available.",p);
+		uu_putline(outh,s2);
+		sprintf(s2,"send \"send index\" in your message body to get");
+		uu_putline(outh,s2);
+		sprintf(s2,"a list of available files.");
+		uu_putline(outh,s2);
+		return(0);
+	}
+
+	sprintf(s2,"- Begin of file %s -",p);
+	uu_putline(outh,s2);
+
+	sprintf(lo,"Server: sending %s",s);
+	log(lo,"server");
+
+	inh = open(s,2);
+	if (inh < 0)
+	{
+		sprintf(s2,"Sorry, %s is currently not accessible.",s);
+		uu_putline(outh,s2);
+		log("Server: requested file not available.","server");
+
+		send("Couldn't read ");
+		send(s);
+		cr(1);
+
+		return(0);
+	}
+
+	for (;;)
+	{
+		l = sys_fread(inh,(long)BLOCK,buf);
+		sys_fwrite(outh,(long)l,buf);
+
+		if (l < BLOCK)
+			break;
+	}
+
+	close(inh);
+
+	sprintf(s2,"- End of file %s -",p);
+	uu_putline(outh,s2);
+	uu_putline(outh,"");
+}
+
+
+sys_mail(sfile,head)	/* <file> in die Mail-Queue stellen */
+char *sfile;
+struct header *head;
+{
+	static char s[LLEN],s2[LLEN],s3[LLEN],file[LLEN],sequence[LLEN];
+	static char sys_mqueue[LLEN],usr_home[LLEN];
+	int inh,outh,n,a,cnt;
+	static char xout[LLEN],sender[LLEN],dout[LLEN];
+	char lo[LLEN];
+	long sys_fread();
+
+	getconf(14,(char *)sys_mqueue);
+	sys_impdirn((char *)sys_mqueue);
+
+
+	strcpy((char *)sfile,(char *)file);
+
+	while (0 == 0)
+	{
+		strcpy("",s);
+
+		while(strlen(s) < 7)
+		{
+			n = 0;
+			while(n == 0)
+			{
+				n = sys_rnd(9);
+			}
+
+			str(n,(char *)s2);
+			stradd(s2,(char *)s);
+		}
+
+		strcpy(s,sequence);	/* Sequence is '1234' */
+
+		strcpy(sys_mqueue,dout);
+		stradd("a",dout);
+		stradd(sequence,dout);
+		stradd(".d",dout);	/* DOUT Name steht. */
+
+		strcpy(sys_mqueue,xout);
+		stradd("a",xout);
+		stradd((char *)sequence,(char *)xout);
+		stradd(".x",(char *)xout);
+
+
+		if ((exist(xout) == FALSE) && (exist(dout) == FALSE))
+			break;
+	}
+
+	/************************************* '???.D' erzeugen */
+
+	inh = open((char *)file,2);		/* Open in-file readonly */
+	if (inh < 0)
+	{
+		/* Could happen with mailer-idiots like GTC's mailer.
+		I ain't gonna make it work since this braindamaged freaks
+		should have built up a working mailer before connecting their
+		sites to net */
+
+		send("Error opening input file.");
+		cr(1);
+		gemerror(inh);
+		return(-1);
+	}
+
+	outh = open((char *)dout,1);	/* Creative open */
+
+	if (outh <= 0)
+	{
+		cr(1);
+		send("Error opening for output: ");
+		send(dout);
+		send(".");
+		cr(1);
+		return;
+	}
+
+	strcpy("Mail: ",lo);
+
+	if (valid(head->from))
+	{
+		strcpy(head->from,sender);
+	}
+	else
+		if (valid(head->sender))
+		{
+			strcpy(head->sender,sender);
+		}
+		else
+		{
+			send("sys_mail: Couldn't get sender's name.");
+			cr(1);
+			return(-1);
+		}
+
+	stradd(sender,lo);
+	stradd(" > ",lo);
+
+
+	strcpy("From ",s);
+	stradd((char *)sender,s);
+
+	/* Datum in der Form "Tue May 16 06:11:13 1989" erzeugen */
+	stradd(" ",s);
+	sd(s2);
+	stradd(s2,s);
+	stradd(" remote from ",s);
+	stradd(sys_myname,s);
+
+
+	uu_putline(outh,s);	/* Zeile 1: From vaxima... */
+
+
+	if (valid(head->id))
+	{
+		strcpy("Message-Id: ",s);
+		stradd(head->id,s);
+	}
+	else
+	{
+		strcpy("Message-Id: <",s);
+		strcpy(sequence,s2);
+		stradd(s2,s);
+		stradd("@",s);
+		stradd(sys_myname,s);
+		stradd(domain,s);
+		stradd(">",s);	/* Kein ';' dahinter!!! */
+	}
+
+	uu_putline(outh,s);	/* Zeile 4: 'Message-Id: <kjighkjg'... */
+
+	strcpy("From: ",s);
+	stradd(sender,s);
+	stradd("@",s);
+	stradd(sys_myname,s);
+	stradd(domain,s);
+	if (valid(head->fromfull))
+	{
+		stradd(" (",s);
+		stradd(head->fromfull,s);
+		stradd(")",s);
+	}
+
+	uu_putline(outh,s);	/* 'From: root@merkur.uucp (Die Systemverwaltung) */
+
+	if (valid(head->replyto))
+	{
+		strcpy("Reply-To: ",s);
+		stradd(head->replyto,s);
+		if (valid(head->replytofull))
+		{
+			stradd(" (",s);
+			stradd(head->replytofull,s);
+			stradd(")",s);
+		}
+		uu_putline(outh,s);
+	}
+
+	if (valid(head->organization))
+	{
+		strcpy("Organization: ",s); /* Organization: Blablabla... */
+		stradd(head->organization,s);
+
+		uu_putline(outh,s);
+	}
+
+	strcpy("X-Version: [server] ",s);
+	stradd(VERSION,s);
+	uu_putline(outh,s);
+
+
+	if (valid(head->subject))
+	{
+		strcpy("Subject: ",s);
+		stradd(head->subject,s);
+		uu_putline(outh,s);	/* Subject-line */
+	}
+
+
+
+	strcpy("To: ",s);
+	stradd(head->to,s);
+	if (valid(head->tofull))
+	{
+		stradd(" (",s);
+		stradd(head->tofull,s);
+		stradd(")",s);
+	}
+
+	uu_putline(outh,s);	/* To: <receiver>@<host> */
+
+	/* Carbon copy */
+	if (valid(head->cc))
+	{
+		sprintf(s,"Cc: %s",head->cc);
+		uu_putline(outh,s);
+	}
+
+	if (valid(head->date))
+	{
+		strcpy("Date: ",s);
+		stradd(head->date,s);
+	}
+	else
+	{
+		strcpy("Date: ",s);
+		sd(s2);
+		stradd(s2,s);
+	}
+
+	uu_putline(outh,s);	/* Date: Day, 99 May 99 14:30:08 */
+
+	uu_putline(outh,"");	/* Eine Leerzeile drunter! */
+
+	/* So, und jetzt wird der Rest 'drunterkopiert. */
+	while (getline(inh,s) != -1)
+	{
+		filter(s);	/* ^M's filtern */
+		uu_putline(outh,s);
+	}
+	close(inh);
+
+	uu_putline(outh,"");
+	uu_putline(outh,"");
+	uu_putline(outh,"--");
+	uu_putline(outh,"                   -][ Mercury UUCP Archive-Server ][-");
+#ifdef 0 /* Antiquiert */
+	uu_putline(outh,"                          Please do not reply.");
+#endif
+	close(outh);
+
+
+	/*********************** Xfile ausgeben ************************/
+
+	outh = open(xout,1);	/* Open for creation */
+	if (outh <= 0)
+	{
+		send("Error opening ");
+		send(xout);
+		send(" as output.");
+		cr(1);
+		return;
+	}
+
+	strcpy("U ",s);
+	stradd((char *)sender,(char *)s);
+	stradd(" ",s);
+	stradd(sys_myname,s);
+	uu_putline(outh,s);
+
+	strcpy("F D.",s);
+	stradd(sequence,s);
+	uu_putline(outh,s);
+
+	strcpy("I D.",s);
+	stradd(sequence,s);
+	uu_putline(outh,s);
+
+	strcpy("C rmail ",s);
+	stradd(head->to,s);
+	uu_putline(outh,s);
+
+	close(outh);
+}
