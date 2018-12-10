@@ -1,0 +1,2961 @@
+***************************************************************************
+*		Sk„rm till Ny†rsparty demot, OB december 1992		  * 
+***************************************************************************
+	jsr	setsuper
+	jsr	setscreen
+
+	move.l	$70.w,oldvbi
+	move.l	#newvbi2,$70.w
+
+	move.l	#str„ng,-(sp)
+	move.w	#0,-(sp)
+	move.w	#25,-(sp)
+	trap	#14
+	addq.l	#8,sp
+
+	jsr	piccy
+
+	move.l	oldvbi,$70.w
+
+	jsr	music
+
+	move.w	#37,-(sp)
+	trap	#14
+	addq.l	#2,sp
+
+	move.l	#save,a0
+	move.l	#$120,(a0)+
+	move.b	$fffa1b,(a0)+
+	move.b	$fffa09,(a0)+
+	move.b	$fffa07,(a0)+
+	move.b	$fffa13,(a0)+
+	move.b	$fffa21,(a0)+
+
+	move.w	#$2700,sr
+	move.l	#newvbi,$70.w
+	move.l	#border,$120
+	clr.b	$fffffa07.w
+	clr.b	$fffffa09.w
+	ori.b	#1,$fffffa07.w
+	ori.b	#1,$fffffa13.w
+	clr.b	$fffffa1b.w
+	move.w	#$2300,sr
+
+
+	move.l	#$30000,a0
+	move.w	#20000,d0
+cls:	move.l	#0,(a0)+
+	dbf.w	d0,cls
+
+	move.l	#$46000,a0
+	move.w	#1000,d0
+clsbuf:	move.l	#0,(a0)+
+	dbf.w	d0,clsbuf
+
+	move.w	#$100,$ff8242
+	move.w	#$200,$ff8244
+	move.w	#$300,$ff8246
+	move.w	#$400,$ff8248
+	move.w	#$500,$ff824a
+	move.w	#$600,$ff824c
+	move.w	#$700,$ff824e
+	move.w	#$f00,$ff8250
+	move.w	#$700,$ff8252
+	move.w	#$600,$ff8254
+	move.w	#$500,$ff8256
+	move.w	#$400,$ff8258
+	move.w	#$300,$ff825a
+	move.w	#$200,$ff825c
+ 	move.w	#$100,$ff825e
+
+	move.l	#shdepal,diffpals
+
+***************************************************************************
+mainloop:
+	move.w	#$0,$ff8240
+	jsr	waitvbl
+	jsr	screenswap
+	move.w	#$0,$ff8240
+
+	cmp.b	#57,$fffc02
+	beq	slut
+
+	move.l	a5,a0
+	move.l	a5,a1
+	add.w	#201*160,a0
+	add.w	#201*160,a1
+	addq.w	#8,a1
+	move.w	#15,d0
+scroll:
+	movem.l	(a1),d1-d7/a2-a4
+	movem.l	d1-d7/a2-a4,(a0)
+	movem.l	40(a1),d1-d7/a2-a4
+	movem.l	d1-d7/a2-a4,40(a0)
+	movem.l	80(a1),d1-d7/a2-a4
+	movem.l	d1-d7/a2-a4,80(a0)
+	movem.l	120(a1),d1-d7/a2
+	movem.l	d1-d7/a2,120(a0)
+	movem.l	160(a1),d1-d7/a2-a4
+	movem.l	d1-d7/a2-a4,160(a0)
+	movem.l	40+160(a1),d1-d7/a2-a4
+	movem.l	d1-d7/a2-a4,40+160(a0)
+	movem.l	80+160(a1),d1-d7/a2-a4
+	movem.l	d1-d7/a2-a4,80+160(a0)
+	movem.l	120+160(a1),d1-d7/a2
+	movem.l	d1-d7/a2,120+160(a0)
+	add.w	#320,a0
+	add.w	#320,a1
+	dbf.w	d0,scroll
+
+	add.w	#1,bokplac
+	cmp.w	#4,bokplac
+	bne	shopp
+	move.w	#0,bokplac
+	add.w	#1,char
+	move.l	#$46000,a1
+	move.w	#10,d0
+hackscr:
+	move.l	4(a1),0(a1)
+	move.l	12(a1),8(a1)
+	move.l	20(a1),16(a1)
+	move.l	28(a1),24(a1)
+	move.l	4+32(a1),0+32(a1)
+	move.l	12+32(a1),8+32(a1)
+	move.l	20+32(a1),16+32(a1)
+	move.l	28+32(a1),24+32(a1)
+	move.l	4+64(a1),0+64(a1)
+	move.l	12+64(a1),8+64(a1)
+	move.l	20+64(a1),16+64(a1)
+	move.l	28+64(a1),24+64(a1)
+	add.w	#96,a1
+	dbf.w	d0,hackscr
+
+	move.l	#text,a0
+	add.w	char,a0
+	clr.w	d0
+	move.b	(a0),d0
+	cmp.w	#32,d0
+	bne	shopp2
+	move.w	#94,d0
+shopp2:
+	cmp.w	#33,d0
+	bne	shopp3
+	move.w	#92,d0
+shopp3:
+	cmp.w	#63,d0
+	bne	shopp4
+	move.w	#91,d0
+shopp4:
+	cmp.w	#46,d0
+	bne	shopp5
+	move.w	#93,d0
+shopp5:
+	cmp.w	#0,d0
+	bne	shopp6
+	move.w	#94,d0
+	sub.w	#23,char
+shopp6:
+	sub.w	#65,d0
+	mulu.w	#512,d0
+	move.l	#font,a0
+	add.w	d0,a0
+	move.l	#$46000,a1
+	addq.w	#4,a1
+	move.w	#10,d0
+newchar:
+	move.w	(a0)+,(a1)
+	move.w	(a0)+,8(a1)
+	move.w	(a0)+,16(a1)
+	move.w	(a0)+,24(a1)
+	move.w	(a0)+,2(a1)
+	move.w	(a0)+,10(a1)
+	move.w	(a0)+,18(a1)
+	move.w	(a0)+,26(a1)
+	move.w	(a0)+,32(a1)
+	move.w	(a0)+,8+32(a1)
+	move.w	(a0)+,16+32(a1)
+	move.w	(a0)+,24+32(a1)
+	move.w	(a0)+,2+32(a1)
+	move.w	(a0)+,10+32(a1)
+	move.w	(a0)+,18+32(a1)
+	move.w	(a0)+,26+32(a1)
+	move.w	(a0)+,64(a1)
+	move.w	(a0)+,8+64(a1)
+	move.w	(a0)+,16+64(a1)
+	move.w	(a0)+,24+64(a1)
+	move.w	(a0)+,2+64(a1)
+	move.w	(a0)+,10+64(a1)
+	move.w	(a0)+,18+64(a1)
+	move.w	(a0)+,26+64(a1)
+	add.w	#96,a1
+	dbf.w	d0,newchar
+shopp:
+	move.l	#$46000,a0
+	add.w	bokplac,a0
+	move.l	a5,a1
+	add.w	#201*160,a1
+	add.w	#152,a1
+	move.w	#30,d0
+getup:
+	move.b	(a0),(a1)+
+	move.b	1(a0),(a1)+
+	move.b	8(a0),(a1)+
+	move.b	9(a0),(a1)+
+	move.b	16(a0),(a1)+
+	move.b	17(a0),(a1)+
+	move.b	24(a0),(a1)+
+	move.b	25(a0),(a1)+
+	add.w	#32,a0
+	add.w	#152,a1
+	dbf.w	d0,getup
+
+*	Timer f”r dom olika delarna
+
+	cmp.w	#1,clear
+	beq	clr
+
+	addq.w	#1,t
+	cmp.w	#9,t
+	bgt	no_fade_up
+
+	move.l	#colours,a6
+	move.w	t,d0
+	mulu.w	#60,d0
+	add.w	d0,a6
+	jsr	many_spr
+	bra	klar
+
+no_fade_up:
+	cmp.w	#1000,t
+	bgt	no_many_spr
+
+*	move.l	#colours+60*8,a6
+	jsr	many_spr
+	bra	klar
+
+no_many_spr:
+	cmp.w	#1008,t
+	bgt	no_fade_down
+
+	move.l	#colours+60*9,a6
+	move.w	t,d0
+	sub.w	#1000,d0
+	mulu.w	#60,d0
+	add.w	d0,a6
+	jsr	many_spr
+	bra	klar
+	
+no_fade_down:
+	cmp.w	#1058,t
+	bgt	no_cls
+
+	move.l	a5,a0
+	move.w	t,d0
+	sub.w	#1009,d0
+	lsr.w	#1,d0
+	mulu.w	#160*8,d0
+	add.w	d0,a0
+	move.w	#2*20*8,d1
+cls_loop:
+	move.l	#0,(a0)+
+	dbf.w	d1,cls_loop
+
+	bra	klar
+
+no_cls:
+	cmp.w	#1059,t
+	bgt	no_cls_buf
+
+	move.l	#buffer,a0
+	move.w	#773,d0
+cls_buf:
+	move.l	#0,(a0)+
+	dbf.w	d0,cls_buf
+	bra	klar
+
+no_cls_buf:
+	cmp.w	#1066,t
+	bgt	no_fade_up2
+
+	move.l	#colours+60*18,a6
+	move.w	t,d0
+	sub.w	#1059,d0
+	mulu.w	#60,d0
+	add.w	d0,a6
+	jsr	many_spr
+	bra	klar
+
+no_fade_up2:
+	cmp.w	#2065,t
+	bgt	no_many_spr2
+
+	jsr	many_spr
+	bra	klar
+
+no_many_spr2:
+	cmp.w	#2073,t
+	bgt	no_fade_down3
+
+	move.l	#colours+50*30,a6
+	move.w	t,d0
+	sub.w	#2065,d0
+	mulu.w	#60,d0
+	add.w	d0,a6
+	jsr	many_spr
+	bra	klar
+	
+no_fade_down3:
+	cmp.w	#2123,t
+	bgt	no_cls2
+
+	move.l	a5,a0
+	move.w	t,d0
+	sub.w	#2074,d0
+	lsr.w	#1,d0
+	mulu.w	#160*8,d0
+	add.w	d0,a0
+	move.w	#2*20*8,d1
+cls_loop2:
+	move.l	#0,(a0)+
+	dbf.w	d1,cls_loop2
+
+	bra	klar
+
+no_cls2:
+	cmp.w	#2133,t
+	bgt	no_fade_up3
+
+	move.l	#colours+58*30,a6
+	move.w	t,d0
+	sub.w	#2123,d0
+	mulu.w	#60,d0
+	add.w	d0,a6
+	jsr	big_spr
+	bra	klar
+
+no_fade_up3:
+
+	move.b	$fffc02,d0
+	cmp.b	#80,d0
+	bne	noleft
+	sub.w	#2,xp
+	cmp.w	#0,xp
+	bgt	noleft
+	move.w	#0,xp
+noleft:
+	cmp.b	#72,d0
+	bne	noright
+	add.w	#2,xp
+	cmp.w	#50,xp
+	blt	noright
+	move.w	#50,xp
+noright:
+	cmp.b	#77,d0
+	bne	noup
+	sub.w	#2,yp
+	cmp.w	#0,yp
+	bgt	noup
+	move.w	#0,yp
+noup:
+	cmp.b	#75,d0
+	bne	nodown
+	add.w	#2,yp
+	cmp.w	#50,yp
+	blt	nodown
+	move.w	#50,yp
+nodown:
+	cmp.b	#97,d0
+	bne	noempty
+	move.w	#1,clear
+	move.w	#0,u
+noempty:
+	cmp.b	#2,d0
+	bne	no1
+	move.l	#shdepal,diffpals
+no1:
+	cmp.b	#3,d0
+	bne	no2
+	move.l	#shdepal+60,diffpals
+no2:
+	cmp.b	#4,d0
+	bne	no3
+	move.l	#shdepal+120,diffpals
+no3:
+	cmp.b	#5,d0
+	bne	no4
+	move.l	#shdepal+180,diffpals
+no4:
+	cmp.b	#6,d0
+	bne	no5
+	move.l	#shdepal+240,diffpals
+no5:
+	cmp.b	#7,d0
+	bne	no6
+	move.l	#shdepal+300,diffpals
+no6:
+	move.l	diffpals,a6
+	cmp.b	#8,d0
+	bne	no7
+	move.l	#shdepal+360,diffpals
+no7:
+	cmp.b	#9,d0
+	bne	no8
+	move.l	#shdepal+420,diffpals
+no8:
+	cmp.b	#10,d0
+	bne	no9
+	move.l	#shdepal+480,diffpals
+no9:
+	cmp.b	#11,d0
+	bne	no0
+	move.l	#shdepal+540,diffpals
+no0:
+	move.l	diffpals,a6
+
+	jsr	big_spr
+
+	move.w	#3000,t
+klar:
+	jmp	mainloop
+***************************************************************************
+clr:
+	move.l	#colours2,a6
+	move.l	a5,a0
+	sub.w	#160*8,a0
+	add.w	#1,u
+	cmp.w	#53,u
+	bne	jmp
+	move.w	#0,u
+	move.w	#0,clear
+	move.l	diffpals,a6
+*
+	move.l	#bbuffer,a0
+	move.w	#639,d0
+cls_buf3:
+	move.l	#0,(a0)+
+	dbf.w	d0,cls_buf3
+	bra	klar
+*
+jmp:
+	move.w	u,d0
+	lsr.w	#1,d0
+	mulu.w	#160*8,d0
+	add.w	d0,a0
+	move.w	#2*20*8,d1
+cls_loop5:
+	move.l	#0,(a0)+
+	dbf.w	d1,cls_loop5
+
+	bra	klar
+***************************************************************************
+many_spr:
+*				Sprite 1
+	move.l	#buffer,a2
+	move.l	#buffer+128,a3
+	move.l	a5,a1
+	add.w	buffer2,a1
+	move.w	#15,d0
+copy:	move.l	(a2)+,(a1)
+	move.l	(a2)+,4(a1)
+	move.l	(a3)+,8(a1)
+	move.l	(a3)+,12(a1)
+	add.w	#160,a1
+	dbf.w	d0,copy
+*				Sprite 2
+	move.l	#buffer3,a2
+	move.l	#buffer3+128,a3
+	move.l	a5,a1
+	add.w	buffer4,a1
+	move.w	#15,d0
+copyb:	move.l	(a2)+,(a1)
+	move.l	(a2)+,4(a1)
+	move.l	(a3)+,8(a1)
+	move.l	(a3)+,12(a1)
+	add.w	#160,a1
+	dbf.w	d0,copyb
+*				Sprite 3
+	move.l	#buffer5,a2
+	move.l	#buffer5+128,a3
+	move.l	a5,a1
+	add.w	buffer6,a1
+	move.w	#15,d0
+copyc:	move.l	(a2)+,(a1)
+	move.l	(a2)+,4(a1)
+	move.l	(a3)+,8(a1)
+	move.l	(a3)+,12(a1)
+	add.w	#160,a1
+	dbf.w	d0,copyc
+*				Sprite 4
+	move.l	#buffer7,a2
+	move.l	#buffer7+128,a3
+	move.l	a5,a1
+	add.w	buffer8,a1
+	move.w	#15,d0
+copyd:	move.l	(a2)+,(a1)
+	move.l	(a2)+,4(a1)
+	move.l	(a3)+,8(a1)
+	move.l	(a3)+,12(a1)
+	add.w	#160,a1
+	dbf.w	d0,copyd
+*				Sprite 5
+	move.l	#buffer9,a2
+	move.l	#buffer9+128,a3
+	move.l	a5,a1
+	add.w	buffer10,a1
+	move.w	#15,d0
+copye:	move.l	(a2)+,(a1)
+	move.l	(a2)+,4(a1)
+	move.l	(a3)+,8(a1)
+	move.l	(a3)+,12(a1)
+	add.w	#160,a1
+	dbf.w	d0,copye
+*				Sprite 6
+	move.l	#buffer11,a2
+	move.l	#buffer11+128,a3
+	move.l	a5,a1
+	add.w	buffer12,a1
+	move.w	#15,d0
+copyf:	move.l	(a2)+,(a1)
+	move.l	(a2)+,4(a1)
+	move.l	(a3)+,8(a1)
+	move.l	(a3)+,12(a1)
+	add.w	#160,a1
+	dbf.w	d0,copyf
+*				Sprite 7
+	move.l	#buffer13,a2
+	move.l	#buffer13+128,a3
+	move.l	a5,a1
+	add.w	buffer14,a1
+	move.w	#15,d0
+copyg:	move.l	(a2)+,(a1)
+	move.l	(a2)+,4(a1)
+	move.l	(a3)+,8(a1)
+	move.l	(a3)+,12(a1)
+	add.w	#160,a1
+	dbf.w	d0,copyg
+*				Sprite 8
+	move.l	#buffer15,a2
+	move.l	#buffer15+128,a3
+	move.l	a5,a1
+	add.w	buffer16,a1
+	move.w	#15,d0
+copyh:	move.l	(a2)+,(a1)
+	move.l	(a2)+,4(a1)
+	move.l	(a3)+,8(a1)
+	move.l	(a3)+,12(a1)
+	add.w	#160,a1
+	dbf.w	d0,copyh
+*				Sprite 9
+	move.l	#buffer17,a2
+	move.l	#buffer17+128,a3
+	move.l	a5,a1
+	add.w	buffer18,a1
+	move.w	#15,d0
+copyi:	move.l	(a2)+,(a1)
+	move.l	(a2)+,4(a1)
+	move.l	(a3)+,8(a1)
+	move.l	(a3)+,12(a1)
+	add.w	#160,a1
+	dbf.w	d0,copyi
+*				Sprite 10
+	move.l	#buffer19,a2
+	move.l	#buffer19+128,a3
+	move.l	a5,a1
+	add.w	buffer20,a1
+	move.w	#15,d0
+copyj:	move.l	(a2)+,(a1)
+	move.l	(a2)+,4(a1)
+	move.l	(a3)+,8(a1)
+	move.l	(a3)+,12(a1)
+	add.w	#160,a1
+	dbf.w	d0,copyj
+*				Sprite 11
+	move.l	#buffer21,a2
+	move.l	#buffer21+128,a3
+	move.l	a5,a1
+	add.w	buffer22,a1
+	move.w	#15,d0
+copyk:	move.l	(a2)+,(a1)
+	move.l	(a2)+,4(a1)
+	move.l	(a3)+,8(a1)
+	move.l	(a3)+,12(a1)
+	add.w	#160,a1
+	dbf.w	d0,copyk
+*				Sprite 12
+	move.l	#buffer23,a2
+	move.l	#buffer23+128,a3
+	move.l	a5,a1
+	add.w	buffer24,a1
+	move.w	#15,d0
+copyl:	move.l	(a2)+,(a1)
+	move.l	(a2)+,4(a1)
+	move.l	(a3)+,8(a1)
+	move.l	(a3)+,12(a1)
+	add.w	#160,a1
+	dbf.w	d0,copyl
+*				Sprite 1
+	move.l	#siny,a0
+	add.w	#20,v
+	cmp.w	#720*4,v
+	blt	hopp
+	clr.w	v
+hopp:
+	add.w	v,a0
+	move.w	(a0),d0
+	add.w	#92,d0
+	mulu.w	#160,d0
+	move.l	a5,a1
+	add.w	d0,a1
+	move.w	d0,buffer2
+	move.l	#buffer,a2
+
+	add.w	#18,v2
+	cmp.w	#720*4,v2
+	blt	hopp2
+	move.w	#0,v2
+hopp2:
+	move.l	#sinx,a0
+	add.w	v2,a0
+
+	move.w	(a0),d0
+	add.w	#152,d0
+	move.w	d0,d1
+	lsr.w	#4,d1
+	lsl.w	#3,d1
+	add.w	d1,a1
+	add.w	d1,buffer2
+	move.w	d0,d1
+	lsr.w	#4,d1
+	lsl.w	#4,d1
+	sub.w	d1,d0
+	lsl.w	#6,d0
+
+	move.l	#boll,a0
+	add.w	d0,a0
+	move.w	#1,d6
+
+	move.w	#15,d3	
+loop:
+	move.w	(a0),d0
+	move.w	(a0),d4
+	move.w	(a1),d2
+	eor.w	d2,d0
+	move.w	d0,(a1)
+	move.w	d0,(a2)+
+	not.w	d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	2(a1),d2
+	eor.w	d2,d0
+	move.w	d0,2(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	4(a1),d2
+	eor.w	d2,d0
+	move.w	d0,4(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	6(a1),d2
+	eor.w	d2,d0
+	move.w	d0,6(a1)
+	move.w	d0,(a2)+
+
+	addq.w	#4,a0
+	add.w	#160,a1
+
+	dbf.w	d3,loop
+
+	sub.w	#62,a0
+	sub.w	#160*16-8,a1
+
+	move.w	#15,d3	
+loop2:
+	move.w	(a0),d0
+	move.w	(a0),d4
+	move.w	(a1),d2
+	eor.w	d2,d0
+	move.w	d0,(a1)
+	move.w	d0,(a2)+
+	not.w	d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	2(a1),d2
+	eor.w	d2,d0
+	move.w	d0,2(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	4(a1),d2
+	eor.w	d2,d0
+	move.w	d0,4(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	6(a1),d2
+	eor.w	d2,d0
+	move.w	d0,6(a1)
+	move.w	d0,(a2)+
+
+	addq.w	#4,a0
+	add.w	#160,a1
+
+	dbf.w	d3,loop2
+*				Sprite 2
+	move.l	#siny,a0
+	add.w	#16,v3
+	cmp.w	#720*4,v3
+	blt	hoppb
+	move.w	#0,v3
+hoppb:
+	add.w	v3,a0
+	move.w	(a0),d0
+	add.w	#92,d0
+	mulu.w	#160,d0
+	move.l	a5,a1
+	add.w	d0,a1
+	move.w	d0,buffer4
+	move.l	#buffer3,a2
+
+	add.w	#20,v4
+	cmp.w	#720*4,v4
+	blt	hopp2b
+	move.w	#0,v4
+hopp2b:
+	move.l	#sinx,a0
+	add.w	v4,a0
+
+	move.w	(a0),d0
+	add.w	#152,d0
+	move.w	d0,d1
+	lsr.w	#4,d1
+	lsl.w	#3,d1
+	add.w	d1,a1
+	add.w	d1,buffer4
+	move.w	d0,d1
+	lsr.w	#4,d1
+	lsl.w	#4,d1
+	sub.w	d1,d0
+	lsl.w	#6,d0
+
+	move.l	#boll,a0
+	add.w	d0,a0
+	move.w	#1,d6
+
+	move.w	#15,d3	
+loopb:
+	move.w	(a0),d0
+	move.w	(a0),d4
+	move.w	(a1),d2
+	eor.w	d2,d0
+	move.w	d0,(a1)
+	move.w	d0,(a2)+
+	not.w	d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	2(a1),d2
+	eor.w	d2,d0
+	move.w	d0,2(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	4(a1),d2
+	eor.w	d2,d0
+	move.w	d0,4(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	6(a1),d2
+	eor.w	d2,d0
+	move.w	d0,6(a1)
+	move.w	d0,(a2)+
+
+	addq.w	#4,a0
+	add.w	#160,a1
+
+	dbf.w	d3,loopb
+
+	sub.w	#62,a0
+	sub.w	#160*16-8,a1
+
+	move.w	#15,d3	
+loop2b:
+	move.w	(a0),d0
+	move.w	(a0),d4
+	move.w	(a1),d2
+	eor.w	d2,d0
+	move.w	d0,(a1)
+	move.w	d0,(a2)+
+	not.w	d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	2(a1),d2
+	eor.w	d2,d0
+	move.w	d0,2(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	4(a1),d2
+	eor.w	d2,d0
+	move.w	d0,4(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	6(a1),d2
+	eor.w	d2,d0
+	move.w	d0,6(a1)
+	move.w	d0,(a2)+
+
+	addq.w	#4,a0
+	add.w	#160,a1
+
+	dbf.w	d3,loop2b
+*				Sprite 3
+	move.l	#siny,a0
+	add.w	#14,v5
+	cmp.w	#720*4,v5
+	blt	hoppc
+	move.w	#0,v5
+hoppc:
+	add.w	v5,a0
+	move.w	(a0),d0
+	add.w	#92,d0
+	mulu.w	#160,d0
+	move.l	a5,a1
+	add.w	d0,a1
+	move.w	d0,buffer6
+	move.l	#buffer5,a2
+
+	add.w	#16,v6
+	cmp.w	#720*4,v6
+	blt	hopp2c
+	move.w	#0,v6
+hopp2c:
+	move.l	#sinx,a0
+	add.w	v6,a0
+
+	move.w	(a0),d0
+	add.w	#152,d0
+	move.w	d0,d1
+	lsr.w	#4,d1
+	lsl.w	#3,d1
+	add.w	d1,a1
+	add.w	d1,buffer6
+	move.w	d0,d1
+	lsr.w	#4,d1
+	lsl.w	#4,d1
+	sub.w	d1,d0
+	lsl.w	#6,d0
+
+	move.l	#boll,a0
+	add.w	d0,a0
+	move.w	#1,d6
+
+	move.w	#15,d3	
+loopc:
+	move.w	(a0),d0
+	move.w	(a0),d4
+	move.w	(a1),d2
+	eor.w	d2,d0
+	move.w	d0,(a1)
+	move.w	d0,(a2)+
+	not.w	d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	2(a1),d2
+	eor.w	d2,d0
+	move.w	d0,2(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	4(a1),d2
+	eor.w	d2,d0
+	move.w	d0,4(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	6(a1),d2
+	eor.w	d2,d0
+	move.w	d0,6(a1)
+	move.w	d0,(a2)+
+
+	addq.w	#4,a0
+	add.w	#160,a1
+
+	dbf.w	d3,loopc
+
+	sub.w	#62,a0
+	sub.w	#160*16-8,a1
+
+	move.w	#15,d3	
+loop2c:
+	move.w	(a0),d0
+	move.w	(a0),d4
+	move.w	(a1),d2
+	eor.w	d2,d0
+	move.w	d0,(a1)
+	move.w	d0,(a2)+
+	not.w	d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	2(a1),d2
+	eor.w	d2,d0
+	move.w	d0,2(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	4(a1),d2
+	eor.w	d2,d0
+	move.w	d0,4(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	6(a1),d2
+	eor.w	d2,d0
+	move.w	d0,6(a1)
+	move.w	d0,(a2)+
+
+	addq.w	#4,a0
+	add.w	#160,a1
+
+	dbf.w	d3,loop2c
+*				Sprite 4
+	move.l	#siny,a0
+	add.w	#12,v7
+	cmp.w	#720*4,v7
+	blt	hoppd
+	move.w	#0,v7
+hoppd:
+	add.w	v7,a0
+	move.w	(a0),d0
+	add.w	#92,d0
+	mulu.w	#160,d0
+	move.l	a5,a1
+	add.w	d0,a1
+	move.w	d0,buffer8
+	move.l	#buffer7,a2
+
+	add.w	#10,v8
+	cmp.w	#720*4,v8
+	blt	hopp2d
+	move.w	#0,v8
+hopp2d:
+	move.l	#sinx,a0
+	add.w	v8,a0
+
+	move.w	(a0),d0
+	add.w	#152,d0
+	move.w	d0,d1
+	lsr.w	#4,d1
+	lsl.w	#3,d1
+	add.w	d1,a1
+	add.w	d1,buffer8
+	move.w	d0,d1
+	lsr.w	#4,d1
+	lsl.w	#4,d1
+	sub.w	d1,d0
+	lsl.w	#6,d0
+
+	move.l	#boll,a0
+	add.w	d0,a0
+	move.w	#1,d6
+
+	move.w	#15,d3	
+loopd:
+	move.w	(a0),d0
+	move.w	(a0),d4
+	move.w	(a1),d2
+	eor.w	d2,d0
+	move.w	d0,(a1)
+	move.w	d0,(a2)+
+	not.w	d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	2(a1),d2
+	eor.w	d2,d0
+	move.w	d0,2(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	4(a1),d2
+	eor.w	d2,d0
+	move.w	d0,4(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	6(a1),d2
+	eor.w	d2,d0
+	move.w	d0,6(a1)
+	move.w	d0,(a2)+
+
+	addq.w	#4,a0
+	add.w	#160,a1
+
+	dbf.w	d3,loopd
+
+	sub.w	#62,a0
+	sub.w	#160*16-8,a1
+
+	move.w	#15,d3	
+loop2d:
+	move.w	(a0),d0
+	move.w	(a0),d4
+	move.w	(a1),d2
+	eor.w	d2,d0
+	move.w	d0,(a1)
+	move.w	d0,(a2)+
+	not.w	d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	2(a1),d2
+	eor.w	d2,d0
+	move.w	d0,2(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	4(a1),d2
+	eor.w	d2,d0
+	move.w	d0,4(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	6(a1),d2
+	eor.w	d2,d0
+	move.w	d0,6(a1)
+	move.w	d0,(a2)+
+
+	addq.w	#4,a0
+	add.w	#160,a1
+
+	dbf.w	d3,loop2d
+*				Sprite 5
+	move.l	#siny,a0
+	add.w	#22,v9
+	cmp.w	#720*4,v9
+	blt	hoppe
+	move.w	#0,v9
+hoppe:
+	add.w	v9,a0
+	move.w	(a0),d0
+	add.w	#92,d0
+	mulu.w	#160,d0
+	move.l	a5,a1
+	add.w	d0,a1
+	move.w	d0,buffer10
+	move.l	#buffer9,a2
+
+	add.w	#24,v10
+	cmp.w	#720*4,v10
+	blt	hopp2e
+	move.w	#0,v10
+hopp2e:
+	move.l	#sinx,a0
+	add.w	v10,a0
+
+	move.w	(a0),d0
+	add.w	#152,d0
+	move.w	d0,d1
+	lsr.w	#4,d1
+	lsl.w	#3,d1
+	add.w	d1,a1
+	add.w	d1,buffer10
+	move.w	d0,d1
+	lsr.w	#4,d1
+	lsl.w	#4,d1
+	sub.w	d1,d0
+	lsl.w	#6,d0
+
+	move.l	#boll,a0
+	add.w	d0,a0
+	move.w	#1,d6
+
+	move.w	#15,d3	
+loope:
+	move.w	(a0),d0
+	move.w	(a0),d4
+	move.w	(a1),d2
+	eor.w	d2,d0
+	move.w	d0,(a1)
+	move.w	d0,(a2)+
+	not.w	d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	2(a1),d2
+	eor.w	d2,d0
+	move.w	d0,2(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	4(a1),d2
+	eor.w	d2,d0
+	move.w	d0,4(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	6(a1),d2
+	eor.w	d2,d0
+	move.w	d0,6(a1)
+	move.w	d0,(a2)+
+
+	addq.w	#4,a0
+	add.w	#160,a1
+
+	dbf.w	d3,loope
+
+	sub.w	#62,a0
+	sub.w	#160*16-8,a1
+
+	move.w	#15,d3	
+loop2e:
+	move.w	(a0),d0
+	move.w	(a0),d4
+	move.w	(a1),d2
+	eor.w	d2,d0
+	move.w	d0,(a1)
+	move.w	d0,(a2)+
+	not.w	d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	2(a1),d2
+	eor.w	d2,d0
+	move.w	d0,2(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	4(a1),d2
+	eor.w	d2,d0
+	move.w	d0,4(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	6(a1),d2
+	eor.w	d2,d0
+	move.w	d0,6(a1)
+	move.w	d0,(a2)+
+
+	addq.w	#4,a0
+	add.w	#160,a1
+
+	dbf.w	d3,loop2e
+*				Sprite 6
+	move.l	#siny,a0
+	add.w	#24,v11
+	cmp.w	#720*4,v11
+	blt	hoppf
+	move.w	#0,v11
+hoppf:
+	add.w	v11,a0
+	move.w	(a0),d0
+	add.w	#92,d0
+	mulu.w	#160,d0
+	move.l	a5,a1
+	add.w	d0,a1
+	move.w	d0,buffer12
+	move.l	#buffer11,a2
+
+	add.w	#22,v12
+	cmp.w	#720*4,v12
+	blt	hopp2f
+	move.w	#0,v12
+hopp2f:
+	move.l	#sinx,a0
+	add.w	v12,a0
+
+	move.w	(a0),d0
+	add.w	#152,d0
+	move.w	d0,d1
+	lsr.w	#4,d1
+	lsl.w	#3,d1
+	add.w	d1,a1
+	add.w	d1,buffer12
+	move.w	d0,d1
+	lsr.w	#4,d1
+	lsl.w	#4,d1
+	sub.w	d1,d0
+	lsl.w	#6,d0
+
+	move.l	#boll,a0
+	add.w	d0,a0
+	move.w	#1,d6
+
+	move.w	#15,d3	
+loopf:
+	move.w	(a0),d0
+	move.w	(a0),d4
+	move.w	(a1),d2
+	eor.w	d2,d0
+	move.w	d0,(a1)
+	move.w	d0,(a2)+
+	not.w	d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	2(a1),d2
+	eor.w	d2,d0
+	move.w	d0,2(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	4(a1),d2
+	eor.w	d2,d0
+	move.w	d0,4(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	6(a1),d2
+	eor.w	d2,d0
+	move.w	d0,6(a1)
+	move.w	d0,(a2)+
+
+	addq.w	#4,a0
+	add.w	#160,a1
+
+	dbf.w	d3,loopf
+
+	sub.w	#62,a0
+	sub.w	#160*16-8,a1
+
+	move.w	#15,d3	
+loop2f:
+	move.w	(a0),d0
+	move.w	(a0),d4
+	move.w	(a1),d2
+	eor.w	d2,d0
+	move.w	d0,(a1)
+	move.w	d0,(a2)+
+	not.w	d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	2(a1),d2
+	eor.w	d2,d0
+	move.w	d0,2(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	4(a1),d2
+	eor.w	d2,d0
+	move.w	d0,4(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	6(a1),d2
+	eor.w	d2,d0
+	move.w	d0,6(a1)
+	move.w	d0,(a2)+
+
+	addq.w	#4,a0
+	add.w	#160,a1
+
+	dbf.w	d3,loop2f
+*				Sprite 7
+	move.l	#siny,a0
+	add.w	#26,v13
+	cmp.w	#720*4,v13
+	blt	hoppg
+	move.w	#0,v13
+hoppg:
+	add.w	v13,a0
+	move.w	(a0),d0
+	add.w	#92,d0
+	mulu.w	#160,d0
+	move.l	a5,a1
+	add.w	d0,a1
+	move.w	d0,buffer14
+	move.l	#buffer13,a2
+
+	add.w	#10,v14
+	cmp.w	#720*4,v14
+	blt	hopp2g
+	move.w	#0,v14
+hopp2g:
+	move.l	#sinx,a0
+	add.w	v14,a0
+
+	move.w	(a0),d0
+	add.w	#152,d0
+	move.w	d0,d1
+	lsr.w	#4,d1
+	lsl.w	#3,d1
+	add.w	d1,a1
+	add.w	d1,buffer14
+	move.w	d0,d1
+	lsr.w	#4,d1
+	lsl.w	#4,d1
+	sub.w	d1,d0
+	lsl.w	#6,d0
+
+	move.l	#boll,a0
+	add.w	d0,a0
+	move.w	#1,d6
+
+	move.w	#15,d3	
+loopg:
+	move.w	(a0),d0
+	move.w	(a0),d4
+	move.w	(a1),d2
+	eor.w	d2,d0
+	move.w	d0,(a1)
+	move.w	d0,(a2)+
+	not.w	d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	2(a1),d2
+	eor.w	d2,d0
+	move.w	d0,2(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	4(a1),d2
+	eor.w	d2,d0
+	move.w	d0,4(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	6(a1),d2
+	eor.w	d2,d0
+	move.w	d0,6(a1)
+	move.w	d0,(a2)+
+
+	addq.w	#4,a0
+	add.w	#160,a1
+
+	dbf.w	d3,loopg
+
+	sub.w	#62,a0
+	sub.w	#160*16-8,a1
+
+	move.w	#15,d3	
+loop2g:
+	move.w	(a0),d0
+	move.w	(a0),d4
+	move.w	(a1),d2
+	eor.w	d2,d0
+	move.w	d0,(a1)
+	move.w	d0,(a2)+
+	not.w	d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	2(a1),d2
+	eor.w	d2,d0
+	move.w	d0,2(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	4(a1),d2
+	eor.w	d2,d0
+	move.w	d0,4(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	6(a1),d2
+	eor.w	d2,d0
+	move.w	d0,6(a1)
+	move.w	d0,(a2)+
+
+	addq.w	#4,a0
+	add.w	#160,a1
+
+	dbf.w	d3,loop2g
+*				Sprite 8
+	move.l	#siny,a0
+	add.w	#8,v15
+	cmp.w	#720*4,v15
+	blt	hopph
+	move.w	#0,v15
+hopph:
+	add.w	v15,a0
+	move.w	(a0),d0
+	add.w	#92,d0
+	mulu.w	#160,d0
+	move.l	a5,a1
+	add.w	d0,a1
+	move.w	d0,buffer16
+	move.l	#buffer15,a2
+
+	add.w	#6,v16
+	cmp.w	#720*4,v16
+	blt	hopp2h
+	move.w	#0,v16
+hopp2h:
+	move.l	#sinx,a0
+	add.w	v16,a0
+
+	move.w	(a0),d0
+	add.w	#152,d0
+	move.w	d0,d1
+	lsr.w	#4,d1
+	lsl.w	#3,d1
+	add.w	d1,a1
+	add.w	d1,buffer16
+	move.w	d0,d1
+	lsr.w	#4,d1
+	lsl.w	#4,d1
+	sub.w	d1,d0
+	lsl.w	#6,d0
+
+	move.l	#boll,a0
+	add.w	d0,a0
+	move.w	#1,d6
+
+	move.w	#15,d3	
+looph:
+	move.w	(a0),d0
+	move.w	(a0),d4
+	move.w	(a1),d2
+	eor.w	d2,d0
+	move.w	d0,(a1)
+	move.w	d0,(a2)+
+	not.w	d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	2(a1),d2
+	eor.w	d2,d0
+	move.w	d0,2(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	4(a1),d2
+	eor.w	d2,d0
+	move.w	d0,4(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	6(a1),d2
+	eor.w	d2,d0
+	move.w	d0,6(a1)
+	move.w	d0,(a2)+
+
+	addq.w	#4,a0
+	add.w	#160,a1
+
+	dbf.w	d3,looph
+
+	sub.w	#62,a0
+	sub.w	#160*16-8,a1
+
+	move.w	#15,d3	
+loop2h:
+	move.w	(a0),d0
+	move.w	(a0),d4
+	move.w	(a1),d2
+	eor.w	d2,d0
+	move.w	d0,(a1)
+	move.w	d0,(a2)+
+	not.w	d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	2(a1),d2
+	eor.w	d2,d0
+	move.w	d0,2(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	4(a1),d2
+	eor.w	d2,d0
+	move.w	d0,4(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	6(a1),d2
+	eor.w	d2,d0
+	move.w	d0,6(a1)
+	move.w	d0,(a2)+
+
+	addq.w	#4,a0
+	add.w	#160,a1
+
+	dbf.w	d3,loop2h
+*				Sprite 9
+	move.l	#siny,a0
+	add.w	#28,v17
+	cmp.w	#720*4,v17
+	blt	hoppi
+	move.w	#0,v17
+hoppi:
+	add.w	v17,a0
+	move.w	(a0),d0
+	add.w	#92,d0
+	mulu.w	#160,d0
+	move.l	a5,a1
+	add.w	d0,a1
+	move.w	d0,buffer18
+	move.l	#buffer17,a2
+
+	add.w	#18,v18
+	cmp.w	#720*4,v18
+	blt	hopp2i
+	move.w	#0,v18
+hopp2i:
+	move.l	#sinx,a0
+	add.w	v18,a0
+
+	move.w	(a0),d0
+	add.w	#152,d0
+	move.w	d0,d1
+	lsr.w	#4,d1
+	lsl.w	#3,d1
+	add.w	d1,a1
+	add.w	d1,buffer18
+	move.w	d0,d1
+	lsr.w	#4,d1
+	lsl.w	#4,d1
+	sub.w	d1,d0
+	lsl.w	#6,d0
+
+	move.l	#boll,a0
+	add.w	d0,a0
+	move.w	#1,d6
+
+	move.w	#15,d3	
+loopi:
+	move.w	(a0),d0
+	move.w	(a0),d4
+	move.w	(a1),d2
+	eor.w	d2,d0
+	move.w	d0,(a1)
+	move.w	d0,(a2)+
+	not.w	d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	2(a1),d2
+	eor.w	d2,d0
+	move.w	d0,2(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	4(a1),d2
+	eor.w	d2,d0
+	move.w	d0,4(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	6(a1),d2
+	eor.w	d2,d0
+	move.w	d0,6(a1)
+	move.w	d0,(a2)+
+
+	addq.w	#4,a0
+	add.w	#160,a1
+
+	dbf.w	d3,loopi
+
+	sub.w	#62,a0
+	sub.w	#160*16-8,a1
+
+	move.w	#15,d3	
+loop2i:
+	move.w	(a0),d0
+	move.w	(a0),d4
+	move.w	(a1),d2
+	eor.w	d2,d0
+	move.w	d0,(a1)
+	move.w	d0,(a2)+
+	not.w	d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	2(a1),d2
+	eor.w	d2,d0
+	move.w	d0,2(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	4(a1),d2
+	eor.w	d2,d0
+	move.w	d0,4(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	6(a1),d2
+	eor.w	d2,d0
+	move.w	d0,6(a1)
+	move.w	d0,(a2)+
+
+	addq.w	#4,a0
+	add.w	#160,a1
+
+	dbf.w	d3,loop2i
+*				Sprite 10
+	move.l	#siny,a0
+	add.w	#30,v19
+	cmp.w	#720*4,v19
+	blt	hoppj
+	move.w	#0,v19
+hoppj:
+	add.w	v19,a0
+	move.w	(a0),d0
+	add.w	#92,d0
+	mulu.w	#160,d0
+	move.l	a5,a1
+	add.w	d0,a1
+	move.w	d0,buffer20
+	move.l	#buffer19,a2
+
+	add.w	#28,v20
+	cmp.w	#720*4,v20
+	blt	hopp2j
+	move.w	#0,v20
+hopp2j:
+	move.l	#sinx,a0
+	add.w	v20,a0
+
+	move.w	(a0),d0
+	add.w	#152,d0
+	move.w	d0,d1
+	lsr.w	#4,d1
+	lsl.w	#3,d1
+	add.w	d1,a1
+	add.w	d1,buffer20
+	move.w	d0,d1
+	lsr.w	#4,d1
+	lsl.w	#4,d1
+	sub.w	d1,d0
+	lsl.w	#6,d0
+
+	move.l	#boll,a0
+	add.w	d0,a0
+	move.w	#1,d6
+
+	move.w	#15,d3	
+loopj:
+	move.w	(a0),d0
+	move.w	(a0),d4
+	move.w	(a1),d2
+	eor.w	d2,d0
+	move.w	d0,(a1)
+	move.w	d0,(a2)+
+	not.w	d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	2(a1),d2
+	eor.w	d2,d0
+	move.w	d0,2(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	4(a1),d2
+	eor.w	d2,d0
+	move.w	d0,4(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	6(a1),d2
+	eor.w	d2,d0
+	move.w	d0,6(a1)
+	move.w	d0,(a2)+
+
+	addq.w	#4,a0
+	add.w	#160,a1
+
+	dbf.w	d3,loopj
+
+	sub.w	#62,a0
+	sub.w	#160*16-8,a1
+
+	move.w	#15,d3	
+loop2j:
+	move.w	(a0),d0
+	move.w	(a0),d4
+	move.w	(a1),d2
+	eor.w	d2,d0
+	move.w	d0,(a1)
+	move.w	d0,(a2)+
+	not.w	d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	2(a1),d2
+	eor.w	d2,d0
+	move.w	d0,2(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	4(a1),d2
+	eor.w	d2,d0
+	move.w	d0,4(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	6(a1),d2
+	eor.w	d2,d0
+	move.w	d0,6(a1)
+	move.w	d0,(a2)+
+
+	addq.w	#4,a0
+	add.w	#160,a1
+
+	dbf.w	d3,loop2j
+*				Sprite 11
+	move.l	#siny,a0
+	add.w	#8,v21
+	cmp.w	#720*4,v21
+	blt	hoppk
+	move.w	#0,v21
+hoppk:
+	add.w	v21,a0
+	move.w	(a0),d0
+	add.w	#92,d0
+	mulu.w	#160,d0
+	move.l	a5,a1
+	add.w	d0,a1
+	move.w	d0,buffer22
+	move.l	#buffer21,a2
+
+	add.w	#14,v22
+	cmp.w	#720*4,v22
+	blt	hopp2k
+	move.w	#0,v22
+hopp2k:
+	move.l	#sinx,a0
+	add.w	v22,a0
+
+	move.w	(a0),d0
+	add.w	#152,d0
+	move.w	d0,d1
+	lsr.w	#4,d1
+	lsl.w	#3,d1
+	add.w	d1,a1
+	add.w	d1,buffer22
+	move.w	d0,d1
+	lsr.w	#4,d1
+	lsl.w	#4,d1
+	sub.w	d1,d0
+	lsl.w	#6,d0
+
+	move.l	#boll,a0
+	add.w	d0,a0
+	move.w	#1,d6
+
+	move.w	#15,d3	
+loopk:
+	move.w	(a0),d0
+	move.w	(a0),d4
+	move.w	(a1),d2
+	eor.w	d2,d0
+	move.w	d0,(a1)
+	move.w	d0,(a2)+
+	not.w	d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	2(a1),d2
+	eor.w	d2,d0
+	move.w	d0,2(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	4(a1),d2
+	eor.w	d2,d0
+	move.w	d0,4(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	6(a1),d2
+	eor.w	d2,d0
+	move.w	d0,6(a1)
+	move.w	d0,(a2)+
+
+	addq.w	#4,a0
+	add.w	#160,a1
+
+	dbf.w	d3,loopk
+
+	sub.w	#62,a0
+	sub.w	#160*16-8,a1
+
+	move.w	#15,d3	
+loop2k:
+	move.w	(a0),d0
+	move.w	(a0),d4
+	move.w	(a1),d2
+	eor.w	d2,d0
+	move.w	d0,(a1)
+	move.w	d0,(a2)+
+	not.w	d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	2(a1),d2
+	eor.w	d2,d0
+	move.w	d0,2(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	4(a1),d2
+	eor.w	d2,d0
+	move.w	d0,4(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	6(a1),d2
+	eor.w	d2,d0
+	move.w	d0,6(a1)
+	move.w	d0,(a2)+
+
+	addq.w	#4,a0
+	add.w	#160,a1
+
+	dbf.w	d3,loop2k
+*				Sprite 12
+	move.l	#siny,a0
+	add.w	#6,v23
+	cmp.w	#720*4,v23
+	blt	hoppl
+	move.w	#0,v23
+hoppl:
+	add.w	v23,a0
+	move.w	(a0),d0
+	add.w	#92,d0
+	mulu.w	#160,d0
+	move.l	a5,a1
+	add.w	d0,a1
+	move.w	d0,buffer24
+	move.l	#buffer23,a2
+
+	add.w	#4,v24
+	cmp.w	#720*4,v24
+	blt	hopp2l
+	move.w	#0,v24
+hopp2l:
+	move.l	#sinx,a0
+	add.w	v24,a0
+
+	move.w	(a0),d0
+	add.w	#152,d0
+	move.w	d0,d1
+	lsr.w	#4,d1
+	lsl.w	#3,d1
+	add.w	d1,a1
+	add.w	d1,buffer24
+	move.w	d0,d1
+	lsr.w	#4,d1
+	lsl.w	#4,d1
+	sub.w	d1,d0
+	lsl.w	#6,d0
+
+	move.l	#boll,a0
+	add.w	d0,a0
+	move.w	#1,d6
+
+	move.w	#15,d3	
+loopl:
+	move.w	(a0),d0
+	move.w	(a0),d4
+	move.w	(a1),d2
+	eor.w	d2,d0
+	move.w	d0,(a1)
+	move.w	d0,(a2)+
+	not.w	d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	2(a1),d2
+	eor.w	d2,d0
+	move.w	d0,2(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	4(a1),d2
+	eor.w	d2,d0
+	move.w	d0,4(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	6(a1),d2
+	eor.w	d2,d0
+	move.w	d0,6(a1)
+	move.w	d0,(a2)+
+
+	addq.w	#4,a0
+	add.w	#160,a1
+
+	dbf.w	d3,loopl
+
+	sub.w	#62,a0
+	sub.w	#160*16-8,a1
+
+	move.w	#15,d3	
+loop2l:
+	move.w	(a0),d0
+	move.w	(a0),d4
+	move.w	(a1),d2
+	eor.w	d2,d0
+	move.w	d0,(a1)
+	move.w	d0,(a2)+
+	not.w	d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	2(a1),d2
+	eor.w	d2,d0
+	move.w	d0,2(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	4(a1),d2
+	eor.w	d2,d0
+	move.w	d0,4(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	6(a1),d2
+	eor.w	d2,d0
+	move.w	d0,6(a1)
+	move.w	d0,(a2)+
+
+	addq.w	#4,a0
+	add.w	#160,a1
+
+	dbf.w	d3,loop2l
+
+	rts
+***************************************************************************
+big_spr:
+*				Sprite 1
+	move.l	#bbuffer,a2
+	move.l	a5,a1
+	add.w	#2*160,a1
+	add.w	bbuffer2,a1
+	move.w	#63,d0
+bcopy:	move.l	(a2),(a1)
+	move.l	4(a2),4(a1)
+	move.l	512(a2),8(a1)
+	move.l	516(a2),12(a1)
+	move.l	1024(a2),16(a1)
+	move.l	1028(a2),20(a1)
+	move.l	1536(a2),24(a1)
+	move.l	1540(a2),28(a1)
+	move.l	2048(a2),32(a1)
+	move.l	2052(a2),36(a1)
+	add.w	#8,a2
+	add.w	#160,a1
+	dbf.w	d0,bcopy
+*				Sprite 1
+	move.l	#bigsiny,a0
+	move.w	xp,d0
+	add.w	d0,v
+	cmp.w	#720*4,v
+	blt	bhopp
+	move.w	#0,v
+bhopp:
+	add.w	v,a0
+	move.w	(a0),d0
+	add.w	#66,d0
+	mulu.w	#160,d0
+	move.l	a5,a1
+	add.w	#2*160,a1
+	add.w	d0,a1
+	move.w	d0,bbuffer2
+	move.l	#bbuffer,a2
+
+	move.w	yp,d0
+	add.w	d0,v2
+	cmp.w	#720*4,v2
+	blt	bhopp2
+	move.w	#0,v2
+bhopp2:
+	move.l	#bigsinx,a0
+	add.w	v2,a0
+
+	move.w	(a0),d0
+	add.w	#152-24,d0
+	move.w	d0,d1
+	lsr.w	#4,d1
+	lsl.w	#3,d1
+	add.w	d1,a1
+	add.w	d1,bbuffer2
+	move.w	d0,d1
+	lsr.w	#4,d1
+	lsl.w	#4,d1
+	sub.w	d1,d0
+	mulu.w	#640,d0
+
+	move.l	#big_boll,a0
+	add.w	d0,a0
+	move.w	#1,d6
+
+	move.w	#63,d3	
+bloop:
+	move.w	(a0),d0
+	move.w	(a0),d4
+	move.w	(a1),d2
+	eor.w	d2,d0
+	move.w	d0,(a1)
+	move.w	d0,(a2)+
+	not.w	d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	2(a1),d2
+	eor.w	d2,d0
+	move.w	d0,2(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	4(a1),d2
+	eor.w	d2,d0
+	move.w	d0,4(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	6(a1),d2
+	eor.w	d2,d0
+	move.w	d0,6(a1)
+	move.w	d0,(a2)+
+
+	add.w	#10,a0
+	add.w	#160,a1
+
+	dbf.w	d3,bloop
+
+	sub.w	#638,a0
+	sub.w	#160*64-8,a1
+
+	move.w	#63,d3	
+bloop2:
+	move.w	(a0),d0
+	move.w	(a0),d4
+	move.w	(a1),d2
+	eor.w	d2,d0
+	move.w	d0,(a1)
+	move.w	d0,(a2)+
+	not.w	d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	2(a1),d2
+	eor.w	d2,d0
+	move.w	d0,2(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	4(a1),d2
+	eor.w	d2,d0
+	move.w	d0,4(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	6(a1),d2
+	eor.w	d2,d0
+	move.w	d0,6(a1)
+	move.w	d0,(a2)+
+
+	add.w	#10,a0
+	add.w	#160,a1
+
+	dbf.w	d3,bloop2
+
+	sub.w	#638,a0
+	sub.w	#160*64-8,a1
+
+	move.w	#63,d3	
+bloop3:
+	move.w	(a0),d0
+	move.w	(a0),d4
+	move.w	(a1),d2
+	eor.w	d2,d0
+	move.w	d0,(a1)
+	move.w	d0,(a2)+
+	not.w	d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	2(a1),d2
+	eor.w	d2,d0
+	move.w	d0,2(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	4(a1),d2
+	eor.w	d2,d0
+	move.w	d0,4(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	6(a1),d2
+	eor.w	d2,d0
+	move.w	d0,6(a1)
+	move.w	d0,(a2)+
+
+	add.w	#10,a0
+	add.w	#160,a1
+
+	dbf.w	d3,bloop3
+
+	sub.w	#638,a0
+	sub.w	#160*64-8,a1
+
+	move.w	#63,d3	
+bloop4:
+	move.w	(a0),d0
+	move.w	(a0),d4
+	move.w	(a1),d2
+	eor.w	d2,d0
+	move.w	d0,(a1)
+	move.w	d0,(a2)+
+	not.w	d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	2(a1),d2
+	eor.w	d2,d0
+	move.w	d0,2(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	4(a1),d2
+	eor.w	d2,d0
+	move.w	d0,4(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	6(a1),d2
+	eor.w	d2,d0
+	move.w	d0,6(a1)
+	move.w	d0,(a2)+
+
+	add.w	#10,a0
+	add.w	#160,a1
+
+	dbf.w	d3,bloop4
+
+	sub.w	#638,a0
+	sub.w	#160*64-8,a1
+
+	move.w	#63,d3	
+bloop5:
+	move.w	(a0),d0
+	move.w	(a0),d4
+	move.w	(a1),d2
+	eor.w	d2,d0
+	move.w	d0,(a1)
+	move.w	d0,(a2)+
+	not.w	d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	2(a1),d2
+	eor.w	d2,d0
+	move.w	d0,2(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	d0,d1
+	move.w	4(a1),d2
+	eor.w	d2,d0
+	move.w	d0,4(a1)
+	move.w	d0,(a2)+
+	eor.w	d1,d0
+	and.w	d1,d0
+	and.w	d4,d0
+	move.w	6(a1),d2
+	eor.w	d2,d0
+	move.w	d0,6(a1)
+	move.w	d0,(a2)+
+
+	add.w	#10,a0
+	add.w	#160,a1
+
+	dbf.w	d3,bloop5
+	rts
+***************************************************************************
+setsuper:
+	clr.l	-(sp)			
+	move.w	#$20,-(sp)
+	trap	#1
+	addq.l	#6,sp
+	move.l	d0,savesuper
+	rts
+***************************************************************************
+newvbi2:
+	move.w	#1,vbiflag
+	rte	
+***************************************************************************
+newvbi:
+	clr.b	$fffffa1b.w
+	move.b	#199,$fffffa21
+	move.b	#8,$fffffa1b.w
+
+	move.l	#border,$120
+
+	move.w	#1,vbiflag
+
+	jsr	music+8
+
+	move.w	(a6),$ff8242
+	move.w	2(a6),$ff8244
+	move.w	4(a6),$ff8246
+	move.w	6(a6),$ff8248
+	move.w	8(a6),$ff824a
+	move.w	10(a6),$ff824c
+	move.w	12(a6),$ff824e
+	move.w	14(a6),$ff8250
+	move.w	16(a6),$ff8252
+	move.w	18(a6),$ff8254
+	move.w	20(a6),$ff8256
+	move.w	22(a6),$ff8258
+	move.w	24(a6),$ff825a
+	move.w	26(a6),$ff825c
+	move.w	28(a6),$ff825e
+
+	rte
+***************************************************************************
+waitvbl:
+	cmpi.w	#1,vbiflag
+	bne	waitvbl
+	move.w	#0,vbiflag
+	rts 
+***************************************************************************
+setscreen:
+	move.w	#0,-(sp)
+	move.l	#$30000,-(sp)
+	move.l	#$30000,-(sp)
+	move.w	#$5,-(sp)
+	trap	#14
+	add.l	#12,sp
+	rts
+***************************************************************************
+screenswap:
+	add.l	#32000+48*160,scrsw
+	cmp.l	#64000+96*160,scrsw
+	bne	hpp
+	move.l	#0,scrsw
+hpp:
+	move.l	#$30000,a5
+	add.l	scrsw,a5
+
+	move.l	a5,d0
+	lsr.l	#8,d0
+	move.b	d0,$ff8203
+	lsr.l	#8,d0
+	move.b	d0,$ff8201
+
+	rts
+***************************************************************************
+border:
+	clr.b	$fffffa1b.w
+	movem.l	d0/a0,-(sp)
+	movea.w	#$fa21,a0
+	move.b	#200,(a0)
+	move.b	#8,$fffffa1b.w
+	move.b	(a0),d0
+wait:	cmp.b	(a0),d0
+	beq	wait
+	clr.b	$ffff820a.w
+	moveq.w	#2,d0
+boloop:	nop
+	dbf.w	d0,boloop
+	move.b	#2,$ffff820a.w
+	movem.l	(sp)+,d0/a0
+	bclr	#0,$fffffa0f.w
+
+	move.w	30(a6),$ff8242
+	move.w	32(a6),$ff8244
+	move.w	34(a6),$ff8246
+	move.w	36(a6),$ff8248
+	move.w	38(a6),$ff824a
+	move.w	40(a6),$ff824c
+	move.w	42(a6),$ff824e
+	move.w	44(a6),$ff8250
+	move.w	46(a6),$ff8252
+	move.w	48(a6),$ff8254
+	move.w	50(a6),$ff8256
+	move.w	52(a6),$ff8258
+	move.w	54(a6),$ff825a
+	move.w	56(a6),$ff825c
+	move.w	58(a6),$ff825e
+
+	rte
+***************************************************************************
+piccy:
+	move.w	#0,$ff8240
+	move.w	#0,$ff8242
+	move.w	#0,$ff8244
+	move.w	#0,$ff8246
+	move.w	#0,$ff8248
+	move.w	#0,$ff824a
+	move.w	#0,$ff824c
+	move.w	#0,$ff824e
+	move.w	#0,$ff8250
+	move.w	#0,$ff8252
+	move.w	#0,$ff8254
+	move.w	#0,$ff8256
+	move.w	#0,$ff8258
+	move.w	#0,$ff825a
+	move.w	#0,$ff825c
+	move.w	#0,$ff825e
+
+	move.l	#bild+34,a0
+	move.l	#$30000,a1
+	move.w	#8000,d0
+getup2:	move.l	(a0)+,(a1)+
+	dbf.w	d0,getup2
+
+	move.l	#fade,a0
+	move.l	#$ff8242,a1
+	move.w	#6,d0
+fadeup:
+	move.w	(a0)+,(a1)
+	move.w	(a0)+,2(a1)
+	move.w	(a0)+,4(a1)
+	move.w	(a0)+,6(a1)
+	move.w	(a0)+,8(a1)
+	move.w	(a0)+,10(a1)
+	move.w	(a0)+,12(a1)
+
+	jsr	waitvbl
+	jsr	waitvbl
+	jsr	waitvbl
+	jsr	waitvbl
+	jsr	waitvbl
+	jsr	waitvbl
+
+	dbf.w	d0,fadeup
+
+key:	cmp.b	#57,$fffc02
+	bne	key
+
+	move.w	#6,d0
+fadedown:
+	move.w	-(a0),12(a1)
+	move.w	-(a0),10(a1)
+	move.w	-(a0),8(a1)
+	move.w	-(a0),6(a1)
+	move.w	-(a0),4(a1)
+	move.w	-(a0),2(a1)
+	move.w	-(a0),(a1)
+
+	jsr	waitvbl
+	jsr	waitvbl
+
+	dbf.w	d0,fadedown
+
+
+	rts
+***************************************************************************
+slut:
+	move.l	oldvbi,$70.w
+
+*	clr.b	$fffa1b
+*	bset	#0,$fffa07
+*	bset	#0,$fffa13
+*	move.b	#0,$fffa21
+
+	move.w	#0,-(sp)
+	move.l	#$70000,-(sp)
+	move.l	#$70000,-(sp)
+	move.w	#$5,-(sp)
+	trap	#14
+	add.l	#12,sp
+
+	move	#$8800,a0
+	move.l	#$08000000,(a0)
+	move.l	#$09000000,(a0)
+	move.l	#$0a000000,(a0)
+	move.b	#7,$484.w
+
+	move.l	#save,a0
+	move.l	(a0)+,$120
+	move.b	(a0)+,$fffa1b
+	move.b	(a0)+,$fffa09
+	move.b	(a0)+,$fffa07
+	move.b	(a0)+,$fffa13
+	move.b	(a0)+,$fffa21
+
+	move.w	#0,$ff8240
+	move.w	#$777,$ff8242
+	move.w	#$777,$ff8244
+	move.w	#$777,$ff8246
+	move.w	#0,$ff8248
+	move.w	#0,$ff824a
+	move.w	#0,$ff824c
+	move.w	#0,$ff824e
+	move.w	#0,$ff8250
+	move.w	#0,$ff8252
+	move.w	#0,$ff8254
+	move.w	#0,$ff8256
+	move.w	#0,$ff8258
+	move.w	#0,$ff825a
+	move.w	#0,$ff825c
+	move.w	#0,$ff825e
+
+	move.l	savesuper,-(sp)
+	move.w	#$20,-(sp)
+	trap	#1
+	addq.l	#6,sp
+
+	move.l	#str„ng2,-(sp)
+	move.w	#0,-(sp)
+	move.w	#25,-(sp)
+	trap	#14
+	addq.l	#8,sp
+
+	clr.w	-(sp)
+	trap	#1
+***************************************************************************
+
+***************************************************************************
+savesuper:	dc.l	0
+vbiflag:	dc.w	0
+oldvbi:		dc.l	0
+sinx:		incbin	"shdebobx.sin"
+	even
+siny:		incbin	"shdeboby.sin"
+	even
+bigsinx:	incbin	"bigshdex.sin"
+	even
+bigsiny:	incbin	"bigshdey.sin"
+	even
+boll:		dc.l	%00000111111000000000000000000000
+		dc.l	%00011111111110000000000000000000
+		dc.l	%00111111111111000000000000000000
+		dc.l	%01111111111111100000000000000000
+		dc.l	%01111111111111100000000000000000
+		dc.l	%11111111111111110000000000000000
+		dc.l	%11111111111111110000000000000000
+		dc.l	%11111111111111110000000000000000
+		dc.l	%11111111111111110000000000000000
+		dc.l	%11111111111111110000000000000000
+		dc.l	%11111111111111110000000000000000
+		dc.l	%01111111111111100000000000000000
+		dc.l	%01111111111111100000000000000000
+		dc.l	%00111111111111000000000000000000
+		dc.l	%00011111111110000000000000000000
+		dc.l	%00000111111000000000000000000000
+		dc.l	%00000011111100000000000000000000
+		dc.l	%00001111111111000000000000000000
+		dc.l	%00011111111111100000000000000000
+		dc.l	%00111111111111110000000000000000
+		dc.l	%00111111111111110000000000000000
+		dc.l	%01111111111111111000000000000000
+		dc.l	%01111111111111111000000000000000
+		dc.l	%01111111111111111000000000000000
+		dc.l	%01111111111111111000000000000000
+		dc.l	%01111111111111111000000000000000
+		dc.l	%01111111111111111000000000000000
+		dc.l	%00111111111111110000000000000000
+		dc.l	%00111111111111110000000000000000
+		dc.l	%00011111111111100000000000000000
+		dc.l	%00001111111111000000000000000000
+		dc.l	%00000011111100000000000000000000
+		dc.l	%00000001111110000000000000000000
+		dc.l	%00000111111111100000000000000000
+		dc.l	%00001111111111110000000000000000
+		dc.l	%00011111111111111000000000000000
+		dc.l	%00011111111111111000000000000000
+		dc.l	%00111111111111111100000000000000
+		dc.l	%00111111111111111100000000000000
+		dc.l	%00111111111111111100000000000000
+		dc.l	%00111111111111111100000000000000
+		dc.l	%00111111111111111100000000000000
+		dc.l	%00111111111111111100000000000000
+		dc.l	%00011111111111111000000000000000
+		dc.l	%00011111111111111000000000000000
+		dc.l	%00001111111111110000000000000000
+		dc.l	%00000111111111100000000000000000
+		dc.l	%00000001111110000000000000000000
+		dc.l	%00000000111111000000000000000000
+		dc.l	%00000011111111110000000000000000
+		dc.l	%00000111111111111000000000000000
+		dc.l	%00001111111111111100000000000000
+		dc.l	%00001111111111111100000000000000
+		dc.l	%00011111111111111110000000000000
+		dc.l	%00011111111111111110000000000000
+		dc.l	%00011111111111111110000000000000
+		dc.l	%00011111111111111110000000000000
+		dc.l	%00011111111111111110000000000000
+		dc.l	%00011111111111111110000000000000
+		dc.l	%00001111111111111100000000000000
+		dc.l	%00001111111111111100000000000000
+		dc.l	%00000111111111111000000000000000
+		dc.l	%00000011111111110000000000000000
+		dc.l	%00000000111111000000000000000000
+		dc.l	%00000000011111100000000000000000
+		dc.l	%00000001111111111000000000000000
+		dc.l	%00000011111111111100000000000000
+		dc.l	%00000111111111111110000000000000
+		dc.l	%00000111111111111110000000000000
+		dc.l	%00001111111111111111000000000000
+		dc.l	%00001111111111111111000000000000
+		dc.l	%00001111111111111111000000000000
+		dc.l	%00001111111111111111000000000000
+		dc.l	%00001111111111111111000000000000
+		dc.l	%00001111111111111111000000000000
+		dc.l	%00000111111111111110000000000000
+		dc.l	%00000111111111111110000000000000
+		dc.l	%00000011111111111100000000000000
+		dc.l	%00000001111111111000000000000000
+		dc.l	%00000000011111100000000000000000
+		dc.l	%00000000001111110000000000000000
+		dc.l	%00000000111111111100000000000000
+		dc.l	%00000001111111111110000000000000
+		dc.l	%00000011111111111111000000000000
+		dc.l	%00000011111111111111000000000000
+		dc.l	%00000111111111111111100000000000
+		dc.l	%00000111111111111111100000000000
+		dc.l	%00000111111111111111100000000000
+		dc.l	%00000111111111111111100000000000
+		dc.l	%00000111111111111111100000000000
+		dc.l	%00000111111111111111100000000000
+		dc.l	%00000011111111111111000000000000
+		dc.l	%00000011111111111111000000000000
+		dc.l	%00000001111111111110000000000000
+		dc.l	%00000000111111111100000000000000
+		dc.l	%00000000001111110000000000000000
+		dc.l	%00000000000111111000000000000000
+		dc.l	%00000000011111111110000000000000
+		dc.l	%00000000111111111111000000000000
+		dc.l	%00000001111111111111100000000000
+		dc.l	%00000001111111111111100000000000
+		dc.l	%00000011111111111111110000000000
+		dc.l	%00000011111111111111110000000000
+		dc.l	%00000011111111111111110000000000
+		dc.l	%00000011111111111111110000000000
+		dc.l	%00000011111111111111110000000000
+		dc.l	%00000011111111111111110000000000
+		dc.l	%00000001111111111111100000000000
+		dc.l	%00000001111111111111100000000000
+		dc.l	%00000000111111111111000000000000
+		dc.l	%00000000011111111110000000000000
+		dc.l	%00000000000111111000000000000000
+		dc.l	%00000000000011111100000000000000
+		dc.l	%00000000001111111111000000000000
+		dc.l	%00000000011111111111100000000000
+		dc.l	%00000000111111111111110000000000
+		dc.l	%00000000111111111111110000000000
+		dc.l	%00000001111111111111111000000000
+		dc.l	%00000001111111111111111000000000
+		dc.l	%00000001111111111111111000000000
+		dc.l	%00000001111111111111111000000000
+		dc.l	%00000001111111111111111000000000
+		dc.l	%00000001111111111111111000000000
+		dc.l	%00000000111111111111110000000000
+		dc.l	%00000000111111111111100000000000
+		dc.l	%00000000011111111111000000000000
+		dc.l	%00000000001111111110000000000000
+		dc.l	%00000000000011111100000000000000
+		dc.l	%00000000000001111110000000000000
+		dc.l	%00000000000111111111100000000000
+		dc.l	%00000000001111111111110000000000
+		dc.l	%00000000011111111111111000000000
+		dc.l	%00000000011111111111111000000000
+		dc.l	%00000000111111111111111100000000
+		dc.l	%00000000111111111111111100000000
+		dc.l	%00000000111111111111111100000000
+		dc.l	%00000000111111111111111100000000
+		dc.l	%00000000111111111111111100000000
+		dc.l	%00000000111111111111111100000000
+		dc.l	%00000000011111111111111000000000
+		dc.l	%00000000011111111111111000000000
+		dc.l	%00000000001111111111110000000000
+		dc.l	%00000000000111111111100000000000
+		dc.l	%00000000000001111110000000000000
+		dc.l	%00000000000000111111000000000000
+		dc.l	%00000000000011111111110000000000
+		dc.l	%00000000000111111111111000000000
+		dc.l	%00000000001111111111111100000000
+		dc.l	%00000000001111111111111100000000
+		dc.l	%00000000011111111111111110000000
+		dc.l	%00000000011111111111111110000000
+		dc.l	%00000000011111111111111110000000
+		dc.l	%00000000011111111111111110000000
+		dc.l	%00000000011111111111111110000000
+		dc.l	%00000000011111111111111110000000
+		dc.l	%00000000001111111111111100000000
+		dc.l	%00000000001111111111111100000000
+		dc.l	%00000000000111111111111000000000
+		dc.l	%00000000000011111111110000000000
+		dc.l	%00000000000000111111000000000000
+		dc.l	%00000000000000011111100000000000
+		dc.l	%00000000000001111111111000000000
+		dc.l	%00000000000011111111111100000000
+		dc.l	%00000000000111111111111110000000
+		dc.l	%00000000000111111111111110000000
+		dc.l	%00000000001111111111111111000000
+		dc.l	%00000000001111111111111111000000
+		dc.l	%00000000001111111111111111000000
+		dc.l	%00000000001111111111111111000000
+		dc.l	%00000000001111111111111111000000
+		dc.l	%00000000001111111111111111000000
+		dc.l	%00000000000111111111111110000000
+		dc.l	%00000000000111111111111110000000
+		dc.l	%00000000000011111111111100000000
+		dc.l	%00000000000001111111111000000000
+		dc.l	%00000000000000011111100000000000
+		dc.l	%00000000000000001111110000000000
+		dc.l	%00000000000000111111111100000000
+		dc.l	%00000000000001111111111110000000
+		dc.l	%00000000000011111111111111000000
+		dc.l	%00000000000011111111111111000000
+		dc.l	%00000000000111111111111111100000
+		dc.l	%00000000000111111111111111100000
+		dc.l	%00000000000111111111111111100000
+		dc.l	%00000000000111111111111111100000
+		dc.l	%00000000000111111111111111100000
+		dc.l	%00000000000111111111111111100000
+		dc.l	%00000000000011111111111111000000
+		dc.l	%00000000000011111111111111000000
+		dc.l	%00000000000001111111111110000000
+		dc.l	%00000000000000111111111100000000
+		dc.l	%00000000000000001111110000000000
+		dc.l	%00000000000000000111111000000000
+		dc.l	%00000000000000011111111110000000
+		dc.l	%00000000000000111111111111000000
+		dc.l	%00000000000001111111111111100000
+		dc.l	%00000000000001111111111111100000
+		dc.l	%00000000000011111111111111110000
+		dc.l	%00000000000011111111111111110000
+		dc.l	%00000000000011111111111111110000
+		dc.l	%00000000000011111111111111110000
+		dc.l	%00000000000011111111111111110000
+		dc.l	%00000000000011111111111111110000
+		dc.l	%00000000000001111111111111100000
+		dc.l	%00000000000001111111111111100000
+		dc.l	%00000000000000111111111111000000
+		dc.l	%00000000000000011111111110000000
+		dc.l	%00000000000000000111111000000000
+		dc.l	%00000000000000000011111100000000
+		dc.l	%00000000000000001111111111000000
+		dc.l	%00000000000000011111111111100000
+		dc.l	%00000000000000111111111111110000
+		dc.l	%00000000000000111111111111110000
+		dc.l	%00000000000001111111111111111000
+		dc.l	%00000000000001111111111111111000
+		dc.l	%00000000000001111111111111111000
+		dc.l	%00000000000001111111111111111000
+		dc.l	%00000000000001111111111111111000
+		dc.l	%00000000000001111111111111111000
+		dc.l	%00000000000000111111111111110000
+		dc.l	%00000000000000111111111111110000
+		dc.l	%00000000000000011111111111100000
+		dc.l	%00000000000000001111111111000000
+		dc.l	%00000000000000000011111100000000
+		dc.l	%00000000000000000001111110000000
+		dc.l	%00000000000000000111111111100000
+		dc.l	%00000000000000001111111111110000
+		dc.l	%00000000000000011111111111111000
+		dc.l	%00000000000000011111111111111000
+		dc.l	%00000000000000111111111111111100
+		dc.l	%00000000000000111111111111111100
+		dc.l	%00000000000000111111111111111100
+		dc.l	%00000000000000111111111111111100
+		dc.l	%00000000000000111111111111111100
+		dc.l	%00000000000000111111111111111100
+		dc.l	%00000000000000011111111111111000
+		dc.l	%00000000000000011111111111111000
+		dc.l	%00000000000000001111111111110000
+		dc.l	%00000000000000000111111111100000
+		dc.l	%00000000000000000001111110000000
+		dc.l	%00000000000000000000111111000000
+		dc.l	%00000000000000000011111111110000
+		dc.l	%00000000000000000111111111111000
+		dc.l	%00000000000000001111111111111100
+		dc.l	%00000000000000001111111111111100
+		dc.l	%00000000000000011111111111111110
+		dc.l	%00000000000000011111111111111110
+		dc.l	%00000000000000011111111111111110
+		dc.l	%00000000000000011111111111111110
+		dc.l	%00000000000000011111111111111110
+		dc.l	%00000000000000011111111111111110
+		dc.l	%00000000000000001111111111111100
+		dc.l	%00000000000000001111111111111100
+		dc.l	%00000000000000000111111111111000
+		dc.l	%00000000000000000011111111110000
+		dc.l	%00000000000000000000111111000000
+		dc.l	%00000000000000000000011111100000
+		dc.l	%00000000000000000001111111111000
+		dc.l	%00000000000000000011111111111100
+		dc.l	%00000000000000000111111111111110
+		dc.l	%00000000000000000111111111111110
+		dc.l	%00000000000000001111111111111111
+		dc.l	%00000000000000001111111111111111
+		dc.l	%00000000000000001111111111111111
+		dc.l	%00000000000000001111111111111111
+		dc.l	%00000000000000001111111111111111
+		dc.l	%00000000000000001111111111111111
+		dc.l	%00000000000000000111111111111110
+		dc.l	%00000000000000000111111111111110
+		dc.l	%00000000000000000011111111111100
+		dc.l	%00000000000000000001111111111000
+		dc.l	%00000000000000000000011111100000
+v:		dc.w	0
+v2:		dc.w	0
+v3:		dc.w	0
+v4:		dc.w	0
+v5:		dc.w	0
+v6:		dc.w	0
+v7:		dc.w	0
+v8:		dc.w	0
+v9:		dc.w	0
+v10:		dc.w	0
+v11:		dc.w	0
+v12:		dc.w	0
+v13:		dc.w	0
+v14:		dc.w	0
+v15:		dc.w	0
+v16:		dc.w	0
+v17:		dc.w	0
+v18:		dc.w	0
+v19:		dc.w	0
+v20:		dc.w	0
+v21:		dc.w	0
+v22:		dc.w	0
+v23:		dc.w	0
+v24:		dc.w	0
+space:		ds.w	4*16
+a:		dc.w	0
+l:		dc.w	0
+scrsw:		dc.l	0
+buffer:		ds.w	128
+buffer2:	dc.w	0
+buffer3:	ds.w	128
+buffer4:	dc.w	0
+buffer5:	ds.w	128
+buffer6:	dc.w	0
+buffer7:	ds.w	128
+buffer8:	dc.w	0
+buffer9:	ds.w	128
+buffer10:	dc.w	0
+buffer11:	ds.w	128
+buffer12:	dc.w	0
+buffer13:	ds.w	128
+buffer14:	dc.w	0
+buffer15:	ds.w	128
+buffer16:	dc.w	0
+buffer17:	ds.w	128
+buffer18:	dc.w	0
+buffer19:	ds.w	128
+buffer20:	dc.w	0
+buffer21:	ds.w	128
+buffer22:	dc.w	0
+buffer23:	ds.w	128
+buffer24:	dc.w	0
+t:		dc.w	0
+xp:		dc.w	16
+yp:		dc.w	18
+font:		incbin	"zaqe.fnt"
+	even
+bokplac:	dc.w	0
+char:		dc.w	0
+u:		dc.w	0
+clear:		dc.w	0
+str„ng:		dc.b	$12 
+str„ng2		dc.b	$8 
+save:		ds.b	9 
+text:		dc.b	"         YES....        SHADED BOBS....          AND THERE IS TWELVE OF THOSE LITTLE BEAUTIES !!!!!         WITHOUT MUSIC AND SCROLLER I CAN DRAW SIXTEEN OF THOSE ON ONE VBL...     AND MY ROUTINE IS NOT MUCH OPTIMIZED.      "
+		dc.b	"    JUST WAIT FOR THE FINAL VERSION !!!!!                     SOON I WILL CHANGE THOSE SMALL TO A BIG ONE WHICH YOU CAN CONTROL USING THE KEYBOARD.          WHEN TALKING ABOUT SHADED BOBS I ALSO WANT TO GREET AGGRESSION FOR "
+		dc.b	" MAKING SHADED BOBS ON THE ST TOO... THANKS FOR A NICE DEMO GUYS....   HERE IS THE BIG BOB.   USE THE ARROW KEYS TO CHANGE THE MOVEMENTS. LEFT AND RIGHT TO INCREASE AND DECREASE THE INC X VALUE. THE UP AND DOWN ARROW TO CHANGE "
+		dc.b	"THE INC Y VALUE.      PRESS THE NICE KEY UNDO TO CLEAR AWAY ALL THE RUBBISH FROM THE SCREEN.      THE KEYS ZERO TO NINE TO CHANGE THE COLOURS ON THE SCREEN....      WELL..   THAT WAS THE KEYS.    BEFORE I FORGET IT    LET US "
+		dc.b	"TAKE THE CREDITS         ALL CODING BY OB OF ANATOMICA.    I AM IMPRESSED IF YOU HAVE HEARD OF ME BEFORE !!         INTRO PICCY AND FONT IS MADE BY OUR GREAT GRAPHICS GUY CALLED ZAQE                   THE COOL MUSIC IS COMPOSED "
+		dc.b	"BY CELTIC OF AURA AND IS RIPPED BY ME.        THAT WAS THE CREDITS...    NOW ITS ONE WEEK AGO THE PARTY WHICH ANATOMICA AND CRYSTALIC HAD ENDED. IT WAS A GREAT TIME WITH A LOT OF CODING    DRAWING    COMPOSING BUT NOT MUCH "
+		dc.b	"SLEEPING !!!!        BY THE WAY DID YOU LIKE THE BLIPP BLOPP TECHNO MUSIC AT THE INTRO ?   COOL OR WOT...   IF YOU DONT LIKE IT TRY TO MAKE A BETTER TECHNO TUNE IN BLIPP BLOPP YOURSELF. IT WAS OUR MUSICIAN BLUE NUNS FIRST TRY AT"
+		dc.b	" BLIPP BLOPP. HE DID NOT LIKE TO WRITE BLIPP BLOPP BUT WE FORCED HIM TO MAKE SOME. HE PREFERS TO MAKE TRACKER MUSIC AND I UNDERSTANDS HIM !!!!           NOPE   TIME IS RUNNING AWAY SO I GOT TO END NOW.        PRESS SPACE DUDES "
+		dc.b	"                     ANATOMICA            ",0
+	even
+bokplac2:	dc.w	0
+music:		incbin	"aura.mus"
+	even
+big_boll:	incbin	"shde.spr"
+	even
+bild:		incbin	"atari.pi1"
+	even
+fade:
+		dc.w	$0,$0,$0,$0,$0,$0,$0
+		dc.w	$0,$0,$111,$0,$0,$0,$0
+		dc.w	$0,$111,$222,$0,$0,$0,$0
+		dc.w	$111,$222,$333,$0,$0,$0,$0
+		dc.w	$222,$333,$444,$111,$0,$0,$0
+		dc.w	$333,$444,$555,$222,$111,$0,$0
+		dc.w	$444,$555,$666,$333,$222,$111,$0
+		dc.w	$555,$666,$777,$444,$333,$222,$111
+
+bbuffer:	ds.w	1280
+bbuffer2:	dc.w	0
+diffpals:	dc.w	0
+colours:	dc.w	$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$1,$0,$0,$0,$0,$0,$0,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$1,$2,$1,$0,$0,$0,$0,$0,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$0,$1,$2,$0,$0,$0,$100,$111
+		dc.w	$0,$0,$0,$0,$0,$1,$2,$3,$2,$1,$0,$0,$0,$0,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$100,$210,$222
+		dc.w	$0,$0,$0,$0,$1,$2,$3,$4,$3,$2,$1,$0,$0,$0,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$333
+		dc.w	$0,$0,$0,$1,$2,$3,$4,$5,$4,$3,$2,$1,$0,$0,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$444
+		dc.w	$0,$0,$1,$2,$3,$4,$5,$6,$5,$4,$3,$2,$0,$0,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$555
+		dc.w	$0,$1,$2,$3,$4,$5,$6,$7,$5,$4,$3,$2,$1,$0,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$666
+		dc.w	$1,$2,$3,$4,$5,$6,$7,$7,$7,$6,$5,$4,$3,$2,$1
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+
+		dc.w	$1,$2,$3,$4,$5,$6,$7,$7,$7,$6,$5,$4,$3,$2,$1
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$1,$2,$3,$4,$5,$6,$7,$6,$5,$4,$3,$2,$1,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$0,$1,$2,$3,$4,$5,$6,$5,$4,$3,$2,$1,$0,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$0,$0,$1,$2,$3,$4,$5,$4,$3,$2,$1,$0,$0,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$0,$0,$0,$1,$2,$3,$4,$3,$2,$1,$0,$0,$0,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$0,$0,$0,$0,$1,$2,$3,$2,$1,$0,$0,$0,$0,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$0,$0,$0,$0,$0,$1,$2,$1,$0,$0,$0,$0,$0,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$1,$0,$0,$0,$0,$0,$0,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+
+		dc.w	$0,$0,$0,$0,$0,$0,$100,$0,$0,$0,$0,$0,$0,$10,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$0,$0,$0,$0,$100,$200,$0,$0,$0,$0,$0,$10,$20,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$0,$0,$0,$100,$200,$300,$0,$0,$0,$0,$10,$20,$30,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$0,$0,$100,$200,$300,$400,$0,$0,$0,$10,$20,$30,$40,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$0,$100,$200,$300,$400,$500,$0,$0,$10,$20,$30,$40,$50,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$100,$200,$300,$400,$500,$600,$0,$10,$20,$30,$40,$50,$60,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$100,$200,$300,$400,$500,$600,$700,$10,$20,$30,$40,$50,$60,$70,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+	
+		dc.w	$100,$200,$300,$400,$500,$600,$700,$10,$20,$30,$40,$50,$60,$70,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$100,$200,$300,$400,$500,$600,$0,$10,$20,$30,$40,$50,$60,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$0,$100,$200,$300,$400,$500,$0,$0,$10,$20,$30,$40,$50,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$0,$0,$100,$200,$300,$400,$0,$0,$0,$10,$20,$30,$40,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$0,$0,$0,$100,$200,$300,$0,$0,$0,$0,$10,$20,$30,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$0,$0,$0,$0,$100,$200,$0,$0,$0,$0,$0,$10,$20,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$0,$0,$0,$0,$0,$100,$0,$0,$0,$0,$0,$0,$10,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$10,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$10,$0,$0,$0,$0,$0,$0,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$0,$0,$0,$0,$0,$10,$20,$10,$0,$0,$0,$0,$0,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$0,$0,$0,$0,$10,$20,$30,$20,$10,$0,$0,$0,$0,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$0,$0,$0,$10,$20,$30,$40,$30,$20,$10,$0,$0,$0,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$0,$0,$10,$20,$30,$40,$50,$40,$30,$20,$10,$0,$0,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$0,$10,$20,$30,$40,$50,$60,$50,$40,$30,$20,$10,$0,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$10,$20,$30,$40,$50,$60,$70,$60,$50,$40,$30,$20,$10,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+
+colours2:	dc.w	$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+
+shdepal:	dc.w	$0,$10,$20,$30,$40,$50,$60,$70,$60,$50,$40,$30,$20,$10,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$100,$200,$310,$420,$530,$640,$750,$10,$20,$31,$42,$53,$64,$75
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$100,$200,$300,$400,$300,$200,$100,$1,$2,$3,$4,$3,$2,$1
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$8,$1,$9,$2,$a,$3,$b,$4,$c,$5,$d,$6,$e,$7,$f
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$1,$2,$3,$4,$5,$6,$7,$6,$5,$4,$3,$2,$1,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$101,$202,$303,$404,$505,$606,$707,$606,$505,$404,$303,$202,$101,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$0,$0,$0,$0,$0,$1,$2,$1,$0,$0,$0,$0,$0,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$0,$0,$0,$707,$0,$0,$0,$707,$0,$0,$0,$707,$0,$0,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$100,$200,$300,$400,$500,$600,$700,$710,$720,$730,$740,$750,$760,$770,$771
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+		dc.w	$111,$222,$333,$444,$555,$666,$777,$666,$555,$444,$333,$222,$111,$0,$0
+		dc.w	$0,$0,$0,$0,$0,$0,$0,$100,$210,$320,$431,$542,$653,$764,$777
+
+	end
+		
