@@ -1,0 +1,1 @@
+.so <MANDIR>/xjove.<MANEXT>
