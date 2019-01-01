@@ -1,4 +1,5 @@
 Iceblox Plus for the Atari ST
+Version 1.0
 Written and designed by Karl Hörnell, karl@javaonthebrain.com
 (c) Eweguo AB, 2018
 

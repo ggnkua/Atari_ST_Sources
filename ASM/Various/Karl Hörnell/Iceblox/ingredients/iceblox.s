@@ -4803,7 +4803,7 @@ clega3:
 
 draw_logo:
 * Clear screen
-	move.w #15999,d0
+	move.w #7999,d0
 	move.l screenbase,a1
 prei1:	clr.l (a1)+
 	dbra d0,prei1
@@ -4906,7 +4906,15 @@ intro7:	move.l #splash_palette,a0
 	cmpi.w #32,d0
 	bne intro7
 
-	move.w #15999,d0
+* Set low resolution mode
+	move.w #0, -(sp)
+	move.l #-1, -(sp)
+	move.l #-1,-(sp)
+	move.w #5,-(sp)
+	trap #14
+	add.l #12,sp
+
+	move.w #7999,d0
 	move.l screenbase,a1
 	move.l #splash_pixels,a0
 intro1: move.l (a0)+,(a1)+
