@@ -1,4 +1,5 @@
 * Iceblox Plus for Atari ST
+* Version 1.0.2
 
 ******************************** Constants
 
@@ -428,7 +429,7 @@ sele31: move.w d2,num_flames
 	move.w #0,counter
 	move.w #0,cheat_mode
 	move.w #0,cheat_count
-	move.w #0,previous_fire
+	move.w #0,previous_joy
 
 * Animate flames
 sele34:	movea.l screenbase,a1
@@ -470,15 +471,20 @@ sele37:	addq.l #2,a4
 	dbra.w d1,sele33
 
 * Check cheat code
-	move.w previous_fire,d1
+	pea super_read_keyboard
+	move.w #38,-(sp)
+	trap #14
+	addq.l #6,sp
+	move.w previous_joy,d1
 	move.b joysticks,d0
 	or.b joysticks+1,d0
+	or.b joysticks+2,d0
 	btst #0,d0
 	beq sele45
 	btst #0,d1
 	bne sele45
 	addi.w #1,cheat_count
-sele45:	move.w d0,previous_fire
+sele45:	move.w d0,previous_joy
 	
 	jsr wait_for_vblank
 
@@ -932,13 +938,26 @@ glopc0:	move.l #0,(a0)
 	adda.l #20,a0
 	dbra.w d0,glopc0
 
-* Pete joystick control
+* Pete
 	tst.w pState
 	bne glop14
-	tst.w pDir
+* Check if all coins collected
+	cmpi.w #5,coins
+	bne glop99
+	move.w #0,iCounter
+	move.w #1,pState
+	move.w #6,new_sound
+	bra glop14
+* Joystick control
+glop99:	tst.w pDir
 	bne glop6
+	pea super_read_keyboard
+	move.w #38,-(sp)
+	trap #14
+	addq.l #6,sp
 	move.b joysticks,d0
 	or.b joysticks+1,d0
+	or.b joysticks+2,d0
 	movea.l #block_map,a0
 	move.w pPos,d1
 	btst #0,d0
@@ -1013,6 +1032,7 @@ glop10:
 glop6:	move.w pDir,d0
 	move.b joysticks,d1
 	or.b joysticks+1,d1
+	or.b joysticks+2,d1
 	cmpi.w #1,d0
 	bne glop50
 	btst #1,d1
@@ -1328,12 +1348,6 @@ glopa4:	move.w d1,iLook
 	move.w #4,new_sound
 	move.b #0x25,d0
 glopa6:	jsr add_score
-	cmpi.w #5,coins
-	bne glopa0
-* All coins collected
-	move.w #0,iCounter
-	move.w #1,pState
-	move.w #6,new_sound
 	bra glopa0
 * Moving ice
 glopa1: tst.w iDx
@@ -2303,16 +2317,17 @@ glop4:
 * Switch music on/off
 	move.b joysticks,d0
 	or.b joysticks+1,d0
+	or.b joysticks+2,d0
 	andi.w #128,d0
 	tst.w d0
 	beq glopj3
-	tst.w previous_fire
+	tst.w previous_joy
 	bne glopj3
 	move.w music_on,d1
 	eori.w #1,d1
 	move.w d1,music_on
 	move.w #2,music_update_flag
-glopj3:	move.w d0,previous_fire
+glopj3:	move.w d0,previous_joy
 
 	jmp glop2
 * End of main game loop
@@ -2933,8 +2948,13 @@ intro_loop:
 
 	jsr update_intro_counter
 
+	pea super_read_keyboard
+	move.w #38,-(sp)
+	trap #14
+	addq.l #6,sp
 	move.b joysticks,d0
 	or.b joysticks+1,d0
+	or.b joysticks+2,d0
 	btst #7,d0
 	beq intro_loop
 
@@ -4516,11 +4536,16 @@ gaov13:	move.l #0,(a0)+
 	adda.l #128,a0
 	dbra.w d0,gaov14
 
+	pea super_read_keyboard
+	move.w #38,-(sp)
+	trap #14
+	addq.l #6,sp
 	movea.l #highscore_texts+157,a0
 	move.w cursor_pos,d2
-	move.w previous_fire,d1
+	move.w previous_joy,d1
 	move.b joysticks,d0
 	or.b joysticks+1,d0
+	or.b joysticks+2,d0
 	btst #7,d0
 	bne gaov15
 	btst #2,d0
@@ -4560,7 +4585,7 @@ gaov21: cmpi.b #47,(a0,d2.w)
 	bne gaov20
 	move.b #65,(a0,d2.w)
 gaov20: 
-	move.w d0,previous_fire
+	move.w d0,previous_joy
 
 	movea.l #char_table,a0
 	movea.l screenbase,a1
@@ -4950,6 +4975,12 @@ setup_joystick:
    	trap   #14
    	addq.l   #8,sp 
 
+* Turn off keyboard clicks
+	pea super_key_click_off
+	move.w #38,-(sp)
+	trap #14
+	addq.l #6,sp
+
 * Handle joystick input
 	move.w   #34,-(sp)
    	trap   #14
@@ -5000,6 +5031,35 @@ restore_system:
 
 	rts
 
+*************************** Supervisor mode routines
+
+super_key_click_off:
+	bclr.b #0,0x484
+	rts
+
+* Use SPACE + WASD keys to simulate a third joystick
+super_read_keyboard:
+	move.b 0xffffc02,d0
+	move.b #0,d1
+	cmpi.b #64,d0
+	bpl reke4
+	cmpi.b #57,d0
+	bne reke0
+	move.b #128,d1
+reke0:	cmpi.b #17,d0
+	bne reke1
+	move.b #1,d1
+reke1:	cmpi.b #31,d0
+	bne reke2
+	move.b #2,d1
+reke2:	cmpi.b #30,d0
+	bne reke3
+	move.b #4,d1
+reke3:	cmpi.b #32,d0
+	bne reke4
+	move.b #8,d1
+reke4:	move.b d1,joysticks+2
+	rts
 
 *************************** Data section
 
@@ -5269,8 +5329,9 @@ levflame_types:
 * Joystick, mouse, palette restore data
 joy_on:	dc.b 0x14,0x12
 mouse_on: dc.b 0x08,0
-joysticks: dc.b 0,0
+joysticks: dc.b 0,0,0
 
+.align 2
 ikbd_vec: dc.l 0
 old_joy: dc.l 0
 old_palette: ds.w 16
@@ -5397,7 +5458,7 @@ block_draw_pos: dc.w 0
 score_buf: dc.b 0,0
 score_update_flag: dc.w 0
 music_update_flag: dc.w 0
-previous_fire: dc.w 0
+previous_joy: dc.w 0
 cheat_count: dc.w 0
 cheat_mode: dc.w 0
 
@@ -5483,7 +5544,7 @@ sound_jumptable:
 	dc.l sound_handle_done
 	dc.l sound_handle_newflame
 	dc.l sound_handle_death
-sound_durations: dc.b 0,111,5,55,63,63,99,63,63
+sound_durations: dc.b 0,111,5,55,63,63,98,63,63
 
 .align 4
 voice1_start: dc.l 0

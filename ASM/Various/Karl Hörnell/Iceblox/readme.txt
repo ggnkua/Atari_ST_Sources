@@ -1,5 +1,5 @@
 Iceblox Plus for the Atari ST
-Version 1.0
+Version 1.0.2
 Written and designed by Karl Hörnell, karl@javaonthebrain.com
 (c) Eweguo AB, 2018
 
@@ -13,3 +13,12 @@ data, as the corresponding .dat files.
 
 - To disable collisions (cheat code) on a level, press the joystick up exactly
 5 times during the between-levels screen.
+
+Version history:
+
+1.0.2 Removed keyboard klick. Implemented keyboard controls with SPACE + WASD.
+
+1.0.1 Fixed a bug that aborted the death sequence if the level was completed in
+the middle of it.
+
+1.0 Initial release.
