@@ -1,0 +1,2382 @@
+' *****************************************************************************
+' Byte Mechanic
+' by William Schneider
+' Copyright 1988 Antic Publishing
+'
+' Written and Compiled in GFA BASIC
+'
+' *****************************************************************************
+'
+Version$="1.10  05/23/88"
+'
+Rez%=Xbios(4)
+If Rez%=0
+  @Bell
+  Alert 3,"Change to medium|or high resolution",1,"End",I%
+  End
+Endif
+'
+@Filepp_info
+'
+' save orig colors for restoration upon prgm exit
+Dim Orig_colors%(4)
+For I%=1 To 4
+  Orig_colors%(I%)=Xbios(7,I%,-1)
+Next I%
+'
+' setup array for gem_menu procedure
+Dim Strip$(13)
+For I%=0 To 12
+  Read Strip$(I%)
+Next I%
+Data Desk,  Mechanic Info,--------------------
+Data 1,2,3,4,5,6,""
+Data Return,  Return to Mechanic  ,""
+'
+' Read keyboard buffer size and set no keys allowed in a macro
+Max_no_keys%=Min(63,Dpeek(Xbios(14,1)+4)/4-1)
+Type_ahead_buffer_on!=False
+'
+' setup variables
+Dim Key$(10)
+Read Pstring1$,Description_pstring1$,Pstring2$,Description_pstring2$
+Data "Printer String 1=027064027077000000000000000000000000000000000End"
+Data "Desc Str1=Epson: Reset 12CPI                                                 End"
+Data "Printer String 2=027064027077027071000000000000000000000000000End"
+Data "Desc Str2=Epson: Reset 12CPI Doublestrike                                    End"
+'
+Pstring1$=Mid$(Pstring1$,18,45)
+Description_pstring1$=Mid$(Description_pstring1$,11,67)
+Pstring2$=Mid$(Pstring2$,18,45)
+Description_pstring2$=Mid$(Description_pstring2$,11,67)
+'
+Graphmode 3
+'
+Size%=15000
+Rev$=Chr$(27)+"p"
+Nor$=Chr$(27)+"q"
+Block$=Rev$+" "+Nor$
+Setcolor 0,7,7,7
+Setcolor 1,7,0,0
+Setcolor 2,0,4,7
+Setcolor 3,0,0,0
+Red$=Chr$(27)+"b1"
+Blue$=Chr$(27)+"b2"
+Black$=Chr$(27)+"b3"
+Allowed_hex$="0123456789ABCDEF()/*-+"
+String_for_hex_input$=" 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6"
+String_for_ascii_input$="1234567890123456"
+Spr2$=Mki$(1)+Mki$(1)+Mki$(-1)+Mki$(0)+Mki$(3)
+If Rez%=1
+  Spr1$=Spr2$+String$(8,Mkl$(&HFF00))+String$(8,Mkl$(&H0))
+  Spr2$=Spr2$+String$(8,Mkl$(&HFFFF))+String$(8,Mkl$(&H0))
+Else
+  Spr1$=Spr2$+String$(8,Mkl$(&HFF00))+String$(8,Mkl$(&HFF00))
+  Spr2$=Spr2$+String$(8,Mkl$(&HFFFF))+String$(8,Mkl$(&HFFFF))
+Endif
+Available_memory%=Max(0,Fre(0)-118000)
+Path$=Chr$(65+Gemdos(25))+":\"
+Macro_path$=Chr$(65+Gemdos(25))+":\"
+'
+On Error Gosub Error_routine
+'
+' begin program
+Start0:
+Cls
+Erase S$()
+Showm
+Deftext 1,2,,6
+@Set_color_off
+'
+' Window!=True : blinking cursor on ascii side of hex mode
+' Window!=False: blinking cursor on hex side of hex mode
+Window!=False
+' Codes!=True : display all characters on screen
+' Codes!=False: display only ascii codes >31 and <127 on screen
+Codes!=True
+' Text!=True  : display in text mode
+' Text!=False : display in hex mode
+Text!=True
+'
+Clr Single_string_key$
+Replaced_single_string!=False
+Last_find_occurrence%=1
+Need_to_reorganize!=False
+'
+@Cur_off
+'
+' select file
+Print At(15,1);"Select file to read or click on cancel to end program:";
+Fileselect Path$+"*.*","",Filename$
+'
+' set selected drive as default
+Chdrive Asc(Filename$)-64
+'
+' check for valid filename
+If Right$(Filename$,1)="\" Or Filename$=""
+  @Finished
+Endif
+If Not Exist(Filename$)
+  @Bell
+  Clr Filename$
+  Alert 1,"|File does not exist",1,"Cont",A%
+  Goto Start0
+Endif
+'
+' find current path
+I%=Len(Filename$)
+While Mid$(Filename$,I%,1)<>"\"
+  Dec I%
+Wend
+Path$=Left$(Filename$,I%)
+'
+' Read file as strings of length size% into s$()
+Hidem
+Cls
+Print At(1,12);Space$(33-Len(Filename$)/2);"Reading file: ";Filename$;
+Open "I",#1,Filename$
+Length_file%=Lof(#1)
+'
+Max_length_file_before_replace%=Length_file%+14983
+File_start%=1
+File_end%=Length_file%
+'
+'   check if file will fit into free memory
+If Length_file%>Available_memory%
+  @Bell
+  Alert 1,"|  File too large        |File size = "+Str$(Length_file%)+"|Max size  = "+Str$(Available_memory%),2,"New File|Split",N%
+  If N%=1
+    Close
+    Goto Start0
+  Else
+    Cls
+    Print At(10,8);"File selected: ";Filename$
+    Print At(10,10);"File size = ";Length_file%;" = H";Hex$(Length_file%)
+    Print At(10,12);"Max size  = ";Available_memory%;" = H";Hex$(Available_memory%)
+    @Input_string("File start byte (xxxxxx or Hxxxxx)? ",10,15,6,3,"",*String$)
+    If Left$(String$)="H"
+      String$="&"+String$
+    Endif
+    File_start%=Val(String$)
+    @Input_string(", end byte? ",52,15,6,3,"",*String$)
+    If Left$(String$)="H"
+      String$="&"+String$
+    Endif
+    File_end%=Val(String$)
+  Endif
+Endif
+'
+'   read file
+If File_end%-File_start%+1<=Available_memory% And File_start%>0 And File_end%<=Length_file% And File_start%<=File_end%
+  Seek #1,File_start%-1
+  Length_file%=File_end%-File_start%+1
+  N%=Length_file%
+  No_dim%=(Length_file%-1)/Size%+1
+  ' add 1 extra element to array to have room for file inserts
+  Erase S$()
+  Dim S$(No_dim%+1)
+  Clr I%
+  While N%>0
+    Inc I%
+    S$(I%)=Input$(Min(Size%,N%),#1)
+    Sub N%,Size%
+  Wend
+  Close
+Else
+  @Bell
+  Alert 1,"Incorrect range",1,"New File",N%
+  Close
+  Goto Start0
+Endif
+'
+' file_pos% is a variable that represents the position in the file for
+' the character that will be displayed at the top left screen position
+File_pos%=1
+'
+' pos% is the position in the b$ string of the character under the cursor.
+' this is also the pos of the character under the cursor
+' relative to "file_pos%".
+Pos%=1
+'
+Start_at_new_file_pos:
+@Draw_screen_at_new_file_pos
+'
+Start_at_menu:
+@Draw_main_menu
+'
+Start_at_new_cursor_pos:
+@New_cur_pos
+'
+' wait for the act on menu choice
+If Instr("MNRY",Single_string_key$)=0 Or Length_file%=1
+  ' wait for menu choice from operator
+  @Getkey
+  Choice$=Key$
+Else
+  If Single_string_key$="R"
+    Choice$="R"
+    Pos%=Pos%+Length_find_string%-1
+  Else
+    If Single_string_key$="N"
+      Clr Single_string_key$
+      If Need_to_reorganize!
+        @Reorganize_array
+      Endif
+      Goto Start_at_menu
+    Else
+      If Single_string_key$="Y"
+        @Single_string_options
+        If Replaced_single_string!=True
+          Pos%=Pos%+Length_replace_string%
+          Replaced_single_string!=False
+          Goto Start_at_new_file_pos
+        Else
+          Goto Start_at_menu
+        Endif
+      Endif
+    Endif
+  Endif
+Endif
+'
+' some key choices will be a 2 byte string and some a 1 byte string
+' take action based on menu choice
+'
+'   After I wrote this section of code, I learned more about the BIOS(2,2) call
+'   which returns a 4 byte string which includes the shift code, key scan code,
+'   and ascii code.  The following code could have been written using BIOS(2,2).
+'   See the macros option "K" for an example.
+'
+If Len(Choice$)=2
+  '
+  ' actions for 2 byte string
+  Choice$=Right$(Choice$,1)
+  '
+  If Key$=Chr$(0)+Chr$(98)
+    ' display help screens
+    @Cur_off
+    Cls
+    Deftext 1,5,,Rez%*6
+    Text 172/Rez%,Rez%*6-(Rez%=2),"Help Directory      Page 1 of 2"
+    Print At(1,2);
+    Print "Arrows        - Move cursor around screen."
+    Print "Shift + right - Move cursor 4 characters right."
+    Print "Shift + left  - Move cursor 4 characters left."
+    Print "Tab           - Toggle cursor between hex & ASCII sides of display in Hex mode."
+    Print "Shift + up    - Go to top of screen."
+    Print "Shift + down  - Go to bottom of screen."
+    Print "Home          - Move cursor to beginning of file."
+    Print "Shift + Home  - Move cursor to end of file."
+    Print "<G>oto        - Go to a specific file position."
+    Print "<N>ext        - Move to next screen of data."
+    Print "<P>revious    - Move to previous screen of data."
+    Print "<U>p          - Add previous 11 lines of data."
+    Print "<D>own        - Add next 11 lines of data."
+    Print "<A>scii/Codes - Toggle display/non-display of ASCII chars <32 & >126."
+    Print "<H>ex/Text    - Toggle Hex/Text modes or return from View mode."
+    Print "<V>iew        - View text in wordwrap format. Spaces replace codes <32 or >126."
+    Print "<C>olr        - Toggle B&W/Color for codes <32 or >126 (B&W is faster)."
+    Print "<F>ind        - Find string from current file position (not case sensitive)."
+    Print "<R>epeat      - Repeat find from current file position w/replace option."
+    Print "                (Find string is not case sensitive, replace string is.)"
+    Print "<E>dit        - Edit file in memory.  Works only in Hex mode."
+    Print "<T>rade       - Find & replace ALL occurrences or those between 2 positions."
+    Print "                (IS case sensitive for both find and replace strings.)"
+    Print "<S>ave        - Save/append edited file under old or new filename.";
+    Void Inp(2)
+    Cls
+    Text 172/Rez%,Rez%*6-(Rez%=2),"Help Directory      Page 2 of 2"
+    Print At(1,2);
+    Print "<Q>uit        - Quit or open another file."
+    Print "<L>ist        - List hex or text screen to printer (not View mode)."
+    Print "<B>uffer      - Enable or disable type-ahead buffer."
+    Print "<K>ey         - Assign/Save/Load set of key strokes to the F1-F10 keys."
+    Print "Ge<M>         - Access to Desk Aceesories."
+    Print
+    Print "When you enter strings, characters will be checked and illegal characters"
+    Print "will not be accepted.  The following special keys will be active:"
+    Print "  Lf/Rt arrow - cursor left/right         Up/Dn arrow  - cursor beg/end"
+    Print "  Backspace   - cursor left & delete      Escape       - clear string"
+    Print "  Insert      - insert/overwrite toggle   Del          - delete under cursor"
+    Print "                Cursor is thin for insert mode, thick for overwrite."
+    Print
+    Print "When entering hex strings, the following characters will be replaced"
+    Print "as shown:"
+    Print "              ( is A   ) is B   / is C   * is D   -is E   + is F"
+    Print
+    Print "Less than 15,000 characters can be inserted in a file.  To insert more, save"
+    Print "and then reopen file.";
+    Void Inp(2)
+    Deftext 1,2,,6
+    Goto Start_at_new_file_pos
+  Endif
+  '
+  If Choice$=Chr$(71)
+    ' set cursor to top of file if "Home" key is selected
+    If File_pos%<>1
+      File_pos%=1
+      Pos%=1
+      Goto Start_at_new_file_pos
+    Else
+      Pos%=1
+      Goto Start_at_new_cursor_pos
+    Endif
+  Endif
+  '
+  ' change cursor position if arrow keys are selected
+  Pos%=Pos%-(Choice$=Chr$(77))+(Choice$=Chr$(75))
+  Pos%=Pos%-Length_line%*(Choice$=Chr$(80))+Length_line%*(Choice$=Chr$(72))
+  Goto Start_at_new_cursor_pos
+Endif
+'
+Choice$=Right$(Upper$(Key$),1)
+' actions for 1 byte string
+'
+If Choice$="K"
+  ' macro keys
+  Repeat
+    Cls
+    '
+    Print "       Byte Mechanic Macros"
+    Print
+    Print "  S - save macros to file."
+    Print "  L - load macros from file."
+    Print "  Fx - assign a macro to a function key (F1 to F10)."
+    Print "  HELP - macro editing help message."
+    Print "  UNDO - return to Byte Mechanic."
+    Print
+    @Get_key_code
+    If Scan_code%=98
+      @Macro_help
+      Scan_code%=98
+    Endif
+    If Ascii_code%=83 Or Ascii_code%=115 Or Ascii_code%=76 Or Ascii_code%=108
+      @Cur_off
+      Cls
+      Alert 2,"|Macro key files.",3,"Load|Save|Cancel",N%
+      If N%<>3
+        A$="Saving macro keys to "
+        If N%=1
+          A$="Loading macro keys from "
+        Endif
+        Print At(14,1);A$;"disk file.  Select filename.";
+        Fileselect Macro_path$+"*.*","",Macro_filename$
+        '
+        If Right$(Macro_filename$,1)<>"\" And Macro_filename$<>""
+          I%=Len(Macro_filename$)
+          While Mid$(Macro_filename$,I%,1)<>"\"
+            Dec I%
+          Wend
+          Macro_path$=Left$(Macro_filename$,I%)
+          If N%=1
+            If Not Exist(Macro_filename$)
+              @Bell
+              Clr Macro_filename$
+              Alert 1,"|File does not exist",1,"Cont",I%
+              Goto Start_at_menu
+            Else
+              Open "I",#1,Macro_filename$
+              Input #1,A$
+              If A$="@@@ MECHANIC Macro Key File @@@"
+                For I%=1 To 10
+                  Key$(I%)=""
+                  Input #1,J%
+                  Key$(I%)=Left$(Input$(J%+2,#1),J%)
+                Next I%
+                Close
+              Else
+                @Bell
+                Alert 3,"|Not a MECHANIC Macro Key File!",1,"Cont",I%
+                Close
+              Endif
+            Endif
+          Else
+            If Exist(Macro_filename$)
+              @Bell
+              Alert 2,"|         File exists!|Do you want to overwrite file?",1,"No|Yes",I%
+              If I%=1
+                Goto Start_at_menu
+              Endif
+            Endif
+            If Dfree(Instr("ABCDEFGHIJKLMNOP",Left$(Macro_filename$,1)))<4097
+              @Bell
+              Alert 3,"|Not enough disk space!",1,"Cont",I%
+              Close
+              Goto Start_at_menu
+            Endif
+            '
+            Open "O",#1,Macro_filename$
+            Print #1,"@@@ MECHANIC Macro Key File @@@"
+            For I%=1 To 10
+              Print #1,Len(Key$(I%))
+              Print #1,Key$(I%)
+            Next I%
+            Close
+          Endif
+        Endif
+      Endif
+    Else
+      Key_no%=Scan_code%-58
+      If Key_no%>0 And Key_no%<11
+        Print At(1,9);"Current string: F";Str$(Key_no%);"   Length: ";Len(Key$(Key_no%))/4
+        Print
+        I%=1
+        While I%<Len(Key$(Key_no%))
+          Key%=Cvl(Mid$(Key$(Key_no%),I%,4))
+          Scan_code%=(Key%/65536) And 255
+          Ascii_code%=Key% And 255
+          @Check_for_valid_key
+          Print C$;
+          If B%<>0
+            Out 5,B%
+          Endif
+          If Crscol>74
+            Print
+          Endif
+          Add I%,4
+        Wend
+        Print At(1,17);"New string:"
+        Print
+        Clr N%,Count%,A$,Current_string_end!
+        Current_string_pos%=1
+        If Len(Key$(Key_no%))>0
+          @Mark_current_string_pos
+        Endif
+        Do
+          Col%=Crscol
+          Row%=Crslin
+          Print At(1,25);"Keystrokes assigned (max ";Max_no_keys%;"): ";Using "##",Count%;
+          Print At(38,25);"<UNDO> to abort, <F";Str$(Key_no%);"> to assign.";
+          Print At(Col%,Row%);
+          @Get_key_code
+          Delete_key:
+          If Shift_code%=4 And Scan_code%=32 And Count%>0
+            ' Ctl D - Delete last key in new string
+            Y%=19+Int((Count%-1)/13)
+            X%=(Count%-1)*6+1-13*(Int((Count%-1)/13))*6
+            Print At(X%,Y%);Space$(6);
+            Print At(X%,Y%);
+            Dec Count%
+            A$=Left$(A$,Len(A$)-4)
+            I%=1
+            Scan_code%=-1
+          Endif
+          If Shift_code%=4 And Scan_code%=46 And Not Current_string_end!
+            ' Ctl C - Copy marked key from current string
+            Key%=Cvl(Mid$(Key$(Key_no%),(Current_string_pos%-1)*4+1,4))
+            Scan_code%=(Key%/65536) And 255
+            Ascii_code%=Key% And 255
+            @Mark_current_string_pos
+            Inc Current_string_pos%
+            If Current_string_pos%>Len(Key$(Key_no%))/4
+              Current_string_pos%=Len(Key$(Key_no%))/4
+              Current_string_end!=True
+            Endif
+            @Mark_current_string_pos
+          Endif
+          If Shift_code%=4 And Scan_code%=49
+            ' Ctl N - Move to next key in current string
+            @Mark_current_string_pos
+            Inc Current_string_pos%
+            Current_string_pos%=Min(Len(Key$(Key_no%))/4,Current_string_pos%)
+            @Mark_current_string_pos
+            Scan_code%=-1
+          Endif
+          If Shift_code%=4 And Scan_code%=25
+            ' Ctl P - Move to previous key in current string
+            @Mark_current_string_pos
+            Dec Current_string_pos%
+            Current_string_pos%=Max(1,Current_string_pos%)
+            @Mark_current_string_pos
+            Current_string_end!=False
+            Scan_code%=-1
+          Endif
+          Exit If Scan_code%-58=Key_no% Or Scan_code%=97
+          @Check_for_valid_key
+          If Key_ok!
+            A$=A$+Mkl$(Key%)
+            Print C$;
+            If B%<>0
+              Out 5,B%
+            Endif
+            If Crscol>74
+              Print
+            Endif
+            Inc Count%
+          Else
+            If Scan_code%<>-1
+              @Bell
+            Endif
+          Endif
+          Exit If Count%=Max_no_keys%
+        Loop
+        While Count%=Max_no_keys%
+          Print At(1,25);Space$(79);
+          Print At(1,25);Max_no_keys%;" keystroke limit.";
+          Print At(38,25);"<UNDO> to abort, <F";Str$(Key_no%);"> to assign.";
+          '        Lpoke Xbios(14,1)+6,0
+          @Get_key_code
+          If Shift_code%=4 And Scan_code%=32
+            Goto Delete_key
+          Endif
+          Exit If Scan_code%-58=Key_no% Or Scan_code%=97
+          @Bell
+        Wend
+        If Scan_code%-58=Key_no%
+          Key$(Key_no%)=A$
+        Else
+          Scan_code%=0
+        Endif
+      Endif
+    Endif
+  Until Scan_code%=97
+Endif
+'
+If Choice$="B"
+  @Type_ahead_buffer
+Endif
+'
+If Choice$="L"
+  ' print screen
+  @Cur_off
+  Prntr_on%=Bios(8,0)
+  If Prntr_on%=0
+    @Bell
+    Alert 1,"|Printer must be on line!",1,"Cont",N%
+  Endif
+  If Prntr_on%=-1
+    Printer_menu:
+    Cls
+    Print At(1,19);"Current printer options:"
+    Print At(4,21);"Description: ";Pdesc$
+    Print At(4,23);"String: ";Pstring$
+    Print At(4,25);"Left margin: ";Len(Left_margin$);
+    Alert 2,"|    Printer options",1,"Print|Options|Cancel",J%
+    If J%=2
+      Cls
+      Print At(1,19);"Str 1  : ";Description_pstring1$
+      Print At(10,20);Pstring1$
+      Print At(1,22);"Str 2  : ";Description_pstring2$
+      Print At(10,23);Pstring2$;
+      Print At(1,25);"Special: ";Special_string$;
+      Alert 2,"| Select string to|initialize printer.",1,"Special|Str 1|Str 2",N%
+      Clr Pchar_string$
+      If N%=1
+        Pdesc$="Special string"
+        @Input_string("Input special setup string: ",1,25,45,4,Pstring$,*String$)
+        Special_string$=String$
+        Pstring$=String$
+      Else
+        If N%=2
+          Pdesc$=Description_pstring1$
+          Pstring$=Pstring1$
+        Else
+          If N%=3
+            Pdesc$=Description_pstring2$
+            Pstring$=Pstring2$
+          Endif
+        Endif
+      Endif
+      For N%=1 To 43 Step 3
+        Pchar_string$=Pchar_string$+Chr$(Val(Mid$(Pstring$,N%,3)))
+      Next N%
+      Cls
+      Repeat
+        Cls
+        Alert 2,"  Change left margin?| |Left margin currently = "+Str$(Len(Left_margin$)),1,"No|Yes",N%
+        If N%=2
+          Repeat
+            @Input_string("Enter desired left margin (max 36): ",25,8,2,1,"",*String$)
+          Until Val(String$)>=0 And Val(String$)<37
+          Left_margin$=Space$(Val(String$))
+        Endif
+      Until N%=1
+      Goto Printer_menu
+    Endif
+  Endif
+  If Prntr_on%=-1 And J%=1
+    Cls
+    Print At(36,12);"Printing"
+    Lprint Pchar_string$;
+    Lprint
+    Lprint
+    Lprint Left_margin$;"Start file position = ";File_pos%;Space$(5);Filename$
+    Lprint
+    Line_count%=5
+    If Text!
+      ' print Text screen
+      Clr N%,C$
+      For I%=1 To Min(Blength%,1760)
+        A$=Mid$(B$,I%,1)
+        If A$<" " Or A$>"~"
+          A$=" "
+        Endif
+        C$=C$+A$
+        Inc N%
+        If N%=80
+          Lprint Left_margin$;C$
+          Inc Line_count%
+          Clr N%,C$
+        Endif
+      Next I%
+    Endif
+    '
+    If Not Text!
+      ' print Hex screen
+      Clr N%,C$,D$
+      For I%=1 To Min(Blength%,512)
+        A$=Mid$(B$,I%,1)
+        C$=C$+Right$("0"+Hex$(Asc(A$)),2)
+        If A$<" " Or A$>"~"
+          A$=" "
+        Endif
+        D$=D$+A$
+        Inc N%
+        If Frac(N%/4)==0
+          C$=C$+" "
+        Endif
+        If N%=24
+          Lprint Left_margin$;C$;"| ";D$
+          Inc Line_count%
+          Clr N%,C$,D$
+        Endif
+      Next I%
+      Lprint Left_margin$;C$;Space$(54-Len(C$));"| ";D$
+      Inc Line_count%
+    Endif
+    Lprint String$(33-Line_count%,Chr$(13)+Chr$(10))
+  Endif
+Endif
+'
+If Choice$=Chr$(9) And Not Text!
+  ' on tab jump between hex and ascii sides of hex display
+  Window!=Not Window!
+  Goto Start_at_new_cursor_pos
+Endif
+'
+If Choice$=Chr$(54)
+  ' shift + right arrow jumps 4 bytes to right
+  Add Pos%,4
+  Goto Start_at_new_cursor_pos
+Endif
+'
+If Choice$=Chr$(52)
+  ' shift + left arrow jumps 4 bytes to left
+  Sub Pos%,4
+  Goto Start_at_new_cursor_pos
+Endif
+'
+If Choice$=Chr$(55)
+  ' on shift + home arrow go to end of file
+  If File_pos%<>Length_file%-Display_length%+1
+    File_pos%=Max(1,Length_file%-Display_length%+1)
+    Pos%=Blength%
+    Goto Start_at_new_file_pos
+  Else
+    Pos%=Blength%
+    Goto Start_at_new_cursor_pos
+  Endif
+Endif
+'
+If Choice$=Chr$(56)
+  ' on shift + up arrow go to top of screen
+  Pos%=1
+Endif
+'
+If Choice$=Chr$(50)
+  ' on shift + down arrow go to bottom of screen
+  Pos%=Blength%
+Endif
+'
+If Choice$="U" And File_pos%<>Max(1,File_pos%-Length_line%*11)
+  ' add previous 1/2 screen of data to display."
+  File_pos%=Max(1,File_pos%-Length_line%*11)
+  Pos%=Min(Display_length%,Pos%+Length_line%*11)
+  If Pos%=Blength%
+    Pos%=1
+  Endif
+  Goto Start_at_new_file_pos
+Endif
+'
+If Choice$="D" And File_pos%<>Min(File_pos%+Length_line%*11,Length_file%-Display_length%+1)
+  ' add next 1/2 screen of data to display."
+  File_pos%=Max(1,Min(File_pos%+Length_line%*11,Length_file%-Display_length%+1))
+  Pos%=Max(1,Pos%-Length_line%*11)
+  If Pos%=Blength%
+    Pos%=1
+  Endif
+  Goto Start_at_new_file_pos
+Endif
+'
+If Choice$="N" And File_pos%<>Min(File_pos%+Display_length%,Length_file%-Display_length%+1)
+  ' goto next screen of data
+  File_pos%=Max(1,Min(File_pos%+Display_length%,Length_file%-Display_length%+1))
+  Pos%=1
+  Goto Start_at_new_file_pos
+Endif
+'
+If Choice$="P" And File_pos%<>Max(1,File_pos%-Display_length%)
+  ' goto previous screen of data
+  File_pos%=Max(1,File_pos%-Display_length%)
+  Pos%=1
+  Goto Start_at_new_file_pos
+Endif
+'
+If Choice$="G"
+  ' request and goto a particular position in the file
+  @Clr_menu
+  @Cur_off
+  Print At(20,24);"File length = ";Length_file%;" = H";Hex$(Length_file%);
+  @Input_string("Enter byte to go to (xxxxxx or Hxxxxx) ",20,25,6,3,Last_goto$,*String$)
+  Last_goto$=String$
+  If Left$(String$)="H"
+    String$="&"+String$
+  Endif
+  N%=Val(String$)
+  If N%<1 Or N%>Length_file%
+    @Incorrect_range
+    Goto Start_at_menu
+  Else
+    If N%<File_pos% Or N%>File_pos%+Display_length%-1
+      File_pos%=N%
+      Pos%=1
+      Goto Start_at_new_file_pos
+    Endif
+  Endif
+  Pos%=N%-File_pos%+1
+  Goto Start_at_menu
+Endif
+'
+If Choice$="M"
+  ' access GEM menu
+  @Cur_off
+  @Gem_menu
+  If Ccolor!
+    @Set_color_on
+  Else
+    @Set_color_off
+  Endif
+Endif
+'
+If Choice$="V"
+  ' display in view with wordwrap format
+  Start_at_layout:
+  Cls
+  Array_pos%=(File_pos%+Pos%-1)/Size%+1
+  B$=Mid$(S$(Array_pos%),File_pos%+Pos%-1-(Array_pos%-1)*Size%,2000)
+  If Len(B$)<2000 And Array_pos%<No_dim%
+    B$=B$+Left$(S$(Array_pos%+1),2000-Len(B$))
+  Endif
+  '
+  ' replace non-printable characters with spaces and print to screen
+  While Left$(B$,1)=Chr$(13)
+    B$=Mid$(B$,2)
+  Wend
+  Blength%=Len(B$)
+  Clr A$,C$,N%,I%,Count_line%
+  While N%<Blength%
+    A%=Peek(Varptr(B$)+N%)
+    Inc N%
+    If A%>32 And A%<127
+      C$=C$+Chr$(A%)
+    Else
+      A%=-32*(A%<>13 And A%<>10)-13*(A%=13)
+    Endif
+    If A%=32
+      If Len(A$+C$)<80
+        A$=A$+C$+" "
+        Clr C$
+      Else
+        If Len(A$+C$)=80
+          A$=A$+C$
+          Clr C$
+        Endif
+      Endif
+    Endif
+    If A$="" And Len(C$)=80
+      Print C$;
+      Clr C$
+    Endif
+    If Len(A$+C$)>79
+      Inc Count_line%
+      If Len(A$)=80
+        Print A$;
+      Else
+        Print A$
+      Endif
+      A$=C$
+      I%=-Len(C$)*(Count_line%=23)
+      Clr C$
+    Endif
+    If A%=13 Or N%=Blength%
+      A$=A$+C$
+      Inc Count_line%
+      If A%=13 And Len(A$)<80
+        Print A$
+      Else
+        If A%=13 And Len(A$)=80
+          Print A$;
+        Else
+          Print A$
+        Endif
+      Endif
+      ' set counter for later use with 1/2 page down option
+      If Count_line%=11
+        J%=N%
+      Endif
+      Clr A$,C$
+    Endif
+    Exit If Count_line%=23
+  Wend
+  Count%=N%-I%
+  Line 0,Rez%*(Crslin*8-4),639,Rez%*(Crslin*8-4)
+  '
+  ' menu for View mode
+  Start_at_menu2:
+  Print At(1,25);Using "######",File_pos%+Pos%-1;
+  Print At(7,25);"=Topleft  <N>ext <P>rev <U>p <D>own <HOME> Shift+<HOME> <H>ex/Text <Q>uit";
+  @Cur_off
+  @Getkey
+  Print At(17,25);Space$(63);
+  Key$=Upper$(Key$)
+  '
+  If Len(Key$)=2
+    ' top of file if Home selected
+    Key$=Right$(Key$,1)
+    If Key$=Chr$(71)
+      File_pos%=1
+      Pos%=1
+      Goto Start_at_layout
+    Endif
+  Else
+    If Key$="H" Or Key$="V"
+      ' return to Hex or Text modes
+      Goto Start_at_new_file_pos
+    Endif
+    If Key$="Q"
+      Choice$="Q"
+      Goto Ready_to_quit
+    Endif
+    If Key$="N"
+      ' next screen
+      If File_pos%+Pos%+Count%>=Length_file%
+        Add File_pos%,Pos%-1
+        Pos%=1
+        Goto Start_at_menu2
+      Endif
+      Add File_pos%,Pos%-1+Count%
+      Pos%=1
+      Goto Start_at_layout
+    Endif
+    If Key$="D"
+      ' next 1/2 screen
+      If File_pos%+Pos%+Count%>=Length_file%
+        Add File_pos%,Pos%-1
+        Pos%=1
+        Goto Start_at_menu2
+      Endif
+      Add File_pos%,Pos%-1+J%
+      Pos%=1
+      Goto Start_at_layout
+    Endif
+    If Key$="B"
+      @Type_ahead_buffer
+    Endif
+  Endif
+  If Key$=Chr$(55) Or Key$="P" Or Key$="U"
+    Add File_pos%,Pos%-1
+    Pos%=1
+    If Key$=Chr$(55)
+      ' last screen from file
+      Array_pos%=Length_file%/Size%+1
+      B$=Right$(S$(Array_pos%),2000)
+      If Len(B$)<2000 And Array_pos%>1
+        B$=Right$(S$(Array_pos%-1),2000-Len(B$))+B$
+      Endif
+    Else
+      ' previous screen or 1/2 screen
+      If File_pos%<=1
+        File_pos%=1
+        Goto Start_at_menu2
+      Endif
+      Add File_pos%,Pos%-1
+      Array_pos%=File_pos%/Size%+1
+      B$=Mid$(S$(Array_pos%),1,File_pos%-(Array_pos%-1)*Size%-1)
+      If Len(B$)<2000 And Array_pos%>1
+        B$=Right$(S$(Array_pos%-1),2000-Len(B$))+B$
+      Endif
+    Endif
+    No_lines_to_move%=11-10*(Key$<>"U")
+    '
+    ' backstep 11 or 21 lines
+    Blength%=Len(B$)
+    Clr A$,C$,B%,Count_line%
+    N%=1
+    While N%<=Blength%
+      A%=Peek(Varptr(B$)+Blength%-N%)
+      Inc N%
+      If A%>32 And A%<127
+        C$=C$+Chr$(A%)
+      Else
+        A%=-32*(A%<>13 And A%<>10)-13*(A%=13)
+      Endif
+      If A%=32
+        If Len(A$+C$)<80
+          A$=A$+C$+" "
+          Clr C$
+        Else
+          If Len(A$+C$)=80
+            A$=A$+C$
+            Clr C$
+          Endif
+        Endif
+      Endif
+      If Len(A$+C$)>79
+        Inc Count_line%
+        A$=C$
+        Clr C$
+      Endif
+      If A%=13 Or N%>Blength%
+        A$=A$+C$
+        Inc Count_line%
+        If Count_line%=No_lines_to_move% And B%=0
+          Inc B%
+          Dec Count_line%
+        Endif
+        If Count_line%>No_lines_to_move%
+          Dec N%
+        Endif
+        Clr A$,C$
+      Endif
+      Exit If Count_line%>No_lines_to_move%
+    Wend
+    '
+    Count%=N%
+    If Key$=Chr$(55)
+      File_pos%=Max(1,Length_file%-Count%+1)
+    Else
+      Sub File_pos%,Count%
+    Endif
+    Goto Start_at_layout
+  Endif
+  Goto Start_at_menu2
+Endif
+'
+If Choice$="C" And Rez%=1
+  ' toggle between color and b&w options
+  If Not Ccolor!
+    @Set_color_on
+  Else
+    @Set_color_off
+  Endif
+  Goto Start_at_new_file_pos
+Endif
+'
+If Choice$="A"
+  ' toggle between ascii with and without chars <32 and >126
+  Codes!=Not Codes!
+  Goto Start_at_new_file_pos
+Endif
+'
+If Choice$="H"
+  ' toggle between text and hex display mode
+  Text!=Not Text!
+  File_pos%=File_pos%+Pos%-1
+  Pos%=1
+  Window!=False
+  Goto Start_at_new_file_pos
+Endif
+'
+If Choice$="T"
+  ' trade (find and replace)
+  @Clr_menu
+  @Mark_cur_pos
+  @Get_string("Find")
+  If Length_find_string%=0
+    Goto Start_at_menu
+  Endif
+  @Get_string("Replace")
+  @Clr_menu
+  If Find_string_type$="H"
+    H1$="H "+Hex_find_string$
+  Else
+    H1$=Find_string$
+  Endif
+  If Replace_string_type$="H"
+    H2$="H "+Hex_replace_string$
+  Else
+    H2$=Replace_string$
+  Endif
+  Print At(1,24);"Replace ";Rev$;H1$;Nor$;" w/ ";Rev$;H2$;Nor$;
+  @Input_string("Replace start byte (xxxxxx or Hxxxxx)? ",10,25,6,3,"1",*String$)
+  If Left$(String$)="H"
+    String$="&"+String$
+  Endif
+  Trade_start_file_pos%=Val(String$)
+  A$=Str$(Length_file%)
+  @Input_string(", end byte? ",55,25,6,3,A$,*String$)
+  If Left$(String$)="H"
+    String$="&"+String$
+  Endif
+  Trade_end_file_pos%=Val(String$)-Length_find_string%-1*(Length_find_string%<>0)
+  If Trade_start_file_pos%<1 Or Trade_end_file_pos%>Length_file% Or Trade_start_file_pos%>Trade_end_file_pos%
+    @Incorrect_range
+    Goto Start_at_menu
+  Endif
+  Print At(7,25);Space$(73);
+  Print At(9,25);"Trade from byte  ";Trade_start_file_pos%;"  through  ";Trade_end_file_pos%;"  <Y/";Rev$;"N";Nor$;">? ";
+  @Getkey
+  Key$=Upper$(Key$)
+  If Key$<>"Y"
+    Goto Start_at_menu
+  Endif
+  Print At(9,25);Space$(71);
+  Print At(1,25);Using "######",Length_file%;
+  Print At(9,25);"Replacing string at file position =          Any key to stop.";
+  @Save_keyboard_buffer
+  I%=(Trade_start_file_pos%-1)/Size%+1
+  Clr Key$,J%,N%
+  A%=Length_replace_string%-Length_find_string%
+  Count%=(I%-1)*Size%
+  Start_search%=Trade_start_file_pos%-Count%
+  @Check_for_max_length_file
+  Exit_flag!=False
+  While I%<No_dim%+1 And Key$="" And Not Exit_flag!
+    Do
+      Find_pos%=Instr(S$(I%),Find_string$,Start_search%)
+      Key$=Inkey$
+      Exit If Find_pos%=0 Or Key$<>"" Or Count%+Find_pos%>Trade_end_file_pos%
+      S$(I%)=Left$(S$(I%),Find_pos%-1)+Replace_string$+Mid$(S$(I%),Find_pos%+Length_find_string%)
+      Last_find_pos%=Find_pos%
+      Add Length_file%,A%
+      Add Trade_end_file_pos%,A%
+      Print At(1,25);Using "######",Length_file%;
+      Print At(45,25);Using "######",Find_pos%+Count%;
+      Exit If Length_file%>Max_length_file_before_replace% Or Fre(0)<38000
+      Start_search%=Find_pos%+Length_replace_string%
+    Loop
+    Exit If Key$<>"" Or Count%+Find_pos%>Trade_end_file_pos%
+    If I%<No_dim%
+      S$(I%+1)=Right$(S$(I%),Length_find_string%-1)+S$(I%+1)
+      S$(I%)=Left$(S$(I%),Len(S$(I%))-Length_find_string%+1)
+      Count%=Count%+Len(S$(I%))
+    Endif
+    Inc I%
+    Start_search%=1
+    J%=Max(J%,Last_find_pos%)
+    @Check_for_max_length_file
+  Wend
+  J%=Max(J%,Last_find_pos%)
+  If Length_file%<1
+    @Bell
+    Alert 1,"| |All bytes have been deleted",1,"New File",N%
+    Goto Start0
+  Endif
+  If J%=0
+    @Bell
+    Print At(9,25);Space$(71);
+    Print At(9,25);"String not found.  Any key to continue.";
+    @Getkey
+  Else
+    @Reorganize_array
+  Endif
+  File_pos%=Trade_start_file_pos%
+  Pos%=1
+  @Restore_keyboard_buffer
+  Goto Start_at_new_file_pos
+Endif
+'
+If Choice$="F"
+  ' select string to find
+  @Mark_cur_pos
+  @Get_string("Find")
+Endif
+'
+If Choice$="F" Or Choice$="R" And Length_find_string%>0
+  ' find string
+  @Cur_off
+  If Find_string_type$="H"
+    H1$="H "+Hex_find_string$
+  Else
+    H1$=Find_string$
+  Endif
+  @Clr_menu
+  Print At(9,24);"Finding string ";Rev$;H1$;Nor$;
+  Print At(9,25);"Any key will stop this operation.";
+  @Save_keyboard_buffer
+  Clr Single_string_key$
+  I%=(File_pos%+Pos%)/Size%+1
+  Start_search%=File_pos%+Pos%-(I%-1)*Size%
+  While I%<=No_dim%
+    ' add 15 characters from next array element to be able to find the
+    ' string at an array border
+    Key$=Inkey$
+    Exit If Key$<>""
+    A$=Upper$(S$(I%))
+    If I%<No_dim%
+      A$=A$+Upper$(Left$(S$(I%+1),Length_find_string%-1))
+    Endif
+    N%=Instr(A$,Upper$(Find_string$),Start_search%)
+    If N%<>0
+      Single_string_key$="Y"
+      @Restore_keyboard_buffer
+      If N%+(I%-1)*Size%>File_pos%+Display_length%-1
+        File_pos%=Max(1,N%+(I%-1)*Size%+880*(Text!)+240*(Not Text!))
+        Pos%=N%+(I%-1)*Size%-File_pos%+1
+        Goto Start_at_new_file_pos
+      Else
+        Pos%=N%+(I%-1)*Size%-File_pos%+1
+        Goto Start_at_menu
+      Endif
+    Endif
+    Inc I%
+    Start_search%=1
+  Wend
+  @Clr_menu
+  If Key$<>""
+    File_pos%=Start_search%+(I%-1)*Size%
+    @Restore_keyboard_buffer
+    Goto Start_at_new_file_pos
+  Endif
+  If Find_string_type$="H"
+    Print At(9,24);Rev$;"H ";Hex_find_string$;Nor$;" not found";
+  Else
+    Print At(9,24);Rev$;Find_string$;Nor$;" not found";
+  Endif
+  Print At(9,25);"Any key to continue.";
+  @Getkey
+  @Restore_keyboard_buffer
+  Goto Start_at_menu
+Endif
+'
+If Choice$="E" And Text!
+  ' check for Hex mode before allow edit
+  @Clr_menu
+  Print At(9,24);"Must be in Hex mode to edit."
+  Print At(9,25);"Any key to continue.";
+  @Getkey
+Endif
+'
+If Choice$="E" And Not Text!
+  ' edit file
+  @Clr_menu
+  Print At(9,24);"<";Rev$;"O";Nor$;">verwrite, <I>nsert, or <D>elete?  ";
+  @Cur_off
+  @Put_cur_on_screen
+  @Getkey
+  Mode_edit$=Upper$(Key$)
+  If Mode_edit$="I"
+    @Check_for_max_length_file
+    If Exit_flag!
+      Goto Start_at_menu
+    Endif
+  Endif
+  If Instr("ID",Mode_edit$)=0
+    Mode_edit$="O"
+  Endif
+  If Mode_edit$<>"D"
+    Print At(9,25);"Changes in <";Rev$;"A";Nor$;">scii or <H>ex?  ";
+    @Getkey
+    Mode2_edit$=Upper$(Key$)
+    If Mode2_edit$="H"
+      A$="Hex"
+    Else
+      A$="Ascii"
+      Mode2_edit$="A"
+    Endif
+  Endif
+  If Mode_edit$="O"
+    ' overwrite mode
+    @Clr_menu
+    Print At(9,24);"Editing file in memory.  ";Rev$;"Overwrite  ";A$;Nor$
+    Print At(9,25);"<Esc> to exit without change, <Enter> to enter changes.";
+    @Clear_sprites
+    Put 0,0,Screen$
+    If Mode2_edit$="A"
+      ' Ascii overwrite mode
+      Do
+        Print At(Xcur2%,Ycur%);
+        Repeat
+          @Getkey
+          If Key$<>"" And Key$<>Chr$(13) And Key$<>Chr$(27) And (Key$<" " Or Key$>"~")
+            @Bell
+          Endif
+        Until Key$=Chr$(13) Or Key$=Chr$(27) Or (Key$>=" " And Key$<="~")
+        Exit If Key$=Chr$(13) Or Key$=Chr$(27)
+        Print At(Xcur2%,Ycur%);Rev$;Key$;Nor$;
+        A$=Hex$(Asc(Key$))
+        Print At(Xcur%,Ycur%);Rev$;A$;Nor$;
+        Mid$(B$,Pos%)=Key$
+        Inc Pos%
+        If Pos%>Blength%
+          Pos%=Blength%
+        Endif
+        @Cur_pos
+        ' print the position of the character under the cursor relative to
+        ' the beginning of the file
+        Print At(1,25);Using "######",File_pos%+Pos%-1;
+        '
+      Loop
+      If Key$<>Chr$(27)
+        @Insert_string_into_array
+      Endif
+      Goto Start_at_new_file_pos
+    Endif
+    If Mode2_edit$="H"
+      ' Hex overwrite mode
+      Do
+        Print At(Xcur%,Ycur%);
+        Repeat
+          @Getkey
+          Key$=Upper$(Key$)
+          If Key$<>"" And Instr(Allowed_hex$+Chr$(13)+Chr$(27),Key$)=0
+            @Bell
+          Endif
+        Until Instr(Allowed_hex$+Chr$(13)+Chr$(27),Key$)<>0
+        Key$=Mid$(Key$+"ABCDEF",1+Instr(Right$(Allowed_hex$,6),Key$,1),1)
+        Exit If Key$=Chr$(13) Or Key$=Chr$(27)
+        A$=Key$
+        Print At(Xcur%,Ycur%);Rev$;Key$;Nor$;
+        Repeat
+          @Getkey
+          Key$=Upper$(Key$)
+          If Key$<>"" And Instr(Allowed_hex$+Chr$(27),Key$)=0
+            @Bell
+          Endif
+        Until Instr(Allowed_hex$+Chr$(27),Key$)<>0
+        Key$=Mid$(Key$+"ABCDEF",1+Instr(Right$(Allowed_hex$,6),Key$,1),1)
+        Exit If Key$=Chr$(27)
+        I%=Val("&H"+A$+Key$)
+        A$=Chr$(I%)
+        Print At(Xcur%+1,Ycur%);Rev$;Key$;Nor$;
+        Print At(Xcur2%,Ycur%);Rev$;
+        Out 5,I%
+        Print Nor$;
+        Mid$(B$,Pos%)=A$
+        Inc Pos%
+        If Pos%>Blength%
+          Pos%=Blength%
+        Endif
+        @Cur_pos
+        ' print the position of the character under the cursor relative to
+        ' the beginning of the file
+        Print At(1,25);Using "######",File_pos%+Pos%-1;
+      Loop
+      If Key$<>Chr$(27)
+        @Insert_string_into_array
+      Endif
+      Goto Start_at_new_file_pos
+    Endif
+  Endif
+  If Mode_edit$="I"
+    ' insert mode
+    @Put_cur_on_screen
+    @Cur_off
+    @Clr_menu
+    If Mode2_edit$="A"
+      ' Ascii insert mode
+      Print At(9,24);"Will be inserted at the cursor pos.";
+      Text 360,Rez%*190,String_for_ascii_input$
+      C$=Last_insert_string$
+      @Input_string("Insert String (max 16 char):"+Space$(9),9,25,16,1,C$,*String$)
+      Insert_string$=String$
+      If Len(Insert_string$)=0
+        Goto Start_at_new_file_pos
+      Endif
+      Last_insert_string$=String$
+    Endif
+    If Mode2_edit$="H"
+      ' Hex insert mode
+      Print At(9,24);"Will be inserted at the cursor pos";
+      Text 361,Rez%*190,String_for_hex_input$
+      C$=Last_hex_insert_string$
+      @Input_string("Insert String (max 16 2-char pairs): ",9,25,32,2,C$,*String$)
+      Hex_insert_string$=String$
+      If Len(Hex_insert_string$)=0
+        Goto Start_at_new_file_pos
+      Endif
+      ' change hex string to ascii string of chr$()'s
+      Clr Insert_string$
+      For I%=1 To Len(Hex_insert_string$) Step 2
+        Insert_string$=Insert_string$+Chr$(Val("&H"+Mid$(Hex_insert_string$,I%,2)))
+      Next I%
+      Last_hex_insert_string$=String$
+    Endif
+    B$=Left$(B$,Pos%-1)+Insert_string$+Mid$(B$,Pos%)
+    @Insert_string_into_array
+    @Reorganize_array
+    Goto Start_at_new_file_pos
+  Endif
+  '
+  If Mode_edit$="D"
+    ' delete mode
+    Clr No_to_delete%
+    @Clr_menu
+    Print At(9,24);"<Esc> aborts, <Enter> when done, <R>ange to delete a range from cursor.";
+    Print At(9,25);Rev$;"Deleting";Nor$;"  Down arrow deletes one row, any other key deletes at cursor. ";
+    I%=1
+    @Clear_sprites
+    Put 0,0,Screen$
+    @Put_cur_on_screen2
+    @Getkey
+    If Upper$(Key$)="R"
+      ' delete over range
+      Start_delete_pos%=File_pos%+Pos%-1
+      @Put_cur_on_screen
+      @Clr_menu
+      Print At(9,24);"Last file byte = ";Length_file%;" = H";Hex$(Length_file%);
+      @Cur_off
+      @Input_string("Delete from cursor pos through byte (xxxxxx or Hxxxxx)? ",9,25,6,3,"",*String$)
+      If Left$(String$)="H"
+        String$="&"+String$
+      Endif
+      End_delete_pos%=Val(String$)
+      @Clr_menu
+      Print At(9,25);"Delete byte  ";Start_delete_pos%;"  through  ";End_delete_pos%;"  <Y/";Rev$;"N";Nor$;">? ";
+      @Getkey
+      If Upper$(Key$)="Y"
+        I%=(Start_delete_pos%-1)/Size%+1
+        No_to_delete%=End_delete_pos%-Start_delete_pos%+1
+        If End_delete_pos%<=Length_file% And No_to_delete%>0 And No_to_delete%<Length_file%
+          Start_delete_pos%=Start_delete_pos%-(I%-1)*Size%
+          While I%<No_dim%+1
+            S$(I%)=Left$(S$(I%),Start_delete_pos%-1)+Mid$(S$(I%),End_delete_pos%-(I%-1)*Size%+1,Len(S$(I%)))
+            Exit If I%*Size%>=End_delete_pos%
+            Inc I%
+            Start_delete_pos%=1
+          Wend
+          B%=File_pos%+Pos%-1
+          File_pos%=Max(1,B%+880*(Text!)+240*(Not Text!))
+          @Reorganize_array
+          Pos%=B%-File_pos%+1
+        Else
+          If No_to_delete%=Length_file%
+            @Bell
+            Alert 1,"| |All bytes have been deleted",1,"New File",N%
+            Goto Start0
+          Else
+            @Incorrect_range
+          Endif
+        Endif
+      Endif
+    Else
+      Start_delete_pos%=Pos%
+      Do
+        ' delete 1 byte or row of bytes
+        Exit If Key$=Chr$(13) Or Key$=Chr$(27)
+        I%=1
+        A%=1
+        If Key$=Chr$(0)+Chr$(80)
+          A%=Min(24,Blength%-Pos%+1)
+        Endif
+        If Blength%=1 Or No_to_delete%+1=Blength%
+          @Bell
+        Endif
+        While I%<=A% And Blength%>1 And Pos%<=Blength%
+          Exit If Start_delete_pos%=1 And Pos%=Blength%
+          Pbox (Xcur%-1)*8-1,Rez%*((Ycur%-1)*8-1),(Xcur%+1)*8,Rez%*(Ycur%*8)
+          Pbox (Xcur2%-1)*8-1,Rez%*((Ycur%-1)*8-1),Xcur2%*8,Rez%*(Ycur%*8)
+          Inc No_to_delete%
+          Inc Pos%
+          @Cur_pos
+          Inc I%
+        Wend
+        ' print the position of the character under the cursor relative to
+        ' the beginning of the file
+        Print At(1,25);Using "######",File_pos%+Pos%-1;
+        @Put_cur_on_screen2
+        @Getkey
+      Loop
+      If Key$<>Chr$(27)
+        B$=Left$(B$,Start_delete_pos%-1)+Mid$(B$,Start_delete_pos%+No_to_delete%)
+        @Insert_string_into_array
+        @Reorganize_array
+      Endif
+    Endif
+  Endif
+  Goto Start_at_new_file_pos
+Endif
+'
+Ready_to_quit:
+If Choice$="Q"
+  @Cur_off
+  Showm
+  Cls
+  @Bell
+  Alert 3,"| File in memory will  |    be abandoned!",1,"Cancel|New File|Exit",I%
+  If I%=1
+    Hidem
+    Goto Start_at_new_file_pos
+  Endif
+  If I%=3
+    @Finished
+  Endif
+  ' choose another file
+  Close #1
+  Erase S$()
+  Goto Start0
+Endif
+'
+If Choice$="S"
+  ' save/append file
+  @Cur_off
+  Showm
+  Cls
+  Print At(18,1);"Saving modified file to disk.  Select filename.";
+  Print At(1,3);Space$(28-Len(Filename$)/2);"Original file name was ";Filename$;
+  Fileselect Path$+"*.*","",Filename_to_save$
+  Clr A%
+  N%=Instr(Filename_to_save$,"\")
+  While N%<>0
+    A%=N%
+    N%=Instr(Filename_to_save$,"\",N%+1)
+  Wend
+  If Mid$(Filename_to_save$,A%+1)=""
+    Goto Start_at_new_file_pos
+  Endif
+  Filename_to_save$=Upper$(Filename_to_save$)
+  Clr I%
+  Append_flag!=False
+  ' check to see if file exists
+  If Exist(Filename_to_save$)
+    @Bell
+    Alert 2,"|         File exists!|Do you want to overwrite file?",1,"No|Yes|Append",I%
+    If I%=1
+      Goto Start_at_new_file_pos
+    Else
+      If I%=3
+        Append_flag!=True
+      Endif
+    Endif
+  Endif
+  Cls
+  ' check for enough free space on disk
+  Clr N%
+  If I%=2
+    Open "I",#2,Filename_to_save$
+    N%=Lof(#2)
+    Close #2
+  Endif
+  B%=Dfree(Instr("ABCDEFGHIJKLMNOP",Left$(Filename_to_save$,1)))
+  If Append_flag!
+    A$="Appending to file: "
+  Else
+    A$="Writing file: "
+  Endif
+  Print At(10,8);A$;Filename_to_save$;
+  If B%-N%*(Not Append_flag!)-1024<Length_file%
+    Print At(15,10);"File size to create/append is ";Length_file%
+    Print At(15,12);"Disk space available is ";B%-N%*(Not Append_flag!)-1024
+    Print At(10,14);"Not enough disk space."
+    Print At(15,16);"Any key to continue."
+    @Getkey
+    Goto Start_at_new_file_pos
+  Endif
+  If Append_flag!
+    Open "A",#1,Filename_to_save$
+  Else
+    Open "O",#1,Filename_to_save$
+  Endif
+  For I%=1 To No_dim%
+    Print #1;S$(I%);
+  Next I%
+  Close
+  Goto Start_at_new_file_pos
+  Hidem
+Endif
+'
+Goto Start_at_menu
+End
+'
+'
+' PROCEDURES
+Procedure Cur_pos
+  ' calculate the position for the cursor
+  Ycur%=(Pos%-1)/Length_line%+1
+  Xcur%=Pos%-(Ycur%-1)*Length_line%
+  Xcur2%=Xcur%+56
+  If Length_line%=24
+    Xcur%=Xcur%*2-1+(Xcur%-1)/4
+  Endif
+Return
+'
+Procedure Getkey
+  ' clear keyboard buffer
+  If Not Type_ahead_buffer_on!
+    Lpoke Xbios(14,1)+6,0
+  Endif
+  ' wait for any key
+  Repeat
+    Key$=Inkey$
+  Until Key$<>""
+  ' if buffer on, add keystroke to buffer
+  Key_no%=Asc(Right$(Key$,1))-58
+  If Len(Key$)=2 And Key_no%>0 And Key_no%<11 And Type_ahead_buffer_on!
+    If Len(Key$(Key_no%))>0
+      Dpoke Xbios(14,1)+6,0
+      Dpoke Xbios(14,1)+8,Len(Key$(Key_no%))
+      Bmove Varptr(Key$(Key_no%)),Lpeek(Xbios(14,1))+4,Len(Key$(Key_no%))
+      Key$=""
+    Endif
+  Endif
+Return
+'
+Procedure Clr_menu
+  Print At(7,24);Space$(74);
+  Print At(7,25);Space$(73);
+Return
+'
+Procedure Cur_off
+  ' turn cursor off
+  Void Xbios(21,0,0)
+  Cur!=False
+Return
+'
+Procedure Cur_on
+  ' enable cursor
+  Void Xbios(21,1,0)
+  ' flash cursor
+  Void Xbios(21,2,0)
+  ' set flash rate
+  Void Xbios(21,4,15)
+  Cur!=True
+Return
+'
+Procedure Finished
+  ' reset original colors
+  For I%=1 To 4
+    Void Xbios(7,I%,Orig_colors%(I%))
+  Next I%
+  @Cur_off
+  End
+Return
+'
+Procedure Get_string(A$)
+  @Cur_off
+  @Clr_menu
+  Print At(9,25);A$;
+  ' default choices are shown in reverse
+  Print At(9,24);"Input in <";Rev$;"A";Nor$;">scii or <H>ex? ";
+  @Getkey
+  String_type$=Upper$(Key$)
+  If String_type$="H"
+    Print "Hex";
+  Else
+    String_type$="A"
+    Print "Ascii";
+  Endif
+  If String_type$="A"
+    Text 360,Rez%*190,String_for_ascii_input$
+    If A$="Find"
+      C$=Last_ascii_find_string$
+    Else
+      C$=Last_ascii_replace_string$
+    Endif
+    @Input_string(A$+" string (max 16 char):"+Space$(15-Len(A$)),9,25,16,1,C$,*String$)
+    If A$="Find"
+      Last_ascii_find_string$=String$
+    Else
+      Last_ascii_replace_string$=String$
+    Endif
+  Else
+    ' get hex string to find
+    Text 361,Rez%*190,String_for_hex_input$
+    If A$="Find"
+      C$=Last_hex_find_string$
+    Else
+      C$=Last_hex_replace_string$
+    Endif
+    @Input_string(A$+" string (max 16 2-char pairs):"+Space$(7-Len(A$)),9,25,32,2,C$,*Hstring$)
+    If A$="Find"
+      Last_hex_find_string$=Hstring$
+    Else
+      Last_hex_replace_string$=Hstring$
+    Endif
+    ' change hex string to ascii string of chr$()'s
+    I%=1
+    Clr String$
+    While I%<Len(Hstring$)
+      String$=String$+Chr$(Val("&H"+Mid$(Hstring$,I%,2)))
+      Add I%,2
+    Wend
+  Endif
+  If A$="Find"
+    Find_string$=String$
+    Hex_find_string$=Hstring$
+    Find_string_type$=String_type$
+  Else
+    Replace_string$=String$
+    Hex_replace_string$=Hstring$
+    Replace_string_type$=String_type$
+  Endif
+  Length_find_string%=Len(Find_string$)
+  Length_replace_string%=Len(Replace_string$)
+Return
+'
+Procedure Mark_cur_pos
+  If Text!
+    Pbox (Xcur%-1)*8-1,Rez%*((Ycur%-1)*8)-1,(Xcur%-1)*8+8,Rez%*(Ycur%*8)
+  Endif
+Return
+'
+Procedure Reorganize_array
+  Need_to_reorganize!=False
+  ' reorganize s$() array
+  @Wait_message
+  Pos%=Pos%-Blength%+Len(B$)
+  Clr Length_file%
+  For I%=1 To No_dim%
+    Length_file%=Length_file%+Len(S$(I%))
+  Next I%
+  No_dim%=(Length_file%-1)/Size%+1
+  ' sub 2 because dim?(s$()) will be one higher than required because s$(0) is
+  ' counted since base=0
+  Cls
+  For I%=1 To Dim?(S$())-2
+    If Len(S$(I%))>Size%
+      S$(I%+1)=Mid$(S$(I%),Size%+1)+S$(I%+1)
+      S$(I%)=Left$(S$(I%),Size%)
+    Else
+      J%=I%+1
+      While Len(S$(I%))<Size% And J%<Dim?(S$())
+        N%=Size%-Len(S$(I%))
+        S$(I%)=S$(I%)+Left$(S$(J%),N%)
+        S$(J%)=Mid$(S$(J%),N%+1)
+        Inc J%
+      Wend
+    Endif
+  Next I%
+Return
+'
+Procedure Insert_string_into_array
+  If Array_pos%<No_dim%
+    S$(Array_pos%)=S$(Array_pos%)+Left$(S$(Array_pos%+1),Blength%)
+    S$(Array_pos%+1)=Mid$(S$(Array_pos%+1),Blength%+1)
+  Endif
+  S$(Array_pos%)=Left$(S$(Array_pos%),File_pos%-(Array_pos%-1)*Size%-1)+B$+Mid$(S$(Array_pos%),File_pos%-(Array_pos%-1)*Size%+Blength%)
+  If Array_pos%<No_dim%
+    S$(Array_pos%+1)=Mid$(S$(Array_pos%),Size%+1)+S$(Array_pos%+1)
+    S$(Array_pos%)=Left$(S$(Array_pos%),Size%)
+  Endif
+Return
+'
+Procedure Gem_menu
+  Cls
+  Menu Strip$()
+  Openw 0
+  On Menu  Gosub Handle_the_menu
+  Do
+    On Menu
+    Exit If Strip$(Menu(0))="  Return to Mechanic  "
+  Loop
+Return
+'
+Procedure Handle_the_menu
+  Cls
+  If Strip$(Menu(0))="  Mechanic Info"
+    @Filepp_info
+  Endif
+  If Strip$(Menu(0))="  Return to Mechanic  "
+    Menu Kill
+    Closew 0
+  Endif
+  Menu Off
+Return
+'
+Procedure Filepp_info
+  Dim A$(4)
+  Cls
+  A$(1)="    Byte Mechanic|"
+  A$(2)="Version "+Version$+"|"
+  A$(3)="   by William Schneider|"
+  A$(4)=Chr$(189)+" 1988 Antic Publishing"
+  Alert 0,A$(1)+A$(2)+A$(3)+A$(4),1,"Go",I%
+  Erase A$()
+Return
+'
+Procedure Set_color_on
+  ' set colors 1 & 2
+  Red$=Chr$(27)+"b1"
+  Blue$=Chr$(27)+"b2"
+  Ccolor!=True
+Return
+'
+Procedure Set_color_off
+  ' set colors 1 & 2 to black
+  Red$=Chr$(27)+"b3"
+  Blue$=Chr$(27)+"b3"
+  Ccolor!=False
+Return
+'
+Procedure Input_string(Prompt$,Col%,Row%,Allowed_length%,Allowed_char%,S$,Ptr%)
+  Local N%,A$
+  '
+  ' Prompt$ will be placed in front of the input string area.
+  ' Col% and Row% are the screen positions for the prompt to start.
+  ' Allowed_length% is the maximum length allowed for the input string.
+  ' Allowed_char% controls what characters will be accepted as input.
+  '    A 1 allows all ASCII characters >31 and <127.
+  '    A 2 allows the characters "0123456789ABCDEF".  The characters "()/*-+"
+  '      are converted to "ABCDEF" respectively & the characters "abcdef"
+  '      will be converted to upper case.  These hex characters will only
+  '      be accepted in pairs.
+  '    A 3 same as 2 and "H"
+  '    A 4 allows "0123456789" in 3's
+  '    More subroutines can be included modeled after these procedures.
+  ' S$ is the default entry for the input string.
+  ' Ptr% is a pointer used to pass the input string back to the variable
+  '    String$ in the main program.
+  '
+  ' setup cursor sprite
+  If Rez%=1
+    Thick_cur$=Mki$(0)+Mki$(0)+Mki$(-1)+Mki$(0)+Mki$(3)+String$(8,Mkl$(&HFF00))+String$(8,Mkl$(&H0))
+    Thin_cur$=Mki$(0)+Mki$(0)+Mki$(-1)+Mki$(0)+Mki$(3)+String$(8,Mkl$(&H8000))+String$(8,Mkl$(&H0))
+  Else
+    Thick_cur$=Mki$(0)+Mki$(0)+Mki$(-1)+Mki$(0)+Mki$(3)+String$(8,Mkl$(&HFF00))+String$(8,Mkl$(&HFF00))
+    Thin_cur$=Mki$(0)+Mki$(0)+Mki$(-1)+Mki$(0)+Mki$(3)+String$(8,Mkl$(&H8000))+String$(8,Mkl$(&H8000))
+  Endif
+  Insert!=False
+  Spr$=Thick_cur$
+  '
+  ' Count% is the position in "String$" for the next character
+  Count%=Len(S$)+1
+  @Print_string
+  Repeat
+    @Getkey
+    A$=Key$
+    If A$<>"" And A$<>Chr$(13)
+      If Len(A$)=2
+        On Instr(Chr$(75)+Chr$(77)+Chr$(82)+Chr$(72)+Chr$(80),Right$(A$,1))+1 Gosub Bell,Cur_left,Cur_right,Cur_insert,Cur_up,Cur_down
+      Else
+        N%=Instr(Chr$(8)+Chr$(27)+Chr$(127),A$)
+        If N%<>0
+          On N% Gosub Cur_backspace,Cur_esc,Cur_delete
+        Else
+          On Allowed_char% Gosub Convert_ascii,Convert_hex,Number,Ascii_number
+          If A$="" Or Count%>Allowed_length%
+            @Bell
+          Else
+            If Count%=Len(S$)+1
+              S$=S$+A$
+            Else
+              If Insert!
+                S$=Left$(Left$(S$,Count%-1)+A$+Mid$(S$,Count%),Allowed_length%)
+              Else
+                Mid$(S$,Count%,1)=A$
+              Endif
+            Endif
+            Inc Count%
+          Endif
+        Endif
+      Endif
+      @Print_string
+    Endif
+    '
+    ' If hex entry in pairs is required, check for that condition
+    If A$=Chr$(13) And Allowed_char%=2 And Not Frac(Len(S$)/2)==0
+      Clr A$
+      @Bell
+    Endif
+    '
+    ' If hex entry in 3's is required, check for that condition
+    If A$=Chr$(13) And Allowed_char%=4 And Not Frac(Len(S$)/3)==0
+      Clr A$
+      @Bell
+    Endif
+  Until A$=Chr$(13)
+  Sprite Spr$
+  *Ptr%=S$
+Return
+'
+Procedure Convert_ascii
+  If A$<" " Or A$>"~"
+    Clr A$
+  Endif
+Return
+'
+Procedure Convert_hex
+  N%=Instr("0123456789ABCDEF()/*-+",Upper$(A$))
+  If N%=0
+    Clr A$
+  Else
+    A$=Mid$("0123456789ABCDEFABCDEF",N%,1)
+  Endif
+Return
+'
+Procedure Number
+  N%=Instr("H0123456789ABCDEF()/*-+",Upper$(A$))
+  If N%=0 Or (Count%>1 And N%=1)
+    Clr A$
+  Else
+    A$=Mid$("H0123456789ABCDEFABCDEF",N%,1)
+  Endif
+Return
+'
+Procedure Ascii_number
+  If Instr("0123456789",A$)=0
+    Clr A$
+  Endif
+Return
+'
+Procedure Cur_insert
+  Sprite Spr$
+  If Insert!=False
+    Insert!=True
+    Spr$=Thin_cur$
+  Else
+    Insert!=False
+    Spr$=Thick_cur$
+  Endif
+  Sprite Spr$,(Col%+Len(Prompt$)+Count%)*8-16,Rez%*(Row%*8-8)
+Return
+'
+Procedure Cur_up
+  If Count%=1
+    @Bell
+  Else
+    Count%=1
+  Endif
+Return
+'
+Procedure Cur_down
+  If Count%=Len(S$)+1
+    @Bell
+  Else
+    Count%=Len(S$)+1
+  Endif
+Return
+'
+Procedure Cur_left
+  If Count%=1
+    @Bell
+  Else
+    Dec Count%
+  Endif
+Return
+'
+Procedure Cur_right
+  If Count%>Allowed_length% Or Count%>Len(S$)
+    @Bell
+  Else
+    Inc Count%
+  Endif
+Return
+'
+Procedure Cur_esc
+  Clr S$
+  Count%=1
+Return
+'
+Procedure Cur_backspace
+  If Count%>1
+    Dec Count%
+    S$=Left$(S$,Count%-1)+Mid$(S$,Count%+1)
+  Else
+    @Bell
+  Endif
+Return
+'
+Procedure Cur_delete
+  If Count%>0 And Count%<=Len(S$)
+    S$=Left$(S$,Count%-1)+Mid$(S$,Count%+1)
+  Else
+    @Bell
+  Endif
+Return
+'
+Procedure Print_string
+  Sprite Spr$
+  If Len(S$)<Allowed_length%
+    Print At(Col%,Row%);Prompt$+S$+String$(Allowed_length%-Len(S$),"_");
+  Else
+    Print At(Col%,Row%);Prompt$+S$;
+  Endif
+  Sprite Spr$,(Col%+Len(Prompt$)+Count%)*8-16,Rez%*(Row%*8-8)
+Return
+'
+Procedure Bell
+  Print Chr$(7);
+Return
+'
+Procedure Put_cur_on_screen2
+  If Not Window!
+    Print Chr$(27);"Y";Chr$(31+Ycur%);Chr$(31+Xcur%);
+  Else
+    Print Chr$(27);"Y";Chr$(31+Ycur%);Chr$(31+Pos%-(Ycur%-1)*Length_line%+56);
+  Endif
+Return
+'
+Procedure Put_cur_on_screen
+  @Cur_pos
+  @Cur_on
+  ' position the cursor on screen
+  If Not Window!
+    Print Chr$(27);"Y";Chr$(31+Ycur%);Chr$(31+Xcur%);
+    If Not Text!
+      Sprite Spr1$,(Pos%-(Ycur%-1)*Length_line%+56-1)*8+1,Rez%*((Ycur%-1)*8+1)
+      Sprite Spr2$,(Xcur%-1)*8+1,Rez%*((Ycur%-1)*8+1)
+    Endif
+  Else
+    Print Chr$(27);"Y";Chr$(31+Ycur%);Chr$(31+Pos%-(Ycur%-1)*Length_line%+56);
+    Sprite Spr1$,(Pos%-(Ycur%-1)*Length_line%+56-1)*8+1,Rez%*((Ycur%-1)*8+1)
+    Sprite Spr2$,(Xcur%-1)*8+1,Rez%*((Ycur%-1)*8+1)
+  Endif
+Return
+'
+Procedure Single_string_options
+  Single_string:
+  @Clr_menu
+  Print At(1,24);"Replace ";Rev$;H1$;Nor$;" w/ ";Rev$;H2$;Nor$;
+  If Single_string_key$="Y" And Last_single_string_key$<>"Y"
+    Print At(9,25);"Single string: <M>ult find, <R>epeat find, or Replace string <Y/";Rev$;"N";Nor$;"<C>hg>";
+  Else
+    Print At(9,25);"Single string: <M>ult find, <R>epeat find, or Replace string <  ";Rev$;"N";Nor$;"<C>hg>";
+  Endif
+  @Cur_on
+  @Put_cur_on_screen
+  @Getkey
+  Single_string_key$=Upper$(Key$)
+  Replaced_single_string!=False
+  If Instr("MRCY",Single_string_key$)=0
+    Single_string_key$="N"
+  Endif
+  If Single_string_key$="M"
+    @Mark_cur_pos
+    @Cur_off
+    Print At(9,25);Space$(71);
+    @Input_string("Mth occurrence to find: ",9,25,6,1,Str$(Max(1,Last_find_occurrence%)),*String$)
+    Find_occurrence%=Val(String$)
+    Last_find_occurrence%=Find_occurrence%
+    Print At(9,25);Space$(71);
+    @Multiple_find
+    @Draw_screen_at_new_file_pos
+    @New_cur_pos
+    Goto Single_string
+  Endif
+  '
+  If Single_string_key$="C"
+    Print At(1,24);Space$(8);
+    @Get_string("Replace")
+    If Replace_string_type$="H"
+      H2$="H "+Hex_replace_string$
+    Else
+      H2$=Replace_string$
+    Endif
+    Goto Single_string
+  Endif
+  If Single_string_key$="Y" And Last_single_string_key$<>"Y" And Find_string$<>""
+    @Check_for_max_length_file
+    If Exit_flag!
+      Replaced_single_string!=False
+      @Bell
+    Else
+      Need_to_reorganize!=True
+      Replaced_single_string!=True
+      B$=Left$(B$,Pos%-1)+Replace_string$+Mid$(B$,Pos%+Length_find_string%)
+      @Insert_string_into_array
+      Length_file%=Length_file%+Length_replace_string%-Length_find_string%
+      Pos%=Max(1,Pos%-1)
+    Endif
+  Endif
+  Print At(1,24);Space$(8);
+  Last_single_string_key$=Single_string_key$
+Return
+'
+Procedure Clear_sprites
+  Sprite Spr1$
+  Sprite Spr2$
+Return
+'
+Procedure Error_routine
+  If Err=8
+    C$="|Not enough memory"
+  Else
+    C$="|Error number "+Str$(Err)
+  Endif
+  @Bell
+  Alert 3,C$,1,"End",I%
+  Close
+  @Finished
+Return
+'
+Procedure Wait_message
+  @Clr_menu
+  @Cur_on
+  Print At(9,25);"Please wait ";
+Return
+'
+Procedure Multiple_find
+  If Find_string_type$="H"
+    H1$="H "+Hex_find_string$
+  Else
+    H1$=Find_string$
+  Endif
+  @Clr_menu
+  Print At(1,24);Space$(8);"Finding "+Str$(Find_occurrence%)+"th occurrence of string ";Rev$;H1$;Nor$;
+  Print At(9,25);"Left to find:          Any key will stop this operation.";
+  @Save_keyboard_buffer
+  '
+  @Cur_off
+  @Mark_cur_pos
+  I%=(File_pos%+Pos%)/Size%+1
+  Start_search%=File_pos%+Pos%-(I%-1)*Size%-1+Length_find_string%
+  Clr Key$
+  A$=Upper$(S$(I%))
+  If I%<No_dim%
+    A$=A$+Upper$(Left$(S$(I%+1),Length_find_string%-1))
+  Endif
+  While I%<=No_dim% And Key$="" And Find_occurrence%>0
+    Key$=Inkey$
+    Exit If Key$<>""
+    N%=Instr(A$,Upper$(Find_string$),Start_search%)
+    If N%<>0
+      Clr Last_single_string_key$
+      Single_string_key$="Y"
+      Dec Find_occurrence%
+      If N%+(I%-1)*Size%>File_pos%+Display_length%-1
+        File_pos%=Max(1,N%+(I%-1)*Size%+880*(Text!)+240*(Not Text!))
+      Endif
+      Pos%=N%+(I%-1)*Size%-File_pos%+1
+      Print At(23,25);Using "######",Find_occurrence%;
+      Start_search%=File_pos%+Pos%-(I%-1)*Size%-1+Length_find_string%
+    Else
+      Inc I%
+      Start_search%=1
+      A$=Upper$(S$(I%))
+      If I%<No_dim%
+        A$=A$+Upper$(Left$(S$(I%+1),Length_find_string%-1))
+      Endif
+    Endif
+  Wend
+  If Key$="" And (N%=0 Or Find_occurrence%<>0)
+    Clr Single_string_key$
+    Print At(9,25);Space$(71);
+    Print At(9,25);"String not found.  Any key to continue.";
+    @Getkey
+  Endif
+  @Restore_keyboard_buffer
+Return
+'
+Procedure Draw_main_menu
+  @Cur_off
+  Put 0,0,Screen$
+  ' print menu
+  Print At(7,24);" <V>iew  <S>ave <F>ind   <U>p   <N>ext <G>oto <H>ex/Text <K>ey <L>st Ge<M>";
+  Print At(7,25);" <T>rade <E>dit <R>epeat <D>own <P>rev <C>olr <A>scii/Codes <HELP> <Q>uit";
+  If File_pos%=1
+    Print At(1,24);Rev$;"Top";Nor$;"   ";
+  Else
+    If File_pos%>(Length_file%-Display_length%)
+      Print At(1,24);Rev$;"End";Nor$;"   ";
+    Endif
+  Endif
+Return
+'
+Procedure New_cur_pos
+  @Cur_off
+  @Clear_sprites
+  Put 0,0,Screen$
+  '
+  ' insure that the value of pos% does not exceed the last and first
+  ' characters displayed on the screen
+  Pos%=Min(Max(1,Pos%),Blength%)
+  '
+  ' print the position of the character under the cursor relative to
+  ' the beginning of the file
+  Print At(1,25);Using "######",File_pos%+Pos%-1;
+  @Put_cur_on_screen
+Return
+'
+Procedure Check_for_max_length_file
+  ' check to be sure too many characters are not added for available memory
+  Local N%
+  Exit_flag!=False
+  If Length_file%>Max_length_file_before_replace%
+    @Bell
+    Alert 3," The max number of characters|       have been added.| |Save & recall to change more.",1,"Cont",N%
+    Exit_flag!=True
+  Endif
+  If Fre(0)<38000
+    @Bell
+    Alert 3,"| |Memory too low.",1,"Cont",N%
+    Exit_flag!=True
+  Endif
+Return
+'
+Procedure Type_ahead_buffer
+  Alert 2,"|Type ahead buffer?",1,"Off|On",N%
+  Type_ahead_buffer_on!=False
+  If N%=2
+    Type_ahead_buffer_on!=True
+  Endif
+Return
+'
+Procedure Save_keyboard_buffer
+  ' save current buffer contents
+  Buffer_contents$=Space$(Dpeek(Xbios(14,1)+4))
+  Buffer_table_contents$=Space$(14)
+  Bmove Lpeek(Xbios(14,1)),Varptr(Buffer_contents$),Dpeek(Xbios(14,1)+4)
+  Bmove Xbios(14,1),Varptr(Buffer_table_contents$),14
+  Lpoke Xbios(14,1)+6,0
+Return
+'
+Procedure Restore_keyboard_buffer
+  Bmove Varptr(Buffer_contents$),Lpeek(Xbios(14,1)),Dpeek(Xbios(14,1)+4)
+  Bmove Varptr(Buffer_table_contents$),Xbios(14,1),14
+Return
+'
+Procedure Check_for_valid_key
+  Last_ascii_flag!=Ascii_flag!
+  Clr B%,C$,Ascii_flag!,Key_ok!
+  If Scan_code%=82
+    C$="INS"
+  Endif
+  If Ascii_code%=0 And Scan_code%=71
+    C$="HOME"
+  Endif
+  If Ascii_code%=55 And Scan_code%=71
+    C$="SHOME"
+  Endif
+  If Scan_code%=72
+    C$=""
+    B%=1
+    If Ascii_code%=56
+      C$="S"
+    Endif
+  Endif
+  If Scan_code%=80
+    C$=""
+    B%=2
+    If Ascii_code%=50
+      C$="S"
+    Endif
+  Endif
+  If Scan_code%=77
+    C$=""
+    B%=3
+    If Ascii_code%=54
+      C$="S"
+    Endif
+  Endif
+  If Scan_code%=75
+    C$=""
+    B%=4
+    If Ascii_code%=52
+      C$="S"
+    Endif
+  Endif
+  If B%=0 And C$="" And Scan_code%<>-1 And (Ascii_code%=8 Or Ascii_code%=9 Or Ascii_code%=13 Or Ascii_code%=27 Or (Ascii_code%>31 And Ascii_code%<128))
+    If Ascii_code%>32 And Ascii_code%<127
+      B%=Ascii_code%
+      Ascii_flag!=True
+      If Not Last_ascii_flag!
+        C$=""
+      Endif
+    Else
+      C$=""+Mid$("BSTABRETESCSPADEL",-(Ascii_code%=8)-3*(Ascii_code%=9)-6*(Ascii_code%=13)-9*(Ascii_code%=27)-12*(Ascii_code%=32)-15*(Ascii_code%=127),3+(Ascii_code%=8))
+    Endif
+  Endif
+  If B%<>0 Or C$<>""
+    C$=Space$(-6*(B%=0)-5*(B%<>0)-Len(C$))+C$
+  Endif
+  If B%<>0 Or C$<>""
+    Key_ok!=True
+  Endif
+Return
+'
+Procedure Get_key_code
+  Key%=Bios(2,2)
+  Shift_code%=Key%/&H1000000
+  Scan_code%=(Key%/65536) And 255
+  Ascii_code%=Key% And 255
+Return
+'
+Procedure Incorrect_range
+  @Bell
+  Alert 1,"Incorrect range",1,"Cont",N%
+Return
+'
+Procedure Draw_screen_at_new_file_pos
+  File_pos%=Max(1,File_pos%)
+  @Cur_off
+  Cls
+  Display_length%=512-1248*(Text!)
+  ' array_pos% is a variable that represents the element in array s$()
+  ' that holds the first character of b$ (at file byte = file_pos%)
+  Array_pos%=(File_pos%-1)/Size%+1
+  ' assign to b$ a portion of the file extracted from s$().
+  ' b$ will be the portion of the file displayed on screen.
+  ' the length of b$ is the number of characters (display_length%) to be
+  ' displayed on the screen which varies between hex and text modes
+  B$=Mid$(S$(Array_pos%),File_pos%-(Array_pos%-1)*Size%,Display_length%)
+  If Len(B$)<Display_length% And Array_pos%<No_dim%
+    B$=B$+Left$(S$(Array_pos%+1),Display_length%-Len(B$))
+  Endif
+  Blength%=Len(B$)
+  ' *****************************************************************************
+  ' BASIC sometimes does a garbage collection to reallocate available memory
+  ' when strings are being modified.  This happens in both the interpreted
+  ' and compiled forms of GFA Basic.  When I am not modifying string values,
+  ' I peek at memory for maximum program speed.  The following code is an
+  ' example of this peeking method.  It only works because I am not modifying
+  ' any strings.
+  ' *****************************************************************************
+  '
+  Mem_pos%=Varptr(B$)
+  Mem_pos_end%=Mem_pos%+Blength%-1
+  '
+  ' In the following code, OUT automatically wraps to the next line except when
+  ' TURBO ST by SofTrek is installed.  Their routines do not wrap so the count%
+  ' stuff in the following routine has been added to work with TURBO ST.
+  '
+  ' the fastest display of all characters is in black
+  If (Not Ccolor!) And Text! And Codes!
+    Clr Count%
+    Repeat
+      Out 5,Peek(Mem_pos%)
+      Inc Mem_pos%
+      Inc Count%
+      If Count%=80
+        Clr Count%
+        If Crscol=80
+          Print Chr$(13);Chr$(10);
+        Endif
+      Endif
+    Until Mem_pos%>Mem_pos_end%
+  Endif
+  '
+  ' slower display which allows colors and/or only printable characters
+  If Text! And (Ccolor! Or Not Codes!)
+    Clr Count%
+    Repeat
+      A%=Peek(Mem_pos%)
+      If A%<32
+        Print Red$;
+        Out 5,-A%*(Codes!)-32*(Not Codes!)
+        Print Black$;
+      Else
+        If A%<127
+          Out 5,A%
+        Else
+          Print Blue$;
+          Out 5,-A%*(Codes!)-32*(Not Codes!)
+          Print Black$;
+        Endif
+      Endif
+      Inc Mem_pos%
+      Inc Count%
+      If Count%=80
+        Clr Count%
+        If Crscol=80
+          Print Chr$(13);Chr$(10);
+        Endif
+      Endif
+    Until Mem_pos%>Mem_pos_end%
+  Endif
+  '
+  ' display hex values and ascii characters on screen at same time
+  If Not Text!
+    Ypos%=1
+    Repeat
+      Xpos%=1
+      Xpos2%=57
+      Repeat
+        I%=1
+        Repeat
+          A%=Peek(Mem_pos%)
+          If A%<32
+            Print At(Xpos%,Ypos%);Red$;Right$("0"+Hex$(A%),2);
+            Print At(Xpos2%,Ypos%);
+            Out 5,-A%*(Codes!)-32*(Not Codes!)
+            Print Black$;
+          Else
+            If A%<127
+              Print At(Xpos%,Ypos%);Right$("0"+Hex$(A%),2);
+              Print At(Xpos2%,Ypos%);
+              Out 5,A%
+            Else
+              Print At(Xpos%,Ypos%);Blue$;Right$("0"+Hex$(A%),2);
+              Print At(Xpos2%,Ypos%);
+              Out 5,-A%*(Codes!)-32*(Not Codes!)
+              Print Black$;
+            Endif
+          Endif
+          Add Xpos%,2
+          Inc Xpos2%
+          Inc Mem_pos%
+          Inc I%
+        Until I%>4 Or Mem_pos%>Mem_pos_end%
+        If I%>4
+          Inc Xpos%
+        Endif
+      Until Xpos%>53 Or Mem_pos%>Mem_pos_end%
+      Print At(55,Ypos%);"|";
+      Inc Ypos%
+    Until Mem_pos%>Mem_pos_end%
+  Endif
+  '
+  ' complete last line of display with blocks so that the position of the
+  ' last on screen character can be easily determined
+  If Not Text! And Xpos%<54
+    If Xpos%<54
+      Print At(Xpos%,Ypos%-1);String$(54-Xpos%,Block$);
+    Endif
+    If Xpos2%<81
+      Print At(Xpos2%,Ypos%-1);String$(81-Xpos2%,Block$);
+    Endif
+  Endif
+  If Text! And Crscol<>1
+    Print String$(81-Crscol,Block$);
+  Endif
+  '
+  ' draw a line under last line of display characters
+  Print "    ";
+  If Not Text!
+    Line 0,Rez%*(Ypos%*8-6),639,Rez%*(Ypos%*8-6)
+  Else
+    If Crscol=1
+      Line 0,Rez%*((Crslin-1)*8-6),639,Rez%*((Crslin-1)*8-6)
+    Else
+      Line 0,Rez%*(Crslin*8-6),639,Rez%*(Crslin*8-6)
+    Endif
+  Endif
+  '
+  Get 0,0,639,Rez%*183,Screen$
+  ' set var for number of characters displayed per screen line
+  Length_line%=24-56*(Text!)
+Return
+'
+Procedure Mark_current_string_pos
+  Y%=11+Int((Current_string_pos%-1)/13)
+  X%=(Current_string_pos%-1)*6+1-13*(Int((Current_string_pos%-1)/13))*6
+  Box X%*8,Rez%*(Y%*8-1),X%*8+40,Rez%*(Y%*8-9)
+Return
+'
+Procedure Macro_help
+  Cls
+  '
+  Print "                 Using the Byte Mechanic Macro Feature"
+  Print
+  Print "       ABANDON a macro: [Undo]."
+  Print
+  Print "       CREATE a function key macro: press the desired function key,"
+  Print "         enter the keystrokes and then press the function key again."
+  Print "         Macros may be assigned at any time, but the type-ahead buffer"
+  Print "         (<B> option) must be ON to play back a macro."
+  Print
+  Print "       DELETE a character in a macro: [Control][D]."
+  Print
+  Print "       EDIT an existing macro: press its function key. The current macro"
+  Print "         will be displayed above the new macro editing area."
+  Print "       --COPY a character into the new macro: press [Control][C] while"
+  Print "         the cursor box is over the character in the old macro."
+  Print "       --MOVE through current macro: [Control][N] (next character)"
+  Print "                                     [Control][P] (previous character)."
+  Print "       EXIT macros menu:  [Undo]."
+  Print
+  Print "       LOAD a set of macros from disk: 'L' on macro menu."
+  Print
+  Print "       SAVE a set of macros to disk: 'S' on macro menu."
+  Print
+  Print "                [Press any key to exit this HELP screen.]";
+  Void Inp(2)
+Return

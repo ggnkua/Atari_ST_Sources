@@ -1,0 +1,40 @@
+; PPRINT.LSP for XLisp Version 1.5b -- public-domain pretty-printing
+;  function.  Modified from original Usenet posting; author unknown.
+
+
+(defun pp (&rest args)
+  (apply 'pp-aux args)
+  (terpri)
+  nil)
+
+(defun pp-aux (expr &optional sink indent &aux moreindent newlineflag)
+  (or indent (setq indent 0))
+  (or sink (setq sink *standard-output*))
+  (setq moreindent 0)
+  (princ "(" sink)
+  (setq indent (1+ indent))
+  (do ((tail expr (cdr tail)))
+      ((null tail))
+      (cond ((atom (car tail))
+             (cond (newlineflag (setq moreindent 0)))
+             (prin1 (car tail)
+              sink)
+             (setq moreindent (+ moreindent 1 (flatc (car tail))))
+             (cond ((cdr tail)
+                    (spaces 1 sink)))
+             (setq newlineflag nil))
+            (t (cond (newlineflag (spaces moreindent sink)))
+               (pp-aux (car tail)
+                sink (+ indent moreindent))
+               (cond ((cdr tail)
+                      (terpri sink)
+                      (spaces indent sink)))
+               (setq newlineflag t))))
+  (princ ")" sink)
+  nil)
+
+(defun spaces (n &optional sink)
+  (or sink (setq sink *standard-output*))
+  (dotimes (i n)
+           (princ " " sink)))
+
