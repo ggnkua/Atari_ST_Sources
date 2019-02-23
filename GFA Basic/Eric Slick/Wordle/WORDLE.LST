@@ -1,0 +1,2314 @@
+' ******************************************************************************
+' ******************                WORDLE                   *******************
+' ******************                  by                     *******************
+' ******************              Eric Slick                 *******************
+' ******************      ½1990  Antic Publishing Inc.       *******************
+' ******************                v. 1.0                   *******************
+' ******************        Dedicated to Susie Slick         *******************
+' ******************         AUGIE BBS 714-425-9703          *******************
+' ******************************************************************************
+'
+'
+CLEAR
+' ON BREAK CONT
+ON ERROR GOSUB error_routine
+r%=XBIOS(4)
+IF r%<>0   !change this to r%=1 and you'll be able to use it on hi rez
+  ALERT 1,"|This Program is only |for low resolution!?|",1,"Ok",button%
+  SYSTEM
+ENDIF
+DIM wordle$(6,6)            !The wordle board
+DIM cube$(37)               !Cube data
+DIM cube%(37)
+DIM pwords$(1000)
+DIM computerwords$(1000)
+DIM grid3%(6,6)             !keeps track of used cubes on board for each word
+DIM grid1%(6,6)
+DIM wordlist$(26)           !Dictionary stored here
+DIM alphabet$(26)           !dictionary management
+DIM di%(30)                 !corresponds to Wl% and its current d%irection
+DIM cx%(7),cy%(7)           !computers position on wordle$() during search
+DIM playerscore%(10)
+DIM computerscore%(10)
+DIM words$(1000)       !there is a maximum limit of 1000 words/alphabet letter
+DIM repeats$(300)           !stores words found by both human and computer
+DIM menu$(50)
+DIM phighscore%(6)
+DIM chighscore%(6)
+DIM computerpalette%(15)     ! Save original computer colors.
+' initialize variables and load data
+cx%(0)=0                  !Determines direction of next A%,B%
+cx%(1)=1                  !See computer_word_search
+cx%(2)=1
+cx%(3)=1
+cx%(4)=0
+cx%(5)=-1
+cx%(6)=-1
+cx%(7)=-1
+cy%(0)=-1
+cy%(1)=-1
+cy%(2)=0
+cy%(3)=1
+cy%(4)=1
+cy%(5)=1
+cy%(6)=0
+cy%(7)=-1
+maxx%=5
+maxy%=5
+viewing%=0
+round%=0
+speed%=3
+time%=3
+level%=1
+n$="You   "
+challengecube%=0
+gridsize%=1
+mouseon%=0
+DEFMOUSE 3
+GRAPHMODE 2
+set_data
+rerun:
+IF EXIST("\path.wrd")
+  path$=STRING$(100,32)
+  BLOAD "\path.wrd",VARPTR(path$)
+  temp%=INSTR(path$," ")
+  path$=LEFT$(path$,temp%-1)
+ELSE IF EXIST("Wrdlpic.dat")
+  path$=""
+ELSE
+  setpath
+  GOTO rerun
+ENDIF
+get_dictionary
+DEFFILL 3
+check_rez
+VSYNC
+PUT 189+lroffset%,0,title$
+IF EXIST(path$+"custom.wrd")
+  custom$="            "
+  file$=path$+"custom.wrd"
+  BLOAD file$,VARPTR(custom$)
+  challengecube%=ASC(MID$(custom$,1,1))
+  gridsize%=ASC(MID$(custom$,2,1))
+  maxx%=4+gridsize%
+  maxy%=4+gridsize%
+  speed%=ASC(MID$(custom$,3,1))
+  time%=ASC(MID$(custom$,4,1))
+  level%=ASC(MID$(custom$,5,1))
+  mouseon%=(ASC(MID$(custom$,6,1)) AND 2)/2
+  n$=MID$(custom$,7,6)
+  temp%=INSTR(n$," ")
+  b$=LEFT$(n$,temp%-1)
+  file$=path$+"wdl"+b$+".hsc"
+  IF EXIST(file$)
+    BLOAD file$,LPEEK(ARRPTR(phighscore%()))
+  ENDIF
+ENDIF
+file$=path$+"wdlcmptr.hsc"
+IF EXIST(file$)
+  BLOAD file$,LPEEK(ARRPTR(chighscore%()))
+ENDIF
+draw_score
+GET 193,102,319,210-lroffset%,score$
+GET 193,10,319,115,underwindow$
+fill_grid
+display_cubes
+'
+startup:                                !The official beginning
+MENU menu$()
+MENU 19,challengecube%
+IF gridsize%=0
+  MENU 20,0
+  MENU 21,1
+  maxx%=4
+  maxy%=4
+ELSE
+  MENU 20,1
+  MENU 21,0
+  maxx%=5
+  maxy%=5
+ENDIF
+MENU 22,mouseon%
+MENU 16,3
+MENU 25,3
+deleting%=0
+viewing%=0
+DEFMOUSE 3
+GRAPHMODE 2
+SHOWM
+VSYNC
+PUT 189+lroffset%,0,title$
+PUT 193,10,underwindow$
+PUT 193,102,score$
+DEFTEXT 1,0,0,6
+TEXT 271,72,time%
+TEXT 271,58,speed%
+TEXT 271,86,level%
+display_score
+GET 193,10,319,115,underwindow$
+ON MENU GOSUB menu
+ON MENU MESSAGE GOSUB message
+ON MENU KEY GOSUB key
+DO
+  a$=""
+  DO
+    ON MENU
+  LOOP UNTIL MOUSEK OR a$<>"" OR startgame%
+  k%=MOUSEK
+  IF deleting%
+    delete
+    k%=0
+  ENDIF
+  IF ASC(a$)=27 AND (viewing% OR deleting%)
+    close_viewing
+  ENDIF
+  IF k%=2
+    OPENW #1,330,300,0,0,0           !forces open menus
+    CLOSEW 1                         !to close
+    CLOSEW 0                         !immediately
+    fill_grid
+    IF gridsize%=0
+      DEFFILL 3,1
+      PBOX 5,10,190,190
+      maxx%=4
+      maxy%=4
+    ENDIF
+    display_cubes
+  ENDIF
+  IF k%=1 OR startgame% OR a$=CHR$(13) AND viewing%=0
+    OPENW #1,330,300,0,0,0           !forces open menus
+    CLOSEW 1                         !to close
+    CLOSEW 0                         !immediately
+    IF startgame%
+      press_button(244,36)
+      startgame%=0
+      GOTO startgame
+    ENDIF
+    IF MOUSEX>196 AND MOUSEX<295 AND MOUSEY>106 AND MOUSEY<192
+      display_highscore
+    ENDIF
+    IF MOUSEX>244 AND MOUSEX<263 OR a$=CHR$(13)
+      IF MOUSEY>36 AND MOUSEY<46 OR a$=CHR$(13)   !start has been pressed
+        MENU KILL
+        a=XBIOS(7,7,1911)
+        press_button(244,36)
+        fill_grid
+        IF gridsize%=0
+          DEFFILL 3,1
+          PBOX 5,10,190,190
+          maxx%=4
+          maxy%=4
+        ENDIF
+        display_cubes
+        startgame:
+        GET 193,10,319,115,underwindow$
+        DEFFILL 3,1
+        PBOX 201,37,241,47
+        DEFTEXT 2,4,0,6
+        TEXT 202,44,"Pause"
+        INFOW #1,""
+        OPENW #1,190,84,119,117,1
+        TITLEW #1,"Get Ready!"
+        PAUSE 100
+        TITLEW #1,"Go!"
+        CLS
+        ARRAYFILL grid1%(),0
+        loc$=""
+        start%=0
+        cx%=1
+        cy%=1
+        tw%=0               !total words in computer list
+        cctimer%=TIMER+1000 !used in level 1,3,5,7 to make sure computer gets a
+        '                    fair chance  ie. at least 5 seconds of looking
+        a=XBIOS(7,7,0)
+        x%=299
+        y%=66
+        i%=time%
+        ii%=0
+        jump%=0
+        jumpmax%=speed%*45  !Determines how slow the search will be
+        DEFFILL 1
+        DEFTEXT 1,0,0,6
+        PRINT
+        PRINT ">";
+        t%=0                !total words in human list
+        searchcomplete%=0
+        temp$=""
+        IF mouseon%=0
+          HIDEM
+        ENDIF
+        GRAPHMODE 1
+        timing%=TIMER+200
+        IF time%=0          !in effect, unlimited time
+          timing%=2000000000
+        ENDIF
+        REPEAT
+          aa$=INKEY$
+          '                 **********************
+          '                    Mouse input loop
+          '                 **********************
+          IF MOUSEK OR (aa$<>"" AND LEN(loc$)>0)
+            IF MOUSEK=0
+              k%=2
+            ELSE
+              k%=MOUSEK
+            ENDIF
+            IF k%=1
+              IF MOUSEX>53
+                IF MOUSEX<72 AND MOUSEY>-60 AND MOUSEY<-50
+                  aa$=CHR$(27)
+                  press_button(244,36) !Pause Button was clicked by mouse
+                ENDIF
+              ENDIF
+              x%=(MOUSEX+211)/17.5  !Result is an odd number when between cubes
+              y%=(MOUSEY+101)/15.5  !Cubes and even when centered in a cube
+              IF EVEN(x%) AND EVEN(y%)
+                x%=(MOUSEX+219)/35
+                y%=(MOUSEY+109)/31
+                ' Check to see if inside grid1% and if next to last x,y pos
+                ' Then add or delete letters as necessary
+                IF x%<=maxx% AND x%>0 AND y%<=maxy% AND y%>0
+                  IF x%<>xx% OR y%<>yy% OR kk%=0
+                    IF LEN(temp$)=0 OR ((x%+1=xx% OR x%-1=xx% OR x%=xx%) AND (y%+1=yy% OR y%-1=yy% OR y%=yy%)) OR grid1%(x%,y%)=1
+                      IF grid1%(x%,y%)=0
+                        kk%=1
+                        grid1%(x%,y%)=1
+                        GRAPHMODE 2  !set to transparent mode
+                        DEFTEXT 14,16,0,18  !Outline in color 14
+                        OPENW 0
+                        ' overlay outline letter
+                        TEXT 20+((x%-1)*35)+(wordle$(x%,y%)="Qu")*7,(y%*31)-2,wordle$(x%,y%)
+                        DEFTEXT 1,0,0,6
+                        GRAPHMODE 1
+                        aa$=wordle$(x%,y%)
+                        loc$=loc$+CHR$(x%+y%*16)
+                      ELSE IF grid1%(x%,y%)=1 !a picked cube has been clicked on
+                        ' check to see if its letter is in temp$ then erase
+                        ' from grid1% and change back to normal. I keep track
+                        ' of the grid loc. of each letter, in nibbles, in loc$
+                        ' Lower 4 bits=xx%; upper 4 bits=yy% location.
+                        FOR loop%=1 TO LEN(loc$)  !find letter's x,y location
+                          temp%=ASC(MID$(loc$,loop%,1))
+                          xx%=temp% AND 15
+                          yy%=(temp% AND 240)/16
+                          EXIT IF xx%=x% AND yy%=y%
+                        NEXT loop%
+                        DEC loop%
+                        ' erase word on work pad
+                        PRINT STRING$(LEN(temp$),CHR$(8));
+                        PRINT STRING$(LEN(temp$)," ");
+                        PRINT STRING$(LEN(temp$),CHR$(8));
+                        OPENW 0
+                        GRAPHMODE 2       !Transparent mode
+                        DEFTEXT 0,16,0,18 !Overlay existing outline with color 0
+                        ' Cube outlines are erased from point where mouse was clicked
+                        FOR loop1%=loop%+1 TO LEN(loc$)
+                          temp%=ASC(MID$(loc$,loop1%,1))
+                          xx%=temp% AND 15
+                          yy%=(temp% AND 240)/16
+                          TEXT 20+((xx%-1)*35)+(wordle$(xx%,yy%)="Qu")*7,(yy%*31)-2,wordle$(xx%,yy%)
+                          grid1%(xx%,yy%)=0
+                        NEXT loop1%
+                        ' rebuild loc$ and temp$ to match edited cubes
+                        loc$=MID$(loc$,1,loop%)
+                        temp$=""
+                        FOR loop1%=1 TO LEN(loc$)
+                          temp%=ASC(MID$(loc$,loop1%,1))
+                          temp1%=temp% AND 15
+                          temp2%=(temp% AND 240)/16
+                          a$=wordle$(temp1%,temp2%)
+                          IF a$="Qu"
+                            a$="QU"
+                          ENDIF
+                          temp$=temp$+a$
+                        NEXT loop1%
+                        DEFTEXT 1,0,0,6
+                        GRAPHMODE 1
+                        OPENW 1
+                        ' reprint edited word on work pad
+                        PRINT temp$;
+                        aa$=""
+                        IF mouseon%
+                          DEFMOUSE 3
+                        ENDIF
+                      ENDIF
+                    ELSE !letter chosen isn't next to last letter
+                      PRINT CHR$(7);
+                    ENDIF
+                    OPENW 1
+                    temp%=ASC(MID$(loc$,LEN(loc$),1))
+                    xx%=temp% AND 15
+                    yy%=(temp% AND 240)/16
+                  ENDIF
+                ELSE  !clicked on outside grid area
+                  PRINT CHR$(7);
+                ENDIF
+              ENDIF
+              ' *****
+            ELSE IF k%=2 !Right mouse button clicked
+              aa$=CHR$(13)
+              ARRAYFILL grid1%(),0
+              OPENW 0
+              GRAPHMODE 2
+              DEFTEXT 0,16,0,18
+              ' Erase outlines
+              ' actual entry into player word list done under normal text entry
+              FOR loop1%=1 TO LEN(loc$)
+                temp%=ASC(MID$(loc$,loop1%,1))
+                xx%=temp% AND 15
+                yy%=(temp% AND 240)/16
+                TEXT 20+((xx%-1)*35)+(wordle$(xx%,yy%)="Qu")*7,(yy%*31)-2,wordle$(xx%,yy%)
+                grid1%(xx%,yy%)=0
+              NEXT loop1%
+              IF mouseon%
+                DEFMOUSE 3
+              ENDIF
+              loc$=""
+              GRAPHMODE 1
+              OPENW 1
+              DEFTEXT 1,0,0,6
+            ENDIF
+            IF MOUSEK=3 !Both mouse buttons down, turn mouse on or off
+              aa$=""
+              mouseon%=-1*(mouseon%=0)
+              MENU 22,mouseon%
+              IF mouseon%
+                SHOWM
+                PAUSE 10
+              ELSE
+                HIDEM
+                PAUSE 10
+              ENDIF
+            ENDIF
+            IF mouseon%
+              DEFMOUSE 3
+            ENDIF
+          ELSE
+            kk%=0
+          ENDIF
+          '             ********************
+          IF ASC(aa$)=27    !Pause or [Esc] pressed during play
+            timingpause%=timing%-TIMER
+            wait
+            IF button%=1
+              GOTO startup
+            ENDIF
+            IF button%=3
+              timing%=TIMER+timingpause%   !Corrects timing so seconds arn't lost
+              IF time%=0
+                timing%=2000000000
+              ENDIF
+            ENDIF
+          ENDIF
+          aa$=UPPER$(aa$)
+          aa%=ASC(aa$)
+          IF aa%>64 AND aa%<91
+            PRINT aa$;
+            temp$=temp$+aa$
+          ENDIF
+          IF aa%=13 OR aa%=32
+            aa$=""
+            IF LEN(temp$)>2 AND LEN(temp$)<14
+              PRINT
+              PRINT ">";
+              TEXT 42,6,ii$
+              INC t%
+              pwords$(t%)=temp$
+              IF t%=1000                     !Unlikely but possible
+                t%=0
+              ENDIF
+              temp$=""
+            ELSE IF LEN(temp$)>13      !Longer words are not only unlikely
+              CLS                      !they mess up the work pad.
+              PRINT
+              PRINT "Get Real!"
+              temp$=""
+            ELSE
+              aa%=127
+            ENDIF
+          ENDIF
+          IF aa%=127                         !Clumsy but it works
+            PRINT STRING$(LEN(temp$),CHR$(8));
+            PRINT STRING$(LEN(temp$)," ");
+            PRINT STRING$(LEN(temp$),CHR$(8));
+            temp$=""
+          ENDIF
+          IF aa%=8 AND temp$<>""             !Clumsy but it works
+            PRINT aa$;
+            PRINT " ";
+            PRINT aa$;
+            temp$=LEFT$(temp$,LEN(temp$)-1)
+          ENDIF
+          IF searchcomplete%=0
+            IF jump%=jumpmax%
+              computer_check
+              jump%=0
+            ELSE
+              INC jump%
+            ENDIF
+          ENDIF
+          IF TIMER>=timing%
+            timing%=TIMER+200
+            DEC ii%
+            IF ii%<0
+              DEC i%
+              ii%=59
+            ENDIF
+            ii$=STR$(i%)+":"
+            IF ii%<10
+              ii$=ii$+"0"
+            ENDIF
+            ii$=ii$+STR$(ii%)
+            TEXT 42,6,ii$
+            IF mouseon%
+              DEFMOUSE 3
+            ENDIF
+          ENDIF
+        UNTIL i%<0
+        GRAPHMODE 2
+        SHOWM
+        DEFTEXT 1,1,0,7
+        OPENW #1,190,25,119,175,1
+        CLS
+        IF t%=0 AND tw%<>0
+          t%=1
+          pwords$(t%)="SKUNKED"
+        ENDIF
+        TITLEW #1,"!! STOP !!"
+        PRINT "Please wait"
+        PRINT
+        strip_repeats
+        cross_check_words
+        check_for_legal_words
+        temp%=0
+        PRINT "~~~~~~~~~~~~~~";
+        PRINT "These are your";
+        PRINT "words:"
+        PRINT
+        FOR loop%=1 TO t%
+          PRINT pwords$(loop%)
+          INC temp%
+          IF temp%>11
+            PRINT
+            PRINT "push button"
+            PRINT
+            REPEAT
+            UNTIL MOUSEK
+            temp%=0
+          ENDIF
+        NEXT loop%
+        temp%=0
+        PRINT
+        PRINT "push button"
+        PRINT
+        REPEAT
+        UNTIL MOUSEK
+        PRINT "~~~~~~~~~~~~~~";
+        PRINT "These are the"
+        PRINT "computer's:"
+        PRINT
+        FOR loop%=1 TO tw%
+          PRINT computerwords$(loop%)
+          INC temp%
+          IF temp%>11
+            PRINT
+            PRINT "push button"
+            PRINT
+            REPEAT
+            UNTIL MOUSEK
+            temp%=0
+          ENDIF
+        NEXT loop%
+        computerwords$(loop%+1)=""
+        score
+        REPEAT
+        UNTIL MOUSEK
+        CLOSEW 1
+        CLOSEW 0
+        VSYNC
+        PUT 193,10,underwindow$
+        display_score
+        m$="|Your Score="+STR$(playerscore%(round%))
+        m$=m$+"|Comp Score="+STR$(computerscore%(round%))+"  "
+        ALERT 1,m$,2,"  OK  |  OK  ",button%
+        INC round%
+        IF round%=5
+          winner
+          SSORT phighscore%(-),6
+          SSORT chighscore%(-),6
+          phighscore%(5)=pt%
+          chighscore%(5)=ct%
+          FOR loop%=0 TO 4
+            playerscore%(loop%)=0
+            computerscore%(loop%)=0
+          NEXT loop%
+          display_highscore
+          display_score
+        ENDIF
+        GOTO startup
+      ENDIF
+      IF MOUSEY>50 AND MOUSEY<60          !speed has been pressed
+        press_button(244,50)
+        INC speed%
+        IF speed%>9
+          speed%=0
+        ENDIF
+        DEFTEXT 1,0,0,6
+        PUT 269,50,blanknmbr$
+        TEXT 271,58,speed%
+      ENDIF
+      IF MOUSEY>64 AND MOUSEY<74          !time has been pressed
+        press_button(244,64)
+        INC time%
+        IF time%>9
+          time%=0
+        ENDIF
+        DEFTEXT 1,0,0,6
+        PUT 269,64,blanknmbr$
+        TEXT 271,72,time%
+      ENDIF
+      IF MOUSEY>78 AND MOUSEY<88          !level has been pressed
+        press_button(244,78)
+        INC level%
+        IF level%>7
+          level%=0
+        ENDIF
+        DEFTEXT 1,0,0,6
+        PUT 269,78,blanknmbr$
+        TEXT 271,86,level%
+      ENDIF
+      IF MOUSEY>92 AND MOUSEY<102         !Exit has been pressed
+        press_button(244,92)
+        ALERT 2,"| |Do you wish to quit?",1,"Yup|No-Way",button%
+        IF button%=1
+          store_wordlist
+          store_highscore
+          reset_colors
+        ENDIF
+      ENDIF
+    ENDIF
+    DEFMOUSE 3
+  ENDIF
+LOOP
+> PROCEDURE computer_check         !One letter checked at a time then return
+  IF start%=0                    !if true, a new position in Wordle grid
+    qu1%=0
+    qu2%=0
+    IF level% AND 2              !If bit 2 set choose random X,Y location
+      beforerandom:              !for search
+      cx%=RANDOM(maxx%)+1
+      cy%=RANDOM(maxy%)+1
+      IF cx%=maxx% AND maxy%=5 AND TIMER<cctimer%  !ensures computer a fair chance
+        GOTO beforerandom
+      ENDIF
+    ENDIF
+    cword$=wordle$(cx%,cy%)
+    IF cword$="Qu"
+      cword$="QU"
+      qu1%=1
+    ENDIF
+    wl%=1                          !current word length
+    l%=ASC(wordle$(cx%,cy%))-64
+    ARRAYFILL grid3%(),0
+    ARRAYFILL di%(),0
+    grid3%(cx%,cy%)=1
+    a%=cx%
+    b%=cy%
+    start%=1
+    d%=0
+    temp1%=1
+    temp%=0
+  ENDIF
+  skipit:
+  a%=a%+cx%(d%)                    !selects next X,Y position of search
+  b%=b%+cy%(d%)
+  IF a%<1 OR a%>maxx% OR b%<1 OR b%>maxy% OR grid3%(a%,b%)=1 !Beyond Wordle's borders? or grid loc(cube) used already?
+    a%=a%-cx%(d%)                  !choose previous X,Y position in search
+    b%=b%-cy%(d%)
+    INC d%                         !attempt to see if next position works
+    di%(wl%)=d%
+    skipit2:
+    IF d%>7                        !we have made a full rotation
+      IF RIGHT$(cword$,2)="QU"     !check for Qu letter
+        IF qu2%
+          qu2%=0
+          cword$=LEFT$(cword$,LEN(cword$)-1)
+        ENDIF
+      ENDIF
+      grid3%(a%,b%)=0              !enable this position
+      DEC wl%                      !dec word length to see if last position has
+      '                             any new words
+      d%=di%(wl%)
+      a%=a%-cx%(d%)                !selects previous X,Y position of search
+      b%=b%-cy%(d%)
+      INC d%                       !resume search in next possible direction
+      di%(wl%)=d%
+      IF d%>7
+        GOTO skipit2
+      ENDIF
+      IF wl%<1                     !no new match possible in this position so
+        start%=0
+        INC cx%                    !move to next search position
+        IF cx%>maxx%
+          cx%=1
+          INC cy%
+          IF cy%>maxy%
+            searchcomplete%=1      !Wordle board has been searched completely
+          ENDIF
+        ENDIF
+      ENDIF
+    ENDIF
+    cword$=LEFT$(cword$,wl%+qu1%+qu2%)
+    GOTO skipit
+  ENDIF
+  IF RIGHT$(cword$)="Q"             !The QU stuff compensates for QU words
+    IF wl%=LEN(cword$)
+      cword$=cword$+"U"
+    ELSE
+      IF qu2%=1
+        qu2%=0
+        cword$=LEFT$(cword$,LEN(cword$)-1)
+      ENDIF
+    ENDIF
+  ENDIF
+  cw$=wordle$(a%,b%)
+  IF cw$="Qu"
+    cw$="QU"
+    qu2%=1
+  ENDIF
+  cword$=cword$+cw$             !a letter was found so add it to cword$
+  ' Activate the next three lines to have a peek into the working processes
+  ' PRINT cword$;" ";a%;" ";b%;" ";qu2%;" ";wl%
+  ' REPEAT
+  ' UNTIL MOUSEK
+  grid3%(a%,b%)=1               !makes this grid loc invalid for a letter check
+  IF level% AND 1
+    temp1%=RANDOM(LEN(wordlist$(l%))/2)+1 !level% 1 randomizes string search pos
+  ENDIF
+  temp%=INSTR(wordlist$(l%),cword$,temp1%)!temp1% matches end of last word and
+  temp1%=temp%                  !ensures quickest string search possible
+  IF temp%=0                    !no match in wordlist so check next position
+    grid3%(a%,b%)=0             !reenable this position for future matches
+    a%=a%-cx%(d%)
+    b%=b%-cy%(d%)
+    INC d%
+    di%(wl%)=d%
+    skipit1:
+    IF d%>7                     !if d% >7 no match possible in this position
+      IF RIGHT$(cword$,2)="QU"  !check for Qu letter
+        IF qu2%
+          qu2%=0
+          cword$=LEFT$(cword$,LEN(cword$)-1)
+        ENDIF
+      ENDIF
+      grid3%(a%,b%)=0           !enable this position
+      DEC wl%                   !dec word length to see if last position has
+      '                          any new possibilities
+      d%=di%(wl%)
+      a%=a%-cx%(d%)             !selects previous X,Y position on grid
+      b%=b%-cy%(d%)
+      INC d%                    !resume search in next possible direction
+      di%(wl%)=d%
+      IF d%>7                   !rotation complete in this position
+        GOTO skipit1
+      ENDIF
+      IF wl%<1                  !no new match possible in this position so . . .
+        start%=0
+        INC cx%                 !move to next search position
+        IF cx%>maxx%
+          cx%=1
+          INC cy%
+          IF cy%>maxy%
+            searchcomplete%=1   !Wordle board has been searched completely
+            PRINT CHR$(7);
+          ENDIF
+        ENDIF
+      ENDIF
+    ENDIF
+    IF RIGHT$(cword$,2)="QU" !check for Qu letter
+      qu2%=0
+      cword$=LEFT$(cword$,LEN(cword$)-1)
+    ENDIF
+    cword$=LEFT$(cword$,wl%+qu1%+qu2%)!Crops word to proper length after dec wl%
+  ELSE
+    a$=MID$(wordlist$(l%),temp%-1,1)
+    b$=MID$(wordlist$(l%),temp%+LEN(cword$),1)
+    di%(wl%)=d%
+    d%=0
+    INC wl%
+    di%(wl%)=d%
+    IF LEN(cword$)>2-(level%>3) AND a$="-" AND b$="-" !If so we have a dict word
+      INC tw%
+      IF tw%>1000                !It's possible but unlikely
+        tw%=1000
+      ENDIF
+      computerwords$(tw%)=cword$
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE strip_repeats
+  DEFMOUSE 2
+  DEFTEXT 1,0,0,6
+  temp%=0
+  FOR loop%=1 TO t%
+    FOR loop1%=loop%+1 TO t%
+      IF pwords$(loop%)=pwords$(loop1%) AND pwords$(loop1%)<>"ZZ"
+        IF temp%=0
+          PRINT "You repeated"
+          PRINT
+        ENDIF
+        INC temp%
+        PRINT pwords$(loop%)
+        pwords$(loop%)="ZZ"
+      ENDIF
+    NEXT loop1%
+  NEXT loop%
+  loop%=1
+  loop1%=2
+  FOR loop%=1 TO tw%
+    FOR loop1%=loop%+1 TO tw%
+      IF computerwords$(loop%)=computerwords$(loop1%) AND computerwords$(loop1%)<>"ZZ"
+        computerwords$(loop%)="ZZ"
+      ENDIF
+    NEXT loop1%
+  NEXT loop%
+RETURN
+> PROCEDURE cross_check_words
+  PRINT
+  PRINT "Cross checking"
+  PRINT "  our lists."
+  PRINT
+  temp%=0
+  FOR loop%=1 TO t%
+    FOR loop1%=1 TO tw%
+      IF pwords$(loop%)=computerwords$(loop1%) AND pwords$(loop%)<>"ZZ"
+        IF temp%=0
+          PRINT "We both found"
+        ENDIF
+        INC temp%
+        PRINT pwords$(loop%)
+        pwords$(loop%)="ZZ"     !Puts the word to "sleep"
+        computerwords$(loop1%)="ZZ"
+      ENDIF
+      IF temp%/12=INT(temp%/12) AND temp%<>0
+        DEFMOUSE 3
+        INC temp%
+        PRINT
+        PRINT "press button"
+        PRINT
+        REPEAT
+        UNTIL MOUSEK
+        DEFMOUSE 2
+      ENDIF
+    NEXT loop1%
+  NEXT loop%
+  IF temp%=0
+    PRINT "No repeats"
+  ENDIF
+  strip_zzs(*computerwords$(),*tw%,tw%)
+  sort(*computerwords$(),tw%)
+RETURN
+> PROCEDURE check_for_legal_words
+  strip_zzs(*pwords$(),*t%,t%)
+  sort(*pwords$(),t%)
+  FOR loop%=1 TO 26
+    alphabet$(loop%)="-"
+  NEXT loop%
+  FOR loop%=1 TO t%
+    c$=pwords$(loop%)
+    alphabet$(ASC(c$)-64)=alphabet$(ASC(c$)-64)+pwords$(loop%)+"-"
+  NEXT loop%
+  start%=0
+  cx%=1
+  cy%=1
+  searchcomplete%=0
+  tt%=0
+  search
+  loop%=1
+  loop1%=2
+  FOR loop%=1 TO tt%                   !puts repeated words to sleep
+    FOR loop1%=loop%+1 TO tt%
+      IF words$(loop%)=words$(loop1%)
+        words$(loop%)="ZZ"
+      ENDIF
+    NEXT loop1%
+  NEXT loop%
+  strip_zzs(*words$(),*tt%,tt%)
+  otherwords%=0
+  FOR loop%=1 TO t%                    !cancels words in alphabet$()
+    l%=ASC(LEFT$(words$(loop%),1))-64
+    cword$="-"+words$(loop%)+"-"
+    IF l%<1
+      l%=0
+    ENDIF
+    temp%=INSTR(alphabet$(l%),cword$)
+    IF temp%
+      MID$(alphabet$(l%),temp%,LEN(cword$))=STRING$(LEN(cword$),"-")
+    ELSE
+      INC otherwords%        !a word which doesn't exist on this Wordle board
+    ENDIF
+  NEXT loop%
+  IF otherwords%
+    IF pwords$(1)<>"SKUNKED" OR t%>1
+      PRINT
+      PRINT "I could not"
+      PRINT "find ";otherwords%;" word";
+      IF otherwords%>1
+        PRINT "s"
+      ELSE
+        PRINT
+      ENDIF
+      PRINT "on the Wordle"
+      PRINT "board."
+      PRINT
+      FOR loop%=1 TO 26
+        temp%=0
+        temp1%=0
+        IF alphabet$(loop%)<>STRING$(LEN(alphabet$(loop%)),"-")
+          FOR loop1%=1 TO LEN(alphabet$(loop%))
+            temp%=INSTR(alphabet$(loop%),CHR$(loop%+64),temp%)
+            IF temp%
+              temp1%=INSTR(alphabet$(loop%),"-",temp%)
+              cword$=MID$(alphabet$(loop%),temp%,temp1%-temp%)
+              PRINT MID$(alphabet$(loop%),temp%,temp1%-temp%)
+              temp%=temp1%
+              FOR loop2%=1 TO t%
+                IF cword$=pwords$(loop2%)
+                  DELETE pwords$(loop2%)
+                ENDIF
+              NEXT loop2%
+            ENDIF
+            IF temp%=0
+              loop1%=500
+            ENDIF
+          NEXT loop1%
+        ENDIF
+      NEXT loop%
+    ENDIF
+    SUB t%,otherwords%
+    PRINT
+    PRINT "Press Button"
+    DEFMOUSE 3
+    REPEAT
+    UNTIL MOUSEK
+    DEFMOUSE 2
+  ENDIF
+  IF (pwords$(1)="SKUNKED" AND t%=1) OR t%=0
+    PRINT
+    PRINT "Guess what? I"
+    PRINT "SKUNKED you."
+    PRINT
+  ELSE
+    PRINT
+    PRINT
+    ad%=0
+    loop%=1
+    DO
+      l%=ASC(pwords$(loop%))-64
+      a$="-"
+      a$=a$+pwords$(loop%)+"-"
+      c$=pwords$(loop%)
+      temp%=INSTR(wordlist$(l%),a$)
+      IF temp%=0
+        DEFMOUSE 3
+        b$=STRING$((22-LEN(a$))/2," ")+a$+STRING$((25-LEN(a$))/2," ")
+        m$=b$+"|is not in my dictionary.|Should I add it?  If it's|not a word, choose Trash."
+        ALERT 2,m$,1,"YES|NO|Trash",button%
+        IF button%=3
+          DELETE pwords$(loop%)
+          DEC t%
+          DEC loop%
+        ENDIF
+        IF button%=1
+          add_to_dictionary(c$,l%)
+          ad%=1
+        ENDIF
+      ENDIF
+      INC loop%
+    LOOP UNTIL loop%>t%
+    DEFMOUSE 2
+  ENDIF
+  IF pwords$(1)="SKUNKED" AND t%=1
+    pwords$(1)=""
+  ENDIF
+  IF ad%=1
+    PRINT
+    PRINT "Sorting"
+    FOR loop%=1 TO 26
+      temp%=0
+      temp1%=0
+      temp1%=1
+      temp2%=1
+      ' first, put wordlist into and array
+      FOR loop1%=1 TO LEN(wordlist$(loop%))
+        temp%=INSTR(wordlist$(loop%),"-",temp1%+1)
+        words$(temp2%)=MID$(wordlist$(loop%),temp1%+1,temp%-temp1%-1)
+        temp1%=temp%
+        INC temp2%
+        loop1%=temp%
+      NEXT loop1%
+      ' second, do sort
+      sort(*words$(),temp2%-1)
+      ' third, rebuild wordlist$() for that alphabet letter
+      wordlist$(loop%)="-"
+      FOR loop1%=1 TO temp2%-1
+        wordlist$(loop%)=wordlist$(loop%)+words$(loop1%)+"-"
+      NEXT loop1%
+    NEXT loop%
+    ad%=0
+  ENDIF
+  DEFMOUSE 3
+RETURN
+> PROCEDURE search !There are enough differences in content and execution of this
+  '          and the computer_check procedures to warrant keeping them separate.
+  DEFMOUSE 2     !This procedure isn't exited until the search is complete.
+  DO
+    IF start%=0
+      qu1%=0
+      qu2%=0
+      cword$=wordle$(cx%,cy%)
+      IF cword$="Qu"
+        cword$="QU"
+        qu1%=1
+      ENDIF
+      wl%=1                     !current word length
+      l%=ASC(wordle$(cx%,cy%))-64
+      ARRAYFILL grid3%(),0
+      ARRAYFILL di%(),0
+      grid3%(cx%,cy%)=1
+      temp%=0
+      a%=cx%
+      b%=cy%
+      start%=1
+      d%=0
+    ENDIF
+    skipit10:
+    a%=a%+cx%(d%)                !selects next X,Y position of search
+    b%=b%+cy%(d%)
+    IF a%<1 OR a%>maxx% OR b%<1 OR b%>maxy% OR grid3%(a%,b%)=1 !Beyond Wordle's borders? or cube already used?
+      a%=a%-cx%(d%)              !X,Y POSITION OF SEARCH back one place
+      b%=b%-cy%(d%)
+      INC d%                     !attempt to see if next position works
+      di%(wl%)=d%                !remember new d% setting
+      skipit13:
+      IF d%>7                    !we have made a full rotation at current pos.
+        IF RIGHT$(cword$,2)="QU" !check for Qu letter
+          qu2%=0
+          cword$=LEFT$(cword$,LEN(cword$)-1)
+        ENDIF
+        grid3%(a%,b%)=0          !enable this position
+        DEC wl%                  !dec word length to see if last position has
+        d%=di%(wl%)
+        a%=a%-cx%(d%)          !SELECTS previous X,Y POSITION OF SEARCH
+        b%=b%-cy%(d%)
+        INC d%                 !resume search in next possible direction
+        di%(wl%)=d%
+        IF d%>7
+          GOTO skipit13
+        ENDIF
+        IF wl%<1
+          '                        no new match possible in this position so . . .
+          start%=0
+          INC cx%                 !move to next search position
+          IF cx%>maxx%
+            cx%=1
+            INC cy%
+            IF cy%>maxy%
+              searchcomplete%=1   !Wordle board has been searched completely
+            ENDIF
+          ENDIF
+        ENDIF
+      ENDIF
+      cword$=LEFT$(cword$,wl%+qu1%+qu2%)
+      GOTO skipit10
+    ENDIF
+    IF RIGHT$(cword$)="Q"
+      IF wl%=LEN(cword$)
+        cword$=cword$+"U"
+      ELSE
+        IF qu2%
+          qu2%=0
+          cword$=LEFT$(cword$,LEN(cword$)-1)
+        ENDIF
+      ENDIF
+    ENDIF
+    cw$=wordle$(a%,b%)
+    IF cw$="Qu"
+      cw$="QU"
+      qu2%=1
+    ENDIF
+    cword$=LEFT$(cword$,wl%+qu1%+qu2%)
+    cword$=cword$+cw$             !a letter was found so add it to cword$
+    grid3%(a%,b%)=1               !makes grid loc invalid for a letter check
+    temp%=INSTR(alphabet$(l%),cword$)
+    '                              If you'd like to see the search pattern,
+    '                              activate the next three lines.
+    '  PRINT cword$;" ";a%;" ";b%;" ";qu1%;" ";qu2%;" ";wl%
+    '  REPEAT
+    '  UNTIL MOUSEK
+    ' ***************************
+    IF temp%=0                    !no match in wordlist so check next position
+      grid3%(a%,b%)=0             !reenable this position for future matches
+      a%=a%-cx%(d%)
+      b%=b%-cy%(d%)
+      INC d%
+      di%(wl%)=d%
+      skipit14:
+      IF d%>7                     !if d% >7 no match possible in this position
+        IF RIGHT$(cword$,2)="QU"  !Check and compensate for Qu letter
+          qu2%=0
+          cword$=LEFT$(cword$,LEN(cword$)-1)
+        ENDIF
+        grid3%(a%,b%)=0           !enable this position
+        DEC wl%                   !dec word length to see if last possition has
+        d%=di%(wl%)
+        a%=a%-cx%(d%)             !SELECTS previous X,Y POSITION OF SEARCH
+        b%=b%-cy%(d%)
+        INC d%                    !resume search in next possible direction
+        di%(wl%)=d%
+        IF d%>7
+          GOTO skipit14
+        ENDIF
+        '                          any new words
+        IF wl%<1                  !no new match possible in this position so . . .
+          start%=0
+          INC cx%                 !move to next search position
+          IF cx%>maxx%
+            cx%=1
+            INC cy%
+            IF cy%>maxy%
+              searchcomplete%=1   !Wordle board has been searched completely
+              PRINT CHR$(7);
+            ENDIF
+          ENDIF
+        ENDIF
+      ENDIF
+      IF RIGHT$(cword$,2)="QU"
+        qu2%=0
+      ENDIF
+      cword$=LEFT$(cword$,wl%+qu1%+qu2%)
+    ELSE
+      a$=MID$(alphabet$(l%),temp%-1,1)
+      b$=MID$(alphabet$(l%),temp%+LEN(cword$),1)
+      di%(wl%)=d%
+      d%=0
+      INC wl%
+      di%(wl%)=d%
+      IF LEN(cword$)>2 AND a$="-" AND b$="-"
+        '        PRINT "*";cword$
+        INC tt%
+        words$(tt%)=cword$
+      ENDIF
+    ENDIF
+    EXIT IF searchcomplete%
+  LOOP
+  DEFMOUSE 3
+RETURN
+> PROCEDURE set_colors
+  IF r%=0
+    FOR loop%=0 TO 15
+      READ red%,green%,blue%
+      a=XBIOS(7,loop%,red%*256+green%*16+blue%)
+    NEXT loop%
+  ENDIF
+RETURN
+> PROCEDURE reset_colors
+  CLS
+  FOR loop%=0 TO 15
+    SETCOLOR loop%,computerpalette%(loop%)
+  NEXT loop%
+  SYSTEM
+RETURN
+> PROCEDURE press_button(x%,y%)
+  PUT x%,y%,buttondn$
+  PAUSE 8
+  PUT x%,y%,buttonup$
+RETURN
+> PROCEDURE score
+  FOR loop%=1 TO t%
+    IF LEN(pwords$(loop%))>2
+      playerscore%(round%)=playerscore%(round%)+LEN(pwords$(loop%))-2
+    ENDIF
+  NEXT loop%
+  FOR loop%=1 TO tw%
+    IF LEN(computerwords$(loop%))>2
+      computerscore%(round%)=computerscore%(round%)+LEN(computerwords$(loop%))-2
+    ENDIF
+  NEXT loop%
+RETURN
+> PROCEDURE draw_score
+  DEFLINE 1,4
+  COLOR 7
+  RBOX 195,104,300,196
+  COLOR 1
+  DEFLINE 1,1
+  RBOX 194,104,301,196
+  RBOX 197,107,298,193
+  DEFFILL 0
+  PRBOX 198,107,297,193
+  IF r%=0
+    DEFFILL 6,2,19
+    GRAPHMODE 1
+    PRBOX 198,107,297,193
+  ENDIF
+  GRAPHMODE 2
+RETURN
+> PROCEDURE fill_grid
+  fillagain:
+  ARRAYFILL cube%(),0
+  ccx%=0
+  ccy%=0
+  FOR loop%=1 TO maxx%
+    FOR loop1%=1 TO maxy%
+      skip:
+      '      a%=RND(0)*(25+challengecube%)+1
+      a%=RANDOM(25+challengecube%)+1
+      IF cube%(a%)
+        GOTO skip
+      ENDIF
+      IF a%=26
+        ccx%=loop%
+        ccy%=loop1%
+      ENDIF
+      cube%(a%)=1
+      b%=INT(RND(0)*6+1)
+      wordle$(loop%,loop1%)=MID$(cube$(a%),b%,1-(a%>24 AND b%=6))
+    NEXT loop1%
+  NEXT loop%
+  IF challengecube% AND ccx%=0
+    GOTO fillagain
+  ENDIF
+RETURN
+> PROCEDURE display_cubes
+  DEFTEXT 8,0,0,18
+  FOR loop%=1 TO maxx%
+    FOR loop1%=1 TO maxy%
+      PUT 7+((loop%-1)*35),(loop1%*31)-14+offset%,cube$
+      IF ccx%=loop% AND ccy%=loop1%
+        DEFTEXT 7,0,0,18
+      ENDIF
+      IF wordle$(loop%,loop1%)="Qu"
+        TEXT 20+((loop%-1)*35)-7,(loop1%*31)+9+offset%,"Q"
+        TEXT 20+((loop%-1)*35)+6,(loop1%*31)+9+offset%,"u"
+      ELSE
+        TEXT 20+((loop%-1)*35),(loop1%*31)+9+offset%,wordle$(loop%,loop1%)
+      ENDIF
+      IF ccx%=loop% AND ccy%=loop1%
+        DEFTEXT 8,0,0,18
+      ENDIF
+    NEXT loop1%
+  NEXT loop%
+  DEFTEXT 8,0,0,6
+RETURN
+> PROCEDURE display_score
+  GRAPHMODE 2
+  VSYNC
+  PUT 193,102,score$
+  DEFTEXT 4,20,0,6
+  TEXT 200,115,"  Scores"
+  DEFTEXT 1,1,0,6
+  a$=" "+n$+" Me"
+  TEXT 200,125,a$
+  DEFTEXT 1,0,0,6
+  pt%=0
+  ct%=0
+  FOR loop%=0 TO round%
+    TEXT 215,135+loop%*10,playerscore%(loop%)
+    TEXT 265,135+loop%*10,computerscore%(loop%)
+    ADD pt%,playerscore%(loop%)
+    ADD ct%,computerscore%(loop%)
+  NEXT loop%
+  DEFTEXT 1,8
+  TEXT 200,136+round%*10,"            "
+  DEFTEXT 1,0
+  TEXT 215,145+round%*10,pt%
+  TEXT 265,145+round%*10,ct%
+RETURN
+> PROCEDURE display_highscore
+  GRAPHMODE 2
+  VSYNC
+  PUT 193,102,score$
+  DEFTEXT 4,20,0,6
+  TEXT 198,115,"Top Scores"
+  DEFTEXT 1,1,0,6
+  a$=" "+n$+" Me"
+  TEXT 200,125,a$
+  DEFTEXT 1,0,0,6
+  FOR loop%=0 TO 5
+    TEXT 215,135+loop%*10,phighscore%(loop%)
+    TEXT 265,135+loop%*10,chighscore%(loop%)
+  NEXT loop%
+  DO
+  LOOP UNTIL MOUSEK
+  DO
+  LOOP UNTIL MOUSEK=0
+  display_score
+RETURN
+> PROCEDURE sort(p,size%)
+  SWAP *p,qwords$()
+  qwords$(0)=CHR$(0)
+  qwords$(size%+1)=CHR$(255)
+  OPTION BASE 1
+  SSORT qwords$(),size%+1
+  OPTION BASE 0
+  SWAP *p,qwords$()
+RETURN
+> PROCEDURE strip_zzs(p,ptr,top%)
+  SWAP *p,qwords$()
+  FOR loop%=1 TO top%
+    IF qwords$(loop%)="ZZ"
+      DELETE qwords$(loop%)
+      DEC loop%
+      DEC top%
+    ENDIF
+  NEXT loop%
+  SWAP *p,qwords$()
+  *ptr=top%
+RETURN
+> PROCEDURE add_to_dictionary(w$,location%)
+  wordlist$(location%)=wordlist$(location%)+w$+"-"
+RETURN
+> PROCEDURE error_routine
+  ON ERROR GOSUB error_routine
+  IF FATAL
+    PRINT "Fatal Error #";ERR
+    PAUSE 90
+    reset_colors
+  ELSE IF ERR=-34 OR ERR=-33 OR ERR=28
+    setpath
+    RESUME rerun
+  ELSE IF ERR=-13
+    reset_colors
+  ELSE
+    ~FORM_ALERT(1,ERR$(ERR))
+    RESUME startup
+  ENDIF
+RETURN
+> PROCEDURE wait
+  a=XBIOS(7,7,1911)
+  ALERT 1,"|  I'm twiddling my thumbs.  |  Would you like to",1,"Start|Skip|Cont",button%
+  IF button%=3
+    PAUSE 100
+  ENDIF
+  a=XBIOS(7,7,0)
+  IF button%=1
+    CLOSEW 1
+    CLOSEW 0
+    VSYNC
+    PUT 193,10,underwindow$
+  ENDIF
+  IF button%=2
+    i%=-1
+  ENDIF
+RETURN
+> PROCEDURE winner
+  IF pt%>ct%
+    m$="CONGRATULATIONS!!! You won  "
+    IF pt%-10<ct%
+      m$=m$+"|    squeaking by"
+    ELSE IF pt%-20<ct%
+      m$=m$+"|  by a fair amount"
+    ELSE IF pt%-30<ct%
+      m$=m$+"| convincingly enough"
+    ELSE IF pt%-40<ct%
+      m$=m$+"|     like a pro"
+    ELSE IF pt%-50<ct%
+      m$=m$+"|   by trouncing me"
+    ELSE IF pt%-70<ct%
+      m$=m$+"|by utterly destroying me"
+    ELSE IF pt%-90<ct%
+      m$=m$+"|   eating me alive"
+    ELSE IF pt%-100<ct%
+      m$=m$+"| (by cheating no doubt)"
+    ELSE IF pt%-120<ct%
+      m$=m$+"|   (are you an alien?)"
+    ELSE IF pt%-150<ct%
+      m$=m$+"|(does God know you personally?)"
+    ELSE
+      m$=m$+"|     but I don't care!"
+    ENDIF
+    m$=m$+"| with a score of "+STR$(pt%)
+    b$=LEFT$(n$,6)+"|is|great"
+  ENDIF
+  IF ct%>pt%
+    m$="  I win, beating you     "
+    IF ct%-10<pt%
+      m$=m$+"| just barely--whew!"
+    ELSE IF ct%-20<pt%
+      m$=m$+"|    convincingly."
+    ELSE IF ct%-30<pt%
+      m$=m$+"|      soundly."
+    ELSE IF ct%-50<pt%
+      m$=m$+"|   embarassingly."
+    ELSE IF ct%-70<pt%
+      m$=m$+"|by stomping your face."
+    ELSE IF ct%-90<pt%
+      m$=m$+"| silly.  Eat my dust."
+    ELSE IF ct%-110<pt%
+      m$=m$+"|by a w-i-d-e margin."
+    ELSE IF ct%-130<pt%
+      m$=m$+"|so badly it aint funny."
+    ELSE IF ct%-150<pt%
+      m$=m$+"| by annihilating you."
+    ELSE IF ct%-200<pt%
+      m$=m$+"|like it was armageddon."
+    ELSE
+      m$=m$+"| but you didn't try."
+    ENDIF
+    m$=m$+" |  Wanna lose again? "
+    b$="You're|just|lucky"
+  ENDIF
+  ALERT 0,m$,3,b$,button%
+  round%=0
+RETURN
+> PROCEDURE store_wordlist
+  ALERT 2,"|Do you wish to save|the dictionary?",1,"Yes|No",button%
+  IF button%=1
+    DEFMOUSE 2
+    file$=path$+"WORDLEAZ.DIC"
+    OPEN "O",#1,file$
+    OPTION BASE 1
+    STORE #1,wordlist$(),27
+    OPTION BASE 0
+    CLOSE #1
+    DEFMOUSE 3
+  ENDIF
+RETURN
+> PROCEDURE store_highscore
+  DEFMOUSE 2
+  SSORT phighscore%(-),6
+  SSORT chighscore%(-),6
+  temp%=INSTR(n$," ")
+  n$=LEFT$(n$,temp%-1)
+  file$=path$+"wdl"+n$+".hsc"
+  BSAVE file$,LPEEK(ARRPTR(phighscore%())),24
+  file$=path$+"wdlcmptr.hsc"
+  BSAVE file$,LPEEK(ARRPTR(chighscore%())),24
+  DEFMOUSE 3
+RETURN
+> PROCEDURE key
+  a$=CHR$(MENU(14))
+RETURN
+> PROCEDURE setpath
+  m$="I can't find your Data files.|Please show me where they|are, especially WRDLPIC.DAT"
+  ALERT 1,m$,1,"OK|No",button%
+  IF button%=2
+    reset_colors
+  ELSE IF button%=1
+    IF r%=2
+      DEFTEXT 1,0,0,13
+    ELSE
+      DEFTEXT 1,0,0,6
+    ENDIF
+    IF path$=""
+      path$="\"
+    ENDIF
+    file$=path$+"*.*"
+    FILESELECT file$,"",temp$
+    IF temp$<>""
+      temp1%=1
+      DO
+        temp%=INSTR(temp1%,temp$,"\")
+        INC temp1%
+      LOOP UNTIL temp%=0 OR temp1%>1000
+      IF temp1%>1000
+        temp1%=2
+      ENDIF
+      temp$=LEFT$(temp$,temp1%-2)
+      path$=temp$
+    ENDIF
+    GRAPHMODE 1
+    GET 10,83,309,120,temp$
+    DEFFILL 0
+    PBOX 90,83,229,120
+    PBOX 10,100,309,120
+    DEFFILL 1
+    BOX 91,83,228,101
+    BOX 11,101,308,119
+    ii%=0
+    IF path$<>""
+      t$=path$
+    ELSE
+      t$="\"
+    ENDIF
+    TEXT 14,115,t$
+    TEXT 127,98,"Set Path"
+    DO
+      aa$=INKEY$
+      IF ii%<30
+        TEXT 14+LEN(t$)*8,115," "
+      ENDIF
+      IF aa$>CHR$(32) AND aa$<CHR$(127)
+        TEXT 14+LEN(t$)*8,115," "
+        TEXT 14+LEN(t$)*8,115,aa$
+        t$=t$+aa$
+      ELSE IF aa$=CHR$(8) AND LEN(t$)>0
+        TEXT 6+LEN(t$)*8,115,"  "
+        t$=LEFT$(t$,LEN(t$)-1)
+      ELSE IF aa$=CHR$(127)
+        TEXT 14,115,STRING$(35,32)
+        t$=""
+      ENDIF
+      IF ii%>30
+        TEXT 14+LEN(t$)*8,115,"_"
+        IF ii%>60
+          ii%=0
+        ENDIF
+      ENDIF
+      INC ii%
+    LOOP UNTIL aa$=CHR$(13) OR LEN(t$)>35
+    IF t$=""
+    ELSE IF RIGHT$(t$,1)="\"
+      t$=LEFT$(t$,LEN(t$)-1)
+      t$=t$+"\"
+    ENDIF
+    file$=t$+"wrdlpic.dat"
+    IF EXIST(file$)
+      IF EXIST("\path.wrd")
+        KILL "\path.wrd"
+      ENDIF
+      IF t$<>""
+        BSAVE "\path.wrd",VARPTR(t$),LEN(t$)
+      ENDIF
+      path$=t$
+    ELSE
+      m$="The path:|"+t$+"| still doesn't lead|me to the Data files."
+      ALERT 1,m$,1,"Just|Try|Again|",button%
+      path$=temp1$
+    ENDIF
+    GRAPHMODE 2
+    PUT 10,83,temp$
+  ENDIF
+RETURN
+> PROCEDURE menu
+  DEFMOUSE 3
+  IF viewing% OR deleting%
+    close_viewing
+  ENDIF
+  menu%=MENU(0)
+  IF menu%=1
+    IF r%=2
+      ALERT 3,"   WORDLE    |     by| Eric Slick|½ 1989 v 2.02",1,"OH?",b%
+    ELSE
+      GET 120,50,205,115,underhelp$
+      PUT 120,50,byline$
+      REPEAT
+      UNTIL MOUSEK=0
+      REPEAT
+      UNTIL MOUSEK
+      PUT 120,50,underhelp$
+    ENDIF
+  ENDIF
+  IF menu%=12                          !save game board
+    a$=path$+"*.sav"
+    FILESELECT a$,file$,file$
+    IF file$<>""
+      temp%=INSTR(file$,".")
+      IF temp%=0
+        file$=file$+".SAV"
+      ENDIF
+      board$=""
+      FOR loop%=1 TO 6
+        FOR loop1%=1 TO 6
+          board$=board$+wordle$(loop%,loop1%)
+        NEXT loop1%
+      NEXT loop%
+      board$=board$+CHR$(t%)+CHR$(tw%)+CHR$(ccx%)+CHR$(ccy%)+CHR$(gridsize%)
+      words$(0)=board$
+      FOR loop%=1 TO t%                !player words
+        words$(loop%)=pwords$(loop%)
+      NEXT loop%
+      FOR loop%=t%+1 TO tw%+t%         !computer words
+        words$(loop%)=computerwords$(loop%-t%)
+      NEXT loop%
+      OPEN "O",#1,file$
+      STORE #1,words$(),t%+tw%+1
+      CLOSE #1
+    ENDIF
+  ENDIF
+  IF menu%=11                          !load game board
+    a$=path$+"*.sav"
+    FILESELECT a$,file$,file$
+    IF file$<>""
+      temp%=INSTR(file$,".")
+      IF temp%=0
+        file$=file$+".SAV"
+      ENDIF
+      IF EXIST(file$)
+        OPEN "U",#1,file$
+        a%=LOF(#1)
+        RECALL #1,words$(),7000,x%
+        CLOSE #1
+        startgame%=0
+        board$=words$(0)
+        temp%=1
+        qu1%=0
+        FOR loop%=1 TO 5
+          FOR loop1%=1 TO 5
+            IF MID$(board$,temp%,2)<>"Qu"
+              wordle$(loop%,loop1%)=MID$(board$,temp%,1)
+              INC temp%
+            ELSE
+              wordle$(loop%,loop1%)=MID$(board$,temp%,2)
+              ADD temp%,2
+              INC qu1%
+            ENDIF
+          NEXT loop1%
+        NEXT loop%
+        t%=ASC(MID$(board$,26+qu1%,1))
+        tw%=ASC(MID$(board$,27+qu1%,1))
+        ccx%=ASC(MID$(board$,28+qu1%,1))
+        ccy%=ASC(MID$(board$,29+qu1%,1))
+        temp%=ASC(MID$(board$,30+qu1%,1))
+        maxx%=4+temp%
+        maxy%=4+temp%
+        FOR loop%=1 TO t%                !player words
+          pwords$(loop%)=words$(loop%)
+        NEXT loop%
+        FOR loop%=t%+1 TO tw%            !computer words
+          computerwords$(loop%-t%)=words$(loop%)
+        NEXT loop%
+        ALERT 2,"| |Play a game with this board?",1,"Yes|No",button%
+        IF button%=1
+          startgame%=1
+          a=XBIOS(7,7,1911)
+        ENDIF
+        DEFFILL 3,1
+        PBOX 5,10,190,190
+        display_cubes
+        '        maxx%=4+gridsize%
+        '        maxy%=4+gridsize%
+      ENDIF
+    ENDIF
+  ENDIF
+  IF menu%=13                          !Kill game board
+    a$=path$+"*.SAV"
+    FILESELECT a$,file$,file$
+    IF file$<>""
+      temp%=INSTR(file$,".")
+      IF temp%=0
+        file$=file$+".SAV"
+      ENDIF
+      IF EXIST(file$)
+        m$="|You wish to kill              | |"+file$
+        ALERT 1,m$,1,"Right|Yikes!",button%
+        IF button%=1
+          KILL file$
+        ENDIF
+      ENDIF
+    ENDIF
+  ENDIF
+  IF menu%=15                      !Custom Save
+    IF EXIST(path$+"Custom.wrd")
+      file$=path$+"custom.wrd"
+      KILL file$
+    ENDIF
+    custom$=""
+    custom$=CHR$(challengecube%)+CHR$(gridsize%)+CHR$(speed%)+CHR$(time%)+CHR$(level%)+CHR$(mouseon%*2)
+    custom$=custom$+n$
+    file$=path$+"custom.wrd"
+    BSAVE file$,VARPTR(custom$),11
+  ENDIF
+  IF menu%=19                      !Dare Cube
+    challengecube%=-1*(challengecube%=0)
+    MENU 19,challengecube%
+  ENDIF
+  IF menu%=20                      !5x5 grid
+    gridsize%=1
+    MENU 20,1
+    MENU 21,0
+    maxx%=5
+    maxy%=5
+    fill_grid
+    display_cubes
+  ENDIF
+  IF menu%=21                      !4x4 grid
+    gridsize%=0
+    MENU 20,0
+    MENU 21,1
+    maxx%=4
+    maxy%=4
+    fill_grid
+    DEFFILL 3,1
+    PBOX 5,10,190,190
+    display_cubes
+  ENDIF
+  IF menu%=22                      !Activate/Deactivate Mouse
+    mouseon%=-1*(mouseon%=0)
+    MENU 22,mouseon%
+  ENDIF
+  IF menu%=24                      !Enter name
+    GRAPHMODE 1
+    temp$=n$
+    n$=""
+    TEXT 205,125,"      "
+    DEFFILL 6,2,19
+    IF r%=2
+      DEFFILL 0
+    ENDIF
+    GRAPHMODE 2
+    FILL 208,121
+    DEFTEXT 1,1,0,6
+    DO
+      a$=INKEY$
+      IF ASC(a$)>31
+        n$=n$+a$
+        TEXT 205,125,n$
+      ENDIF
+      IF ASC(a$)=8
+        GRAPHMODE 1
+        n$=""
+        TEXT 205,125,"      "
+        IF r%=0
+          DEFFILL 6,2,19
+          GRAPHMODE 2
+          FILL 207,121
+        ENDIF
+      ENDIF
+      EXIT IF LEN(n$)=5 OR ASC(a$)=13
+    LOOP
+    WHILE MOUSEK<>0
+    WEND
+    FOR loop%=1 TO 1000        !Strip out unwanted keyboard input
+      a$=INKEY$
+    NEXT loop%
+    IF n$=""
+      n$=temp$
+      TEXT 205,125,n$
+    ENDIF
+    n$=n$+STRING$(6-LEN(n$),32)
+    IF n$<>temp$
+      temp%=INSTR(temp$," ")   !If there is more than 1 space after temp$ or n$
+      b$=LEFT$(temp$,temp%-1)  !then the extender won't be recognized.
+      file$=path$+"wdl"+b$+".hsc"
+      SSORT phighscore%(-),6
+      BSAVE file$,LPEEK(ARRPTR(phighscore%())),24  !Save original N$ Hiscores
+      temp%=INSTR(n$," ")
+      b$=LEFT$(n$,temp%-1)
+      file$=path$+"wdl"+b$+".hsc"
+      IF EXIST(file$)
+        BLOAD file$,LPEEK(ARRPTR(phighscore%()))  !Load new name's Hiscores
+      ELSE
+        ARRAYFILL phighscore%(),0
+      ENDIF
+    ENDIF
+    b$=n$+"|No|Both"
+    ALERT 0,"|     Clear Top Scores?         ",2,b$,button%
+    IF button% AND 1
+      FOR loop%=0 TO 5
+        phighscore%(loop%)=0
+        IF button%=3
+          chighscore%(loop%)=0
+        ENDIF
+      NEXT loop%
+    ENDIF
+    display_score
+    DEFTEXT 1,0,0,6
+  ENDIF
+  IF menu%=27                             !Help
+    RESTORE help_data
+    GET 20,20,220,190,underhelp$
+    IF r%=2
+      DEFFILL 0
+      PBOX 20,20,220,190
+      DEFFILL 1
+      BOX 22,22,218,188
+      TEXT 45,34,"Wordle Help Screens"
+      BOX 42,25,198,38
+      GET 20,20,220,190,help$
+    ENDIF
+    PUT 20,20,help$
+    temp%=0
+    DEFTEXT 1,0,0,4
+    DO
+      PUT 20,20,help$
+      DO
+        READ b$
+        IF b$<>"-1" AND b$<>"-111"
+          TEXT 25,55+temp%*7,LEN(b$)*6,b$
+          INC temp%
+        ENDIF
+      LOOP UNTIL b$="-1" OR b$="-111"
+      IF b$="-1"
+        TEXT 25,174,"* LEFT = MORE & RIGHT = EXIT *"
+        REPEAT
+        UNTIL MOUSEK
+        temp%=0
+      ELSE IF b$="-111"
+        TEXT 25,174,"           * DONE *"
+        REPEAT
+        UNTIL MOUSEK
+      ENDIF
+    LOOP UNTIL b$="-111" OR MOUSEK=2
+    REPEAT
+    UNTIL MOUSEK=0
+    DEFTEXT 1,0,0,6
+    PUT 20,20,underhelp$
+  ENDIF
+  IF menu%=26                              !Printout
+    button%=1
+    recheck:
+    IF OUT?(0)<>TRUE AND button%<>2
+      ALERT 3,"| |Please turn your printer on!",1,"OK|Cancel",button%
+      GOTO recheck
+    ENDIF
+    IF button%=1
+      LPRINT CHR$(27);"@";CHR$(27);CHR$(87);"1";CHR$(27);CHR$(69)
+      LPRINT "Wordle Board"
+      LPRINT n$
+      LPRINT
+      LPRINT
+      FOR loop%=1 TO maxx%
+        LPRINT STRING$(15," ");
+        FOR loop2%=1 TO maxy%
+          LPRINT wordle$(loop2%,loop%);" ";
+        NEXT loop2%
+        LPRINT
+        LPRINT
+      NEXT loop%
+      LPRINT CHR$(27);CHR$(87);"0"
+      LPRINT CHR$(27);"e";CHR$(0);CHR$(10)
+      LPRINT
+      LPRINT
+      LPRINT n$;"'s words"
+      LPRINT
+      temp%=1
+      FOR loop%=1 TO t%
+        LPRINT pwords$(loop%);CHR$(9);
+      NEXT loop%
+      LPRINT
+      LPRINT
+      LPRINT "Computer's words"
+      LPRINT
+      temp%=1
+      FOR loop%=1 TO tw%
+        LPRINT computerwords$(loop%);CHR$(9);
+      NEXT loop%
+      LPRINT CHR$(12);CHR$(27);"@"
+    ENDIF
+  ENDIF
+  IF menu%=16                          !Delete words
+    TITLEW #1,"Deleting"
+    OPENW #1,190,15,119,181,451
+    lter$="  | A | "
+    deleting%=1
+    menuitem%=16
+    alph%=1
+    get_alphabet_words(alph%)
+    MENU 16,2
+    display_wordlist
+  ENDIF
+  IF menu%=25                          !Viewing words
+    TITLEW #1,"Viewing"
+    OPENW #1,190,23,119,175,451
+    CLS
+    temp%=t%+tw%+5
+    temp1%=round%
+    round%=10
+    playerscore%(10)=0
+    computerscore%(10)=0
+    score
+    round%=temp1%
+    menuitem%=25
+    base%=1
+    viewing%=1
+    total%=temp%
+    temp%=temp%*50
+    temp%=1000/(temp%/1000)
+    ~WIND_SET(1,16,temp%,0,0,0)
+    MENU 25,2
+    words$(1)="Player "+STR$(playerscore%(10))+"pts"
+    words$(2)="# Words="+STR$(t%)
+    FOR loop%=3 TO t%+2
+      words$(loop%)=pwords$(loop%-2)
+    NEXT loop%
+    words$(loop%)=" ~~~~~~~~~~"
+    words$(loop%+1)="Comp. "+STR$(computerscore%(10))+"pts"
+    words$(loop%+2)="# Words="+STR$(tw%)
+    FOR loop%=loop%+3 TO loop%+3+tw%
+      words$(loop%)=computerwords$(loop%-t%-5)
+    NEXT loop%
+    display_wordlist
+  ENDIF
+  MENU OFF
+  DEFMOUSE 3
+RETURN
+> PROCEDURE message
+  GRAPHMODE 1
+  menu%=MENU(1)
+  IF menu%=26                             !vertical slider
+    temp%=MENU(5)
+    base%=(temp%/1000*(total%-20))+1
+    IF base%<1
+      base%=1
+    ENDIF
+    ~WIND_SET(1,9,temp%,0,0,0)
+    display_wordlist
+  ELSE IF menu%=24 AND MENU(5)=0          !page up
+    SUB base%,20
+    IF base%<1
+      base%=1
+    ENDIF
+    ~WIND_SET(1,9,(base%-1)/(total%-20)*1000,0,0,0)
+    display_wordlist
+  ELSE IF menu%=24 AND MENU(5)=1          !page down
+    ADD base%,20
+    IF base%>total%-18
+      base%=total%-19
+    ENDIF
+    ~WIND_SET(1,9,(base%-1)/(total%-20)*1000,0,0,0)
+    display_wordlist
+  ELSE IF menu%=24 AND MENU(5)=2          !row up
+    IF base%>1
+      RC_COPY XBIOS(3),190,35+offset%,108-offset%,151 TO XBIOS(3),190,43+offset%
+      DEC base%
+      ~WIND_SET(1,9,(base%-1)/(total%-20)*1000,0,0,0)
+      PRINT AT(1,2+(viewing%=1));"            ";
+      PRINT AT(1,2+(viewing%=1));words$(base%);
+    ENDIF
+  ELSE IF menu%=24 AND MENU(5)=3          !row down
+    IF base%<total%-19
+      RC_COPY XBIOS(3),190,43+offset%,108-offset%,151 TO XBIOS(3),190,35+offset%
+      INC base%
+      ~WIND_SET(1,9,(base%-1)/(total%-20)*1000,0,0,0)
+      PRINT AT(1,21+(viewing%=1));"            ";
+      PRINT AT(1,21+(viewing%=1));words$(base%+19);
+    ENDIF
+  ELSE IF menu%=22                        !close window
+    close_viewing
+  ENDIF
+  IF deleting% AND menu%=MENU(1)
+    delete
+  ENDIF
+  GRAPHMODE 2
+RETURN
+> PROCEDURE delete
+  GRAPHMODE 1
+  y%=300
+  IF MOUSEK
+    x%=MOUSEX
+    y%=MOUSEY
+    temp%=y%/8-1
+  ENDIF
+  IF y%/8<1
+    IF y%>-2
+      IF x%>0 AND x%<35                 !alphabet list down
+        REPEAT
+          DEC alph%
+          IF alph%<1
+            alph%=26
+          ENDIF
+          MID$(lter$,7,1)=CHR$(64+alph%)
+          TEXT 1,6,lter$
+          IF MOUSEK=2
+            PAUSE 5
+          ENDIF
+        UNTIL MOUSEK<>2
+        get_alphabet_words(alph%)
+        display_wordlist
+      ELSE IF x%>68 AND x%<105          !alphabet list up
+        REPEAT
+          INC alph%
+          IF alph%>26
+            alph%=1
+          ENDIF
+          MID$(lter$,7,1)=CHR$(64+alph%)
+          TEXT 1,6,lter$
+          IF MOUSEK=2
+            PAUSE 5
+          ENDIF
+        UNTIL MOUSEK<>2
+        get_alphabet_words(alph%)
+        display_wordlist
+      ELSE IF x%>35 AND x%<68           !view this list from top
+        base%=1
+        ~WIND_SET(1,9,(base%-1)/total%*1000,0,0,0)
+        display_wordlist
+      ENDIF
+    ENDIF
+    '                          a word was chosen 
+  ELSE IF y%/8>=1 AND y%<>300 AND temp%<20 AND x%>0 AND x%<103 AND base%+temp%<=total%
+    REPEAT
+    UNTIL MOUSEK<>1
+    m$="You wish to delete     |"+SPACE$(8-(LEN(words$(base%+temp%))/2))+words$(base%+temp%)+"?"
+    ALERT 0,m$,1," Yes | No ",button%
+    IF button%=1 AND total%>1
+      DELETE words$(base%+temp%)        !put word to sleep permanently
+      DEC total%
+      IF base%+19>total%
+        IF base%>1
+          DEC base%
+        ENDIF
+      ENDIF
+      wordlist$(alph%)="-"
+      FOR loop%=1 TO total%             !rebuild this alphabet letter's dict.
+        wordlist$(alph%)=wordlist$(alph%)+words$(loop%)+"-"
+      NEXT loop%
+      temp%=total%*50
+      temp%=1000/(temp%/1000)
+      ~WIND_SET(1,16,temp%,0,0,0)
+      temp%=total%-20
+      IF temp%<1
+        temp%=1
+      ENDIF
+      ~WIND_SET(1,9,(base%-1)/temp%*1000,0,0,0)
+      display_wordlist
+    ELSE IF button%=1 AND total%=1
+      ALERT 0,"You can't delete the last|word in the list.",1,"OK",button%
+    ENDIF
+  ENDIF
+  GRAPHMODE 2
+RETURN
+> PROCEDURE get_alphabet_words(temp3%)
+  DEFMOUSE 2
+  temp1%=0
+  temp2%=0
+  FOR loop%=1 TO LEN(wordlist$(temp3%))
+    temp4%=INSTR(wordlist$(temp3%),"-",temp1%+1)
+    words$(temp2%)=MID$(wordlist$(temp3%),temp1%+1,temp4%-temp1%-1)
+    temp1%=temp4%
+    INC temp2%
+    loop%=temp4%
+  NEXT loop%
+  DEC temp2%
+  temp%=temp2%
+  base%=1
+  total%=temp%
+  temp%=temp%*50
+  temp%=1000/(temp%/1000)
+  ~WIND_SET(1,16,temp%,0,0,0)         !set size of slider
+  temp%=total%-20
+  IF temp%<1
+    temp%=1
+  ENDIF
+  ~WIND_SET(1,9,0,0,0,0) !set position of slider
+  ' ~WIND_SET(1,9,(base%-1)/temp%*1000,0,0,0) !set position of slider
+  DEFMOUSE 3
+RETURN
+> PROCEDURE close_viewing
+  ' The ALERT box is for the compiled version, to get around a bug introduced
+  ' by the compiler that messes up the slider box. It's the same bug that
+  ' occurs when you try to view or edit words after a game
+  ALERT 1,"| | All done ",1,"Right!",button%
+  ~FORM_DIAL(2,192,13-(deleting%*5),5,5,190,20-(deleting%*5),15,15) ! for pretty
+  CLOSEW 1
+  CLOSEW 0
+  VSYNC
+  PUT 193,10,underwindow$
+  display_score
+  viewing%=0
+  deleting%=0
+  MENU menuitem%,3
+  GRAPHMODE 2
+  DEFMOUSE 3
+RETURN
+> PROCEDURE display_wordlist
+  IF base%<1
+    base%=1
+  ENDIF
+  IF deleting%
+    CLS
+    TEXT 1,6,lter$
+    DEFLINE 1,1,0,0
+    LINE 0,8,105,8
+    PRINT
+  ELSE
+    CLS
+  ENDIF
+  FOR loop%=base% TO base%+18
+    afterprint%=1
+    PRINT words$(loop%)
+    IF loop%=total%
+      afterprint%=0
+      loop%=base%+18
+    ENDIF
+  NEXT loop%
+  IF afterprint%
+    PRINT words$(loop%);
+  ENDIF
+RETURN
+> PROCEDURE set_data
+  FOR loop%=0 TO 15
+    computerpalette%(loop%)=XBIOS(7,loop%,-1)
+  NEXT loop%
+  RESTORE menu_data
+  temp%=0
+  offset%=ABS((r%=2)*8)
+  lroffset%=ABS((r%=0)*12)
+  REPEAT
+    READ a$
+    menu$(temp%)=a$
+    INC temp%
+  UNTIL a$="-111"
+  RESTORE cube_data
+  FOR loop%=1 TO 26
+    FOR loop1%=1 TO 6
+      READ a$
+      cube$(loop%)=cube$(loop%)+a$
+    NEXT loop1%
+  NEXT loop%
+  RESTORE color_data
+  set_colors
+RETURN
+> PROCEDURE check_rez
+  IF r%=0                                  !Low Resolution
+    PBOX 0,0,319,200
+    file$=path$+"wrdlpic.dat"
+    pictures$=STRING$(26300,CHR$(0))
+    BLOAD file$,VARPTR(pictures$)
+    cube$=MID$(pictures$,1,800)
+    buttonup$=MID$(pictures$,801,200)
+    buttondn$=MID$(pictures$,1001,200)
+    blanknmbr$=MID$(pictures$,1201,100)
+    title$=MID$(pictures$,1301,6000)
+    help$=MID$(pictures$,7301,16000)
+    byline$=MID$(pictures$,23301,3000)
+  ELSE                                     !High Resolution
+    ' High Rez is a compromise because I had one day to implement it on my brother's
+    ' Monocrome and had to go the quickest route.
+    r%=2
+    PBOX 0,15,640,400
+    DEFFILL 0
+    PBOX 0,15,319,210
+    DEFFILL 1
+    DEFTEXT 1,0,0,18
+    TEXT 210,34,"Wordle"
+    DEFTEXT 1,0,0,6
+    TEXT 200,45,"Start"
+    TEXT 200,59,"Speed"
+    TEXT 200,73," Time"
+    TEXT 200,87,"Level"
+    TEXT 200,101," Exit"
+    BOX 100,100,134,130
+    BOX 102,102,132,128
+    GET 100,100,134,130,cube$
+    DEFFILL 0
+    PBOX 100,100,120,110
+    DEFFILL 1
+    BOX 100,100,120,110
+    GET 100,100,120,110,buttonup$
+    PBOX 102,102,118,108
+    GET 100,100,120,110,buttondn$
+    blanknmbr$=CHR$(0)+CHR$(11)+CHR$(0)+CHR$(10)+CHR$(0)+CHR$(1)
+    blanknmbr$=blanknmbr$+STRING$(109,0)
+    PUT 244,36,buttonup$
+    PUT 244,50,buttonup$
+    PUT 244,64,buttonup$
+    PUT 244,78,buttonup$
+    PUT 244,92,buttonup$
+    GET 193,-2,319,210,title$
+  ENDIF
+RETURN
+> PROCEDURE get_dictionary
+  a$=path$+"WORDLEAZ.DIC"
+  IF EXIST(a$)
+    OPEN "U",#1,a$
+    OPTION BASE 1
+    RECALL #1,wordlist$(),27,temp%
+    OPTION BASE 0
+    CLOSE #1
+  ELSE
+    '               In case dictionary is lost or a new beginning is desired.
+    RESTORE wordlist
+    FOR loop%=1 TO 26
+      wordlist$(loop%)="-"
+      nextword:
+      READ a$
+      IF a$<>"-1"
+        wordlist$(loop%)=wordlist$(loop%)+a$+"-"
+        GOTO nextword
+      ENDIF
+    NEXT loop%
+  ENDIF
+RETURN
+> PROCEDURE here_be_data
+  color_data:  !corresponds to setcolor; not color
+  DATA 7,7,7
+  DATA 7,0,0
+  DATA 1,2,2
+  DATA 7,7,0
+  DATA 7,2,5
+  DATA 7,0,2
+  DATA 0,6,0
+  DATA 0,0,0
+  DATA 3,3,3
+  DATA 7,2,5
+  DATA 1,2,2
+  DATA 3,3,0
+  DATA 5,5,4
+  DATA 4,4,3
+  DATA 3,3,2
+  DATA 0,0,0
+  '
+  cube_data:
+  DATA A,A,A,F,R,S
+  DATA N,D,D,O,T,H
+  DATA E,T,I,L,C,I
+  DATA O,T,O,O,U,T
+  DATA P,Y,I,F,S,R
+  DATA E,A,E,M,E,E
+  DATA E,E,E,E,A,A
+  DATA T,O,T,T,M,E
+  DATA R,A,S,A,F,I
+  DATA R,O,G,W,R,V
+  DATA T,I,T,I,I,E
+  DATA H,O,R,D,L,N
+  DATA P,T,E,S,C,I
+  DATA E,A,N,D,N,N
+  DATA A,Y,I,F,S,R
+  DATA R,O,H,D,N,L
+  DATA R,O,H,D,H,L
+  DATA T,O,U,O,N,W
+  DATA Y,P,R,I,R,R
+  DATA N,A,E,G,M,N
+  DATA G,A,E,M,E,U
+  DATA N,S,S,S,U,E
+  DATA C,T,N,S,E,C
+  DATA T,C,L,I,P,E
+  DATA K,X,Z,J,B,Qu
+  DATA Z,W,I,Y,K,Qu
+  '
+  wordlist: !Want Spanish, French or German?
+  '          All you have to do is enter them here.
+  '          The only thing that's necessary is the -1 and one word per data line
+  '          After entering your new words, run this program and exit saving
+  '          the dictionary.  Add the new DIC file to your compiled version
+  '          WORDLE folder (or wherever you keep your data). Remember to rename
+  '          your old dictionary file.
+  DATA AXE,AGE,AGO,ALM,AND,APE,ARM,ART,AGES,ALMS,APES,ARMS,AGAIN,-1
+  DATA BAG,BEG,BIG,BIT,BOX,BUG,BAGS,BUGS,BOOT,BEAK,BOOTS,BEAKS,-1
+  DATA CAB,CAN,CAR,CAT,COB,COT,CUT,CABS,CANS,CATS,CLIP,CLAPS,CLIPS,-1
+  DATA DAB,DABS,DATE,DATES,DEAL,DEALS,DIRT,DOT,DOTS,DRANK,DRINK,DRINKING,-1
+  DATA EARTH,EARTHS,EEL,EELS,EITHER,ENTER,EVEN,EVENT,EVENTS,EXIT,EXITS,-1
+  DATA FAD,FADS,FADE,FAT,FEAR,FEARS,FEET,FELT,FIT,FITS,FALL,FALLS,-1
+  DATA GAIN,GAINS,GALE,GALES,GELL,GOD,GODS,GOOD,GOUL,GRATE,GRATES,GREED,-1
+  DATA HARP,HARPS,HAT,HATE,HATING,HATS,HELP,HELPS,HIKE,HIKES,HURT,HURTS,-1
+  DATA IBID,ILL,ILLNESS,ILLNESSES,INK,INKS,INN,INNS,INNING,IRIS,IRATE,ITS,-1
+  DATA JAM,JAMS,JAR,JARS,JEEP,JEER,JEERS,JOT,JOTS,JOY,JOYS,JOYOUS,-1
+  DATA KEEL,KEELS,KILL,KILLS,KIT,KITE,KITES,KITS,-1
+  DATA LARD,LARGE,LATE,LATER,LEAK,LEAKS,LET,LETTER,LETTERS,LOT,LOTS,-1
+  DATA MAT,MATE,MATS,MATES,MEAT,MEATER,MEATS,MEEK,MILE,MILES,MITE,MITES,MIX,MIXES,MOLE,MOLES,-1
+  DATA NAIL,NAILS,NAPE,NAPES,NIGHT,NIGHTS,NIP,NIPS,NOT,NOTE,NOTES,NUT,NUTS,-1
+  DATA OBOE,OBOES,ODIOUS,OIL,OILS,OKAY,OOZE,OOZES,-1
+  DATA PAD,PADS,PARK,PARKS,PART,PARTS,PEA,PEAS,PEE,PEES,PEAK,PEAKS,POT,POTS,-1
+  DATA QUA,QUAD,QUACK,QUACKS,QUART,QUARTS,QUARTZ,QUEEN,QUELL,QUIET,-1
+  DATA RATE,RATES,REEK,REEKS,REEL,REELS,REEM,REEMS,RIGHT,RIGHTS,ROT,ROTTING,ROTS,-1
+  DATA SALE,SALES,SAT,SEAT,SEATS,SET,SHARK,SHARKS,SINS,SIT,SITS,SOCK,-1
+  DATA TAPE,TAPES,TARGET,TARGETS,TOP,TOPS,TRAP,TRAPS,TRIP,TRIPS,TYPE,TYPES,-1
+  DATA UGH,UDO,UGLY,OOZE,OOZES,-1
+  DATA VAN,VANS,VAIL,VALE,VALES,-1
+  DATA WIT,WAKE,WAIL,WAKES,WAILS,-1
+  DATA XUNIT,XYLAN,XYLEM,-1
+  DATA YAK,YAKS,YELL,YELLS,YELLOW,YOUNG,YOUR,YOURS,-1
+  DATA ZAP,ZANY,ZEBRA,-1
+  menu_data:
+  DATA ,  About Wordle      ,--------------------,"-","-","-","-","-","-",""
+  DATA File, Load Board/Wds , Save Board/Wds , Kill Board/Wds ,----------------, Save Custom , Delete Words ,""
+  DATA Options,  Dare Cube ,  5X5 Grid ,  4X4 Grid ,  Mouse,------------, Enter name
+  DATA  View Words, Printout, Help,""
+  DATA "",-111
+  help_data:
+  DATA "      V. 2.02 IN GENERAL"
+  DATA ""
+  DATA "OBJ: FIND, IN THE TIME ALLOWED"
+  DATA "     AS MANY LEGAL WORDS AS IS"
+  DATA "     POSSIBLE ON THE BOARD."
+  DATA ""
+  DATA "HOW: STRING TOGETHER ONLY CON-"
+  DATA "     NECTING LETTERS (VERTICAL"
+  DATA "     HORIZONTAL AND DIAGONAL) "
+  DATA "     WITHOUT USING THE SAME"
+  DATA "     CUBE TWICE IN ANY WORD."
+  DATA ""
+  DATA "ILL: ILLEGAL WORDS ARE: PROPER"
+  DATA "     NOUNS, ABBREVIATED WORDS,"
+  DATA "     HYPHENATED WORDS, FOREIGN"
+  DATA "     WORDS AND THOSE NOT IN"
+  DATA "     OFFICIAL DICTIONARIES."
+  DATA "-1"
+  DATA "           BUTTONS"
+  DATA ""
+  DATA "START: BEGINS GAME.  DELETE"
+  DATA "     AND BACKSPACE WORK."
+  DATA ""
+  DATA "SPEED: THE HIGHER THE NUMBER"
+  DATA "     THE SLOWER THE COMPUTER"
+  DATA "     WILL SEARCH FOR WORDS."
+  DATA ""
+  DATA "TIME: HOW MANY MINUTES YOU "
+  DATA "     HAVE TO TYPE IN WORDS."
+  DATA ""
+  DATA "LEVEL: RANDOMIZES PARTS OF"
+  DATA "     THE COMPUTER SEARCH."
+  DATA "     0=NO RANDOMNESS"
+  DATA "     1=RANDOM SEARCH OF THE"
+  DATA "       DICTIONARY"
+  DATA "-1"
+  DATA "       BUTTONS (CONT)"
+  DATA ""
+  DATA "     2=RANDOM SEARCH OF THE"
+  DATA "       BOARD"
+  DATA "     3=COMBINES 1 & 2"
+  DATA "     4=0 BUT COMPUTER LOOKS"
+  DATA "       FOR WORDS WITH FOUR"
+  DATA "       LETTERS OR MORE ONLY"
+  DATA "     5=COMBINES 4 & 1"
+  DATA "     6=COMBINES 4 & 2"
+  DATA "     7=COMBINES 4, 1 & 2"
+  DATA ""
+  DATA "          MENU BAR"
+  DATA ""
+  DATA "SAVE BOARD: SAVES CURRENTLY"
+  DATA "     DISPLAYED BOARD & WORDS."
+  DATA "-1"
+  DATA "       MENU BAR (CONT)"
+  DATA ""
+  DATA "LOAD BOARD: LOADS BOARD & WRDS"
+  DATA ""
+  DATA "KILL BOARD: DELETES A SAVED"
+  DATA "     BOARD/WDS"
+  DATA ""
+  DATA "SAVE CUSTOM: SAVES ALL SET-"
+  DATA "     TINGS, INCLUDING NAME,"
+  DATA "     TO DISK AND AUTO LOAD'S"
+  DATA "     THEM AT THE NEXT BOOT"
+  DATA " PATH=\?FOLDER?\?FOLDER?\ETC"
+  DATA "     ALL FILES MUST BE IN"
+  DATA "     THE SAME FOLDER EXCEPT"
+  DATA "     THE PROGRAM, WHICH CAN"
+  DATA "     BE ANYWHERE."
+  DATA "-1"
+  DATA "       MENU BAR (CONT)"
+  DATA ""
+  DATA "DELETE WORD: ALLOWS YOU TO"
+  DATA "     DELETE WORDS FROM THE"
+  DATA "     DICTIONARY."
+  DATA ""
+  DATA "DARE CUBE:  WHEN ACTIVE, A"
+  DATA "     RED CUBE WILL BE USED"
+  DATA "     THAT HAS DIFFICULT "
+  DATA "     LETTERS ON IT."
+  DATA ""
+  DATA "5X5 GRID:  ACTIVATES THE"
+  DATA "     5X5 GRID."
+  DATA "4X4 GRID:  ACTIVATES THE
+  DATA "     4X4 GRID."
+  DATA ""
+  DATA "-1"
+  DATA "       MENU BAR (CONT)"
+  DATA ""
+  DATA "MOUSE:  POINT, CLICK & DRAG"
+  DATA "     TO BUILD OR EDIT WORDS."
+  DATA ""
+  DATA "ENTER NAME: ALLOWS YOU TO"
+  DATA "     ENTER YOUR NAME AND SAVE"
+  DATA "     YOUR HIGH SCORES."
+  DATA ""
+  DATA "VIEW WORDS: SHOWS YOU LAST"
+  DATA "     GAME'S WORDLISTS     "
+  DATA ""
+  DATA "PRINTOUT: PRINTS BOARD & WORDS"
+  DATA "     TO EPSON/COMPATIBLE PRNTR"
+  DATA ""
+  DATA "-111"
+RETURN
