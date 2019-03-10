@@ -1,3 +1,5 @@
+;	compiled with devpac (lp)
+
 ;	int	say(int mode, char *buf)
 ; prononce la suite de phonemes contenus dans buf.
 ; mode = 0:	retour immediat, silence en fin de phrase
@@ -8,7 +10,7 @@
 ; design:
 ;
 ; 1] english -> phonetic text 
-; (not in this version)
+; (ascii text -> phoneme text 'buffer')
 ;
 ; 2] phonetic text -> binary phoneme 'buffer' 
 ; (phoneme indices, pitch, length)
@@ -18,6 +20,8 @@
 ;
 ; 4] speech buffer -> wave samples + hiss -> YM2149
 
+	opt	l2	;output a dri object file
+
 TIMAVEC		equ	$000134
 GISELECT	equ	$ffff8800
 GIDATA		equ	$ffff8802
@@ -25,19 +29,24 @@ IPRA		equ	$fffffa0b
 ISRA		equ	$fffffa0f
 IMRA		equ	$fffffa13
 
-	ifne	0
-	.globl	_say
-	.globl	say
-	.globl	_set_pitch
-	.globl	set_pitch
-	.globl	_set_rate
-	.globl	set_rate
-	.globl	_say_copyright
-	.globl	say_copyright
-	else
-	endc
+;	let the gfa linker find this one symbol
+;	command changed to make devpac happy
+	xdef	fnctab
 
 	text
+
+		;this is the function table
+fnclst:		dc.l	say_copyright,set_pitch,set_rate,say,text_in,-1
+
+		;this returns a pointer to the function table
+fnctab:		move.l	#fnclst,d0
+		rts
+
+		;a bit of patching to interface the ascii routine to gfa
+text_in:	move.l	4(sp),a0
+		movea.l	a0,a1
+		bsr	TEXTIN
+		rts
 
 _say_copyright:
 say_copyright:
