@@ -1,0 +1,23 @@
+(* resource set indicies for ST_FORM *)
+
+CONST
+	tree1    = 0;	(* form/dialog *)
+	ob1      = 0;	(* BOX in tree TREE1 *)
+	dra      = 2;	(* BOXCHAR in tree TREE1 *)
+	drb      = 3;	(* BOXCHAR in tree TREE1 *)
+	drc      = 4;	(* BOXCHAR in tree TREE1 *)
+	drd      = 5;	(* BOXCHAR in tree TREE1 *)
+	dre      = 6;	(* BOXCHAR in tree TREE1 *)
+	drf      = 7;	(* BOXCHAR in tree TREE1 *)
+	drg      = 8;	(* BOXCHAR in tree TREE1 *)
+	drh      = 9;	(* BOXCHAR in tree TREE1 *)
+	dri      = 10;	(* BOXCHAR in tree TREE1 *)
+	drj      = 11;	(* BOXCHAR in tree TREE1 *)
+	drk      = 12;	(* BOXCHAR in tree TREE1 *)
+	drl      = 13;	(* BOXCHAR in tree TREE1 *)
+	drm      = 14;	(* BOXCHAR in tree TREE1 *)
+	drn      = 15;	(* BOXCHAR in tree TREE1 *)
+	dro      = 16;	(* BOXCHAR in tree TREE1 *)
+	drp      = 17;	(* BOXCHAR in tree TREE1 *)
+	dun      = 18;	(* BUTTON in tree TREE1 *)
+
