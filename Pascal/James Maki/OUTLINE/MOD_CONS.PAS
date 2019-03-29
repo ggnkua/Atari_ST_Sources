@@ -1,0 +1,3 @@
+    NoSp    = '' ;
+    MaxWind = 4 ;
+
