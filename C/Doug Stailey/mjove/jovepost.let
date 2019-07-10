@@ -1,0 +1,83 @@
+I am posting this for my brother Doug, who can't get to Usenet.
+
+
+Recently, I have been working on a port of the JOVE editor, V. 4.14.6.
+I am using the MiNT libs and attempting to add all the features
+from the BSD version.  This includes the use of ptys for
+interactive processes, such as M-X shell.  So far, all of the
+editing features work, as do the non-interactive process control
+routines, including M-X shell-command and M-X compile-it.
+
+However, the interactive commands I have tested so far, M-X shell and
+M-X i-shell-command, don't work.  M-X shell starts the shell, opens
+the *shell* buffer and then ksh sticks its prompt into the buffer.
+After this, nothing happens.  I can type text into the buffer, but it
+never gets to the shell.  The shell sits there waiting, trying to
+read Q:/jovep0, but not getting any response.  You'd think that this
+would be an easy one.  Except that the suspect code was my hack.
+
+You see, the MiNT libs lack an ffs().  In the following code fragment,
+you can see what I did to fix this:
+
+#ifdef MiNT
+int
+ffs(int i)
+{
+	int j;
+#define NUMBITS  (sizeof(int) * 8)
+
+	for (j = 1; j <= NUMBITS; j++)
+		if (i & ~(0xffffffff >> j))                /* 32-bit libs */
+			return (NUMBITS - --j);
+}
+#endif
+
+int
+jgetchar()
+{
+	long		reads;
+	register int	tmp,
+			nfds;
+	int		c;
+
+	if (nchars <= 0) {
+		/* Get a character from the keyboard, first checking for
+		   any input from a process.  Handle that first, and then
+		   deal with the terminal input. */
+		do {
+			do {
+				reads = global_fd;
+				nfds = select(32, &reads, (long *)NULL, (long *)NULL, (struct timeval *)NULL);
+			} while (nfds < 0 && errno == EINTR);
+
+			if (nfds == -1)
+				complain("\rerror in select %ld: %s", global_fd, strerror(errno));
+			else {
+				if (reads & 01) {
+					nchars = read(0, (UnivPtr) smbuf, sizeof(smbuf));
+					reads &= ~01;
+					nfds -= 1;
+				}
+				while (nfds--) {
+/* here's where ffs() gets called  */	tmp = ffs(reads) - 1;
+					read_proc(tmp);
+					reads &= ~(1L << tmp);
+				}
+			}
+		} while (nchars <= 0);
+
+		if (nchars <= 0)
+			finish(SIGHUP);
+
+		bp = smbuf;
+		InputPending = (nchars > 1);
+	}
+
+	if (((c = *bp) & 0200) && MetaKey) {
+		*bp = (c & CHARMASK);
+		return '\033';
+	}
+	nchars -= 1;
+	return *bp++ & 0377;
+}
+
