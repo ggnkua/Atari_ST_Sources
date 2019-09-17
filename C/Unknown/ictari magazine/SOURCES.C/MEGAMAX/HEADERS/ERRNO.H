@@ -1,0 +1,1 @@
+extern int errno;   /* defined in EXIT.C */

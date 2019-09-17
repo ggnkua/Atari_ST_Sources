@@ -1,0 +1,263 @@
+
+     A Dictionary File Format
+     by Keith Baines
+     
+
+This article describes the approach to dictionary files
+that I developed when I wrote a desk accessory to add
+spell-checking capabilities to Neocept's WordUp 2 word
+processor; the resulting program was called CheckUp and is
+available from the FaST Club and other PD sources - or if
+you want a copy and can't find it, direct from me; send a
+SAE and a blank disk. It's only of use if you've got WordUp
+version 1 or 2.
+
+The main constraints were that the DA should use as little
+memory as possible, that the spelling checks should be
+reasonably fast, and that the file sizes should be kept
+small enough to be used from floppy-disk only systems -
+hard disks were much less common in the ST community 4
+years ago than they are now.
+
+To keep memory usage down without making the algorithm too
+slow, I wanted a design which held common words in memory
+and accessed less common ones from a disk-based main
+dictionary. Also, some kind of caching system would be
+desirable - documents tend to repeat words relating to
+their subject matter.
+
+Keeping file sizes small meant that some kind of
+compression would be required, but to avoid slowing the
+process down too much, data should be byte-aligned if at
+all possible.
+
+So, what design did I adopt? . . . .
+
+
+Dictionary Format
+-----------------
+
+The most obvious thing about a conventional dictionary is
+that it is in alphabetical order. This means that there is
+a lot of repetition at the beginning of words from one word
+to the next. So we can cut down the amount of data to be
+stored by encoding the number of letters each word has in
+common with its predecessor. For example
+
+Words     length    Encoded   length
+-----     ------    -------   ------
+cab          3      [0]cab       4
+cabal        5      [3] al       3
+cabals       6      [5] s        2
+cabaret      7      [4] ret      4
+cabbage      7      [3] bage     5
+cabbages     8      [7] s        2
+cabbies      7      [4] ies      3
+cabby        5      [4] y        2
+cabin        5      [3] in       3
+          ------              ------
+            53                  28
+
+So this saves around half of the space needed to store the
+words, and the only cases where the encoded word would be
+longer than the plain text are the 26 words which are the
+first starting with each letter of the alphabet.
+
+In fact, hardly any cases will require a repeat count of
+more than 31 and so there are three spare bits available
+for other uses. I decided to use two bits to code the
+capitalisation required in the word as follows:
+
+     -    lower case words
+     -    words with an initial capital letter (e.g.
+          England)
+     -    words which must be in all capitals (e.g. USA)
+     -    words with unusual capitalisation (e.g. HiSoft)
+
+The eighth bit was used to mark words for inclusion in an
+index file and will be discussed later.
+
+I decided to ignore accents, and treat hyphenated words as
+two separate words, so the required character set was A-Z,
+0-9, and apostrophe (for words like wouldn't). I allowed
+scope to change my mind about accents and opted for a 64
+character coding scheme. I didn't want to use 6 bit
+characters because of the added complications of coding
+this and the speed penalty of processing data at bit rather
+than byte level. So, what could be done with the other 192
+available values?
+
+If the dictionary were held as a text file with a separator
+character or characters after each word, that would add
+significantly to the length of the file, as would storing a
+length byte. So values 64 to 127 were used to represent the
+same characters as 0 to 64, but also mark the end of a
+word.
+
+English has a number of common word endings, such as -ing,
+-ious, -ological, etc. and identifying these and using the
+remaining 128 byte values to encode them was the final
+stage in designing the dictionary format.
+
+To summarise, the dictionary file is made up of word
+entries in alphabetical order each encoded as follows:
+     [1]  a single byte of which
+          bits 0-4 give the number of letters repeated from
+          the previous word
+          bits 5-6 give the requirements for capital
+          letters:
+               0=normal words
+               1=Initial Capital Required
+               2=UPPER CASE REQUIRED
+               3=AnY MiXturE AlloWeD
+          bit 7 marks the word for inclusion in the index
+
+     [2]  zero or more bytes in the range 1-63, each
+          representing one character.
+
+     [3]  one byte in the range 65-255 representing one or
+          more characters and marking the end of the word.
+          Codes 65-127 correspond to single characters
+          equivalent to those in the range 1-63. Codes
+          128-255 represent common word endings.
+
+
+Indexing
+--------
+
+There's an obvious problem with this format once you start
+coding to use it. There are only 26 places (at the start of
+each letter of the alphabet) where word entries do not
+depend on the preceding word, and no way of stepping
+backwards through the file. That's where an index file
+comes in.
+
+The index file is designed to be read into memory and has
+two purposes:
+     -    it holds common words
+     -    it points into the main dictionary file held on
+          disk.
+
+The index file has two sections.
+
+The first section is a table of word-length pointers into
+the index data proper.
+
+The second section is a series of variable length records
+as follows:
+     [1]  A three-byte value.
+          Bits 0-20 contain a pointer to the main dictionary
+          entry for this word.
+          Bits 21-22 give the capitalisation, coded as in
+          the main dictionary file
+          Bit 23 is zero.
+
+     [2]  Zero or more bytes in the range 1-63 each
+          representing one character.
+
+     [3]  One byte in the range 65-255 representing one or
+          more characters at the end of the word.
+
+
+So the index file has the following structure:
+
+-------------------------------
+| Length of section 1  (word) |
+-------------------------------
+| Pointer to first entry      |-----
+| Pointer to second entry     |     |
+| Pointer to third entry      |     |
+|     . . . . . . . .         |     |
+| Pointer to last entry       |-----+---
+-------------------------------     |   |
+| Length of section 2 (long)  |     |   |
+-------------------------------     |   |
+| First entry                 |<----    |
+| Second entry                |         |
+| Third entry                 |         |
+|      . . . . . . . .        |         |
+| Last entry                  |<--------
+-------------------------------
+
+
+In the main dictionary file, bit seven of the first byte of
+each entry shows whether if is a "common" word and a
+utility program builds the index using this information.
+Further index file entries are added so that the maximum
+interval in the main dictionary between index entries is
+256 bytes. The first word in the dictionary is always in
+the index.
+
+Searching for a word in the dictionary is then a two stage
+process.
+
+The index file is searched using a "binary chop" algorithm.
+
+This algorithm produces one of three answers.
+
+     -    Word in index.
+     -    Word not in dictionary.
+     -    Word not in index but may be in dictionary, and
+          dictionary offset at which to start looking is
+          returned.
+
+The main dictionary search is then straightforward.
+
+The word from the index entry is copied into a word buffer
+and 256 bytes of the main dictionary starting at that entry
+are read into a dictionary buffer.
+
+The word buffer is updated for each dictionary entry in
+turn, and compared with the word we are checking. This
+continues until either the word is matched, or the
+dictionary word is alphabetically after the word we are
+checking. Because index entries are at most 256 bytes
+apart, we are guaranteed that one of these will happen.
+
+
+The example Code.
+-----------------
+
+The assembler file (dictnrys.s) included with this article
+includes the basic routines for checking whether a word is
+in the index and main dictionary files and provides a very
+simple command line interface - type a word and the program
+will say whether it's in the dictionary.
+
+
+What else is needed for a complete spelling checker?
+----------------------------------------------------
+
+In the CheckUp accessory I added three further refinements.
+
+A buffer was set up to store words matched from the main
+dictionary file and re-used on a "least-recently-used entry
+is overwritten" basis. This is particularly important if
+the main dictionary is stored on floppy disk.
+
+A "personal" dictionary file was added, and searched first.
+This allowed users to add files to the dictionary as they
+used the program.
+
+An ignore list was kept in memory. Users could specify that
+words would be ignored for the rest of the WordUp editing
+session without any permanent change to the dictionary.
+
+Support Programs
+----------------
+
+I also wrote a dictionary editor and a program to build the
+index file. These are in HiSoft Basic (No need to use
+assembler when size and performance are less of an issue).
+If anyone wants a copy, they can get the programs and
+source from me (see my entry in the members list) ....
+
+........ or if there is enough interest they might be a
+topic for a future Ictari issue.
+
+
+
+Keith Baines
+December 1994
+
+

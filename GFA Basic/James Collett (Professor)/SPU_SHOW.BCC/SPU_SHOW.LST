@@ -1,0 +1,182 @@
+'           ////////////////////////////////////////////////////////////////////
+'          //                       SPU viewer/converter                      //
+'          //         By Professor of VIRTUAL INFINITY, September 1994        //
+'          //                      For Ictari User Group                      //
+'          //                                                                 //
+'          //          Additional code (find_index) by Steve Belczyk          //
+'          //                                                                 //
+'          // The following source: is public domain                          //
+'          //                       maybe freely copied & modified            //
+'          //                       is 'hardwired' to ST low res              //
+'          //                       was written in pure GFA 3.5e              //
+'          //                       is saved as ASCII to increase portability //
+'          //                                                                 //
+'          //    PLEASE REFER TO DOCUMENTATION FOR USER AND TECHNICAL HELP    //
+'          ////////////////////////////////////////////////////////////////////
+'
+PRINT "E"
+DIM spu|(51103+1),greypal|(31+1),in_plane%(3),out_plane%(3)
+' ------------------------------------------------------------------------------
+' Constants: fload$, *valid* "SPU" to load              [SEE ALSO DOCUMENTATION]
+' ~~~~~~~~~  fsave$, either *valid* "PI1" to save, or "" for no save
+'            ste!, either FALSE|TRUE to force 3|4 bit, or STE? to auto-determine
+' ------------------------------------------------------------------------------
+fload$="sphere_3.spu"                !<<<<<< QuickStart: Put "SPU" To View Here
+fsave$=""                            !       ~~~~~~~~~~
+ste!=STE?
+'
+'
+' ----------------------------------------
+' Set up memory, Load SPU & Set up palette
+' ----------------------------------------
+start_addr%=V:spu|(0)
+IF ODD(start_addr%)
+  INC start_addr%
+ENDIF
+greypal_addr%=V:greypal|(0)
+IF ODD(greypal_addr%)
+  INC greypal_addr%
+ENDIF
+BLOAD fload$,start_addr%
+make_pal(ste!,greypal_addr%)
+~XBIOS(6,L:greypal_addr%)
+'
+'
+' ------------------------------------------------------------------------------
+' For each scanline: Find source(in) bitmp, Find target(out) bitmp, Find palette
+' ------------------------------------------------------------------------------
+y&=1
+WHILE y&<200
+  in_bitmp_addr%=start_addr%+y&*160
+  linpal_addr%=start_addr%+31904+y&*96
+  out_bitmp_addr%=XBIOS(3)+y&*160
+  '
+  group|=0
+  WHILE group|<20
+    ' -----------------------------------------------------------
+    ' For each group: read four in_planes & reset four out_planes
+    ' -----------------------------------------------------------
+    read_plane|=0
+    WHILE read_plane|<4
+      in_plane%(read_plane|)=DPEEK(in_bitmp_addr%+group|*8+read_plane|*2)
+      out_plane%(read_plane|)=&H0
+      INC read_plane|
+    WEND
+    ' -------------------------------------------------------------------------
+    ' For each group: set sixteen pixels [decode in_planes & encode out_planes]
+    ' -------------------------------------------------------------------------
+    set_pixel|=0
+    WHILE set_pixel|<16
+      mask%=2^(15-set_pixel|)
+      in_pixel|=((in_plane%(0) AND mask%)+(in_plane%(1) AND mask%)*2+(in_plane%(2) AND mask%)*4+(in_plane%(3) AND mask%)*8) DIV mask%
+      x&=group|*16+set_pixel|
+      phycol&=DPEEK(linpal_addr%+@find_index(x&,in_pixel|)*2)
+      out_pixel|=@grey(phycol&)
+      encode_plane|=0
+      WHILE encode_plane|<4
+        IF (out_pixel| AND 2^encode_plane|)>0
+          out_plane%(encode_plane|)=out_plane%(encode_plane|) OR mask%
+        ENDIF
+        INC encode_plane|
+      WEND
+      INC set_pixel|
+    WEND
+    ' -------------------------------------
+    ' For each group: write four out_planes
+    ' -------------------------------------
+    write_plane|=0
+    WHILE write_plane|<4
+      DPOKE out_bitmp_addr%+group|*8+write_plane|*2,out_plane%(write_plane|)
+      INC write_plane|
+    WEND
+    INC group|
+  WEND
+  '
+  INC y&
+WEND
+'
+'
+' ----------------------------------
+' If fsave$ is not "", then save PI1
+' ----------------------------------
+PRINT CHR$(7);
+IF fsave$<>""
+  sav_degas(fsave$,greypal_addr%)
+ELSE
+  ~INP(2)
+ENDIF
+EDIT
+'
+'
+'
+'
+'
+'
+' -----------------------------------------------------------------------------
+' Parameters: ste!, FALSE forces 3 bit, TRUE forces 4 bit, STE? auto-determines
+'             greypal_addr%, pointer to 32 byte block to WRITE palette
+' -----------------------------------------------------------------------------
+PROCEDURE make_pal(ste!,greypal_addr%)
+  LOCAL logcol|,phycol&
+  logcol|=0
+  WHILE logcol|<8
+    phycol&=logcol|*&H100+logcol|*&H10+logcol|
+    DPOKE greypal_addr%+logcol|*2,phycol&
+    IF ste!
+      ADD phycol&,&H888
+    ENDIF
+    DPOKE greypal_addr%+16+logcol|*2,phycol&
+    INC logcol|
+  WEND
+RETURN
+'
+'
+'
+'
+' -------------------------------------------------------------------------
+'  "Given an X co-ordinate (x&) and a color index (logcol|), the following
+'   routine returns the corresponding Spectrum palette index"
+'
+'               -- by Steve Belczyk, placed in public domain December 1990
+' -------------------------------------------------------------------------
+FUNCTION find_index(x&,logcol|)
+  LOCAL x1&
+  x1&=10*logcol|
+  IF ODD(logcol|)
+    SUB x1&,5
+  ELSE
+    INC x1&
+  ENDIF
+  IF x&>=x1& AND x&<x1&+160
+    ADD logcol|,16
+  ELSE IF x&>=x1&+160
+    ADD logcol|,32
+  ENDIF
+  RETURN logcol|
+ENDFUNC
+'
+'
+'
+'
+' ---------------------------------------------------------
+' Reduces: 16 bit physical color of '0000rRRRgGGGbBBB' form
+'      To: Grey-scale equal to (rRRR+gGGG+bBBB) DIV 3
+' ---------------------------------------------------------
+DEFFN grey(phycol&)=((phycol& AND &HF00) DIV &H100+(phycol& AND &HF0) DIV &H10+(phycol& AND &HF)) DIV 3
+'
+'
+'
+'
+' -------------------------------------------------------------------
+' Parameters: fsave$, *valid* "PI1" to save
+'             greypal_addr%, pointer to 32 byte block to READ palette
+' -------------------------------------------------------------------
+PROCEDURE sav_degas(fsave$,greypal_addr%)
+  LOCAL control&
+  control&=XBIOS(4)
+  OPEN "O",#1,fsave$
+  BPUT #1,V:control&,2
+  BPUT #1,greypal_addr%,32
+  BPUT #1,XBIOS(3),32000
+  CLOSE #1
+RETURN

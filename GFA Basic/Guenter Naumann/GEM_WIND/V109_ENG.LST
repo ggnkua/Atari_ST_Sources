@@ -1,0 +1,254 @@
+'
+' W_VDI109.GFA        REDRAW  with COPY RASTER (VDI function 109)
+'                     Selection with EVNT-MULTI
+'
+' Base program for window handling under GEM (without LINE-A)
+'
+RESERVE FRE(0)
+'
+xres&=WORK_OUT(0)+1                   ! X resolution
+yres&=WORK_OUT(1)+1                   ! Y resolution
+'
+CONTRL(0)=102                         ! No. of VDI function 102
+INTIN(0)=1                            ! 1= extended information owflag
+VDISYS                                ! VDI call
+bit_pl&=INTOUT(4)                     ! Number of bit planes
+'
+w_ram%=xres&*yres&*bit_pl&/8          ! RAM memory space for 1 window
+logbase%=XBIOS(3)                     ! Logical address of screen
+sizeflag!=FALSE                       ! Window size change flag
+fullflag!=FALSE                       ! Window fuller flag
+DIM s_mfdb&(6),d_mfdb&(6)             ! Memory Form Description Block
+'                                     ! (Felder fÅr COPY RASTER-Funktion)
+REPEAT
+  PRINT AT(2,3);"How many windows do you want (max. 7) ";
+  INPUT w_anzahl&
+  PRINT AT(2,3);"                                                 "
+UNTIL w_anzahl&<=7                    ! max. number of windows
+'
+DIM w_adr%(12)                        ! Address array for windows
+'
+DIM message_buffer%(3)                ! 16 Byte
+mes_adr%=V:message_buffer%(0)
+'
+ABSOLUTE word0&,mes_adr%
+ABSOLUTE handle&,mes_adr%+6
+ABSOLUTE x&,mes_adr%+8
+ABSOLUTE y&,mes_adr%+10
+ABSOLUTE b&,mes_adr%+12
+ABSOLUTE h&,mes_adr%+14
+'
+DEFFILL 1,2,4                         ! Desktop background draw
+PBOX 0,19,xres&,yres&                 ! only for not patched GFA compilers,
+DEFFILL 1,0                           ! because damned GFA clears the screen
+'
+GOSUB beispiel_fenster(45,35,120,80)  ! Sample window creation
+'                                     ! Event Multi
+DO
+  ~EVNT_MULTI(&X110000,0,0,0,0,0,0,0,0,0,0,0,0,0,mes_adr%,100,d%,d%,d%,d%,d%,d%)
+  IF word0&>10
+    GOSUB window_manager
+    word0&=0
+  ENDIF
+LOOP
+'
+> PROCEDURE window_manager
+  '
+  SELECT word0&
+    '
+  CASE 20                        ! WINDOW REDRAW
+    ~WIND_UPDATE(1)                               ! Window updating starts
+    '
+    ~WIND_GET(handle&,4,ax&,ay&,ab&,ah&)          ! Get window work dimensions
+    ~WIND_GET(handle&,11,rx&,ry&,rb&,rh&)         ! 1th entry in the rectangle redraw list
+    IF fullflag!=FALSE                                  ! only redraw, if no window fuller
+      GOSUB w_restaurieren(handle&,rx&,ry&,rb&-1,rh&-1) ! selected
+    ENDIF
+    '
+    WHILE rb&>0 AND rh&>0                         ! redraw loop, get redraw areas from GEM
+      IF sizeflag!=TRUE
+        ~WIND_GET(win&,4,x&,y&,b&,h&)             ! get your window dimensions
+        GOSUB fuellmuster(x&,y&,b&,h&)            ! fill background
+        sizeflag!=FALSE
+      ELSE
+        ~RC_INTERSECT(ax&,ay&,ab&,ah&,rx&,ry&,rb&,rh&) ! Check rectangle (overlaps it your windows)
+        GOSUB w_restaurieren(handle&,rx&,ry&,rb&-1,rh&-1) ! redraw
+      ENDIF
+      ~WIND_GET(handle&,12,rx&,ry&,rb&,rh&)       ! Next rectangle list element from GEM
+    WEND
+    '
+    ~WIND_UPDATE(0)                               ! Redraw is finished
+    '
+  CASE 21                        ! WINDOW TOP
+    ~WIND_GET(w_top&,4,ax&,ay&,ab&,ah&)           ! get window dimensions
+    GOSUB rette_fenster(w_top&,ax&,ay&,ab&,ah&)   ! save window contents
+    ~WIND_SET(handle&,10,0,0,0,0)                 ! save GEM-handle of new top window
+    w_top&=handle&
+    '
+  CASE 22                        ! WINDOW CLOSED
+    ~WIND_CLOSE(handle&)                          ! close window
+    ~WIND_DELETE(handle&)                         ! delete window
+    ~MFREE(w_adr%(handle&))                       ! realllocate memory (MFREE)
+    RESERVE +w_ram%                               ! Add to Basic memory
+    '
+    ~WIND_GET(0,10,handle&,ay&,ab&,ah&)           ! get actual top window handle
+    w_top&=handle&
+    '
+  CASE 23                        ! WINDOW FULL
+    win&=handle&
+    '
+    IF fullflag!=FALSE                            ! only if no max. window size
+      ~WIND_GET(handle&,4,x&,y&,b&,h&)            ! get window dimensions
+      GOSUB rette_fenster(handle&,x&,y&,b&,h&)    ! save window contents
+      ~WIND_SET(handle&,5,0,19,xres&,yres&-19)    ! set max. window size
+      fullflag!=TRUE
+      sizeflag!=TRUE
+    ELSE
+      ~WIND_GET(handle&,6,ax&,ay&,ab&,ah&)        ! toggle to old window size
+      ~WIND_SET(handle&,5,ax&,ay&,ab&,ah&)        ! set old window size
+      ~WIND_GET(win&,4,ax&,ay&,ab&,ah&)           ! get window dimensions
+      GOSUB w_restaurieren(win&,ax&,ay&,ab&,ah&)  ! redraw window
+      fullflag!=FALSE
+      sizeflag!=FALSE
+    ENDIF
+    '
+  CASE 27                        ! WINDOW SIZED
+    win&=handle&
+    sizeflag!=TRUE
+    fullflag!=FALSE
+    b&=MIN(xres&-x&-2,b&)
+    h&=MIN(yres&-y&-2,h&)
+    ~WIND_SET(handle&,5,x&,y&,MAX(55,b&),MAX(55,h&))
+    ~WIND_GET(handle&,4,x&,y&,b&,h&)               ! get new window dimensions
+    GOSUB fuellmuster(x&,y&,b&,h&)
+    '
+  CASE 28                        ! WINDOW MOVED
+    IF fullflag!=FALSE
+      sizeflag!=FALSE
+      x&=MIN(xres&-b&-2,x&)
+      y&=MIN(yres&-h&-2,y&)
+      ~WIND_SET(handle&,5,x&,y&,b&,h&)               ! move window
+    ENDIF
+    '
+  ENDSELECT
+RETURN
+'
+> PROCEDURE beispiel_fenster(x&,y&,b&,h&)    ! Sample window
+  '
+  freier_ram%=FRE(0)                     ! Max. free memory block in bytes
+  '
+  IF freier_ram%>=w_ram&*w_anzahl&       ! enough memory ?
+    RESERVE -w_ram%*w_anzahl&            ! get memory from BASIC
+    w_adr%=MALLOC(w_ram%*w_anzahl&)      ! allocate memory for window
+    FOR i&=1 TO w_anzahl&
+      w_adr%(i&)=w_adr%                  ! window title
+      w_title$=" Titel "+STR$(i&)+" "
+      w_info$=" Info "+STR$(i&)+" "
+      w_top&=i&                          ! window is top
+      '
+      GOSUB init_window(x&,y&,b&,h&,w_title$,w_info$)   ! create windows
+      x&=x&+50                           ! new window dimensions
+      y&=y&+40
+      b&=b&+40
+      h&=h&+15
+      w_adr%=w_adr%+w_ram%
+    NEXT i&
+  ELSE
+    ALERT 1,"|Not enough memory free|for the next window",1," ok ",antwort&
+  ENDIF
+RETURN
+'
+'
+> PROCEDURE init_window(x&,y&,b&,h&,w_titel$,w_info$)
+  ~WIND_UPDATE(1)                           ! window updating
+  handle&=WIND_CREATE(&X111111,0,19,xres&,yres&-19)   ! create window
+  w_titel$=w_titel$+CHR$(0)
+  adr_tit%=V:w_titel$
+  w_info$=w_info$+CHR$(0)
+  adr_inf%=V:w_info$
+  '
+  ~WIND_SET(handle&,2,CARD(SWAP(adr_tit%)),CARD(adr_tit%),0,0)  ! Title
+  ~WIND_SET(handle&,3,CARD(SWAP(adr_inf%)),CARD(adr_inf%),0,0)  ! Info line
+  x&=MIN(x&,xres&-40)
+  y&=MIN(y&,yres&-40)
+  b&=MIN(b&,xres&-2-x&)
+  h&=MIN(h&,yres&-2-y&)
+  ~WIND_OPEN(handle&,x&,y&,b&,h&)
+  '
+  ~WIND_GET(handle&,4,x&,y&,b&,h&)          ! get window dimensions
+  DEFFILL 1,2,RAND(25)                      ! random fill pattern
+  PBOX x&,y&,x&+b&,y&+h&                    ! fill window area
+  '
+  GOSUB rette_fenster(handle&,x&,y&,b&,h&)  ! save window contents
+  '
+  ~WIND_UPDATE(0)                           ! update finished
+RETURN
+'
+> PROCEDURE fuellmuster(x&,y&,b&,h&)
+  DEFFILL 1,2,RAND(25)                   ! fill pattern
+  PBOX x&,y&,x&+b&,y&+h&                 ! fill window area
+RETURN
+'
+'
+PROCEDURE rette_fenster(hdl&,x&,y&,b&,h&)
+  GOSUB src_mfdb(logbase%,xres&,yres&,bit_pl&)      ! MFDB array source address  (VDI 109)
+  GOSUB des_mfdb(w_adr%(hdl&),xres&,yres&,bit_pl&)  ! MFDB array destination address
+  GOSUB par_mfdb(x&,y&,b&,h&,x&,y&)                 ! Parameter-Feld
+  '
+  INTIN(0)=3                            ! raster mode (destination=source)
+  CONTRL(0)=109                         ! No. of VDI function 109
+  CONTRL(1)=4                           ! entries in ptsin
+  CONTRL(3)=1                           ! entries in intin
+  CONTRL(6)=GRAF_HANDLE()             ! Handle of VDI workstation
+  CONTRL(7)=CARD(SWAP(V:s_mfdb&(0)))  ! pointer to MFDB source address
+  CONTRL(8)=CARD(V:s_mfdb&(0))        ! pointer to MFDB source address
+  CONTRL(9)=CARD(SWAP(V:d_mfdb&(0)))  ! pointer to MFDB destination address
+  CONTRL(10)=CARD(V:d_mfdb&(0))       ! pointer to MFDB destination address
+  VDISYS                                ! VDI call
+RETURN
+'
+PROCEDURE w_restaurieren(handle&,x&,y&,b&,h&)          ! redraw window
+  GOSUB src_mfdb(w_adr%(handle&),xres&,yres&,bit_pl&)  ! Source      -array
+  GOSUB des_mfdb(logbase%,xres&,yres&,bit_pl&)         ! Destination -array
+  GOSUB par_mfdb(x&,y&,b&,h&,x&,y&)                    ! Parameter   -array
+  '
+  INTIN(0)=3                            ! Raster mode (Destination=Source)
+  CONTRL(0)=109                         ! No. of VDI function
+  CONTRL(1)=4                           ! entries in ptsin
+  CONTRL(3)=1                           ! entries in intin
+  CONTRL(6)=GRAF_HANDLE()               ! Handle of VDI workstation
+  CONTRL(7)=CARD(SWAP(V:s_mfdb&(0)))    ! pointer to MFDB source address
+  CONTRL(8)=CARD(V:s_mfdb&(0))          ! pointer to MFDB source address
+  CONTRL(9)=CARD(SWAP(V:d_mfdb&(0)))    ! pointer to MFDB destination address
+  CONTRL(10)=CARD(V:d_mfdb&(0))         ! pointer to MFDB destination address
+  VDISYS                                ! VDI call
+RETURN
+'
+PROCEDURE src_mfdb(s_adr%,x&,y&,bit_pl&)  ! MFDB block source
+  LPOKE V:s_mfdb&(0),s_adr%           ! Long pointer to source address
+  s_mfdb&(2)=x&              ! max. x-width (divideable by 16 !!)
+  s_mfdb&(3)=y&              ! max. y-height
+  s_mfdb&(4)=x&/16           ! Raster width in 16-bit words (=Pixel/16)
+  s_mfdb&(5)=0               ! reserved, set to 0
+  s_mfdb&(6)=bit_pl&         ! Bit planes (Number of color planes)
+RETURN
+'
+PROCEDURE des_mfdb(d_adr%,x&,y&,bit_pl&)  !MFDB block of destination
+  LPOKE V:d_mfdb&(0),d_adr%           ! Long pointer to destination address
+  d_mfdb&(2)=x&              ! max. x-width (divideable by 16 !!)
+  d_mfdb&(3)=y&              ! max. y-height
+  d_mfdb&(4)=x&/16           ! raster width in 16-bit words (=Pixel/16)
+  d_mfdb&(5)=0               ! reserved, set to 0
+  d_mfdb&(6)=bit_pl&         ! Bit planes (Number of color planes)
+RETURN
+'
+PROCEDURE par_mfdb(sx&,sy&,sb&,sh&,dx&,dy&)
+  PTSIN(0)=sx&               ! left X-coordinate source raster
+  PTSIN(1)=sy&               ! left Y-coordinate source raster
+  PTSIN(2)=sx&+sb&           ! right X-coordinate source raster
+  PTSIN(3)=sy&+sh&           ! right Y-coordinate source raster
+  PTSIN(4)=dx&               ! left X-coordinate destination raster
+  PTSIN(5)=dy&               ! left Y-coordinate destination raster
+  PTSIN(6)=dx&+sb&           ! right X-Koordinate destination raster
+  PTSIN(7)=dy&+sh&           ! right Y-Koordinate destination raster
+RETURN

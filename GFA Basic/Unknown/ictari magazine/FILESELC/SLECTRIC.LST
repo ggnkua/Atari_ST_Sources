@@ -1,0 +1,282 @@
+' First the settings for GfA I always use. With my compiler it is
+' ESSENTIAL to tell it to OPTION BASE 0 (arrays start with element
+' zero). If I don't, the compiler I use (v3.5) will initiate (unlike
+' my editor) at OPTION BASE 1, leaving me with a lot of bombs..
+'
+OPTION BASE 0     ! 1st element of array is number ZERO
+DEFWRD "a-z"      ! all variables with no suffix are 2-byte signed WORDS
+DEFLIST 4         ! show commands in CAPS, variables in lowercase
+'
+' Below some routines to have your program making the best use of
+' alternative fileselectors like BoxKite, Freedom and (I think is
+' the best of all) Selectric. With these routines you can have the
+' user select more than one file in one go in different ways.
+'
+fselector$=@slct_check$(slct%)          ! what fileselector are we using ?
+IF fselector$>""
+  @slct_getvars(slct%)                  ! read variables into structure
+  PRINT fselector$+" is ";
+  IF ODD(slct_config)                   ! test bit 0
+    PRINT "ON"
+  ELSE
+    PRINT "OFF"
+  ENDIF
+  '
+  ' example to use Selectric to get up to 15 filenames:
+  slct_path$=@slct_morefiles$(15,"Choose up to 15 files","\*.*","")
+  IF slct_path$=""
+    PRINT "Fileselect cancelled"
+  ELSE IF slct_outc
+    PRINT slct_outc;" files selected:"
+    FOR i=0 TO slct_outc-1
+      IF RIGHT$(slct_file$(i))="\"
+        PRINT "<folder> ";
+      ELSE
+        PRINT "< file > ";
+      ENDIF
+      PRINT slct_path$+slct_file$(i)
+    NEXT i
+  ELSE
+    PRINT "No files selected.."
+    PRINT "Path chosen= ";slct_path$
+  ENDIF
+  ' You can also let the user decide how many files will be
+  ' chosen. These files can be read in, into a DTA-structure
+  ' in which also file-attributes, length, date and time are
+  ' preserved. In this case, variable slct_version MUST have
+  ' a value of at least &H102.
+  ' example:
+  '     slct_path$=@slct_dir$("Choose file(s)","\*.*","")
+  '     PRINT slct_outc;" files selected. Path = ";slct_path$
+ELSE
+  PRINT "Standard GEM fileselector"
+ENDIF
+~INP(2)
+EDIT
+'
+'
+FUNCTION slct_check$(VAR cookie%)       ! test if alternative selector present
+  LOCAL sv
+  cookie%=@cookie_find("FSEL")
+  IF cookie%>0
+    IF LONG{cookie%}=CVL("SLCT")        ! uses Selectric protocol?
+      sv=WORD{cookie%+4}
+      IF AND(sv=>&H102,@cookie_find("HBFS")>0)
+        RETURN "BoxKite"
+      ENDIF
+      IF sv=>&H200
+        RETURN "Freedom"
+      ELSE
+        RETURN "Selectric"
+      ENDIF
+    ENDIF
+    RETURN "Unknown Fileselector"
+  ENDIF
+  RETURN ""                             ! Gem standard fileselector
+ENDFUNC
+'
+FUNCTION slct_dir$(header$,pathmask$,filemask$)
+  LOCAL ret%,dta%,fsel$,fcount
+  ERASE slct_xdta%()                    ! example, create space for DTA
+  DIM slct_xdta%(PRED(44\4))            ! or use MALLOC or claim BASEPAGE+128
+  dta%=V:slct_xdta%(0)                  ! In case of BoxKite: PRED(64\4)
+  slct_comm=&X1001                      ! Selectric now set to use get_first()
+  CLR fcount                            ! When Selectric, count files yourself..
+  ~WIND_UPDATE(3)                       ! mousecontrol to application !
+  FILESELECT #header$,pathmask$,filemask$,fsel$         ! call fileselector
+  fsel$=LEFT$(fsel$,RINSTR(fsel$,"\"))  ! return PATH in a string
+  IF fsel$>""
+    ret%=C:slct_getfirst%(L:dta%,&X1101111)     ! attribs: all filetypes
+    WHILE ret%=0
+      PRINT CHAR{dta%+30},              ! example: print filename and length
+      PRINT LONG{dta%+26};" bytes"
+      ret%=C:slct_getnext%(L:dta%)
+      INC fcount
+    WEND
+  ENDIF
+  ERASE slct_dta%()
+  ~C:slct_release%()                    ! clear Selectric for next call
+  ~WIND_UPDATE(2)                       ! mousecontrol back to GEM
+  IF slct_outc<>fcount                  ! Selectric does not update this
+    slct_outc=fcount                    ! BoxKite and Freedom do
+  ENDIF                                 ! Freedom can return only "\"..
+  RETURN fsel$                          ! return PATH in a string
+ENDFUNC
+'
+PROCEDURE slct_getvars(struct%)         ! read Selectric-structure
+  ABSOLUTE slct_id%,struct%             ! Selectric -> 'SLCT'
+  ABSOLUTE slct_version,struct%+4       ! version: Freedom=>200, BoxKite=>102
+  ABSOLUTE slct_config,struct%+6        ! config bitmap
+  ' bit 0: ON/OFF
+  ' bit 1: show hiden files
+  ' bit 2: open folder on double click
+  ' bit 3: use lowercase filenames
+  ' bit 4: numeric sort (AAN->FILE1,FILE2,FILE10 UIT->FILE1,FILE10,FILE2)
+  ' bit 5: auto locator on/off (look for first character typed in)
+  ' bit 6: stay in destination path
+  ' bit 7: save Gemdos paths
+  ' bit 8: todaytime (not all versions 'touch'??)
+  ' bit 9-15: reserved
+  ' example turn Selectric OFF: slct_config=BCLR(slct_config,0)
+  ' example set lowercase ON:   slct_config=BSET(slct_config,3)
+  '
+  ABSOLUTE slct_sort,struct%+8          ! sortingmode (negative=reversed)
+  ' 1=name, 2=date, 3=length, 4=type, 5=non sort
+  '
+  ABSOLUTE slct_extn,struct%+10         ! number of preset extensions (masks)
+  ABSOLUTE slct_extp%,struct%+12        ! pointer to (address of extensions)
+  ABSOLUTE slct_pathn,struct%+16        ! number of preset paths
+  ABSOLUTE slct_pathp%,struct%+18       ! pointer to (address of paths)
+  ABSOLUTE slct_comm,struct%+22         ! communication (BoxKite always 9)
+  ' slct_comm determines what the fileselector returns to the program:
+  ' bit 0: OFF=1 filename, ON=more filenames
+  ' bit 1: OFF=names as C-string array (each name NULL-terminated)
+  '         ON=names as one long string, separated by a space character
+  '        each name uses 14+1 bytes (in case of BoxKite 33+1)
+  ' bit 2: no function ?
+  ' bit 3: return names via XDTA (also: bit0=1, bit1=0)
+  '        XDTA: 21 bytes reserved
+  '               1 byte fileattribute
+  '               2 bytes file time
+  '               2 bytes file date
+  '               4 bytes length
+  '              14 bytes file name (in case of BoxKite: 34)
+  '
+  '
+  ABSOLUTE slct_inpc,struct%+24         ! input counter    (not used)
+  ABSOLUTE slct_inpp%,struct%+26        ! pointer to input (not used)
+  ABSOLUTE slct_outc,struct%+30         ! output counter
+  ABSOLUTE slct_outp%,struct%+32        ! pointer to output
+  slct_getfirst%=LONG{struct%+36}       ! address of get_first routine
+  slct_getnext%=LONG{struct%+40}        ! address of get_next routine
+  slct_release%=LONG{struct%+44}        ! address of release_dir routine
+RETURN
+'
+FUNCTION slct_morefiles$(fmax,header$,pathmask$,filemask$)
+  ' In this function, when fmax has a negative alue, Selectric
+  ' will be set to return filenames in one 'space-separated' string.
+  ' A positive value will set it so the NULL-terminated C-string
+  ' mode is chosen (this is a better way..)
+  '
+  LOCAL fsel$
+  ERASE slct_file$()
+  DIM slct_file$(ABS(fmax-1))           ! OPTION BASE 0
+  IF fmax<0                             ! use 1 string ?
+    @slct_setstring(-fmax)              ! Selectric returns one string
+  ELSE
+    @slct_setarray(fmax)                ! Selectric returns null-terminated
+  ENDIF
+  FILESELECT #header$,pathmask$,filemask$,fsel$
+  IF fmax<0
+    @slct_readstring(-fmax)             ! read filenames in slct_file$()
+  ELSE
+    @slct_readarray(fmax)
+  ENDIF
+  RETURN LEFT$(fsel$,RINSTR(fsel$,"\")) ! return PATH in a string
+ENDFUNC
+'
+PROCEDURE slct_readarray(nfiles)        ! read null_terminated array
+  LOCAL tel
+  IF slct_outc
+    FOR tel=0 TO nfiles-1               ! there are slct_outc strings
+      slct_file$(tel)=CHAR{slct_ptr%(tel)}
+    NEXT tel
+  ENDIF
+RETURN
+'
+PROCEDURE slct_readext                  ! read preset searchmasks
+  LOCAL xadr%,tel                       ! since it's really best to let the
+  xadr%=LONG{slct_extp%}                ! user decide what searchmasks and
+  FOR tel=0 TO slct_extn-1              ! paths are used, better not set
+    PRINT CHAR{xadr%}                   ! them in your programs. If you do
+    ADD xadr%,17                        ! I recommend you only set the masks,
+  NEXT tel                              ! using slct_setext
+RETURN
+'
+PROCEDURE slct_readpath                 ! read preset paths
+  LOCAL xadr%,tel
+  xadr%=LONG{slct_pathp%}
+  FOR tel=0 TO slct_pathn-1
+    PRINT CHAR{xadr%}
+    ADD xadr%,128
+  NEXT tel
+RETURN
+'
+PROCEDURE slct_readstring(nfiles)
+  LOCAL tel,c32
+  IF nfiles>0
+    FOR tel=0 TO nfiles-1               ! there are slct_outc strings returned
+      c32=INSTR(slct$," ")
+      IF c32=0
+        slct_file$(tel)=""
+      ELSE
+        slct_file$(tel)=LEFT$(slct$,c32-1)
+      ENDIF
+      slct$=RIGHT$(slct$,LEN(slct$)-c32)
+    NEXT tel
+  ENDIF
+RETURN
+'
+PROCEDURE slct_setarray(nfiles)         ! return filenames as null-terminated
+  LOCAL tel
+  ERASE slct|(),slct_ptr%()             ! create (numeric) space for the arrays
+  IF nfiles>0
+    DIM slct|(nfiles*15),slct_ptr%(nfiles-1)
+    FOR tel=0 TO nfiles-1               ! set pointers to string_space
+      slct_ptr%(tel)=V:slct|(0)+tel*15  ! use *34 when BoxKite
+    NEXT tel
+    slct_comm=&X1
+    slct_outc=nfiles
+    slct_outp%=V:slct_ptr%(0)           ! point at first address_pointer
+  ENDIF
+RETURN
+'
+PROCEDURE slct_setext                   ! set predefines searchmasks
+  ' this is just an example..
+  ' it's best to leave these settings to the user.
+  ' If you do use this, be advised that you should set these
+  ' masks/paths before EVERY fileselect-call, because Selectric
+  ' will reset itself to its saved (or default) strings.
+  LOCAL tel,msk$
+  slct_extn=5
+  DIM masks%(PRED(slct_extn))           ! pointers for 5 preset searchmasks
+  DIM mask|(slct_extn*17)               ! you can set the preset paths
+  RESTORE example_masks                 ! with a similar routine
+  FOR tel=0 TO PRED(slct_extn)
+    masks%(tel)=V:mask|(0)+17*tel
+    READ msk$
+    CHAR{masks%(tel)}=msk$
+  NEXT tel
+  slct_extp%=V:masks%(0)                ! point at first addresspointer
+  '
+example_masks:
+  DATA AC[CX],PR[GX],TTP,TOS,GTP
+RETURN
+'
+PROCEDURE slct_setstring(nfiles)        ! return filenames in one string
+  IF nfiles>0                           ! separated by space characters
+    slct_comm=&X11
+    slct_outc=nfiles                    ! 1 t/m .. (usually up to 5)
+    slct$=SPACE$(nfiles*15)             ! when BoxKite: nfiles*34
+    slct_outp%=V:slct$                  ! strings can move around...
+  ENDIF                                 ! if possible, use slct_setarray()
+RETURN
+'
+FUNCTION cookie_find(id$)               ! finds a certain cookie
+  LOCAL c_ptr%,cname%,c_val%
+  c_ptr%=LPEEK(&H5A0)                   ! start of cookie-jar
+  IF OR(c_ptr%=0,ODD(c_ptr%))
+    RETURN FALSE                        ! error: cookiejar does not exist
+  ELSE
+    REPEAT
+      cname%=LPEEK(c_ptr%)
+      c_val%=LPEEK(c_ptr%+4)
+      EXIT IF cname%=0                  ! end of list
+      ADD c_ptr%,8
+    UNTIL MKL$(cname%)=id$              ! found it!
+    IF cname%
+      RETURN c_val%                     ! return its value
+    ENDIF
+    RETURN TRUE                         ! jar exists, cookie not found
+  ENDIF
+ENDFUNC

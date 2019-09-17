@@ -1,0 +1,4 @@
+
+WAIT_FORM	EQU	    0
+
+WAIT_FORM1	EQU	    3

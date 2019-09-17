@@ -1,0 +1,30 @@
+
+#define	SEQ	    0
+
+#define SEQBOX	    0
+#define DBYE	    2
+#define DCLS	    5
+#define DMODE	    8
+#define DMSAM	    9
+#define DMSEQ	   10
+#define DLSEQ	   13
+#define DSSEQ	   14
+#define DLSAM	   17
+#define DSSAM	   18
+#define DPANIC	   20
+#define DDOWN	   22
+#define DFDOWN	   23
+#define DBOTTOM	   24
+#define DUP	   26
+#define DFUP	   27
+#define DTOP	   28
+#define DDEL	   30
+#define DHEAD	   31
+#define DRECORD	   34
+#define DPLAY	   35
+#define DAC	   36
+#define DTEST	   37
+#define DODUB	   39
+#define DDIRECT	   40
+#define DMIX	   41
+#define DCLRMIX	   43

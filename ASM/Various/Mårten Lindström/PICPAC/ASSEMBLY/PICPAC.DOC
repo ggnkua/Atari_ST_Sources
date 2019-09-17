@@ -1,0 +1,661 @@
+                                    --
+                                  PICPAC
+                               ------------
+                           By: M†rten Lindstr”m
+                        --------------------------
+
+A collection of sub-routines for  picture  un/packing primarily written for
+VDI image copying with VR_TRNFM  +  VRO_CPYFM/VRT_CPYFM, but also including
+routines to replace the VDI ones, thus making the package as usable without
+GEM. The formats handled are IMG  and  IFF  ILBM plus, unpacking only, GIF,
+TIFF, Degas and NEO.
+
+
+General notes on all of my sub-routines:
+
+1) No registers are affected except those specified as exit parameters.
+
+2) At exit the  processor  condition  flags  will  be  set according to the
+contents of register D0 if this is an exit parameter.
+This means that you don't have  to  perform  a  test of D0 to, for example,
+determine if there was an error. Example :-
+
+        bsr     routine
+        ble     error
+
+if zero or negative signals error.
+
+The routines for un/packing  picture  files  have  names  XXXUNP and XXXPAC
+where XXX stands for  either  of  IMG,  LBM  (=IFF  ILBM),  DEG (=Degas) or
+NEO(chrome).
+
+IMGUNP  unpacks any IMG including PC  imported,  colour  IMGs of types XIMG
+        and HyperPaint and with any pattern length.
+LBMUNP  unpacks IFF ILBM of  any  compression  type  0-2, skipping any mask
+        plane.
+DEGUNP  unpacks/converts files  of  types  PI1,PC1,PI2,PC2,PI3,PC3,PI5,PC5,
+        PI7,PC7 (but not PI8,PC8 since I'm unsure about the organization of
+        TT low rez screen memory -  word- or byte-interleaved).
+NEOUNP  reads the resolution word in the  NEO file header and then branches
+        to DEGUNP - i.e. can handle the same image resolutions.
+GIFUNP  unpacks (the first image in) any  GIF  file, plus sorts palettes of
+        any length up to 256 for them to be usable on 16-colour screens.
+TIFUNP  unpacks (the first image in) any  TIFF palette colour and grayscale
+        files - TIFF classes  P  and  G  -  (with  a  few limitations of no
+        practical importance) and probably most bilevel (mono) and some RGB
+        (high/true colour) files too (classes B and R). The limitation to B
+        images is that the, probably not  often used, compression type 2 is
+        not  supported.  TIFUNP  may  work  with  RGB  files  with  Planar-
+        Configuration=1 and no Prediction.
+        TIFFUNP also sorts palettes with (exactly) 256 colours to make them
+        usable on screens with only 16 colours.
+
+IMGPAC  can pack with pattern length  1  or  2.  (2  is 'standard' but 1 is
+        usually slightly more effective /less ineffective. Any palette will
+        be stored according to the XIMG standard. IMGPAC uses all available
+        IMG compression methods  about  as  effectively  as  can  be done I
+        think. (For every  IMG  file  that  I  have  tried  to re-pack with
+        IMGPAC, it managed to save a few  bytes  at least - in some extreme
+        cases KILObytes - compared to the original size. Specifically it is
+        much  more  effective  than  either   HyperPaint  or  Fleet  Street
+        Publisher).
+
+LBMPAC  can pack according to compression types 0-2 where
+        0 = Uncompressed
+        1 = Packbits  (as  Degas  compressed):  Standard  and  the best for
+        pictures with regular patterns.
+        2 = Vertical  word  (almost  as  TINY):  usually  by  far  the most
+        effective type, except with patterns.  Not  as standard as Packbits
+        but used by Deluxe Paint.
+
+(I have not bothered to write corresponding Degas/NEO packing routines.)
+
+
+The un/packing of picture files is  done NOT directly to/from screen memory
+(as would admittedly have been the  quickest  and most space-saving) but in
+all cases  to/from  an  image  in  GEM  'device  independent'  (i.e.  plane
+separated) format. This is the format between which and the screen all 100%
+compatible programs must do  their  image  copying,  and in addition allows
+more flexibility, for instance, with images  of differing size or number of
+colour planes. The copying can  be  done  with  VDI (VR_TRNFM + VRO_CPYFM/-
+VRT_CPYFM) or - if the screen is  known  to be word-interleaved (as are all
+ST resolutions) - it can be done with my non-VDI routines PUTFM and GETFM.
+
+Both the packing and the unpacking routines require a pointer to a VDI MFDB
+extended with some further parameters. This can  be empty when you call the
+unpacking routines (which will fill it  in)  EXCEPT for its first longword,
+which must be a pointer to (space for) the image data.
+
+MFDB (10 words = 20 bytes):
+  L: Pointer to image
+  W: Width in pixels
+  W: Height
+  W: Width in words (= width in pixels/16 rounded up)
+  W: Format flag = 1 for device independent  (0: device specific)
+  W: Number of (used) planes. (= # of planes on screen or 1 with VRT_CPYFM)
+ 3W: 0 (reserved)
+
+ + 8 words (16 bytes):
+  W: Actual number of planes. (# of fill planes = used number minus this)
+ 2W: Relative width and height of a pixel
+  W: 0 (Reserved word)
+  W: 0 (or screen start colour if # of image colours < # of screen colours)
+  W: Number of colours in palette
+  L: Pointer to palette in 24-bit format (3 bytes/colour: Red,Green,Blue)
+---------
+ 36 bytes in all
+
+The 24-bit palette created by the  unpacking  routines can be used with the
+SETPAL routine (see separate doc) if you  use  GEM, or else with SETTRU, to
+set the colours on the screen of any TOS computer.
+
+In PICPAC1.S a  set  of  routines  to  convert  palettes  between different
+formats are included, some of  which  are  internally called by the picture
+un/packing routines. They have names  XXX_YYY  where  XXX stands for source
+and YYY for destination format  given  as  "VDI", "STE" or "TRU" (=24-bit).
+E.g. STE_VDI translates ST(E) hardware palette into VDI colours.
+
+
+
+
+  UNPACKING AN IMAGE AND COPYING RECTANGLES FROM IT TO SCREEN - WITH VDI
+  ----------------------------------------------------------------------
+(described with a mixture of plain  text  and assembler instructions that I
+hope you'll excuse.)
+
+1) Load picture file and set A3 to point to it
+   Set A4 to point to an area of 32 unused bytes (on a word boundary)
+
+2)      moveq   #0,D4      ;for palette to be stored with image
+* or else set D4 to point to a pre-allocated space (W boundary) for palette
+        moveq   #-1,D3     ;for VRT_CPYFM use if image turns out to be mono
+*   or  moveq   #0,D3      ;for VRO_CPFYM use regardless of image type
+        move.w  nplanes,D3 ;where 'nplanes' labels number of screen planes
+* nplanes got as the word at intout+8 after a call of VQ_EXTND #1
+        bsr     IMGCALC    ;for IMG file (or LBMCALC, GIFCALC etc.)
+        ble     error
+3) Use size in D0 to allocate memory for unpacking.
+   Move the address (Long) of the allocated memory block to (A4)
+4)      bsr     IMGUNP     ;(or LBMUNP, GIFUNP, TIFUNP, DEGUNP, NEOUNP)
+        ble     error
+* (     tst.l   D1         ;If you want to check for 'minor error' i.e. )
+* (     bmi     minorerr   ;file header OK but error during unpacking   )
+
+5) If the palette of the image is shorter  than that of the screen, you can
+   optionally set a start screen  colour  number other than zero (=default)
+   where you want the image palette to  go. (Set D1=startcolour and run the
+   routine PLNFILL. Any start number not divisible by the number of colours
+   in image will be replaced with the next lower number that is).
+
+6) A4 is already pointing to an MFDB  for the device independent image. Now
+   create an MFDB for the transformed image  (if  you do not want to do the
+   transformation in place, which is slow). A  simple copy - 5 longs - from
+   (A4) will do fine.
+
+   Use size given in D0  (by  the  unpacking  routine;  Any call of PLNFILL
+   hasn't touched it) to allocate memory  for the transformed image and put
+   the address of this as the first long in the new MFDB.
+
+   Then call   vr_trnfm A4,xx   (where xx is the address of the new MFDB).
+
+7)      lea     28(A4),D0  ;D0.MSW: start colour D0.LSW: Number of colours
+        move.l  32(A4),A0  ;A0 -> palette
+        bsr     setpal     ;(See setpal.s and setpal.doc)
+
+9) Now you can copy the picture  (or  rectangles  of it) to the screen with
+   VRO_CPYFM or VRT_TRNFM. As a destination MFDB for the screen, just use a
+   cleared longword, which is followed by 4 more uninitialized longs.
+
+   You merely have to decide the VDI  coordinates of a rectangle within the
+   image, and the coordinates of an  equally sized rectangle on the screen,
+   and then write them - source first - to the ptsin array.
+
+   For instance the VDI coordinates of the  full image would be (in pseudo-
+   code): x1=#0, y1=#0, x2=4(A4)-#1, y2=6(A4)-#1
+
+   And the coordinates of the  full  screen  would be defined - immediately
+   after  the  V_OPNVWK  call  with  which  you  opened  the  VDI   virtual
+   workstation  (or  after  a call of VQ_EXTND #0) - as x1=#0, y1=#0,
+   x2=(contents of) intout, y2= (contents of) intout+2.
+
+   Just make sure that both rectangles are  of equal size and that they are
+   both  within the image area  AND within the screen area. (In particular
+   that you don't try to write outside the DESTINATION area.)
+
+   When the 8 coordinate words  (source x1,y1,x2,y2, dest x1,y1,x2,y2) have
+   been written to ptsin, just use (with the Devpac macros):
+
+        VRO_CPYFM #3,xx,yy
+
+   where xx is the address of the  MFDB  of the transformed image (that you
+   created in step 6 above) while yy  points to a cleared longword, and the
+   image rectangle will be copied to screen.
+
+   A two-colour ("mono") image could alternatively be copied with
+
+        VRT_CPYFM #1,xx,yy,#1bitcolour,#0bitcolour
+
+   where 1bitcolour and 0bitcolour determine  the colours (VDI pen numbers)
+   to use for 1-bits and 0-bits in image data.
+   Copy with VRT_CPYFM saves space for mono images but is somewhat slower.
+
+
+
+ UNPACKING AN IMAGE AND COPYING RECTANGLES FROM IT TO SCREEN - WITHOUT VDI
+ -------------------------------------------------------------------------
+
+1) Load picture file and set A3 to point to it
+   Set A4 to point to an area of 32 unused bytes (on a word boundary)
+
+2)      moveq   #0,D4      ;for palette to be stored with image
+* or else set D4 to point to a pre-allocated space (W boundary) for palette
+        moveq   #0,D3      ;use as many planes as there is in image
+        bsr     IMGCALC    ;for IMG file (or LBMCALC, GIFCALC etc.)
+        ble     error
+3) Use size in D0 to allocate memory for unpacking.
+   Move the address (Long) of the allocated memory block to (A4)
+4)      bsr     IMGUNP     ;(or LBMUNP, GIFUNP, TIFUNP, DEGUNP, NEOUNP)
+        ble     error
+* (     tst.l   D1         ;If you want to check for 'minor error' i.e. )
+* (     bmi     minorerr   ;file header OK but error during unpacking   )
+
+5) In word at 28(A4) you can, optionally,  set a start screen colour number
+   other than zero (=default) where  you  want  a  palette shorter than the
+   screen palette to go. (Any start  number  not divisible by the number of
+   colours in image will be replaced with the next lower number that is).
+
+6)      move.w  28(A4),D0  ;D0.MSW: start colour D0.LSW: Number of colours
+        move.l  32(A4),A0  ;A0 -> palette
+        bsr     SETTRU     ;Set screen palette
+
+7) Copy the picture (or rectangles of it) to screen with PUTFM:-
+
+   In case # of image planes less than # of screen planes, first clear D0.W
+   (or move the same word you used at  28(A4) to D0). Or set D0=-1 for last
+   plane repeated, which for a mono  image  will use first and last colour,
+   on the native Atari screens initialised to white and black.
+
+   Then just set A3 to point to an array of 8 words:
+        source X1,Y1,X2,Y2, screen X1,Y1,X2,Y2
+   (where X2=X1+width-1 and Y2=Y1+height-1) and finally use
+        bsr PUTFM
+
+
+
+                          FOREIGN SCREEN FORMATS:
+                          -----------------------
+
+SIZE:   The unpacking to  a  device  independent  form,  and  copying  - of
+        selected rectangles - to screen from  there,  makes it easy to deal
+        with pictures of any size. Large  images  can be scrolled by simply
+        moving the rectangle from where the copy is made.
+
+COLOUR: Images of  more  colours  than  the  current  screen  is  a tougher
+        problem. The algorithm described above  will  simply skip any extra
+        colour planes, which can  produce  acceptable  results depending on
+        how the picture was  made.  The  GIF  and TIFF routines furthermore
+        sorts palettes of 256 colours which will guarantee an image that is
+        at least recognizable even in just 16 colours.
+        To make more general pictures look good you would have to devise an
+        emulation routine of  some  kind  (probably  replacing colours with
+        patterns of two or more colours).
+PIXEL
+SHAPE:  The unpacking routines takes care of the pixel shape (aspect ratio)
+        info deducible from the file headers  and  store it as two words at
+        22(A4). None of my routines use  this  info however, so again it is
+        up to others to write  appropriate emulation routines (perhaps just
+        doubling/halving lines/columns).
+        NOTE: pixel w and h = 0 means UNDEFINED aspect ratio
+
+
+
+                           ROUTINE DESCRIPTIONS:
+                           ---------------------
+
+SUB-ROUTINE NAME        TT_VDO?
+BRIEF DESCRIPTION       Compares VDO_ cookie value MSW with 2
+FILENAME                PICPAC1.S
+OTHER RESOURCES         -
+LANGUAGE                Assembler (Devpac)
+AUTHOR                  M†rten Lindstr”m
+
+ENTRY PARAMETERS        None
+
+EXIT PARAMETERS         None  except  processor  flags   set  according  to
+                        comparison
+
+DETAILS
+
+No registers are affected, only the processor flags, which can be used by a
+conditional branch.
+
+Example:
+   bsr  TT_VDO?
+   bhi  falcon
+
+if 'falcon' labels a routine specific for Falcon030 video hardware.
+
+
+
+SUB-ROUTINE NAMES       VDI_TRU,TRU_VDI,STE_TRU,STE_VDI,TRU_STE,VDI_STE
+BRIEF DESCRIPTION       Transform palette between three different formats
+FILENAME                PICPAC1.S
+OTHER RESOURCES         -
+LANGUAGE                Assembler (Devpac)
+AUTHOR                  M†rten Lindstr”m
+
+ENTRY PARAMETERS        A0 -> Source,  A1 -> Destination, D0: # of colours
+
+EXIT PARAMETERS         None (No registers affected)
+
+DETAILS
+
+These routines transform palettes between three formats:
+   ST(E)        2 bytes/colour (As used by XBIOS SETCOLOR)
+   24-bit       3 bytes/colour (1 byte/component 0-255)
+   VDI          6 bytes/colour (1 word/component 0-1000)
+
+E.g. STE_VDI transforms an ST(E) hardware palette into a VDI palette.
+
+STE_TRU transforms the 16 STE colour  intensities $0,$1,$2, etc. to $F into
+$00,$11,$22 etc. up to $FF i.e.  evenly  among the 256 possible true colour
+levels. Conversions between VDI and 24-bit are made according to:
+   TRU = VDI*256/1001
+   VDI = TRU*1000/255
+
+Internally I have let conversions between VDI  and  STE be made via the 24-
+bit ('TRU') format (e.g. STE_VDI is calling STE_TRU and TRU_VDI).
+
+
+SUB-ROUTINE NAME        SETTRU
+BRIEF DESCRIPTION       Sets palette given as 24-bit (no dummy bytes)
+FILENAME                PICPAC1.S
+OTHER RESOURCES         None (But calls tt_vdo? in same file, see above)
+LANGUAGE                Assembler (Devpac)
+AUTHOR                  M†rten Lindstr”m
+
+ENTRY PARAMETERS        A0->Palette to set
+                        D0 MSW: =0 (screen start colour), LSW: # of colours
+
+EXIT PARAMETERS         None (No registers affected)
+
+DETAILS
+
+Sets screen colours, without use of GEM,  according to palette given in 24-
+bit format (as used in IFF ILBM and GIF pictures).
+
+When there are less colours in the  palette  than on screen, a screen start
+colour, where the palette will go, can  be set in the Most Significant Word
+of D0.
+
+Note that the 24-bit format used by  this  and  other of my routines is not
+identical to the palette format of  Falcon VSETRGB/VGETRGB. The latter uses
+leading dummy fill bytes to make each colour take up a full longword.
+
+COMPARE this call with SETPAL  (in  separate  file)  which does exactly the
+same thing though via GEM for higher compatibility.
+
+
+
+SUB-ROUTINE NAME        GETCHNK
+BRIEF DESCRIPTION       Searches IFF FORM for specified chunk
+FILENAME                PICPAC1.S
+OTHER RESOURCES         None
+LANGUAGE                Assembler (Devpac)
+AUTHOR                  M†rten Lindstr”m
+
+ENTRY PARAMETERS        A3 -> FORM chunk to search, D0: ID to look for
+
+EXIT PARAMETERS         A0 -> Data (after 8 byte header) of found chunk
+                        D0.L: Length or -1 at error
+
+DETAILS
+
+Searches IFF FORM (or other structural  IFF  chunk),  pointed to by A3, for
+(the first occurring) chunk the ID of which is specified in D0.
+
+Example (assuming A3 points to FORM i.e. usually file start):
+
+        move.l  #'BODY',D0  search for BODY chunk
+        bsr     GETCHNK
+        ble     error
+
+after which A0 points to the data of the (1st) BODY chunk.
+
+
+
+SUB-ROUTINE NAME        GETTAG, GET1TAG
+BRIEF DESCRIPTION       Searches Motorola TIFF IFD for specified TAG
+FILENAME                PICPAC3.S
+OTHER RESOURCES         None
+LANGUAGE                Assembler (Devpac)
+AUTHOR                  M†rten Lindstr”m
+
+ENTRY PARAMETERS        A3 -> IFD to search
+                        D7 -> TIFF file start
+                        D0.W: Tag to look for -256
+                        (D2: Default first value); GET1TAG sets D2=1
+
+EXIT PARAMETERS         A0 -> Data (or A0=0 if not found)
+                        D0.L: Type of info unit, 0=not found, -1=error
+                              1=byte, 2=character(byte)
+                              3=word, 4=long, 5=rational (2 longs)
+                        D1.L: Number of them
+                        D2.L: First value, untouched if not found
+
+DETAILS
+
+Searches IFD pointed to by A3, in TIFF  file - in Motorola format - pointed
+to by D7,  for  (the  first  occurring)  tag,  the  ID  of  which (-256) is
+specified in D0.
+
+The routine requires that 256 is  subtracted  from the given TAG ID, simply
+because that makes it possible  to  use  the more compact MOVEQ instruction
+for most tags:
+   E.g.  moveq #258-256,D0  to search for the 258 BitsPerSample tag.
+
+D0 and D1 will return the type and number of "info units" of the tag:
+Type    1 = bytes (unsigned)
+        2 = bytes forming a null ended string (D1=length including null)
+        3 = words (unsigned)
+        4 = longs (unsigned)
+        5 = rationals, i.e. pairs of longs: numerator, denominator
+
+D2 will return the first info unit (byte, word, long) of the tag, but won't
+be touched if a tag isn't found, and this  can be used to set D2 equal to a
+default value prior to calling GETTAG.
+
+   For the common default  of  1  you  can  instead  call GET1TAG, which is
+   equivalent to:-
+        moveq #1,D2
+        bsr GETTAG
+
+(For a rational, D2 will contain only the numerator of the first value.)
+
+Example (assuming D7 points to  the  TIFF  file  start  and A3 points to an
+IFD):
+        moveq   #2,D2        Set default=2
+        moveq   #296-256,D0  Search for ResolutionUnit tag (296)
+        bsr     GETTAG
+        bmi     error
+
+after which D2 will contain the resolution unit value
+
+
+
+SUB-ROUTINE NAMES       IMGCALC, LBMCALC, DEGCALC, NEOCALC, GIFCALC,TIFCALC
+BRIEF DESCRIPTION       Calculate space needed for picture unpacking
+                        with corresponding routines - see below.
+                        Plus fills in an extended MFDB.
+FILENAME                PICPAC1.S (and PICPAC3.S for GIFCALC & TIFCALC)
+OTHER RESOURCES         None
+LANGUAGE                Assembler (Devpac)
+AUTHOR                  M†rten Lindstr”m
+
+ENTRY PARAMETERS        A3 -> Loaded picture file
+                        A4 -> 32-byte free space on word boundary
+                        D3 MSW: Flag for VRT_CPYFM:  -1=use, 0=don't
+                        D3 LSW: Should be set to # of screen planes
+                        Except: in NON-GEM programs set whole D3 to ó 0
+                        D4: =0 (or -> pre-allocated space for palette)
+
+EXIT PARAMETERS         D0.L: Required size or -1 for error
+
+DETAILS
+
+These routines can be called in  preparation for picture unpacking with the
+routines below to calculate the space that needs to be allocated.
+
+The number of bitplanes to use (in  D3  MSW)  will be written into the MFDB
+proper, used with VDI calls.  Should  the  image contain less colour planes
+than this, the missing planes will  still  be accounted for in the returned
+size value, except if the image  contains  only one plane and the VRT_CPYFM
+flag (in D3 MSW) has been set.
+
+(Since VRO_CPYFM (or VR_TRNFM) isn't capable  of copying between forms with
+different numbers of planes, extra fill planes  will  have to be added - by
+the xxxUNP routines - whenever VRT_CPYFM isn't used.)
+
+If D3 is set to 0 (or negative)  -  only  to be done in a non-GEM program -
+then the number of used planes will always  be = actual number of planes in
+image.
+
+
+
+SUB-ROUTINE NAMES       IMGUNP, LBMUNP, DEGUNP, NEOUNP, GIFUNP, TIFUNP
+BRIEF DESCRIPTION       Unpack pictures to device independent format
+FILENAME                PICPAC1.S (and PICPAC3.S for GIFUNP & TIFUNP)
+OTHER RESOURCES         None (but above calc and palette routines called)
+LANGUAGE                Assembler (Devpac)
+AUTHOR                  M†rten Lindstr”m
+
+ENTRY PARAMETERS        See above calc routines
+                        Plus: long at (A4) must point to space for image
+
+EXIT PARAMETERS         D0.L: Size of image data or -1 for error
+                        D1.L: -1 for "minor" error; 0 = No "minor" error
+                        Additional parameters found at (A4). See below.
+
+DETAILS
+
+These routines unpack/convert a picture file  to  a form that can be easily
+used with VDI functions VR_TRNFM  and VRO_CPYFM/VRT_CPYFM, or alternatively
+with my PUTFM routine below.
+
+The image size returned in D0 can  be  used to allocate memory for VR_TRNFM
+if you don't want to make the transformation in place (slow).
+
+The extended MFDB pointed to by A4 will be filled in. See above.
+
+NOTE: The area for unpacking must be different than the source area, except
+with GIFUNP and TIFUNP which manage  to  "seemingly" unpack in space. This,
+however is achieved with  internal  calls  of  MALLOC to allocate temporary
+workspace. GIFUNP and TIFUNP therefore  require  that  enough free space is
+available, = the size of the image  plus  about 25000 bytes. (GIF images of
+less than 256 colours take up as much workspace as 256-colour GIF images.)
+
+NOTE2: Be warned that in particular  the  GIFUNP routine makes fairly heavy
+use of the stack (between 300  and  400  bytes used). GIFUNP uses it during
+LZW unpacking as an intermediate space  for  storing the current image data
+sub-block with its byte order reversed.
+
+
+
+SUB-ROUTINE NAME        PLNFILL
+BRIEF DESCRIPTION       Sets #planes in MFDB and fills extra planes
+FILENAME                PICPAC1.S
+OTHER RESOURCES         None
+LANGUAGE                Assembler (Devpac)
+AUTHOR                  M†rten Lindstr”m
+
+ENTRY PARAMETERS        A4 -> unpacked image (see above unp routines)
+                        D1.W: Requested start colour
+
+EXIT PARAMETERS         None
+
+DETAILS
+
+This function can, in a GEM program, optionally be used with images of less
+colour bitplanes than on screen, if  you  want  a screen start colour other
+than 0 (= the default) where you want the palette of the image to go.
+
+If used it should of course  be  called  before an image is transformed and
+copied to screen.
+
+E.g. for a 4-plane image  and  an  8-plane  screen  you could set the start
+colour to $F0 if you want to use  the last 16 colours rather than the first
+16. (Note that any start number not  divisible  by the number of colours in
+image will be interpreted as the next lower number that is. So in the above
+example $F1, $FF etc. would be interpreted as $F0.)
+
+
+
+SUB-ROUTINE NAME        PUTFM
+BRIEF DESCRIPTION       Copies rectangle from device indep. form to screen
+FILENAME                PICPAC1.S
+OTHER RESOURCES         None
+LANGUAGE                Assembler (Devpac)
+AUTHOR                  M†rten Lindstr”m
+
+ENTRY PARAMETERS        A4 -> MFDB
+                        A3 ->8 W: source X1,Y1,X2,Y2, screen X1,Y1,X2,Y2
+                        D0: Start colour if less image than screen planes
+                        (Start colour = -1: Repeat last plane)
+
+EXIT PARAMETERS         None
+
+DETAILS
+
+This non-GEM routine can be used  to replace VR_TRNFM + VRO_CPYFM/VRT_CPYFM
+for plain copy operations if screen is known to be word-interleaved.
+
+I.e. it copies  rectangles  DIRECTLY  from  a  'device  independent' (plane
+separated) form to the  screen  without  the  need  for transformation as a
+separate step. (This is how I would  have wished that VRO_CPYFM had worked,
+and how it probably was/is intended to work one day).
+
+In addition the source form does  NOT  need  to  have as many planes as the
+screen. If not you can,  in  D0,  specify  a  start colour for the hardware
+palette where you want  the  image  palette  to  go.  (Any start number not
+divisible by the number of colours in image will be interpreted as the next
+lower number that  is.  So  for  a  4-plane  image  a  start  colour $FF is
+equivalent to $F0.) OR you can set  D0=-1  in which case last plane will be
+repeated (so that a mono image  will  use  the  first and last colours - by
+default white and black).
+
+A3 should point to 8 words (as used with VDI copy routines):
+ X,Y of source rectangle upper left corner
+ X,Y of source rectangle lower right corner
+ X,Y of screen rect. upper left corner (0,0 for full screen)
+ X,Y of screen rect. lower right corner (319,199 for full ST low)
+
+PUTFM does some error checking: it will shrink rectangles to equal size and
+to fit within screen/source boundaries.
+
+Only  straight  copy  operations  are  possible  (no  fancy  'write  modes'
+logically combining source and destination in  various ways). And again the
+screen must be word-interleaved,  which  includes  all  standard ST screens
+and, if the Atari Compendium  is  to  be  believed,  all other Atari screen
+modes as well except 16-bit Falcon high colour.
+
+PUTFM can obviously not be  a  general  replacement  for VDI copying if you
+want your program to be 100% compatible including graphic cards.
+
+
+
+SUB-ROUTINE NAME        GETFM
+BRIEF DESCRIPTION       Copies rectangle from screen to device indep. form
+FILENAME                PICPAC1.S
+OTHER RESOURCES         None (but - part of - PUTFM called)
+LANGUAGE                Assembler (Devpac)
+AUTHOR                  M†rten Lindstr”m
+
+ENTRY PARAMETERS        A4 -> MFDB
+                        A3 ->8 W: screen X1,Y1,X2,Y2, dest. X1,Y1,X2,Y2
+
+EXIT PARAMETERS         None (MFDB # of planes set to min of screen & form)
+
+DETAILS
+
+This routine is the reverse of PUTFM  (see above). A difference is that any
+extra planes are ignored, and that GETFM  sets the MFDB number of planes to
+the minimum of screen and form.
+
+(Also note that screen coordinates are now  the FIRST four words pointed to
+by A3. Since source coordinates are always first.)
+
+
+
+SUB-ROUTINE NAMES       IMGPAC, LBMPAC
+BRIEF DESCRIPTION       Pack pictures to files of types IMG & IFF ILBM
+FILENAME                PICPAC2.S
+OTHER RESOURCES         None (but above palette routines called)
+LANGUAGE                Assembler (Devpac)
+AUTHOR                  M†rten Lindstr”m
+
+ENTRY PARAMETERS        A4 -> MFDB + xtra param. (see 'unp' routines above)
+                        A3 -> Space for file
+                        D1.L: Length of this space
+                        D0 for LBM: compr. type; for IMG: pattern length
+
+EXIT PARAMETERS         D0.L: File length or -1 for error
+
+DETAILS
+
+These routines pack pictures (in  the  format  produced  by the above 'unp'
+routines) to files of types IMG and IFF ILBM.
+
+IMGPAC lets you specify a pattern length of  1 or 2 - only. 2 is 'standard'
+for some reason while a pattern  length  of  1 should practically always be
+more effective - or, rather, less  ineffective.  (Where the IMG pattern run
+is at all applicable it is usually outdone  by the simple Packbits - of IFF
+ILBM and Degas compressed. IMG  is  best  with  solid lines /colour fields,
+especially where the IMG line repeat feature can be used.)
+
+For IFF ILBM files a compression type can be specified:
+
+0: Uncompressed
+1: Packbits - Standard and the best for pictures with regular patterns.
+2: Vertical word - usually  by  far  the  most  effective type, except with
+patterns. Not as standard as Packbits but used by Deluxe Paint.
+

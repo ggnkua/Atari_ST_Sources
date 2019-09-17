@@ -1,0 +1,27 @@
+extern void rsrc_init(void);
+
+extern OBJECT PIN_ABT[];
+#define ABT_BOX 0
+#define TITLE1 1
+#define TITLE2 2
+#define DO_WHT 3
+#define IWILT 4
+extern OBJECT PIN_FRM[];
+#define SET_BOX 0
+#define SET 1
+#define MOD_BOX 2
+#define BUT_BOX 3
+#define NORM 4
+#define INV 5
+#define SET_OK 6
+#define METHOD 7
+#define CELL 8
+#define MONTE 9
+#define RECUR 10
+#define DEP_BOX 11
+extern OBJECT PIN_MEN[];
+#define OPTION 4
+#define ABOUT 7
+#define QUIT 16
+#define SETNGS 17
+#define SAVE 18

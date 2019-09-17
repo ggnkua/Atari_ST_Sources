@@ -1,0 +1,19 @@
+;Get address of command line and NULL terminate it
+;ENTRY:	A0 = Basepage Pointer
+;EXIT:	A0 = Command Line Pointer
+;	D0 = 0 if succesful, -1 if not
+;	D1 = length of string (not including 0 at end)
+;USES:	d0-d1/a0
+
+		TEXT
+Read_cmdlin	;move.l	Basepage,a0	;basepage = 4(sp) @ Prg start
+		clr.w	d1
+		lea	$80(a0),a0	;command line length (1st byte of command line)
+		move.b	(a0)+,d1
+		seq	d0		;set d0.b to 0 if ok,-1 if length=0
+		clr.b	0(a0,d1.w)	;clear end of string
+		;move.l	a0,filename	;null terminated string in a0
+		rts			;d0=0 for pass, -1 for fail
+					;d1=string length
+					;a0=string address
+

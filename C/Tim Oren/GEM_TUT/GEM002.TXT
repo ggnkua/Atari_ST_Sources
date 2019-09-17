@@ -1,0 +1,413 @@
+                           by Tim Oren
+
+                     Topic: Windows, part II
+                             10/21/85
+
+
+                            EXCELSIOR!
+
+  In this installment, we continue the exploration of GEM's window
+manager by finding out how to process the messages received by an
+application when it has a window defined on the screen.
+
+  Also, beginning with this column, sample C code demonstrating the
+techniques discussed will be available on SIG*ATARI in DL5.  This
+will allow you to download the code without interference by the CIS
+text-formatter used by ANTIC ONLINE output.
+
+  The file for this column is GEMCL2.XMO.  All references  to non-GEM
+routines in this column refer to this file.  Please note that  these
+files will not contain entire programs.  Instead, they consist of
+small pieces of utility code which you may copy and modify in your
+own  programs.
+
+                        REDRAWING WINDOWS
+
+  One of the most misunderstood parts of GEM is the correct method for
+drawing within a window.  Most requests for redrawing are generated
+by the GEM system, and arrive as messages (read with evnt_multi)
+which contain the handle of the window, and the screen rectangle
+which is  "dirty" and needs to be redrawn.
+
+  Screen areas may become dirty as a result of windows being closed,
+sized down, or moved, thus "exposing" an area underneath.  The
+completion of  a dialog, or closing of a desk accessory may also free
+up a screen area which needs to be redrawn.  When GEM detects the
+presence of a dirty rectangle,  it checks its list of open windows,
+and sends the application a redraw message  for each of its windows
+which intersects the dirty area.
+
+                          CAVEAT EMPTOR
+
+  GEM does not "clip" the rectangle which it sends to  the application;
+that is, the rectangle may not lie entirely within the  portion of
+the window which is exposed on the screen.  It is the job of the
+application to determine in what portion of the rectangle it may
+safely draw.   This is done by examining the "rectangle list"
+associated with the window.
+
+  A rectangle list is maintained by GEM for each active window.  It
+contains the portions of the window's interior which are exposed,
+i.e., topmost, on the screen and within which the app may draw.
+
+  Let's consider an example to make this clear.  Suppose an app has
+opened two windows, and there are no desk accessory windows open. The
+window which is topmost will  always have only one rectangle in its
+list.  If the two are separate on the  screen, then the second window
+will also have one rectangle.  If they overlap,  then the top window
+will "break" the rectangle of the bottom one.  If the  overlap is at
+a corner, two rectangles will be generated for the bottom window.  If
+the overlap is on a side only, then three rectangles are required to
+cover  the exposed portion of the bottom window.  Finally, if the
+first window is  entirely within the second, it requires four
+rectangles in the list to tile the second window.
+
+  Try working out a few rectangle examples with pencil and paper to
+get the feel of it.  You will see that the possible combinations with
+more  than two windows are enormous.  This, by the way, is the reason
+that GEM does  not send one message for each rectangle on the list:
+With multiple windows,  the number of messages generated would
+quickly fill up the application's message queue.
+
+  Finally, note that every app MUST use this method, even if it only
+uses a single window, because there may be desk accessories with
+their own  windows in the system at the same time.  If you do not use
+the rectangle lists, you may overwrite an accessory's window.
+
+                          INTO THE BITS
+
+  First, we should note that the message type for a  redraw request is
+WM_REDRAW, which is stored in msg[0], the first location of the
+message returned by evnt_multi.  The window handle is stored in
+msg[3].  These locations are the same for all of the message types
+being discuss.  The rectangle which needs to be redrawn is stored in
+msg[4] through msg[7].
+
+  Now let's examine the sample redraw code in more detail. The redraw
+loop is bracketed with mouse off and mouse on calls.  If you forget
+to do  this, the mouse pointer will be over-written if it is within
+the window and  the next movement of the mouse will leave a
+rectangular blotch on the screen  as a piece of the "old" screen is
+incorrectly restored.
+
+  The other necessary step is to set the window update flag.  This
+prevents the menu manager from dropping a menu on top of the screen
+portion being redrawn.  You must release this flag at the end of the
+redraw, or the you will be unable to use any menus afterwards.
+
+  The window rectangles are retrieved using a get-first, get-next
+scheme which will be familiar if you have used the GEM DOS or PC-DOS
+wildcard file calls.  The end of the rectangle list has been reached
+when both the width and height returned are zero.  Since some part of
+a  window might be off-screen (unless you have clamped its position -
+see below), the retrieved rectangle is intersected with the desktop's
+area,  and then with the screen area for which a redraw was
+requested.
+
+  Now you have the particular area of the screen in which it is  legal
+to draw.  Unless there is only one window in your application, you
+will have to test the handle in the redraw request to figure out what
+to  put in the rectangle.
+
+  Depending on the app, you may be drawing an AES  object tree, or
+executing VDI calls, or some combination of the two.  In  the AES
+case, the computed rectangle is used to specify the bounds of the
+objc_draw.  For VDI work, the rectangle is used to set the clipping
+area before executing the VDI calls.
+
+                        A SMALL CONFESSION
+
+  At the beginning of this discussion, I  deliberately omitted one
+class of redraws: those initiated by the application  itself.
+
+  In some cases a part of the screen must be redrawn immediately to
+give feedback to the user following a keystroke, button, or mouse
+action.   In these cases, the application could call do_redraw
+directly, without  waiting for a message.
+
+  The only time you can bypass do_redraw, and draw  without walking the
+rectangle list, is when you can be sure that the target  window is on
+top, and that the figure being drawn is entirely contained  within
+it.
+
+  In many cases, however, an application initiated redraw happens
+because of a computed change, for instance, a spreadsheet update, and
+its timing is not crucial.  In this instance, you may wish to have
+the  app send ITSELF a redraw request.
+
+  The main advantage of this approach  is that the AES is smart enough
+to see if there is already a redraw request for the same window in
+the queue, and, if so, to merge the requests by  doing a union of
+their rectangles.  In this fashion, the "blinky" appearance of
+multiple redraws is avoided, without the need to include logic for
+merging redraws within the program.
+
+  A utility routine for sending the "self-redraw" is included in the
+down-load for this article.
+
+                     WINDOW CONTROL REQUESTS
+
+  An application is notified by the AES, via the message system, when
+the user manipulates one of the window control points.  Remember that
+you must have specified each control point when the window was
+created, or will not receive the associated control message.
+
+  The most important thing to understand about window control is that
+the change which the user requested does not take place until the
+application forwards it to the AES.  While this makes for a little
+extra work,  it gives the program a chance to intervene and validate
+or modify the request to suit.
+
+  A second thing to keep in mind is that not all window updates cause a
+redraw request to be generated for the window, because the AES
+attempts to save time with raster moves on the screen.
+
+  Now let's look at each window control request in detail.  The
+message code for a window move is WM_MOVED.  If you are willing to
+accept  any such request, just do:
+
+  wind_set(wh, WF_CXYWH, msg[4], msg[5], msg[6], msg[7]);
+
+  (Remember that wh, the window handle, is always in msg[3]).
+
+  The AES will not request a redraw of the window following this call,
+unless the window is being moved from a location which is partially
+"off-screen". Instead, it will do a "blit" (raster copy) of the
+window and its contents to the new location without intervention by
+the app.
+
+  There are two constraints which you may often wish to apply to  the
+user's move request.  The first is to force the new location to lie
+entirely within the desktop, rather than partially off-screen.  You
+can do this with the rc_constrain utility by executing:
+
+  rc_constrain(&full, &msg[4]);
+
+before making the wind_set call.  (Full is assumed to contain the
+desktop dimensions.)
+
+  The second common constraint is to "snap" the x-dimension location of
+the new location to a word boundary.  This operation will speed up
+GEM's "blit" because no shifting or masking will need to be done
+when moving the window.  To perform this operation, use align()
+before the  wind_set call:
+
+  msg[4] = align(msg[4], 16);
+
+  The message code for a window size request is WM_SIZED.  Again, if
+you are willing to accept any request, you can just "turn it around"
+with the same wind_set call as given for WM_MOVED.
+
+  Actually, GEM enforces a couple of constraints on sizing.  First, the
+window may not be sized off screen.  Second, there is a minimum
+window size which is dependent on the window components specified
+when it was created.  This prevents features like scroll arrows from
+being squeezed into oblivion.
+
+  The most common application constraint on sizing is to snap the size
+to horizontal words (as above) and/or vertical character lines.  In
+the latter case, the vertical dimension of the output font is used
+with align().
+
+  Also,  be aware that the size message which you receive specifies the
+EXTERNAL  dimensions of the window.  To assure an "even" size for the
+INTERNAL dimensions, you must make a wind_calc call to compute them,
+use align() on the computed values, back out the corresponding
+external dimensions with the reverse wind_calc, and then make the
+wind_set call with this set of values.
+
+  A window resize will only cause a redraw request for the window if
+the size is being increased in at least one dimension.  This is
+satisfactory for most applications, but if you must "reshuffle" the
+window after a  size-down, you should send yourself a redraw (as
+described above) after you make the wind_set call.  This will
+guarantee that the display is updated correctly.  Also note that the
+sizing or movement of one window may cause redraw requests to be
+generated for other windows which are uncovered by the change.
+
+  The window full request, with code WM_FULLED, is actually a toggle.
+If the window is already at its full size (as specified in the
+wind_create), then this is a request to shrink to its previous size.
+If the window is currently small, then the request is to grow to full
+size.
+
+  Since the AES records the current, previous, and maximum window size,
+you can use  wind_get calls to determine which situation pertains.
+The hndl_full utility in the down-load (modified from Doodle), shows
+how to do this.
+
+  The "zoom box" effects when changing size are optional, and can be
+removed  to speed things up.  Again, if the window's size is
+decreasing, no redraw is  generated, so you must send yourself one if
+necessary.  You should not have  to perform any constraint or "snap"
+operations here, since (presumably) the  full and previous sizes have
+had these checks applied to them already.
+
+  The WM_CLOSED message is received when the close box is clicked. What
+action you perform depends on the application.  If you want to remove
+the window, use wind_close as described in the last column.  In many
+applications, however, the close message may indicate that a file is
+to be saved, or a directory or editing level is to be closed.  In
+these cases, the message is used to trigger this action before or
+instead of the wind_close.  (Folders on the Desktop are an example of
+this situation.)
+
+  The WM_TOPPED message indicates that the AES wants to bring the
+indicated window to the "top" and make it active.  This happens if
+the user clicks within a window which is not on top, or if the
+currently topped window is closed by its application or desk
+accessory.  Normally, the application should respond to this message
+with:
+
+  wind_set(wh, WF_TOP, 0, 0);
+
+and allow the process to complete.
+
+  In a few instances, a window may be used in an output only mode, such
+as a status display, with at least one other window present for
+input.  In this case, a WM_TOPPED message for the status window may
+be ignored.  In all other cases, you must handle the WM_TOPPED
+message even if your application has only one window: Invocation of a
+desk accessory could always place another window on top.  If you fail
+to do so, subsequent redraws for your window may not be processed
+correctly.
+
+                      WINDOW SLIDER MESSAGES
+
+  If you specify all of the slider bar parts for your window, you may
+receive up to five different message types for each of the two sets
+of sliders.  To simplify things a little, I will discuss everything
+in terms of the vertical (right hand side) sliders.  If you are also
+using the horizontal sliders, the same techniques will work, just use
+the alternate mnemonics.
+
+  The WM_VSLID message indicates that the user has dragged the slider
+bar within its box, indicating a new relative position within the
+document.  Along with the window handle, this message includes the
+relative position between 1 and 1000 in msg[4].
+
+  Recall from last column's discussion that this interval corresponds
+to the "freedom of movement" of the slider. If you want to accept the
+user's request, just make the call:
+
+  wind_set(wh, WF_VSLIDE, msg[4], 0, 0, 0);
+
+  (Corresponding horizontal mnemonics are WM_HSLID and WF_HSLIDE).
+
+  Note that this wind_set call will not cause a redraw message to be
+sent.  You must update the display to reflect the new scrolled
+position, either by executing a redraw directly, or by sending
+yourself a message.
+
+  If the document within the window has some structure, you may not
+wish to accept all slider positions.  Instead you may want to force
+the scroll position to the nearest text line (for instance).  Using
+terms defined in the last column, you may convert the slider position
+to "document units" with:
+
+  top_wind = msg[4] * (total_doc - seen_doc) / 1000 + top_doc
+
+  (This will probably require 32-bit arithmetic).
+
+  After rounding off or otherwise modifying the request, convert it
+back to slider units and make the WF_VSLIDE request.
+
+  The other four slider requests all share one message code:
+WM_ARROWED.  They are distinguished by sub-codes stored in msg[4]:
+WA_UPPAGE, WA_DNPAGE, WA_UPLINE, and WA_DNLINE.  These are produced
+by clicking above and below the slider, and on the up and down
+arrows, respectively.  (I have no idea why sub-codes were used in
+this one instance.)  The corresponding horizontal slider codes are:
+WA_LFPAGE, WA_RTPAGE, WA_LFLINE, and WA_RTLINE.
+
+  What interpretation you give to these requests will depend on  the
+application.  In the most common instance, text documents, the
+customary method is to change the top of window position (top_wind)
+by  one line for a WA_UPLINE or WA_DNLINE, and by seen_doc (the
+number of lines in the window) for a WA_UPPAGE or WA_DNPAGE.
+
+  After making the change, compute a new slider position, and make the
+wind_set call as given above.  If the document's length is not an
+even multiple of "lines" or "pages" you will have to be careful that
+incrementing or  decrementing top_wind does not exceed its range of
+freedom: top_doc to (top_doc + total_doc - seen_doc).
+
+  If you have such an odd size document, you will also have to make a
+decision on whether to violate the line positioning rule so that the
+slider may be put at its bottom-most position, or to follow the rule
+but make it impossible to get the slider to the extreme of its range.
+
+                           A COMMON BUG
+
+  It is easy to forget that user clicks are not the only things that
+affect slider position.  If the window size changes as a result of a
+WM_SIZED or WM_FULLED message, the app must also  update its sliders
+(if they are present).  This is a good reason to keep the top of
+window information in "document units".
+
+  You can just redo the position calculation with the new "seen_doc"
+value, and call  wind_set.  Also remember that changing the size of
+the underlying document  (adding or deleting a bottom line, for
+instance) must also cause the sliders  to be adjusted.
+
+                      DEPT. OF DIRTY TRICKS
+
+  There are two remaining window calls which are useful to advanced
+programmers.  They require techniques which I have not yet discussed,
+so you may need to file them for future reference.
+
+  The AES maintains a quarter-screen sized buffer which is used to save
+the area under alerts and menu drop-downs.  It is occasionally useful
+for the application to gain access to this buffer for its own use in
+saving screen areas with raster copies.  To do so, use:
+
+  wind_get(0, WF_SCREEN, &loaddr, &hiaddr, &lolen, &hilen);
+
+  Hiaddr and loaddr are the top and bottom 16-bits (respectively) of
+the  32-bit address of the buffer.  Hilen and lolen are the two
+halves of  its length.
+
+  Due to a preculiarity of the binding you have to reassemble  these
+pieces before using them.  (The actual value of WF_SCREEN is 17; this
+does not appear in some versions of the GEMDEFS.H file.)
+
+  If you use this buffer, you MUST prevent menus from dropping down by
+using either the BEG_UPDATE or BEG_MCTRL wind_update calls.  Failure
+to do so will result in your data being destroyed.  Remember to use
+the matching wind_update: END_UPDATE or END_MCTRL, when you are done.
+
+  The other useful call enables you to replace the system's desktop
+definition with a resource of your choosing.  The call:
+
+  wind_set(0, WF_NEWDESK, tree, 0, 0);
+
+where tree is the 32-bit address of the object tree, will cause the
+AES to draw your definition instead of the usual gray or green
+background. Not only that, it will continue to redraw this tree with
+no intervention on your part.
+
+  Obviously, the new definition must be carefully built to fit the
+desktop area exactly or garbage will be left around the edges.  For
+the truly sophisticated, a user-defined object could be used in this
+tree, with the result that your application's code would be entered
+from the AES whenever the desktop was redrawn.  This would allow you
+to put VDI pictures or complex images onto the desktop background.
+
+                        A SIN OF OMISSION
+
+  In the last column, I neglected to mention that strings whose
+addresses are passed in the WF_NAME and WF_INFO  wind_set calls must
+be allocated in a static data area.  Since the AES remembers the
+addresses (not the characters), a disaster may result if the storage
+has been reused when the window manager next attempts to draw the
+window title area.
+
+                          COMING SOON...
+
+  This concludes our tour of GEM's basic window management techniques.
+There have been some unavoidable glimpses of paths not yet taken
+(forward references), but we will return in time.
+
+  On our next excursion, we will take a look at techniques for handling
+simple dialog boxes, and start exploring the mysteries of resources
+and object trees.

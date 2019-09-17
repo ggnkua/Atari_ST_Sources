@@ -1,0 +1,667 @@
+' ****************************************************************************
+' NVDI
+' If your program depends on the existence of GDOS, functions
+' GDOS?, vq_gdos() or vq_gdosname() could return FALSE, even
+' if NVDI is present. In this case, GDOS compatability for NVDI
+' had been turned off. Using functions below let you check for
+' NVDI, change its settings and read/write the NVDI.INF file.
+' As usual, there's a demo to show how these functions work.
+'
+' Theo Ros      06/07/1997
+' ****************************************************************************
+'
+DEFLIST 4
+DEFWRD "a-z"
+OPTION BASE 0
+'
+RESERVE 10000
+' to prevent GfA from clearing the screen on startup:
+~WIND_SET(0,14,0,0,0,0)                                 ! restore desktop
+~FORM_DIAL(3,0,0,0,0,0,0,WORK_OUT(0),WORK_OUT(1))       ! and draw it
+@demo
+EDIT
+'
+' ****************************************************************************
+' NVDI functions
+' ****************************************************************************
+'
+> FUNCTION nvdi_get_conf(VAR config%)
+' function reads configuration for NVDI
+' <-- : FALSE: NVDI not loaded
+'       TRUE : NVDI loaded, configuration in config%
+$F%
+LOCAL confadr%
+CLR config%           ! see nvdi_read_config() for explanation
+confadr%=@nvdi_conf_adr
+IF confadr%>0
+  config%=CARD{confadr%}
+  RETURN TRUE
+ENDIF
+RETURN FALSE
+ENDFUNC
+> FUNCTION nvdi_set_conf(config%)
+' function writes new config value into
+' NVDI. Only bits 0-4 and 6 are updated
+$F%
+LOCAL confadr%,oldconf%
+confadr%=@nvdi_conf_adr
+IF confadr%>0
+oldconf%=CARD{confadr%} AND &HFFA0          ! leave unused bits intact
+config%=oldconf% OR (config% AND &H5F)      ! see nvdi_read_config()
+CARD{confadr%}=config%                      ! for explanation
+RETURN TRUE
+ENDIF
+RETURN FALSE
+ENDFUNC
+> FUNCTION nvdi_conf_adr
+' returns the address of the configuration UNSIGNED WORD
+' <-- :  0: NVDI not loaded
+'       >0: address of NVDI config word
+$F%
+LOCAL nvdicookie%,confadr%
+nvdicookie%=@cookie_find("NVDI")          ! test if NVDI present
+IF nvdicookie%>0
+RETURN nvdicookie%+6
+ENDIF
+RETURN 0
+ENDFUNC
+> FUNCTION nvdi_get_version(VAR version,dat$)
+' returns TRUE if NVDI loaded, FALSE if not.
+' if TRUE, parameters version& and dat$ are filled
+'
+$F%
+LOCAL nvdicookie%
+CLR version
+nvdicookie%=@cookie_find("NVDI")
+IF nvdicookie%>0
+version=VAL(HEX$(CARD{nvdicookie%}))        ! version*100
+dat$=HEX$(BYTE{nvdicookie%+2},2)            ! day
+dat$=dat$+"/"+HEX$(BYTE{nvdicookie%+3},2)   ! month
+dat$=dat$+"/"+HEX$(CARD{nvdicookie%+4})     ! year
+RETURN TRUE
+ENDIF
+RETURN FALSE
+ENDFUNC
+'
+' if you're not sure you are using the right bits in config%
+' the next two functions are safer
+'
+> FUNCTION nvdi_read_conf(VAR ngdos!,nerror!,ngemdos!,ndynamo!,nlinea!,nermsg!)
+' combined function. returns NVDI configuration
+' via a set of BOOLEAN parameters.
+LOCAL nvdiconfig%
+CLR ngdos!,nerror!,ngemdos!,ndynamo!,nlinea!,nermsg!
+IF @nvdi_get_conf(nvdiconfig%)
+ngdos!=BTST(nvdiconfig%,0)      ! GDOS simulation ON or OFF
+nerror!=BTST(nvdiconfig%,1)     ! use (erraneous) VDI functions ON or OFF
+ngemdos!=BTST(nvdiconfig%,2)    ! use GEMDOS for character drawing ON or OFF
+ndynamo!=BTST(nvdiconfig%,3)    ! Dynamic Mouse ON or OFF
+nlinea!=BTST(nvdiconfig%,4)     ! Line-A simulation ON or OFF
+nermsg!=BTST(nvdiconfig%,6)     ! Error messages ON or OFF
+RETURN TRUE
+ENDIF
+RETURN FALSE
+ENDFUNC
+> FUNCTION nvdi_write_conf(ngdos!,nerror!,ngemdos!,ndynamo!,nlinea!,nermsg!)
+' combined function. set each bit of NVDI config word separately
+$F%
+LOCAL confadr%,newconf%
+confadr%=@nvdi_conf_adr
+IF confadr%
+newconf%=CARD{confadr%} AND &HFFA0  ! clear bits 0-4 and 6
+IF ngdos!                           ! GDOS simulation ON
+newconf%=BSET(newconf%,0)
+ENDIF
+IF nerror!                          ! use (erraneous) VDI functions ON
+newconf%=BSET(newconf%,1)
+ENDIF
+IF ngemdos!                         ! use GEMDOS for characterdrawing ON
+newconf%=BSET(newconf%,2)
+ENDIF
+IF ndynamo!                         ! Dynamic Mouse ON
+newconf%=BSET(newconf%,3)
+ENDIF
+IF nlinea!                          ! Line-A simulation ON
+newconf%=BSET(newconf%,4)
+ENDIF
+IF nermsg!                          ! Error messages ON
+newconf%=BSET(newconf%,6)
+ENDIF
+CARD{confadr%}=newconf%
+RETURN TRUE
+ENDIF
+RETURN FALSE
+ENDFUNC
+'
+' These next functions work with the NVDI.INF file
+' The values in this file are ONLY read in at bootup, so
+' changes will have no effect until a system reset occurs
+'
+> FUNCTION nvdi_read_inf(VAR fif$,font$)
+' function reads in the initial values
+' for NVDI, from the NVDI.INF file
+' --> fif$    string which afterwards contains NVDI's
+'             Font Information File path
+'     font$   string which afterwards contains NVDI's
+'             Font path(s). If there are more paths, they
+'             will be separated by a SPACE character
+' <-- FALSE   NVDI.INF not found
+'     TRUE    cachevalues in BYTES are stored in array
+'             nvdicache%() elements 0 to 4
+'
+$F%
+LOCAL v%,bootdrive$
+ERASE inf$(),nvdicache%()
+CLR fif$,font$
+bootdrive$=CHR$(DPEEK(&H446)+65)+":\"
+IF EXIST(bootdrive$+"NVDI.INF")=0
+RETURN FALSE
+ENDIF
+DIM inf$(0),nvdicache%(4)
+OPEN "i",#21,bootdrive$+"NVDI.INF"
+DO
+RECALL #21,inf$(),1,v%
+EXIT IF v%=0
+inf$(0)=UPPER$(TRIM$(inf$(0)))
+IF LEFT$(inf$(0))<>";"
+v%=INSTR(inf$(0),"=")
+SELECT LEFT$(inf$(0),4)
+CASE "ATTR","BITM","FILE","KERN","WIDT"
+IF v%
+v%=VAL(RIGHT$(inf$(0),LEN(inf$(0))-v%))
+SELECT LEFT$(inf$(0),4)
+CASE "ATTR"     ! ATTRIBUT_CACHE
+nvdicache%(0)=v%
+CASE "BITM"     ! BITMAP_CACHE
+nvdicache%(1)=v%
+CASE "FILE"     ! FILE_CACHE
+nvdicache%(2)=v%
+CASE "KERN"     ! KERNING_CACHE
+nvdicache%(3)=v%
+CASE "WIDT"     ! WIDTH_CACHE
+nvdicache%(4)=v%
+ENDSELECT
+ENDIF
+CASE "FIFP"       ! FIFPATH
+fif$=TRIM$(RIGHT$(inf$(0),LEN(inf$(0))-v%))
+CASE "FONT"       ! FONTPATH
+font$=font$+TRIM$(RIGHT$(inf$(0),LEN(inf$(0))-v%))+" "
+ENDSELECT
+ENDIF
+LOOP
+CLOSE #21
+font$=TRIM$(font$)    ! different paths separated by space character
+RETURN TRUE
+ENDFUNC
+> FUNCTION nvdi_write_inf(fif$,font$)
+' function writes a NVDI.INF file to disk
+' if one already exists, it is renamed NVDI.BAK
+' --> fif$   the path for NVDI.FIF (Font Information File)
+'     font$  the path(s) for the vector fonts themselves
+'            different paths are to be separated by
+'            a SPACE character
+'     a GLOBAL array nvdicache%(0-4) is used for
+'     the various cache sizes in BYTES
+' <-- FALSE  no cache-array given, file NOT created
+'     TRUE   file created
+'
+$F%
+LOCAL bootdrive$,f$,s
+IF DIM?(nvdicache%())<>5      ! no values for caches ?
+RETURN 0
+ENDIF
+bootdrive$=CHR$(DPEEK(&H446)+65)+":\"
+IF EXIST(bootdrive$+"NVDI.INF")
+IF EXIST(bootdrive$+"NVDI.BAK")
+KILL bootdrive$+"NVDI.BAK"
+ENDIF
+RENAME bootdrive$+"NVDI.INF" AS bootdrive$+"NVDI.BAK"
+ENDIF
+OPEN "o",#21,bootdrive$+"NVDI.INF"
+PRINT #21,"; NVDI configuration file"
+PRINT #21,";"
+PRINT #21,"; All cache sizes in BYTES"
+PRINT #21,"ATTRIBUT_CACHE = ";STR$(nvdicache%(0))
+PRINT #21,"BITMAP_CACHE = ";STR$(nvdicache%(1))
+PRINT #21,"FILE_CACHE = ";STR$(nvdicache%(2))
+PRINT #21,"KERNING_CACHE = ";STR$(nvdicache%(3))
+PRINT #21,"WIDTH_CACHE = ";STR$(nvdicache%(4))
+fif$=UPPER$(TRIM$(fif$))
+IF fif$>""
+IF RIGHT$(fif$,1)<>"\"
+fif$=fif$+"\"
+ENDIF
+PRINT #21,";"
+PRINT #21,"; Font Information File path:"
+PRINT #21,"FIFPATH = ";fif$
+ENDIF
+PRINT #21,";"
+PRINT #21,"; Vector Font path(s):"
+PRINT #21,"; NVDI also reads fonts one"
+PRINT #21,"; subdirectory-plane deeper"
+font$=UPPER$(TRIM$(font$))
+WHILE font$>""
+s=INSTR(font$," ")      ! read separate paths
+IF s
+f$=TRIM$(LEFT$(font$,s-1))
+font$=TRIM$(RIGHT$(font$,LEN(font$)-s))
+ELSE
+f$=font$
+CLR font$
+ENDIF
+IF RIGHT$(f$,1)<>"\"
+f$=f$+"\"
+ENDIF
+PRINT #21,"FONTPATH = ";f$
+WEND
+CLOSE #21
+RETURN TRUE
+ENDFUNC
+> FUNCTION nvdi_calc_cache(read_inf!)
+' returns the total amount of bytes
+' used by NVDI caches. divide by 1024 to obtain Kb value
+' if returnvalue is 0, no NVDI.INF file was found.
+' --> read_inf!  TRUE: first read NVDI.INF to get cache-sizes
+'                FALSE: cache-sizes already read into nvdicache%()
+' <-- total size in BYTES
+'
+$F%
+LOCAL totalcache%,fif$,font$
+CLR totalcache%
+IF OR(read_inf!,DIM?(nvdicache%())<>5)  ! NVDI.INF file not yet read in?
+IF @nvdi_read_inf(fif$,font$)
+totalcache%=nvdicache%(0)+nvdicache%(1)+nvdicache%(2)
+ADD totalcache%,nvdicache%(3)+nvdicache%(4)
+ENDIF
+ELSE                                    ! use array already present
+totalcache%=nvdicache%(0)+nvdicache%(1)+nvdicache%(2)
+ADD totalcache%,nvdicache%(3)+nvdicache%(4)
+ENDIF
+RETURN totalcache%
+ENDFUNC
+'
+' ****************************************************************************
+' The demo
+' ****************************************************************************
+'
+> PROCEDURE demo
+IF @demo_init
+CLR demo_quit!
+ON MENU KEY GOSUB demo_handle_key
+ON MENU GOSUB demo_handle_menu
+DO
+ON MENU 100
+LOOP UNTIL demo_quit!
+ELSE
+ENDIF
+~MENU_BAR(demomenu%,0)
+~RSRC_FREE()
+RESERVE
+RETURN
+> FUNCTION demo_init
+LOCAL a,nvdiversion,rsc$
+IF @nvdi_get_version(nvdiversion,nvdidate$)      ! NVDI loaded ?
+'
+' for demo, load and use resource the old way
+rsc$=CHR$(BYTE(GEMDOS(25))+65)+":"+DIR$(0)+"\nvdiconf.rsc"
+REPEAT
+EXIT IF RSRC_LOAD(rsc$)
+FILESELECT #"Find NVDICONF.RSC","\*.rsc","NDICONF.RSC",rsc$
+IF RIGHT$(rsc$)="\"   ! clicked 'Ok' on empty selection
+CLR rsc$
+ENDIF
+UNTIL rsc$=""
+IF rsc$>""
+~RSRC_LOAD(rsc$)
+~RSRC_GADDR(0,0,demoinfo%)
+~@obj_set_text(demoinfo%,3,STR$(nvdiversion/100)+" of "+nvdidate$)
+~RSRC_GADDR(0,1,demofile%)
+~RSRC_GADDR(0,2,democonf%)
+~RSRC_GADDR(0,3,demomenu%)
+~MENU_BAR(demomenu%,1)
+CLR p_fif$,p_font$
+ERASE fontpath$()
+DIM fontpath$(3)
+RETURN TRUE
+ELSE
+ALERT 3,"|NVDI demo |cancelled.. ",1," Ok ",a
+ENDIF
+ELSE
+ALERT 3,"|Sorry, NVDI |not loaded.. ",1," Ok ",a
+ENDIF
+RETURN FALSE
+ENDFUNC
+> PROCEDURE demo_handle_key
+LOCAL mnu
+SELECT MENU(14)
+CASE &H1700     ! Alt I: NVDI Info
+mnu=3
+~MENU_TNORMAL(demomenu%,mnu,0)
+@demo_nvdi_info
+CASE &H1F00     ! Alt S: NVDI Settings
+mnu=4
+~MENU_TNORMAL(demomenu%,mnu,0)
+@demo_nvdi_conf
+CASE &H2E00     ! Alt C: NVDI Caches & Paths
+mnu=4
+~MENU_TNORMAL(demomenu%,mnu,0)
+@demo_nvdi_file
+CASE &H1000     ! Alt Q: Quit
+mnu=4
+~MENU_TNORMAL(demomenu%,mnu,0)
+demo_quit!=TRUE
+ENDSELECT
+~MENU_TNORMAL(demomenu%,mnu,1)
+RETURN
+> PROCEDURE demo_handle_menu
+SELECT MENU(5)
+CASE 7          ! NVDI Info
+@demo_nvdi_info
+CASE 16         ! NVDI Settings
+@demo_nvdi_conf
+CASE 17         ! NVDI Caches & Paths
+@demo_nvdi_file
+CASE 19         ! Quit
+demo_quit!=TRUE
+ENDSELECT
+~MENU_TNORMAL(demomenu%,MENU(4),1)
+RETURN
+> PROCEDURE demo_nvdi_info
+~FORM_CENTER(demoinfo%,dx,dy,dw,dh)
+~FORM_DIAL(0,0,0,0,0,dx-1,dy-1,dw+2,dh+2)
+~OBJC_DRAW(demoinfo%,0,9,dx-1,dy-1,dw+2,dh+2)
+~FORM_DO(demoinfo%,0)
+~@obj_unselect(demoinfo%,6)
+~FORM_DIAL(3,0,0,0,0,dx-1,dy-1,dw+2,dh+2)
+RETURN
+> PROCEDURE demo_nvdi_conf
+LOCAL bit,object,char
+~@nvdi_get_conf(nvdiconfig%)
+object=2
+FOR bit=0 TO 6
+IF bit<>5
+IF BTST(nvdiconfig%,bit)
+~@obj_set_boxchar(democonf%,object,8)            ! boxchar is 
+ELSE
+~@obj_set_boxchar(democonf%,object,0)            ! clear boxchar
+ENDIF
+ADD object,2
+ENDIF
+NEXT bit
+~FORM_CENTER(democonf%,dx,dy,dw,dh)
+~FORM_DIAL(0,0,0,0,0,dx-1,dy-1,dw+2,dh+2)
+~OBJC_DRAW(democonf%,0,9,dx-1,dy-1,dw+2,dh+2)
+DO
+object=FORM_DO(democonf%,0) AND &H7FFF
+SELECT object
+CASE 2 TO 13
+object=2+((object-2) DIV 2)*2                ! --> object 2,4,6,8,10,12
+char=@obj_get_boxchar(democonf%,object)
+~@obj_set_boxchar(democonf%,object,8-char)   ! toggle boxchar <>0
+~OBJC_DRAW(democonf%,object,0,0,0,0,0)
+CASE 15                                        ! Ok
+CLR nvdiconfig%
+object=2
+FOR bit=0 TO 6
+IF bit<>5
+IF @obj_get_boxchar(democonf%,object)
+nvdiconfig%=BSET(nvdiconfig%,bit)
+ENDIF
+ADD object,2
+ENDIF
+NEXT bit
+~@nvdi_set_conf(nvdiconfig%)
+object=15                         ! reset value for ok button
+ENDSELECT
+LOOP UNTIL object>13
+~@obj_unselect(democonf%,object)
+~FORM_DIAL(3,0,0,0,0,dx-1,dy-1,dw+2,dh+2)
+RETURN
+> PROCEDURE demo_nvdi_file
+LOCAL object
+~@nvdi_read_inf(p_fif$,p_font$)
+@demo_set_infobjects
+~FORM_CENTER(demofile%,dx,dy,dw,dh)
+~FORM_DIAL(0,0,0,0,0,dx-1,dy-1,dw+2,dh+2)
+~OBJC_DRAW(demofile%,0,9,dx-1,dy-1,dw+2,dh+2)
+DO
+object=FORM_DO(demofile%,9) AND &H7FFF
+SELECT object
+CASE 3              ! FIFPATH
+IF @demo_select("NVDI.FIF",object)
+fifpath$=fsel$
+ENDIF
+CASE 5 TO 8         ! FONTPATH
+IF @demo_select("Vector Font",object)
+fontpath$(object-5)=fsel$
+ENDIF
+CASE 15             ! Ok
+@demo_get_infobjects
+~@nvdi_write_inf(p_fif$,p_font$)
+ENDSELECT
+LOOP UNTIL object>13
+~@obj_unselect(demofile%,object)
+~FORM_DIAL(3,0,0,0,0,dx-1,dy-1,dw+2,dh+2)
+RETURN
+> FUNCTION demo_select(title$,obj)
+LOCAL slash
+FILESELECT #"Select path for "+title$,"\","",fsel$
+IF RIGHT$(fsel$)<>"\"
+slash=RINSTR(fsel$,"\")     ! pathname only
+IF slash
+fsel$=LEFT$(fsel$,slash)
+ELSE
+CLR fsel$
+ENDIF
+ENDIF
+IF fsel$>""
+~@obj_set_text(demofile%,obj,@shortpath$(fsel$,35))
+ENDIF
+~@obj_unselect(demofile%,obj)
+~OBJC_DRAW(demofile%,obj,0,0,0,0,0)
+RETURN fsel$>""
+ENDFUNC
+> PROCEDURE demo_set_infobjects
+LOCAL obj,a
+~@obj_set_text(demofile%,3,@shortpath$(p_fif$,35))
+FOR obj=0 TO 3
+a=INSTR(p_font$," ")
+IF a
+fontpath$(obj)=LEFT$(p_font$,a-1)
+p_font$=RIGHT$(p_font$,LEN(p_font$)-a)
+ELSE
+fontpath$(obj)=p_font$
+CLR p_font$
+ENDIF
+~@obj_set_text(demofile%,obj+5,@shortpath$(fontpath$(obj),35))
+NEXT obj
+FOR obj=0 TO 4
+~@obj_set_text(demofile%,obj+9,STR$(nvdicache%(obj)))
+NEXT obj
+RETURN
+> PROCEDURE demo_get_infobjects
+LOCAL obj,v$
+CLR p_font$
+FOR obj=0 TO 3
+p_font$=p_font$+fontpath$(obj)+" "
+NEXT obj
+p_font$=TRIM$(p_font$)
+FOR obj=0 TO 4
+~@obj_get_text(demofile%,obj+9,v$)
+nvdicache%(obj)=VAL(v$)
+NEXT obj
+RETURN
+'
+' ****************************************************************************
+' Some useful functions used by the demo
+' ****************************************************************************
+'
+> FUNCTION cookie_find(id$)
+' this function you should already know. It looks for a certain
+' cookie held in id$.
+' --> id$ :  4 byte cookie (like 'NVDI')
+' <--     :  0 : cookiejar not present in this system
+'           -1 : cookiejar exists, cookie id$ not found
+'           >0 : cookie id$ 's value
+'
+' examples:
+' ret%=@cookie_find("_MCH")          ! &H10010 -> STe
+' ret%=AND(@cookie_find("_SND"),10)  ! DMA-sound possible ?
+' ret%=@cookie_find("_FLK")          ! GEMDOS function 92 flock() present
+' ret%=@cookie_find("_NET")          ! network installed ?
+' ret%=@cookie_find("_CPU")+68000    ! 68xxx processor
+' ret%=@cookie_find("_FSM")          ! FSM-Gdos
+' ret%=@cookie_find("_FNT")          ! FSM-Gdos-fonts
+' ret%=@cookie_find("NVDI")          ! NVDI installed
+' ret%=@cookie_find("EdDI")          ! VDI-Enhancer installed
+' ret%=AND(SHR(@cookie_find("_FDC"),24),256) ! 0-> no HD-disks
+'                                    !         1-> HighDensity  1.44 Mb
+'                                    !         2-> ExtraDensity 2.88 Mb
+' ret%=SHR(@cookie_find("_FPU"),16)  ! 0-> no coprocessor
+'     1-> Atari FPU     2-> LineF FPU     3-> Atari+LineF FPU
+'     4-> 68881         5-> Atari+68881   6-> 68882
+'     7-> Atari+68882   8-> 68040         9-> Atari+68040
+'
+$F%
+LOCAL c_ptr%,cname%,c_val%
+c_ptr%=LPEEK(&H5A0)            ! get address of cookie jar
+IF AND(c_ptr%>0,EVEN(c_ptr%))
+REPEAT
+cname%=LPEEK(c_ptr%)
+c_val%=LPEEK(c_ptr%+4)
+EXIT IF cname%=0           ! end of cookie list
+ADD c_ptr%,8
+UNTIL MKL$(cname%)=id$       ! cookie found?
+IF cname%
+RETURN c_val%              ! return its value
+ENDIF
+RETURN -1                    ! jar exists, cookie not found
+ENDIF
+RETURN 0                       ! error: cookiejar does not exist
+ENDFUNC
+> FUNCTION shortpath$(p_name$,p_maxlen)
+' function returns a pathname for a file, with
+' a MAXIMUM length of p_maxlen characters.
+' if the pathname is longer, it will be truncated
+' by replacing parts of the path with '..'
+' this function is used to fit a pathname in a button
+' --> p_name$   the original pathname
+'     p_maxlen  the maximum length of the returned string
+' <-- the updated string
+LOCAL p_slash!,p_dummy
+CLR p_slash!
+p_dummy=LEN(p_name$)
+IF p_dummy>p_maxlen
+IF RIGHT$(p_name$)="\"
+p_slash!=TRUE
+DEC p_dummy
+p_name$=LEFT$(p_name$,p_dummy)
+ENDIF
+SUB p_dummy,RINSTR(p_name$,"\")
+p_maxlen=MAX(0,p_maxlen-(p_dummy+3-p_slash!))
+p_maxlen=RINSTR(p_maxlen,p_name$,"\")
+p_name$=LEFT$(p_name$,p_maxlen)+"..\"+RIGHT$(p_name$,p_dummy)
+IF p_slash!
+p_name$=p_name$+"\"
+ENDIF
+ENDIF
+RETURN p_name$
+ENDFUNC
+'
+' ***************************************************************************
+' Object functions used by the demo
+' ***************************************************************************
+'
+> FUNCTION obj_unselect(tree%,obj)
+' set status for obj& to NOT SELECTED
+' you need to redraw after this with:
+' ~OBJC_DRAW(tree%,obj,99,clipx,clipy,clipw,cliph)
+'
+LOCAL obstat
+obstat=BCLR(OB_STATE(tree%,obj),0)
+OB_STATE(tree%,obj)=obstat
+' or: RETURN @obj_bset_state(tree%,obj,0)
+RETURN obstat
+ENDFUNC
+> FUNCTION obj_get_text(tree%,obj,VAR t$)
+' reads in the text for obj&
+'
+LOCAL adr%
+CLR t$
+SELECT BYTE(OB_TYPE(tree%,obj))
+CASE 26,28,32         ! type G_BUTTON, G_STRING of G_TITLE
+t$=CHAR{OB_SPEC(tree%,obj)}
+CASE 21,22,29,30      ! tedinfo
+t$=CHAR{LONG{OB_SPEC(tree%,obj)}}
+CASE 31               ! G_ICON
+t$=CHAR{LONG{OB_SPEC(tree%,obj)}+8}
+CASE 33               ! G_CICON
+adr%=LONG{OB_SPEC(tree%,obj)+8}
+IF LONG{adr%}
+t$=STRING$(13,0)
+BMOVE adr%,V:t$,12
+t$=CHAR{V:t$}
+ELSE IF LONG{adr%+4}=CVL("XTXT")
+t$=CHAR{LONG{adr%+8}}
+ENDIF
+ENDSELECT
+RETURN (t$>"")
+ENDFUNC
+> FUNCTION obj_set_text(tree%,obj,t$)
+' function overwrites text in obj& with t$
+' NEVER (no, never) set t$ to hold a text LONGER
+' than the text the object was intended for !
+' a safer way is to not update the text itself,
+' but only the pointer to this text, using
+' obj_set_textadr()
+'
+LOCAL adr%,fixadr%
+SELECT BYTE(OB_TYPE(tree%,obj))
+CASE 26,28,32         ! type G_BUTTON, G_STRING of G_TITLE
+CHAR{OB_SPEC(tree%,obj)}=t$
+RETURN TRUE
+CASE 21,22,29,30      ! tedinfo
+CHAR{LONG{OB_SPEC(tree%,obj)}}=t$
+RETURN TRUE
+CASE 31               ! G_ICON
+CHAR{LONG{OB_SPEC(tree%,obj)}+8}=t$
+RETURN TRUE
+CASE 33               ! G_CICON
+adr%=LONG{OB_SPEC(tree%,obj)+8}
+IF LEN(t$)<13
+t$=LEFT$(t$+STRING$(12,0),12)
+BMOVE V:t$,adr%,12
+ELSE                ! need to relocate it, so create fixed address
+fixadr%=MALLOC(SUCC(LEN(t$)))
+IF fixadr%
+CHAR{fixadr%}=t$
+LONG{adr%}=0
+LONG{adr%+4}=CVL("XTXT")
+LONG{adr%+8}=fixadr%
+RETURN fixadr%  ! keep this value, so you can MFREE it again,
+ENDIF             ! or do ~MFREE(@obj_get_textadr(tree%,obj))
+ENDIF
+DEFAULT
+RETURN FALSE
+ENDSELECT
+RETURN TRUE
+ENDFUNC
+'
+' two new obj_.. functions
+'
+> FUNCTION obj_get_boxchar(tree%,obj)
+SELECT BYTE(OB_TYPE(tree%,obj))
+CASE 20,25,27
+RETURN BYTE{OB_ADR(tree%,obj)+12}
+' or: RETURN BYTE(SHR(SWAP(OB_SPEC(tree%,obj)),8))
+ENDSELECT
+RETURN 0
+ENDFUNC
+> FUNCTION obj_set_boxchar(tree%,obj,char)
+SELECT BYTE(OB_TYPE(tree%,obj))
+CASE 20,25,27
+BYTE{OB_ADR(tree%,obj)+12}=char
+RETURN TRUE
+ENDSELECT
+RETURN FALSE
+ENDFUNC

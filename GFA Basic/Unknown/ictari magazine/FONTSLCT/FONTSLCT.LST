@@ -1,0 +1,749 @@
+OPTION BASE 0
+DEFWRD "a-z"
+DEFLIST 4
+'
+' Here are some routines that let you use autofolder fontselectors.
+' Roughly there are three types:
+' -Universal fontselectors
+' -Extended fontselectors (usually further developed than 'Universal')
+' -Accessory-types, working with an AV-protocol called 'Drag&Drop'.
+' This listing ONLY handles the first two types.
+'
+' Dependent of the version of the fontselectorprogram, you have a choice
+' between a simple (standard) call and a more sophisticated (extended) one.
+' The standard call offers less functions to the user, but doesn't
+' use up much memory. The extended call also makes it possible to do
+' some pre-selecting by your program.
+' Function fontsel_check() provides an easy way to determine wich call
+' can be made best.
+' Fontselectors are only of use when GDOS is present in the system.
+' A simple check is made here with GfA-function GDOS?
+'
+' Theo Ros, june 1996
+'
+'
+IF GDOS?=FALSE
+  ALERT 3,"|No GDOS loaded ! ",1,"Cancel",i
+  EDIT
+ENDIF
+'
+' make room for fonts and/or Pexec'ing XFSL.OVL
+RESERVE 100000
+CLR e%                          ! global result for functions
+SELECT @fontsel_check(fontslct$,fontsel%)   ! what fontselector is loaded?
+CASE -1
+  ALERT 3,"|FontSel version 1.00 | | DO NOT USE !! ",1," Ok ",i
+CASE 0
+  ALERT 3,"No xFSL- or UFSL- |Fontselector..",1,"Cancel",i
+CASE 1                          ! simplest type UFSL
+  e%=@ufsl_standard(fontsel%)   ! so do the standard call
+CASE 2                          ! extended UFSL
+  e%=@ufsl_extended(fontsel%)   ! so do the extended call
+CASE 3                          ! simplest type XFSL
+  e%=@xfsl_standard(fontsel%)
+CASE 4                          ! extended XFSL
+  e%=@xfsl_extended(fontsel%)
+ENDSELECT
+IF e%                           ! result: 0=OK, -1=Error
+  ALERT 1,"Fontselector |"+fontslct$+"|Errormessage "+STR$(e%),1," Ok ",i
+ENDIF
+RESERVE
+EDIT
+'
+> FUNCTION cookie_find(id$)
+LOCAL c_ptr%,cname%,c_val%
+c_ptr%=LPEEK(&H5A0)
+IF OR(c_ptr%=0,ODD(c_ptr%))
+  RETURN 0                    ! error: cookiejar does not exist
+ELSE
+  REPEAT
+    cname%=LPEEK(c_ptr%)
+    c_val%=LPEEK(c_ptr%+4)
+    EXIT IF cname%=0          ! end of list
+    ADD c_ptr%,8
+  UNTIL MKL$(cname%)=id$      ! cookie found
+  IF cname%
+    RETURN c_val%             ! return its value
+  ENDIF
+  RETURN -1                   ! jar exists; cookie not found
+ENDIF
+ENDFUNC
+'
+> FUNCTION fontsel_check(VAR fontsel$,fontsel%)
+' returns the name of the fontselector in a string and adds its
+' versionnumber to it. (example: "Universal Font Selector 0.97")
+' besides that, the cookie-value is returned in parameter fontsel%
+' The number this function returns reflects the capabilities:
+' 0= no fontselector present
+' 1= UFSL of FontSel version <=1.02    ! only ufsl_input() function
+' 2= xUFSL, FontSel version =>1.03     ! 1+ ufsl_selexinput() function
+' 3= Fontsel version =>1.03            ! 2+ xfsl_input() function
+' 4= Calvino, HuGo!                    ! 3+ xfsl_exinput() en Drag&Drop
+'
+LOCAL version%,soort
+fontsel%=@cookie_find("xFSL")
+IF fontsel%
+IF fontsel%>0                       ! xFSL found
+  IF MKL$(LONG{fontsel%})="xFSL"    ! magic
+    version%=CARD{fontsel%+10}
+    SELECT LONG{fontsel%+6}         ! maker
+    CASE "FSEL"
+      fontsel$="FontSel"
+      soort=2-(version%>&H102)       ! 2, usually 3
+    CASE "CLVN"
+      fontsel$="Calvino"
+      soort=4
+    CASE "HUGO"
+      fontsel$="HuGo!"
+      soort=4
+    DEFAULT
+      fontsel$=MKL$(LONG{fontsel%+6})
+      soort=3
+    ENDSELECT
+    version%=VAL(HEX$(version%))
+  ELSE
+    version%=VAL(HEX$(CARD{fontsel%+4})) ! xFSL-release
+    fontsel$="Extended Fontselector"
+    soort=3
+  ENDIF
+ELSE
+  fontsel%=@cookie_find("UFSL")
+  IF fontsel%>0
+    version%=VAL(HEX$(CARD{fontsel%+4}))
+    SELECT LONG{fontsel%}           ! magic
+    CASE "xUFS"
+      soort=2
+      fontsel$="Ext. Univ. Fontselector"
+    CASE "FSEL"
+      soort=2
+      fontsel$="FontSel"
+    CASE "UFSL"
+      soort=1
+      IF version%=100               ! FontSel 1.00 of 11/05/1994
+        soort=-1                    ! DELETE IT !!!
+      ENDIF
+      fontsel$="FontSel"
+    DEFAULT
+      soort=1
+      fontsel$="Universal Fontselector"
+    ENDSELECT
+  ENDIF
+ENDIF
+fontsel$=fontsel$+" "+STR$(version%/100)
+IF (version% MOD 100)=0
+  fontsel$=fontsel$+".0"
+ENDIF
+RETURN soort
+ENDIF
+CLR fontsel$,fontsel%
+RETURN 0
+ENDFUNC
+'
+> PROCEDURE fontsel_error(ecode)
+' errormessages:
+' -9  xfs_paramerror
+' -8  xfs_loaderror
+' -7  xfs_res_error
+' -6  xfs_no_handle
+' -5  xfs_no_window
+' -4  xfs_no_fonts
+' -3  xfs_no_fontsize
+' -2  xfs_active
+' -1  xfs_error
+'  0  xfs_stop
+'  1  xfs_ok
+'  2  xfs_help
+'  3  xfs_event
+'  4  xfs_popup
+'
+LOCAL alrt$
+SELECT ecode
+CASE -9
+alrt$="Parameters wrong.. "
+CASE -8
+alrt$="Error while |loading 'XFSL.OVL'"
+CASE -7
+alrt$="Wrong resolution.. "
+CASE -6
+alrt$="No VDI-handle left.. "
+CASE -5
+alrt$="No window left.. "
+CASE -4
+alrt$="No fonts loaded.. "
+CASE -3
+alrt$="Could not access |fontsize.. "
+CASE -2
+alrt$="Fontselector |already active.. "  ! UFSL suffers from this
+CASE -1
+alrt$="Out of memory.. "
+ENDSELECT
+ALERT 3,alrt$,1,"Cancel",i
+RETURN
+'
+> FUNCTION fontsel_getname$(fid,VAR ftype,index)
+LOCAL count,font$
+count=VST_LOAD_FONTS(0)+WORK_OUT(10)
+CONTRL(0)=130
+CONTRL(1)=0
+CONTRL(3)=1
+CONTRL(6)=V~H
+FOR index=1 TO count
+INTIN(0)=index
+VDISYS                      ! do vqt_name()
+EXIT IF fid=INTOUT(0)       ! GfA's VQT_NAME() doesn't return font-TYPE..
+NEXT index
+IF index>count
+index=1
+ENDIF
+CLR font$,ftype
+FOR count=1 TO 32
+EXIT IF INTOUT(count)=0
+font$=font$+CHR$(INTOUT(count))
+NEXT count
+IF CONTRL(4)>32
+ftype=INTOUT(33)            ! 0=BITMAP, 1=VECTOR
+ENDIF
+~VST_UNLOAD_FONTS(0)
+RETURN font$
+ENDFUNC
+'
+> PROCEDURE fontsel_printinfo
+CLS
+PRINT "Font chosen :"
+PRINT              ! UFSL returns no name or type, so it's up to us..
+PRINT "Fontname    : ";@fontsel_getname$(font_id,font_type,font_index)
+PRINT "Font ID     : ";font_id
+PRINT "Font index  : ";font_index
+PRINT "Size        : ";font_size
+PRINT "Font is a   : ";
+IF font_type
+PRINT "Vectorfont"
+ELSE
+PRINT "Bitmapfont"
+ENDIF
+RETURN
+'
+> FUNCTION ufsl_standard(ufsl%)
+LOCAL font_id,font_max,font_size,font_type,font_index,back
+IF @ufsl_init
+CARD{ufsl%+6}=1             ! dialtype: 0=dialogue, 1=window
+LONG{ufsl%+16}=0            ! turn helpbutton tekst OFF
+LONG{ufsl%+20}=0            ! (useless) helpfunction OFF
+font_max=VST_LOAD_FONTS(0)+WORK_OUT(10)
+font_type=0                 ! 0: all fonts, 1: only monospaced
+SHOWM
+back=@ufsl_input("Choose a font")
+IF back=-5                  ! no more windows?
+CARD{ufsl%+6}=0           ! then go without..
+back=@ufsl_input("Choose a font")
+ENDIF
+~VST_UNLOAD_FONTS(0)
+IF back>0
+@fontsel_printinfo
+~INP(2)
+RETURN 0
+ELSE IF back=0
+ALERT 1,"Fontselector exit |with button 'Cancel' .. ",1," Ok ",back
+RETURN 0
+ENDIF
+@fontsel_error(back)
+RETURN -1
+ENDIF
+ALERT 3,"Cannot open UFSL.. ",1,"Cancel",back
+RETURN -1
+ENDFUNC
+'
+> FUNCTION ufsl_init
+LOCAL routine%
+routine%=LONG{ufsl%+8}
+RETURN C:routine%()
+ENDFUNC
+'
+> FUNCTION ufsl_input(hdr$)
+$F&
+LOCAL routine%,adrtxt%,adrfid%,adrsiz%
+routine%=LONG{ufsl%+12}
+hdr$=hdr$+CHR$(0)
+adrtxt%=V:hdr$
+adrfid%=V:font_id
+adrsiz%=V:font_size
+RETURN WORD(C:routine%(V~H,font_max,font_type,L:adrtxt%,L:adrfid%,L:adrsiz%))
+ENDFUNC
+'
+> FUNCTION ufsl_extended(ufsl%)
+$F&
+LOCAL winmover$,header$,example$
+LOCAL font_id,font_size,font_attr,font_skew,font_color,font_width,font_type
+LOCAL font_index,routine%,m%,h%,control%,id%,pt%,wi%,at%,co%,sk%,back
+winmover$=fontslct$+CHR$(0)
+header$="Choose a font.."+CHR$(0)
+example$="The quick brown fox jumps over the lazy dog"+CHR$(0)
+LONG{ufsl%+16}=0              ! helpbutton text OFF
+LONG{ufsl%+20}=0              ! helpfunction OFF
+LONG{ufsl%+24}=V:example$
+LONG{ufsl%+28}=0              ! another extended routine..
+routine%=LONG{ufsl%+36}       ! font_selexinput()
+m%=V:winmover$
+h%=V:header$
+font_id=1
+font_attr=0
+font_size=14
+font_skew=0
+font_color=1
+font_width=0
+' control% is a bitmap. Set bits mean:
+' bit  0: size can be changed
+' bit  1: width can be changed
+' bit  2: attributes can be changed
+' bit  3: slant for italics can be changed
+' bit  4: color can be changed
+' bit  5: 'DEFAULT' value is possible
+' bit  6: attribute 'INVERS' is possible
+' bit  7: kerning (microspacing between characters) can be changed
+' bit  8: GDOS fonts also possible
+' bit  9: proportional fonts also possible
+' bit 10: ONLY bitmap fonts possible
+' bit 11: ONLY vector fonts possible
+' bit 12: dialogue in a window
+' bit 15: show errors with ALERT-box
+' bit 31: use extended UFSL_LIST structure (not in this listing)
+'
+control%=&X1001111111111      ! see above
+id%=V:font_id
+pt%=V:font_size
+wi%=V:font_width
+at%=V:font_attr
+co%=V:font_color
+sk%=V:font_skew
+back=WORD(C:routine%(V~H,L:control%,L:m%,L:h%,0,1,L:id%,L:pt%,L:wi%,L:at%,L:co%,L:sk%))
+IF back=-5                    ! no more windows?
+control%=BCLR(control%,12)  ! try without
+back=WORD(C:routine%(V~H,L:control%,L:m%,L:h%,0,1,L:id%,L:pt%,L:wi%,L:at%,L:co%,L:sk%))
+ENDIF
+IF back>0                     ! yep, something is chosen
+@fontsel_printinfo          ! for this demo, show it
+'
+' since this is the extended call, there is extra fontinfo:
+'
+PRINT "Width       : ";font_width AND &H1FFF  ! 13 bits (0-8191)
+PRINT "Attributes  : ";BIN$(font_attr)
+PRINT "Color       : ";font_color
+IF font_type                ! vectorfont?
+PRINT "Microspacing: ";(SHR(font_width,13) AND 3);
+IF BTST(font_width,15)    ! of font_width<0
+PRINT " (Pair-kerning)"
+ELSE
+PRINT " (Track-kerning)"
+ENDIF
+PRINT "Italic-slant: ";font_skew    ! negatie for BACKSLANT
+ENDIF
+~INP(2)
+RETURN 0
+ELSE IF back=0
+ALERT 1,"Fontselector exit |with button 'Cancel' .. ",1," Ok ",back
+RETURN 0
+ENDIF
+@fontsel_error(back)
+RETURN -1
+ENDFUNC
+'
+> FUNCTION xfsl_init
+$F&
+LOCAL routine%
+routine%=LONG{xfsl%+16}
+RETURN WORD(C:routine%(V~H,L:xfsl_xpar%))
+ENDFUNC
+'
+> FUNCTION xfsl_info
+LOCAL routine%
+routine%=LONG{xfsl%+28}
+RETURN C:routine%()
+ENDFUNC
+'
+> FUNCTION xfsl_exit(xfslhandle)
+LOCAL routine%
+routine%=LONG{xfsl%+24}
+RETURN C:routine%(xfslhandle)
+ENDFUNC
+'
+> FUNCTION xfsl_event(xfslhandle)
+$F&
+LOCAL routine%
+routine%=LONG{xfsl%+20}
+RETURN WORD(C:routine%(xfslhandle,L:xfsl_evnt%))
+ENDFUNC
+'
+> FUNCTION xfsl_standard(xfsl%)
+$F&
+' the simplest way of calling xFSL.
+' officially it's called xfsl_input()
+' leave everithing in the default settings, except for the
+' titlestring. dialogue is never in a window.
+LOCAL routine%,adrtxt%,adrfid%,adrsiz%
+LOCAL font_id,font_size,font_flags,font_type,font_index,back
+LOCAL header$
+routine%=LONG{xfsl%+12}               ! address of xfsl_input()
+header$="Choose a font"+CHR$(0)       ! of something like that..
+font_flags=254                        ! all fonttypes possible
+adrtxt%=V:header$
+adrfid%=V:font_id
+adrsiz%=V:font_size
+back=WORD(C:routine%(V~H,font_flags,L:adrtxt%,L:adrfid%,L:adrsiz%))
+IF back>0
+@fontsel_printinfo
+~INP(2)
+RETURN 0            ! OK
+ELSE IF back=0
+ALERT 1,"Fontselector exit |with button 'Cancel' .. ",1," Ok ",back
+RETURN 0
+ENDIF
+@fontsel_error(back)
+RETURN -1
+ENDFUNC
+'
+> FUNCTION xfsl_extended(xfsl%)
+LOCAL answer,numpops,xhandle,back,features%,xfsl_txt%
+LOCAL xfsl_finf%,xfsl_xpar%,xfsl_evnt%,xfsl_pop%
+LOCAL demo$
+features%=@xfsl_info
+' Routine xfsl_info() returns the capabilities of the fontselector:
+' in a bitmap:  features%=@xfsl_info
+' bit  0=xf_size     ($0001)
+' bit  1=xf_color    ($0002)
+' bit  2=xf_attr     ($0004)
+' bit  3=xf_width    ($0008)
+' bit  4=xf_kern     ($0010)
+' bit  5=xf_skew     ($0020)
+' bit  6=xf_???      ($0040)  ! reserved
+' bit  7=xf_???      ($0080)  ! reserved
+' bit  8=xf_fix31    ($0100)
+' bit  9=xf_popup    ($0200)
+' bit 10=xf_dragdrop ($0400)
+'
+IF BTST(features%,9)            ! popups possible?
+numpops=6                     ! max. 16, in this example 6
+ELSE                            ! popups count from 0-15
+CLR numpops
+ENDIF
+@xfsl_initvars(xfsl_txt%,xfsl_finf%,xfsl_xpar%,xfsl_evnt%,xfsl_pop%)
+@xfsl_config(&X11111000000011,254)    ! do some settings
+@xfsl_setevent(&X10000)               ! demo only uses MESAG
+xhandle=@xfsl_init                    ! initialise and get handle
+IF xhandle=-5                         ! no more windows?
+xfslxpar(3)=BCLR(xfslxpar(3),0)     ! turn off bit cc_window in control%
+xhandle=@xfsl_init                  ! try again
+ENDIF
+IF xhandle<0
+@fontsel_error(xhandle)
+@xfsl_closearrays
+RETURN -1
+ENDIF
+DO
+back=@xfsl_event(xhandle)
+SELECT back
+CASE 0                      ! xfs_stop
+demo$="Fontselector exit |with button 'Cancel'.. "
+CASE 1                      ! xfs_ok
+demo$="Fontselector exit |with button 'Ok'.. "
+CASE 2                      ! xfs_help
+demo$="HELP-button chosen |"
+IF LONG{xfsl_xpar%+38}<=0 ! pointer to hypertext (info on fontselector)
+demo$=demo$+"No hypertext |file available.. "
+ELSE
+demo$=demo$+"More info, see hypertext: | |"
+demo$=demo$+CHAR{LONG{xfsl_xpar%+38}}
+ENDIF
+CASE 3                      ! xfs_event
+' somekind of event happened, for instance an AC_CLOSE
+' so this is where you put a routine to handle AES-events
+' The xfsl_eventbuffer start at xfsl_evnt%+32 (xfslevnt(16)).
+' These messages only occur if the calling program has opened
+' a window or usen a gem-menubar.
+'
+' xfslevnt(16) --> ev_mwwich
+' IF BTST(xfslevnt(16),0)       ! keyboard event
+'   @handle_keyboard
+' ELSE IF BTST(xfslevnt(16),1)  ! mousebutton
+'   @handle_mouseclick
+' ELSE IF BTST(xfslevnt(16),2)  ! mouse rectangle1
+'   @handle_mouserect_1
+' ELSE IF BTST(xfslevnt(16),3)  ! mouse rectangle2
+'   @handle_mouserect_2
+' ELSE IF BTST(xfslevnt(16),4)  ! eventbuffer (could be WM_REDRAW)
+'   @handle_eventbuffer
+' ELSE IF BTST(xfslevnt(16),5)  ! timer
+'   @handle_timer
+' ENDIF
+'
+' more usefull stuff can be found here:
+' xfslevnt(17): ev_mmox         = mouse x-position during event
+' xfslevnt(18): ev_mmoy         = mouse y-position during event
+' xfslevnt(19): ev_mmobutton    = mousebutton during event
+' xfslevnt(20): ev_mmokstate    = status of shift-keys
+' xfslevnt(21): ev_mmokreturn   = pressed key during event
+' xfslevnt(22): ev_mbreturn     = number of mouseclicks during event
+' hierna komt de AES-eventbuffer:
+' xfslevnt(23) t/m xfslevnt(30) = ev_mmgpbuf
+'
+demo$="MULTI-event "+BIN$(xfslevnt(16),6)+" |happened..."
+CASE 4                      ! xfsl_popup
+demo$="User chose another |popuptext.. "
+DEFAULT
+demo$="Unknown message from |"+fontslct$
+demo$=demo$+"|Returnvalue is "+STR$(back)
+CLR back
+ENDSELECT
+IF demo$>""
+ALERT 1,demo$,1," Ok ",answer
+CLR demo$
+ENDIF
+LOOP UNTIL back<2
+~@xfsl_exit(xhandle)
+IF back<0                     ! error?
+@fontsel_error(back)
+RETURN -1
+ENDIF
+IF back=1                     ! choose something?
+@xfsl_printinfo
+ENDIF
+RETURN 0
+ENDFUNC
+'
+> PROCEDURE xfsl_config(control%,fontflags)
+' Controlflags to configure the fontselector:
+' bit  0=cc_window    ($0001)
+' bit  1=cc_appmodal  ($0002)
+' bit  2=cc_fix31     ($0004)
+' bit  3=cc_fakestyle ($0008)
+' bit  4=cc_closer    ($0010)
+' bit  5=cc_???       ($0020) ! reserved
+' bit  6=cc_???       ($0040) ! reserved
+' bit  7=cc_???       ($0080) ! reserved
+' bit  8=cc_nosize    ($0100)
+' bit  9=cc_nocolor   ($0200)
+' bit 10=cc_noattr    ($0400)
+' bit 11=cc_nowidth   ($0800)
+' bit 12=cc_nokern    ($1000)
+' bit 13=cc_noskew    ($2000)
+' bit 14=cc_???       ($4000) ! reserved
+' bit 15=cc_???       ($8000) ! reserved
+' bit 16=cc_dfltsize  ($10000)
+' bit 17=cc_invstyle  ($20000)
+'
+LONG{V:xfslxpar(2)}=control%     ! control
+'
+' bitmap voor Fontflags:
+' bit  0=ff_system       ($0001) !
+' bit  1=ff_monospaced   ($0002) !
+' bit  2=ff_proportional ($0004) !
+' bit  3=ff_bitmap       ($0008) !
+' bit  4=ff_spd          ($0010) ! Bitstream Speedo vector font
+' bit  5=ff_ttf          ($0020) ! True Type vector font
+' bit  6=ff_pfb          ($0040) ! Postscript vector font
+' bit  7=ff_cfn          ($0080) ! Calamus vector font
+' bits 8 thru 14 are reserved
+' bit 15=ff_changed      ($8000) !
+' much used combinations:
+' ff_vector&=ff_spd OR ff_ttf OR ff_pfb OR ff_cfn (=240)
+' ff_all&=ff_monospaced OR ff_proportional OR ff_vector OR ff_bitmap (254)
+'
+xfslxpar(12)=fontflags             ! fontflags
+RETURN
+'
+> PROCEDURE xfsl_setevent(ev_mflags)
+' fill parameters for the event-handler of the xfsl-
+' fontselector. These parameters LOOK LIKE the ones for
+' EVNT_MULTI, but with a difference:
+' xfslevnt(14) en (15) are NOT the address of a message-
+' buffer, but together they form the EVNT_TIMER.
+' the xfsl_evnt structure looks like this:
+'
+xfslevnt(0)=ev_mflags         ! wich event; see EVNT_MULTI
+'  xfslevnt(1)=ev_mbclicks    ! number of mouseclicks to watch for
+'  xfslevnt(2)=ev_bmask       ! button to be clicked
+'  xfslevnt(3)=ev_mbstate     ! 0=direct, 1=left, 2=right, 3=both buttons
+'  xfslevnt(4)=ev_mm1flags    ! watchbox 1
+'  xfslevnt(5)=ev_mm1x
+'  xfslevnt(6)=ev_mm1y
+'  xfslevnt(7)=ev_mm1width
+'  xfslevnt(8)=ev_mm1height
+'  xfslevnt(9)=ev_mm2flags    ! watchbox 2
+'  xfslevnt(10)=ev_mm2x
+'  xfslevnt(11)=ev_mm2y
+'  xfslevnt(12)=ev_mm2width
+'  xfslevnt(13)=ev_mm2height
+'  LONG{V:xfslevnt(14)}=SHL(ev_mtlocount,16)+ev_mthicount  ! timer (=> 250)
+RETURN
+'
+> PROCEDURE xfsl_closearrays
+ERASE xfsltxt(),xfslpfontinfo(),xfslxpar(),xfslevnt()
+ERASE xfslpopup(),xfslflags(),xfslfontname()
+RETURN
+'
+> PROCEDURE xfsl_initvars(VAR ptxt%,pfont%,pxpar%,pevnt%,ppop%)
+LOCAL d,d$
+~FRE(0)
+' create all WORD arrays
+@xfsl_closearrays               ! just to be safe
+d=SUCC(numpops)*40
+DIM xfslpfontinfo(PRED(d/2))    ! create tabels (numpops+1)*40 bytes
+ARRAYFILL xfslpfontinfo(),0     ! fill with zero
+d=numpops*14
+DIM xfslpopup(MAX(0,PRED(d/2))) ! room for numpops popuptexts
+ARRAYFILL xfslpopup(),0
+' you need not fill these ones yet:
+DIM xfsltxt(PRED(240/2))        ! room for 240 bytes dialoguetexts
+DIM xfslxpar(PRED(42/2))        ! room for 42 bytes parameters
+DIM xfslevnt(PRED(170/2))       ! room for 170 bytes eventbuffer
+'
+DIM xfslfontname(PRED(40/2))
+ptxt%=V:xfsltxt(0)
+pfont%=V:xfslpfontinfo(0)
+pxpar%=V:xfslxpar(0)
+pevnt%=V:xfslevnt(0)
+ppop%=V:xfslpopup(0)
+'
+' structure xFSL_PAR:
+'                     ! offset from xfsl_xpar%
+' WORD  par_size      ! +0
+' WORD  pfi_size      ! +2
+' LONG  control%      ! +4
+' LONG  headline%     ! +8
+' LONG  example%      ! +12
+' LONG  helptext%     ! +16
+' LONG  font%         ! +20
+' WORD  fontflags     ! +24
+' LONG  poptext%      ! +26
+' WORD  num_entries   ! +30
+' WORD  sel_entry     ! +32
+' LONG  popup%        ! +34
+' LONG  helpinfo%     ! +38
+'
+xfslxpar(0)=42                ! par_size   : size of xFSL_PAR-structure
+xfslxpar(1)=38                ! pfi_size   : size of PFONTINFO-structure
+'  LONG{pxpar%+4}=control%    ! control, fill it with xfsl_config()
+LONG{pxpar%+8}=ptxt%          ! headline   : windowtitle
+LONG{pxpar%+12}=ptxt%+30      ! example    : to show font
+LONG{pxpar%+16}=ptxt%+95      ! helptext   : text in HELP-button
+LONG{pxpar%+20}=pfont%        ! font       : pointer to PFONTINFO-structure
+'  xfslxpar(12)=fontflags     ! fontflags, fill it with xfsl_config()
+LONG{pxpar%+26}=ptxt%+80      ! poptext    : text in front of popups
+xfslxpar(15)=numpops          ! num_entries: nr. of popuplines, 0-15
+xfslxpar(16)=0                ! sel_entry  : pre-selected popupline
+LONG{pxpar%+34}=ppop%         ! popup      : pointer to popup strings
+LONG{pxpar%+38}=0             ! helpinfo   : hypertext helptext filename
+'
+' fill textarray:
+CHAR{ptxt%}="Select a font"   ! venstertitel (<30 chars)
+CHAR{ptxt%+30}="The quick brown fox jumps over the lazy dog"  ! <50 chars
+CHAR{ptxt%+80}="Fonttypes:"         ! Popup (<15 chars)
+CHAR{ptxt%+95}="HELP"               ! Tex in HELP-button
+IF numpops                          ! texts for lines in the popup
+DIM xfslflags(numpops-1)
+RESTORE xfsl_popupvars
+FOR d=0 TO numpops-1
+READ xfslflags(d),d$            ! read appropriate flags
+CHAR{ptxt%+100+20*d}=d$
+@xfsl_setpopup(d)
+NEXT d
+ENDIF
+' fontflags and popuptexts (max. 19 chars + nulbyte)
+xfsl_popupvars:
+DATA 2,"  monospaced",4,"  proportional",8,"  bitmap"
+DATA 240,"  vector",0,"----------------",254,"  all fonts"
+RETURN
+'
+> PROCEDURE xfsl_setpopup(index)
+LOCAL pt%,popup%
+popup%=xfsl_pop%+14*index
+pt%=xfsl_finf%+40*SUCC(index)
+'
+' structure xFSL_PENTRY:
+'                                ! offset from xfsl_pentry%
+' LONG  off_pentry_entry%        ! +0
+' LONG  off_pentry_fontinfo%     ! +4
+' WORD  off_pentry_fontflags%    ! +8
+' LONG  off_pentry_funcflags%    ! +10
+'
+{popup%}=xfsl_txt%+100+20*index  ! pointer to popuptext
+{popup%+4}=pt%                   ! pentry_fontinfo
+CARD{popup%+8}=xfslflags(index)  ! font-flags
+{popup%+10}=0                    ! func-flags (onlu for HuGo!)
+'
+' structure PFONTINFO:
+'                     ! offset from pfontinfo%
+' WORD  fontid        ! +0
+' WORD  fonttype      ! +2
+' LONG  fontname%     ! +4
+' LONG  fontsize%     ! +8
+' LONG  fontwidth%    ! +12
+' BYTE  trackkern     ! +16
+' BYTE  pairkern      ! +17
+' WORD  fontattr      ! +18
+' WORD  fontskew      ! +20
+' WORD  fontcol       ! +22
+' WORD  backcol       ! +24
+' WORD  halign        ! +26
+' WORD  valign        ! +28
+' WORD  rotation      ! +30
+' WORD  validtype     ! +32
+' LONG  validchars%   ! +34
+'
+' fill the structure.
+'
+'  CARD{pt%}=0        ! fontid      ID of font
+'  CARD{pt%+2}=0      ! fonttype    Type of font
+LONG{pt%+4}=V:xfslfontname(0)   ! fontname    name of font
+'  LONG{pt%+8}=0      ! fontsize    size of font in pt or fix31
+'  LONG{pt%+12}=0     ! fontwidth   width in pt or fix31
+'  BYTE{pt%+16}=0     ! trackkern   track-kerning
+'  BYTE{pt%+17}=0     ! pairkern    pair-kerning
+'  CARD{pt%+18}=0     ! fontattr    attributes
+'  CARD{pt%+20}=0     ! fontskew    italics-slant
+CARD{pt%+22}=1        ! fontcol     foreground color
+'  CARD{pt%+24}=0     ! backcol     background color
+'  CARD{pt%+26}=0     ! halign      hor. textalignment
+'  CARD{pt%+28}=0     ! valign      vert. textalignment
+'  CARD{pt%+30}=0     ! rotation    textrotation
+'  CARD{pt%+32}=0     ! validtype   type of Mapping
+'  LONG{pt%+34}=0     ! validchars  mappingtabel
+'
+RETURN
+'
+> PROCEDURE xfsl_printinfo
+LOCAL pt%
+CLS
+PRINT
+PRINT "Chosen font :"
+PRINT "Font-ID     : ";xfslpfontinfo(0)  ! of CARD{xfsl_finf%}
+PRINT "Fonttype    : ";xfslpfontinfo(1);  ! of CARD{xfsl_finf%+2}
+SELECT xfslpfontinfo(1)
+CASE 1
+PRINT " (Bitmap)"
+CASE 2
+PRINT " (Speedo)"
+CASE 4
+PRINT " (TrueType)"
+CASE 8
+PRINT " (Postscript Type-1)"
+ENDSELECT
+' this is the INTERNAL, extended name (max 39+NULLbyte)
+PRINT "Fontname    : ";CHAR{V:xfslfontname(0)}
+PRINT "Size        : ";xfslpfontinfo(4)  ! of CARD{xfsl_finf%+8}
+PRINT "Width       : ";xfslpfontinfo(6)  ! of CARD{xfsl_finf%+12}
+PRINT "Attributes  : ";xfslpfontinfo(9)  ! of CARD{xfsl_finf%+18}
+PRINT "Color       : ";xfslpfontinfo(11) ! of CARD{xfsl_finf%+22}
+PRINT "Slant       : ";xfslpfontinfo(10) ! of CARD{xfsl_finf%+20}
+PRINT "Rotation    : ";xfslpfontinfo(15)/10;" degrees"
+PRINT
+IF numpops
+PRINT "Last active popup : "+STR$(SUCC(xfslxpar(16)));
+pt%=xfsl_txt%+100+20*xfslxpar(16)
+PRINT " (";TRIM$(CHAR{pt%});")"
+pt%=xfslflags(xfslxpar(16))
+PRINT "Active fontflags  : ";pt%;" (&X";BIN$(pt%);")"
+PRINT
+ENDIF
+PRINT "Press a key.."
+~INP(2)
+RETURN

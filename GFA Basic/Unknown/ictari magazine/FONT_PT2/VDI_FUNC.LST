@@ -1,0 +1,2533 @@
+' ****************************************************************
+' VDIFUNC. Various VDI functions to be used in GfA Basic programs.
+' Especially if you want to use GDOS you can not go without these
+' functions. To find out whether GDOS is loaded and if so, what
+' the capabilitions of this version are , use vq_gdosname().
+' The returnvalue of this function will show the gdos loaded:
+' 0: no GDOS present
+' 1: GDOS version 1.x loaded
+' 2: FONTGDOS loaded (Bezier curves possible)
+' 3: FSMGDOS loaded (also Imagen vector fonts)
+' 4: SPEEDO GDOS or NVDI=>3 loaded (also Bitstream vector fonts)
+' 5: NVDI version 4 or higher loaded (all of the above)
+' ****************************************************************
+'
+' ****************************************************************
+' useful functions
+' ****************************************************************
+'
+' if you want to use the call vr_trnfm(), here's a better routine
+' from NVDI. Load the INLINE using file VR_TRNFM.INL
+' and use it with procedure vr_transform.
+'
+INLINE vr_trans%,132
+'
+' two routines to convert a LONG fix31-type into an integer
+DEFFN fix31_int(n%)=CARD(SHR(n%,16))
+DEFFN fix31_rounded(n%)=CARD(SHR(n%+32768,16))
+' two conversionfunctions for calculating pixels <-> dots per inch
+DEFFN conv_pts_pix(pts,dpi)=CINT((pts/72)*dpi)
+DEFFN conv_pix_pts(pxl,dpi)=CINT((pxl/dpi)*72)
+'
+> FUNCTION cookie_find(id$)
+LOCAL c_ptr%,cname%,c_val%
+c_ptr%=LPEEK(&H5A0)           ! start of list (cookie-jar)
+IF OR(c_ptr%=0,ODD(c_ptr%))
+  RETURN 0                    ! error: cookiejar does not exist
+ELSE
+  REPEAT
+    cname%=LPEEK(c_ptr%)
+    c_val%=LPEEK(c_ptr%+4)
+    EXIT IF cname%=0          ! end of list
+    ADD c_ptr%,8
+  UNTIL MKL$(cname%)=id$      ! cookie found
+  IF cname%
+    RETURN c_val%             ! return its value
+  ENDIF
+  RETURN -1                   ! jar exists; cookie not fount
+ENDIF
+ENDFUNC
+'
+> FUNCTION open_workstation(drive_id)
+LOCAL vdihandle
+IF drive_id<=10               ! screen ?
+vdihandle=V_OPNVWK(BYTE(XBIOS(4))+2)
+ELSE                          ! drive_id: 01-10=screen,  11-20=plotter
+vdihandle=V_OPNWK(drive_id) !           21-30=printer, 31-40=metafile
+ENDIF                         !           41-50=camera,  51-60=graphic tablet
+IF vdihandle>0                !           61-70=memory,  71-80=??
+V~H=vdihandle               !           81-90=??,      91-100=IMG
+ENDIF
+RETURN vdihandle              ! return workstation (0=error)
+' if vdihandle>0, then in INTOUT and PTSOUT you'll find
+' the complete WORK_OUT array for that driver:
+'  xresolution=INTOUT(0)      ! width
+'  yresolution=INTOUT(1)      ! height
+'  @vq_workdpi(INTOUT(3),INTOUT(4),x_dpi,y_dpi) ! calculate dots per inch
+' if you substitute V_OPNWK() by @v_opnwk(),
+' this workout array will be filled in for you.
+ENDFUNC
+'
+> FUNCTION close_workstation(drive_id)
+V~H=workstation
+IF drive_id>10                ! not screen ?
+~V_CLSWK()
+ELSE
+~V_CLSVWK()
+ENDIF
+V~H=-1                        ! reset GfA workstation
+RETURN V~H
+ENDFUNC
+'
+> FUNCTION clear_workstation(drive_id)
+V~H=workstation
+IF drive_id>10                ! not screen ?
+~V_CLRWK()                  ! performs a formfeed on the printer
+' if you don't want it to formfeed, use @v_clear_disp_list
+ELSE
+CLS
+ENDIF
+V~H=-1                        ! reset GfA workstation
+RETURN V~H
+ENDFUNC
+'
+> FUNCTION print_workstation(drive_id)
+' if you are printing to PRINTER (drive_id=21 ... 30)
+' always check if the printer is ready first with something like:
+LOCAL dummy
+IF AND(drive_id>20,drive_id<31)       ! really PRINTER?
+WHILE GEMDOS(&H11)=0                ! printer not ready?
+ALERT 3,"|Your printer is |NOT responding.. ",1,"Again| Abort ",dummy
+EXIT IF dummy>1
+WEND
+IF dummy>1                          ! 2 means abort function
+RETURN 0
+ENDIF
+ENDIF
+'
+IF drive_id>10              ! NOT for screens !
+V~H=workstation
+~V_UPDWK()                ! build page in memory
+V~H=workstation           ! keep resetting V~H..
+~V_CLSWK()                ! and start printing
+ENDIF
+V~H=-1                      ! reset GfA workstation
+RETURN V~H
+ENDFUNC
+'
+> FUNCTION vq_gdosname(VAR gdosname$)
+' fills a string the name of the actual loaded GDOS. Whith NVDI,
+' the string gdosname$ also contains the versionnumber (like "NVDI 4.11")
+' the function returns with a value, expressing the gdos-capabilities:
+' 0= no gdosfunctions
+' 1= bitmapfonts and drivers                         ! simply GDOS/AMCGDOS
+' 2= 1+ bezierfunctions, vst_error()                 ! FONT-GDOS
+' 3= 2+ QMS/Imagen outline vector fonts and caching  ! FSM-GDOS
+' 4= 3+ Bitstream Speedo vector fonts and fix31-data ! SPEEDO-GDOS and NVDI =>3
+' 5= 4+ TryeType fonts                               ! NVDI =>4
+'
+LOCAL gdosvalue%,nvdi%
+gdosvalue%=@vq_gdos                   ! test gdos; (better than GfA's GDOS?)
+IF gdosvalue%<>-2
+nvdi%=@cookie_find("NVDI")          ! test for NVDI
+IF nvdi%>0
+nvdi%=VAL(HEX$(CARD{nvdi%}))      ! version
+ELSE
+CLR nvdi%
+ENDIF
+SELECT gdosvalue%                   ! which gdos?
+CASE "_FNT"
+gdosname$="FONT-GDOS"             ! FONTGDOS
+gdosvalue%=2
+CASE "_FSM"
+gdosvalue%=@cookie_find("FSMC")   ! what type of vector font possible?
+IF gdosvalue%>0
+SELECT LONG{gdosvalue%}
+CASE "_FSM"                     ! only Imagen vector fonts
+gdosname$="FSM-GDOS"          ! FSMGDOS
+gdosvalue%=3
+CASE "_SPD"                     ! also Bitstream (speedo) fonts
+gdosname$="SPEEDO-GDOS"       ! SPEEDO GDOS
+gdosvalue%=4-(nvdi%=>400)     ! 4 of 5 (=ook TrueType vector fonts)
+ENDSELECT
+ELSE
+gdosname$="FSM-GDOS"
+gdosvalue%=3
+ENDIF
+DEFAULT                             ! GDOS 1.0, 1.1 of 1.2
+gdosname$="GDOS"
+gdosvalue%=1
+ENDSELECT
+IF nvdi%
+gdosname$="NVDI "+STR$(nvdi%/100)
+ENDIF
+RETURN gdosvalue%
+ENDIF
+CLR gdosname$
+RETURN 0
+ENDFUNC
+'
+> FUNCTION vq_gdos
+' not a real vdi function.
+' returns with a value, denoting the GDOS-version
+' installed:  -2 --> no GDOS
+'              n --> GDOS 1.0, 1.1 of 1.2
+'         '_FNT' --> FONTGDOS
+'         '_FSM' --> FSMGDOS or higher like SPEEDO or NVDI =>3
+'                    now, also look for the 'FSMC'-cookie
+'
+LOCAL gdos%,gdos$                             ! assembler:
+gdos$=MKI$(&H70FE)+MKI$(&H4E42)+MKI$(&H4E75)  ! moveq  #-2,d0
+gdos%=V:gdos$                                 ! trap   #2
+RETURN C:gdos%()                              ! rts
+ENDFUNC
+'
+> PROCEDURE vq_workdpi(workout3,workout4,VAR xdpi,ydpi)
+' Returns the horizontal and vertical resolution in
+' dots per inch for the current workstation.
+' A monochrome 640x400 screen: xdpi=90 and ydpi=90
+' call this procedure RIGHT after opening a workstation, when
+' INTOUT(3) and INTOUT(4) still contain the pointsize in mm/1000.
+' Normally these values are placed in a workout-array.
+' To get the dpi's for the standard (opened by GFA) screen:
+'       @vq_workdpi(WORK_OUT(3),WORK_OUT(4),dpi_x,dpi_y)
+' To get it for a workstation you opened using V_OPNWK() or V_OPNVWK():
+'       @vq_workdpi(INTOUT(3),INTOUT(4),dpi_x,dpi_y)
+'
+xdpi=CINT(25.4/(workout3/100))*10    ! pixelwidth in DPI for device
+ydpi=CINT(25.4/(workout4/100))*10    ! pixelheight in DPI
+RETURN
+'
+> PROCEDURE vqt_textwh(txt$,font_type,VAR w,h)
+' returns width and height in pixels of given string.
+' this is a combination of vqt_extent() and vqt_f_extent().
+' mostly, a program only needs the width and height of a string.
+' using parameter font_type (you'll get it from function vqt_name()),
+' you can tell the routine if it's a BITMAP (0) or an OUTLINE (1) font.
+LOCAL tel,tadr%
+IF font_type>0                ! OUTLINE (vector) font ?
+CONTRL(0)=240               ! vqt_f_extent() is more accurate
+ELSE                          ! BITMAP font ?
+CONTRL(0)=116               ! vqt_extent()
+ENDIF
+CONTRL(1)=0
+CONTRL(3)=LEN(txt$)
+CONTRL(6)=workstation
+tadr%=V:txt$
+FOR tel=0 TO PRED(CONTRL(3))
+INTIN(tel)=BYTE{tadr%}
+INC tadr%
+NEXT tel
+VDISYS
+w=PTSOUT(2)-PTSOUT(0)
+h=PTSOUT(5)-PTSOUT(1)
+RETURN
+'
+> PROCEDURE vr_transform(s_mfdb%,d_mfdb%)
+' an improved vr_trnfm routine taken from NVDI, that will
+' work on big planes and is faster than the ROM-based routine.
+' DON'T forget to load VR_TRNFM.INL into the INLINE !
+' s_mfdb% is the address of the SOURCE Memory Form Definition Block
+' d_mfdb% is the address of the DESTINATION Memory Form Definition Block
+' fill these blocks using procedure mfdb_fill()
+~C:vr_trans%(L:s_mfdb%,L:d_mfdb%)
+RETURN
+'
+> PROCEDURE mfdb_fill(fd_target,fd_adr%,fd_width,fd_height,fd_stand,fd_planes)
+' fd_target:    0:fill SOURCE mfdb, <>0:fill DESTINATION mfdb
+' fd_adr%:      address of bitmap
+' fd_width:     width in pixels
+' fd_height:    height in lines
+' fd_stand:     0: machine dependent, 1: standard rasterformat
+' fd_planes:    number of colorplanes
+IF DIM?(mfdb())=0             ! called upon the first time?
+DIM mfdb(19)                ! room for 2 Memory Form Definition Block's
+ENDIF
+IF fd_target                              ! DESTINATION mfdb?
+fd_target=10                            ! then word_index=10 t/m 19
+ENDIF                                     ! SOURCE: word_index=0 t/m 9
+LONG{V:mfdb(fd_target)}=fd_adr%           ! address of MFDB
+IF fd_adr%                                ! 0=logical screen, leave it
+mfdb(fd_target+2)=fd_width              ! pixelwidth
+mfdb(fd_target+3)=fd_height             ! lineheight
+mfdb(fd_target+4)=(fd_width+15) DIV 16  ! WORD-width for source
+mfdb(fd_target+5)=fd_stand              ! 0=mach. dependent; 1=standard
+mfdb(fd_target+6)=fd_planes             ! number of colorplanes
+ENDIF
+mfdb(fd_target+7)=0                       ! reserved, should be 0
+mfdb(fd_target+8)=0
+mfdb(fd_target+9)=0
+RETURN
+'
+> PROCEDURE conv_xywh(mode,rect,pxy%)
+' converts a coordinate-array of format: x,y,w,h
+' (mode=0) to vdiformat x1,y1,x2,y2 and vice versa (mode=1)
+' rect& determines how many RECTANGLES will be converted
+' 1 RECTANGLE is x1,y1,x2,y2 or x,y,w,h, so always 8 bytes
+LOCAL tel
+IF mode         ! from vdiformat to x,y,w,h
+FOR tel=0 TO rect-1                                 ! rect=RECTANGLE
+CARD{pxy%+4}=SUCC(CARD{pxy%}+CARD{pxy%+4})        ! w=x1+x2+1
+CARD{pxy%+6}=SUCC(CARD{pxy%+2}+CARD{pxy%+6})      ! h=y1+y2+1
+ADD pxy%,8
+NEXT tel
+ELSE            ! from x,y,w,h to vdiformat
+FOR tel=0 TO rect-1                                 ! rect=RECTANGLE
+CARD{pxy%+4}=PRED(ABS(CARD{pxy%+4}-CARD{pxy%}))   ! x2=(w-x1)-1
+CARD{pxy%+6}=PRED(ABS(CARD{pxy%+6}+CARD{pxy%+2})) ! y2=(h-y1)-1
+ADD pxy%,8
+NEXT tel
+ENDIF
+RETURN
+'
+> PROCEDURE correct_metaheader(mfile$)
+' When GDOS writes a metafile (*.GEM), the header
+' is incorrect. Calamus cannot handle those files, so
+' here's a routine that will correct the header of the file.
+LOCAL header$,tel,newhdr
+CLR header$
+RESTORE calamus_header
+FOR tel=1 TO 28
+READ newhdr
+header$=header$+CHR$(newhdr)
+NEXT tel
+OPEN "u",#1,mfile$
+PRINT #1,header$
+CLOSE #1
+'
+calamus_header:
+DATA 255,255,24,0,101,0,2,0,234,244,254,241,72,246
+DATA 8,243,240,7,236,9,192,244,16,14,64,11,240,241
+RETURN
+'
+' ****************************************************************
+' bezier functions
+' ****************************************************************
+'
+> PROCEDURE v_bez(count,pxy%,bezarr%,extent%,VAR totpts,totmoves)
+' draws a bezier_curve
+' use only if @vq_gdosname(gdos$)>1
+' GfA's CURVE command will draw a bezier even without GDOS !
+LOCAL tel                             ! pxy%: pointer to WORD coo-array
+CONTRL(0)=6                           ! bezarr%: pointer to flags array
+CONTRL(1)=count                       !          bit 0: 0=polyline segment
+CONTRL(3)=(count+1)\2                 !                 1=bezier segment
+CONTRL(5)=13                          !          bit 1: 1=to next point
+CONTRL(6)=workstation                 !                   without drawing
+FOR tel=0 TO count-1                  ! extent%: pointer to count*4 WORDS
+INTIN(tel)=BYTE{bezarr%+tel}        !          x1,y1,x2,y2 of rectangle
+NEXT tel
+BMOVE pxy%,PTSIN,count*2              ! put coordinates in PTSIN
+VDISYS
+totpts=INTOUT(0)                      ! total number of points
+totmoves=INTOUT(1)                    ! total number of moves
+BMOVE PTSOUT,extent%,8                ! bounding rectangle (x1,y1,x2,y2)
+RETURN
+'
+> PROCEDURE v_bez_fill(count,pxy%,bezarr%,extent%,VAR totpts,totmoves)
+' draws a filled bezier_path
+' use only if @vq_gdosname(gdos$)>1
+LOCAL tel                             ! pxy%: pointer to WORD coords-array
+CONTRL(0)=9                           ! bezarr%: pointer to flags-array
+CONTRL(1)=count                       !          bit 0: 0=polyline segment
+CONTRL(3)=(count+1)\2                 !                 1=bezier segment
+CONTRL(5)=13                          !          bit 1: 1=to next point
+CONTRL(6)=workstation                 !                   without drawing
+FOR tel=0 TO count-1                  ! extent%: pointer to count*4 WORDS
+INTIN(tel)=BYTE{bezarr%+tel}        !          x1,y1,x2,y2 of rectangle
+NEXT tel
+BMOVE pxy%,PTSIN,count*2              ! put coordinates in PTSIN
+VDISYS
+totpts=INTOUT(0)                      ! total number of points
+totmoves=INTOUT(1)                    ! total number of moves
+BMOVE PTSOUT,extent%,8                ! bounding rectangle
+RETURN
+'
+> PROCEDURE v_bez_off
+' turns beziercurves off, frees memory
+' use only if @vq_gdosname(gdos$)>1
+CONTRL(0)=11
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(5)=13
+CONTRL(6)=workstation
+VDISYS
+RETURN
+'
+> PROCEDURE v_bez_on(VAR smoothness)
+' turns beziercurves on, frees memory
+' use only if @vq_gdosname(gdos$)>1
+CONTRL(0)=11
+CONTRL(1)=1
+CONTRL(3)=0
+CONTRL(5)=13
+CONTRL(6)=workstation
+VDISYS
+smoothness=2^INTOUT(0)            ! number of segments per curve (0-128)
+RETURN
+'
+> PROCEDURE v_bez_qual(percent,VAR actual)
+' set speed/quality
+' use only if @vq_gdosname(gdos$)>1
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=3
+CONTRL(5)=99
+CONTRL(6)=workstation
+INTIN(0)=32
+INTIN(1)=1
+INTIN(2)=percent                ! 0-100 (0<- fast, high-quality->100)
+VDISYS
+actual=INTOUT(0)                ! actual set value
+RETURN
+'
+> PROCEDURE v_set_app_buff(buf%,nparagraphs)
+' set memoryblock for bezier routines
+' use only if @vq_gdosname(gdos$)>2
+CONTRL(0)=-1
+CONTRL(1)=0
+CONTRL(3)=2
+CONTRL(5)=6
+CONTRL(6)=workstation
+LONG{INTIN}=buf%              ! application reserved memory
+INTIN(2)=nparagraphs          ! size in 'paragraphs' (16 bytes)
+VDISYS
+' exit the program using @v_set_app_buff(NULL%,0)
+' and clear memory using MFREE(). buff% not smaller than 8 Kb.
+RETURN
+'
+' ****************************************************************
+' metafile and printer functions
+' ****************************************************************
+'
+> PROCEDURE v_alpha_text(txt$)
+' prints a line to the printer or metafile file
+' is LPRINT or PRINT #..
+LOCAL tel,tadr%
+CONTRL(0)=5
+CONTRL(1)=1
+CONTRL(3)=LEN(txt$)
+CONTRL(5)=25
+CONTRL(6)=workstation
+tadr%=V:txt$
+FOR tel=0 TO PRED(CONTRL(3))
+INTIN(tel)=BYTE{tadr%}
+INC tadr%
+NEXT tel
+VDISYS
+RETURN
+'
+> PROCEDURE v_form_adv
+' prints a page via the driver, but does NOT clear it
+' use only if @vq_gdosname(gdos$)>0
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(5)=20
+CONTRL(6)=workstation
+VDISYS
+RETURN
+'
+> PROCEDURE v_updwk
+' print the current 'page'
+' use only if @vq_gdosname(gdos$)>0
+CONTRL(0)=4
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(6)=workstation
+VDISYS
+' NO formfeed is performed
+RETURN
+'
+> PROCEDURE v_output_window(wx1,wy1,wx2,wy2)
+' print a part of the current 'page'
+' is used by printer and metafile drivers
+' use only if @vq_gdosname(gdos$)>0
+CONTRL(0)=5
+CONTRL(1)=2
+CONTRL(3)=0
+CONTRL(5)=21
+CONTRL(6)=workstation
+PTSIN(0)=wx1                          ! coordinates of page-part
+PTSIN(1)=wy1
+PTSIN(2)=wx2
+PTSIN(3)=wy2
+VDISYS
+RETURN
+'
+> PROCEDURE v_pgcount(numcopies)
+' print a number of copies of the same page to laserprinter
+' is used by SOME laserprinter drivers
+' use only if @vq_gdosname(gdos$)>0
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=1
+CONTRL(5)=2000
+CONTRL(6)=workstation
+INTIN(0)=numcopies-1
+VDISYS
+RETURN
+'
+> PROCEDURE vm_pagesize(pwidth,pheight)
+' set size of a 'page' in tenths of millimetres
+' is used by metafile drivers
+' use only if @vq_gdosname(gdos$)>0
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=2
+CONTRL(5)=99
+CONTRL(6)=workstation
+INTIN(0)=pwidth                       ! 8,5 inch --> 8.5*254=2159
+INTIN(1)=pheight
+VDISYS
+RETURN
+'
+> PROCEDURE vm_coords(xmin,ymin,xmax,ymax)
+' set variabel coordinate-system for a metafile
+' defaultcoordinates are (0,32767),(32767,0)
+' use only if @vq_gdosname(gdos$)>0
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=5
+CONTRL(5)=99
+CONTRL(6)=workstation
+INTIN(0)=1
+INTIN(1)=xmin                         ! -32768 - 0
+INTIN(2)=ymin
+INTIN(3)=xmax                         ! 0 - 32767
+INTIN(4)=ymax
+VDISYS
+RETURN
+'
+> PROCEDURE vm_filename(metafilename$)
+' change the default_name 'GEMFILE.GEM' in something
+' the user selected. do this as soon as you have opened
+' the workstation with V_OPNWK().
+' use only if @vq_gdosname(gdos$)>0
+LOCAL tel,tadr%
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=LEN(metafilename$)
+CONTRL(5)=100
+CONTRL(6)=workstation
+tadr%=V:metafilename$
+FOR tel=0 TO PRED(CONTRL(3))
+INTIN(tel)=BYTE{tadr%}
+INC tadr%
+NEXT tel
+VDISYS
+RETURN
+'
+> PROCEDURE v_meta_extents(xmin,ymin,xmax,ymax)
+' set rectangle INSIDE a metafile
+' use only if @vq_gdosname(gdos$)>0
+CONTRL(0)=5
+CONTRL(1)=2
+CONTRL(3)=0
+CONTRL(5)=98
+CONTRL(6)=workstation
+PTSIN(0)=xmin                         ! coordinates of rectangle
+PTSIN(1)=ymin
+PTSIN(2)=xmax
+PTSIN(3)=ymax
+VDISYS
+RETURN
+'
+> PROCEDURE v_write_meta(len_intin,elem_intin%,len_ptsin,elem_ptsin%)
+' puts a metafile sub_opcode into the file
+' is used by metafile drivers
+' use only if @vq_gdosname(gdos$)>0
+CONTRL(0)=5
+CONTRL(1)=len_ptsin
+CONTRL(3)=len_intin
+CONTRL(5)=99
+CONTRL(6)=workstation
+BMOVE elem_intin%,INTIN,len_intin*2   ! 1-127 element WORDS
+BMOVE elem_ptsin%,PTSIN,len_ptsin*2   ! 0-127 element WORDS
+VDISYS
+RETURN
+'
+' ****************************************************************
+' font and graphic text functions
+' ****************************************************************
+'
+> PROCEDURE v_flushcache
+' clears the characterbitmap portion of the cache (buffer)
+' use only if @vq_gdosname(gdos$)>2
+CONTRL(0)=251
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(6)=workstation
+VDISYS
+RETURN
+'
+> PROCEDURE v_fontinit(fptr%)
+' replaces the systemfont. fptr% is a pointer to a
+' 'Line-A' compatible fontheader in Motorola-format
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=2
+CONTRL(5)=102
+CONTRL(6)=workstation
+LONG{INTIN}=fptr%
+VDISYS
+RETURN
+'
+> PROCEDURE v_gtext(x,y,txt$)
+' writes graphic text, cannot handle microspaces
+' when using vectorfonts (in that case, use v_ftext().
+' is TEXT,x,y,txt$
+LOCAL tel,tadr%
+CONTRL(0)=8
+CONTRL(1)=1
+CONTRL(3)=LEN(txt$)
+CONTRL(6)=workstation
+PTSIN(0)=x
+PTSIN(1)=y
+tadr%=V:txt$
+FOR tel=0 TO PRED(CONTRL(3))
+INTIN(tel)=BYTE{tadr%}
+INC tadr%
+NEXT tel
+VDISYS
+RETURN
+'
+> PROCEDURE v_ftext(x,y,txt$)
+' writes graphic text, like v_gtext(), but correctly
+' uses microspacing for vectorfonts.
+' use only if @vq_gdosname(gdos$)>2
+LOCAL tel,tadr%
+CONTRL(0)=241
+CONTRL(1)=1
+CONTRL(3)=LEN(txt$)
+CONTRL(6)=workstation
+PTSIN(0)=x
+PTSIN(1)=y
+tadr%=V:txt$
+FOR tel=0 TO PRED(CONTRL(3))
+INTIN(tel)=BYTE{tadr%}
+INC tadr%
+NEXT tel
+VDISYS
+RETURN
+'
+> PROCEDURE v_ftext_offset(x,y,txt$,offset%)
+' writes like v_ftext(), but uses a WORD-array for
+' each x and y offset for every character in the string.
+' use only if @vq_gdosname(gdos$)>3
+LOCAL tel,tadr%
+CONTRL(0)=241
+CONTRL(1)=LEN(txt$)+1
+CONTRL(3)=LEN(txt$)
+CONTRL(6)=workstation
+PTSIN(0)=x
+PTSIN(1)=y
+tadr%=V:txt$
+FOR tel=0 TO PRED(CONTRL(3))
+INTIN(tel)=BYTE{tadr%}
+INC tadr%
+NEXT tel
+BMOVE offset%,PTSIN+4,LEN(txt$)*4
+VDISYS
+RETURN
+'
+> PROCEDURE v_ftext16(x,y,wtxt$)
+' writes like v_ftext(), but uses a string of WORDS,
+' (each character=16 bits) rather than a string of BYTES.
+' use only if @vq_gdosname(gdos$)>3
+CONTRL(0)=241
+CONTRL(1)=1
+CONTRL(3)=LEN(wtxt$)\2
+CONTRL(6)=workstation
+PTSIN(0)=x
+PTSIN(1)=y
+BMOVE V:wtxt$,INTIN,LEN(wtxt$)
+VDISYS
+RETURN
+'
+> PROCEDURE v_ftext_offset16(x,y,wtxt$,offset%)
+' writes like v_ftext(), but uses a WORD-array for
+' x and y offsets for each character in the string.
+' also, the string is made up of WORDS in stead of BYTES.
+' use only if @vq_gdosname(gdos$)>3
+LOCAL wlen
+wlen=LEN(wtxt$)
+CONTRL(0)=241
+CONTRL(1)=SUCC(wlen\2)
+CONTRL(3)=wlen\2
+CONTRL(6)=workstation
+PTSIN(0)=x
+PTSIN(1)=y
+BMOVE V:wtxt$,INTIN,wlen
+BMOVE offset%,PTSIN+4,wlen*4
+VDISYS
+RETURN
+'
+> PROCEDURE v_getbitmap_info(ch,VAR chw,chh,advx,advy,xoff,yoff,bitmap%)
+' returns information for a character from the current
+' (vector) font, based on the current format and size.
+' use only if @vq_gdosname(gdos$)>3
+CONTRL(0)=239
+CONTRL(1)=0
+CONTRL(3)=1
+CONTRL(6)=workstation
+INTIN(0)=ch
+VDISYS
+chw=INTOUT(0)
+chh=INTOUT(1)
+advx=@fix31_int(LONG{INTOUT+4})       ! microspacing for x_position
+advy=@fix31_int(LONG{INTOUT+8})       ! microspacing for y_position
+xoff=@fix31_int(LONG{INTOUT+12})      ! add this to x--> x of bitmap
+yoff=@fix31_int(LONG{INTOUT+16})      ! add this to y--> y of bitmap
+bitmap%=LONG{INTOUT+20}               ! address of character ch bitmap
+RETURN
+'
+> PROCEDURE v_getoutline(ch,pxy%,bezarr%,maxverts,VAR numverts)
+' returns information for a character from the current
+' (vector) font, needed to draw it using beziercurves.
+' use only if @vq_gdosname(gdos$)>3
+CONTRL(0)=243
+CONTRL(1)=0
+CONTRL(3)=6
+CONTRL(6)=workstation
+INTIN(0)=ch
+INTIN(1)=maxverts
+LONG{INTIN+4}=pxy%                    ! see v_bez() for explanation
+LONG{INTIN+8}=bezarr%                 ! of these arraypointers
+VDISYS
+numverts=INTOUT(0)
+RETURN
+'
+> FUNCTION v_loadcache(filename$,mode)
+' load a cache-file from disk
+' use only if @vq_gdosname(gdos$)>2
+LOCAL tel,tadr%
+CONTRL(0)=250
+CONTRL(1)=0
+CONTRL(3)=LEN(filename$)
+CONTRL(6)=workstation
+INTIN(0)=mode                         ! mode: 0=add to existing cache
+tadr%=V:filename$                     !       1=clear cache first
+FOR tel=1 TO CONTRL(3)
+INTIN(tel)=BYTE{tadr%}
+INC tadr%
+NEXT tel
+VDISYS
+RETURN INTOUT(0)                      ! 0: OK, -1: error
+ENDFUNC
+'
+> FUNCTION v_savecache(filename$)
+' load a cache-file from disk
+' use only if @vq_gdosname(gdos$)>2
+LOCAL tel,tadr%
+CONTRL(0)=249
+CONTRL(1)=0
+CONTRL(3)=LEN(filename$)
+CONTRL(6)=workstation
+tadr%=V:filename$
+FOR tel=0 TO PRED(CONTRL(3))
+INTIN(tel)=BYTE{tadr%}
+INC tadr%
+NEXT tel
+VDISYS
+RETURN INTOUT(0)                      ! 0: OK, -1: error
+ENDFUNC
+'
+> PROCEDURE v_justified(x,y,txt$,width,wflag,cflag)
+' draws justified graphic text
+'
+LOCAL tel,tadr%
+CONTRL(0)=11
+CONTRL(1)=2
+CONTRL(3)=LEN(txt$)
+CONTRL(5)=10
+CONTRL(6)=workstation
+INTIN(0)=wflag                ! word justify     : 0=off, 1=on
+INTIN(1)=cflag                ! character justify: 0=off, 1=on
+tadr%=V:txt$
+FOR tel=2 TO SUCC(CONTRL(3))
+INTIN(tel)=BYTE{tadr%}
+INC tadr%
+NEXT tel
+PTSIN(0)=x                    ! text x and y
+PTSIN(1)=y
+PTSIN(2)=width                ! pixelwidth of area
+PTSIN(3)=0
+VDISYS
+RETURN
+'
+' ****************************************************************
+' alphatext functions
+' ****************************************************************
+'
+> PROCEDURE v_curdown
+' moves the textcursor one line down
+' same as PRINT CHR$(27)+"B"
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(5)=5
+CONTRL(6)=workstation
+VDISYS
+RETURN
+'
+> PROCEDURE v_curleft
+' moves the textcursor one character to the left
+' same as PRINT CHR$(27)+"D"
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(5)=7
+CONTRL(6)=workstation
+VDISYS
+RETURN
+'
+> PROCEDURE v_curright
+' moves the textcursor one character to the right
+' same as PRINT CHR$(27)+"C"
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(5)=6
+CONTRL(6)=workstation
+VDISYS
+RETURN
+'
+> PROCEDURE v_curup
+' moves the textcursor one line up
+' same as PRINT CHR$(27)+"A"
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(5)=4
+CONTRL(6)=workstation
+VDISYS
+RETURN
+'
+> PROCEDURE v_curhome
+' moves the textcursor to point top-left of screen
+' same as PRINT CHR$(27)+"H"
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(5)=8
+CONTRL(6)=workstation
+VDISYS
+RETURN
+'
+> PROCEDURE v_eeol
+' deletes text from the cursor to end of line
+' same as PRINT CHR$(27)+"K"
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(5)=10
+CONTRL(6)=workstation
+VDISYS
+RETURN
+'
+> PROCEDURE v_eeos
+' deletes text from the cursor to end of current screen
+' same as PRINT CHR$(27)+"J"
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(5)=9
+CONTRL(6)=workstation
+VDISYS
+RETURN
+'
+> PROCEDURE v_enter_cur
+' deletes the current screen, removes the mouse and enters text modus
+' same as PRINT CHR$(27)+"E"
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(5)=3
+CONTRL(6)=workstation
+VDISYS
+' use this function from within a GEM-application, from where
+' a TOS-application is launched. the function starts working
+' when the mousebutton is released.
+RETURN
+'
+> PROCEDURE v_exit_cur
+' leaves text modus and restores the mouse
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(5)=2
+CONTRL(6)=workstation
+VDISYS
+' to restore the screen, use FORM_DIAL()
+RETURN
+'
+> PROCEDURE v_curtext(txt$)
+' puts a line of text onto the screen
+' max. length of the string is 127 characters
+' same as PRINT txt$
+LOCAL tel,tadr%
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=LEN(txt$)
+CONTRL(5)=12
+CONTRL(6)=workstation
+tadr%=V:txt$
+FOR tel=0 TO PRED(CONTRL(3))
+INTIN(tel)=BYTE{tadr%}
+INC tadr%
+NEXT tel
+VDISYS
+RETURN
+'
+> PROCEDURE v_rvoff
+' shows text normal (black on white)
+' same as PRINT CHR$(27)+"Q"
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(5)=14
+CONTRL(6)=workstation
+VDISYS
+RETURN
+'
+> PROCEDURE v_rvon
+' shows inverted text (white on black)
+' same as PRINT CHR$(27)+"P"
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(5)=13
+CONTRL(6)=workstation
+VDISYS
+RETURN
+'
+' ****************************************************************
+' mousecursor functions
+' ****************************************************************
+'
+> PROCEDURE v_dspcur(mx,my)
+' draws the mousecursor at the given position,
+' despite the 'show'-status. see v_hide_c()/v_show_c()
+CONTRL(0)=5
+CONTRL(1)=1
+CONTRL(3)=0
+CONTRL(5)=18
+CONTRL(6)=workstation
+PTSIN(0)=mx
+PTSIN(1)=my
+VDISYS
+RETURN
+'
+> PROCEDURE v_rmcur
+' deletes the last mouse drawn by v_dspcur()
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(5)=19
+CONTRL(6)=workstation
+VDISYS
+RETURN
+'
+> PROCEDURE v_show_c(mreset)
+' mreset  = 0 -> the mousecursor is visible at each call
+'         = 1 -> you need to call v_hide_c() the same amount of
+'                times you call upon v_show_c()
+CONTRL(0)=122
+CONTRL(1)=0
+CONTRL(3)=1
+CONTRL(6)=workstation
+INTIN(0)=mreset
+VDISYS 122
+RETURN
+'
+> PROCEDURE v_hide_c
+' deletes the mousepointer from the screen
+' this function needs as many v_show_c() calls
+' as v_hide_c() calls.
+CONTRL(0)=123
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(6)=workstation
+VDISYS
+RETURN
+'
+> PROCEDURE vsc_form(newform%)
+' set another mouseform, like GRAF_MOUSE() and DEFMOUSE newmouse$
+' newform%=pointer to block of 37 WORDS:
+'             x hotspot
+'             y hotspot
+'             number of colorplanes (ALWAYS 1)
+'             foregroundcolor  (ALWAYS 0)
+'             backgroundcolor  (ALWAYS 1)
+'             masker (16 WORDS)
+'             data (16 WORDS)
+CONTRL(0)=111
+CONTRL(1)=0
+CONTRL(3)=37
+CONTRL(6)=workstation
+BMOVE newform%,INTIN,37*2
+VDISYS
+RETURN
+'
+' ****************************************************************
+' workstation functions
+' ****************************************************************
+'
+> FUNCTION v_opnvwk(ghandle,workin%,workout%)
+' opens a VIRTUEEL workscreen
+' is V_OPNVWK()
+' ghandle& is the physical handle, returned by GRAF_HANDLE()
+'     if 'ghandle&' has a value of 0, this routine will do
+'     the GRAF_HANDLE call for you
+'
+' workin%  is pointer to an array of 11 WORDS containing the
+'          initial values for the workstation:
+'          workin(0): device id (voor screen XBIOS(4)+2)
+'          workin(1): default linetype
+'          workin(2): default linecolor
+'          workin(3): default markertype
+'          workin(4): default markercolor
+'          workin(5): default font
+'          workin(6): default textcolor
+'          workin(7): default filltype
+'          workin(8): default fillpattern
+'          workin(9): default fillcolor
+'          workin(10): coordinatesvlag (0=NDC, 2=RC)
+'     if 'workin%' has a value of 0, this routine will pass the
+'     default values to intin
+'
+' workout% is a pointer to an array of 57 WORDS in which various
+'          values are put to determine the workstation. see your
+'          manual for the WORK_OUT array on this.
+LOCAL vdum
+IF ghandle=0                  ! physical handle not given?
+ghandle=GRAF_HANDLE(vdum,vdum,vdum,vdum)
+ENDIF
+CONTRL(0)=100
+CONTRL(1)=0
+CONTRL(3)=11
+CONTRL(6)=ghandle
+IF workin%=0                  ! no init-values given?
+INTIN(0)=XBIOS(4)+2
+FOR vdum=1 TO 9             ! fill the defaults
+INTIN(vdum)=1
+NEXT vdum
+INTIN(10)=2
+ELSE
+BMOVE workin%,INTIN,11*2
+ENDIF
+VDISYS
+BMOVE INTOUT,workout%,45*2
+BMOVE PTSOUT,workout%+90,12*2
+RETURN CONTRL(6)              ! vdi-handle (0=error)
+ENDFUNC
+'
+> FUNCTION v_opnwk(device,workin%,workout%)
+' opens a PHYSICAL workstation (NOT screen)
+' is V_OPNWK()
+' device&  driver id (11-20=plotter, 21-30=printer etc.)
+'     als a geldige value wordt given for workin%
+'     wordt deze parameter genegeerd, want: workin(0)=device
+'
+' workin%  is pointer to an array of 11 WORDS containing the
+'          initial values for the workstation:
+'          workin(0): device id (voor screen XBIOS(4)+2)
+'          workin(1): default linetype
+'          workin(2): default linecolor
+'          workin(3): default markertype
+'          workin(4): default markercolor
+'          workin(5): default font
+'          workin(6): default textcolor
+'          workin(7): default filltype
+'          workin(8): default fillpattern
+'          workin(9): default fillcolor
+'          workin(10): coordinatesvlag (0=NDC, 2=RC)
+'     if 'workin%' has a value of 0, this routine will pass the
+'     default values to intin
+'
+' workout% is a pointer to an array of 57 WORDS in which various
+'          values are put to determine the workstation. see your
+'          manual for the WORK_OUT array on this.
+LOCAL vdum
+CONTRL(0)=1
+CONTRL(1)=0
+CONTRL(3)=11                  ! NO value for CONTRL(6) !!
+IF workin%=0                  ! no init-values?
+INTIN(0)=device
+FOR vdum=1 TO 9             ! fill defaults
+INTIN(vdum)=1
+NEXT vdum
+INTIN(10)=2
+ELSE
+BMOVE workin%,INTIN,11*2
+ENDIF
+VDISYS
+BMOVE INTOUT,workout%,45*2
+BMOVE PTSOUT,workout%+90,12*2
+RETURN CONTRL(6)              ! vdi-handle (0=error)
+' always close a physical workstation IMMEDIATLY after
+' use. Do NOT open one at the start of the program and
+' only close it on exit !
+ENDFUNC
+'
+> PROCEDURE v_clear_disp_list
+' used by printer, plotter, metafile and camera drivers
+' same as v_clrwk(), but NO formfeed will be performed
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(5)=22
+CONTRL(6)=workstation
+VDISYS
+RETURN
+'
+> PROCEDURE v_clrwk
+' is var=V_CLRWK()
+' same as v_clear_disp_list(), but formfeed IS performed
+CONTRL(0)=3
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(6)=workstation
+VDISYS
+RETURN
+'
+> PROCEDURE v_clsvwk
+' is var=V_CLSVWK()
+' closes a virtual workstation (screen)
+CONTRL(0)=101
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(6)=workstation
+VDISYS
+RETURN
+'
+> PROCEDURE v_clswk
+' is var=V_CLSWK()
+' closes a physical workstation (NOT screen)
+CONTRL(0)=2
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(6)=workstation
+VDISYS
+RETURN
+'
+' ****************************************************************
+' system functions
+' ****************************************************************
+'
+> FUNCTION vex_timv(newtimvec%)
+' installes a new routine that will be called
+' at every system timer click (every 50 milliseconds)
+CONTRL(0)=118
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(6)=workstation
+LONG{CONTRL+14}=newtimvec%
+VDISYS
+RETURN LONG{CONTRL+18}        ! return old timer_vector
+ENDFUNC
+'
+> FUNCTION vex_butv(newbutvec%)
+' installes a new routine that will be called
+' every time the mousebutton is pressed
+CONTRL(0)=125
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(6)=workstation
+LONG{CONTRL+14}=newbutvec%    ! mousebutton in d0
+VDISYS
+RETURN LONG{CONTRL+18}        ! return old mousebutton_vector
+ENDFUNC
+'
+> FUNCTION vex_motv(newmovvec%)
+' installes a new routine that will be called
+' every time the mousepointer is moved
+' for an example, see CAGEMOUS.GFA
+CONTRL(0)=126
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(6)=workstation
+LONG{CONTRL+14}=newmovvec%    ! mouse_x in d0, mouse_y in d1
+VDISYS
+RETURN LONG{CONTRL+18}        ! return old mousemovement_vector
+ENDFUNC
+'
+> FUNCTION vex_curv(newcurvec%)
+' installes a new routine that will be called
+' every time the mousepointer needs to be drawn
+CONTRL(0)=127
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(6)=workstation
+LONG{CONTRL+14}=newcurvec%    ! mouse_x in d0, mouse_y in d1
+VDISYS
+RETURN LONG{CONTRL+18}        ! return old mousedraw_vector
+ENDFUNC
+'
+' ****************************************************************
+' inquiry functions
+' ****************************************************************
+'
+> PROCEDURE vq_extend(mode,workout%)
+' returns information on a certain workstation
+CONTRL(0)=102
+CONTRL(1)=0
+CONTRL(3)=1
+CONTRL(6)=workstation
+INTIN(0)=mode                 ! 0: fill workout using 57 words as v_opnwk()
+VDISYS                        ! 1: fill workout using 57 words extra info
+BMOVE INTOUT,workout%,45*2    !    --> workout(4)=number of bitplanes
+BMOVE PTSOUT,workout%+45*2,13*2
+RETURN
+'
+> PROCEDURE vq_chcells(VAR rows,columns)
+' returns number of lines and columns of the TOS-screen
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(5)=1
+CONTRL(6)=workstation
+VDISYS
+rows=INTOUT(0)
+columns=INTOUT(1)
+RETURN
+'
+> PROCEDURE vq_curaddress(VAR row,column)
+' returns current position of textcursor
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(5)=15
+CONTRL(6)=workstation
+VDISYS
+row=INTOUT(0)
+column=INTOUT(1)
+RETURN
+'
+> FUNCTION vq_key_s
+' returns the shift-key status
+CONTRL(0)=128
+CONTRL(1)=0
+CONTRL(3)=0                   ! bit 0: right shift
+CONTRL(6)=workstation         ! bit 1: left shift
+VDISYS                        ! bit 2: control key
+RETURN INTOUT(0)              ! bit 3: alternate key
+ENDFUNC
+'
+> FUNCTION vq_mouse(VAR mx,my)
+' returns the mousebutton status
+CONTRL(0)=124
+CONTRL(1)=0                   ! mousebutton: 1=left
+CONTRL(3)=0                   !              2=right
+CONTRL(6)=workstation         !              4=middle (left of right)
+VDISYS                        !              8=other (left of middle)
+mx=PTSOUT(0)                  ! mouse x
+my=PTSOUT(1)                  ! mouse y
+RETURN INTOUT(0)              ! mousekbutton
+ENDFUNC
+'
+> FUNCTION vq_tabstatus
+' checks if there is a graphical tablet attatched
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(5)=16
+CONTRL(6)=workstation
+VDISYS
+RETURN INTOUT(0)              ! 0= no tablet, 1=tablet present
+ENDFUNC
+'
+> PROCEDURE vq_scan(VAR grh,passes,alh,apage,gdiv)
+' returns the status of the printerdriver
+' use only if @vq_gdosname(gdos$)>0
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(5)=24
+CONTRL(6)=workstation         ! printer, 21-30
+VDISYS
+grh=INTOUT(0)                 ! grh/gdiv --> graphic lines per pass
+passes=INTOUT(1)              ! graphic passes per printer page
+alh=INTOUT(0)                 ! alh/gdiv --> graphic lines per alphatext line
+apage=INTOUT(3)               ! alphatext lines per page
+gdiv=INTOUT(4)                ! divisor (CAN BE ZERO !!)
+RETURN
+'
+> PROCEDURE vq_tdimensions(VAR xdim,ydim)
+' returns the dimensions of het graphical tablet
+' use only if @vq_tabstatus>0
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(5)=84
+CONTRL(6)=workstation
+VDISYS
+xdim=INTOUT(0)                ! x dimension in tenths of an INCH
+ydim=INTOUT(1)                ! y dimension in tenths of an INCH
+RETURN
+'
+> FUNCTION vq_color(index,flag,VAR red,green,blue)
+' returns information on the VDI colorindex
+CONTRL(0)=26
+CONTRL(1)=0
+CONTRL(3)=2
+CONTRL(6)=workstation
+INTIN(0)=index                ! vdi index to be questioned
+INTIN(1)=flag                 ! 0=values as were last set by user
+VDISYS                        ! 1=value as is represented on screen
+red=INTOUT(1)                 ! intensity per color (0-1000)
+green=INTOUT(2)
+blue=INTOUT(3)
+RETURN INTOUT(0)              ! -1=out_of_range_error
+ENDFUNC
+'
+> PROCEDURE vqf_attributes(VAR finterior,fcolor,fstyle,fwrmode,fperimeter)
+' returns information on the current FILL settings
+CONTRL(0)=37
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(6)=workstation
+VDISYS
+finterior=INTOUT(0)           ! DEFFILL 2nd parameter (0-4)
+fcolor=INTOUT(1)              ! DEFFILL 1st parameter
+fstyle=INTOUT(2)              ! DEFFILL 3rd parameter
+fwrmode=INTOUT(3)             ! GRAPHMODE (1-4)
+fperimeter=INTOUT(4)          ! BOUNDARY  (0 of 1)
+RETURN
+'
+> PROCEDURE vql_attributes(VAR ltype,lcolor,lwrmode,lstart,lend,lwidth)
+' returns information on the current LINE settings
+CONTRL(0)=35
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(6)=workstation
+VDISYS
+ltype=INTOUT(0)               ! DEFLINE 1st parameter (1-7 of negative)
+lcolor=INTOUT(1)              ! COLOR
+lwrmode=INTOUT(2)             ! GRAPHMODE (1-4)
+lstart=INTOUT(3)              ! DEFLINE 3rd parameter (startshape 0-2)
+lend=INTOUT(4)                ! DEFLINE 4th parameter (endshape 0-2)
+lwidth=INTOUT(5)              ! DEFLINE 2nd parameter (0-40 STEP 2)
+RETURN
+'
+> PROCEDURE vqm_attributes(VAR mtype,mcolor,mwrmode,mwidth,mheight)
+' returns information on the current POLYMARK settings
+CONTRL(0)=36
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(6)=workstation
+VDISYS
+mtype=INTOUT(0)               ! DEFMARK 2nd parameter (1-6)
+mcolor=INTOUT(1)              ! DEFMARK 1st parameter
+mwrmode=INTOUT(2)             ! GRAPHMODE (1-4)
+mwidth=INTOUT(3)              ! DEFMARK 3rd parameter (width STEP 20)
+mheight=INTOUT(4)             ! DEFMARK 3rd parameter (height STEP 20)
+RETURN
+'
+> FUNCTION vqp_error
+' returns information on the camera driver (workstation 41-50)
+' to prevent messages being sent to the screen, use vsp_message()
+CONTRL(0)=5                   ! returnvalue:          0=ok
+CONTRL(1)=0                   ! 1=open dark slide,    2=no port at location
+CONTRL(3)=0                   ! 3=palette not found,  4=video cable disconnect
+CONTRL(5)=96                  ! 5=malloc error,       6=no memory for buffer
+CONTRL(6)=workstation         ! 7=memory not freed,   8=driver file not found
+VDISYS                        ! 9=driverfile corrupt,10=process print film
+RETURN INTOUT(0)
+ENDFUNC
+'
+> PROCEDURE vqp_state(VAR port,film,lightness,interlace,planes,indices%)
+' returns information on the palette driver
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(5)=92
+CONTRL(6)=workstation         ! camera driver: 41-50
+VDISYS
+port=INTOUT(0)                ! communication port number
+film=INTOUT(1)                ! film type (0-4), zie vqp_films()
+lightness=INTOUT(2)           ! diafragm (-3 t/m 3, 0=current setting)
+interlace=INTOUT(3)           ! 0=non-interlaced, 1=interlaced
+planes=INTOUT(4)              ! number of colorplanes (1-4)
+BMOVE INTOUT+10,indices%,32   ! indices%=pointer to array of 16 WORDS
+RETURN
+'
+> PROCEDURE vqp_films(VAR filmtype$())
+' returns in a stringarray (0-4) 5 possible filmtypes
+LOCAL tel,snr
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(5)=91
+CONTRL(6)=workstation         ! camera driver: 41-50
+VDISYS
+FOR snr=0 TO 4
+filmtype$(snr)=""           ! OPTION BASE 0 !!!
+FOR tel=0 TO 24
+filmtype$(snr)=filmtype$(snr)+CHR$(INTOUT(tel+25*snr))
+NEXT tel
+filmtype$(snr)=TRIM$(filmtype$(snr))
+NEXT snr
+RETURN
+'
+> FUNCTION vqin_mode(device)
+' returns information on the INPUT status of the VDI-device
+CONTRL(0)=115                 ! device:
+CONTRL(1)=0                   ! 1=LOCATOR (mouse and keyboard)
+CONTRL(3)=1                   ! 2=VALUATOR (not defined)
+CONTRL(6)=workstation         ! 3=CHOICE (not defined)
+INTIN(0)=device               ! 4=STRING (keyboard)
+VDISYS
+RETURN INTOUT(0)              ! modus (1=REQUEST, 2=SAMPLE)
+ENDFUNC
+'
+> PROCEDURE vqt_advance(ch,VAR advx,advy,xrem,yrem)
+' returns width and height of a vector-character
+' use only if @vq_gdosname(gdos$)>2
+CONTRL(0)=247
+CONTRL(1)=0
+CONTRL(3)=1
+CONTRL(6)=workstation
+INTIN(0)=ch
+VDISYS
+advx=PTSOUT(0)                        ! add to current position gives
+advy=PTSOUT(1)                        ! the next character position
+xrem=PTSOUT(2)                        ! remainder to add for microspacing
+yrem=PTSOUT(3)
+RETURN
+'
+> PROCEDURE vqt_advance32(ch,VAR advx,advy)
+' returns width and height of a vector-character in fix31 form
+' use only if @vq_gdosname(gdos$)>3
+CONTRL(0)=247
+CONTRL(1)=0
+CONTRL(3)=1
+CONTRL(6)=workstation
+INTIN(0)=ch
+VDISYS
+advx=@fix31_int(SHL(PTSOUT(4),16) OR PTSOUT(5)) ! microspacing for x_position
+advy=@fix31_int(SHL(PTSOUT(6),16) OR PTSOUT(7)) ! microspacing for y_position
+RETURN
+'
+> PROCEDURE vqt_cachesize(which,size%)
+' returns the size of the largest cache memoryblock
+' use only if @vq_gdosname(gdos$)>2
+CONTRL(0)=255
+CONTRL(1)=0
+CONTRL(3)=1
+CONTRL(6)=workstation
+INTIN(0)=which                                ! which: 0=charactercache
+VDISYS                                        !        1=miscellaneous cache
+size%=LONG{INTIN}
+' determine size for charactercache:   (width+7)\8*height
+'    "               misc. cache   :   84*(width+height)
+RETURN
+'
+> FUNCTION vqt_devinfo(devid,VAR devstr$)
+' checks if a driver is installed and returns its filename
+' use only if @vq_gdosname(gdos$)>1
+LOCAL tel
+CONTRL(0)=248
+CONTRL(1)=0
+CONTRL(3)=1
+CONTRL(6)=workstation
+INTIN(0)=devid                        ! ex. 21=printerdriver
+VDISYS
+CLR devstr$
+IF CONTRL(4)>0
+FOR tel=0 TO PRED(CONTRL(4))
+devstr$=devstr$+CHR$(INTOUT(tel))
+NEXT tel
+RETURN TRUE                         ! driver present
+ENDIF
+RETURN FALSE                          ! driver not present
+ENDFUNC
+'
+> FUNCTION vqt_name(fontindex,VAR fontid,fonname$)
+LOCAL tel
+CONTRL(0)=130
+CONTRL(1)=0
+CONTRL(3)=1
+CONTRL(6)=workstation
+INTIN(0)=fontindex
+VDISYS
+fontid=INTOUT(0)
+CLR fontname$
+FOR tel=1 TO 32               ! read name from intout, max 32 chars
+EXIT IF INTOUT(tel)=0
+fontname$=fontname$+CHR$(INTOUT(tel))
+NEXT tel
+RETURN INTOUT(33)             ! font_type: 0=BITMAP, 1=OUTLINE (vector)
+ENDFUNC
+'
+> PROCEDURE vqt_extent(txt$,pxy%)
+' returns 4 coords of rectangle into which the given text fits.
+' recommendation: use this routine only on BITMAPfonts.
+' the font_type is returned by function vqt_name()
+' as: 0=BITMAP, 1=OUTLINE (vector)
+' also see 'useful'-routine vqt_textwh()
+LOCAL tel,tadr%
+CONTRL(0)=116                 ! @vqt_name(index,id,font$)=0
+CONTRL(1)=0
+CONTRL(3)=LEN(txt$)           ! x4,y4--------------x3,y3
+CONTRL(6)=workstation         !   |      text       |
+tadr%=V:txt$                  ! x1,y1--------------x2,y2
+FOR tel=0 TO PRED(CONTRL(3))
+INTIN(tel)=BYTE{tadr%}
+INC tadr%
+NEXT tel
+VDISYS
+BMOVE PTSOUT,pxy%,16          ! 8 words: x1,y1,x2,y2 etc.
+RETURN
+'
+> PROCEDURE vqt_f_extent(txt$,pxy%)
+' returns 4 coords of the rectangle into which the text fits.
+' recommendation: use this routine for VECTOTfonts.
+LOCAL tel,tadr%
+CONTRL(0)=240                 ! @vqt_name(index,id,font$)=1
+CONTRL(1)=0
+CONTRL(3)=LEN(txt$)           ! x4,y4--------------x3,y3
+CONTRL(6)=workstation         !   |      text       |
+tadr%=V:txt$                  ! x1,y1--------------x2,y2
+FOR tel=0 TO PRED(CONTRL(3))
+INTIN(tel)=BYTE{tadr%}
+INC tadr%
+NEXT tel
+VDISYS
+BMOVE PTSOUT,pxy%,16          ! 8 words: x1,y1,x2,y2 etc.
+RETURN
+'
+> PROCEDURE vqt_attributes(attr%)
+' returns current settings for TEXT
+' in an array of 10 WORDS (attr%=pointer to the array)
+'     (0)=font indexnumber, see vst_font()
+'     (1)=textcolor, see vst_color()
+'     (2)=text angle, see vst_rotation()
+'     (3)=horizontal justification, see vst_alignment()
+'     (4)=vertical justification, see vst_alignment()
+'     (5)=graphical mode, see vswr_mode()
+'     (6)=characterwidth, see vst_height(),vst_point()
+'     (7)=characterheight, see vst_height(),vst_point()
+'     (8)=characterboxwidth, see vst_height()
+'     (9)=characterboxheight, see vst_height()
+CONTRL(0)=38
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(6)=workstation
+VDISYS
+BMOVE INTOUT,attr%,20
+RETURN
+'
+> PROCEDURE vqt_f_extent16(wtxt$,pxy%)
+' this routine is thesame as vqt_f_extent(), only it uses
+' a string, made up of (speedo) WORDS in stead of bytes.
+' returns 4 coords of the rectangle into which the text fits.
+' ONLY use this routine for WORD-sized strings in combination
+' with VECTORfonts and be sure SPEEDO is set correctly by vst_charmap()
+' use only if @vq_gdosname(gdos$)>3
+CONTRL(0)=240
+CONTRL(1)=0                   ! x4,y4--------------x3,y3
+CONTRL(3)=LEN(wtxt$)\2        !   |      text       |
+CONTRL(6)=workstation         ! x1,y1--------------x2,y2
+BMOVE V:wtxt$,INTIN,LEN(wtxt$)
+VDISYS
+BMOVE PTSOUT,pxy%,16          ! 8 words: x1,y1,x2,y2 etc.
+RETURN
+'
+> PROCEDURE vqt_fontheader(buffer%,VAR pathname$)
+' returns information on the current Speedo font
+' buffer%   is a pointer to a memoryblock of minimal 421 bytes
+' pathname$ will be filled in with the complete pathname of the
+'           corresponding .TDF file.
+' use only if @vq_gdosname(gdos$)>3
+LOCAL tel
+CONTRL(0)=234
+CONTRL(1)=0
+CONTRL(3)=2
+CONTRL(6)=workstation
+LONG{INTIN}=buffer%           ! this is where the fontheader goes
+VDISYS
+CLR pathname$
+FOR tel=0 TO PRED(CONTRL(4))
+EXIT IF INTOUT(tel)=0
+pathname$=pathname$+CHR$(INTOUT(tel))
+NEXT tel
+RETURN
+'
+> PROCEDURE vqt_fontinfo(VAR first,last,bigw,valign(),slant())
+' returns information on the current font
+' valign() is an array of 6 WORDS for vertical positioning
+' slant()  is an array of 3 WORD for skew
+' Speedo does NOT properly fill valign(1) and valign(2)..
+CONTRL(0)=131
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(6)=workstation
+VDISYS
+first=INTOUT(0)               ! first defined character
+last=INTOUT(1)                ! last defined character
+bigw=PTSOUT(0)                ! width largest characterbox
+valign(0)=PTSOUT(1)           ! bottom line (bottom line characterbox)
+valign(1)=PTSOUT(3)           ! descent line (bottom line character g)
+valign(2)=PTSOUT(5)           ! baseline (bottom line character G)
+valign(3)=PTSOUT(7)           ! half line (top line character g)
+valign(4)=PTSOUT(9)           ! ascent line (top line character G)
+valign(5)=PTSOUT(11)          ! topline (top line characterbox)
+slant(0)=PTSOUT(2)            ! pixelwidth top-left white edge on slant
+slant(1)=PTSOUT(4)            ! pixelwidth bottom-right      "
+slant(2)=PTSOUT(6)            ! slant(0)+slant(1)
+RETURN
+'
+> FUNCTION vqt_get_table
+' returns a pointer to 7 tabels for Bitstream character-
+' indexing. each tabel is 224 WORDS and corresponds with the
+' ASCII characters 32-255
+' use only if @vq_gdosname(gdos$)>3
+CONTRL(0)=254                 ! tabel 1: Master mapping
+CONTRL(1)=0                   ! tabel 2: Bitstream Intern. Character Set
+CONTRL(3)=0                   ! tabel 3: Bitstream Intern. Symbol Set
+CONTRL(6)=workstation         ! tabel 4: Bitstrean Dingbats Set
+VDISYS                        ! tabel 5: PostScript Text Set
+RETURN LONG{INTOUT}           ! tabel 6: PostScript Symbol Set
+ENDFUNC                         ! tabel 7: PostScript Dingbats Set
+'
+> PROCEDURE vqt_trackkern(VAR xkern%,ykern%)
+' returns the horizontal and vertical adjustment-vectors
+' that are used for GLOBAL font-microspacing
+' use only if @vq_gdosname(gdos$)>3
+CONTRL(0)=234
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(6)=workstation
+VDISYS
+xkern%=LONG{PTSOUT}
+ykern%=LONG{PTSOUT+4}
+RETURN
+'
+> FUNCTION vqt_width(ch,VAR cellw,left,right)
+' returns the pixelwidth of a given character
+' this routine does not allow for special effects.
+' on vectorfonts rather use vqt_advance()
+CONTRL(0)=117
+CONTRL(1)=0
+CONTRL(3)=1
+CONTRL(6)=workstation
+INTIN(0)=BYTE(ch)
+VDISYS
+cellw=PTSOUT(0)               ! width of the characterbox
+left=PTSOUT(2)                ! width white edge left
+right=PTSOUT(4)               ! width white edge right
+RETURN INTOUT(0)              ! -1=error, otherwise ch is returned
+ENDFUNC
+'
+' ****************************************************************
+' settings functions
+' ****************************************************************
+'
+> FUNCTION vsin_mode(device,mode)
+' set the INPUT status of het VDI-device
+' best NOT use this, because it will confuse the AES..
+CONTRL(0)=33                  ! device:
+CONTRL(1)=0                   ! 1=LOCATOR (mouse and keyboard)
+CONTRL(3)=2                   ! 2=VALUATOR (not defined)
+CONTRL(6)=workstation         ! 3=CHOICE (not defined)
+INTIN(0)=device               ! 4=STRING (keyboard)
+INTIN(1)=mode                 ! 1=REQUEST, 2=SAMPLE
+VDISYS
+RETURN INTOUT(0)              ! modus
+ENDFUNC
+'
+> PROCEDURE vs_clip(flag,clipx1,clipy1,clipx2,clipy2)
+' is CLIP clipx1,clipy1,clipx2,clipy2
+CONTRL(0)=129
+CONTRL(1)=2
+CONTRL(3)=1
+CONTRL(6)=workstation
+INTIN(0)=flag                 ! 0=CLIP_OFF, 1=CLIP_ON
+IF flag
+PTSIN(0)=clipx1
+PTSIN(1)=clipy1
+PTSIN(2)=clipx2
+PTSIN(3)=clipy2
+ENDIF
+VDISYS
+RETURN
+'
+> PROCEDURE vs_color(colreg,red,green,blue)
+' is SETCOLOR
+' colreg= register : HI-RES=0-1 / MID-RES=0-3 / LOW-RES=0-15
+CONTRL(0)=14
+CONTRL(1)=0
+CONTRL(3)=4
+CONTRL(6)=workstation
+INTIN(0)=colreg
+INTIN(1)=red                  ! 0-1000
+INTIN(2)=green
+INTIN(3)=blue
+VDISYS
+RETURN
+'
+> PROCEDURE vs_palette(mode)
+' selects a CGA palette
+' colreg= register : HI-RES=0-1 / MID-RES=0-3 / LOW-RES=0-15
+CONTRL(0)=14
+CONTRL(1)=0
+CONTRL(3)=4
+CONTRL(6)=workstation
+INTIN(0)=colreg
+INTIN(1)=red                  ! 0-1000
+INTIN(2)=green
+INTIN(3)=blue
+VDISYS
+RETURN
+'
+> FUNCTION vsf_color(fcolor)
+' is DEFFILL, 1st parameter
+' sets color for FILL-actions
+CONTRL(0)=25
+CONTRL(1)=0
+CONTRL(3)=1
+CONTRL(6)=workstation
+INTIN(0)=fcolor
+VDISYS
+RETURN INTOUT(0)              ! actual set color
+ENDFUNC
+'
+> FUNCTION vsf_perimeter(flag)
+' turns perimeter on or off for filled boxes, circels e.d.
+CONTRL(0)=104
+CONTRL(1)=0
+CONTRL(3)=1
+CONTRL(6)=workstation
+INTIN(0)=flag                 ! 0=perimeter OFF, 1=perimeter ON
+VDISYS
+RETURN INTOUT(0)              ! actual set value
+ENDFUNC
+'
+> FUNCTION vsf_interior(finterior)
+' is DEFFILL, 2nd parameter
+' sets fillpattern for FILL-actions
+' finterior:  0=fill opaque using backgroundcolor (color 0)
+'             1=fill opaque using foregroundcolor
+'             2=fill using dotted-pattern (set using vsf_style())
+'             3=fill using line-pattern (set using vsf_style)
+'             4=enter user-defined fillpattern (set using vsf_udpat())
+CONTRL(0)=23
+CONTRL(1)=0
+CONTRL(3)=1
+CONTRL(6)=workstation
+INTIN(0)=finterior
+VDISYS
+RETURN INTOUT(0)              ! actual set filltype
+ENDFUNC
+'
+> FUNCTION vsf_style(fstyle)
+' sets the current fillpattern
+' is DEFFILL 3rd parameter
+' fstyle is dependent of the setting by vsf_interior:
+'     if 2 (dots), then fstyle 1-24
+'     if 3 (lines), then fstyle 1-12
+CONTRL(0)=24
+CONTRL(1)=0
+CONTRL(3)=1
+CONTRL(6)=workstation
+INTIN(0)=fstyle
+VDISYS
+RETURN INTOUT(0)              ! actual set value
+ENDFUNC
+'
+> PROCEDURE vsf_udpat(fpattern%,nplanes)
+' sets a user-defined fillpattern
+' is DEFFILL ,pattern$
+' nplanes is the number of colorplanes
+CONTRL(0)=112
+CONTRL(1)=0
+CONTRL(3)=16*nplanes
+CONTRL(6)=workstation
+BMOVE fpattern%,INTIN,32*nplanes      ! 16*nplanes WORDS
+VDISYS
+RETURN
+'
+> PROCEDURE vsl_color(lcolor)
+' sets color that is used for drawing lines
+' is COLOR
+CONTRL(0)=17
+CONTRL(1)=0
+CONTRL(3)=1
+CONTRL(6)=workstation
+INTIN(0)=lcolor
+VDISYS
+RETURN
+'
+> PROCEDURE vsl_ends(lstart,lfinish)
+' is DEFLINE,3rd and 4th parameter
+' lstart and lfinish:  0 -> square
+'                      1 -> arrow
+'                      2 -> rounded (only for thicker lines)
+CONTRL(0)=108
+CONTRL(1)=0
+CONTRL(3)=2
+CONTRL(6)=workstation
+INTIN(0)=lstart
+INTIN(1)=lfinish
+VDISYS
+RETURN
+'
+> PROCEDURE vsl_type(ltype)
+' is DEFLINE, 1st parameter
+' ltype: 0-6 standard linepatterns
+'        7   linepattern is user defined pattern with vsl_udsty()
+CONTRL(0)=15
+CONTRL(1)=0
+CONTRL(3)=1
+CONTRL(6)=workstation
+INTIN(0)=ltype
+VDISYS
+RETURN
+'
+> PROCEDURE vsl_udsty(lpattern)
+' is DEFLINE, 1st parameter set to 7 (user defined line)
+' lpattern = 16 bits number, determining the line
+' call vsf_style() to actually use this linepattern..
+CONTRL(0)=113
+CONTRL(1)=0
+CONTRL(3)=1
+CONTRL(6)=workstation
+INTIN(0)=lpattern
+VDISYS
+RETURN
+'
+> PROCEDURE vsl_width(lwidth)
+' is DEFLINE, 2nd parameter
+' lwidth = wanted linewidth in steps of 2
+CONTRL(0)=16
+CONTRL(1)=1
+CONTRL(3)=0
+CONTRL(6)=workstation
+PTSIN(0)=lwidth               ! only ODD numbers
+VDISYS
+RETURN
+'
+> FUNCTION vsm_color(mcolor)
+' is DEFMARK, 1st parameter
+CONTRL(0)=20
+CONTRL(1)=0
+CONTRL(3)=1
+CONTRL(6)=workstation
+INTIN(0)=mcolor
+VDISYS
+RETURN INTOUT(0)              ! actual set color
+ENDFUNC
+'
+> FUNCTION vsm_height(mheight)
+' is DEFMARK, 3rd parameter
+CONTRL(0)=19
+CONTRL(1)=1
+CONTRL(3)=0
+CONTRL(6)=workstation
+PTSIN(0)=0
+PTSIN(1)=mheight              ! so NOT in intin (error in Compendium)
+VDISYS
+RETURN PTSOUT(1)              ! actual set pixelheight
+ENDFUNC
+'
+> FUNCTION vsm_type(mtype)
+' is DEFMARK, 2nd parameter
+' mtype:  1  -> one pixelpoint
+'         2  -> plus-sign
+'         3  -> six angled star
+'         4  -> rectangle
+'         5  -> diagonal cross (x)
+'         6  -> diamond
+'         >6 -> same as 3
+CONTRL(0)=18
+CONTRL(1)=0
+CONTRL(3)=1
+CONTRL(6)=workstation
+INTIN(0)=mtype
+VDISYS
+RETURN INTOUT(0)              ! actual set marker
+ENDFUNC
+'
+> PROCEDURE vswr_mode(mode)
+' is GRAPHMODE
+' mode: 1=REPLACE, 2=TRANSPARENT, 3=XOR, 4=NEGATIVE
+CONTRL(0)=32
+CONTRL(1)=0
+CONTRL(3)=1
+CONTRL(6)=workstation
+INTIN(0)=mode                 ! graphmode: 1-4
+VDISYS
+RETURN
+'
+> PROCEDURE vsp_message
+' stops error messages being printed to screen by camera driver
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(5)=95
+CONTRL(6)=workstation         ! 41-50
+VDISYS
+RETURN
+'
+> PROCEDURE vsp_save
+' puts the current settings of the camera driver to disk
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(5)=94
+CONTRL(6)=workstation         ! 41-50
+VDISYS
+RETURN
+'
+> PROCEDURE vsp_state(port,film,lightness,interlace,planes,indices%)
+' sets the camera driver (palette driver)
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=21
+CONTRL(5)=93
+CONTRL(6)=workstation         ! 41-50
+INTIN(0)=port                 ! communication port number
+INTIN(1)=film                 ! film type (0-4), see vqp_films()
+INTIN(2)=lightness            ! diafragm (-3 (=half) t/m 3 (=double))
+INTIN(3)=interlace            ! 0=non_interlaced, 1=interlaced
+INTIN(4)=planes               ! number of colorplanes
+BMOVE indices%,INTIN+10,32    ! indices%=pointer to array of 16 WORDS
+VDISYS
+RETURN
+'
+> PROCEDURE vst_alignment(halign,valign,VAR hout,vout)
+' set horizontal and vertical justification for graphic text
+' halign: 0=left justified
+'         1=center justified
+'         2=right justified
+' valign: 0=base line (bottom line character G)
+'         1=half line (top line character g)
+'         2=ascent line (top line character G)
+'         3=bottom line (bottom line characterbox)
+'         4=descent line (bottom line character g)
+'         5=top line (top line characterbox)
+CONTRL(0)=39
+CONTRL(1)=0
+CONTRL(3)=2
+CONTRL(6)=workstation
+INTIN(0)=halign
+INTIN(1)=valign
+VDISYS
+hout=INTOUT(0)
+vout=INTOUT(1)
+RETURN
+'
+> PROCEDURE vst_height(height,VAR wchar,hchar,wcell,hcell)
+' sets height of current font in pixels
+' is DEFTEXT, 4th parameter
+CONTRL(0)=12
+CONTRL(1)=1
+CONTRL(3)=0
+CONTRL(6)=workstation
+PTSIN(0)=0
+PTSIN(1)=height
+VDISYS
+wchar=PTSOUT(0)
+hchar=PTSOUT(1)
+wcell=PTSOUT(2)
+wcell=PTSOUT(3)
+RETURN
+'
+> FUNCTION vst_point(pts,VAR wchar,hchar,wcell,hcell)
+' is DEFTEXT 4th parameter
+' sets height of current BITMAP-font in points PICA (1/72 inch)
+' see vst_height() and vst_arbpt()
+CONTRL(0)=107
+CONTRL(1)=0
+CONTRL(3)=1
+CONTRL(6)=workstation
+INTIN(0)=pts
+VDISYS
+wchar=PTSOUT(0)
+hchar=PTSOUT(1)
+wcell=PTSOUT(2)
+wcell=PTSOUT(3)
+RETURN INTOUT(0)              ! actual set pointheight
+ENDFUNC
+'
+> FUNCTION vst_arbpt(pts,VAR wchar,hchar,wcell,hcell)
+' sets height of current OUTLINE-font in points pica (1/72 inch)
+' see vst_point()
+' use only if @vq_gdosname(gdos$)>2
+CONTRL(0)=246
+CONTRL(1)=0
+CONTRL(3)=1
+CONTRL(6)=workstation
+INTIN(0)=pts
+VDISYS
+wchar=PTSOUT(0)
+hchar=PTSOUT(1)
+wcell=PTSOUT(2)
+wcell=PTSOUT(3)
+RETURN INTOUT(0)              ! actual set pointheight
+ENDFUNC
+'
+> FUNCTION vst_arbpt32(pts%,VAR wchar,hchar,wcell,hcell)
+' sets height of current OUTLINE-font in points pica
+' using a fix31 value. see vst_arbpt()
+' use only if @vq_gdosname(gdos$)>3
+CONTRL(0)=246
+CONTRL(1)=0
+CONTRL(3)=2
+CONTRL(6)=workstation
+LONG{INTIN}=pts%                      ! fix31 type
+VDISYS
+wchar=PTSOUT(0)
+hchar=PTSOUT(1)
+wcell=PTSOUT(2)
+wcell=PTSOUT(3)
+RETURN @fix31_int(LONG{INTOUT})       ! actual set pointheight
+ENDFUNC
+'
+> PROCEDURE vst_kern(trackmode,pairmode,VAR tracks,pairs)
+' sets kerning (microspacing) globally for OUTLINE-font
+' or by pairs of characters
+' use only if @vq_gdosname(gdos$)>3
+' trackmode:  0=no track (global) kerning
+'             1=normal track kerning
+'             2=condensed track kerning
+'             3=very condensed track kerning
+' pairmode:   0=pair kerning OFF
+'             1=pair kerning ON
+CONTRL(0)=237
+CONTRL(1)=0
+CONTRL(3)=2
+CONTRL(6)=workstation
+INTIN(0)=trackmode
+INTIN(1)=pairmode
+VDISYS
+tracks=INTOUT(0)              ! actual set modus
+pairs=INTOUT(1)               ! number of defined character_pairs
+RETURN
+'
+> FUNCTION vst_setsize(pts,VAR wchar,hchar,wcell,hcell)
+' sets point (pica=1/72 inch) WIDTH for font
+CONTRL(0)=252
+CONTRL(1)=0
+CONTRL(3)=1
+CONTRL(6)=workstation
+INTIN(0)=pts
+VDISYS
+wchar=PTSOUT(0)
+hchar=PTSOUT(1)
+wcell=PTSOUT(2)
+wcell=PTSOUT(3)
+RETURN INTOUT(0)              ! actual set pointwidth
+ENDFUNC
+'
+> FUNCTION vst_setsize32(pts%,VAR wchar,hchar,wcell,hcell)
+' sets point (pica=1/72 inch) WIDTH for font
+' using fix31 type value
+' use only if @vq_gdosname(gdos$)>3
+CONTRL(0)=252
+CONTRL(1)=0
+CONTRL(3)=2
+CONTRL(6)=workstation
+LONG{INTIN}=pts%                      ! fix31 type
+VDISYS
+wchar=PTSOUT(0)
+hchar=PTSOUT(1)
+wcell=PTSOUT(2)
+wcell=PTSOUT(3)
+RETURN @fix31_int(LONG{INTOUT})       ! actual set pointheight
+ENDFUNC
+'
+> FUNCTION vst_effects(teffect)
+' is DEFTEXT, 2nd parameter
+' teffect: bit 0 -> fat
+'          bit 1 -> light
+'          bit 2 -> skewed
+'          bit 3 -> underlined
+'          bit 4 -> contour
+'          bit 5 -> shadowed (not supported)
+CONTRL(0)=106
+CONTRL(1)=0
+CONTRL(3)=1
+CONTRL(6)=workstation
+INTIN(0)=teffect
+VDISYS
+RETURN INTOUT(0)                      ! actual set effect
+ENDFUNC
+'
+> PROCEDURE vst_scratch(mode)
+' as from FSMGDOS you can set the memorybuffer for rendering
+' outline fonts. The bigger the buffer, the more efficient it gets.
+' mode: 0=buffers large enough for all fonts WITH special effects
+'       1=buffers for vector fonts WITHOUT- and bitmap fonts WITH effects
+'       2=buffers large enough for all fonts WITHOUT special effects
+' use only if @vq_gdosname(gdos$)>2
+'
+CONTRL(0)=244
+CONTRL(1)=0
+CONTRL(3)=1
+CONTRL(6)=workstation
+INTIN(0)=mode                         ! 1=default
+VDISYS
+RETURN
+'
+> FUNCTION vst_skew(skew)
+' sets skewing angle for OUTLINE (vector)fonts
+' use only if @vq_gdosname(gdos$)>2
+CONTRL(0)=253
+CONTRL(1)=0
+CONTRL(3)=1
+CONTRL(6)=workstation
+INTIN(0)=skew                 ! in tenths of degrees (-900 t/m 900)
+VDISYS
+RETURN INTOUT(0)              ! actual set value
+ENDFUNC
+'
+> FUNCTION vst_load_fonts
+' load font information in memory
+' use only if @vq_gdosname(gdos$)>0
+CONTRL(0)=119
+CONTRL(1)=0
+CONTRL(3)=1
+CONTRL(6)=workstation
+INTIN(0)=0
+VDISYS
+RETURN INTOUT(0)              ! number of loaded fonts
+ENDFUNC
+'
+> PROCEDURE vst_unload_fonts
+' deletes memory for loaded font information
+' use only if @vq_gdosname(gdos$)>0
+CONTRL(0)=120
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(6)=workstation
+INTIN(0)=0
+VDISYS
+RETURN
+'
+> FUNCTION vst_font(f_index)
+' is DEFTEXT, 5th parameter
+CONTRL(0)=21
+CONTRL(1)=0
+CONTRL(3)=1
+CONTRL(6)=workstation
+INTIN(0)=f_index              ! get this value from vqt_name()
+VDISYS
+RETURN INTOUT(0)              ! returns index of set font
+ENDFUNC
+'
+> FUNCTION vst_color(tcolor)
+' is DEFTEXT, 1st parameter
+' sets drawing (pen) color (NOT background) for TEXT
+CONTRL(0)=22
+CONTRL(1)=0
+CONTRL(3)=1
+CONTRL(6)=workstation
+INTIN(0)=tcolor
+VDISYS
+RETURN INTOUT(0)              ! actual set color
+ENDFUNC
+'
+> FUNCTION vst_rotation(degrees)  ! set font-angle
+' is DEFTEXT, 3rd parameter
+CONTRL(0)=13
+CONTRL(1)=0
+CONTRL(3)=1                   ! only outline fonts can be rotated at
+CONTRL(6)=workstation         ! any angle; bitmaps in steps of 90ø
+INTIN(0)=degrees              ! ~@vst_rotation(700) --> 70ø LEFT
+VDISYS
+RETURN INTOUT(0)              ! value actually set
+ENDFUNC
+'
+> PROCEDURE vst_error(mode,adr_error%)
+' determines where error messages by GDOS should go
+' use only if @vq_gdosname(gdos$)>1
+' adr_error% is the address of a GLOBAL word, in which
+' error messages are being placed. ERRORWORD:
+'     0= no error,            1=character not found in font
+'     8=error reading file,   9=error opening file
+'    10=bad file format,     11=out of memory/cache full
+'    -1=miscellaneous error
+' mode& sets the way messages should be given:
+'     0=APP_ERROR, put errors in ERRORWORD
+'     1=SCREEN_ERROR, put error messages on screen (default)
+CONTRL(0)=245
+CONTRL(1)=0
+CONTRL(3)=3
+CONTRL(6)=workstation
+INTIN(0)=mode
+LONG{INTIN+2}=adr_error%
+VDISYS
+RETURN
+'
+> PROCEDURE vst_charmap(mode)
+' sets vdi to handle ASCII-strings (BYTES)
+' or Bitstream character indexes (WORDS)
+' use only if @vq_gdosname(gdos$)>3
+CONTRL(0)=236
+CONTRL(1)=0
+CONTRL(3)=1
+CONTRL(6)=workstation
+INTIN(0)=mode                 ! 1=MAP_ATARI, 0=MAP_BITSTREAM
+VDISYS
+RETURN
+'
+> PROCEDURE vt_alignment(dx,dy)
+' sets size for the graphical tablet
+' use only if @vq_tabstatus>0
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=2
+CONTRL(5)=85
+CONTRL(6)=workstation
+INTIN(0)=dx                   ! delta offset from point (0,0)
+INTIN(1)=dy
+VDISYS
+RETURN
+'
+> PROCEDURE vt_axis(xres,yres,VAR xout,yout)
+' sets horizontal and vertical resolution for the graphical tablet
+' use only if @vq_tabstatus>0
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=2
+CONTRL(5)=82
+CONTRL(6)=workstation
+INTIN(0)=xres                 ! resolution in lines
+INTIN(1)=yres
+VDISYS
+xout=INTOUT(0)                ! actual set resolution
+yout=INTOUT(1)
+RETURN
+'
+> PROCEDURE vt_origin(xorigin,yorigin)
+' sets point of origin for het graphical tablet
+' use only if @vq_tabstatus>0
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=2
+CONTRL(5)=83
+CONTRL(6)=workstation
+INTIN(0)=xorigin              ! top-left: (0,0)
+INTIN(1)=yorigin
+VDISYS
+RETURN
+'
+> PROCEDURE vt_resolution(xres,yres,VAR xout,yout)
+' sets horizontal and vertical resolution for
+' the graphical tablet in lines per inch
+' use only if @vq_tabstatus>0
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=2
+CONTRL(5)=81
+CONTRL(6)=workstation
+INTIN(0)=xres                 ! resolution in lines per inch
+INTIN(1)=yres
+VDISYS
+xout=INTOUT(0)                ! actual set resolution
+yout=INTOUT(1)
+RETURN
+'
+' ****************************************************************
+' screen functions
+' ****************************************************************
+'
+> PROCEDURE v_arc(x,y,radius,startangle,endangle)
+' draws a cure on the selected driver
+CONTRL(0)=11
+CONTRL(1)=4
+CONTRL(3)=2
+CONTRL(5)=2
+CONTRL(6)=workstation
+INTIN(0)=startangle             ! angle in tenths of degrees
+INTIN(1)=endangle
+PTSIN(0)=x
+PTSIN(1)=y
+LONG{PTSIN+4}=0
+LONG{PTSIN+8}=0
+PTSIN(6)=radius
+PTSIN(7)=0
+VDISYS
+RETURN
+'
+> PROCEDURE v_bar(x_start,y_start,x_finish,y_finish)
+' draws a filled rectangle on the selected driver
+' uses boundary-setting by vsf_perimeter()
+' is PBOX
+CONTRL(0)=11
+CONTRL(1)=2
+CONTRL(3)=0
+CONTRL(5)=1
+CONTRL(6)=workstation
+PTSIN(0)=x_start
+PTSIN(1)=y_start
+PTSIN(2)=x_finish
+PTSIN(3)=y_finish
+VDISYS
+RETURN
+'
+> PROCEDURE v_circle(x,y,radius)
+' draws a filled circle on the selected driver
+' is PCIRCLE
+CONTRL(0)=11
+CONTRL(1)=3           ! number of Ptsin elements
+CONTRL(3)=0           ! number of Intin elements
+CONTRL(5)=4
+CONTRL(6)=workstation
+PTSIN(0)=x
+PTSIN(1)=y
+LONG{PTSIN+4}=0
+PTSIN(4)=radius
+VDISYS
+RETURN
+'
+> PROCEDURE v_contourfill(x,y,color)
+' is FILL
+CONTRL(0)=103
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(6)=workstation
+INTIN(0)=color
+PTSIN(0)=x
+PTSIN(1)=y
+VDISYS
+RETURN
+'
+> PROCEDURE v_ellarc(x,y,xradius,yradius,startangle,endangle)
+' draws an elliptical curvesegment
+' is ELLIPSE
+CONTRL(0)=11
+CONTRL(1)=2
+CONTRL(3)=2
+CONTRL(5)=6
+CONTRL(6)=workstation
+INTIN(0)=startangle           ! angle in tenths of degrees
+INTIN(1)=endangle
+PTSIN(0)=x
+PTSIN(1)=y
+PTSIN(2)=xradius
+PTSIN(3)=yradius
+VDISYS
+RETURN
+'
+> PROCEDURE v_ellipse(x,y,xradius,yradius)
+' draws a filled ellips
+' is PELLIPSE
+CONTRL(0)=11
+CONTRL(1)=2
+CONTRL(3)=0
+CONTRL(5)=5
+CONTRL(6)=workstation
+PTSIN(0)=x
+PTSIN(1)=y
+PTSIN(2)=xradius
+PTSIN(3)=yradius
+VDISYS
+RETURN
+'
+> PROCEDURE v_ellpie(x,y,xradius,yradius,startangle,endangle)
+' draws a filled elliptical curvesegment
+CONTRL(0)=11
+CONTRL(1)=2
+CONTRL(3)=2
+CONTRL(5)=7
+CONTRL(6)=workstation
+INTIN(0)=startangle           ! angle in tenths of degrees
+INTIN(1)=endangle
+PTSIN(0)=x
+PTSIN(1)=y
+PTSIN(2)=xradius
+PTSIN(3)=yradius
+VDISYS
+RETURN
+'
+> PROCEDURE v_fillarea(count,pxy%)
+' draws filled POLYGONS.
+' is POLYFILL
+CONTRL(0)=9
+CONTRL(1)=count
+CONTRL(3)=0
+CONTRL(6)=workstation
+BMOVE pxy%,PTSIN,count*4      ! fill x- and y coordinates
+VDISYS 9
+RETURN
+'
+> PROCEDURE v_get_pixel(x,y,VAR pindex,vindex)
+' returns the color of a certain point on the screen
+' is POINT
+CONTRL(0)=105
+CONTRL(1)=1
+CONTRL(3)=0
+CONTRL(6)=workstation
+PTSIN(0)=x                    ! palette_based: pindex=hardware register
+PTSIN(1)=y                    !                vindex=VDI colorindex
+VDISYS                        ! 16_bit: pindex=0
+pindex=INTOUT(0)              !         vindex=color: RRRR RGGG GGGB BBBB
+vindex=INTOUT(1)              ! 32_bit: SHR(pindex,8)=GROEN
+'                             !         BYTE(pindex)=BLAUW
+'                             !         BYTE(vindex)=ROOD
+'                             !         SHR(vindex)=NON_COLOR
+RETURN
+'
+> PROCEDURE v_hardcopy
+' dumps current screen to the printer (ALT_HELP)
+' only available for ST-resolutions
+CONTRL(0)=5
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(5)=17
+CONTRL(6)=workstation
+VDISYS
+RETURN
+'
+> PROCEDURE v_pieslice(x,y,radius,startangle,endangle)
+' draws a filled circular curvesegment
+CONTRL(0)=11
+CONTRL(1)=4
+CONTRL(3)=2
+CONTRL(5)=3
+CONTRL(6)=workstation
+INTIN(0)=startangle           ! angle in tenths of degrees
+INTIN(1)=endangle
+PTSIN(0)=x
+PTSIN(1)=y
+LONG{PTSIN+4}=0
+LONG{PTSIN+8}=0
+PTSIN(6)=radius
+VDISYS
+RETURN
+'
+> PROCEDURE v_pline(count,pxy%)
+' draws unfilled POLYGONS
+' is POLYLINE
+CONTRL(0)=6
+CONTRL(1)=count
+CONTRL(3)=0
+CONTRL(6)=workstation
+BMOVE pxy%,PTSIN,count*4      ! x- and y coordinates
+VDISYS
+RETURN
+'
+> PROCEDURE v_pmarker(count,pxy%)
+' draws a marker. use vsm_type() to select one.
+' single pixels can be drawn fast with this function
+' is POLYMARK
+CONTRL(0)=7
+CONTRL(1)=count
+CONTRL(3)=0
+CONTRL(6)=workstation
+BMOVE pxy%,PTSIN,count*4      ! x- and y coordinates
+VDISYS
+RETURN
+'
+> PROCEDURE v_rbox(x_start,y_start,x_finish,y_finish)
+' draws a rounded box
+' is RBOX
+CONTRL(0)=11
+CONTRL(1)=2
+CONTRL(3)=0
+CONTRL(5)=8
+CONTRL(6)=workstation
+PTSIN(0)=x_start
+PTSIN(1)=y_start
+PTSIN(2)=x_finsh
+PTSIN(3)=y_finsh
+VDISYS
+RETURN
+'
+> PROCEDURE v_rfbox(x_start,y_start,x_finish,y_finish)
+' draws a filled rounded box
+' is PRBOX
+CONTRL(0)=11
+CONTRL(1)=2
+CONTRL(3)=0
+CONTRL(5)=9
+CONTRL(6)=workstation
+PTSIN(0)=x_start
+PTSIN(1)=y_start
+PTSIN(2)=x_finsh
+PTSIN(3)=y_finsh
+VDISYS
+RETURN
+'
+> PROCEDURE vr_recfl(x_start,y_start,x_finish,y_finish)
+' draws a filled box WITHOUT boundary (despite setting of vs_perimeter())
+' is PBOX, using BOUNDARY 0
+CONTRL(0)=114
+CONTRL(1)=2
+CONTRL(3)=0
+CONTRL(6)=workstation
+PTSIN(0)=x_start
+PTSIN(1)=y_start
+PTSIN(2)=x_finish
+PTSIN(3)=y_finish
+VDISYS
+RETURN
+'
+> PROCEDURE vr_trnfm(s_mfdb%,d_mfdb%)
+' translates a memoryblock (bitmap) from machine independent
+' (colorplanes separated) to machine dependent (color-
+' planes word-interlaced) and vice versa. There is a better
+' routine from NVDI available: vr_transform()
+CONTRL(0)=110
+CONTRL(1)=0
+CONTRL(3)=0
+CONTRL(6)=workstation
+LONG{CONTRL+14}=s_mfdb%       ! address of SOURCE mfdb
+LONG{CONTRL+18}=d_mfdb%       ! address of DESTINATION mfdb
+VDISYS                        ! fill mfdb's using mfdb_fill()
+RETURN
+'
+> PROCEDURE vro_cpyfm(mode,sx1,sy1,sx2,sy2,dx1,dy1,dx2,dy2)
+' Copy Raster Opaque
+' this routine blits a bitmap from one memorylocation to the
+' other. Destination and source must have the same number of color
+' planes. Use vrt_cpyfm() to blit a monochrome bitmap onto a color
+' screen.
+' use mfdb_fill() to fill the Memory Form Definition Blocks
+CONTRL(0)=109
+CONTRL(1)=4
+CONTRL(3)=1
+CONTRL(6)=workstation
+LONG{CONTRL+14}=V:mfdb(0)     ! address of SOURCE-MFDB
+LONG{CONTRL+18}=V:mfdb(10)    ! address of DESTINATION-MFDB
+INTIN(0)=mode                 ! 0 t/m 15 as in PUT
+PTSIN(0)=sx1                  ! x1 of source
+PTSIN(1)=sy1                  ! y1 of source
+PTSIN(2)=sx2                  ! x2 of source
+PTSIN(3)=sy2                  ! y2 of source
+PTSIN(4)=dx1                  ! same for destination
+PTSIN(5)=dy1
+PTSIN(6)=dx2
+PTSIN(7)=dy2
+VDISYS
+RETURN
+'
+> PROCEDURE vrt_cpyfm(mode,sx1,sy1,sx2,sy2,dx1,dy1,dx2,dy2,colone,colzero)
+' Copy Raster Transparent
+' this routine blits a bitmap from one memorylocation to the
+' other. The SOURCE bitmap MUST be monochrome, the DESTINATION
+' MUST be a color display.
+' use mfdb_fill() to fill the Memory Form Definition Blocks
+CONTRL(0)=121
+CONTRL(1)=4
+CONTRL(3)=3
+CONTRL(6)=workstation
+LONG{CONTRL+14}=V:mfdb(0)     ! address of SOURCE-MFDB
+LONG{CONTRL+18}=V:mfdb(10)    ! address of DESTINATION-MFDB
+INTIN(0)=mode                 ! 1 t/m 4 as in GRAPHMODE
+INTIN(1)=colone               ! color of set bits
+INTIN(2)=colzero              ! color of cleared bits
+PTSIN(0)=sx1                  ! x1 of source
+PTSIN(1)=sy1                  ! y1 of source
+PTSIN(2)=sx2                  ! x2 of source
+PTSIN(3)=sy2                  ! y2 of source
+PTSIN(4)=dx1                  ! same for destination
+PTSIN(5)=dy1
+PTSIN(6)=dx2
+PTSIN(7)=dy2
+VDISYS
+RETURN

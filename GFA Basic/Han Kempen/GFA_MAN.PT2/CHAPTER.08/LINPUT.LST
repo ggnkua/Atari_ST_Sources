@@ -1,0 +1,526 @@
+' *** LINPUT.LST ***                                  2nd GFA-Manual, page 8-11
+> PROCEDURE line_input(flg%,c,l,len,cur,f$,c$,def$,chr$,VAR in$,curs,ret)
+  '
+  ' *** The ultimate input-routine
+  ' ***
+  ' *** Bits in flg% determine actions:
+  ' ***         0 - draw box around input-field
+  ' ***         1 - CapsLock on
+  ' ***         2 - CapsLock off
+  ' ***         3 - Insert-mode (if bit is 0: Overwrite-mode)
+  ' ***         9 - monitor mouse-actions (if bit is 0: only keyboard active)
+  ' ***        10 - show Help-screen after <Help> is pressed
+  ' ***        12 - convert all letters to upper case
+  ' ***        13 - convert all letters to lower case
+  ' ***        17 - exit input-routine after <Return> or <Enter>
+  ' ***        18 - exit after entering character at last position
+  ' ***        19 - exit after <Backspace> or <Left Arrow> at first position
+  ' ***        20 - exit after left mouse-click outside input-box
+  ' ***        21 - exit after right mouse-click
+  ' ***        22 - exit after <Up Arrow>
+  ' ***        23 - exit after <Down Arrow>
+  ' *** Set flag-bits in main program using something like this:
+  ' ***              '               10987654321098765432109876543210   bit 0-31
+  ' ***              flag%=VAL("&X"+"00000000111111100000011000001101")
+  ' ***
+  ' *** c&    = first column of input-line
+  ' *** l&    = line
+  ' *** len&  = length of input-line
+  ' *** cur&  = (relative) position of cursor (1 = first position)
+  ' *** f$    = field-character, e.g.: " ", "_" or "."
+  ' *** c$    = cursor-string (sprite)
+  ' *** def$  = default input-string
+  ' *** chr$  = string of allowed characters, or "" if all characters allowed
+  ' ***
+  ' *** Characters with ASCII-code > 127 can be entered with <Alternate> <code>
+  ' ***
+  ' *** in$   = input-string (this string is also printed on screen)
+  ' *** curs& = last cursor-column (screen-position)
+  ' ***
+  ' *** bit in ret& determines how user exited input-routine:
+  ' ***         1 - exit after <Return> or <Enter>
+  ' ***         2 - exit after entering character at last position or
+  ' ***                  after pressing <Right Arrow> at last character
+  ' ***         3 - exit after <Backspace> or <Left Arrow> at first position
+  ' ***         4 - exit after left mouse-click outside input-box
+  ' ***         5 - exit after right mouse-click
+  ' ***         6 - exit after <Up Arrow>
+  ' ***         7 - exit after <Down Arrow>
+  '
+  ' *** Standard:  char.width&  char.height&
+  '
+  LOCAL c.width,c.height,cx,cy,b1,b2,b3,b4,p
+  LOCAL box.margin,x1,y1,x2,y2,box$,ins!,mouse!,help!,chr!
+  LOCAL upper!,lower!,exit,last!,exit.first!,exit.outside!,exit.right.click!
+  LOCAL mouse.box!,mx,my,mk,exit!,status|,key,asci|,scan|,undo$
+  '
+  CLR in$,curs,ret
+  '
+  c.width=char.width                    ! change if you're going to use TEXT
+  c.height=char.height                  !                instead of PRINT AT
+  '
+  cx=c.width*(c-1)                      ! origin for cursor-sprite
+  cy=c.height*(l-1)
+  '
+  box.margin=2                          ! other margin-values possible
+  b1=c.width*(c-1)-box.margin           ! x1 for IBOX/OBOX
+  b2=c.height*(l-1)-box.margin          ! y1
+  b3=len*c.width+box.margin             ! width
+  b4=c.height+box.margin                ! height
+  '
+  IF cur=0
+    p=LEN(def$)+1                       ! compute relative cursor-position
+  ELSE
+    p=MIN(cur,len)                      ! default relative cursor-position
+  ENDIF
+  '
+  IF f$=""
+    f$="_"                              ! default field
+  ENDIF
+  '
+  IF c$=""
+    @line_input_cursor(1,c$)            ! default cursor: |
+  ENDIF
+  '
+  in$=def$                              ! default output-string (could be "")
+  undo$=def$                            ! restore after <Undo>
+  f$=STRING$(len,LEFT$(f$))             ! input-field (with " ","." or "_")
+  '
+  IF chr$<>""
+    chr!=TRUE                           ! check for valid character-input
+  ENDIF
+  '
+  IF BTST(flg%,0)                       ! draw a box (restore after exit)
+    x1=b1
+    y1=b2
+    x2=x1+b3-1+box.margin
+    y2=y1+b4-1+box.margin
+    GET x1,y1,x2,y2,box$
+    DEFFILL 1,0
+    BOUNDARY 1
+    PBOX x1,y1,x2,y2
+    box!=TRUE
+  ENDIF
+  '
+  IF BTST(flg%,1)                       ! CapsLock on
+    ~BIOS(11,BSET(BIOS(11,-1),4))
+  ELSE IF BTST(flg%,2)
+    ~BIOS(11,BCLR(BIOS(11,-1),4))       ! CapsLock off
+  ENDIF
+  '
+  IF BTST(flg%,3)
+    ins!=TRUE                           ! Insert-mode
+  ELSE
+    ins!=FALSE                          ! Overwrite-mode
+  ENDIF
+  '
+  IF BTST(flg%,9)                       ! monitor mouse-actions
+    mouse!=TRUE
+    DEFMOUSE 1                          ! special text-mouse
+    SHOWM
+  ELSE
+    HIDEM
+  ENDIF
+  '
+  IF BTST(flg%,10)                      ! <Help> active
+    help!=TRUE
+  ENDIF
+  '
+  IF BTST(flg%,12)                      ! convert all letters to capitals
+    upper!=TRUE
+  ELSE IF BTST(flg%,13)                 ! convert all characters to lower case
+    lower!=TRUE
+  ENDIF
+  '
+  IF BTST(flg%,17)                      ! exit after <Return> or <Enter>
+    exit.return!=TRUE
+  ENDIF
+  '
+  IF BTST(flg%,18)                      ! exit after entry at last position
+    exit.last!=TRUE
+  ENDIF
+  '
+  IF BTST(flg%,19)                      ! exit after <Backspace> or <Left arrow>
+    exit.first!=TRUE                    !                      at first position
+  ENDIF
+  '
+  IF mouse!
+    IF BTST(flg%,20)                    ! exit after left click outside box
+      exit.outside!=TRUE
+    ENDIF
+    IF BTST(flg%,21)                    ! exit after right mouse-click
+      exit.rightclick!=TRUE
+    ENDIF
+  ENDIF
+  '
+  IF BTST(flg%,22)                      ! exit after <Up arrow>
+    exit.up!=TRUE
+  ENDIF
+  '
+  IF BTST(flg%,23)                      ! exit after <Down arrow>
+    exit.down!=TRUE
+  ENDIF
+  '
+  {ADD(XBIOS(14,1),6)}=0                ! clear keyboard-buffer
+  WHILE MOUSEK                          ! mouse-buttons released?
+  WEND
+  '
+  PRINT AT(c,l);LEFT$(in$+f$,len);      ! print default input-line
+  SPRITE c$,cx+(p-1)*c.width,cy         ! cursor on
+  '
+  IF mouse!
+    ON MENU IBOX 1,b1,b2,b3,b4 GOSUB line_input_inmouse   ! watch the mouse
+  ENDIF
+  ON MENU KEY GOSUB line_input_key      ! watch the keyboard
+  '
+  ' *** main loop
+  IF mouse!                             ! watch mouse and keyboard
+    REPEAT
+      REPEAT
+        ON MENU                         ! check for keyboard-input
+        MOUSE mx,my,mk
+      UNTIL mk OR exit!
+      IF mk=1
+        @line_input_leftclick           ! left-click detected
+      ELSE IF mk=2 AND exit.rightclick!
+        @line_input_rightclick          ! right-click detected
+      ENDIF
+    UNTIL exit!
+  ELSE                                  ! watch keyboard only
+    REPEAT
+      ON MENU
+    UNTIL exit!
+  ENDIF
+  '
+  IF box!
+    PUT x1,y1,box$                      ! restore if box was used
+  ENDIF
+  '
+  IF mouse!
+    DEFMOUSE 0                          ! arrow-mouse
+    SHOWM
+  ENDIF
+  '
+  PRINT AT(c,l);LEFT$(in$+STRING$(len," "),len);  ! print input-line
+  curs=p+c-1                            ! last cursor-position (screen-column!)
+  '
+RETURN
+' ***
+> PROCEDURE line_input_inmouse
+  mouse.box!=TRUE                       ! mouse in input-rectangle
+  ON MENU OBOX 1,b1,b2,b3,b4 GOSUB line_input_outmouse
+RETURN
+' ***
+> PROCEDURE line_input_outmouse
+  mouse.box!=FALSE                      ! mouse outside input-rectangle
+  ON MENU IBOX 1,b1,b2,b3,b4 GOSUB line_input_inmouse
+RETURN
+' ***
+> PROCEDURE line_input_leftclick
+  SPRITE c$                             ! cursor off
+  IF mouse.box!                         ! mouse in input-rectangle
+    p=MAX(1,MIN((mx-cx)/c.width+1,LEN(in$)+1)) ! cursor-position (relative)
+    SPRITE c$,cx+(p-1)*c.width,cy       ! cursor on
+  ELSE                                  ! mouse outside input-rectangle
+    IF exit.outside!
+      ret=BSET(ret,4)                   ! set bit 4 in return-flag
+      exit!=TRUE                        ! ready
+    ELSE
+      SPRITE c$,cx+(p-1)*c.width,cy     ! cursor on (same position)
+      OUT 2,7                           ! bell (illegal action)
+    ENDIF
+  ENDIF
+RETURN
+' ***
+> PROCEDURE line_input_rightclick
+  SPRITE c$                             ! cursor off
+  ret=BSET(ret,5)                       ! set bit 5 in return-flag
+  exit!=TRUE                            ! ready
+RETURN
+' ***
+> PROCEDURE line_input_key
+  SPRITE c$                             ! cursor off
+  status|=MENU(13)
+  key=MENU(14)
+  asci|=BYTE(key)
+  scan|=BYTE{V:key}
+  '
+  ' *** special keys (with ASCII-code)
+  '
+  IF asci|=8                            ! <Backspace>
+    IF p>1
+      in$=LEFT$(in$,p-2)+MID$(in$,p)    ! delete character at left of cursor
+      DEC p
+    ELSE
+      IF exit.first!                    ! Backspace at first position = exit
+        ret=BSET(ret,3)                 ! set bit 3 in return-flag
+        exit!=TRUE                      ! ready
+      ELSE
+        OUT 2,7                         ! Backspace on first position impossible
+      ENDIF
+    ENDIF
+    '
+  ELSE IF asci|=9                       ! <Tab>
+    OUT 2,7                             ! Tab not possible yet
+    '
+  ELSE IF asci|=13                      ! <Return> or <Enter>
+    IF exit.return!                     ! <Return>/<Enter> = exit
+      ret=BSET(ret,1)                   ! set bit 1 in return-flag
+      exit!=TRUE                        ! ready
+    ELSE
+      OUT 2,7                           ! <Return>/<Enter> not allowed
+    ENDIF
+    '
+  ELSE IF asci|=27                      ! <Esc>
+    undo$=in$                           ! overrides default-string
+    in$=""                              ! erase current input-string
+    p=1
+    '
+  ELSE IF asci|=127                     ! <Delete>
+    in$=LEFT$(in$,p-1)+MID$(in$,p+1)    ! delete character under cursor
+    '
+  ELSE IF (asci|>31 AND asci|<127) OR (asci|>127 AND asci|<256) ! all ASCII-
+    '                                                                 characters
+    ' *** special keys (with confusing ASCII-codes)
+    '
+    IF scan|=&H4B AND AND(status|,&X11)         ! <Shift> <Left arrow>
+      p=1                                       ! cursor to first position
+      '
+    ELSE IF scan|=&H4D AND AND(status|,&X11)    ! <Shift> <Right arrow>
+      p=MIN(LEN(in$)+1,len)                     ! cursor after input-string
+      '
+    ELSE IF scan|=&H48 AND AND(status|,&X11)    ! <Shift> <Up arrow>
+      OUT 2,7                                   ! not active
+      '
+    ELSE IF scan|=&H50 AND AND(status|,&X11)    ! <Shift> <Down arrow>
+      OUT 2,7                                   ! not active
+      '
+    ELSE
+      '
+      ' *** regular ASCII-characters
+      IF upper!
+        IF asci|>=97 AND asci|<=122
+          asci|=BCLR(asci|,5)           ! convert to upper case
+        ENDIF
+      ENDIF
+      IF lower!
+        IF asci|>=65 AND asci|<=90
+          asci|=BSET(asci|,5)           ! convert to lower case
+        ENDIF
+      ENDIF
+      '
+      IF LEN(in$)<=len                  ! only if room for another character
+        IF (NOT chr!) OR INSTR(chr$,CHR$(asci|))
+          IF ins!                         ! Insert-mode
+            in$=LEFT$(LEFT$(in$,PRED(p))+CHR$(asci|)+MID$(in$,p),len)
+          ELSE                            ! Overwrite-mode
+            IF p<=LEN(in$)                ! cursor on character
+              MID$(in$,p)=CHR$(asci|)
+            ELSE                          ! cursor at end
+              in$=in$+CHR$(asci|)
+            ENDIF
+          ENDIF
+          IF p=len AND exit.last!         ! exit after entering last character
+            ret=BSET(ret,2)               ! set bit 2 of return-flag
+            exit!=TRUE                    ! ready
+          ELSE
+            p=MIN(len,SUCC(p))            ! new cursor-position
+          ENDIF
+        ELSE
+          OUT 2,7                         ! illegal character (not in chr$)
+        ENDIF
+      ELSE
+        OUT 2,7                           ! illegal action (string too long)
+      ENDIF
+      '
+    ENDIF
+    '
+    ' *** other special keys (without ASCII-code)
+    '
+  ELSE IF scan|>=&H3B AND scan|<=&H44           ! <F1> - <F10>
+    OUT 2,7                                     ! not allowed yet
+    '
+  ELSE IF scan|>=&H54 AND scan|<=&H5D           ! <Shift><F1> - <Shift><F10>
+    OUT 2,7                                     ! not allowed yet
+    '
+  ELSE IF scan|=&H62                    ! <Help>
+    IF help!
+      @line_input_help                  ! show Help-screen
+    ELSE
+      OUT 2,7                           ! not allowed
+    ENDIF
+    '
+  ELSE IF scan|=&H61                    ! <Undo>
+    SWAP in$,undo$                      ! remember current input-line
+    p=LEN(in$)+1
+    '
+  ELSE IF scan|=&H52                    ! <Insert>
+    ins!=NOT ins!
+    '
+  ELSE IF scan|=&H47                    ! <ClrHome>
+    OUT 2,7                             ! not allowed
+    '
+  ELSE IF scan|=&H4B                    ! <Left arrow>
+    IF p>1
+      DEC p
+    ELSE
+      IF exit.first!                    ! <Left arrow> at first position = exit
+        ret=BSET(ret,3)                 ! set bit 3 in return-flag
+        exit!=TRUE                      ! ready
+      ELSE
+        OUT 2,7                         ! <Left arrow> on first position illegal
+      ENDIF
+    ENDIF
+    '
+  ELSE IF scan|=&H4D                    ! <Right arrow>
+    IF p<=LEN(in$) AND p<len
+      INC p
+    ELSE IF p=len AND exit.last!        ! <Right arrow> on last position = exit
+      ret=BSET(ret,2)                   ! set bit 2 in return-flag
+      exit!=TRUE                        ! ready
+    ELSE
+      OUT 2,7
+    ENDIF
+    '
+  ELSE IF scan|=&H48                    ! <Up arrow>
+    IF exit.up!
+      ret=BSET(ret,6)                   ! set bit 6 in return-flag
+      exit!=TRUE                        ! ready
+    ENDIF
+    '
+  ELSE IF scan|=&H50                    ! <Down arrow>
+    IF exit.down!
+      ret=BSET(ret,7)                   ! set bit 7 in return-flag
+      exit!=TRUE                        ! ready
+    ENDIF
+    '
+  ENDIF
+  '
+  PRINT AT(c,l);LEFT$(in$+f$,len);      ! print input-line
+  SPRITE c$,cx+(p-1)*c.width,cy         ! cursor on
+RETURN
+' ***
+> PROCEDURE line_input_help
+  '
+  ' *** Simple Help-screen (adapt to your specific needs)
+  '
+  ' *** Standard:  lin.max&
+  '
+  LOCAL screen$
+  SGET screen$
+  CLS
+  PRINT @center$(@rev$(" Help - Screen "))
+  PRINT
+  PRINT " <Help>                - show this Help-screen"
+  IF ins!
+    PRINT " <Insert>              - switch from Insert-mode to Overwrite-mode"
+  ELSE
+    PRINT " <Insert>              - switch from Overwrite-mode to Insert-mode"
+  ENDIF
+  PRINT
+  PRINT " <Backspace>           - delete character before cursor"
+  PRINT " <Delete>              - delete character under cursor"
+  PRINT " <Esc>                 - erase entire input-line (restore with <Undo>)"
+  IF def$<>"" AND def$=undo$
+    PRINT " <Undo>                - restore default-line or last erased line"
+  ELSE
+    PRINT " <Undo>                - restore last erased line"
+  ENDIF
+  PRINT
+  PRINT " <Left Arrow>          - move cursor one position to the left"
+  PRINT " <Right Arrow>         - move cursor one position to the right"
+  PRINT " <Shift><Left Arrow>   - move cursor to start of input-line"
+  PRINT " <Shift><Right Arrow>  - move cursor to end of current input-string"
+  IF mouse!
+    PRINT " Left mouse-click      - move cursor to mouse-position (in input-area)"
+  ENDIF
+  PRINT
+  PRINT " Input is terminated as follows:"
+  IF exit.return!
+    PRINT "     - <Enter> or <Return>"
+  ENDIF
+  IF exit.last!
+    PRINT "     - enter character at last position or <Right Arrow> on last position"
+  ENDIF
+  IF exit.first!
+    PRINT "     - <Backspace> or <Left Arrow> on first position"
+  ENDIF
+  IF exit.outside!
+    PRINT "     - click left mouse-button outside input-area"
+  ENDIF
+  IF exit.rightclick!
+    PRINT "     - click right mouse-button"
+  ENDIF
+  IF exit.up!
+    PRINT "     - <Up Arrow>"
+  ENDIF
+  IF exit.down!
+    PRINT "     - <Down Arrow>";
+  ENDIF
+  PRINT AT(1,lin.max);@center$("<Press any key to continue>");
+  '
+  {ADD(XBIOS(14,1),6)}=0
+  WHILE MOUSEK
+  WEND
+  REPEAT
+  UNTIL MOUSEK OR LEN(INKEY$)   ! wait for mouse-click or keypress
+  {ADD(XBIOS(14,1),6)}=0
+  WHILE MOUSEK
+  WEND
+  SPUT screen$
+RETURN
+' ***
+> PROCEDURE line_input_cursor(n,VAR c$)
+  '
+  ' *** Create cursor-sprite:
+  ' ***         1 = | (thin vertical line)
+  ' ***         2 = fat vertical line
+  ' ***         3 = block-cursor
+  ' ***         4 = rectangle-cursor
+  ' ***         5 = _ (underline)
+  '
+  ' *** Standard:  char.height&
+  '
+  LOCAL pat$,i,c.height
+  c.height=char.height
+  SELECT n
+  CASE 1
+    pat$=MKL$(&X1000000000000000)
+    c$=MKI$(0)+MKI$(0)+MKI$(-1)+MKI$(1)+MKI$(0)
+    FOR i=1 TO c.height
+      c$=c$+pat$
+    NEXT i
+    c$=LEFT$(c$+STRING$(74,0),74)
+  CASE 2
+    pat$=MKL$(&X1100000000000000)
+    c$=MKI$(0)+MKI$(0)+MKI$(-1)+MKI$(1)+MKI$(0)
+    FOR i=1 TO c.height
+      c$=c$+pat$
+    NEXT i
+    c$=LEFT$(c$+STRING$(74,0),74)
+  CASE 3
+    pat$=MKL$(&X1111111100000000)
+    c$=MKI$(0)+MKI$(0)+MKI$(-1)+MKI$(1)+MKI$(0)
+    FOR i=1 TO c.height
+      c$=c$+pat$
+    NEXT i
+    c$=LEFT$(c$+STRING$(74,0),74)
+  CASE 4
+    pat$=MKL$(&X1000000100000000)
+    c$=MKI$(0)+MKI$(0)+MKI$(-1)+MKI$(1)+MKI$(0)+MKL$(&X1111111100000000)
+    FOR i=2 TO c.height-1
+      c$=c$+pat$
+    NEXT i
+    c$=LEFT$(c$+MKL$(&X1111111100000000)+STRING$(74,0),74)
+  CASE 5
+    pat$=MKL$(&X0)
+    c$=MKI$(0)+MKI$(0)+MKI$(-1)+MKI$(1)+MKI$(0)
+    FOR i=1 TO c.height-1
+      c$=c$+pat$
+    NEXT i
+    c$=LEFT$(c$+MKL$(&X1111111100000000)+STRING$(74,0),74)
+  ENDSELECT
+  '
+RETURN
+' *********
+'

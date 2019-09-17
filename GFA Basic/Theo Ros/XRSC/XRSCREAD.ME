@@ -1,0 +1,205 @@
+XRSCFIX() (c) Theo Ros 24/04/97
+
+XRSCFIX() is a function to:
+
+ù let you embed a resource file into your program's code
+ù also let you use resource files created for AES-version =>3.30
+  (extended headers and/or the use of color icons), even if the machine
+  you're running has an AES-version with none of these capabilities
+ù fix address pointers for each tree in the resource
+ù calculate objects coordinates, using its own (faster) RSRC_OBFIX code
+ù transform color-icon data from machine independent to VDI-format,
+  using its own (faster) VR_TRNFM code. (this piece of code is an adapted
+  (shortened) version of NVDI's vr_trnfm).
+ù fix possible LASTOB-errors in the resource (ICO2RSC.PRG creates such
+  errors)
+ù fix possible OB_H errors in the resource (INTERFACE does this for
+  color-icons...)
+ù handle relocated (mostly extended) icon-text
+
+XRSCFIX() is fully written in assembler for optimised speed and size and
+is meant to be called upon from within a GfA Basic program. (I don't
+know the first thing of C, but I expect there must be a way to call it
+from there too.) For the benefit of assembler programmers the source
+code is provided in the files OB_VARS.EQU, GRAPHMOD.EQU, XRSCVARS.EQU (to
+keep the listing readable) and XRSCFIX.S. You will find these files in
+the folder XRSC_ASM.
+
+Please see the XRSC.GFA listing where you will find a working
+demonstration of its use. I've kept the demo as simple as possible
+(nothing fancy, so you could use it as a basis for your own program).
+It lets you choose any resource-file and (if not cancelled) displays all
+object-trees in it. I have included a small resource called CARTOONS.RSC,
+which contains 6 color icons, but you can select any resource you might
+have.
+
+
+To call the function in GfA, use:
+
+~C:xrscfix%(L:rsc_start%,L:xheaderarray%,charw&,charh&,hide_progdefs!)
+
+where:
+
+rsc_start% 	is the address where the resource-file is situated in
+	memory. (either BLOADed in INLINed)
+
+xheaderarray% 	is the address of a 20 LONG integer array (80 bytes of
+	memory) the function fills and uses. You don't have to fill in
+	these values, xrscfix() will do that for you, but DO have to
+	create this  workspace. The demo uses the most common way of
+	doing this with:
+
+	DIM xrsh%(19) ! (OPTION BASE 0 !!!!!!!)
+	xheaderarray%=V:xrsh%(0) ! calc starting address
+
+	Afterwards this array will contain the following values:
+
+    xrsh%(0)  copy of rsc_startaddress%
+    xrsh%(1)  copy of rsh_object (=offset to object structures)
+    xrsh%(2)  copy of rsh_tedinfo (=offset to tedinfo structures)
+    xrsh%(3)  copy of rsh_iconblk (=offset to iconblk structures)
+    xrsh%(4)  copy of rsh_bitblk (=offset to bitblk structures)
+    xrsh%(5)  copy of rsh_frstr (=offset to freestring pointer table)
+    xrsh%(6)  copy of rsh_string (=offset to string data)
+    xrsh%(7)  copy of rsh_imdata (=offset to image data)
+    xrsh%(8)  copy of rsh_frimg (=offset to image pointer table)
+    xrsh%(9)  copy of rsh_trindex (=offset to tree pointer table)
+    xrsh%(10) copy of rsh_nobs (=number of objects in the file)
+    xrsh%(11) copy of rsh_ntree (=number of trees in the file)
+    xrsh%(12) copy of rsh_nted (=number of tedinfos in the file)
+    xrsh%(13) copy of rsh_nib (=number of iconblk's in the file)
+    xrsh%(14) copy of rsh_nbb (=number of bitblk's in the file)
+    xrsh%(15) copy of rsh_nstring (=number of free strings in the file)
+    xrsh%(16) copy of rsh_nimages (=number of free images in the file)
+    xrsh%(17) copy of rsh_rssize (=old style resource file size)
+    xrsh%(18) number of color icons found in the resource
+    xrsh%(19) address of ciconpointer-table or 0 if no color-icons found
+
+
+charw& and charh& are the pixeldimensions of a character the routine
+	uses to fix object coordinates. Using RSRC_OBFIX would imply
+	that for every object in the resource GRAF_HANDLE is called
+	to get these values, which would make the fixing of an entire
+	resource very slow.
+
+hide_progdefs! this flag should be set to TRUE for any unknown resource
+	file you want xrscfix() to handle. Because your program cannot
+	possibly know what to draw when an object of type 24 (G_PROGDEF)
+        is in the file, setting this value to TRUE (in fact: anything
+        <>0 will do) will cause xrscfix() to set this objects hide-flag
+        (OB_FLAGS bit #5), so AES-function OBJC_DRAW will ignore it
+        completely. When hide_progdefs! is FALSE, xrscfix() assumes you
+        know what you're doing and leaves OB_FLAGS for what it is. In
+        that case, you are responsible for filling the objects OB_SPEC
+        with a pointer to a ub_parm structure and having a drawing
+        routine present in your code. If you want an example of how this
+        works, wait for it, because I'm planning to have an menu
+        Niceline routine, using this feature, ready for the next Ictari
+        disk.
+
+Usually programs change an objects type to G_PROGDEF AFTER it has been
+loaded, not in the resource file itself, but don't count on it...
+
+
+
+==============================WARNING===================================
+
+NEVER EVER FIX A RESOURCE ALREADY FIXED
+
+If you want to re-use a resourcefile that has already been fixed up by
+XRSCFIX(), simply call @xrsc_set() again. XRSCFIX() is only there to
+handle raw resources.
+
+
+If you're not interested in HOW it works, don't read the next part,
+just use the functions in the demo-listing.
+
+=======================================================================
+
+RSH_VRSN
+
+The first WORD-value of any resource-file contains its version. Don't
+treat this value like a program's versionnumber, but as a bitmap :
+
+bits 0 and 1: these were used in resourcefiles old-style (1 or 2)
+	If BOTH bits are set ( (rsh_vrsn AND 3)=3), the resource-files
+	header is made up from LONG (4 byte) integers, enabling the
+	resource to be bigger than 64Kb. If this is the case, the
+	second word of the header contains an indication of the program
+	used to create it: 'IN' --> Interface, 'OR' --> ORCS.
+	Having both bits set also means the resource file COULD contain
+	color-icons.
+bit 2: 	If this bit is set, the resource-file contains color-icons.
+
+XRSCFIX() checks the length of the file-header with (rsh_vrsn AND 3)=3,
+and uses rsh_vrsn=>3 to test if the file could contain color-icons.
+
+To prevent your functions to constantly check these bits to define the
+length of the file's header, most frequent used values are copied into
+the xrsh%() array, so they will allways be available as LONG integers.
+
+=======================================================================
+
+RSRC_GADDR
+
+In the demo, RSRC_GADDR() is used before a tree is drawn.
+To make such AES resource-related functions possible, you MUST use a
+@xrsc_set(xheaderarray%) call, so GEM knows the resource is loaded and
+ready. You could ofcourse forget about RSRC_GADDR() alltogether and use
+
+ tree%=LONG{xrsh%(0)+xrsh%(9)+index*4}
+
+instead of RSRC_GADDR(0,index,tree%) to get the address of the indexed
+tree.
+
+If you decide to dispence of the resource, call @xrsc_set(0) to clear it
+from GEM's mind. If you want the resource cleared from memory aswell,
+use ~MFREE(xrsh%(0)).
+
+=======================================================================
+
+RELOCATED CICON_TEXT
+
+To be able to store text exceeding 12 characters, the placeholder in
+the resource file (ib_ptext) is not null, but an offset to where the
+text can be found. The RSC-fixing routine should check this while
+calculating the addresses.
+XRSCFIX() uses the standard textbuffer of 12 bytes (pointed to by
+ib_ptext) in those cases as an array of three LONG values. In this
+buffer a special code is placed, so the reader knows the text is
+somewhere else:
+
+    1st LONG = 0 to make sure readers with no understanding of
+               relocated text find an empty string here
+    2nd LONG = 'XTXT' (=&H58545854) as a flag that relocated text exists
+    3rd LONG = pointer to NULL_terminated string.
+
+So if a text is relocated, you will know by the first two long's.
+In this case, the string is always NULL_terminated. In cases where the
+standard 12-byte buffer is used,
+
+**** DO NOT ASSUME THE TEXT IS NULL_TERMINATED ****
+
+because the text COULD be exactly 12 bytes long. Using CHAR{} depends on
+the first null-byte it finds. Because the next byte holds the values
+for the icons back- and foreground colours, there is NO guarantee of
+finding a null-byte immediately after the textbuffer.
+The reader should read bytes until a value of zero is encountered, or
+the maximum number of bytes (12) are read.
+In GfA, you can do this with:
+
+    t$=STRING$(13,0)    ! create a null_terminated buffer
+    BMOVE ib_ptext%,V:t$,12
+    t$=CHAR{V:t$}
+
+The DRAWCICN() routine also expects the relocated text method of
+XRSCFIX()
+
+=======================================================================
+
+
+
+
+
+
+
