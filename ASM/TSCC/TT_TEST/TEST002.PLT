@@ -1,0 +1,34 @@
+  ; Palette from "test002.gif"
+    dc.w $000, $222, $444, $666, $999, $bbb, $ddd, $fff  ; colors 0-7
+    dc.w $f0f, $d1d, $b1b, $a2a, $838, $636, $444, $f70  ; colors 8-15
+    dc.w $d60, $c61, $a51, $852, $642, $543, $333, $8ff  ; colors 16-23
+    dc.w $7dd, $7bb, $6aa, $588, $566, $444, $f8e, $f98  ; colors 24-31
+    dc.w $800, $820, $840, $850, $860, $870, $480, $080  ; colors 32-39
+    dc.w $084, $088, $048, $008, $208, $508, $708, $804  ; colors 40-47
+    dc.w $000, $111, $222, $333, $444, $555, $666, $777  ; colors 48-55
+    dc.w $888, $999, $aaa, $bbb, $ccc, $ddd, $eee, $fff  ; colors 56-63
+    dc.w $500, $500, $700, $800, $900, $b00, $c00, $e00  ; colors 64-71
+    dc.w $f00, $f22, $f33, $f55, $f66, $f88, $faa, $fbb  ; colors 72-79
+    dc.w $520, $520, $630, $840, $940, $b50, $c60, $e70  ; colors 80-87
+    dc.w $f70, $f82, $f93, $fa5, $fa6, $fb8, $fca, $fdb  ; colors 88-95
+    dc.w $540, $550, $760, $880, $990, $ba0, $cc0, $ed0  ; colors 96-103
+    dc.w $ff0, $ff2, $ff3, $ff5, $ff6, $ff8, $ffa, $ffb  ; colors 104-111
+    dc.w $050, $060, $070, $080, $0a0, $0b0, $0c0, $0e0  ; colors 112-119
+    dc.w $0f0, $2f2, $3f3, $5f5, $7f6, $8f8, $afa, $bfb  ; colors 120-127
+    dc.w $044, $055, $077, $088, $099, $0bb, $0cc, $0ee  ; colors 128-135
+    dc.w $0ff, $5ff, $7ff, $8ff, $9ff, $bff, $cff, $dff  ; colors 136-143
+    dc.w $024, $035, $037, $048, $059, $05b, $06c, $07e  ; colors 144-151
+    dc.w $08f, $28f, $39f, $5af, $6bf, $8cf, $adf, $bdf  ; colors 152-159
+    dc.w $005, $006, $007, $008, $00a, $00b, $00c, $00e  ; colors 160-167
+    dc.w $00f, $22f, $34f, $55f, $67f, $89f, $aaf, $bcf  ; colors 168-175
+    dc.w $205, $306, $408, $509, $50a, $60c, $70e, $70f  ; colors 176-183
+    dc.w $80f, $82f, $93f, $a5f, $a6f, $b8f, $caf, $dbf  ; colors 184-191
+    dc.w $405, $606, $707, $808, $90a, $b0b, $c0c, $d0e  ; colors 192-199
+    dc.w $e1e, $e3e, $e4e, $e6e, $e7f, $f8f, $faf, $fbf  ; colors 200-207
+    dc.w $200, $300, $300, $410, $511, $621, $722, $733  ; colors 208-215
+    dc.w $843, $955, $a65, $b87, $c98, $daa, $ecb, $fed  ; colors 216-223
+    dc.w $220, $440, $550, $650, $761, $861, $a72, $b72  ; colors 224-231
+    dc.w $b83, $c85, $c96, $da7, $da8, $eba, $fcb, $fed  ; colors 232-239
+    dc.w $f22, $f22, $f22, $f22, $f22, $f22, $f22, $a77  ; colors 240-247
+    dc.w $f22, $f22, $f22, $f22, $000, $567, $bbb, $fff  ; colors 248-255
+
