@@ -28,19 +28,19 @@ chnkhead	equ	"LSDC"
 
 	bra	main
 
-gam		dc.b "WALKER.1",0
+gam		dc.b "filename.egb",0
 		even
 
 text	DC.B 27,"E",27,"f",27,"w"
- dc.b	27,'Y',32+10,32+13+20,"WALKER DEMO 1"
- dc.b	27,'Y',32+14,32+9+20,"Packed by MAC SYS DATA"
+	dc.b "Automation",13,10
+	dc.b "present BAD CAT",13,10
+	dc.b "though it should be called trash-cat"
 	DC.B 00,00
 
 	EVEN
 
 	
-main
-	MOVEA.L	4(A7),A5
+main	MOVEA.L	4(A7),A5
 	move.l $c(a5),d0
 	add.l $14(a5),d0
 	add.l $1c(a5),d0
@@ -62,9 +62,9 @@ main
 	addq.l	#6,a7
 	dc.w	$a009
 
-;	move.w	#7,-(a7)
-;	trap	#1		;wait for key
-;	addq.l	#2,a7
+	move.w	#7,-(a7)
+	trap	#1		;wait for key
+	addq.l	#2,a7
 
 	move.l	#buff_start,buff_add	;set buffer start address
 					;change buff_start to absolute
@@ -82,7 +82,6 @@ CHEAT	CLR.L	-(A7)
 	MOVE.W	#$20,-(A7)
 	TRAP	#$01			;usermode
 	ADDQ.L	#6,A7
-	move.l	#stack,sp
 stkk	clr.l	in_use			;so first read gets file
 	clr.l 	$60000
 	pea 	$60000
@@ -746,7 +745,7 @@ crunpos		dc.l 0
 ;11th October 1989
 
 DEPACK		adda.l #4,a0
-		move.w $ffff8240.w,-(sp)
+		move.w $ff8240,-(sp)
 		lea	crunpos(pc),a6
 		move.l a0,(a6)		;save crunch position
 		move.b (a0)+,d5
@@ -811,11 +810,9 @@ L_8		MOVE.B	4(A3,D3.W),D2
 
 NUMS		DC.B	$0A,$03,$02,$02,$0E,$07,$04,$01
 
-L_9	move.w	#$fffe,d2
-L_9i	MOVE.B	-(A0),-(A1)
-	move.w	d2,$ffff8240.w
-	lsr.w	#1,d2
-	DBF	D1,L_9i
+L_9		MOVE.B	-(A0),-(A1)
+		eor.w	#$777,$ff8240
+		DBF	D1,L_9
 L_10		MOVE.L	crunpos(pc),A3		;get crunch position
 		ADDQ.L	#$8,A3
 		CMPA.L	A3,A0
@@ -898,9 +895,10 @@ L_26		LEA	0(A1,D2.W),A2
 L_27		MOVE.B	-(A2),-(A1)
 		DBF	D1,L_27
 		BRA	L_2
-BYENOW		move.w (a7)+,$ffff8240.w
+BYENOW		move.w (a7)+,$ff8240
 		RTS
 
+		section bss
 
 		dcb.l	maxfiles,0
 
@@ -920,10 +918,6 @@ real_hand	dc.l	0,1,2,3,4,5
 		dcb.l	maxfiles,0
 offsets		dcb.l	maxfiles,0
 chunked		dcb.l	maxfiles,0
-
-		section bss
-	ds.l	1000
-stack	ds.l	1
 tmp_sav		ds.b	200
 numb_chnk	ds.l	1
 i_buff		ds.l	1

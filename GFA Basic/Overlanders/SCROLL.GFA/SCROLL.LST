@@ -1,0 +1,228 @@
+'
+'    SIMPLE GFA SCROLLER - by DOGUE DE MAUVE from OVR
+'
+' Supervisor mode (total access to memory)
+supervisor%=GEMDOS(32,L:0)
+'
+init
+ininew
+get
+'
+' *** MAIN LOOP ***
+'
+REPEAT
+  VSYNC                         ! Screen synchro
+  '  CARD{&HFFFF8240}=0               ! VBL time beginning
+  scroll                        ! Scroll routine
+  swap                          ! screen swapping
+  c|=BYTE{&HFFFFC02}            ! Keyboard test
+  '  CARD{&HFFFF8240}=&H333           ! VBL time left limit
+UNTIL c|=57                     ! Quit if "space" pressed
+'
+the_end
+'
+' *** MAIN PROCEDURES ***
+'
+PROCEDURE scroll
+  INC tt%                          ! Increment text counter
+  tt%=tt% MOD tl%                  ! If end of text then wrap
+  BMOVE xb2%+8,xb2%,5120-8         ! Scroll the screen (16 pix.)
+  '
+  coul                             ! Calls the rasters
+  '
+  PUT 304,0,alf$(BYTE{scr%+tt%})   ! Put first precalculated block
+  PUT 312,0,alf$(BYTE{scr%+tt%+1}) ! Put second precalculated block
+RETURN
+PROCEDURE coul
+  '
+  ' HBL synchronization (for steady rasters)
+  '
+  REPEAT
+  UNTIL BYTE{&HFFFF8209}>0
+  VOID shl(BYTE{&HFFFF8209})
+  '
+  ' Rasters
+  '
+  r%=raster%
+  p%=pattern%
+  FOR q%=0 TO 200
+    CARD{&HFFFF8240}=CARD{r%} ! Raster 1 (change color 0)
+    CARD{&HFFFF825E}=CARD{p%} ! Raster 2 (change color 15)
+    CARD{&HFFFF8240}=CARD{r%} ! Repeat it 'coz it's too fast
+    CARD{&HFFFF825E}=CARD{p%} ! (something too fast in GFA????)
+    ADD r%,2
+    ADD p%,2
+  NEXT q%
+RETURN
+PROCEDURE swap
+  SWAP xb2%,xb3%                 ! Swap the two screens
+  ~XBIOS(5,L:xb2%,L:xb3%,-1)     ! We work on xb2% while we see xb3%
+RETURN
+'
+' *** INITIALISATION ***
+'
+PROCEDURE init
+  RESERVE 100000
+  BYTE{&H484}=2                      ! Disable keyboard click
+  '  inter|=BYTE{&HFFFFFA09}            ! Save interrupts
+  '  BYTE{&HFFFFFA09}=0                 ! Disable interrupts
+  rez%=XBIOS(4)                      ! Save basic resolution
+  ~XBIOS(5,L:-1,L:-1,W:0)            ! Low resolution
+  basepal$=SPACE$(32)                ! Buffer for basic palette
+  VSYNC
+  BMOVE &HFFFF8240,V:basepal$,32     ! Palette transfer
+  fade                               ! Fading
+  x3%=XBIOS(3)                       ! Get basic screen address
+  screen%=MALLOC(32255)              ! Screen buffer
+  xb2%=screen% AND &HFFFF00          ! Xb2%=screen buffer address
+  xb3%=XBIOS(3)                      ! Xb3%=logical screen address
+  PRINT AT(1,11)
+  ce("PLEASE WAIT...")
+  SETCOLOR 15,&H777                  ! White pen
+  ~XBIOS(5,L:xb2%,L:xb3%,W:-1)       ! We work on xb2% and we see xb3%
+RETURN
+PROCEDURE ininew
+  '
+  ' Rasters creation
+  '
+  CLR i%
+  raster%=MALLOC(400)
+  FOR r%=1 TO 7
+    ADD i%,2
+    CARD{raster%+i%}=VAL("$"+STR$(r%)+"00")   ! Red
+  NEXT r%
+  FOR r%=7 TO 1 STEP -1
+    ADD i%,2
+    CARD{raster%+i%}=VAL("$"+STR$(r%)+"00")
+  NEXT r%
+  FOR g%=1 TO 7
+    ADD i%,2
+    CARD{raster%+i%}=VAL("$0"+STR$(g%)+"0")   ! Green
+  NEXT g%
+  FOR g%=7 TO 1 STEP -1
+    ADD i%,2
+    CARD{raster%+i%}=VAL("$0"+STR$(g%)+"0")
+  NEXT g%
+  FOR b%=1 TO 7
+    ADD i%,2
+    CARD{raster%+i%}=VAL("$00"+STR$(b%))      ! Blue
+  NEXT b%
+  FOR b%=7 TO 1 STEP -1
+    ADD i%,2
+    CARD{raster%+i%}=VAL("$00"+STR$(b%))
+  NEXT b%
+  '
+  CLR i%
+  pattern%=MALLOC(400)
+  FOR q%=0 TO 400 STEP 2
+    CARD{pattern%+q%}=q%                     ! Font rasters
+  NEXT q%
+RETURN
+PROCEDURE get
+  CLS
+  DIM alf$(250)           ! Create a buffer for font blocks
+  FOR q%=32 TO 91
+    GET 0,0,0,0,alf$(q%)  ! Clear all font blocks
+  NEXT q%
+  '
+  ' 8 pixels font blocks cutting
+  '
+  chargimage("FONTS") ! Load the font picture & cut every block
+  '
+  CLR q%
+  FOR y%=0 TO 5
+    FOR x%=0 TO 9
+      GET x%*32,y%*32,x%*32+7,y%*32+31,alf$(q%)        ! Block 1
+      GET x%*32+8,y%*32,x%*32+15,y%*32+31,alf$(q%+1)   ! Block 2
+      GET x%*32+16,y%*32,x%*32+23,y%*32+31,alf$(q%+2)  ! Block 3
+      GET x%*32+24,y%*32,x%*32+31,y%*32+31,alf$(q%+3)  ! Block 4
+      ADD q%,4
+    NEXT x%
+  NEXT y%
+  '
+  ' Read scrolltext and precalculate the blocks
+  '
+  OPEN "I",#1,"SCROLL.TXT"
+  t$=INPUT$(LOF(#1)-1,#1)
+  CLOSE
+  tl%=LEN(t$)
+  scr%=MALLOC(tl%*4)
+  CLR i%
+  '
+  ' We precalculate every bloc used in the scrolltext
+  ' (quite a bad method which uses too much memory, actually)
+  '
+  FOR q%=0 TO tl%
+    a%=(ASC(MID$(t$,q%,1))-32)*4  ! Get & write the block numbers
+    BYTE{scr%+i%}=a%
+    BYTE{scr%+i%+1}=a%+1
+    BYTE{scr%+i%+2}=a%+2
+    BYTE{scr%+i%+3}=a%+3
+    ADD i%,4
+  NEXT q%
+  MUL tl%,4
+  '
+  CLS                           ! Clear both screens
+  BMOVE xb2%,xb3%,32000
+  '
+  CLR i%,q%
+  OUT 4,18                      ! Disable mouse
+  HIDEM                         ! Hide it
+  BMOVE pal%,&HFFFF8240,32      ! install palette
+  ~FRE(0)                       ! Memory cleaning
+RETURN
+'
+' *** UTILITIES ***
+'
+PROCEDURE the_end
+  fade                            ! Colour fading
+  VSYNC
+  ~XBIOS(5,L:x3%,L:x3%,W:rez%)    ! Basic resolution & screen address
+  BMOVE V:basepal$,&HFFFF8240,32    ! Basic palette
+  SETCOLOR 0,1911
+  OUT 4,8                         ! Enables mouse
+  VSYNC
+  '  BYTE{&HFFFFFA09}=inter|         ! Enables the interrupts again
+  BYTE{&H484}=7                   ! Keyboard click & repetition again
+  ~MFREE(screen%)
+  ~MFREE(pal%)
+  ~MFREE(scr%)
+  ~MFREE(raster%)
+  ~MFREE(pattern%)
+  ~GEMDOS(32,L:supervisor%)       ! User mode
+  EDIT
+RETURN
+'
+PROCEDURE ce(a$)
+  '
+  '  Automatic centering of any text
+  '
+  LOCAL x%
+  ll%=LEN(a$)
+  x%=((XBIOS(4)+1)*40-ll%)/2
+  PRINT TAB(x%);a$
+RETURN
+PROCEDURE chargimage(image$)
+  '
+  ' Loading a PI1 (DEGAS) picture
+  '
+  image$=image$+".PI1"
+  i%=MALLOC(32066)
+  pal%=MALLOC(32)
+  BLOAD image$,i%
+  BMOVE i%+34,XBIOS(3),32000
+  BMOVE i%+2,pal%,32
+  ~MFREE(i%)
+RETURN
+PROCEDURE fade
+  '
+  ' Fading white to black
+  '
+  FOR q%=7 DOWNTO 0
+    FOR z%=0 TO 15
+      SETCOLOR z%,q%,q%,q%
+    NEXT z%
+    VSYNC
+    VSYNC
+  NEXT q%
+RETURN
