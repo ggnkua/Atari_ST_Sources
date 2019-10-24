@@ -1,0 +1,704 @@
+MODULE Physical;
+
+(*----------------------------------------------------------------------------
+ * System-Version: MOS 3.5
+ *----------------------------------------------------------------------------
+ * Version       : 1.0
+ *----------------------------------------------------------------------------
+ * Text-Version  : V#00039
+ *----------------------------------------------------------------------------
+ * Modul-Holder  : Meinolf Schneider
+ *----------------------------------------------------------------------------
+ * Copyright May 1990 by Digital Art Meinolf Schneider
+ *----------------------------------------------------------------------------
+ * MS  : Meinolf Schneider
+ *----------------------------------------------------------------------------
+ * Datum    Autor Version Bemerkung (Arbeitsbericht)
+ *----------------------------------------------------------------------------
+ * 06.05.90 MS    1.0     Grundversion
+ *----------------------------------------------------------------------------
+ * Modul-Beschreibung:
+ *
+ * Residentes Gimmick-Programm fr Atari ST mit monochromen Monitor, bei dem
+ * die Maus nach den physikalischen Gesetzen funktioniert.
+ *----------------------------------------------------------------------------
+ *) (*$S-,R-,C-,N+*)
+
+
+FROM    System          IMPORT  ADDRESS, ADR, BYTE;
+
+FROM    MSSystems       IMPORT  EnterSupervisorMode,
+                                WriteString, WriteLn, Write;
+
+FROM    MSSounds        IMPORT  StartSound, SetSampleFrequency;
+
+
+TYPE    FixReal         =       RECORD
+                                  CASE  : BOOLEAN OF
+                                  FALSE:
+                                    I             : INTEGER;
+                                    (* Integer-Teil *)
+                                    F             : CARDINAL|
+                                    (* Fraction-Teil *)
+                                  TRUE:
+                                    H             : LONGINT;
+                                    (* gesamte Zahl *)
+                                  END;
+                                END;
+
+        FixRealVector   =       RECORD
+                                  X, Y            : FixReal;
+                                END;
+
+
+
+        MouseRec        =       RECORD
+                                  Mass                    : FixReal;
+                                  UserPower               : FixReal;
+                                  DesktopFriction         : FixReal;
+                                  DesktopGravity          : FixRealVector;
+                                  
+                                  Speed                   : FixRealVector;
+                                  Position                : FixRealVector;
+                                  Impulse                 : FixRealVector;
+                                
+                                  ScreenMaximum           : FixRealVector;
+                                END;
+
+
+CONST           (* Zugriffoffsets fr LineA-Variablen *)
+                V_REZ_HZ           =       -$C;
+                V_REZ_VT           =       -$4;
+                CUR_X              =       -$158;
+                CUR_Y              =       -$156;
+                GCURX              =       -$25A;
+                GCURY              =       -$258;
+                CUR_FLAG           =       -$154;
+                CUR_MS_STAT        =       -$15C;
+                USER_MOT           =       -$32;
+                MOUSE_BT           =       -$253;
+                M_HID_CT           =       -$256;
+                
+
+VAR     VBLStack                : ARRAY[0..100] OF CARDINAL;
+        OldVBLIRQ               : ADDRESS;
+        
+        i                       : CARDINAL;
+        
+        MouseChanged            : BYTE;
+        Collision               : BYTE;
+        DoPhysical              : BYTE;
+        
+        Mouse                   : MouseRec;
+        LineA                   : ADDRESS;
+        
+        OldMouseVector          : ADDRESS;
+        OldIKBDSYS              : ADDRESS;
+        KeyBuffer               : POINTER TO RECORD
+                                    BufferStart : ADDRESS;
+                                    size        : CARDINAL;
+                                    head        : CARDINAL; (* n„chste Taste an *)
+                                    tail        : CARDINAL; (* n„chste Taste rein *)
+                                  END;
+
+        
+        
+(*---------------------------------------------------------------------------*)
+
+TABLE.L KlickSound:
+         $80828689, $8B8C8D8D, $8D8D8089, $D6D8D8D8, $D8D8D8D8, $D8D8D8D8,
+         $D6B26630, $27272727, $27272727, $27272727, $27272727, $27272727,
+         $27272727, $27272727, $27272727, $2727272E, $475E7489, $A1B7CAD8,
+         $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8,
+         $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D8, $D8D8D8D7,
+         $D2CDC8C4, $C1BEBCBA, $B7B5B3B2, $B1B0AEAF, $AEACACAA, $A9A8A7A7,
+         $A6A5A5A2, $A09F9E9C, $9A999999, $99999999, $99979696, $95949391,
+         $908E8D8B, $8A888786, $84828281, $80808080, $7F7E7E7E, $7F808080,
+         $80808082, $84848687, $898A8D8F, $91939494, $9698999B, $9D9E9F9F,
+         $A0A1A2A2, $A3A4A4A4, $A5A4A4A3, $A3A2A1A1, $A2A1A2A1, $A09F9E9B,
+         $9A989795, $95949290, $908E8F8E, $8D8D8B89, $87868585, $84848281,
+         $80807F7E, $7D7B7A79, $78777775, $73716F6E, $6D6D6C6A, $69676665,
+         $65646362, $6160605F, $5E5D5C5B, $5B5A5A59, $59585858, $59595A5A,
+         $5A5B5B5B, $5B5C5C5C, $5D5E5E5F, $5F5F5F5E, $5E5F5F5F, $5E5E5D5E,
+         $5E5E5F60, $61626262, $62626261, $60606060, $5F5F5E5D, $5C5B5B5B,
+         $5A5A5A5B, $5B5B5B5A, $5A595959, $59595959, $58575758, $59595959,
+         $59595A5A, $5B5B5C5D, $5E5E6061, $62636565, $67696A6C, $6E6F7071,
+         $73737577, $78797A7B, $7C7C7D7E, $7E7F8080, $80808081, $81818080,
+         $80818282, $82828282, $83838484, $84848585, $86868686, $86878788,
+         $88888888, $88888888, $88888888, $88888989, $8989898A, $8A8B8B8B,
+         $8B8B8B8C, $8D8D8D8D, $8C8D8D8D, $8D8E8E8D, $8E8E8F8F, $90909090,
+         $91919292, $92929393, $94949494, $94949495, $95959696, $96979797,
+         $97979797, $97989999, $99989999, $99999999, $9A9B9B9B, $9C9C9C9D,
+         $9D9E9E9E, $A0A0A0A0, $A0A1A1A1, $A2A2A3A3, $A3A3A3A3, $A4A4A4A4,
+         $A4A5A5A5, $A5A4A4A4, $A4A4A4A4, $A4A4A3A3, $A2A2A2A2, $A2A2A2A2,
+         $A1A1A2A1, $A1A1A1A1, $A1A0A0A0, $A0A09F9F, $9E9F9E9E, $9E9E9D9C,
+         $9C9B9B9B, $9B9A9A99, $99999999, $98979797, $97979696, $95959494,
+         $94939292, $92929190, $90909090, $8F8E8D8D, $8D8D8D8D, $8C8B8B8A,
+         $8A8A8989, $89888888, $87868686, $86858585, $84848483, $82828282,
+         $81808080, $80807F7F, $7E7E7E7E, $7E7E7D7D, $7C7C7C7C, $7C7C7C7C,
+         $7C7C7C7B, $7B7A7B7B, $7A7A7A7A, $7A7A7A7A, $7A7A7A7A, $7A7A7A7A,
+         $7A7A7A7A, $7A7A7A7B, $7A7B7B7B, $7B7C7C7C, $7C7D7D7E, $7E7E7E7E,
+         $7E7E7F7F, $7F7F8080, $80808000;
+
+
+
+(*---------------------------------------------------------------------------*)
+
+
+(*$L-*)
+PROCEDURE KeyBufferCheck;
+BEGIN
+  ASSEMBLER
+  move.w        SR,-(A7)
+  ori.w         #$0700,SR
+  
+  movem.l       A0/D0,-(A7)
+  
+  move.l        LineA,A0
+  btst          #1,MOUSE_BT(A0)         ; Rechte Maustaste gedrckt?
+  beq.w         ED                      ; Nee !
+  
+  move.l        KeyBuffer,A0
+  move.w        KeyBuffer.tail(A0),D0
+  cmp.w         KeyBuffer.head(A0),D0
+  beq.w         ED                      ; Nix drin!
+
+  move.w        KeyBuffer.tail(A0),D0
+  sub.w         KeyBuffer.head(A0),D0
+  bcc           ok
+  add.w         KeyBuffer.size(A0),D0
+ !ok
+  lsr.w         #2,D0           ; DIV 4
+  subq.w        #1,D0
+  
+  movem.l       A1-A3/D1,-(A7)
+  
+  move.l        LineA,A2
+  lea           Mouse,A3
+  
+  move.w        KeyBuffer.head(A0),D1
+  move.l        KeyBuffer.BufferStart(A0),A1
+ 
+ !NextKey
+  addq.w        #4,D1
+  cmp.w         KeyBuffer.size(A0),D1
+  bcs           NoWarpAround
+  clr.w         D1
+ !NoWarpAround
+  
+  ; Physical Mouse an/aus
+  cmpi.b        #' ',3(A1,D1.W)
+  bne           NoOnOff
+  not.b         DoPhysical
+  beq.w         Goon
+  move.w        GCURX(A2),MouseRec.Position.X(A3)
+  move.w        GCURY(A2),MouseRec.Position.Y(A3)
+  clr.w         MouseRec.Position.X.F(A3)
+  clr.w         MouseRec.Position.Y.F(A3)
+  clr.l         MouseRec.Speed.X(A3)
+  clr.l         MouseRec.Speed.Y(A3)
+  bra.w         Goon
+ 
+ !NoOnOff
+  cmpi.b        #'5',3(A1,D1.W)
+  bne           NoZeroGravity
+  clr.l         MouseRec.DesktopGravity.X(A3)
+  clr.l         MouseRec.DesktopGravity.Y(A3)
+  bra.w         Goon
+  
+ !NoZeroGravity
+  cmpi.b        #'8',3(A1,D1.W)
+  bne           NoUpGravity
+  subi.l        #$100,MouseRec.DesktopGravity.Y(A3)
+  bra.w         Goon
+ 
+ !NoUpGravity
+  cmpi.b        #'2',3(A1,D1.W)
+  bne           NoDownGravity
+  addi.l        #$100,MouseRec.DesktopGravity.Y(A3)
+  bra.w         Goon
+ 
+ !NoDownGravity
+  cmpi.b        #'4',3(A1,D1.W)
+  bne           NoLeftGravity
+  subi.l        #$100,MouseRec.DesktopGravity.X(A3)
+  bra.w         Goon
+ 
+ !NoLeftGravity
+  cmpi.b        #'6',3(A1,D1.W)
+  bne           NoRightGravity
+  addi.l        #$100,MouseRec.DesktopGravity.X(A3)
+  bra.w         Goon
+ 
+ !NoRightGravity
+  cmpi.b        #'7',3(A1,D1.W)
+  bne           NoLessPower
+  subi.w        #$1,MouseRec.UserPower.I(A3)
+  bpl.w         Goon
+  clr.w         MouseRec.UserPower.I(A3)
+  bra.w         Goon
+ 
+ !NoLessPower
+  cmpi.b        #'9',3(A1,D1.W)
+  bne           NoMorePower
+  addi.w        #$1,MouseRec.UserPower.I(A3)
+  bra.w         Goon
+ 
+ !NoMorePower
+  cmpi.b        #'1',3(A1,D1.W)
+  bne           NoLessFriction
+  addi.l        #$100,MouseRec.DesktopFriction(A3)
+  cmpi.l        #$10000,MouseRec.DesktopFriction(A3)
+  ble.w         Goon
+  move.l        #$10000,MouseRec.DesktopFriction(A3)
+  bra.w         Goon
+ 
+ !NoLessFriction
+  cmpi.b        #'3',3(A1,D1.W)
+  bne           NoMoreFriction
+  subi.l        #$100,MouseRec.DesktopFriction(A3)
+  bpl.w         Goon
+  clr.l         MouseRec.DesktopFriction(A3)
+  bra.w         Goon
+ 
+ !NoMoreFriction
+  cmpi.b        #'-',3(A1,D1.W)
+  bne           NoLessMass
+  addi.l        #$1,MouseRec.Mass(A3)
+  cmpi.l        #$90,MouseRec.Mass(A3)
+  ble.w         Goon
+  move.l        #$90,MouseRec.Mass(A3)
+  bra.w         Goon
+ 
+ !NoLessMass
+  cmpi.b        #'+',3(A1,D1.W)
+  bne           NoMoreMass
+  subi.l        #$1,MouseRec.Mass(A3)
+  bpl           Goon
+  clr.l         MouseRec.Mass(A3)
+ 
+ !NoMoreMass
+ !Goon
+  dbf.w         D0,NextKey
+  
+  ; Tastaturbuffer l”schen
+  move.w        KeyBuffer.tail(A0),KeyBuffer.head(A0)
+  
+  movem.l       (A7)+,A1-A3/D1
+  
+ !ED
+  movem.l       (A7)+,A0/D0
+  move.w        (A7)+,SR
+  END;
+END KeyBufferCheck;
+(*$L+*)
+
+
+
+(*$L-*)
+PROCEDURE KeyXBRA;
+BEGIN
+  ASSEMBLER
+  asc           'XBRA'
+  asc           'PHYS'
+  dc.w          0
+  END;
+END KeyXBRA;
+(*$L+*)
+
+(*$L-*)
+PROCEDURE NewKeyVector;
+BEGIN
+  ASSEMBLER
+  pea           KeyBufferCheck          ; Erst die alte Routine aufrufen, damit
+  move.l        OldIKBDSYS,-(A7)        ; diese den Tastaturbuffer fllt.
+  END;
+END NewKeyVector;
+(*$L+*)
+
+
+(*---------------------------------------------------------------------------*)
+
+(*$L-*)
+PROCEDURE MouseXBRA;
+BEGIN
+  ASSEMBLER
+  asc           'XBRA'
+  asc           'PHYS'
+  dc.w          0
+  END;
+END MouseXBRA;
+(*$L+*)
+
+(*$L-*)
+PROCEDURE NewMouseVector;
+BEGIN
+  ASSEMBLER
+  tst.b         DoPhysical
+  beq           DoOld
+  
+  movem.l       A1-A2/D0,-(A7)
+  lea           Mouse,A1
+  move.l        LineA,A2
+  move.b        1(A0),D0
+  ext.w         D0
+  add.w         D0,MouseRec.Impulse.X(A1)
+  move.w        MouseRec.Position.X(A1),CUR_X(A2)  ; wegen Protos. oder
+  move.w        MouseRec.Position.X(A1),GCURX(A2)  ; andere trickreiche
+  move.b        2(A0),D0                           ; Zeitgenossen...
+  ext.w         D0
+  add.w         D0,MouseRec.Impulse.Y(A1)
+  move.w        MouseRec.Position.Y(A1),CUR_Y(A2)
+  move.w        MouseRec.Position.Y(A1),GCURY(A2)
+  
+  clr.b         1(A0)   ; unsere Ostereier => 00
+  clr.b         2(A0)
+  movem.l       (A7)+,A1-A2/D0
+  
+ !DoOld
+  move.l        OldMouseVector,-(A7)
+  END;
+END NewMouseVector;
+(*$L+*)
+
+
+
+(*---------------------------------------------------------------------------*)
+
+(*$L-*)
+PROCEDURE MulFixReals ( F1  : FixReal;
+                        F2  : FixReal ): FixReal;
+BEGIN
+  ASSEMBLER
+  movem.l       D3-D7,-(A7)
+  move.l        -(A3),D0        ; F2
+  move.l        -(A3),D2        ; F3
+  
+  clr.w         D5              ; Vorzeichenflag
+  
+  tst.l         D0              ; Faktor 2 negativ ?
+  bpl           go
+  neg.l         D0
+  eori.w        #1,D5
+ !go
+  tst.l         D2
+  bpl           go2             ; Faktor 1 negativ ?
+  neg.l         D2
+  eori.w        #1,D5
+ !go2
+  
+  move.w        D5,-(A7)        ; Vorzeichen des Ergebnisses merken
+  
+  
+  swap          D0
+  move.w        D0,D1           ; D1.W = HighWord (Vorkomma) Faktor 2
+  swap          D0              ; D0.W = LowWord (Nachkomma) Faktor 2
+  
+  swap          D2
+  move.w        D2,D3           ; D3.W = HighWord (Vorkomma) Faktor 1
+  swap          D2              ; D2.W = LowWord (Nachkomma) Faktor 1
+  
+  ; D6.L = LowDoubleWord Ergebnis
+  ; D7.L = HighDoubleWord Ergebnis
+  
+  move.w        D2,D6           ; Frac (F2) * Frac (F1)
+  mulu          D0,D6           ; = LowDoubleWord
+  
+  move.w        D3,D7           ; Trunc (F2) * Trunc (F1)
+  mulu          D1,D7           ; = HightDoubleWord
+  
+  mulu          D0,D3           ; Frac (F2) * Trunc (F1)
+  moveq.l       #0,D4
+  move.w        D3,D4           ; => HighWord of LowDoubleWord
+  swap          D4
+  moveq.l       #0,D5
+  swap          D3              ; und LowWord of HighDoubleWord
+  move.w        D3,D5
+  
+  add.l         D4,D6           ; zum Ergebnis addieren
+  addx.l        D5,D7
+  
+  mulu          D1,D2           ; Trunc (F2) * Frac (F1)
+  moveq.l       #0,D4
+  move.w        D2,D4           ; => HightWord of LowDoubleWord
+  swap          D4
+  moveq.l       #0,D5           ; und LowWord of HighDoubleWord
+  swap          D2
+  move.w        D2,D5
+  
+  add.l         D4,D6           ; wieder addieren
+  addx.l        D5,D7
+  
+  move.w        D7,D6           ; Ergebnis ist (ohne Rangecheck!)
+  swap          D6              ; (LowWord of HighDoubleWord und
+  tst.w         (A7)+           ; HightWord of LowDoubleWord) => FIXREAL
+  beq           go3
+  neg.l         D6              ; Vorzeichen wieder anbringen
+  
+ !go3
+  move.l        D6,(A3)+        ; fertig
+  
+  movem.l       (A7)+,D3-D7
+  END;
+END MulFixReals;
+(*$L+*)
+
+
+
+(*---------------------------- VBL - Interrupt -----------------------------*)
+
+(*$L-*)
+PROCEDURE VBLXBRA;
+BEGIN
+  ASSEMBLER
+  asc           'XBRA'
+  asc           'PHYS'
+  dc.w          0
+  END;
+END VBLXBRA;
+(*$L+*)
+
+(*$L-*)
+PROCEDURE VBLIRQ;
+BEGIN
+  ASSEMBLER
+  movem.l       D0-D7/A0-A6,-(A7)
+  
+  bset          #3,$484
+  
+  lea           VBLStack,A3             ; Jetzt nehmen wir unseren Stack,
+  
+  jsr           KeyBufferCheck
+  
+  tst.b         DoPhysical
+  beq.w         ED
+  
+  sf            Collision
+  
+  move.l        LineA,A1
+  lea           Mouse,A0
+  sf            MouseChanged
+  
+  move.l        MouseRec.UserPower(A0),(A3)+
+  move.l        MouseRec.Impulse.X(A0),(A3)+
+  clr.l         MouseRec.Impulse.X(A0)
+  jsr           MulFixReals                     ; Gesamtkraft => A3-Stack
+  move.l        MouseRec.Mass(A0),(A3)+
+  jsr           MulFixReals                     ; a=F/m => A3-Stack
+  move.l        -(A3),D1
+  add.l         MouseRec.Speed.X(A0),D1
+  add.l         MouseRec.DesktopGravity.X(A0),D1
+  move.l        D1,(A3)+
+  move.l        MouseRec.DesktopFriction(A0),(A3)+
+  jsr           MulFixReals
+  move.l        -(A3),D1
+  move.l        D1,MouseRec.Speed.X(A0)
+  add.l         MouseRec.Position.X(A0),D1
+  bpl           NotOverTheLeft
+  clr.l         D1
+  neg.l         MouseRec.Speed.X(A0)
+  tst.w         MouseRec.Speed.X.I(A0)
+  beq           SetXPosition
+  st            Collision
+  bra           SetXPosition
+ !NotOverTheLeft
+  cmp.l         MouseRec.ScreenMaximum.X(A0),D1
+  bls           NotOverTheRight
+  neg.l         MouseRec.Speed.X(A0)
+  move.l        MouseRec.ScreenMaximum.X(A0),D1
+  cmpi.w        #$FFFF,MouseRec.Speed.X.I(A0)
+  beq           SetXPosition
+  st            Collision
+ !NotOverTheRight
+ !SetXPosition
+  move.l        D1,MouseRec.Position.X(A0)
+  swap          D1
+  cmp.w         GCURX(A1),D1
+  beq           NoXSet
+  move.w        D1,GCURX(A1)
+  move.w        D1,CUR_X(A1)
+  st            MouseChanged
+ !NoXSet
+  
+  
+  move.l        MouseRec.UserPower(A0),(A3)+
+  move.l        MouseRec.Impulse.Y(A0),(A3)+
+  clr.l         MouseRec.Impulse.Y(A0)
+  jsr           MulFixReals                     ; Gesamtkraft => A3-Stack
+  move.l        MouseRec.Mass(A0),(A3)+
+  jsr           MulFixReals                   ; a=F/m => A3-Stack
+  move.l        -(A3),D1
+  add.l         MouseRec.Speed.Y(A0),D1
+  add.l         MouseRec.DesktopGravity.Y(A0),D1
+  move.l        D1,(A3)+
+  move.l        MouseRec.DesktopFriction(A0),(A3)+
+  jsr           MulFixReals                   ; v'=v*f => A3-Stack
+  move.l        -(A3),D1
+  move.l        D1,MouseRec.Speed.Y(A0)
+  add.l         MouseRec.Position.Y(A0),D1
+  bpl           NotOverTheTop
+  neg.l         MouseRec.Speed.Y(A0)
+  clr.l         D1
+  tst.w         MouseRec.Speed.Y.I(A0)
+  beq           SetYPosition
+  st            Collision
+  bra           SetYPosition
+ !NotOverTheTop
+  cmp.l         MouseRec.ScreenMaximum.Y(A0),D1
+  bls           NotOverTheBottom
+  neg.l         MouseRec.Speed.Y(A0)
+  move.l        MouseRec.ScreenMaximum.Y(A0),D1
+  cmpi.w        #$FFFF,MouseRec.Speed.Y.I(A0)
+  beq           SetYPosition
+  st            Collision
+ !NotOverTheBottom
+ !SetYPosition
+  move.l        D1,MouseRec.Position.Y(A0)
+  swap          D1
+  cmp.w         GCURY(A1),D1
+  beq           NoYSet
+  move.w        D1,GCURY(A1)
+  move.w        D1,CUR_Y(A1)
+  st            MouseChanged
+ !NoYSet
+  
+  
+  tst.b         MouseChanged
+  beq           ED
+  move.w        GCURX(A1),D0
+  move.w        GCURY(A1),D1
+  move.l        USER_MOT(A1),A1
+  move.w        SR,-(A7)
+  ori.w         #$0700,SR
+  jsr           (A1)
+  move.w        (A7)+,SR
+  move.l        LineA,A1
+  tst.w         M_HID_CT(A1)
+  bne           MouseIsFutsch
+  st            CUR_FLAG(A1)
+  bset          #5,CUR_MS_STAT(A1)
+  
+ !MouseIsFutsch
+  tst.b         Collision
+  beq           ED
+  lea           VBLStack,A3
+  move.l        #KlickSound,(A3)+
+  clr.w         (A3)+
+  jsr           StartSound
+ 
+ !ED
+  movem.l       (A7)+,D0-D7/A0-A6
+ 
+  move.l        OldVBLIRQ,-(A7)         ; alte VBL-Routine macht weiter...
+  END;
+END VBLIRQ;
+(*$L+*)
+
+
+(*$L-*)
+PROCEDURE InstallVBLIRQ;
+BEGIN
+  ASSEMBLER
+  jsr           EnterSupervisorMode
+  move.w        SR,-(A7)
+  ori.w         #$0700,SR
+  
+  move.l        $70,OldVBLIRQ
+  lea           VBLXBRA,A0
+  lea           VBLIRQ,A0
+  move.l        $70,-4(A0)              ; XBRA-Vektor setzen
+  move.l        A0,$70
+  
+  move.w        (A7)+,SR
+  andi.w        #$DFFF,SR
+  END;
+END InstallVBLIRQ;
+(*$L+*)
+
+
+
+
+(*--------------------------------------------------------------------------*)
+
+BEGIN
+  Writeln;
+  WriteString ( 'PHYSICAL CURSOR installed.' );
+  Writeln;
+  WriteString ( 'Written with MEGAMAX MODULA-2 for the TOS-Magazin by Meinolf Schneider' );
+  Writeln;
+  WriteString ( '½ May 1990 by Meinolf Schneider' );
+  Writeln;
+  Writeln;
+  FOR i := 0 TO 30000 DO END;
+  FOR i := 0 TO 30000 DO END;
+  
+  SetSampleFrequency ( 9000 );
+  
+  ASSEMBLER
+  ; Adressen der LineA-Variablen abfragen und setzen
+  dc.w          $A000
+  move.l        A0,LineA
+  
+  move.w        #1,-(A7)        ; I/O-Buffer f. Tastatur ermitteln
+  move.w        #14,-(A7)
+  trap          #14
+  addq.w        #4,A7
+  move.l        D0,KeyBuffer
+  
+  
+  move.w        #34,-(A7)       ; Keyboardvektoren abfragen
+  trap          #14
+  addq.l        #2,A7
+  move.l        D0,A1
+  
+  jsr           EnterSuperVisorMode
+  move.w        SR,-(A7)
+  ori.w         #$0700,SR
+  
+  ; Mousevektor umbiegen...
+  lea           MouseXBRA,A0
+  move.l        16(A1),OldMouseVector
+  move.l        16(A1),(A0)
+  move.l        #NewMouseVector,16(A1)
+  
+  ; Keyboardvektor umbiegen...
+  lea           KeyXBRA,A0
+  move.l        32(A1),OldIKBDSYS
+  move.l        32(A1),8(A0)
+  move.l        #NewKeyVector,32(A1)
+  
+  
+  ; Startwerte setzen
+  move.l        LineA,A0
+  lea           Mouse,A1
+  move.w        GCURX(A0),MouseRec.Position.X(A1)
+  move.w        GCURY(A0),MouseRec.Position.Y(A1)
+  clr.w         MouseRec.Position.X.F(A1)
+  clr.w         MouseRec.Position.Y.F(A1)
+  move.l        #$140000,MouseRec.UserPower(A1)
+  move.l        #$FC00,MouseRec.DesktopFriction(A1)
+  clr.l         MouseRec.DesktopGravity.X(A1)
+  move.l        #$1000,MouseRec.DesktopGravity.Y(A1)
+  move.l        #$90,MouseRec.Mass(A1)
+  clr.l         MouseRec.Speed.X(A1)
+  clr.l         MouseRec.Speed.Y(A1)
+  clr.l         MouseRec.Impulse.X(A1)
+  clr.l         MouseRec.Impulse.Y(A1)
+  
+  clr.w         MouseRec.ScreenMaximum.X.F(A1)
+  move.w        V_REZ_HZ(A0),MouseRec.ScreenMaximum.X(A1)
+  subq.w        #1,MouseRec.ScreenMaximum.X(A1)
+  clr.w         MouseRec.ScreenMaximum.Y.F(A1)
+  move.w        V_REZ_VT(A0),MouseRec.ScreenMaximum.Y(A1)
+  subq.w        #1,MouseRec.ScreenMaximum.Y(A1)
+  
+  
+  st            DoPhysical
+  
+  move.w        (A7)+,SR
+  andi.w        #$DFFF,SR
+  END;
+  
+  InstallVBLIRQ;
+END Physical.
+

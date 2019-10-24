@@ -1,0 +1,1 @@
+void direct2disk(void);

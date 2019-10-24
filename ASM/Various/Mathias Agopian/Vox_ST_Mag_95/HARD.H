@@ -1,0 +1,12 @@
+int init_dsp(void);
+int init_snd(void);
+void It_Ready(void);
+void set_trigger(int trigger,int quiet);
+void set_nbp(int nbp);
+void vox(void);
+void get_samples(int nbp,int *ptr);
+double pearson(int *x,int *y,int n);
+void copy_tab(int *s,int *d,int pas, int nb);
+void optimise(int *ptr,int n);
+void stop_dsp(void);
+int get_seuil(void);
