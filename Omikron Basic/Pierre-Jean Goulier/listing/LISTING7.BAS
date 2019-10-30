@@ -1,0 +1,4 @@
+DIM T$(10000)
+Ptr= VARPTR(T$(0))
+Adr= LPEEK( SEGPTR +20)+ LPEEK(Ptr)
+BLOAD "A:\TEST.ARY",Adr

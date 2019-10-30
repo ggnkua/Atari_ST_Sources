@@ -1,0 +1,11 @@
+DIM A%(100,100)
+Ti= TIMER
+OPEN "I",1,"A:\ESSAI.MAT"
+FOR I%=0 TO 100
+  FOR J%=0 TO 100
+    INPUT #1,A%(I%,J%)
+  NEXT J%
+NEXT I%
+CLOSE
+PRINT "Temps : ";( TIMER -Ti)/200
+

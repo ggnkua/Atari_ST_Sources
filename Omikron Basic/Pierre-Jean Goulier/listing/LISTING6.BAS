@@ -1,0 +1,15 @@
+1 DIM T$(10000)
+2 FOR I%=0 TO 10000
+3   T$(I%)= CHR$( RND(25)+65)*10
+4 NEXT I%
+5 '
+6 Ptr= VARPTR(T$(0))
+7 Adr= LPEEK( SEGPTR +20)+ LPEEK(Ptr)
+8 FOR I%=0 TO 10000
+9   IF LPEEK(Adr+I%*6)=0 THEN EXIT
+10   R= LPEEK(Adr+I%*6):L= WPEEK(Adr+I%*6+4)
+11 NEXT I%
+12 Start= LPEEK( SEGPTR +28)+ LPEEK(Adr)
+13 Size=Start+R+L-Adr
+14 BSAVE "A:\TEST.ARY",Adr,Size
+
