@@ -1,0 +1,314 @@
+' ****************************************
+' *                                      *
+' *     kleines Beispielprogramm         *
+' *                                      *
+' *          zum erleutern               *
+' *                                      *
+' *              vom                     *
+' *                                      *
+' *        IFF - NEO - Degas             *
+' *                                      *
+' *          Bildformat                  *
+' *                                      *
+' *  dies ist natÅrlich keine            *
+' *  GEM kompatible Lîsung wie z.B.      *
+' *  GEMVIEW, sondern einzig und allein  *
+' *  fÅr den Spieleprogrammierer gedacht *
+' *  und zur Veranschaulichung des       *
+' *  Systems !                           *
+' *                                      *
+' ****************************************
+'
+' Aus dem Buch:
+'
+' Spiele selbst programmieren
+'
+' erschienen im Heim - Verlag
+'
+' von Klaus Dieter Pollack 08.03. 1993
+'
+' arbeitet in allen 4/8 Plane Auflîsungen des ST/TT/F030
+'
+' es wird nur ILBM - IFF / Degas / Neochrome unterstÅzt
+'
+' auf einem ST wird eine Palette von 3375 Farben unterstÅtzt
+' durch schnellem Wechsel der Palette alle 20ms (50Hz) bzw. 16ms (60Hz)
+' eine solche Palettenerweiterung wÑre natÅrlich auch auf STE/TT und F030
+' mîglich !!!
+'
+DIM n|(16),oldpal|(768)
+' *******  Einlesen der Liste zum Wandeln VDI / Plane Colors
+FOR t|=0 TO 15
+  READ n|(t|)
+NEXT t|
+' ***********
+scmem%=XBIOS(2)         !Bildschirmspeicher
+' **** Initialisierung, je nach Auflîsung
+SELECT WORK_OUT(13)     ! Menge der Farben ?
+CASE 16                 ! 16 Farb Auflîsung
+  words|=8
+CASE 256                ! 256 Farb Auflîsung
+  words|=16
+  n|(15)=255            ! modifizieren der Liste fÅr 256 Farb Aufîsung
+ENDSELECT
+' ****************************************
+' mîgliche Planes
+plane|=ROUND(LOG(WORK_OUT(13))/LOG(2))
+' grîûe des Bildspeichers
+mem%=((WORK_OUT(0)+1)*(WORK_OUT(1)+1))/8*ROUND((LOG(WORK_OUT(13))/LOG(2)))
+' Speicherbedarf einer Zeile
+linemem&=mem%/(WORK_OUT(1)+1)
+DO
+  rette_palette
+  REPEAT
+    FILESELECT "\*.*","",name$ ! Dateiname erfragen
+  UNTIL EXIST(name$)=TRUE OR name$=""
+  IF name$<>"" AND EXIST(name$)=TRUE ! Kein ABBRUCH ?
+    OPEN "i",#1,name$ ! ôffne Datei
+    long%=LOF(#1)
+    IF @ident=0  ! IFF ?
+      chunks
+      RELSEEK #1,4
+      body
+    ELSE
+      SEEK #1,0
+      IF INP&(#1)=0 AND long%=32128  ! Neochrome ?
+        SEEK #1,4
+        neopal
+        SEEK #1,128
+        ' ******* Werte fÅr niedrige auflîsung
+        planes|=4
+        plmem&=19 ! Menge der Wîrter einer Plane -1
+        y&=200
+        ' *********
+        neoload
+      ELSE
+        SEEK #1,0
+        compr|=SHR(INP(#1),7)
+        y&=200
+        plmem&=19
+        IF compr|=0 AND (long%=32066 OR long%=32034) ! Degas ungepackt ?
+          degasinit
+          neopal
+          neoload
+        ELSE IF compr|=1 ! Degas gepackt ?
+          degasinit
+          neopal
+          body
+        ENDIF
+      ENDIF
+    ENDIF
+    CLOSE #1  ! unbekannt
+  ELSE
+    END
+  ENDIF
+  alte_palette
+LOOP
+' ******** IFF
+> FUNCTION ident ! identifiziert ILBM IFF File
+IF INPUT$(4,#1)="FORM"
+  RELSEEK #1,4
+  IF INPUT$(4,#1)="ILBM"
+    RETURN 0
+  ELSE
+    RETURN 1
+  ENDIF
+ELSE
+  RETURN 1
+ENDIF
+ENDFUNC
+> PROCEDURE chunks ! hangelt sich durch die Chunks
+REPEAT
+  c_name$=INPUT$(4,#1)
+  PRINT c_name$
+  SELECT c_name$
+  CASE "BMHD"
+    header
+  CASE "CMAP"
+    palette
+  CASE "BODY"
+  DEFAULT
+    weiter
+  ENDSELECT
+UNTIL c_name$="BODY"
+RETURN
+> PROCEDURE palette ! ÅbertrÑgt Palette in die Register
+a$=""
+FOR t&=0 TO INP%(#1)-1 STEP 3
+  r|=INP(#1)
+  g|=INP(#1)
+  b|=INP(#1)
+  wandle_3375
+  set_color(t&,r|,g|,b|,0)
+NEXT t&
+RETURN
+> PROCEDURE header ! holt sich Format Daten
+c_long%=INP%(#1)
+x&=INP&(#1)
+y&=INP&(#1)
+RELSEEK #1,4
+planes|=INP(#1)
+mask|=INP(#1)
+compr|=INP(#1)
+RELSEEK #1,c_long%-11
+plmem&=x&/16-1
+bildmem%=y&*linemem&
+RETURN
+> PROCEDURE weiter !positioniert auf nÑchsten Chunk
+c_long%=INP%(#1)
+RELSEEK #1,c_long%
+RETURN
+> PROCEDURE body  ! bringt IFF & Degas gepackt und IFF ungepackt auf den Schirm
+weiche|=0
+CLS
+FOR n%=0 TO bildmem%-linemem& STEP linemem& ! Zeile fÅr Zeile
+  FOR tt%=0 TO planes|*2-2 STEP 2 ! Plane fÅr Plane
+    weiche|=0 ! es wird nur bis zum Zeilenende entpacked
+    FOR t%=0 TO plmem&  ! Wort fÅr Wort
+      IF compr|=1 ! IFF Format gepacked
+        ' Es gibt mittlerweile auch Programme mit compr|>1
+        ' z.B. Deluxe Paint 2 ST oder div. True Color IFF Formate !!!
+        '
+        ' ** In den Bildschirmspeicher schreiben
+        BYTE{scmem%+t%*words|+tt%+n%}=@entpack
+        BYTE{scmem%+t%*words|+tt%+n%+1}=@entpack
+        ' **************************************
+      ELSE IF compr|=0 !
+        ' ** In den Bildschirmspeicher Schreiben
+        WORD{scmem%+t%*words|+tt%+n%}=INP&(#1)
+        ' *************************************
+      ENDIF
+    NEXT t%
+  NEXT tt%
+NEXT n%
+wait
+RETURN
+> PROCEDURE set_color(t&,r|,g|,b|,flag!) ! setzt Farbpalette
+CONTRL(1)=0
+CONTRL(3)=4
+IF t&/3<16 AND flag!=0! Die ersten 16 Farben sind nach PC - GEM  Manier geordnet
+  INTIN(0)=n|(t&/3) ! Umwandlung von VDI in HardwareabhÑngiges
+ELSE                ! Palettenformat
+  INTIN(0)=t&/3
+ENDIF
+INTIN(1)=r|*4
+INTIN(2)=g|*4
+INTIN(3)=b|*4
+VDISYS (14)
+RETURN
+> PROCEDURE rette_palette ! rettet alte Palette
+INTIN(1)=0
+CONTRL(1)=0
+CONTRL(3)=2
+CONTRL(4)=4
+FOR t&=0 TO (WORK_OUT(13)-1)*3 STEP 3
+  INTIN(0)=t&/3
+  VDISYS (26)
+  oldpal|(t&)=INTOUT(1)/4
+  oldpal|(t&+1)=INTOUT(2)/4
+  oldpal|(t&+2)=INTOUT(3)/4
+NEXT t&
+RETURN
+> PROCEDURE alte_palette ! schreibt alte Palette wieder zurÅck
+FOR t&=0 TO (WORK_OUT(13)-1)*3 STEP 3
+  set_color(t&,oldpal|(t&),oldpal|(t&+1),oldpal|(t&+2),-1)
+NEXT t&
+RETURN
+> PROCEDURE wandle_3375 ! erzeugt zwei Paletten zum Wechseln
+IF WORK_OUT(39)=512
+  rr|=SHR(r|,5)
+  gg|=SHR(g|,5)
+  bb|=SHR(b|,5)
+  a$=a$+MKI$(SHL&(rr|,8)+SHL(gg|,4)+bb|)
+  IF rr|<7
+    rr|=rr|+AND(SHR(r|,4),&X1)
+  ENDIF
+  IF gg|<7
+    gg|=gg|+AND(SHR(g|,4),&X1)
+  ENDIF
+  IF bb|<7
+    bb|=bb|+AND(SHR(b|,4),&X1)
+  ENDIF
+  b$=b$+MKI$(SHL&(rr|,8)+SHL(gg|,4)+bb|)
+ENDIF
+RETURN
+> FUNCTION entpack ! Erzeugt entpackte Daten
+DO
+IF weiche|=0       ! Befehlsbyte schon eingelesen ?
+  long|=INP(#1)    ! Befehlsbyte lesen
+  IF long|>128     ! gepackt ?
+    weiche|=1      ! Weiche stellen fÅr gepackte Daten
+    which|=INP(#1) ! lese nÑchstes Byte
+    n|=257-long|   ! Menge der gepackten Bytes errechnen
+  ELSE IF long|<128 ! ungepackt ?
+    weiche|=2       ! Weiche fÅr ungepackte Daten stellen
+    n|=long|+1      ! Menge der Ungepackten Bytes
+  ELSE
+    weiche|=0       ! nÑchstes Befehlsbyte lesen
+  ENDIF
+ELSE IF weiche|=1   ! gepackt
+  DEC n|            ! ZÑhler fÅr ausgegebene Daten um eins verringern
+  IF n|=0           ! alle gepackten Bytes ausgegeben ?
+    weiche|=0       ! beim nÑchsten Aufruf neues Befehlesbyte lesen
+  ENDIF
+  RETURN (which|)   ! Datenbyte zurÅckgeben und Funktion verlassen
+ELSE IF weiche|=2   ! ungepackte Daten
+  DEC n|            ! ZÑhler fÅr ausgegebene Daten um eins veringern
+  IF n|=0           ! alle ungepackten Daten ausgegeben ?
+    weiche|=0       ! beim nÑchsten Aufruf neues Befehlsbyte lesen
+  ENDIF
+  RETURN (INP(#1))  ! gelesene Daten zurÅckgeben
+ENDIF
+LOOP
+ENDFUNC
+' ********* NEO
+> PROCEDURE neopal ! Palette Degas und IFF
+FOR t&=0 TO 15
+pal&=INP&(#1)
+' Wandelt 3 Bit ST u. 4 Bit STE/TT ins 8 Bit IFF Palettenformat um
+b|=OR(BYTE(SHL(pal&,5)),AND(SHL(pal&,1),&X10000))
+g|=OR(BYTE(AND(&X11100000,SHL&(pal&,1))),AND(SHR(pal&,3),&X10000))
+r|=OR(BYTE(AND(SHR&(pal&,3),&X11100000)),AND(SHR&(pal&,7),&X10000))
+wandle_3375
+set_color(t&*3,r|,g|,b|,0)
+NEXT t&
+RETURN
+> PROCEDURE neoload ! lÑdt NEO/DEGAS ungepackt
+CLS
+FOR t%=0 TO (y&-1)*linemem& STEP linemem&     ! Zeilen
+FOR s&=0 TO plmem&*4*plane|/2 STEP plane|*2 ! Offset Planes
+  FOR tt&=0 TO (planes|-1)*2 STEP 2         ! Wort fÅr Wort (16 Pixel)
+    BGET #1,scmem%+t%+tt&+s&,2
+  NEXT tt&
+NEXT s&
+NEXT t%
+wait
+RETURN
+> PROCEDURE wait ! wartet auf Tastendruck u. wechselt Palette im 3375 Modus
+IF WORK_OUT(39)=512
+REPEAT
+  IF LPEEK(&H462)<>vbl_count
+    vbl_count=LPEEK(&H462)
+    VOID XBIOS(6,L:V:a$)
+    SWAP a$,b$
+  ENDIF
+UNTIL INP(-2)=-1 ! Warte auf Tastendruck
+ENDIF
+VOID INP(2)
+VSYNC
+RETURN
+> PROCEDURE degasinit ! erzeugt wichtige IFF Header Daten fÅr Degas File
+SELECT INP(#1)
+CASE 0  ! niedrige Auflîsung
+planes|=4
+CASE 1  ! mittlere Auflîsung
+planes|=2
+CASE 2  ! Monochrome
+y&=400
+plmem&=39 ! Wîrter einer Plane -1
+planes|=1
+ENDSELECT
+bildmem%=y&*linemem& ! benîtigter Speicher des Bilds bei eingest. Auflîsung
+RETURN
+' Umrechnungstabelle fÅr die ersten 16 VDI Farben der Palette
+DATA  0,2,3,6,4,7,5,8,9,10,11,14,12,15,13,1

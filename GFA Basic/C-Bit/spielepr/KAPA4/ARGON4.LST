@@ -1,0 +1,1916 @@
+' Unter Multi TOS muû das Programm Flag fÅr die Speicherverwaltung
+' beim compilierten Programm auf SUPER gestellt werden !
+$%3
+$F<
+$S%
+$S>
+$P<
+$I+
+RESERVE 20000 !allen Åbrigen Speicher zurÅck ans GEMDOS
+IF WORK_OUT(13)<>16
+  ALERT 3,"Dies ist keine |Auflîsung mit |16 Farben",1,"WEITER|ABBRUCH",n|
+  IF n|=2
+    END
+  ENDIF
+ENDIF
+' ******* Hardwareregister + Systemvariablen **********
+syncmode%=&HFFFF820A !Register 50/60 HZ Umschaltung (STE/ST)
+dmabasis%=&HFFFF8900 !STE/TT/Falcon DMA Sound on/of
+tbcr%=&HFFFFFA1B !Timer B Control Register
+tacr%=&HFFFFFA19 !Timer A Control Register
+vr%=&HFFFFFA17   !Interupt Vektor Register
+SPOKE vr%,BCLR(PEEK(vr%),3) !Automatic End of Interupt
+cookies%=LPEEK(&H5A0) !stellt Adresse der cookies fest
+tosver%=DPEEK(LPEEK(&H4F2)+2) ! stellt TOS Versionsnummer fest
+col_reg%=&HFFFF8240 !Farbregister 0
+xres&=WORK_OUT(0) !Maximale X Position
+yres&=WORK_OUT(1) !Maximale Y Position
+' *******************************************************
+SPOKE tacr%,0 !Timer A aus
+' ******** liebes AES der Bildschirm gehîrt mir ! ************
+VOID FORM_DIAL(0,0,0,xres&,yres&,0,0,xres&,yres&)
+VOID WIND_UPDATE(1)
+VOID WIND_UPDATE(3)
+' ****************** letzte énderung 10.03.93
+' jetzt auch mit High_Score
+STICK 1 !Joystick und keine Maus
+blitter
+' ********************* (Scroll) Speicherverwaltung
+malmymem%=MALLOC(320256) !holt 320000 Byte vom Betriebssystem
+mymem%=malmymem%+256
+mymem%=SHL(SHR(mymem%,8),8)!Bildschirmspeicher auf 256 Bytes Grenze
+' 2 Bildschirmspeicher fÅr Pageflip      =   64000
+' 2 "     "    "    "  fÅr die Masken    =+  64000
+' 1 Bild fÅr das Menö                    =+  32000
+' 5 "     "    "    "  fÅr das Scrolling =+ 160000
+'                                        ----------
+'                                           320000
+' + 256 Bytes um den Bildschirmspeicher ST kompatibel umschalten zu kînnen
+' d.h. an einer 256 Bytes Grenze
+IF mymem%=0
+  ende
+ENDIF
+' *****************************************************
+DIM scmem%(3),a|(4),b|(4),shx&(3),shy&(3),shoot!(3) ! 3 Variablen fÅr den Bildschirmspeicher
+' und 4 Variablen fÅr die Scrollroutine und 3 fÅr Schuû
+DIM alx&(5),aly&(5),change!(5),ab&(5),init!(5),ani&(5),an&(5),expl!(5),change2!(5)
+' Variablen fÅr die Gegner (5 StÅck) in Proc. alien1 u. alien2
+DIM score%(4),game_over!(4),amount|(4),x&(4),y&(4),kap|(4),s_off%(4),hit!(4)
+DIM sh_last|(4),fshield!(4)
+oldrez&=XBIOS(4)
+oldmode%=XBIOS(88,-1)
+VOID XBIOS(5,L:-1,L:-1,0)
+' Variablen fÅr 1-4 Spielerverwaltung
+DIM reg%(16),samples%(6)
+' Variable fÅr Register bei RCALL
+rette_palette
+' ********** variablen fÅr High Score *******
+DIM high%(11),high$(11)
+FOR t|=1 TO 10
+  high$(t|)=SPACE$(20)
+NEXT t|
+' ********* Musik ***************
+'      Init DMA Sound auf Falcon030
+oldl&=XBIOS(130,0,160) ! Lautst. links
+oldr&=XBIOS(130,1,160) ! Lautst. rechts
+oldma&=XBIOS(130,4,3) !Setze Addierer auf ADC u. Matrix
+oldadc&=XBIOS(130,5,3) !links u. rechts PSG auf A/D Wandler
+lpsgin&=XBIOS(130,2,255) ! PSG LAUT
+rpsgin&=XBIOS(130,3,255) ! PSG LAUT
+VOID XBIOS(132,0) ! 8 Bit Stereo
+VOID XBIOS(139,0,8,0,0,1) ! DMA auf ADC, 25 MHz,TT compatibel,kein handshake
+oldfreq&=XBIOS(130,6,1) ! Setze DMA auf 12khz
+'
+SPOKE &H484,BCLR(PEEK(&H484),0) !Tastaturclick aus
+rausch&=7
+DIM freq&(3),sound|(3),eff|(3)
+DIM laut|(3),amch|(3),hold|(3),oldeff|(3),oldhold|(3)
+l_song
+zaehler&=1
+' *********************
+scmem%(1)=XBIOS(2) ! Lage des Bildschirmspeichers
+scmem%(2)=mymem% !Lage der Bildschirmspeicher fÅrs
+scmem%(3)=mymem%+32000 !Pageflipping
+scrmem%=scmem%(3)+32000 !Startadresse des zu scrollenden Speichers
+menue%=mymem%+288000 ! Neochrome Bild fÅr das MenÅ
+BLOAD laufw$+"menue.neo",menue% !lÑdt das Bild zum MenÅ
+pre_load
+l_color
+mask_load
+oldvec%=BIOS(5,28,L:-1) !alter VBL Vector
+VOID XBIOS(6,L:sprites%+4)
+players|=1
+oldplay|=1
+' ********* Wegen der Pallette von Neocrome
+CLS
+do_maske
+' ***********************************
+RCALL chcoll%,reg%() !ruft die Pallettenumschaltung
+' gibt in A0 und A1 die Adressen von Palette 1 u. 2 zurÅck
+basepal1%=reg%(8) ! 1. Palette in Routine chcoll
+basepal2%=reg%(9) ! 2. Palette im " " " " " " "
+BMOVE sprite%+29600,scmem%(1)+29600,2240 !kopiert das Logo in den 1. Bildsp.
+FOR t|=2 TO 3
+  BMOVE scmem%(1),scmem%(t|),32000 ! Kopiert das Logo in Bilschirmsp.
+NEXT t|
+ON BREAK GOSUB ende
+ON ERROR GOSUB erende
+cookies
+l_sound
+ch_mouse
+scroll ! fÅr Bitplit Speed
+speed
+high_in
+auswahl
+ch_palette
+> PROCEDURE main  !Steuerung des JÑgers der SchÅsse u.v.m
+  check_it
+  EVERY STOP
+  WAVE 0,0
+  init
+  logo_copy
+  level_change
+  main_pal
+  ON MENU KEY GOSUB taste
+  REPEAT
+    digi_on
+    REPEAT
+      IF speed%<>0
+        FOR t%=0 TO speed%
+        NEXT t%
+      ENDIF
+      INC flip| ! ZÑhler fÅr das "Page Flipping"
+      IF flip|=4
+        flip|=1
+      ENDIF
+      ' ************* DÅsenflackern
+      IF long|=26
+        long|=18
+      ELSE
+        long|=26
+      ENDIF
+      ' ************* Joystick - abfrage
+      SELECT STICK(1)
+      CASE 0
+        in_mitte
+      CASE 1
+        oben
+        in_mitte
+      CASE 2
+        unten
+        in_mitte
+      CASE 4
+        links
+      CASE 8
+        rechts
+      CASE 5
+        links
+        oben
+      CASE 9
+        rechts
+        oben
+      CASE 6
+        links
+        unten
+      CASE 10
+        rechts
+        unten
+      ENDSELECT
+      ' **********  Links und Rechts je nach Stellung des JÑgers
+      IF offset&<>66
+        small&=DIV(offset&-66,22)
+        ADD x&,small&
+        ADD x&,small&
+        IF x&<1
+          x&=1
+        ELSE IF x&>298
+          x&=298
+        ENDIF
+      ENDIF
+      ' ************ Feuerknopf
+      IF STRIG(1)=TRUE
+        IF pressed!=FALSE
+          menge|=0
+          pressed!=TRUE
+          REPEAT
+            INC menge|
+            IF shoot!(menge|)=FALSE
+              ' **** DIGI Sound
+              sam|=3
+              lplay_sound ! hier Schuss ***
+              ' *****************
+              shoot!(menge|)=TRUE
+              shx&(menge|)=x&
+              shy&(menge|)=y&
+              menge|=3
+            ENDIF
+          UNTIL menge|=3
+        ENDIF
+      ELSE
+        pressed!=FALSE
+      ENDIF
+      ' ************* Scrolling
+      SUB s_off%,speed&
+      IF s_off%<=-128000
+        s_off%=0
+      ENDIF
+      ' ********** setzt neue Bildschirmadresse (pageflipping)
+      VOID XBIOS(5,L:scmem%(flip|),L:scmem%(flipi|),-1)
+      BMOVE scrollup%+s_off%,scmem%(flip|),28960
+      FOR menge|=1 TO 3
+        IF shoot!(menge|)=TRUE
+          SUB shy&(menge|),4
+          IF shy&(menge|)<4
+            shoot!(menge|)=FALSE
+          ENDIF
+          ' ******* Schuû
+          RC_COPY sprite%,319,0,1,5 TO scmem%(flip|),shx&(menge|)+10,shy&(menge|)
+        ENDIF
+      NEXT menge|
+      ' ********* GrauberÅhrung ?
+      IF POINT(x&+10,y&)=9 OR POINT(x&+20+small&,y&+15)=9 OR POINT(x&,y&+15-small&)=9 AND hit!=FALSE
+        colission
+      ENDIF
+      IF hit!(mitsp|)=TRUE
+        ' **** rÅtteln bei Kollision
+        IF shake&=1
+          shake&=-1
+        ELSE
+          shake&=1
+        ENDIF
+        ' ******** Explosionen
+        RC_COPY maske%,155+ani|,1+kap|,21,long| TO scmem%(flip|),x&+shake&,y&,1
+        RC_COPY sprite%,155+ani|,1+kap|,21,long| TO scmem%(flip|),x&+shake&,y&,7
+        IF ani|<132
+          ADD ani|,22 AND flip|=1
+        ELSE
+          WAVE 0,0
+          hit!(mitsp|)=FALSE
+          ADD kap|,27
+          IF kap|=108 ! Wenn keine Shields mehr
+            kap|=0 ! Alle Schilds zurÅck
+            one_up ! Ein Fighter weniger
+          ENDIF
+          ani|=0
+        ENDIF
+      ELSE
+        ' **** regulÑrer Flug
+        IF fshield!=FALSE
+          RC_COPY maske%,1+offset&,1+kap|,21,long| TO scmem%(flip|),x&,y&,1
+          RC_COPY sprite%,1+offset&,1+kap|,21,long| TO scmem%(flip|),x&,y&,7
+        ELSE
+          INC sh_last|
+          IF sh_last|=200
+            sh_last|=0
+            fshield!=FALSE
+            ani|=0
+            kap|=0
+          ENDIF
+          IF sh_last|>170
+            '   verwandlung von "Feuerball" zurÅck in Fighter
+            RC_COPY maske%,23+ani|,156,21,26 TO scmem%(flip|),x&,y&,1
+            RC_COPY sprite%,23+ani|,156,21,26 TO scmem%(flip|),x&,y&,7
+            IF ani|<111
+              ADD ani|,22 AND flip|=1
+            ENDIF
+          ELSE
+            IF long|=26
+              ' ******** mit shield
+              RC_COPY maske%,1,156,21,26 TO scmem%(flip|),x&,y&,1
+              RC_COPY sprite%,1,156,21,26 TO scmem%(flip|),x&,y&,7
+            ELSE
+              ' ******** mit shield
+              RC_COPY maske%,23,156,21,26 TO scmem%(flip|),x&,y&,1
+              RC_COPY sprite%,23,156,21,26 TO scmem%(flip|),x&,y&,7
+            ENDIF
+          ENDIF
+        ENDIF
+      ENDIF
+      ON alien| GOSUB alien1,alien2,mother
+      IF shield!=TRUE
+        shield
+      ENDIF
+      ' COLOR 0
+      ' PLOT x&+0,y&+15
+      flipi|=flip|
+    UNTIL amount|(mitsp|)=0 OR zurueck!=TRUE
+    high_score
+    game_over
+    digi_off
+    WAVE 0,0
+    logo_copy
+    game_over!(mitsp|)=TRUE
+    alien_off
+    ' ***beendet Stage bei Tot des Spielers und Ruft Playerchange***
+    ON alien| GOSUB wechsel_alien1,wechsel_alien2,wechsel_mother
+  UNTIL zurueck!=TRUE
+  ausw_men
+  EVERY 8 GOSUB music
+RETURN
+> PROCEDURE ch_mouse ! Maus weg
+  mouse$=STRING$(74,CHR$(0))
+  DEFMOUSE mouse$
+RETURN
+> PROCEDURE explodiert ! Bedingung zum  Abziehen eines Fighters
+RETURN
+> PROCEDURE logo_copy ! Kopiert das Logo in die Bildschirmspeicher
+  FOR t|=1 TO 3
+    BMOVE sprite%+29600,scmem%(t|)+29600,2240 ! Kopiert das Logo in Bilschirmsp.
+  NEXT t|
+RETURN
+> PROCEDURE auswahl ! zeigt AuswahlmenÅ zum Start
+  ausw_men
+  REPEAT
+  UNTIL STRIG(1)=FALSE
+  EVERY 8 GOSUB music
+  ON MENU KEY GOSUB menue_event
+  DO
+    ON MENU
+    check_it
+    SELECT STICK(1)
+    CASE 2  !Joystick nach oben
+      IF wahl|<>2
+        lumramung
+        INC wahl| !Variable fÅr die Auswahl und das Zeichnen der Umramung
+        ' des AngewÑhlten "Button"
+        zumramung
+        REPEAT
+          check_it
+        UNTIL STICK(1)<>2
+      ENDIF
+    CASE 1 ! Joystick nach unten
+      IF wahl|<>0
+        lumramung
+        DEC wahl|
+        zumramung
+        REPEAT
+          check_it
+        UNTIL STICK(1)<>1
+      ENDIF
+    ENDSELECT
+    check_it
+    IF STRIG(1)=TRUE
+      ON wahl|+1 GOSUB main,ende,u_play
+      ON MENU KEY GOSUB menue_event
+    ENDIF
+    IF wahl|=2
+      SELECT STICK(1)
+      CASE 4
+        d_play
+      CASE 8
+        u_play
+      ENDSELECT
+    ENDIF
+  LOOP
+RETURN
+> PROCEDURE menue_event ! reagiert auf Taste
+  SELECT SHR(MENU(14),8)    ! F- Tasten ?
+  CASE 59 ! F1 ?
+    main
+    check_it
+  CASE 63 !F5 (50HZ)
+    check_it
+    VSYNC ! Syncronisiert das umschalten der Syncronisation mit dem
+    ' Bildschirmaufbau es kînnte bei STE's sonst zu Problemen mit verschoben
+    ' Bitplanes geben !
+    SPOKE syncmode%,OR(PEEK(syncmode%),&X10) ! setzt Bit 2
+    check_it
+  CASE 64 !F6 (60HZ)
+    VSYNC !siehe oben
+    SPOKE syncmode%,AND(PEEK(syncmode%),&X11111101)
+  CASE 98
+    help
+  ENDSELECT
+  SELECT BYTE(MENU(14))
+    check_it
+  CASE 113 !Q = Quit
+    ende
+  CASE 43 ! +
+    u_play
+  CASE 45 !-
+    d_play
+  CASE 98
+    blitter
+    speed%=0
+    IF BTST(blitter%,0)=TRUE
+      VOID XBIOS(64,0)
+    ELSE
+      VOID XBIOS(64,1)
+    ENDIF
+  ENDSELECT
+  ON MENU KEY GOSUB menue_event
+RETURN
+> PROCEDURE zumramung !Zeichnet Umramung im AnfangsmenÅ
+  COLOR 1
+  BOX 119,59+wahl|*27,210,84+wahl|*27
+RETURN
+> PROCEDURE lumramung !lîscht Umramung im AnfangsmenÅ
+  COLOR 0
+  BOX 119,59+wahl|*27,210,84+wahl|*27
+RETURN
+> PROCEDURE u_play !mehr Spieler
+  IF players|<4
+    INC players|
+    playcopy
+  ENDIF
+RETURN
+> PROCEDURE d_play !weniger Spieler
+  IF players|>1
+    DEC players|
+    playcopy
+  ENDIF
+RETURN
+> PROCEDURE ausw_men !dient zum Zeichen des Menues
+  ch_palette
+  p_cls
+  RC_COPY menues%,1,1,164,49 TO scmem%(1),80,0 ! ARGON 4
+  RC_COPY menues%,0,96,90,24 TO scmem%(1),120,60 ! F1 = START
+  RC_COPY menues%,90,96,90,24 TO scmem%(1),120,87 ! Q= Quit
+  RC_COPY menues%,1,52,50,23 TO scmem%(1),140,114 ! Auswahl Player
+  RC_COPY menues%,1+(oldplay|-1)*24,77,24,18 TO scmem%(1),153,117 ! 1 Player
+  zumramung
+  HIDEM
+  palette_up
+RETURN
+> PROCEDURE p_cls !Pseudo Clear Screen mit Palettenwechsel
+  VOID XBIOS(5,L:scmem%(1),L:scmem%(1),-1)
+  DEFFILL 0
+  PBOX 0,0,319,183 ! Pseudo clear Screen
+RETURN
+> PROCEDURE clear_all ! loescht alle screens bis auf Spielstandanzeige
+  DEFFILL 0
+  FOR t|=1 TO 3
+    VOID XBIOS(5,L:scmem%(t|),L:scmem%(t|),-1)
+    PBOX 0,0,319,183 ! Pseudo clear Screen
+  NEXT t|
+RETURN
+> PROCEDURE playcopy  ! Player I II ... Wechseln im Menue
+  @other
+  step&=players|-oldplay|
+  FOR t&=(oldplay|-1)*24 TO (players|-1)*24 STEP step&
+    SOUND 1,0,#t&+110
+    SOUND 2,0,#t&+120
+    SOUND 3,0,#t&+130
+    WAVE 7,7,14,10+t&
+    check_it
+    VSYNC ! Wartet aus vertikale Syncronisation
+    RC_COPY menues%,1+t&,77,24,18 TO scmem%(1),153,117 ! Player 1-4
+    check_it
+  NEXT t&
+  WAVE 0,0
+  othert!=FALSE
+  oldplay|=players|
+  tast_aus
+RETURN
+> PROCEDURE init ! Initialisiert Variablen
+  ' ********* Anfangskoordinaten ******
+  RESTORE
+  level|=0
+  speed&=160 !Scroll Geschwindigkeit (eine Zeile)
+  mx&=90
+  kap|=0
+  zurueck!=0      !kein GAME OVER
+  offset&=66 ! Stellung "      "
+  alien_off
+  x&=145 ! x koordinate des JÑgers
+  y&=120 ! y Koordinate "      "
+  s_off%=0 !scroll offset
+  ' ********** Variablen fÅrs Pageflip
+  flipi|=1 ! Nummer des angezeigten screens
+  flip|=3  ! Nummer  "  zu beschreibenden screens
+  scrollup%=scmem%(3)+160000 ! bestimmt unteren Zeiger auf Scrollspeicher
+  ' ********* Variablen fÅr den Verlauf  des Programms
+  alien|=1 ! fÅr on gosub in Proc. main
+  abgesch|=0
+  in|=0
+  ' ******* Aliens
+  verz|=0
+  sdani|=1
+  ' ***** Mehrspieler
+  FOR t|=players|+1 TO 4 ! nicht benutzte Spieler auf GAME OVER setzten
+    game_over!(t|)=TRUE
+  NEXT t|
+  FOR t|=1 TO players|
+    score%(t|)=0 !Punkte
+    game_over!(t|)=FALSE
+    fshield!(t|)=FALSE
+    amount|(t|)=3 !******* Menge der Fighter
+    x&(t|)=145 ! x koordinate des JÑgers !Puffer fÅr Mehrspieler
+    y&(t|)=120 ! y Koordinate "      "
+    hit!(t|)=FALSE ! JÑger getroffen Variable
+    s_off%(t|)=0
+    oldalien|=1
+    kap|(mitsp|)=0
+  NEXT t|
+  fshield!=FALSE
+  mitsp|=1 !welcher Mitspieler
+  ' ******* Alienmutter
+  animat|=1
+  mot|=1
+  init_mother
+  miniinit
+  sam|=0
+RETURN
+PROCEDURE help !Hilfe - Menue - Setup Funktion
+  EVERY STOP
+  WAVE 0,0
+  ch_palette
+  p_cls
+  tos$=HEX$(tosver%)
+  DEFTEXT 1,0,0,6
+  TEXT 16,10,"ARGON 4"
+  DEFTEXT 1,0,0,4
+  TEXT 80,10,"by Klaus Dieter Pollack 1992/93"
+  TEXT 80,16,"version 1.1 vom MÑrz 93"
+  DEFTEXT 1,0,0,6
+  TEXT 16,35,"Configuration:"
+  TEXT 16,48,"Dieser ATARI lÑuft mit TOS "+MID$(tos$,1,1)+"."+MID$(tos$,2)
+  IF tosver%>=&H102
+    IF BTST(blitter%,1)=TRUE
+      IF BTST(blitter%,0)=TRUE
+        TEXT 16,57,"Der Blitter wird genutzt"
+      ELSE
+        TEXT 16,57,"Der Blitter wird nicht genutzt"
+      ENDIF
+    ELSE
+      TEXT 16,57,"Kein Blitter vorhanden"
+    ENDIF
+    IF tosver%>=&H104
+      SELECT vdo%
+      CASE 0
+        TEXT 16,67,"Nur ST Video Modies mîglich !"
+      CASE 1
+        TEXT 16,67,"STE Videohardware !"
+      CASE 2
+        TEXT 16,67,"Aha, TT Videohardware !"
+      CASE 3
+        TEXT 16,67,"Huch, Falcon Video Hardware !"
+      DEFAULT
+        TEXT 16,67,"Oh, was is'n das fÅr'n Ding ?"
+      ENDSELECT
+      SELECT mch%
+      CASE 0
+        text$="ST"
+      CASE 1
+        text$="STE"
+      CASE 2
+        text$="TT"
+      CASE 3
+        text$="FALCON 30"
+      CASE 4
+        text$="FALCON 40 ?"
+      ENDSELECT
+      TEXT 16,77,"ES handelt sich um einen "+text$
+      TEXT 16,87,"mit einem MC"+STR$(68000+cpu%)+"er als CPU."
+      TEXT 16,97,"Noch "+STR$(MALLOC(-1)/1024)+" KB Speicher "
+      TEXT 16,107,"sind unbenutzt."
+      IF BTST(snd%,1)=TRUE
+        TEXT 16,117,"DMA Sound wird genutzt !"
+      ENDIF
+    ENDIF
+  ELSE
+    TEXT 16,57,"Blitter wird vom TOS nicht untersÅtzt"
+  ENDIF
+  TEXT 16,127,"Relative Geschwindigkeit "+STR$(speedy%)
+  palette_up
+  w_key
+  ch_palette
+  p_cls
+  COLOR 3
+  DEFTEXT 1,0,0,6
+  TEXT 20,20,"Relative Geschwindigkeit"
+  DEFTEXT 1,0,0,4
+  TEXT 20,30,"im Vergleich zum Standard ST"
+  TEXT 67,160,"(-) werde schneller"
+  TEXT 67,45,"(+) werde langsamer"
+  TEXT 50,170,"relative Geschwindigkeit"
+  TEXT 200,170,STR$(speed%)+"     "
+  TEXT 15,180,"[(*)= mal 10 ; (/)= durch 10] Faktor * 1"
+  BOX 70,49,80,151
+  speedbox
+  ' LINE 80,67,90,67
+  ' LINE 80,61,90,61
+  ' LINE 80,113,90,113
+  ' DEFTEXT 1,0,0,4
+  '  TEXT 95,113,"ST/STE 8Mhz"
+  '  TEXT 95,67,"STE 8Mhz Blitter"
+  '  TEXT 95,61,"TT  32Mhz"
+  palette_up
+  n&=1
+  ON MENU KEY GOSUB speedo !EVENT KEYBOARD
+  a|=0
+  REPEAT
+    ON MENU !Wenn Taste gedrÅckt gehe zu speedo
+  UNTIL a|=98 !bis Help gedrÅckt
+  ausw_men
+  EVERY 8 GOSUB music
+RETURN
+> PROCEDURE speedo !abfrage der (+) & (-) Taste bei einem Key EVENT
+  SELECT BYTE(MENU(14))
+  CASE 45 ! -
+    SUB speed%,n&
+    IF speed%<0
+      speed%=0
+    ENDIF
+  CASE 42 ! (*)
+    IF n&<1000
+      MUL n&,10
+    ENDIF
+  CASE 47 ! (/)
+    IF n&>1
+      DIV n&,10
+    ENDIF
+  CASE 43 ! +
+    ADD speed%,n&
+    IF speed%>12000
+      speed%=12000
+    ENDIF
+  ENDSELECT
+  IF INT(speed%/120)<>INT(oldspeed%/120)
+    speedbox
+  ENDIF
+  TEXT 200,170,STR$(speed%)+"     "
+  TEXT 249,180,STR$(n&)+"     "
+  a|=SHR(MENU(14),8)
+RETURN
+> PROCEDURE speedbox !Zeichnet Speedanzeige im Help menÅ
+  DEFFILL 0
+  PBOX 71,150-speed%/120,79,50
+  DEFFILL 10
+  PBOX 71,150,79,150-speed%/120
+  oldspeed%=speed%
+RETURN
+> PROCEDURE cookies !Auswerten der cookies
+  IF cookies%=0
+    cookies!=FALSE
+  ELSE
+    cookies!=TRUE
+    t%=cookies%
+    WHILE LPEEK(t%)<>0
+      text$=""
+      text$=MKL$(LPEEK(t%))
+      tt%=t%+4
+      SELECT text$
+      CASE "_CPU" ! Welcher Prozessor
+        cpu%=LPEEK(tt%)
+      CASE "_FPU" ! Floating Point ?
+        fpu%=DPEEK(tt%)
+      CASE "_MCH" ! welche Maschine ST-TT-Falcon ?
+        mch%=DPEEK(tt%)
+      CASE "_SND" ! welcher Soundchip ?
+        snd%=LPEEK(tt%)
+      CASE "_VDO" ! welche Videohardware
+        vdo%=DPEEK(tt%)
+      ENDSELECT
+      ADD t%,8
+    WEND
+  ENDIF
+RETURN
+> PROCEDURE speed ! miût Zeit fÅr Verzîgerungsschleife
+  zeit2%=TIMER
+  FOR t%=0 TO 20000
+  NEXT t%
+  zeit2%=TIMER-zeit2%
+  IF zeit%<126
+    speed%=((126-zeit%)/(zeit2%/200))
+    IF speed%<0
+      speed%=0
+    ENDIF
+  ENDIF
+  speedy%=speed%
+RETURN
+> PROCEDURE blitter ! mach den Blitter Test
+  blitter%=XBIOS(64,-1)
+RETURN
+> PROCEDURE palette_up  !Einblenden der MenÅ Screens
+  FOR t&=0 TO 7
+    FOR n&=0 TO 26 STEP 2
+      col&=WORD{menue%+6+n&}
+      sol&=WORD{basepal1%+n&}
+      r&=SHR&(SHL&(col&,12),12)
+      g&=SHR&(SHL&(col&,8),8)-r&
+      b&=SHR&(SHL&(col&,4),4)-r&-g&
+      rs&=SHR&(SHL&(sol&,12),12)
+      gs&=SHR&(SHL&(sol&,8),8)-rs&
+      bs&=SHR&(SHL&(sol&,4),4)-rs&-gs&
+      ADD sol&,&H1 AND rs&<r&
+      ADD sol&,&H10 AND gs&<g&
+      ADD sol&,&H100 AND bs&<b&
+      WORD{basepal1%+n&}=sol&
+    NEXT n&
+    SETCOLOR 15,t&,t&,t&
+    VSYNC
+    VSYNC
+  NEXT t&
+RETURN
+> PROCEDURE main_pal !Palette fÅr Spielfeld zurÅck
+  p_cls
+  SETCOLOR 15,7,7,7
+  BMOVE sprites%+6,basepal1%,28 !Farben wieder zurÅck
+RETURN
+> PROCEDURE ch_palette    !ausblenden der Screens
+  FOR t&=7 DOWNTO 0
+    FOR n&=0 TO 26 STEP 2
+      col&=WORD{basepal1%+n&}
+      r&=SHR&(SHL&(col&,12),12)
+      g&=SHR&(SHL&(col&,8),8)-r&
+      b&=SHR&(SHL&(col&,4),4)-r&-g&
+      SUB col&,&H1 AND r&<>0
+      SUB col&,&H10 AND g&<>0
+      SUB col&,&H100 AND b&<>0
+      WORD{basepal1%+n&}=col&
+    NEXT n&
+    SETCOLOR 15,t&,t&,t&
+    VSYNC
+    VSYNC
+  NEXT t&
+RETURN
+' ********* Joystick
+> PROCEDURE tast_aus ! Wegen Tastenwiederholung
+  WHILE INP(-2)=-1
+    VOID INP(2)
+  WEND
+RETURN
+> PROCEDURE links !joystick
+  SUB offset&,22 AND flip|=1
+  IF offset&<0
+    offset&=0
+  ENDIF
+RETURN
+> PROCEDURE rechts ! joystick
+  ADD offset&,22 AND flip|=1
+  IF offset&>132
+    offset&=132
+  ENDIF
+RETURN
+> PROCEDURE oben ! joystick
+  IF y&>0
+    SUB y&,2
+  ENDIF
+RETURN
+> PROCEDURE unten !joystick
+  IF y&<154
+    ADD y&,2
+  ENDIF
+RETURN
+> PROCEDURE in_mitte ! Joystick
+  IF flip|=1
+    IF offset&>66
+      SUB offset&,22
+    ELSE IF offset&<66
+      ADD offset&,22
+    ENDIF
+  ENDIF
+RETURN
+' ********** erzeugt Landschaft
+> PROCEDURE scroll !erzeugt die scrollenden Bildschirme
+  sam|=0
+  zeit%=TIMER
+  FOR screen|=0 TO 4
+    scrscr%=screen|*32000
+    FOR zeile|=0 TO 179 STEP 50
+      GOSUB data_in
+      FOR reihe&=0 TO 319 STEP 80
+        reihe|=(reihe&+81)/80
+        RC_COPY scroller%,a|(reihe|)*80,b|(reihe|)*50,80,50 TO scrmem%+scrscr%,reihe&,zeile|
+      NEXT reihe&
+    NEXT zeile|
+  NEXT screen|
+  zeit%=TIMER-zeit%
+RETURN
+> PROCEDURE data_in !verwaltet Data Zeilen
+  IF sam|=0
+    READ sam|,a|(1),b|(1),a|(2),b|(2),a|(3),b|(3),a|(4),b|(4)
+  ENDIF
+  DEC sam|
+RETURN
+' ********** Wechsel und Aliens
+> PROCEDURE colission     !Effeckte beim Treffer am Schiff
+  IF fshield!=FALSE
+    SOUND 0,0,1,1
+    WAVE 1,1,1,1000
+    hit!(mitsp|)=TRUE
+  ENDIF
+RETURN
+> PROCEDURE alcol ! Effekte u. explosionsboolean ist war  (Aliens)
+  expl!(al|)=TRUE
+  ADD score%(mitsp|),10
+  ' *** hier Digi Sound Explosion
+  sam|=0
+  rplay_sound
+RETURN
+> PROCEDURE p_alien ! Alien 1
+  RC_COPY maske%,ani&(al|),109+an&(al|),20,20-ab&(al|) TO scmem%(flip|),alx&(al|),aly&(al|),1
+  RC_COPY sprite%,ani&(al|),109+an&(al|),20,20-ab&(al|) TO scmem%(flip|),alx&(al|),aly&(al|),7
+RETURN
+> PROCEDURE alien1 !Steuerung der Insekten u. kolission mit Schuû
+  ON MENU
+  FOR al|=1 TO 5 ! ****** Maximal 5 StÅck
+    IF init!(al|)=TRUE
+      ' ********* X Bewegung (immer hin und her)
+      IF change!(al|)=FALSE
+        ADD alx&(al|),3
+        IF alx&(al|)>265
+          change!(al|)=TRUE
+        ENDIF
+      ELSE
+        SUB alx&(al|),3
+        IF alx&(al|)<35
+          change!(al|)=FALSE
+        ENDIF
+      ENDIF
+      ' ********** x Bewegung (von oben nach unten)
+      IF aly&(al|)<159
+        IF aly&(al|)=0
+          SUB an&(al|),3
+          SUB ab&(al|),3
+          IF ab&(al|)<0
+            ab&(al|)=0
+            an&(al|)=0
+            aly&(al|)=3
+          ENDIF
+        ELSE
+          ADD aly&(al|),3
+        ENDIF
+      ELSE IF aly&(al|)<189
+        ADD aly&(al|),3
+        ADD ab&(al|),3
+      ELSE
+        aly&(al|)=0
+        ab&(al|)=20
+        an&(al|)=20
+      ENDIF
+      ' ***** Kolission mit Fighter
+      IF expl!(al|)=FALSE
+        p_alien
+        colx&=alx&(al|)+20
+        coly&=aly&(al|)+20
+        caly&=aly&(al|)-20
+        IF x&+11=>alx&(al|) AND x&+11=<colx& AND y&+19=>aly&(al|) AND y&=<coly&
+          colission
+          ani&(al|)=22
+          alcol
+        ENDIF
+        ' ***** Kollision mit Schuû
+        FOR n|=1 TO 3
+          IF shoot!(n|)=TRUE
+            IF shx&(n|)>alx&(al|) AND shx&(n|)<colx& AND shy&(n|)>caly& AND shy&(n|)<coly&
+              shoot!(n|)=FALSE
+              alcol
+            ENDIF
+          ENDIF
+        NEXT n|
+        ' ***** FlÅgelschlag
+        IF ani&(al|)=22
+          ani&(al|)=1
+        ELSE
+          ani&(al|)=22
+        ENDIF
+        ' ******** Alien 1
+      ELSE
+        p_alien
+        ADD ani&(al|),21
+        IF ani&(al|)=295
+          INC abgesch|
+          DEC in|
+          IF abgesch|>15 AND in|=0
+            wechsel_alien1
+          ENDIF
+          score
+          init!(al|)=FALSE
+          expl!(al|)=FALSE
+        ENDIF
+      ENDIF
+    ELSE
+      ' ****** macht das nicht alle gleichzeitig kommen
+      IF sperre!=TRUE
+        IF abgesch|<16
+          ADD verz|,1
+          IF verz|=25
+            INC in|
+            bed_f_schield
+            init!(al|)=TRUE
+            ani&(al|)=1
+            ab&(al|)=20
+            an&(al|)=20
+            verz|=0
+            aly&(al|)=0
+            alx&(al|)=(RND*200)+35
+          ENDIF
+          sperre!=FALSE
+        ELSE
+        ENDIF
+      ENDIF
+    ENDIF
+  NEXT al|
+  sperre!=TRUE
+RETURN
+> PROCEDURE wechsel_alien1 !Wechsel der Aliens
+  abgesch|=0
+  oldalien|=1
+  alien|=2
+  verz|=0
+  playerchange
+RETURN
+> PROCEDURE bed_f_schield
+  IF in|<4 AND shield!=FALSE  !Falls weniger als 4 Aliens
+    ' ist es mîglich ein Schutzschild zu bekommen
+    shield!=TRUE
+    sdx&=(200*RND)+60
+    sdy&=(150*RND)
+  ELSE
+    shield!=FALSE
+  ENDIF
+RETURN
+> PROCEDURE shield !Bewegung des Schild Bonuszeichens
+  IF long|=26
+    ' *********** Bonus Zeichen folgt dem Spieler
+    IF sdx&<x&+5
+      INC sdx&
+    ELSE IF sdx&>x&+5
+      DEC sdx&
+    ENDIF
+    IF sdy&<y&+5
+      INC sdy&
+    ELSE IF sdy&>y&+5
+      DEC sdy&
+    ENDIF
+    ' ****************
+    ADD sdani|,10 ! animiert Bonus Zeichen
+    IF sdani|=121
+      sdani|=1
+    ENDIF
+  ENDIF
+  ' Zeichnet Bonus Zeichen
+  RC_COPY maske%,sdani|,142,9,13 TO scmem%(flip|),sdx&,sdy&,1
+  RC_COPY sprite%,sdani|,142,9,13 TO scmem%(flip|),sdx&,sdy&,7
+  IF sdx&+9>x& AND sdy&+13>y&
+    IF sdx&<x&+21 AND sdy&<y&+18
+      IF fshield!=FALSE
+        sam|=5
+        rplay_sound
+        fshield!=TRUE
+        shield!=FALSE
+      ENDIF
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE q_alien ! Alien 2
+  RC_COPY maske%,1+ani&(al|),130+an&(al|),10,10-ab&(al|) TO scmem%(flip|),alx&(al|),aly&(al|),1
+  RC_COPY sprite%,1+ani&(al|),130+an&(al|),10,10-ab&(al|) TO scmem%(flip|),alx&(al|),aly&(al|),7
+RETURN
+> PROCEDURE alien2   !Steuerung der Kugeln und Kollision
+  ON MENU
+  FOR al|=1 TO 5 ! ****** Maximal 5 StÅck
+    IF init!(al|)=TRUE
+      ' ********* X Bewegung (immer hin und her)
+      IF change!(al|)=FALSE
+        ADD alx&(al|),3
+        IF alx&(al|)>278
+          change!(al|)=TRUE
+        ENDIF
+      ELSE
+        SUB alx&(al|),3
+        IF alx&(al|)<33
+          change!(al|)=FALSE
+        ENDIF
+      ENDIF
+      ' ********** x Bewegung (von oben nach unten)
+      IF aly&(al|)=0
+        SUB an&(al|),3
+        SUB ab&(al|),3
+        IF ab&(al|)<0
+          change2!(al|)=TRUE
+          ab&(al|)=0
+          an&(al|)=0
+          aly&(al|)=6
+        ENDIF
+      ELSE
+        IF change2!(al|)=TRUE
+          ADD aly&(al|),3
+          IF aly&(al|)>170
+            change2!(al|)=FALSE
+          ENDIF
+        ELSE
+          SUB aly&(al|),3
+          IF aly&(al|)<6
+            change2!(al|)=TRUE
+          ENDIF
+        ENDIF
+      ENDIF
+      ' ***** Kolission mit Fighter
+      IF expl!(al|)=FALSE
+        q_alien
+        colx&=alx&(al|)+10
+        coly&=aly&(al|)+10
+        caly&=aly&(al|)-10
+        IF x&+11>alx&(al|) AND x&+11<colx& AND y&+19>aly&(al|) AND y&<coly&
+          colission
+          alcol
+        ENDIF
+        ' ***** Kollision mit Schuû
+        FOR n|=1 TO 3
+          IF shoot!(n|)=TRUE
+            IF shx&(n|)=>alx&(al|) AND shx&(n|)<=colx& AND shy&(n|)>=caly& AND shy&(n|)<=coly&
+              shoot!(n|)=FALSE
+              alcol
+            ENDIF
+          ENDIF
+        NEXT n|
+        ' ***** animation
+        IF ani&(al|)<96
+          ADD ani&(al|),12
+        ELSE
+          ani&(al|)=0
+        ENDIF
+        ' ******** Alien 2
+      ELSE
+        q_alien
+        ADD ani&(al|),12
+        IF ani&(al|)=156
+          INC abgesch|
+          DEC in|
+          IF abgesch|>15 AND in|=0 !Alle Aliens weg ?
+            wechsel_alien2
+          ENDIF
+          score
+          init!(al|)=FALSE
+          expl!(al|)=FALSE
+        ENDIF
+      ENDIF
+    ELSE
+      ' ****** macht das nicht alle gleichzeitig kommen
+      IF sperre!=TRUE
+        IF abgesch|<16
+          ADD verz|,1
+          IF verz|=25
+            INC in|
+            bed_f_schield
+            init!(al|)=TRUE
+            ab&(al|)=20
+            an&(al|)=20
+            verz|=0
+            aly&(al|)=0
+            alx&(al|)=(RND*200)+35
+            ' ******** andere Aliens
+          ENDIF
+          sperre!=FALSE
+        ENDIF
+      ENDIF
+    ENDIF
+  NEXT al|
+  sperre!=TRUE
+RETURN
+> PROCEDURE wechsel_alien2
+  in|=0
+  abgesch|=0
+  verz|=0
+  oldalien|=2
+  alien|=3
+  playerchange
+  shield!=FALSE
+RETURN
+> PROCEDURE level_change !Wechsel der Levels,Sprites,scrollender Hintergrund
+  INC level|
+  ' schnelleres Scrolling pro Level bis zu eiener geschw. von 5 Zeilen
+  IF level|>endl|
+    IF speed&<960
+      ADD speed&,160
+    ENDIF
+    level|=1
+  ENDIF
+  '
+  IF l_flag!=TRUE ! zuwenig Speicher fÅr alle Levels
+    level_load ! lade einzelnen Level
+  ENDIF
+  sprites%=sprites%(level|) ! neues Aussehen der Level
+  mother%=mother%(level|)   ! " " " ...
+  scroll%=scroll%(level|)   ! " " " ...
+  do_maske
+  RESTORE  ! Datazeilenzeiger zurÅcksetzen
+  scroll
+  ADD amount|(mitsp|),1 ! jeden Level einen Zusatzfighter
+  s_off%=0  !ZurÅcksetzen des Scrollings
+  ch_lev_screen
+  clear_all !Alle Pufferscreens lîschen
+  main_pal
+RETURN
+> PROCEDURE alien_off ! schaltet alle Aliens aus
+  ' da sonst beim nÑchsten Spieler wieder alle Aliens
+  ' sofort !!! erscheinen
+  FOR t|=1 TO 5
+    expl!(t|)=FALSE
+    init!(t|)=FALSE
+  NEXT t|
+RETURN
+> PROCEDURE playerchange ! Åbernimmt Spieler wechsel
+  ' *********** pseudo Stack
+  kap|(mitsp|)=kap| ! Rettet SchÑden am Fighter
+  x&(mitsp|)=x& ! *rettet alte *
+  sh_last|(mitsp|)=sh_last|
+  fshield!(mitsp|)=fshield!
+  y&(mitsp|)=y& ! *X & Y Werte *
+  s_off%(mitsp|)=s_off% !alte Scrollposition
+  dummymit|=mitsp| ! alter Mitspieler
+  ' *****************
+  IF (game_over!(1) AND game_over!(2) AND game_over!(3) AND game_over!(4))=FALSE
+    zurueck!=FALSE
+    ' alle war ?
+    REPEAT ! ******* Wechsel von Mitspieler
+      INC mitsp|
+      IF mitsp|>=players|+1
+        mitsp|=1
+        oldalien|=alien|
+        IF alien|=1
+          level_change
+        ENDIF
+      ENDIF
+    UNTIL game_over!(mitsp|)=FALSE
+    IF dummymit|<>mitsp| !Wurde Spieler gewechselt ?
+      alien|=oldalien|
+      miniinit
+      ' ********* Peudo Stack wenn wirklich gewechselt wird
+      x&=x&(mitsp|)
+      y&=y&(mitsp|)
+      sh_last|=sh_last|(mitsp|)
+      fshield!=fshield!(mitsp|)
+      kap|=kap|(mitsp|)
+      s_off%=s_off%(mitsp|)
+      ' ********** Anpassung der 3 Figter (unten neben 'Argon 4')
+      update_players
+      ' ********************
+      change_screen
+      ch_palette
+      p_cls
+      main_pal
+    ENDIF
+  ELSE
+    zurueck!=TRUE
+  ENDIF
+  ON MENU KEY GOSUB taste
+RETURN
+> PROCEDURE ch_lev_screen !erzeugt Schirm zum wechseln des Levels
+  ch_palette
+  p_cls
+  RC_COPY menues%,148,54,109,40 TO scmem%(1),60,80
+  DEFTEXT 1,0,0,26
+  TEXT 190,110,level|
+  DEFTEXT 1,0,0,6
+  TEXT 60,70,"prepare for"
+  palette_up
+  w_key
+  ch_palette
+RETURN
+> PROCEDURE change_screen !erzeugt Schirm zum wechseln von Stage u. Player
+  ch_palette
+  p_cls
+  RC_COPY menues%,1,121,210,48 TO scmem%(1),40,0
+  RC_COPY menues%,52,52,94,23 TO scmem%(1),100,80
+  RC_COPY menues%,148,54,109,40 TO scmem%(1),60,140
+  DEFTEXT 1,0,0,21
+  TEXT 140,70,alien|
+  DEFTEXT 1,0,0,26
+  TEXT 190,170,level|
+  DEFTEXT 1,0,0,13
+  TEXT 144,125,mitsp|
+  palette_up
+  w_key
+  ch_palette
+  clear_all
+RETURN
+> PROCEDURE miniinit ! alle SchÅsse aus
+  FOR t|=1 TO 3
+    shoot!(t|)=FALSE
+  NEXT t|
+RETURN
+> PROCEDURE init_mother  ! intitialisiert schwache Stelle
+  m_come!=TRUE
+  xcome&=0
+  ycome&=0
+  VOID XBIOS(5,L:gegner%,L:-1,-1)
+  DEFFILL 7
+  PBOX 263,126,319,160
+  VOID XBIOS(5,L:maske2%,L:-1,-1)
+  DEFFILL 0
+  PBOX 263,126,319,160
+RETURN
+> PROCEDURE q_mother ! Zeichnet Mutter
+  ' ******* Zeichnen des Alien - Mutterschiffs
+  RC_COPY maske2%,mot|,animat|,130,41 TO scmem%(flip|),wedelx&,my&,1
+  RC_COPY gegner%,mot|,animat|,130,41 TO scmem%(flip|),wedelx&,my&,7
+RETURN
+> PROCEDURE mother_comes ! lÑût das Alienmutterschiff aus dem "nichts" erscheinen
+  ADD xcome&,3
+  INC ycome&
+  xact&=65-xcome&
+  yact&=20-ycome&
+  IF EVEN(ycome&)
+    RC_COPY gegner%,mot|+xact&,animat|+yact&,xcome&+xcome&,ycome&+ycome& TO scmem%(flip|),wedelx&+xact&,my&+yact&,7
+  ENDIF
+  IF ycome&=20
+    m_come!=FALSE
+  ENDIF
+RETURN
+> PROCEDURE mother !Endgegener (Alinemutterschiff)
+  ON MENU
+  ' **** Animation (quelle auf und ab)
+  IF mothexpl!=FALSE
+    IF animat!=FALSE
+      ADD animat|,42
+      IF animat|=127
+        animat!=TRUE
+      ENDIF
+    ELSE
+      SUB animat|,42
+      IF animat|=1
+        animat!=FALSE
+        IF y&>my&
+          ADD my&,1 AND my&<140 ! Y Bewegung d. Mutter nach unten
+        ELSE
+          SUB my&,1 AND my&>0 ! Y Bewegung d. Mutter nach oben
+        ENDIF
+      ENDIF
+    ENDIF
+    ' ******* immer dem Fighter folgen
+    IF x&<mx&+75
+      SUB mx&,2 AND mx&>25
+    ELSE
+      IF x&>mx&+85
+        ADD mx&,2 AND mx&<130
+      ENDIF
+    ENDIF
+    ' ********* immer hin und her "wedeln"
+    IF wedel!=FALSE
+      INC wedel|
+      IF wedel|=40
+        wedel!=TRUE
+      ENDIF
+    ELSE
+      DEC wedel|
+      IF wedel|=0
+        wedel!=FALSE
+      ENDIF
+    ENDIF
+    ' ****** collision mit
+    coly&=my&+38
+    colx&=mx&+wedel|+130
+    wedelx&=mx&+wedel|
+    ' ****** Figter
+    IF x&+11>mx& AND x&+11<colx& AND y&+19>my& AND y&<coly&
+      colission
+    ENDIF
+    ' ******* Schuû
+    FOR n|=1 TO 3
+      IF shoot!(n|)=TRUE
+        ' treffer ?
+        IF shy&(n|)<coly& AND shx&(n|)<colx& AND shx&(n|)>wedelx& AND y&>coly&
+          IF shx&(n|)>wedelx&+49 AND shx&(n|)<wedelx&+60
+            ' An der schwachen Stelle ?
+            ' ******* Treffer in Mother Sound
+            sam|=4
+            rplay_sound
+            ' ******************************
+            SLPOKE &H44E,gegner% ! Ñndere logischen Bilschirmaspeicher
+            sberx&=shx&(n|)+263-wedelx&-50
+            WHILE POINT(sberx&,140-ymoth|)=0 AND mothexpl!=FALSE ! Farbig ?
+              ' wenn nicht farbig
+              IF ymoth|>13 ! Sehr tief ins Mutterschiff eingedrungen ?
+                mothexpl!=TRUE
+                mot|=132
+                animat|=1
+                ' ******* Mother, ExplosionsgerÑusch
+                sam|=1
+                rplay_sound
+                ' ***************
+                ymoth|=0
+              ELSE
+                INC ymoth|
+              ENDIF
+            WEND
+            ' ********* Striche in schwache Stelle
+            COLOR 0
+            LINE sberx&,140-ymoth|,sberx&,138-ymoth|
+            COLOR 1
+            SLPOKE &H44E,maske2%
+            LINE sberx&,140-ymoth|,sberx&,138-ymoth|
+            shoot!(n|)=FALSE
+            ymoth|=0
+          ELSE
+            shoot!(n|)=FALSE
+            ' ****** Sound, Mother nicht getroffen
+            sam|=2
+            rplay_sound
+            ' ************
+          ENDIF
+        ENDIF
+      ENDIF
+    NEXT n|
+    IF m_come!=TRUE !Mutter noch nicht da!
+      mother_comes !Mutter erscheint
+    ELSE
+      q_mother
+      ' ******* Zeichnet schwache Stelle von Mutter Alien
+      RC_COPY maske2%,263,126,6,14 TO scmem%(flip|),wedelx&+62,my&+23,1
+      RC_COPY gegner%,263,126,6,14 TO scmem%(flip|),wedelx&+62,my&+23,7
+    ENDIF
+  ELSE
+    ' ****** animiert Explosion
+    INC verz|
+    IF verz|=5
+      ADD animat|,42
+      verz|=0
+    ENDIF
+    q_mother
+    IF animat|=127
+      wechsel_mother
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE wechsel_mother ! nach der zerstîrung der Mutter
+  oldalien|=3 ! anderer Spieler falls vorhanden soll auch Mutterschiff bekÑmpfen
+  alien|=1 ! nÑchste gegner (wieder von vorne
+  ' *******  initialisieren der Variablen fÅr die Mutter *****
+  mothexpl!=FALSE
+  my&=0
+  animat!=FALSE
+  animat|=1
+  mot|=1
+  ' **************
+  ADD score%(mitsp|),100 ! You gain 100 Points
+  score
+  init_mother
+  playerchange
+RETURN
+> PROCEDURE score ! malt score in unteres Men.
+  score$=STR$(score%(mitsp|))
+  long|=LEN(score$)
+  score$=SPACE$(9-long|)+score$
+  TEXT 210,195,score$
+  nscmem%=scmem%(flip|)+30240
+  BMOVE nscmem%,scmem%(1)+30240,1280
+  BMOVE nscmem%,scmem%(2)+30240,1280
+  BMOVE nscmem%,scmem%(3)+30240,1280
+RETURN
+> PROCEDURE one_up !zieht JÑger vom unteren Menue ab
+  SUB amount|(mitsp|),1
+  dummyup|=amount|(mitsp|)
+  show_up
+  copy_up
+RETURN
+> PROCEDURE show_up !zieht einen Fighter ab
+  IF dummyup|<4
+    RC_COPY sprite%,0,186,15,13 TO scmem%(1),110+MUL(16,(3-dummyup|)),186
+  ENDIF
+RETURN
+> PROCEDURE copy_up !copiert Menue bei Verlust eines Fighters
+  nscmem%=scmem%(1)+29600 !berechnet position des Menue im Bildschirmsp.
+  BMOVE nscmem%,scmem%(2)+29600,2240 ! Kopiert das Logo in Bildschirmsp.
+  BMOVE nscmem%,scmem%(3)+29600,2240 ! Kopiert das Logo in Bildschirmsp.
+RETURN
+> PROCEDURE update_players ! malt bei Spielerwechsel u. Levelchange neue Anzeige
+  logo_copy
+  FOR dummyup|=3 DOWNTO amount|(mitsp|)
+    show_up
+  NEXT dummyup|
+  copy_up
+RETURN
+> PROCEDURE do_maske !erzeugt die Masken fÅr die Sprites
+  sprite%=sprites%+128
+  scroller%=scroll%+128
+  gegner%=mother%+128
+  menues%=menue%+128
+  maske%=scmem%(3)+192000 !Adresse der 1. Maske
+  maske2%=maske%+32000 !Adresse der 2. Maske
+  BMOVE sprite%,maske%,32000
+  VOID XBIOS(5,L:maske%,L:-1,-1)
+  CALL white% ! Assembler Teil zu erzeugen der Maske
+  BMOVE gegner%,maske2%,32000
+  VOID XBIOS(5,L:maske2%,L:-1,-1)
+  CALL white%
+RETURN
+> PROCEDURE taste ! ist fÅr Pausentaste etc zustÑndig
+  SELECT BYTE(MENU(14))
+  CASE 32 !Space
+    w_key
+    ON MENU KEY GOSUB taste
+  CASE 0 !Sondertaste ?
+    IF SHR(MENU(14),8)=59 !F1 ?
+      zurueck!=-1 !zurÅck ins Menue
+    ENDIF
+  ENDSELECT
+RETURN
+> PROCEDURE game_over ! bringt das GAME OVER auf den Schirm
+  ch_palette
+  p_cls
+  RC_COPY menues%,167,1,76,51 TO scmem%(1),120,40 !game over
+  BMOVE menue%+6,basepal1%,28 !Kopieren d. Palette in die Ass. Routine
+  palette_up
+  w_key
+RETURN
+> PROCEDURE high_score !Testet ob Score in High Score
+  WAVE 0,0
+  ch_palette
+  p_cls
+  ' ****** Welcher Platz ? *********
+  FOR t|=1 TO 10
+    EXIT IF high%(t|)<score%(mitsp|)
+  NEXT t|
+  ' ****** Innerhalb ? **********
+  IF t|<11
+    ' ******* Rest um einen Plaz nach unten *****
+    FOR n|=10 DOWNTO t|
+      high%(n|+1)=high%(n|)
+      high$(n|+1)=high$(n|)
+    NEXT n|
+    ' *******************************
+    high%(t|)=score%(mitsp|) !score in Liste eintragen
+    high$(t|)=SPACE$(20) !neuen Eintrag lîschen
+    h_o_fame
+    taste!=FALSE
+    pos|=0
+    DEFTEXT t|+3
+    ON MENU KEY GOSUB high_name
+    REPEAT
+      ' ******** Blinken des "Cursors" ********
+      IF blink!=TRUE
+        blink!=FALSE
+        TEXT 50+pos|*8,50+t|*8,""
+      ELSE
+        blink!=TRUE
+        TEXT 50,50+t|*8,high$(t|)+" "
+      ENDIF
+      ' ***************************************
+      ON MENU
+    UNTIL taste!=TRUE
+  ELSE
+    h_o_fame
+    w_key
+  ENDIF
+RETURN
+> PROCEDURE high_name !Eingabe des Namens
+  sam|=4
+  rplay_sound
+  n|=BYTE(MENU(14))
+  IF n|>31 AND n|<255 AND pos|<20
+    INC pos|
+    MID$(high$(t|),pos|)=CHR$(n|)
+    TEXT 50,50+t|*8,high$(t|)
+  ELSE IF n|=13
+    taste!=TRUE
+  ELSE IF n|=8 AND pos|>0
+    MID$(high$(t|),pos|)=" "
+    TEXT 50,50+t|*8,high$(t|)
+    DEC pos|
+  ENDIF
+  lplay_sound
+RETURN
+> PROCEDURE h_o_fame !zeigt High Score liste an
+  DEFTEXT 1,0,0,6
+  TEXT 130,16,"High Score"
+  FOR n|=1 TO 10
+    DEFTEXT n|+3
+    TEXT 20,50+n|*8,STR$(n|)
+    TEXT 50,50+n|*8,high$(n|)+"  "+STR$(high%(n|))
+  NEXT n|
+  palette_up
+RETURN
+> PROCEDURE high_out ! Augabe der Highscore auf Diskette/Platte etc.
+  OPEN "o",#1,laufw$+"high.tab"
+  FOR t|=1 TO 10
+    WRITE #1,high%(t|),high$(t|)
+  NEXT t|
+  CLOSE #1
+RETURN
+> PROCEDURE high_in !Einlesen der Highscore von Diskette/Platte etc.
+  file$=laufw$+"high.tab"
+  IF EXIST(file$)=TRUE
+    OPEN "i",#1,file$
+    FOR t|=1 TO 10
+      INPUT #1,high%(t|),high$(t|)
+    NEXT t|
+    CLOSE #1
+  ENDIF
+RETURN
+> PROCEDURE rette_palette ! alte Palette, z.B. vom Desktop, retten
+  FOR t|=0 TO 31 STEP 2
+    deskpalette$=deskpalette$+MKI$(DPEEK(col_reg%+t|))
+  NEXT t|
+RETURN
+> PROCEDURE aes_conf !AES conforme Keyboard Abfrage
+  taste!=TRUE
+RETURN
+> PROCEDURE w_key ! wartet auf Joystick oder Tastendruck
+  taste!=FALSE
+  ON MENU KEY GOSUB aes_conf
+  REPEAT
+    ON MENU
+  UNTIL STRIG(0)=TRUE OR STRIG(1)=TRUE OR taste!=TRUE
+RETURN
+' ***************  Hier kommen die Routinen fÅr die Musik !!!
+> PROCEDURE music ! wird continuierlich aufgerufen vom EVERY ...
+  INC inflag|
+RETURN
+> PROCEDURE other ! Musik wird nur ausgewertet aber nicht gespielt
+  othert!=TRUE
+  WAVE 0,0
+RETURN
+> PROCEDURE check_it  !music aufgerufen ? wenn ja springe zu music2
+  $U
+  WHILE inflag|>0
+    GOSUB music2
+  WEND
+RETURN
+> PROCEDURE music2 ! wird continuierlich zum abspielen aufgerufen
+  DEC inflag|
+  IF verzo|=0
+    stim|=0
+    tone|=1
+    read_tone
+    play_tone
+    tone|=2
+    read_tone
+    play_tone
+    tone|=3
+    read_tone
+    play_tone
+    verzo|=4
+    WAVE rausch&,stim|,huel|,periode&
+    ADD next|,1
+    IF next|=32
+      INC part|
+      IF part|=23
+        part|=0
+      ENDIF
+      zaehler&=MUL(ASC(MID$(partitur$,part|,1)),480)+1
+      next|=0
+    ENDIF
+  ENDIF
+  IF othert!=FALSE
+    DEC verzo|
+    tone|=1
+    play_tone
+    tone|=2
+    play_tone
+    tone|=3
+    play_tone
+    WAVE rausch&,stim|,huel|,periode&
+  ENDIF
+RETURN
+> PROCEDURE freq_up  !  1   -Pitch Bend Note wird tiefer
+  ADD freq&(tone|),sound|(tone|)
+RETURN
+> PROCEDURE freq_down ! 2   -Pitch bend Note wird hîher
+  SUB freq&(tone|),sound|(tone|)
+RETURN
+> PROCEDURE laut_up !   4   -Note lauter
+  laut|(tone|)=hold|(tone|)-SHR|(amch|(tone|),1)
+  IF laut|(tone|)<hold|(tone|)
+    SUB amch|(tone|),sound|(tone|)
+  ENDIF
+RETURN
+> PROCEDURE laut_down ! 8   -Note leiser
+  laut|(tone|)=SHR|(amch|(tone|),1)
+  IF laut|(tone|)>0
+    SUB amch|(tone|),sound|(tone|)
+  ENDIF
+RETURN
+> PROCEDURE vibrato ! 16    -Dreieck Vibrato (LFO)
+  IF EVEN(verzo|)=TRUE
+    SUB freq&(tone|),sound|(tone|)
+  ELSE
+    ADD freq&(tone|),sound|(tone|)
+  ENDIF
+RETURN
+> PROCEDURE modulation ! 32 -benutzt Huellkurve zur Ringmodulation
+  stim|=BSET(stim|,tone|-1)
+  SOUND tone|,0,#0
+  SELECT hold|(tone|)
+  CASE 0
+    stim|=0
+  CASE 1
+    rausch&=BCLR(rausch&,tone|-1)
+    huel|=12
+    periode&=freq&(tone|)
+  CASE 2
+    rausch&=BCLR(rausch&,tone|-1)
+    huel|=14
+    periode&=freq&(tone|)
+  CASE 3
+    huel|=14
+    periode&=freq&(tone|)/48
+  ENDSELECT
+RETURN
+> PROCEDURE set_kind ! 128  -Rauschen an/aus fÅr Stimme
+  rausch&=7
+  IF sound|(tone|)>0
+    IF freq&(tone|)=>9000
+      rausch&=BSET(rausch&,tone|+2)+SHL(freq&(tone|)-9000,8)
+    ELSE
+      rausch&=BSET(rausch&,tone|+2)+SHL(freq&(tone|),8)
+    ENDIF
+    laut|(tone|)=hold|(tone|)
+  ENDIF
+RETURN
+> PROCEDURE abfrage ! setzt voreinstellungen am Anfang einer Note
+  eff|=eff|(tone|)
+  hold|=SHL|(hold|(tone|),1)
+  IF eff|<>oldeff|(tone|) OR amch|(tone|)=1 OR oldhold|(tone|)<>hold|(tone|) OR amch|(tone|)>=hold|
+    amch|(tone|)=SHL(hold|(tone|),1)
+    laut|(tone|)=hold|(tone|)
+    oldeff|(tone|)=eff|
+    oldhold|(tone|)=hold|(tone|)
+  ENDIF
+RETURN
+> PROCEDURE read_tone  ! liest Musik DATEN aus dem String
+  freq&(tone|)=CVI(MID$(music$,zaehler&,2))
+  ADD zaehler&,2
+  sound|(tone|)=ASC(MID$(music$,zaehler&,1))
+  INC zaehler&
+  eff|(tone|)=ASC(MID$(music$,zaehler&,1))
+  INC zaehler&
+  hold|(tone|)=ASC(MID$(music$,zaehler&,1))
+  INC zaehler&
+  abfrage
+RETURN
+> PROCEDURE play_tone    ! spielt die gelesenen Daten
+  eff|=eff|(tone|)
+  IF BTST(eff|,5)=TRUE
+    IF BTST(eff|,0)=TRUE
+      freq_up
+    ENDIF
+    IF BTST(eff|,1)=TRUE
+      freq_down
+    ENDIF
+    IF BTST(eff|,4)=TRUE
+      vibrato
+    ENDIF
+    modulation
+  ELSE
+    IF BTST(eff|,7)=TRUE
+      set_kind
+    ENDIF
+    IF BTST(eff|,0)=TRUE
+      freq_up
+    ENDIF
+    IF BTST(eff|,1)=TRUE
+      freq_down
+    ENDIF
+    IF BTST(eff|,2)=TRUE
+      laut_up
+    ENDIF
+    IF BTST(eff|,3)=TRUE
+      laut_down
+    ENDIF
+    IF BTST(eff|,4)=TRUE
+      vibrato
+    ENDIF
+    IF BTST(eff|,6)=TRUE
+    ENDIF
+    IF freq&(tone|)<9000
+      SOUND tone|,laut|(tone|),#freq&(tone|)
+    ELSE
+      SOUND tone|,laut|(tone|),#0
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE pre_load !lÑdt die in den Speicher passenden level
+  lev_in_mem%=MALLOC(-1)/96384 ! rechnet aus wieviel Level in den Speicher passen
+  IF lev_in_mem%>9
+    lev_in_mem%=9
+  ENDIF
+  REPEAT
+    ADD endl|,1
+    text$=laufw$+"sprites"+STR$(endl|)+".neo"
+  UNTIL EXIST(text$)=FALSE
+  SUB endl|,1
+  DIM sprites%(endl|),scroll%(endl|),mother%(endl|)
+  IF lev_in_mem%>=1 OR endl|=0 !passt auch wirklich ein ganzer Level in den Speicher
+    ' und wenn er hinein passt, ist auch einer da ?
+    IF lev_in_mem%<endl|  !genÅgen Speicher da ?
+      IF lev_in_mem%<0
+        ende
+      ELSE
+        l_flag!=TRUE !wenn nicht immer nur einzelne Level einladen
+        levels%=MALLOC(96384) ! Speicherbedarf eines Levels
+        level|=1
+        sprites%(1)=levels%
+        level_load
+        FOR t|=1 TO 3
+          sprites%(t|)=levels%
+          mother%(t|)=levels%
+          scroll%(t|)=levels%
+        NEXT t|
+      ENDIF
+    ELSE
+      levels%=MALLOC(endl|*96384)
+      FOR level|=1 TO endl|
+        sprites%(level|)=levels%+(level|-1)*96384
+        level_load
+      NEXT level|
+    ENDIF
+  ELSE
+    ende
+  ENDIF
+  sprites%=sprites%(1)
+  mother%=mother%(1)
+  scroll%=scroll%(1)
+RETURN
+> PROCEDURE level_load  !lÑdt einzigen level
+  text$=laufw$+"sprites"+STR$(level|)+".neo"
+  BLOAD text$,sprites%(level|)
+  mother%(level|)=sprites%(level|)+32128
+  text$=laufw$+"mother"+STR$(level|)+".neo"
+  IF EXIST(text$)=TRUE
+    BLOAD text$,mother%(level|)
+  ENDIF
+  scroll%(level|)=mother%(level|)+32128
+  text$=laufw$+"scroll"+STR$(level|)+".neo"
+  IF EXIST(text$)=TRUE
+    BLOAD text$+STR$(level|),scroll%(level|)
+  ENDIF
+RETURN
+> PROCEDURE mask_load !lÑdt Unterroutine zur Maskengenerierung
+  file$=laufw$+"mask.inl"
+  white%=MALLOC(42)
+  IF white%<>0
+    BLOAD file$,white%
+  ELSE
+    ende
+  ENDIF
+RETURN
+> PROCEDURE l_song !lÑdt die Music vom Speichermedium
+  ' prÅft ob das File "music.sng" auf irgendeinem Laufwerk vorhanden ist
+  laufw|=97
+  file$="music.sng"
+  laufw$=""
+  WHILE EXIST(laufw$+file$)=FALSE AND laufw|<>122
+    laufw$=CHR$(laufw|)+":"
+    INC laufw|
+  WEND
+  ' *******************
+  IF laufw|<>122 ! Laufwerk vorhanden ? dann File vorhanden !
+    OPEN "i",#1,laufw$+file$
+    ' Format der ST-MODUL SNG Files (eigenes Format !)
+    ' 8 Bytes Kennung
+    IF INPUT$(8,#1)="ST-MODUL"
+      RELSEEK #1,8
+      ' 8 Bytes Name des Songs
+      parti|=INP(#1) ! 1 Byte LÑnge der Track Liste
+      partitur$=INPUT$(parti|,#1) ! Track Liste
+      music$=INPUT$(LOF(#1)-17-parti|,#1) ! Rest Tracks mit Noten
+    ENDIF
+    CLOSE #1
+  ELSE
+    PRINT "Kein music.sng gefunden !"
+    PRINT "Kann daher keine Musik spielen."
+    PRINT "**** bitte TASTE drÅcken ! ****"
+    VOID INP(2)
+  ENDIF
+RETURN
+> PROCEDURE l_sound !lÑdt Abspielroutine, Samples
+  IF BTST(snd%,1)=TRUE
+    digi_off
+    file$=laufw$+"dma.inl"
+    samplay%=MALLOC(2412)
+    IF samplay%=0
+      ende
+    ENDIF
+    BLOAD file$,samplay%
+    samples%(0)=MALLOC(85707)
+    IF samples%(0)<>0
+      BLOAD laufw$+"sam12.all",samples%(0)
+      samples%(1)=samples%(0)+31964
+      samples%(2)=samples%(0)+62944
+      samples%(3)=samples%(0)+71196
+      samples%(4)=samples%(0)+74314
+      samples%(5)=samples%(0)+79160
+      samples%(6)=samples%(0)+85707
+      digi%=samplay%+&H30
+    ELSE
+      ende
+    ENDIF
+    ' ******** Init DMA - Player *******
+    VOID XBIOS(135,0,1)   ! Timer A interupt wenn Puffer Ende
+    RCALL samplay%,reg%()
+    digi_off
+  ELSE
+    file$=laufw$+"yama.inl"
+    samplay%=MALLOC(4344)
+    IF samplay%=0
+      ende
+    ENDIF
+    BLOAD file$,samplay%
+    samples%(0)=MALLOC(42853)
+    IF samples%(0)<>0
+      BLOAD laufw$+"sam6.all",samples%(0)
+      samples%(1)=samples%(0)+15982
+      samples%(2)=samples%(0)+31472
+      samples%(3)=samples%(0)+35585
+      samples%(4)=samples%(0)+37157
+      samples%(5)=samples%(0)+39580
+      samples%(6)=samples%(0)+42853
+      FOR t|=1 TO 6
+        BYTE{samples%(t|)-1}=0
+      NEXT t|
+      digi%=samplay%
+      samplay%=samplay%+&H6E
+    ELSE
+      ende
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE digi_on ! Schaltet je nach Soundchip digi Sound an
+  IF BTST(snd%,1)=TRUE ! 8 Bit DMA ?
+    ' Falcon Einstellung
+    VOID XBIOS(130,W:6,W:1) ! 12 khz
+    SPOKE dmabasis%+1,3 ! 8 Bit DMA an
+  ELSE
+    RCALL samplay%,reg%() ! initialisiere PSG
+  ENDIF
+RETURN
+> PROCEDURE digi_off ! schaltet je nach Soundchip digi Sound aus
+  IF BTST(snd%,1)=TRUE ! 8 Bit DMA ?
+    SPOKE dmabasis%+1,0 ! 8 Bit DMA aus
+    ' Falcon Einstellungen
+    VOID XBIOS(130,6,3) !TIMER A Puffer Ende
+  ELSE
+    SPOKE tacr%,0
+  ENDIF
+RETURN
+> PROCEDURE l_color
+  chcoll%=MALLOC(232)
+  IF chcoll%<>0
+    BLOAD laufw$+"chall.inl",chcoll%
+  ELSE
+    ende
+  ENDIF
+RETURN
+> PROCEDURE lplay_sound ! spiele linken Kanal
+  reg%(5)=0
+  reg%(6)=samples%(sam|)
+  reg%(7)=samples%(sam|+1)
+  RCALL digi%,reg%()
+RETURN
+> PROCEDURE rplay_sound !spiele rechten Kanal
+  reg%(5)=4
+  reg%(6)=samples%(sam|)
+  reg%(7)=samples%(sam|+1)
+  RCALL digi%,reg%()
+RETURN
+DATA 4,0,1,0,0,0,0,2,1
+DATA 1,0,1,3,0,0,0,3,1
+DATA 2,1,1,1,0,2,0,2,1
+DATA 1,1,3,3,2,3,3,3,1
+DATA 2,1,1,3,3,2,0,2,1
+DATA 1,0,2,3,0,1,0,2,1
+DATA 2,0,1,1,0,0,0,3,1
+DATA 1,0,1,1,2,3,2,2,1
+DATA 1,1,3,3,2,0,0,2,3
+DATA 1,0,1,2,0,2,0,2,2
+DATA 4,0,1,0,0,0,0,2,1
+> PROCEDURE ende
+  EVERY STOP ! Sequenzer aus
+  VOID BIOS(5,28,L:oldvec%) !alter VBL Vector
+  SPOKE tbcr%,0 !Timer B aus
+  STICK (0) ! Maus wieder an
+  SPOKE &H484,BSET(PEEK(&H484),0) !Tastaturclick wieder an
+  SPOKE tacr%,0
+  SPOKE vr%,BSET(PEEK(vr%),3)
+  CLS
+  WAVE 0,0 ! Soundchip sei still
+  VOID XBIOS(6,L:V:deskpalette$) ! Palette wird erst beim VBL Åbertragen
+  IF vdo%>2 ! Falcon ?
+    oldrez&=3 !dann neuer Setscreen Parameter
+  ENDIF
+  VOID XBIOS(5,L:scmem%(1),L:scmem%(1),oldrez&,oldmode%) ! alter Bildschirmspeicher
+  VSYNC ! Man muû auf den nÑchsten VBL warten,
+  ' da beim QUIT die Palette aus dem Speicher gelîscht wird !
+  VOID MFREE(samples%(0)) !alle Samples
+  VOID MFREE(samplay%) !Gibt Speicher fÅr den Sampleplayer zurÅck
+  VOID MFREE(white%)
+  VOID MFREE(chcoll%)
+  VOID MFREE(malmymem%) !Gibt Bildschirm u. Scrollspei. ans Betriebssystem zurÅck
+  VOID MFREE(levels%)
+  digi_off
+  VOID WIND_UPDATE(0)
+  VOID WIND_UPDATE(2)
+  VOID FORM_DIAL(3,0,0,xres&,yres&,0,0,xres&,yres&)
+  ' zuruecksetzen der F030 DMA Parameter
+  VOID XBIOS(130,0,oldl&) ! Lautst. links
+  VOID XBIOS(130,1,oldr&) ! Lautst. rechts
+  VOID XBIOS(130,4,oldma&) !Setze Addierer auf ADC u. Matrix
+  VOID XBIOS(130,6,oldfreq&) ! Setze auf alte Abspielfrequenz
+  VOID XBIOS(130,2,lpsgin&) ! PSG LAUT
+  VOID XBIOS(130,3,rpsgin&) ! PSG LAUT
+  DEFMOUSE 0
+  high_out
+  EDIT
+RETURN
+> PROCEDURE erende
+  VOID BIOS(5,28,L:oldvec%) !alter VBL Vector
+  SPOKE &HFFFFFA1B,0 !Timer B aus
+  STICK (0)
+  VOID XBIOS(5,L:scmem%(1),L:scmem%(1),-1)
+  VOID FORM_ALERT(1,ERR$(ERR))
+  EDIT
+RETURN

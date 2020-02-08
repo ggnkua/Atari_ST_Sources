@@ -1,3 +1,14 @@
+/********************************************************************/
+/*																	*/
+/* 	ScreenEye Interface : film sequence definitions					*/
+/*																	*/
+/*	film.h / 15.4.94												*/
+/*																	*/
+/*  (c) 1994 Matrix Daten Systeme GmbH								*/
+/*		Talstr. 16, D-71570 Oppenweiler								*/
+/*																	*/
+/********************************************************************/
+
 # define MAXframesPerSequence	500
 
 typedef struct

@@ -1,0 +1,1 @@
+extern TImage ScreenImage ;

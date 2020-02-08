@@ -1,6 +1,13 @@
-/*	digitise.h	/	 9.3.92	/	MATRIX	/	WA	*/
-/*	MatDigi		/	15.9.93	/	MATRIX	/	HG	*/
-/*	(c) 1993 Matrix daten Systeme GmbH 			*/
+/********************************************************************/
+/*																	*/
+/* 	ScreenEye Interface : decoder definitions						*/
+/*																	*/
+/*	digitise.h / 15.4.94											*/
+/*																	*/
+/*  (c) 1994 Matrix Daten Systeme GmbH								*/
+/*		Talstr. 16, D-71570 Oppenweiler								*/
+/*																	*/
+/********************************************************************/
 
 # define NOdmsd		    0
 # define DEFdmsdType 9051
@@ -15,6 +22,7 @@
 # define PUP_PAL 1
 # define PUP_NTSC 2
 # define PUP_SECAM 3
+# define PUP_RS170 4
 # define PUP_VTR 0
 # define PUP_TV 1
 # define PUP_SVHS 1

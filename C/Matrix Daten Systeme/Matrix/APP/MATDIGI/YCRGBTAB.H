@@ -1,0 +1,1 @@
+void rgb_init ( int planes ) ;

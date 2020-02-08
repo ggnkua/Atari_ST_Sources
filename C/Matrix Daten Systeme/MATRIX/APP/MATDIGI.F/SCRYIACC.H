@@ -1,10 +1,23 @@
+/********************************************************************/
+/*																	*/
+/* 	ScreenEye Interface : parameter structure access definitions	*/
+/*																	*/
+/*	scryiacc.h / 15.4.94											*/
+/*																	*/
+/*  (c) 1994 Matrix Daten Systeme GmbH								*/
+/*		Talstr. 16, D-71570 Oppenweiler								*/
+/*																	*/
+/********************************************************************/
+
 # define MATscreyeCookie "mSEY"
 
 extern int _GetScreenEyeParameter ( unsigned magic ) ;
 # define GetScreenEyeParameter() _GetScreenEyeParameter((unsigned)sizeof(TScreenEyeParameterBlock))
 
-extern TScreenEyeParameterBlock *ScreenEyeParameter ;
+/* pointer to interface structure	*/
+extern TScreenEyeParameterBlock 	 *ScreenEyeParameter ;
 
+/* access interface parameter values	*/
 # define GetDmsdType() 				 (ScreenEyeParameter->DmsdParam->dmsd)
 # define GetWaitUntilFrameGrabbed()  (ScreenEyeParameter->DigiParam->waituntilgrabbed)
 # define GetVideoSignal()			 (ScreenEyeParameter->DmsdParam->signal)
@@ -15,6 +28,31 @@ extern TScreenEyeParameterBlock *ScreenEyeParameter ;
 # define SetVideoSource(s)			 ScreenEyeParameter->DmsdParam->source = s
 # define SetVideoStandard(s)		 ScreenEyeParameter->DmsdParam->standard = s
 
+/* define user function, Set..(NULL) == off	*/
+# define SetAbortLoopFunction(alf) 	ScreenEyeParameter->_AbortLoopFunction = alf
+# define SetJpegUserRoutine(jur) 	ScreenEyeParameter->_JpegUserRoutine = jur
+
+/* DMSD register programming, s. DMSD 9051/7191 User's Manual	*/
+
+# define GetSetDmsdRegister(r,v)	(*(ScreenEyeParameter->_GetSetDmsdRegister))(r,v)
+# define GetDmsdRegister(r)			GetSetDmsdRegister(r,-1)
+# define SetDmsdRegister(r,v)		GetSetDmsdRegister(r,v)
+/* reload changed register set	*/
+# define LoadDmsdRegister()			(*(ScreenEyeParameter->_LoadDmsdRegister))()
+
+/* call interface functions	via macros						*/
+/* parameter definition and description see 'screyeif.h'	*/
+/* name conventions parameter : _name						*/
+/*					macro :		name						*/
+
+extern bool SetBlitDigiToWindow ( TBlitWindow *blitwind, POINT *zoom, TPictureFormat format ) ;
+
+# define GetBlitDigiToWindow(w,z,f)	(*(ScreenEyeParameter->_GetBlitDigiToWindow))(w,z,f)
+# define BlitDigiToWindow(w,z) 		(*(ScreenEyeParameter->_BlitDigiToWindow))(w,z)
+
+# define BlitP8ColorWindow(w,z) 	(*(ScreenEyeParameter->_BlitP8ColorWindow))(w,z)
+# define BlitP8GreyWindow(w,z) 		(*(ScreenEyeParameter->_BlitP8GreyWindow))(w,z)
+# define BlitF7GreyWindow(w,z) 		(*(ScreenEyeParameter->_BlitF7GreyWindow))(w,z)
 # define BlitGreyWindow(w,z) 		(*(ScreenEyeParameter->_BlitGreyWindow))(w,z)
 # define Blit555SWWindow(w,z) 		(*(ScreenEyeParameter->_Blit555SWWindow))(w,z)
 # define Blit555HWSimWindow(w,z) 	(*(ScreenEyeParameter->_Blit555HWSimWindow))(w,z)
@@ -24,10 +62,10 @@ extern TScreenEyeParameterBlock *ScreenEyeParameter ;
 # define BlitF8GreyWindow(w,z) 		(*(ScreenEyeParameter->_BlitF8GreyWindow))(w,z)
 # define BlitFyc224Window(w,z) 		(*(ScreenEyeParameter->_BlitFyc224Window))(w,z)
 
-# define ImageInfo(in,im) (*(ScreenEyeParameter->_ImageInfo))(in,im)
-# define WindowInfo(i,w) (*(ScreenEyeParameter->_WindowInfo))(i,w)
-# define BlitWindowInfo(w) (*(ScreenEyeParameter->_BlitWindowInfo))(w)
-# define ImageWindowInfo(i,w) (*(ScreenEyeParameter->_ImageWindowInfo))(i,w)
+# define ImageInfo(in,im) 			(*(ScreenEyeParameter->_ImageInfo))(in,im)
+# define WindowInfo(i,w) 			(*(ScreenEyeParameter->_WindowInfo))(i,w)
+# define BlitWindowInfo(w) 			(*(ScreenEyeParameter->_BlitWindowInfo))(w)
+# define ImageWindowInfo(i,w) 		(*(ScreenEyeParameter->_ImageWindowInfo))(i,w)
 
 # define SetToFullSize(b,d,w,h,p) (*(ScreenEyeParameter->_SetToFullSize))(b,d,w,h,p)
 
@@ -50,8 +88,8 @@ extern TScreenEyeParameterBlock *ScreenEyeParameter ;
 # define InitDmsd(c)  (*(ScreenEyeParameter->_InitDmsd))(c)
 
 # define DigitiseMatrix(nx,ny,bw,z,w) (*(ScreenEyeParameter->_DigitiseMatrix))(nx,ny,bw,z,w)
-# define InterPolate555(s,d,z) (*(ScreenEyeParameter->_InterPolate555))(s,d,z)
-# define StretchBlit(s,d) (*(ScreenEyeParameter->_StretchBlit))(s,d)
+# define InterPolate555(s,d,z) 		(*(ScreenEyeParameter->_InterPolate555))(s,d,z)
+# define StretchBlit(s,d) 			(*(ScreenEyeParameter->_StretchBlit))(s,d)
 
 # define WriteRGBFiles(f,w,h,d) 	(*(ScreenEyeParameter->_WriteRGBFiles))(f,w,h,d)
 # define WriteTargaFile(f,w,h,d) 	(*(ScreenEyeParameter->_WriteTargaFile))(f,w,h,d)
@@ -92,9 +130,6 @@ extern TScreenEyeParameterBlock *ScreenEyeParameter ;
 # define ChkAndSetCurrentFrame(s,f) (*(ScreenEyeParameter->_ChkAndSetCurrentFrame))(s,f)
 # define DisplayFrame(s,f,w) (*(ScreenEyeParameter->_DisplayFrame))(s,f,w)
 
-# define AbortLoopFunction() (*(ScreenEyeParameter->_AbortLoopFunction))()
-
-# define LoadMdfLcaFile(t,v,r) (*(ScreenEyeParameter->_LoadMdfLcaFile))(t,v,r)
 # define SetDmsdType(c,l) 		 (*(ScreenEyeParameter->_SetDmsdType))(c,l)
 # define ResetDigiWindows(w) 	 (*(ScreenEyeParameter->_ResetDigiWindows))(w)
 # define CheckDigiWindows(w,z,d) (*(ScreenEyeParameter->_CheckDigiWindows))(w,z,d)
