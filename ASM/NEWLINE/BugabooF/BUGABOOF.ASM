@@ -1,4 +1,7 @@
-ultradev       EQU 0                              ;0=disable ultraDev extension (fetch PRG from ultradev at startup)
+;known issues:
+;-ultradev: a -prg less than 60 bytes does not load (several exceptions or only an "le" line is shown)
+;-ultradev: a 60 byte prg with only NOPs in it's TEXT section does laod, but only shows 1 nop @TEXT
+ultradev       EQU 1                              ;0=disable ultraDev extension (fetch PRG from ultradev at startup)
 sprache        EQU 1                              ;0=Deutsch, 1=Englisch
 version        EQU $01071400                      ;Die Versionsnummer (Macroversion >= $200000)
 etv_exit       EQU $040C                          ;etv_exit()-Vektor
@@ -82,6 +85,9 @@ start:          move.l  SP,old_usp(A4)            ;USP merken
                 not.b   D0                        ;A = not A
                 and.b   D2,D1                     ;B = B and C
                 or.b    D1,D0                     ;A = not(A or C)or(C and (A xor B))
+               IFNE ultradev
+                clr.l   D0                        ;don't allow bugaboo to start in resident mode 
+               ENDC
                 move.b  D0,do_resident(A4)
                 beq.s   start2                    ;nicht resident
                 pea     resident_text(PC)
@@ -210,16 +216,26 @@ initvi2:        sf      install_load(A4)
                 jsr     @crout(A4)                ;CR ausgeben
                 jsr     @c_eol(A4)                ;Zeile lîschen
                 move.l  trace_pos(A4),reg_pos(A4)
+               IFNE ultradev
+                move.l  $3E0020,input_pnt(A4)     ;get 1st command from UD
+               ENDC
 all_normal:
-               IFEQ ultradev
                 lea     main_loop(PC),A0
                 move.l  A0,jmpdispa(A4)           ;Sprungdispatcher auf Hauptschleife
                 jmp     (A4)
-               ELSE
-                move.l  $3E0020,input_pnt(A4)
-                lea     main_loop(PC),A0
-                move.l  A0,jmpdispa(A4)
-                jmp     (A4)
+
+               IFNE ultradev
+autoloader:
+                DC.B "le",13,0
+
+show:
+                pea     showit
+                move.w  #$26,-(SP)
+                trap    #$0E
+showit:
+                add.w   #$01,D0
+                move.w  D0,$FFFF8240.w
+                bra     showit
                ENDC
 
                IFEQ sprache
@@ -239,10 +255,14 @@ __star:        DC.B " ‰-Soft's Bugaboo V"
                IF version&$FF
                DC.B version&$FF
                ENDC
-               DC.B ' von Markus Fritze und Sîren Hellwig',13
+               DC.B ' von Markus Fritze und Sîren Hellwig'
+              IFNE ultradev
+               DC.B " (ultraDev only!)"
+              ENDC
+               DC.B 13
                DC.B ">Falcon030-Improvements by Chris/AURA and The Innovator/NEWline<",13
                DC.B "  There are still some errors, please don't fuck us!",13
-               DC.B "  Version F0.2d (01/04/94-21:21pm) [F030 refix test v0.004]",13
+               DC.B "  Version F0.2d (01/04/94-21:21pm) [F030 refix test v0.005]",13
                DC.B ' Ein 680'
 __star2:       DC.B '00 Prozessor ist aktiv.',13,0
 __star4:       DC.B ' Parameter wurden geladen.',13,0
@@ -262,11 +282,15 @@ __star:        DC.B ' Bugaboo V'
                IF version&$FF
                DC.B version&$FF
                ENDC
-               DC.B ' by ‰-Soft',13
+               DC.B ' by ‰-Soft'
+              IFNE ultradev
+               DC.B " (ultraDev cartridge only version)"
+              ENDC
+               DC.B 13
                DC.B ' The Bozos: Markus Fritze and Sîren Hellwig',13
                DC.B ">Falcon030-Improvements by Chris/AURA and The Innovator/NEWline<",13
                DC.B "  There are still some errors, please don't fuck us!",13
-               DC.B "  Version F0.2d (01/04/94-21:21pm) [F030 refix test v0.004]",13
+               DC.B "  Version F0.2d (01/04/94-21:21pm) [F030 refix test v0.005]",13
                DC.B ' 680'
 __star2:       DC.B '00 Processor is active',13,0
 __star4:       DC.B ' parameter-file loaded',13,0
@@ -7495,6 +7519,10 @@ install_name10:DC.B 'SIGMA=',0
                ;>PART 'install_read'
 install_read:   movem.l D0-A6,-(SP)
                 jsr     init_save                 ;fÅr's Bildschirm speichern
+                IFNE ultradev
+                bra     install_read1   ;nix da bei cart
+                ENDC
+
                 lea     install_name9(PC),A0
                 move.l  #'INF'<<8,(A0)
                 bsr.s   install_name              ;'BUGABOO.INF' als Namen setzen
@@ -7620,11 +7648,12 @@ cmd_load7:     DC.B 'Endadress       :',0
 ********************************************************************************
                ;>PART 'cmd_lexec'
 cmd_lexec:      
-                tst.b   le_allowed(A4)
-                beq     noallow
                IFNE ultradev
                 bra     cmd_lexec5
                ENDC
+
+                tst.b   le_allowed(A4)
+                beq     noallow
 
                 moveq   #1,D0
                 bsr     graf_mouse                ;Diskette anschalten
@@ -7666,10 +7695,12 @@ cmd_lexec5:     bsr     kill_programm             ;Altes Programm bei Bedarf ent
                 bsr     do_mediach                ;Media-Change auslîsen
                ELSE
                 movem.l D0-A6,-(SP)
+
                 movem.l D0-A6,-(SP)
-                jsr     $FA0026
+                jsr     $FA0026         ;load prg from cart
                 movem.l (SP)+,D0-A6
-                bsr     load_symbols
+
+                bsr     load_symbols    ;Symboltabelle einlesen (falls vorhanden)
                 movem.l (SP)+,D0-A6
                 move.l  $3E0016,D0
                 bra     cmd_lexec6a
@@ -15084,6 +15115,10 @@ init2:          move.l  A1,kbshift_adr(A4)
                 movea.l #ende,A3
                 adda.l  A4,A3                     ;Zeiger auf das Programmende
 
+                IFNE ultradev
+                bra     initcart
+                ENDC
+
                 lea     install_name9(PC),A0
                 move.l  #'SYM'<<8,(A0)
                 bsr     install_name              ;'BUGABOO.SYM' als Namen setzen
@@ -15138,7 +15173,7 @@ init20:         move.l  A6,-(SP)
                 move.w  #$1A,-(SP)
                 trap    #1                        ;Fsetdta(alter Buffer)
                 addq.l  #6,SP
-
+initcart:
                 move.l  A3,end_adr(A4)
                 suba.l  #anfang-256,A3            ;ProgrammlÑnge + Basepage
                 move.l  A3,-(SP)                  ;= LÑnge
@@ -15620,8 +15655,10 @@ set_vek:        lea     etv_critic(PC),A0
                 move.l  A0,$0404.w                ;Neuer etv_critic-Handler
                IFEQ symtab ;^^SYMTAB
                 bsr.s   set_spez_vek              ;Fehlervektoren rein
+                IFEQ ultradev
                 move.l  #$31415926,$0426.w        ;Resvalid setzen
                 move.l  #do_reset,$042A.w         ;Reset-Vektor umbiegen
+                ENDC
                 lea     swv_vec(PC),A0
                 move.l  A0,$046E.w                ;Neuer Vektor fÅr Monitorumschaltung
                ENDC
@@ -16725,12 +16762,14 @@ keyboard_tab:  DC.B $1A,'\','@'
                DC.B $27,'{','['
                DC.B $28,'}',']'
                DC.B 0
-               ELSEIF sprache==1
+               ENDC
+               IF sprache==1
 keyboard_tab:  DC.B $1A,'\','@'
                DC.B $27,'{','['
                DC.B $28,'}',']'
                DC.B 0
-               ELSEIF sprache==2
+               ENDC
+               IF sprache==2
 keyboard_tab:  DC.B $1A,'{','['
                DC.B $1B,'}',']'
                DC.B $28,0,'\'
