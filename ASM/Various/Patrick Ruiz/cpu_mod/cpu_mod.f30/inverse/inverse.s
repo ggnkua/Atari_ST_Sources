@@ -1,0 +1,52 @@
+; This program must be placed in the AUTO directory
+
+DEBUG=0
+	TOS_APP
+	PROG_SUPER #InitXBAR
+ IFEQ DEBUG
+	D_
+ProgDSP INCBIN	INVERSE.P56
+TailleProgDSP=*-ProgDSP
+	P_
+	PW	#"IN"
+	PL	#TailleProgDSP/3
+	PEA	ProgDSP(PC)
+	XBIOS	109,12 Dsp_ExecProg
+ ELSE
+	D_
+NomProgDSP	DC.B "INVERSE.LOD",0
+	EVEN
+	M_
+TailleProgDSP=3000
+TamponProgDSP	DS.B TailleProgDSP
+	P_
+	PEA	TamponProgDSP(PC)
+	PW	#"IN"
+	PEA	NomProgDSP(PC)
+	XBIOS	108,12 Dsp_LoadProg
+ ENDC
+	PROG_SUPER #InitInversion
+	PROG_END
+
+InitXBAR:
+	LEA	SND_XBARIN,A0
+	MOVE	(A0),D0
+	ANDI	#%0000111100000000,D0
+	ORI	#%1000000010011001,D0
+	MOVE	D0,(A0)
+	LEA	SND_XBAROUT,A0
+	MOVE	(A0),D0
+	ANDI	#%0000111100001111,D0
+	ORI	#%1011000010010000,D0
+	MOVE	D0,(A0)
+	RTS
+
+InitInversion:
+	LEA	DSP_TDH,A0
+	MOVE.L	#$300000,D0 ;i=0.375
+	MOVE.L	D0,(A0)
+.1	CMP.L	(A0),D0
+	BNE	.1
+	RTS
+
+ END

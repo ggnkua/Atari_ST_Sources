@@ -1,0 +1,197 @@
+;***************************************************************
+;* Compl‚ment pour CPU_MOD permettant de r‚cup‚rer les 4 voies *
+;* V0,V1,V2 et V3 qui sont envoy‚es s‚par‚ment en 2V Stereo 8b *
+;* On r‚alise donc un groupement-fusion de ces voies en tenant *
+;* compte de 2 paramˆtres d'inversion-fusion pour V0V1 et V2V3 *
+;* InversionV0V1 et InversionV2V3 not‚s i et j		       *
+;***************************************************************
+
+;Voie0 gauche brute: -1 =< V0 < 1
+;Voie0 droite brute: -1 =< V1 < 1
+;Voie1 gauche brute: -1 =< V2 < 1
+;Voie1 droite brute: -1 =< V3 < 1
+;InversionV0V1:       0 =<  i < 1
+;InversionV2V3:       0 =<  j < 1
+;Voie0 gauche mix‚e: ((1-i)V0+iV1+jV2+(1-j)V3)/2
+;		     (V0-iV0+iV1+jV2+V3-jV3)/2
+;Voie0 droite mix‚e: (iV0+(1-i)V1+(1-j)V2+jV3)/2
+;		     (iV0+V1-iV1+V2-jV2+jV3)/2
+;Voie1 gauche mix‚e: =Voie0 gauche mix‚e
+;Voie1 droite mix‚e: =Voie0 droite mix‚e
+
+; Les fonctions:
+; EXIT		    : MODX4V(0)
+; INIT		    : MODX4V(1,InversionV0V1,InversionV2V3)
+; SET INVERSION V0V1: MODX4V(2,InversionV0V1)
+; SET INVERSION V2V3: MODX4V(3,InversionV2V3)
+
+; ManiŠre d'appeler une "fonction" DSP
+; MOVE Parameter,HostPort ... autant de fois que n‚cessaire comme pour -(SP)
+; puis appel par d‚clanchement de la Host Command (10:0 11:1 12:2 13:3)
+
+NombreVoies		EQU	2
+TailleTamponParam	EQU	2
+
+; Pas de INCLUDE 'D:\MC56001\SYSTEM.S56' possible ...
+;-------------------------------------------------------------------------------
+PA_CR		EQU	$FFFE	; Port A Control Register =$000000
+PB_CR		EQU	$FFE0	; Port B Control Register =$000001
+PC_CR		EQU	$FFE1	; Port C Control Register =$0001FF
+HST_CR		EQU	$FFE8	; HoST Control Register
+HST_SR		EQU	$FFE9	; HoST Status Register
+HST_RD		EQU	$FFEB	; HoST Receive Data
+HST_TD		EQU	$FFEB	; HoST Transmit Data
+SSI_CRA 	EQU	$FFEC	; SSI Control Register A
+SSI_CRB 	EQU	$FFED	; SSI Control Register B
+SSI_SR		EQU	$FFEE	; SSI Status Register
+SSI_TSR 	EQU	$FFEE	; SSI Time Slot Register
+SSI_RD		EQU	$FFEF	; SSI Receive Data
+SSI_TD		EQU	$FFEF	; SSI Transmit Data
+IPR		EQU	$FFFF	; Interrupt Priority Register
+
+INT_RESET	EQU	$0000
+INT_STACK	EQU	$0002
+INT_TRACE	EQU	$0004
+INT_SWI 	EQU	$0006
+INT_SSI_RD	EQU	$000C
+INT_SSI_RDE	EQU	$000E	; with Exception status
+INT_SSI_TD	EQU	$0010
+INT_SSI_TDE	EQU	$0012	; with Exception status
+INT_HST_RD	EQU	$0020
+INT_HST_TD	EQU	$0022
+INT_HST_UC	EQU	$0024	; HoST User Commands
+INT_ILLEGAL	EQU	$003E
+;-------------------------------------------------------------------------------
+
+DACLevel	EQU	.85	;=85% Une r‚serve anti-bruit ...
+
+	ORG	P:$0000
+	JMP	<InitRegistres
+	ORG	P:INT_SSI_RD
+	JSR	<LireSSIRD
+	NOP
+	NOP
+	NOP
+	JSR	<EcrireSSITD
+	NOP
+	NOP
+	NOP
+	ORG	P:INT_HST_RD
+	MOVEP	X:<<HST_RD,X:(R7)+
+	NOP
+	ORG	P:10*2
+	JSR	<EXIT		; EXIT
+	NOP
+	JSR	<INIT		; INIT
+	NOP
+	MOVE	X:-(R7),X0	; SET INVERSION V0V1
+	MOVE	X0,Y:(R1)
+	MOVE	X:-(R7),X0	; SET INVERSION V2V3
+	MOVE	X0,Y:(R0)
+	ORG	P:$0040
+
+LireSSIRD
+	BTST	#3,X:<<SSI_SR
+	JCC	<_lire
+	BCLR	#1,R6 ;Voie0 !!!
+	BCLR	#0,R6 ;Gauche !!!
+	BSET	#0,X:<LireTamponReception
+	JCS	<_fin
+_lire	MOVEP	X:<<SSI_RD,X:(R6)+
+_fin	RTI
+
+EcrireSSITD
+	BTST	#2,X:<<SSI_SR
+	JCC	<_ecrire
+	BCLR	#1,R3 ;Voie0 !!!
+	BSET	#0,R3 ;Droite !!!
+	BSET	#0,Y:<EcrireTamponTransmiss
+	JCS	<_fin
+_ecrire MOVEP	Y:(R3)+,X:<<SSI_TD
+_fin	RTI
+
+EXIT	LUA	(R1)-N1,R1	(R0)-N0,R0
+	RTI
+
+INIT	LUA	(R1)+N1,R1	(R0)+N0,R0
+	MOVE	X:-(R7),X0	; InversionV0V1
+	MOVE	X0,Y:(R1)
+	MOVE	X:-(R7),X0	; InversionV2V3
+	MOVE	X0,Y:(R0)
+	RTI
+
+AttenteR
+	JCLR	#0,X:<LireTamponReception,AttenteR
+;Voie gauche mix‚e: (V0-iV0+iV1+...
+;Voie droite mix‚e: (iV0+V1-iV1+...
+	;Ne PAS utiliser X0 !!!
+	MOVE	X:(R5)+,A	Y:(R1),Y0	;   G et i
+	MOVE	X:(R5)+,B	A,Y1		;   D et V0
+	MAC	-Y0,Y1,A	B,X1		;-iV0 et V1
+	MAC	+Y0,X1,A			;+iV1
+	MAC	+Y0,Y1,B	X:(R5)+,Y1	;+iV0 et V2 anticip‚ !
+	MAC	-Y0,X1,B	X:(R5)+,X1	;-iV1 et V3 anticip‚ !
+	BCLR	#0,X:<LireTamponReception
+;Voie gauche mix‚e: ...+jV2+V3-jV3)/...
+;Voie droite mix‚e: ...+V2-jV2+jV3)/...
+	ADD	X1,A		Y:(R0),Y0	;+V3 et j
+	ADD	Y1,B				;+V2
+	MAC	+Y0,Y1,A			;+jV2
+	MAC	-Y0,X1,A			;-jV3
+	MAC	-Y0,Y1,B			;-jV2
+	MAC	+Y0,X1,B			;+jV3
+;Voie gauche mix‚e: (A/2)*DACLevel
+;Voie droite mix‚e: (B/2)*DACLevel
+	ASR	A		#>DACLevel,Y0
+	ASR	B		A,Y1
+	MPY	Y0,Y1,A		B,Y1
+	MPY	Y0,Y1,B
+AttenteT
+	JCLR	#0,Y:<EcrireTamponTransmiss,AttenteT
+	MOVE	A,Y:(R2)+
+	MOVE	B,Y:(R2)+
+	MOVE	A,Y:(R2)+
+	MOVE	B,Y:(R2)+
+	BCLR	#0,Y:<EcrireTamponTransmiss
+	JMP	<AttenteR
+
+InitRegistres
+	MOVEC	#$0300,SR
+	MOVEC	#$0002,OMR
+	MOVEP	#$000005,X:<<HST_CR ;5=HRIE+HCIE
+	MOVEP	#$004300,X:<<SSI_CRA ;16b ! 4 words
+	MOVEP	#$00F800,X:<<SSI_CRB
+	MOVEP	#$000000,X:<<PA_CR
+	MOVEP	#$000001,X:<<PB_CR
+	MOVEP	#$0001FF,X:<<PC_CR
+	MOVEP	#$002400,X:<<IPR ;SSI en IPL1 et HST en IPL0
+	MOVE	#<TamponParam,R7
+	MOVEC	#TailleTamponParam-1,M7
+	MOVE	#<TamponReception,R6 ;R‚ception IN
+	MOVEC	#(1+1)*NombreVoies*2-1,M6
+	MOVE	#<TamponReception+(1+1)*NombreVoies,R5 ;R‚ception OUT
+	MOVEC	M6,M5
+	;R4=libre
+	MOVE	R6,R3 ;Transmission OUT
+	MOVEC	M6,M3
+	MOVE	R5,R2 ;Transmission IN
+	MOVEC	M5,M2
+	MOVE	#<TamponInversions,R1 ;i
+	MOVE	#<TamponInversions+1,R0 ;j
+	MOVE	#2,N1 ;D'un couple … l'autre
+	MOVE	#2,N0 ;D'un couple … l'autre
+	MOVEC	#$0000,SR
+	JMP	<AttenteR
+
+	ORG	X:$0000
+TamponReception 	DSM	(1+1)*NombreVoies*2 ;tampon FIFO double
+LireTamponReception	DC	0 ; ... quand SSI_SRb3=1
+TamponParam		DSM	TailleTamponParam
+
+	ORG	Y:$0000
+TamponTransmiss 	DSM	(1+1)*NombreVoies*2 ;tampon FIFO double
+EcrireTamponTransmiss	DC	0 ; ... quand SSI_SRb2=1
+TamponInversions	DS	2*3 ;3 couples de InversionV0V1-InversionV2V3
+ ;3 est largement suffisant: 1 nul, 1 pour *.ACC et 1 pour *.TTP
+ ;Pour un paramˆtre inversion cela va de .000:0% … .999:100%
+ END
