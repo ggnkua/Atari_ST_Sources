@@ -1,0 +1,925 @@
+--- u:\n\XaAES\prev-src/objects.h	Tue Feb 27 01:55:20 1996
++++ objects.h	Fri Mar 22 20:52:56 1996
+@@ -8,7 +8,7 @@
+ void draw_2d_box(short x, short y, short w, short h, short border_thick, short colour);
+ void fix_menu(OBJECT *root);
+ 
+-void set_clip(short x1, short y1, short x2, short y2);
++void set_clip(short x, short y, short w, short h);
+ void clear_clip(void);
+ 
+ 
+--- u:\n\XaAES\prev-src/rectlist.h	Tue Feb 27 01:55:22 1996
++++ rectlist.h	Fri Mar 22 22:44:02 1996
+@@ -1,7 +1,7 @@
+ #ifndef _RECTLIST_H_
+ #define _RECTLIST_H_
+ 
+-short rc_intersect(GRECT *s, GRECT *d);
++short rc_intersect(const GRECT *s, GRECT *d);
+ XA_RECT_LIST *generate_rect_list(XA_WINDOW *w);
+ 
+ #endif
+--- u:\n\XaAES\prev-src/xa_globl.h	Sun Mar 17 00:35:24 1996
++++ xa_globl.h	Thu Mar 21 18:47:50 1996
+@@ -57,6 +57,7 @@
+ extern char scrap_path[128];			/* Clipboard directory path */
+ 
+ extern void *system_resources;			/* Pointer to the XaAES resources */
++extern const char dummy_cmd_tail[], dummy_cmd_name[];
+ 
+ extern far AESroutine Ktable[300];		/* The main AES kernal command jump table */
+ extern far short Kcall_direct[300];		/* array of flags to indicate that routines should be direct called */
+--- u:\n\XaAES\prev-src/appl_ini.c	Mon Mar 11 16:13:28 1996
++++ appl_ini.c	Sat Mar 23 22:07:50 1996
+@@ -33,8 +33,6 @@
+ short client_exit_contrl[]={XA_CLIENT_EXIT,0,0,0,0};
+ AESPB new_client_pb;
+ K_CMD_PACKET new_client_packet;
+-short XAappin_temp;
+-short Cpid;
+ 
+ /*
+ 	Application initialise - appl_init()
+@@ -43,14 +41,19 @@
+ */
+ short XA_appl_init(AESPB *pb)
+ {
++	short Cpid;
++	XA_CLIENT *client;
++	short drv;
++
+ 	Psemaphore(2,APPL_INIT_SEMAPHORE,-1L);
+ 	
+ /* In XaAES, AESid==MiNT process id : this makes error tracking easier */
+ 	Cpid=Pgetpid();
++	client=Pid2Client(Cpid);
+ 
+ 	pb->intout[0]=Cpid;
+ 
+-	pb->globl[0]=0x0410;		/* Try to emulate AES4.1 */
++	pb->globl[0]=0x0140;		/* Try to emulate AES 1.4 (TOS 1.04/1.06) */
+ 	pb->globl[1]=-1;			/* Unlimited applicatios (well, not really) */
+ 	pb->globl[2]=Cpid;			/* appid==pid */
+ 	pb->globl[5]=0;
+@@ -64,10 +67,10 @@
+ 	pb->globl[13]=display.c_max_h;		/* AES4.0 extensions */
+ 	pb->globl[14]=4;
+ 
+-	clients[Cpid].globl_ptr=pb->globl;		/* Preserve the pointer to the global array */
++	client->globl_ptr=pb->globl;		/* Preserve the pointer to the global array */
+ 											/* so we can fill in the resource address later */
+ 	
+-	if (clients[Cpid].clnt_pipe_rd)
++	if (client->clnt_pipe_rd)
+ 	{
+ 		Psemaphore(3,APPL_INIT_SEMAPHORE,0);
+ 		return TRUE;
+@@ -75,28 +78,28 @@
+ 
+ /* Create a new client reply pipe */
+ 	sprintf(r_pipe_name,r_fmt,Cpid);
+-	clients[Cpid].clnt_pipe_rd=Fopen(r_pipe_name,O_CREAT|O_RDONLY);	/* Clients end of pipe */
++	client->clnt_pipe_rd=Fopen(r_pipe_name,O_CREAT|O_RDONLY);	/* Client's end of pipe */
+ 
+-	pb->globl[12]=clients[Cpid].clnt_pipe_rd;	/* XaAES extension */
++	pb->globl[12]=client->clnt_pipe_rd;	/* XaAES extension */
+ 
+ /* Get the client's home directory (where it was started) - we use this later to load
+     resource files, etc */
+-	XAappin_temp=Dgetdrv();
+-	clients[Cpid].home_path[0]=(char)XAappin_temp+'a';
+-	clients[Cpid].home_path[1]=':';
+-	clients[Cpid].home_path[2]='\\';
+-	Dgetcwd(clients[Cpid].home_path+3,XAappin_temp+1,196);
++	drv=Dgetdrv();
++	client->home_path[0]=(char)drv+'a';
++	client->home_path[1]=':';
++	client->home_path[2]='\\';
++	Dgetcwd(client->home_path+3,drv+1,(short)sizeof(client->home_path)-4);
+ 
+ /* Reset the AES messages pending list for our new application */
+-	clients[Cpid].msg=NULL;
++	client->msg=NULL;
+ /* No widgets have action pending on a new app */
+-	clients[Cpid].widget_active=NULL;
++	client->widget_active=NULL;
+ /* Initially, client isn't waiting on any event types */
+-	clients[Cpid].waiting_for=0;
+-	clients[Cpid].waiting_pb=NULL;
++	client->waiting_for=0;
++	client->waiting_pb=NULL;
+ /* Initial settings for the clients mouse cursor */
+-	clients[Cpid].client_mouse=ARROW;		/* Default client mouse cursor is an arrow */
+-	clients[Cpid].client_mouse_form=NULL;
++	client->client_mouse=ARROW;		/* Default client mouse cursor is an arrow */
++	client->client_mouse_form=NULL;
+ 
+ /* Build a 'register new client' packet and send it to the kernal
+    - the kernal will respond by opening it's end of the reply pipe ready for use */
+@@ -122,7 +125,10 @@
+ */
+ short XA_appl_exit(short *intout)
+ {
++	XA_CLIENT *client;
++
+ 	intout[0]=Pgetpid();						/* Which process are we? It'll be a client pid */
++	client = Pid2Client(intout[0]);
+ 	DIAGS(("XaAES:pid=%d :appl_exit()\n",intout[0]));
+ 
+ /* Build a 'client is exiting' packet and send it to the kernal
+@@ -134,9 +140,9 @@
+ 
+ 	Fwrite(AES_in_pipe_clnt, sizeof(K_CMD_PACKET), &new_client_packet);	/* Send packet */
+ 
+-	Fclose(clients[intout[0]].clnt_pipe_rd);	/* Close the client end of client reply pipe */
++	Fclose(client->clnt_pipe_rd);	/* Close the client end of client reply pipe */
+ 
+-	clients[intout[0]].clnt_pipe_rd=0;
++	client->clnt_pipe_rd=0;
+ 
+ 	return TRUE;
+ }
+--- u:\n\XaAES\prev-src/bootup.c	Tue Mar 12 01:23:44 1996
++++ bootup.c	Sat Mar 23 16:10:00 1996
+@@ -151,6 +151,8 @@
+ char scrap_path[128];				/* Path to the scrap directory */
+ 
+ void *system_resources;				/* Pointer to the XaAES resources */
++const char dummy_cmd_tail[]="\0"; /* Dummy constants used for distinguishing */
++const char dummy_cmd_name[]=""; /* malloced from non-malloced strings... */
+ 
+ /*
+ 	Read & parse the 'xaaes.cnf' file.
+@@ -322,7 +324,7 @@
+ 
+ /* Where were we started? */
+ 	XaAES_home_drv=Dgetdrv();
+-	Dgetcwd(XaAES_home,XaAES_home_drv+1,196);
++	Dgetcwd(XaAES_home,XaAES_home_drv+1,sizeof(XaAES_home)-1);
+ 
+ /* Are we an auto/mint.cnf launched program? */
+ 	/* Note: global[0] (AES version number) is initially zero. */
+@@ -332,6 +334,8 @@
+ 	
+ 	if (auto_program)
+ 	{
++		if ( (Kbshift(-1)&3) && Getrez()==0 ) /* any shift key and low rez */
++			Setscreen((void*)-1L,(void*)-1L,1); /* switch to medium rez */
+ 		v_opnwk(work_in,&P_handle,work_out);			/* If we are an auto program we must open a physical workstation to the screen */
+ 	}else{
+ 		P_handle=graf_handle(&junk,&junk,&junk,&junk);	/* The GEM AES has already been started,  */
+@@ -379,8 +383,8 @@
+ 		clients[f].clnt_pipe_rd=clients[f].clnt_pipe_wr=0;
+ 		clients[f].std_resource=NULL;
+ 		clients[f].parent=AESpid;
+-		clients[f].cmd_tail="\0";
+-		clients[f].cmd_name="";
++		clients[f].cmd_tail=(char*)dummy_cmd_tail;
++		clients[f].cmd_name=(char*)dummy_cmd_name;
+ 		clients[f].zen=NULL;
+ 		clients[f].desktop=NULL;
+ 	}
+--- u:\n\XaAES\prev-src/c_window.c	Sat Mar  9 16:47:44 1996
++++ c_window.c	Sat Mar 23 22:14:18 1996
+@@ -231,6 +231,8 @@
+ */
+ void pull_wind_to_top(XA_WINDOW *w)
+ {
++	XA_CLIENT *owner;
++
+ 	Psemaphore(2,WIN_LIST_SEMAPHORE,-1L);
+ 
+ 	if (window_list->owner!=w->owner)	/* If we're getting a new top window, we may need */
+@@ -240,13 +242,14 @@
+ 		Psemaphore(2,ROOT_SEMAPHORE,-1L);
+ 		
+ 		menu_bar=(XA_WIDGET_TREE*)(root_window->widgets[XAW_MENU].stuff);
+-		menu_bar->tree=clients[w->owner].std_menu;
++		owner=Pid2Client(w->owner);
++		menu_bar->tree=owner->std_menu;
+ 		menu_bar->owner=w->owner;
+ 
+-		if ((clients[w->owner].desktop)					/* Change desktops? */
+-			&&((clients[w->owner].desktop!=desktop)&&(clients[w->owner].desktop!=ResourceTree(system_resources,DEF_DESKTOP))))
++		if ((owner->desktop)					/* Change desktops? */
++			&&((owner->desktop!=desktop)&&(owner->desktop!=ResourceTree(system_resources,DEF_DESKTOP))))
+ 		{
+-			set_desktop(clients[w->owner].desktop);
++			set_desktop(owner->desktop);
+ 			root_window->owner=w->owner;;
+ 
+ 			v_hide_c(V_handle);
+@@ -325,16 +328,18 @@
+ 	if (old_top->owner!=window_list->owner)	/* If we're getting a new top window, we may need */
+ 	{										/* to swap menu bars..... */
+ 		XA_WIDGET_TREE *menu_bar=(XA_WIDGET_TREE*)(root_window->widgets[XAW_MENU].stuff);
+-	
++		XA_CLIENT *owner;
++
+ 		Psemaphore(2,ROOT_SEMAPHORE,-1L);
+-			
+-		menu_bar->tree=clients[window_list->owner].std_menu;
++
++		owner=Pid2Client(window_list->owner);
++		menu_bar->tree=owner->std_menu;
+ 		menu_bar->owner=window_list->owner;
+ 
+-		if ((clients[window_list->owner].desktop)					/* Change desktops? */
+-			&&((clients[window_list->owner].desktop!=desktop)&&(clients[window_list->owner].desktop!=ResourceTree(system_resources,DEF_DESKTOP))))
++		if (owner->desktop					/* Change desktops? */
++			&&((owner->desktop!=desktop)&&(owner->desktop!=ResourceTree(system_resources,DEF_DESKTOP))))
+ 		{
+-			set_desktop(clients[window_list->owner].desktop);
++			set_desktop(owner->desktop);
+ 			root_window->owner=window_list->owner;
+ 
+ 			v_hide_c(V_handle);
+@@ -403,11 +408,11 @@
+ 				
+ 				if (rc_intersect(clip,&target))
+ 				{
+-					set_clip(target.g_x, target.g_y, target.g_x+target.g_w, target.g_y+target.g_h);
++					set_clip(target.g_x, target.g_y, target.g_w, target.g_h);
+ 					display_window(w);
+ 				}
+ 			}else{
+-				set_clip(rl->x, rl->y, rl->x+rl->w, rl->y+rl->h);
++				set_clip(rl->x, rl->y, rl->w, rl->h);
+ 				display_window(w);
+ 			}
+ 			rl=rl->next;
+@@ -479,7 +484,7 @@
+ 					
+ 						if (rc_intersect(&old_r, &win_r))
+ 						{
+-							set_clip(win_r.g_x, win_r.g_y, win_r.g_x+win_r.g_w, win_r.g_y+win_r.g_h);
++							set_clip(win_r.g_x, win_r.g_y, win_r.g_w, win_r.g_h);
+ 	
+ 							display_window(wl);				/* Display the window */
+ 							
+--- u:\n\XaAES\prev-src/evnt_mes.c	Tue Feb 27 01:54:30 1996
++++ evnt_mes.c	Fri Mar 22 20:44:08 1996
+@@ -49,7 +49,7 @@
+ 				v_hide_c(V_handle);
+ 				for(drl=rl; drl; drl=drl->next)	/* Walk the rectangle list */
+ 				{
+-					set_clip(drl->x,drl->y,drl->x+drl->w,drl->y+drl->h);
++					set_clip(drl->x,drl->y,drl->w,drl->h);
+ 					(*disp)(wind, widg);
+ 				}
+ 				v_show_c(V_handle, 1);
+--- u:\n\XaAES\prev-src/evnt_mul.c	Tue Feb 27 01:54:30 1996
++++ evnt_mul.c	Fri Mar 22 20:44:24 1996
+@@ -84,7 +84,7 @@
+ 					v_hide_c(V_handle);
+ 					for(drl=rl; drl; drl=drl->next)	/* Walk the rectangle list */
+ 					{
+-						set_clip(drl->x, drl->y, drl->x+drl->w, drl->y+drl->h);
++						set_clip(drl->x, drl->y, drl->w, drl->h);
+ 						(*disp)(wind, widg);
+ 					}
+ 					v_show_c(V_handle, 1);
+--- u:\n\XaAES\prev-src/form_do.c	Sat Mar  9 15:39:48 1996
++++ form_do.c	Fri Mar 22 20:45:12 1996
+@@ -60,7 +60,7 @@
+ 			object_abs_coords(d, o, &x, &y);
+ 			w=(d+o)->ob_width;
+ 			h=(d+o)->ob_height;
+-			set_clip(x,y,x+w,y+h);
++			set_clip(x,y,w,h);
+ 
+ 			draw_object_tree(d, o, 5);
+ 		}
+@@ -73,7 +73,7 @@
+ 	object_abs_coords(d, object, &x, &y);
+ 	w=(d+object)->ob_width;
+ 	h=(d+object)->ob_height;
+-	set_clip(x,y,x+w,y+h);
++	set_clip(x,y,w,h);
+ 	
+ 	draw_object_tree(d, object, 5);
+ }
+@@ -107,7 +107,7 @@
+ 		object_abs_coords(form, wt->edit_obj, &x, &y);
+ 		w=(form+wt->edit_obj)->ob_width;
+ 		h=(form+wt->edit_obj)->ob_height;
+-		set_clip(x,y,x+w,y+h);
++		set_clip(x,y,w,h);
+ 
+ 		v_hide_c(V_handle);
+ 		draw_object_tree(form,wt->edit_obj,2);
+@@ -115,7 +115,7 @@
+ 		object_abs_coords(form, f, &x, &y);
+ 		w=(form+f)->ob_width;
+ 		h=(form+f)->ob_height;
+-		set_clip(x,y,x+w,y+h);
++		set_clip(x,y,w,h);
+ 		
+ 		draw_object_tree(form,f,2);
+ 		v_show_c(V_handle,1);
+@@ -134,7 +134,7 @@
+ 	object_abs_coords(form, f, &x, &y);
+ 	w=(form+f)->ob_width;
+ 	h=(form+f)->ob_height;
+-	set_clip(x,y,x+w,y+h);
++	set_clip(x,y,w,h);
+ 
+ 	os=form[f].ob_state;
+ 	if (form[f].ob_state&SELECTED)
+@@ -158,7 +158,7 @@
+ 	}else{
+ 		if (watch_object(form, f, is, os))
+ 		{
+-			set_clip(x,y,x+w,y+h);
++			set_clip(x,y,w,h);
+ 			
+ 			form[f].ob_state|=SELECTED;
+ 	
+--- u:\n\XaAES\prev-src/forms.c	Sun Mar 10 18:19:26 1996
++++ forms.c	Fri Mar 22 20:45:32 1996
+@@ -135,7 +135,7 @@
+ 	object_abs_coords(tree, ob, &x, &y);
+ 	w=(tree+ob)->ob_width;
+ 	h=(tree+ob)->ob_height;
+-	set_clip(x,y,x+w,y+h);
++	set_clip(x,y,w,h);
+ 
+ 	os=tree[ob].ob_state;
+ 	if (tree[ob].ob_state&SELECTED)
+--- u:\n\XaAES\prev-src/getinfo.c	Sun Mar 17 02:25:58 1996
++++ getinfo.c	Sat Mar 23 22:26:18 1996
+@@ -16,18 +16,18 @@
+ */
+ 
+ short info_tab[15][4]={
+-		{STANDARD_FONT_POINT,STANDARD_AES_FONTID,0,0},	/*0*/
+-		{SMALL_FONT_POINT,STANDARD_AES_FONTID,0,0},		/*1*/
++		{0,0,0,0},										/*0*/
++		{0,0,0,0},										/*1*/
+ 		{1,16,1,1},										/*2*/
+ 		{0,0,0,0},										/*3*/
+-		{1,1,0,0},										/*4*/
++		{1,1,1,0},										/*4*/
+ 		{0,0,0,0},										/*5*/
+ 		{0,0,1,0},										/*6*/
+ 		{0,0,0,0},						/* 7 isn't defined at the moment */
+ 		{0,1,0,0},										/*8*/
+ 		{0,0,0,1},										/*9*/
+-		{0,0,0,0},										/*10*/
+-		{1+16+64+128+256,0,2,0},						/*11*/
++		{0x0301,0,0,0},								/*10*/
++		{1+16+64+128+256,0,2,1},						/*11*/
+ 		{2+64+128+256,0,1,0},							/*12*/
+ 		{1,0,1,0},										/*13*/
+ 		{0,0,0,0}										/*14*/
+@@ -65,7 +65,6 @@
+ */
+ short XA_appl_find(short clnt_pid, AESPB *pb)
+ {
+-	XA_WIDGET_TREE *menu_bar=(XA_WIDGET_TREE*)(root_window->widgets[XAW_MENU].stuff);
+ 	unsigned short ex=(unsigned short)((unsigned long)pb->addrin[0]>>16)&0xffff;
+ 	char *name=(char*)pb->addrin[0],*t;
+ 	short f,n;
+@@ -76,14 +75,22 @@
+ 		return TRUE;
+ 	}
+ 	
+-	if (!ex)
++	if (name==NULL)
+ 	{
+-		pb->intout[0]=menu_bar->owner;		/* Return the pid of the app owning the menu? */
++		pb->intout[0]=clnt_pid;		/* Return AES pid of current process */
+ 		return TRUE;
+ 	}
+ 	
+-	if (name)
+ 	{
++		/* Tell application we understand appl_getinfo() */
++		/* (invented by Martin Osieka for his AES extension WINX; used */
++		/*	by MagiC 4, too.) */
++		if (strcmp(name, "?AGI")==0)
++		{
++			pb->intout[0]=0 ;		/* OK */
++			return TRUE ;
++		}
++
+ 		for(f=0; f<MAX_PID; f++)
+ 		{
+ 			if (clients[f].clnt_pipe_rd)	/* Client active? */
+--- u:\n\XaAES\prev-src/menubar.c	Sat Mar  2 13:12:36 1996
++++ menubar.c	Fri Mar 22 20:46:46 1996
+@@ -52,7 +52,7 @@
+ 			while(rl)
+ 			{
+ 				drl=rl;
+-				set_clip(rl->x, rl->y, rl->x+rl->w, rl->y+rl->h);
++				set_clip(rl->x, rl->y, rl->w, rl->h);
+ 				display_menu_widget(root_window, &root_window->widgets[XAW_MENU]);
+ 				rl=rl->next;
+ 				free(drl);
+@@ -72,7 +72,7 @@
+ 			while(rl)
+ 			{
+ 				drl=rl;
+-				set_clip(rl->x, rl->y, rl->x+rl->w, rl->y+rl->h);
++				set_clip(rl->x, rl->y, rl->w, rl->h);
+ 				display_menu_widget(root_window, &root_window->widgets[XAW_MENU]);
+ 				rl=rl->next;
+ 				free(drl);
+@@ -114,7 +114,7 @@
+ 		while(rl)
+ 		{
+ 			drl=rl;
+-			set_clip(rl->x, rl->y, rl->x+rl->w, rl->y+rl->h);
++			set_clip(rl->x, rl->y, rl->w, rl->h);
+ 			display_menu_widget(root_window, &root_window->widgets[XAW_MENU]);
+ 			rl=rl->next;
+ 			free(drl);
+@@ -151,7 +151,7 @@
+ 		while(rl)
+ 		{
+ 			drl=rl;
+-			set_clip(rl->x, rl->y, rl->x+rl->w, rl->y+rl->h);
++			set_clip(rl->x, rl->y, rl->w, rl->h);
+ 			display_menu_widget(root_window, &root_window->widgets[XAW_MENU]);
+ 			rl=rl->next;
+ 			free(drl);
+@@ -187,7 +187,7 @@
+ 		while(rl)
+ 		{
+ 			drl=rl;
+-			set_clip(rl->x, rl->y, rl->x+rl->w, rl->y+rl->h);
++			set_clip(rl->x, rl->y, rl->w, rl->h);
+ 			display_menu_widget(root_window, &root_window->widgets[XAW_MENU]);
+ 			rl=rl->next;
+ 			free(drl);
+@@ -222,7 +222,7 @@
+ 		while(rl)
+ 		{
+ 			drl=rl;
+-			set_clip(rl->x, rl->y, rl->x+rl->w, rl->y+rl->h);
++			set_clip(rl->x, rl->y, rl->w, rl->h);
+ 			display_menu_widget(root_window, &root_window->widgets[XAW_MENU]);
+ 			rl=rl->next;
+ 			free(drl);
+--- u:\n\XaAES\prev-src/new_clnt.c	Tue Mar 19 18:25:30 1996
++++ new_clnt.c	Sat Mar 23 17:50:52 1996
+@@ -28,33 +28,34 @@
+ 	char pipe_name[50];
+ 	char fmt[]="u:\\pipe\\XaClnt.%d\0";
+ 	short f;
++	XA_CLIENT *client=Pid2Client(clnt_pid);
+ 
+-	if (clients[clnt_pid].clnt_pipe_wr)		/* Multiple appl_inits? what's going on here then..... */
++	if (client->clnt_pipe_wr)		/* Multiple appl_inits? what's going on here then..... */
+ 	{
+ 		DIAGS(("New Client - Error: already opened server end?\n"));
+ 		return FALSE;
+ 	}
+ 
+-	if (!clients[clnt_pid].clnt_pipe_rd)	/* If this occurs, then we've got a problem - fix it with */
++	if (!client->clnt_pipe_rd)	/* If this occurs, then we've got a problem - fix it with */
+ 	{
+ 		DIAGS(("New Client - Error: client pipe does not exist yet?\n"));
+-		clients[clnt_pid].clnt_pipe_rd=(int)Fopen(pipe_name,O_RDONLY|O_GLOBAL);
++		client->clnt_pipe_rd=(int)Fopen(pipe_name,O_RDONLY|O_GLOBAL);
+ 	}
+ 
+ 	sprintf(pipe_name,fmt,clnt_pid);							/* Open the clients reply pipe for writing to */
+-	clients[clnt_pid].clnt_pipe_wr=(int)Fopen(pipe_name,O_WRONLY);	/* Kernals end of pipe*/
+-	clients[clnt_pid].std_menu=ResourceTree(system_resources,SYSTEM_MENU);
++	client->clnt_pipe_wr=(int)Fopen(pipe_name,O_WRONLY);	/* Kernals end of pipe*/
++	client->std_menu=ResourceTree(system_resources,SYSTEM_MENU);
+ 
+-	sprintf(clients[clnt_pid].name,"Foreign client ?");
+-	sprintf(clients[clnt_pid].proc_name,"XACLIENT");
++	sprintf(client->name,"Foreign client ?");
++	sprintf(client->proc_name,"XACLIENT");
+ 	
+-	for(f=0; ((clients[clnt_pid].cmd_name[f]!='\0')&&(clients[clnt_pid].cmd_name[f]!='.'))&&(f<8); f++)
+-		clients[clnt_pid].proc_name[f]=clients[clnt_pid].cmd_name[f];
++	for(f=0; ((client->cmd_name[f]!='\0')&&(client->cmd_name[f]!='.'))&&(f<8); f++)
++		client->proc_name[f]=client->cmd_name[f];
+ 	
+ 	for(; f<8; f++)
+-		clients[clnt_pid].proc_name[f]=' ';
++		client->proc_name[f]=' ';
+ 
+-	clients[clnt_pid].proc_name[8]='\0';
++	client->proc_name[8]='\0';
+ 
+ 	return FALSE;	/* No reply from this, as the client has already moved on */
+ }
+@@ -70,9 +71,10 @@
+ 	XA_WINDOW *wl,*dwl;
+ 	XA_AESMSG_LIST *nm,*dnm;
+ 	XA_WIDGET_TREE *menu_bar=(XA_WIDGET_TREE*)(root_window->widgets[XAW_MENU].stuff);
++	XA_CLIENT *client=Pid2Client(clnt_pid);
+ 
+-	Fclose(clients[clnt_pid].clnt_pipe_wr);	/* Close the kernal end of client reply pipe */
+-	clients[clnt_pid].clnt_pipe_wr=clients[clnt_pid].clnt_pipe_rd=0;
++	Fclose(client->clnt_pipe_wr);	/* Close the kernal end of client reply pipe */
++	client->clnt_pipe_wr=client->clnt_pipe_rd=0;
+ 
+ /* Go through and check that all windows belonging to this client are */
+ /* closed and deleted (in case of sloppy programming). */
+@@ -107,16 +109,16 @@
+ 	}
+ 
+ /* Dispose of any pending messages for the client */
+-	for(nm=clients[clnt_pid].msg; nm;)
++	for(nm=client->msg; nm;)
+ 	{
+ 		dnm=nm;
+ 		nm=nm->next;
+ 		free(dnm);
+ 	}
+-	clients[clnt_pid].msg=NULL;
++	client->msg=NULL;
+ 	
+ /* If the client forgot to remove it's menu bar, better do it now */
+-	if (menu_bar->tree==clients[clnt_pid].std_menu)
++	if (menu_bar->tree==client->std_menu)
+ 	{
+ 		menu_bar->tree=ResourceTree(system_resources,SYSTEM_MENU);
+ 		menu_bar->owner=AESpid;
+@@ -126,9 +128,9 @@
+ 	}
+ 
+ /* Did the exiting app forget to remove a custom desktop? */
+-	if ((desktop==clients[clnt_pid].desktop)&&(desktop!=ResourceTree(system_resources,DEF_DESKTOP)))
++	if ((desktop==client->desktop)&&(desktop!=ResourceTree(system_resources,DEF_DESKTOP)))
+ 	{
+-		set_desktop(clients[menu_bar->owner].desktop);
++		set_desktop(Pid2Client(menu_bar->owner)->desktop);
+ 
+ 		v_hide_c(V_handle);
+ 		display_non_topped_window(root_window,NULL);
+@@ -143,13 +145,18 @@
+ 		clients[clnt_pid].std_resource=NULL;
+ 	}
+ #endif
+-
+-	clients[clnt_pid].std_resource=NULL;
+-	clients[clnt_pid].parent=AESpid;
+-	clients[clnt_pid].cmd_tail="\0";
+-	clients[clnt_pid].cmd_name="";
+-	clients[clnt_pid].zen=NULL;
+-	clients[clnt_pid].desktop=NULL;
++	/* Free command tail and name *only if* they were malloced: */
++	if (client->cmd_tail != dummy_cmd_tail)
++		free(client->cmd_tail);
++	if (client->cmd_name != dummy_cmd_name)
++		free(client->cmd_name);
++
++	client->std_resource=NULL;
++	client->parent=AESpid;
++	client->cmd_tail=(char*)dummy_cmd_tail;
++	client->cmd_name=(char*)dummy_cmd_name;
++	client->zen=NULL;
++	client->desktop=NULL;
+ 	
+ 	if (update_lock==clnt_pid)					/* unlock mouse & screen */
+ 	{
+--- u:\n\XaAES\prev-src/objc_drw.c	Tue Feb 27 01:54:44 1996
++++ objc_drw.c	Fri Mar 22 20:47:46 1996
+@@ -18,7 +18,7 @@
+ 
+ short XA_objc_draw(short clnt_pid, AESPB *pb)
+ {
+-	set_clip(pb->intin[2], pb->intin[3], pb->intin[2]+pb->intin[4], pb->intin[3]+pb->intin[5]);
++	set_clip(pb->intin[2], pb->intin[3], pb->intin[4], pb->intin[5]);
+ 	pb->intout[0]=draw_object_tree(pb->addrin[0],pb->intin[0],pb->intin[1]+1);
+ 	clear_clip();
+ 	
+@@ -46,7 +46,7 @@
+ 	
+ 	if (pb->intin[7])
+ 	{
+-		set_clip(pb->intin[2], pb->intin[3], pb->intin[2]+pb->intin[4], pb->intin[3]+pb->intin[5]);
++		set_clip(pb->intin[2], pb->intin[3], pb->intin[4], pb->intin[5]);
+ 		draw_object_tree(root,pb->intin[0],pb->intin[1]+1);
+ 		clear_clip();
+ 	}
+--- u:\n\XaAES\prev-src/objcwidg.c	Mon Mar  4 00:09:06 1996
++++ objcwidg.c	Fri Mar 22 20:50:08 1996
+@@ -268,7 +268,8 @@
+ 					if (point_at_menu!=-1)		/* De-select current selection (if any) */
+ 					{
+ 						root[point_at_menu].ob_state&=~SELECTED;
+-						set_clip(menu_x-5,old_menu_y-5,menu_x+root[selected_menu].ob_width+5,old_menu_y+display.c_max_h+5);
++						set_clip(menu_x-5, old_menu_y-5,
++								root[selected_menu].ob_width+10, display.c_max_h+10);
+ 						v_hide_c(V_handle);
+ 						display_menu_widget(menu_wind, menu_widg);
+ 						v_show_c(V_handle, 1);
+@@ -277,7 +278,8 @@
+ 					if (t!=-1)				/* Something selected at the moment? */
+ 					{						/* Highlight current selection */
+ 						root[t].ob_state|=SELECTED;
+-						set_clip(menu_x-5,menu_y-5,menu_x+root[selected_menu].ob_width+5,menu_y+display.c_max_h+5);
++						set_clip(menu_x-5,menu_y-5,
++								root[selected_menu].ob_width+10,display.c_max_h+10);
+ 						v_hide_c(V_handle);
+ 						display_menu_widget(menu_wind, menu_widg);
+ 						v_show_c(V_handle, 1);
+--- u:\n\XaAES\prev-src/objects.c	Sun Mar 17 02:27:48 1996
++++ objects.c	Fri Mar 22 20:52:20 1996
+@@ -27,15 +27,16 @@
+ 
+ short global_clip[4];	/* Bloody progdefs need to know the clip rectangle */
+ 
+-void set_clip(short x1, short y1, short x2, short y2)
++void set_clip(short x, short y, short w, short h)
+ {
+-	global_clip[0]=x1;
+-	global_clip[1]=y1;
+-	global_clip[2]=x2;
+-	global_clip[3]=y2;
++	global_clip[0]=x;
++	global_clip[1]=y;
++	global_clip[2]=x+w-1;
++	global_clip[3]=y+h-1;
+ 	vs_clip(V_handle,1,global_clip);
+ }
+ 
++/* Set clipping to entire screen */
+ void clear_clip(void)
+ {
+ 	global_clip[0]=display.x;
+@@ -42,7 +43,7 @@
+ 	global_clip[1]=display.y;
+ 	global_clip[2]=display.x+display.w-1;
+ 	global_clip[3]=display.y+display.h-1;
+-	vs_clip(V_handle,0,global_clip);
++	vs_clip(V_handle,1,global_clip);
+ }
+ 
+ /*
+@@ -240,7 +241,7 @@
+ 					break;
+ 				case TE_SMALL:			/* Use the small syatem font (probably 8 point) */
+ 					vst_font(V_handle,display.standard_font_id);
+-					vst_point(V_handle,display.standard_font_point,&temp,&temp,&temp,&temp);
++					vst_point(V_handle,display.small_font_point,&temp,&temp,&temp,&temp);
+ 					tw=display.c_min_w;
+ 					th=display.c_min_h;
+ 					ty=parent_y + ob->ob_y + ((ob->ob_height-display.c_min_h)/2);
+--- u:\n\XaAES\prev-src/rectlist.c	Tue Feb 27 01:54:48 1996
++++ rectlist.c	Sat Mar 23 20:34:24 1996
+@@ -14,70 +14,31 @@
+ #include "K_DEFS.H"
+ #include "C_WINDOW.H"
+ #include "EVENTS.H"
++#include "rectlist.h"
+ 
+-short rc_intersect(GRECT *s, GRECT *d)
++#define max(x,y)	(((x)>(y))?(x):(y))
++#define min(x,y)	(((x)<(y))?(x):(y))
++/*
++*	Compute intersection of two rectangles; put result rectangle
++*	into *d; return TRUE if intersection is nonzero.
++*
++*	(Original version of this function taken from Digital Research's
++*	GEM sample application `DEMO' [aka `DOODLE'],  Version 1.1,
++*	March 22, 1985)
++*/
++short rc_intersect(const GRECT *s, GRECT *d)
+ {
+-	short xmina,xmaxa,xminb,xmaxb;
+-	short ymina,ymaxa,yminb,ymaxb;
+-	short inw,inh;
+-	
+-	if (s->g_x<d->g_x)
+-	{
+-		xmina=s->g_x;
+-		xmaxa=s->g_x+s->g_w;
+-		xminb=d->g_x;
+-		xmaxb=d->g_x+d->g_w;
+-	}else{
+-		xmina=d->g_x;
+-		xmaxa=d->g_x+d->g_w;
+-		xminb=s->g_x;
+-		xmaxb=s->g_x+s->g_w;
+-	}
+-
+-	if (s->g_y<d->g_y)
+-	{
+-		ymina=s->g_y;
+-		ymaxa=s->g_y+s->g_h;
+-		yminb=d->g_y;
+-		ymaxb=d->g_y+d->g_h;
+-	}else{
+-		ymina=d->g_y;
+-		ymaxa=d->g_y+d->g_h;
+-		yminb=s->g_y;
+-		ymaxb=s->g_y+s->g_h;
+-	}
+-	
+-	if (xminb>xmaxa)
+-	{
+-		inw=0;
+-	}else{
+-		if (xmaxb>xmaxa)
+-		{
+-			inw=xmaxa-xminb;
+-		}else{
+-			inw=xmaxb-xminb;
+-		}
+-	}
++	short x1,y1,x2,y2 ;
+ 
+-	if (yminb>ymaxa)
+-	{
+-		inh=0;
+-	}else{
+-		if (ymaxb>ymaxa)
+-		{
+-			inh=ymaxa-yminb;
+-		}else{
+-			inh=ymaxb-yminb;
+-		}
+-	}
+-	
+-	d->g_x=xminb;
+-	d->g_y=yminb;
+-	d->g_w=inw;
+-	d->g_h=inh;
+-	
+-	if ((!inw)||(!inh)) return FALSE;
+-	return TRUE;
++	x1 = max( s->g_x, d->g_x ) ;
++	y1 = max( s->g_y, d->g_y ) ;
++	x2 = min( s->g_x+s->g_w, d->g_x+d->g_w ) ;
++	y2 = min( s->g_y+s->g_h, d->g_y+d->g_h ) ;
++	d->g_x = x1 ;
++	d->g_y = y1 ;
++	d->g_w = x2 - x1 ;
++	d->g_h = y2 - y1 ;
++	return (x2 > x1) && (y2 > y1) ;
+ }
+ 
+ /*
+@@ -127,7 +88,7 @@
+ 							cnrl=(XA_RECT_LIST*)malloc(sizeof(XA_RECT_LIST));
+ 							cnrl->x=r_ours.g_x;
+ 							cnrl->y=r_ours.g_y;
+-							cnrl->w=r_win.g_x-r_ours.g_x-1;
++							cnrl->w=r_win.g_x-r_ours.g_x;
+ 							cnrl->h=r_ours.g_h;
+ 							cnrl->next=nrl;
+ 							nrl=cnrl;
+@@ -135,9 +96,9 @@
+ 						if(r_win.g_x+r_win.g_w!=r_ours.g_x+r_ours.g_w)
+ 						{
+ 							cnrl=(XA_RECT_LIST*)malloc(sizeof(XA_RECT_LIST));
+-							cnrl->x=r_win.g_x+r_win.g_w+1;
++							cnrl->x=r_win.g_x+r_win.g_w;
+ 							cnrl->y=r_ours.g_y;
+-							cnrl->w=r_ours.g_x+r_ours.g_w-r_win.g_x-r_win.g_w-1;
++							cnrl->w=r_ours.g_x+r_ours.g_w-r_win.g_x-r_win.g_w;
+ 							cnrl->h=r_ours.g_h;
+ 							cnrl->next=nrl;
+ 							nrl=cnrl;
+@@ -148,7 +109,7 @@
+ 							cnrl->x=r_win.g_x;
+ 							cnrl->y=r_ours.g_y;
+ 							cnrl->w=r_win.g_w;
+-							cnrl->h=r_win.g_y-r_ours.g_y-1;
++							cnrl->h=r_win.g_y-r_ours.g_y;
+ 							cnrl->next=nrl;
+ 							nrl=cnrl;
+ 						}
+@@ -156,9 +117,9 @@
+ 						{
+ 							cnrl=(XA_RECT_LIST*)malloc(sizeof(XA_RECT_LIST));
+ 							cnrl->x=r_win.g_x;
+-							cnrl->y=r_win.g_y+r_win.g_h+1;
++							cnrl->y=r_win.g_y+r_win.g_h;
+ 							cnrl->w=r_win.g_w;
+-							cnrl->h=r_ours.g_y+r_ours.g_h-r_win.g_y-r_win.g_h-1;
++							cnrl->h=r_ours.g_y+r_ours.g_h-r_win.g_y-r_win.g_h;
+ 							cnrl->next=nrl;
+ 							nrl=cnrl;
+ 						}
+--- u:\n\XaAES\prev-src/shellwrt.c	Tue Mar 12 00:49:20 1996
++++ shellwrt.c	Sat Mar 23 23:46:24 1996
+@@ -77,9 +77,6 @@
+ 			clients[child].cmd_tail=save_tail;
+ 			clients[child].parent=AESpid;
+ 
+-			free(save_cmd);
+-			free(save_tail);
+-			
+ 			return child;
+ 			break;
+ 		case 1:
+@@ -148,12 +145,8 @@
+ 
+ 			Dsetdrv(XaAES_home_drv);
+ 			Dsetpath(XaAES_home);
+-						
+-			free(save_cmd);
+-			free(save_tail);
+-			
+-			return child;
+ 
++			return child;
+ 			break;
+ 	}
+ 	
+--- u:\n\XaAES\prev-src/std_widg.c	Thu Mar  7 23:43:54 1996
++++ std_widg.c	Fri Mar 22 20:53:28 1996
+@@ -629,7 +629,7 @@
+ 					v_hide_c(V_handle);
+ 					for(drl=rl; drl; drl=drl->next)				/* Walk the rectangle list */
+ 					{
+-						set_clip(drl->x, drl->y, drl->x+drl->w, drl->y+drl->h);
++						set_clip(drl->x, drl->y, drl->w, drl->h);
+ 						(*disp)(w, this_widget);	/* display the selected widget */
+ 					}
+ 					v_show_c(V_handle, 1);
+@@ -663,7 +663,7 @@
+ 					v_hide_c(V_handle);
+ 					for(drl=rl; drl; drl=drl->next)	/* Walk the rectangle list */
+ 					{
+-						set_clip(drl->x, drl->y, drl->x+drl->w, drl->y+drl->h);
++						set_clip(drl->x, drl->y, drl->w, drl->h);
+ 						(*disp)(w, this_widget);	/* display the selected widget */
+ 					}
+ 					v_show_c(V_handle, 1);
+--- u:\n\XaAES\prev-src/wind_fns.c	Fri Mar  8 13:42:10 1996
++++ wind_fns.c	Sat Mar 23 22:14:18 1996
+@@ -184,7 +184,7 @@
+ 	v_hide_c(V_handle);
+ 	for(drl=rl; drl; drl=drl->next)				/* Walk the rectangle list */
+ 	{
+-		set_clip(drl->x, drl->y, drl->x+drl->w, drl->y+drl->h);
++		set_clip(drl->x, drl->y, drl->w, drl->h);
+ 		v_bar(V_handle,pnt);
+ 		display_vslide(wind, widg);
+ 	}
+@@ -209,7 +209,7 @@
+ 	v_hide_c(V_handle);
+ 	for(drl=rl; drl; drl=drl->next)				/* Walk the rectangle list */
+ 	{
+-		set_clip(drl->x, drl->y, drl->x+drl->w, drl->y+drl->h);
++		set_clip(drl->x, drl->y, drl->w, drl->h);
+ 		v_bar(V_handle,pnt);
+ 		display_hslide(wind, widg);
+ 	}
+@@ -684,22 +684,32 @@
+ short update_cnt=0;
+ short mouse_cnt=0;
+ 
++#define	EACCESS	36		/* access denied */
++
+ /* Wind_update handling */
+ /* This handles locking for the update and mctrl flags. */
+ /* !!!!New version - uses semphores to locking... */
+ short XA_wind_update(short clnt_pid, AESPB *pb)
+ {
++	short op=pb->intin[0];
++	long timeout=(op&0x100)?0L:-1L;	/* test for check-and-set mode */
++
+ 	pb->intout[0]=1;
+ 
+-	switch(pb->intin[0])
++	switch(op)
+ 	{
+ 		case BEG_UPDATE:	/* Grab the update lock */
++		case BEG_UPDATE|0x100:
+ 			if (update_lock==clnt_pid)   /* Already owning it? */
+ 			{
+ 				update_cnt++ ;
+ 				break ;
+ 			}
+-			Psemaphore(2,UPDATE_LOCK,-1L);
++			if ( Psemaphore(2,UPDATE_LOCK,timeout)==-EACCESS )
++			{
++				pb->intout[0]=0;	/* screen locked by different process */
++				break ;
++			}
+ 			update_lock=clnt_pid;
+ 			update_cnt=1 ;
+ 			break;
+@@ -711,12 +721,17 @@
+ 			}
+ 			break;
+ 		case BEG_MCTRL:		/* Grab the mouse lock */
++		case BEG_MCTRL|0x100:
+ 			if (mouse_lock==clnt_pid)   /* Already owning it? */
+ 			{
+ 				mouse_cnt++ ;
+ 				break ;
+ 			}
+-			Psemaphore(2,MOUSE_LOCK,-1L);
++			if ( Psemaphore(2,MOUSE_LOCK,timeout)==-EACCESS )
++			{
++				pb->intout[0]=0;	/* mouse locked by different process */
++				break ;
++			}
+ 			mouse_lock=clnt_pid;
+ 			mouse_cnt=1 ;
+ 			break;

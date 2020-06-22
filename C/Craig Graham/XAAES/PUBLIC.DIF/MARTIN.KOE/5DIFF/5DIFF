@@ -1,0 +1,234 @@
+--- u:\n\XaAES\orig-src/xa_globl.h	Sat Mar  9 17:41:04 1996
++++ xa_globl.h	Sun Mar 17 00:35:24 1996
+@@ -64,4 +64,8 @@
+ 
+ extern OBJECT *desktop;					/* The desktop/root window object tree */
+ 
++#define Pid2Client(pid)	(&clients[pid])	/* AES pid -> client pointer */
++#define Client2Pid(client_p)	((short)((XA_CLIENT*)client_p-&clients[0]))
++										/* client pointer -> AES pid */
++
+ #endif
+--- u:\n\XaAES\orig-src/getinfo.c	Tue Mar  5 15:13:48 1996
++++ getinfo.c	Sun Mar 17 02:25:58 1996
+@@ -9,6 +9,7 @@
+ #include "XA_DEFS.H"
+ #include "XA_TYPES.H"
+ #include "XA_GLOBL.H"
++#include "getinfo.h"
+ 
+ /*
+ 	Data table for appl_getinfo
+@@ -37,7 +38,13 @@
+ */
+ short XA_appl_getinfo(short clnt_pid, AESPB *pb)
+ {
+-	short gi_type=pb->intin[0];
++	unsigned short gi_type=pb->intin[0];
++
++	if ( gi_type>14 )
++	{
++		pb->intout[0] = 0 ;		/* "error" - unimplemented info type */
++		return TRUE ;
++	}
+ 
+ 	info_tab[0][0]=display.standard_font_height;
+  	info_tab[0][1]=display.standard_font_id;
+--- u:\n\XaAES\orig-src/handler.c	Tue Mar 12 01:22:22 1996
++++ handler.c	Sun Mar 17 02:26:28 1996
+@@ -90,6 +90,7 @@
+ 	if (Kcall_direct[pb->contrl[0]])	/* Call direct? */
+ 	{
+ 		short rtn_mode,cmd_rtn,clnt_pid=Pgetpid();
++		XA_CLIENT *client=Pid2Client(clnt_pid);
+ 		unsigned long reply_s;
+ 		short timeout,dummy;
+ 
+@@ -105,11 +106,11 @@
+ 				switch(rtn_mode)
+ 				{
+ 					case XAC_BLOCK:		/* Block if no immediate reply... */
+-						Fread(clients[clnt_pid].clnt_pipe_rd,sizeof(short),&dummy);	
++						Fread(client->clnt_pipe_rd,sizeof(short),&dummy);	
+ 						break;
+ 					case XAC_T_TIMEOUT:	/* Block, with a timeout (evnt_timer format)*/
+ 					case XAC_M_TIMEOUT:	/* Block, with a timeout (evnt_multi format)*/
+-						reply_s=1L<<clients[clnt_pid].clnt_pipe_rd;
++						reply_s=1L<<client->clnt_pipe_rd;
+ 						timeout=cmd_rtn&XAC_TVAL;
+ 						
+ 						cmd_rtn=Fselect(timeout,(long *)&reply_s,NULL,NULL);
+@@ -118,13 +119,13 @@
+ 						
+ 						if (!cmd_rtn)	/* timed out */
+ 						{	
+-							if(clients[clnt_pid].waiting_for&XAWAIT_MULTI)
++							if(client->waiting_for&XAWAIT_MULTI)
+ 							{
+-								clients[clnt_pid].waiting_pb->intout[0]=MU_TIMER;	/* evnt_multi() returns MU_TIMER */
++								client->waiting_pb->intout[0]=MU_TIMER;	/* evnt_multi() returns MU_TIMER */
+ 							}else{
+-								clients[clnt_pid].waiting_pb->intout[0]=1;	/* evnt_timer() always returns 1 */
++								client->waiting_pb->intout[0]=1;	/* evnt_timer() always returns 1 */
+ 							}
+-							clients[clnt_pid].waiting_for=0;
++							client->waiting_for=0;
+ 						}
+ 						
+ 						Psemaphore(3,CLIENTS_SEMAPHORE,0L);
+@@ -142,6 +143,7 @@
+ 
+ 
+ 		short rtn_mode,cmd_rtn,clnt_pid=Pgetpid();
++		XA_CLIENT *client=Pid2Client(clnt_pid);
+ 		unsigned long reply_s;
+ 		short timeout,dummy;
+ 
+@@ -161,7 +163,7 @@
+ /* OK, here we are in blocking AES call mode (standard GEM) - so we handle the reply pipe */
+ /* on behalf of the client. */
+ 
+-		Fread(clients[clnt_pid].clnt_pipe_rd,sizeof(short),&dummy);
++		Fread(client->clnt_pipe_rd,sizeof(short),&dummy);
+ 		
+ 		timeout=dummy&XA_TVAL;
+ 		rtn_mode=dummy&0xf;
+@@ -176,7 +178,7 @@
+ 			case XA_M_WAIT:
+ 				{
+ 
+-					reply_s=1L<<clients[clnt_pid].clnt_pipe_rd;
++					reply_s=1L<<client->clnt_pipe_rd;
+ 					
+ 					cmd_rtn=Fselect(timeout,(long *)&reply_s,NULL,NULL);
+ 					
+@@ -184,16 +186,16 @@
+ 
+ 					if (!cmd_rtn)	/* timed out */
+ 					{
+-						if (clients[clnt_pid].waiting_for&XAWAIT_MULTI)
++						if (client->waiting_for&XAWAIT_MULTI)
+ 						{
+-							clients[clnt_pid].waiting_pb->intout[0]=MU_TIMER;	/* evnt_multi() returns MU_TIMER */
++							client->waiting_pb->intout[0]=MU_TIMER;	/* evnt_multi() returns MU_TIMER */
+ 						}else{
+-							clients[clnt_pid].waiting_pb->intout[0]=1;	/* evnt_timer() always returns 1 */
++							client->waiting_pb->intout[0]=1;	/* evnt_timer() always returns 1 */
+ 						}
+ 						
+-						clients[clnt_pid].waiting_for=0;
++						client->waiting_for=0;
+ 					}else{	/* Second dummy read to unblock */
+-						Fread(clients[clnt_pid].clnt_pipe_rd,sizeof(short),&dummy);
++						Fread(client->clnt_pipe_rd,sizeof(short),&dummy);
+ 					}
+ 					
+ 					Psemaphore(3,CLIENTS_SEMAPHORE,0L);
+@@ -225,6 +227,9 @@
+ 	/* We want to do this with task switching disabled in order
+ 		to prevent a possible race condition... */
+ 	old_trap2_vector = Setexc(0x20+AES_TRAP, (void*)handler) ;
++	/* Dummy access to the critical error handler (make Selectric,
++		FSELECT and other AES extenders happy...) */
++	(void)Setexc(0x101, (void*)-1L);
+ 	Super(old_ssp);					/* Back to User Mode */
+ }
+ 
+--- u:\n\XaAES\orig-src/logo.c	Tue Feb 27 01:54:40 1996
++++ logo.c	Sat Mar 16 21:20:14 1996
+@@ -5,6 +5,10 @@
+ 
+ #include <VDI.H>
+ #include <AES.H>
++#ifndef WM_BOTTOMED
++#define WM_BOTTOMED	33
++#define WF_BOTTOM 25
++#endif
+ 
+ #define LOGO_W 0x00C0
+ #define LOGO_H 0x003D
+--- u:\n\XaAES\orig-src/objects.c	Sat Mar  9 14:33:32 1996
++++ objects.c	Sun Mar 17 02:27:48 1996
+@@ -16,6 +16,7 @@
+ #include "K_DEFS.H"
+ #include "RECTLIST.H"
+ #include "BOX3D.H"
++#include "objects.h"
+ 
+ /*
+ 	OBJECT TREE ROUTINES
+@@ -231,15 +232,15 @@
+ 					ty=parent_y + ob->ob_y + ((ob->ob_height-display.c_max_h)/2);
+ 					break;
+ 				case TE_STANDARD:		/* Use the standard system font (probably 10 point) */
+-					vst_font(V_handle,STANDARD_AES_FONTID);
+-					vst_point(V_handle,STANDARD_FONT_POINT,&temp,&temp,&temp,&temp);
++					vst_font(V_handle,display.standard_font_id);
++					vst_point(V_handle,display.standard_font_point,&temp,&temp,&temp,&temp);
+ 					tw=display.c_max_w;
+ 					th=display.c_max_h;
+ 					ty=parent_y + ob->ob_y + ((ob->ob_height-display.c_max_h)/2);
+ 					break;
+ 				case TE_SMALL:			/* Use the small syatem font (probably 8 point) */
+-					vst_font(V_handle,STANDARD_AES_FONTID);
+-					vst_point(V_handle,SMALL_FONT_POINT,&temp,&temp,&temp,&temp);
++					vst_font(V_handle,display.standard_font_id);
++					vst_point(V_handle,display.standard_font_point,&temp,&temp,&temp,&temp);
+ 					tw=display.c_min_w;
+ 					th=display.c_min_h;
+ 					ty=parent_y + ob->ob_y + ((ob->ob_height-display.c_min_h)/2);
+@@ -414,8 +415,8 @@
+ 				}
+ 			}
+ 			
+-			vst_font(V_handle,STANDARD_AES_FONTID);
+-			vst_point(V_handle,STANDARD_FONT_POINT,&temp,&temp,&temp,&temp);
++			vst_font(V_handle,display.standard_font_id);
++			vst_point(V_handle,display.standard_font_point,&temp,&temp,&temp,&temp);
+ 			vst_alignment(V_handle,0,5,&x,&x);
+ 			vst_color(V_handle, colourword->textc);
+ 							
+@@ -561,15 +562,15 @@
+ 				
+ 				}
+ 			}
+-			vst_font(V_handle,STANDARD_AES_FONTID);
+-			vst_point(V_handle,STANDARD_FONT_POINT,&temp,&temp,&temp,&temp);
++			vst_font(V_handle,display.standard_font_id);
++			vst_point(V_handle,display.standard_font_point,&temp,&temp,&temp,&temp);
+ 			vswr_mode(V_handle, MD_TRANS);
+ 			vst_alignment(V_handle,1,5,&temp,&temp);
+ 			v_gtext(V_handle,tx,ty,(char*)ob->ob_spec);
+ 			break;
+ 		case G_STRING:
+-			vst_font(V_handle,STANDARD_AES_FONTID);
+-			vst_point(V_handle,STANDARD_FONT_POINT,&temp,&temp,&temp,&temp);
++			vst_font(V_handle,display.standard_font_id);
++			vst_point(V_handle,display.standard_font_point,&temp,&temp,&temp,&temp);
+ 			vswr_mode(V_handle, MD_TRANS);
+ 			vst_alignment(V_handle,0,5,&temp,&temp);
+ 			vst_color(V_handle, colourword->textc);
+@@ -780,8 +781,8 @@
+ 
+ 	vst_alignment(V_handle,0,5,&x,&x);
+ 	vswr_mode(V_handle, MD_TRANS);
+-	vst_font(V_handle,STANDARD_AES_FONTID);
+-	vst_point(V_handle,STANDARD_FONT_POINT,&next,&next,&next,&next);
++	vst_font(V_handle,display.standard_font_id);
++	vst_point(V_handle,display.standard_font_point,&next,&next,&next,&next);
+ 	vsf_interior(V_handle, FIS_SOLID);
+ 
+ 	return TRUE;
+--- u:\n\XaAES\orig-src/watchbox.c	Tue Feb 27 01:54:56 1996
++++ watchbox.c	Sun Mar 17 00:45:14 1996
+@@ -74,8 +74,8 @@
+ 	vst_alignment(V_handle,0,5,&x,&x);
+ 	vsf_interior(V_handle,FIS_SOLID);
+ 	vswr_mode(V_handle, MD_TRANS);
+-	vst_font(V_handle,STANDARD_AES_FONTID);
+-	vst_point(V_handle,STANDARD_FONT_POINT,&x,&x,&x,&x);
++	vst_font(V_handle,display.standard_font_id);
++	vst_point(V_handle,display.standard_font_point,&x,&x,&x,&x);
+ 
+ 	if (obf==ob)
+ 		return 1;

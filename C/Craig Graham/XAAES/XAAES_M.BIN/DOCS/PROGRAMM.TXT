@@ -1,0 +1,350 @@
+XaAES - XaAES ain't AES
+½1995, Data Uncertain Software
+Written By Craig Graham.
+--
+
+                        PROGRAMMERS DOCUMENTATION
+
+This document is intended to give an overview of the underlying architecture
+of the XaAES GUI and details for XaAES specific programming.
+
+NOTE: I should really move over to using sockets to speed things up instead of
+using pipes, but I'll have to write an installer to setup MiNT-net first
+(a worthy project....)
+
+CONTENTS
+
+1. INTRODUCTION
+2. ARCHITECTURE OF XAAES
+x. WIDGET HANDLERS
+
+y. AES Extentions
+
+1) Introduction
+----------------
+
+After using MultiTOS, then AES4.1, I became frustrated at the lack of a decent
+GUI to use the real power of the MiNT kernal - X-Windows is all very
+well, but I cann't run GEM programs on it (and it's only black & white under
+MiNT). The W window system is ok but not widely used or available. The Mgr
+system (Bellcore Windows Manager) is seriously out of date (looks and feels
+rubbish), and again no GEM.
+
+MultiTOS (even AES4.1) is too slow. Geneva didn't run with MiNT (and, having
+tried the new MiNT compatible version, I can say it wasn't very compatible
+- at least AES4.1 is quite stable, if a little slow). MagiC lives in a very
+fast, very small world all it's own (no networking support, few programs
+written to exploit it).
+
+Firstly it is important to note that you can use & program XaAES without
+reading this - it provides a GEM compatible call interface via the
+standard GEM AES trap vector (trap 2).
+
+More advanced programs can be produced using XaAES's non-blocking call
+interface which allows programs to make multiple calls without blocking
+to wait for replies from the AES.
+
+Here's a few important general points about XaAES before we get technical:
+
+o It works only with MiNT - the architecture was designed to use MiNT,
+  and so you must have it.
+o Being written especially for MiNT, it is a real MultiTasking GUI
+  that can run GEM programs, not a slow & unwieldy kludge like MultiTOS.
+o Groovy sculpted 3D interface.
+o Colour icon support for all machines.
+o No busy waiting in the AES.
+o Client-Server architecture.
+o The source is freely available. Anyone can change the code, if they send
+  patches to me with descriptions I'll included them into the next version.
+  In fact the whole point of this document is to give people enough info
+  to work on the code themselves.
+o Built with a 'real' C compiler (Lattice) not GNU
+  (in spite of the denisons of comp.sys.atari.st.tech and the gem-list
+  who wanted me to use GNU).
+o Extended fast interface for use by XaAES aware programs.
+  Extended call interface allows XaAES aware applications to make AES calls
+  without blocking to wait for replies they don't want, and to make multiple
+  AES calls (calls to the AES server are queued).
+o Works with NVDI (NOTE: NVDI must be loaded before XaAES in order to work,
+  otherwise strange things will happen).
+
+2) Architecture Of XaAES
+-------------------------
+XaAES is really three distinct comoponents:
+
+ o XaAES GUI server. This is deals with all the windows & stuff. It uses the
+   existing VDI to produce it's graphics (and works fine with NVDI).
+   Most of the time the server is blocked reading from it's command pipe
+   - this means that unless it is actually doing something it doesn't use
+   any CPU time at all. The server runs completely in user mode, and so
+   can be pre-empted by MiNT at any time (unlike MultiTOS).
+o The GEM trap interface handler. This is actually part of the GUI server,
+   but it is run under the process id of the client (so I don't allow it
+   to access any of XaAES's data structures). It serves to serialise calls
+   to the AES, and drop them into a command pipe to the sercer. It then blocks
+   the client to wait for the AES server to service the command and reply.
+   This bit is quite dodgy as it makes OS calls from inside a trap
+   interupt, and I'm not altogether certain this was a legal thing to do.
+   It works, so it stays....
+   As of beta2, there has also been a direct call mechanism as well, which
+   allows certain functions to be called directly by the client in the way
+   normal GEM does, bypassing the command pipe altogether.
+o The MOUSESRV Mouse button server. This is a seperate program spawned by XaAES
+   during bootup. It hooks the VDI mouse vector and drops messages into
+   the XaAES command pipe to let the server know that button events have
+   occured. A new version of this by James Cox implements this as a MiNT
+   device '/dev/moose', which provides a significant improvement in performance.
+
+The XaAES GUI server manages the window system, and commumicates with the rest
+of the system via MiNT pipes. In order to run standard GEM programs, it also
+replaces the standard AES trap handler with a small routine that fields trapped
+calls and drops them into a server command pipe on behalf of the application
+(this is done transparently, the application see's it as being the ordinary
+GEM AES trap). This is slightly slower than accessing the command pipe directly,
+but is totally compatible with GEM.
+
+3) The XaAES Kernal
+---------------------
+
+The XaAES kernal consists of a small assembler routine to catch the TRAP#2 vector,
+another small C routine in handler.c which provides the interface to the XaAES pipe
+based client/server AES for normal GEM applications.
+
+3.1) The Command Pipe Interface
+---------------------------------
+
+Most commands go via the clients private command pipe.
+
+The server must first be introduced to the client however, so there is a shared
+command pipe '/pipe/XaAES.cmd', where appl_init() will drop an XA_NEW_CLIENT message.
+
+The server then responds by creating a bi-directionial command/reply pipe for the
+application. The client then uses this to communicate with the AES server kernal.
+(NOTE: The server uses Fselect() on all the client command pipes.)
+When an AES trap occurs, the handler drops the pointer to the parameter block into
+it's command pipe.
+
+There are then 3 modes that the AES could have been called in.
+
+If standard GEM emulation mode (trap2 entered with d0=0xc8) the handler then drops
+back into user mode and blocks whilst reading on the current process's reply pipe.
+This allows other processes to execute whilst XaAES is performing AES functions
+(the XaAES server runs wholely in user mode so it's more MiNT-friendly than
+MultiTOS). The server writes back to the clients reply pipe with the reply when
+it has serviced the command - this unblocks the client which then returns from
+the exception.
+
+If NOREPLY mode is used, the AES doesn't block the calling process to wait
+for a reply - and indeed, won't generate one.
+
+If NOBLOCK mode is used, the AES doesn't block the calling process - but does
+place the result in the client's reply pipe. The client is then expected to
+handle it's own reply pipe. This allows multiple AES calls to be made without
+blocking a process, so an app could make all it's GEM initialisation calls
+at one go, then go on to do it's internal initialisation before coming back
+to see if the AES has serviced it's requests (less blocking in the client,
+and better multitasking).
+The result will be a short with the low byte being one of:
+   XA_OK              - The op-code was supported & was executed
+   XA_UNIMPLEMENTED   - You may have used a valid op-code, but XaAES doesn't
+                        yet support it.
+   XA_ILLEGAL         - The op-code was invalid in the first place, or there
+                        was some other problem with the parameters....
+   XA_T_WAIT          - Re-select for a evnt_timer format timeout
+   XA_M_WAIT          - Re-select for a evnt_multi format timeout
+
+For either XA_T_WAIT or XA_M_WAIT, the upper 3 bytes will contain a timeout
+value. This should be multiplied by 16 to get the timeout in milliseconds:
+
+So, you would make the call then get the response using this method:
+      /* Do some GEM call here */
+      Fread(reply_pipe_handle,sizeof(short),&response);
+      timeout=response&0xfff0;
+      response&=0xf;
+      if ((response==XA_T_WAIT)||(response==XA_M_WAIT))
+      {
+         select_mask=1L<<reply_pipe_handle;
+         timeout=Fselect(timeout,&select_mask,NULL,NULL);
+         if (!timeout)
+            /* Command timed out */
+         else
+            /* Command didn't time out */
+      }
+
+You can use NOBLOCK mode in conjunction with evnt_multi() to do nifty tricks
+like using Fselect() to wait for AES events and serial data, or perhaps listen
+to a socket, all at the same time......
+
+NOTE: The reply pipe is opened on behalf of the client by appl_init(). The file handle
+can be found either by calling appl_pipe() from the XaAESLIB extention library, or
+from the application's global array at global[12].
+
+The main kernal handler is in kernal.c : void kernal(void);
+
+When an AES function packet is read from the command pipe, and the op-code is
+used to call an AES function handler routine via the Ktable[] array. A NULL
+in this array indicates an un-implemented function, otherwise it contains a
+pointer to an 'AESroutine' type function. These functions are always of type:
+
+   short XA_objc_draw(short clnt_pid, AESPB *pb) { }
+
+The pb parameter (obviously) always points to the AES parameter block for the
+call, and clnt_pid is the MiNT process id of the client making the call.
+NOTE: In XaAES MiNTpid==AESid.
+
+Details of a client can be found in the XA_CLIENT clients[];  array
+(index on clnt_pid).
+
+The return value of a call is crucial - if the function returns TRUE (1) then
+the kernal will write to the clients reply pipe 'u:\pipe\XaClnt.<PID>' to unblock
+the process (in NOBLOCK or NOREPLY modes, the client won't have blocked anyway).
+If FALSE (0) is returned by the function, then the kernal leaves the client blocked
+- this is how functions like evnt_multi() block to wait for an event. The occurance
+of the event causes the value to be written to the reply pipe to unblock the client.
+
+x) Widget Handlers
+-------------------
+XaAES uses callback functions to handle all window widgets. These are refered
+to as 'behaviours'. Each widget has 4 behaviours - CLICK, DCLICK, DRAG &
+DISPLAY. These are held in an XA_WIDGET structure (see the file XA_TYPES.H).
+Each window has a set of these structures associated with it. The advantage
+of this is that the behaviour of a widget can be modified on a window by window
+basis (how it's displayed, what happens when it's clicked on, etc).
+
+CLICK  - called whenever the user single clicks on the widget
+DCLICK - called when the user double clicks on the widget
+DRAG   - called with the mouse button down when the user clicks and holds the
+         button down on the widget
+DISPLAY- called to display the widget whenever the window is redrawn or the
+         status of the widget changes. XaAES will set up appropriate clip
+         rectangles before calling this behaviour, so all it has to do is draw
+         the thing - taking into account the status of the widget (selected,
+         etc).
+
+Not all widgets will need all the behaviours. For example, the standard GEM
+closer widget has only CLICK and DISPLAY behaviours, you cann't drag the closer
+and a double click does nothing, so they are left as NULL to signify that
+they aren't valid.
+
+GENERAL PRINCIPLE: If a widget isn't to behave in a certain way, set that
+behaviour to NULL.
+
+A widget handler is passed two parameters when it is called :
+   XA_WINDOW *wind   - the window which the widget is a part of
+   XA_WIDGET *widg - the widget descriptor
+
+These contain all the info a widget needs.
+
+The handler itself should be of this type:
+
+   short widget_handler_routine(XA_WINDOW *wind, XA_WIDGET *widg) { }
+
+The XA_WIDGET structure looks like this:
+
+   typedef struct xa_widget {
+      XA_WIDGET_LOCATION loc;    // Location of widget relative to window extents
+      WidgetCallback behaviour[COUNT_XACB];  // Callback function pointers to the behaviours of the widget
+      XA_WIDGET_STATUS stat;     // Current status (selected, etc)
+      short w,h;              // dimensions
+      short click_x,click_y;     // If we are displaying because we've been clicked on, this is the location
+                           // of the click (this is only used by the slider widget really)
+      void *stuff;            // Pointer to widget dependant context data, if any
+   } XA_WIDGET;
+
+The behaviour[] array contains pointers to all the behaviours for the widget.
+
+w & h define the size of the widget - used to detect mouse events on the widget.
+When a mouse event occurs, the click_x & click_y values are filled in with the
+location of the click event prior to calling the widget handler.
+
+All widgets have relative locations like X-Windows widgets (attribute 'loc').
+This is useful, as you can specify a widget as (RB, 1, 1) and it will always be
+displayed starting with it's coords in the bottom-right of the window. Possible
+relative coords are:
+
+   LT : top left
+   CT : centred top (y relative to top, x recalculated to be window width / 2)
+   RT : top right
+   LB : bottom left
+   CB : centred bottom
+   RB : bottom right
+
+An example use of this is the SIZER widget, which always keeps the same location
+relative to the bottom-right of the window, even when the window moves & changes
+size.
+The utility routine
+
+   void rp_2_ap(XA_WINDOW *wind, XA_WIDGET *widg, short *x, short *y);
+
+changes relative coords into absolute screen coordinates (returned in x & y).
+
+When displaying, a widget should check it's state attribute 'stat' (normally
+XAW_PLAIN). If this is set to XAW_SELECTED then the widget should display
+itself in some 'selected' form - anything will do, just invert it like
+old GEM, or do a 3D push like AES4, maybe do some little animations like
+my default widget set does.
+
+The final element of the XA_WIDGET structure is void *stuff; this is provided
+so certain widgets can have extra information kept with them - the scroll bars
+for instance keep a pointer to an XA_SLIDER_WIDGET structure here to maintain
+their size & position information.
+
+It is intended that a user program in the know will be able to change the
+default behaviours of it's own window widgets, so a desktop could change
+the CLICK behaviour of the close widget for directory windows to make the
+window go back up a level instead of sending a WM_CLOSED, and perhaps display
+as a << arrow instead of a closer box.
+
+User programs can also add their own custom widgets to a window, and they will
+behave in exactly the same way as the standard GEM widgets (the same behaviour
+based system).
+
+Widgets should be informative and 'nice', so the XaAES versions of the standard
+GEM widgets (CLOSE, RESIZE, etc) are implemented as colour bitmaps (designed
+using Interface - get it it's cool) with seperate 'selected' images. This allows
+the CLOSE widget to display as an ordinary looking button, but get a little red
+alert sign with a '!' in it when you click on it.
+
+y. AES EXTENSIONS
+-------------------
+
+XaAES provides several extensions to the standard AES that provide more features.
+This section details exactly what these features are. Where possible, I've tied
+up with the oAESis authors to get support for these features in two AES's.
+
+The file XAAESLIB.H provides bindings for the extended functions.
+
+y.1 appl_init()
+----------------
+The file handle of the clients command/reply pipe is available in global[12].
+
+y.2 shel_write()
+-----------------
+We've extended shel_write() to support the concept of a multi-user system provided
+by MiNT.
+
+When a program uses shel_write to launch a child, the default behaviour
+(under XaAES) is that the 'AES child' inherits the user id & group id of the
+process that launched it.
+
+An extension to the AES4.0 shel_write() mode 0 is provided in the form of:
+
+   #define SW_UID 0x1000   /* Set user id of launched child */
+   #define SW_GID 0x2000   /* Set group id of launched child */
+
+   typedef struct _xshelw {
+      char *newcmd;
+      LONG psetlimit;
+      LONG prenice;
+      char *defdir;
+      char *env;
+      short uid;            /* New child's UID */
+      short gid;            /* New child's GID */
+   } XSHELW;
+
+This is used in the same way as the AES4.0 SHELW structure and is compatible - using
+the extended structure won't kill AES4.0, the UID/GID fields will simply be ignored.
+The extra fields uid & gid allow you to explicitly set the child's user & group id.
+
+
+

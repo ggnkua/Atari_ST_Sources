@@ -1,0 +1,700 @@
+--- u:\n\XaAES\orig-src/xa_globl.h	Sun Mar 31 20:42:50 1996
++++ xa_globl.h	Fri Apr 19 23:49:26 1996
+@@ -74,4 +74,8 @@
+ #define Client2Pid(client_p)	((short)((XA_CLIENT*)client_p-&clients[0]))
+ 										/* client pointer -> AES pid */
+ 
++/* The following two are useful for running through the entire client list: */
++#define FirstClient()	(&clients[0])
++#define NextClient(cp)	\
++	(((XA_CLIENT*)(cp)<&clients[MAX_PID-1]) ? (XA_CLIENT*)(cp)+1 : NULL)
+ #endif
+--- u:\n\XaAES\orig-src/bootup.c	Sun Mar 31 23:23:28 1996
++++ bootup.c	Fri Apr 19 22:59:56 1996
+@@ -254,25 +254,35 @@
+ static void Cleanup(void)
+ {
+ 	XA_CLIENT *client;
+-	short c_idx;
+ 
+ 	DIAGS(("Cleaning up ready to exit....\n"));
+ 	Psignal(SIGCHLD, 0L);
+ 	
+ /* Kill off clients */
+-	for(c_idx=0; c_idx<MAX_PID; c_idx++)
++	for(client=FirstClient(); client!=NULL; client=NextClient(client))
+ 	{
+-		client=Pid2Client(c_idx);
+ 		if (client->clnt_pipe_rd)
+ 		{
+ 			DIAGS(("Killing:%d:%s:%s\n",c_idx,client->cmd_name,client->name));
+-			Pkill(c_idx,SIGKILL);
++			Pkill(Client2Pid(client),SIGTERM);
+ 		}
+ 	}
+ 
+ /* Kill off the mouse server */
+ 	DIAGS(("Killing mouse server\n"));
+-	Pkill(mouse_pid,SIGKILL);
++	Pkill(mouse_pid,SIGTERM);	/* "Please die". This gives the server */
++										/* a chance to clean up before exiting; SIGKILL */
++										/* can't be caught! */
++
++	/* Wait for mouse server to terminate; this is *essential*! */
++	/* It helps prevent two problems: */
++	/* - The XaAES kernal might close the physical screen workstation before */
++	/*   the mouse server is finished restoring the interrupt vectors. */
++	/* - If XaAES.TOS was started from the DESKTOP, GEM AES restores */
++	/*   the mouse button and mouse movement vectors afterwards; if this */
++	/*   happens *before* the mouse server is finished, this causes */
++	/*   problems... (e.g.: button clicks are no longer accepted) */
++	Pwaitpid(mouse_pid, 0, NULL);
+ 
+ /* Close screen workstation */
+ 	v_clsvwk(V_handle);
+@@ -316,10 +326,8 @@
+ 	short f,junk;
+ 	long dummy;
+ 	XA_WIDGET_TREE *menu;
+-	char proc_path[32];
+ 	short proc_handle;
+ 	long protection;
+-	_DTA my_dta,*old_dta;
+ 
+ 	work_in[0]=1;
+ 	for(f=1;f<10; work_in[f++]=1);
+@@ -341,10 +349,6 @@
+ /* Change the protection mode to OS_SPECIAL to allow operation with
+  * memory protection (doesn't work yet, what's wrong?)
+  */
+-	sprintf(proc_path, "u:\\proc\\*.%03d", AESpid);
+-	old_dta = Fgetdta();
+-	Fsetdta(&my_dta);
+-	if (!Fsfirst(proc_path, 0x27))
+ 	{
+ #ifndef F_PROT_S
+ #define F_PROT_S		0x20
+@@ -352,8 +356,8 @@
+ #ifndef F_OS_SPECIAL
+ #define F_OS_SPECIAL	0x8000
+ #endif
+-		sprintf(proc_path, "u:\\proc\\%s", my_dta.dta_name);
+-		if ((dummy = Fopen(proc_path, O_RDONLY)) >= 0)
++		/*	Opening "u:\proc\.-1" opens the current process... */
++		if ((dummy = Fopen("u:\\proc\\.-1", O_RDONLY)) >= 0)
+ 		{
+ 			proc_handle = (short)dummy;
+ 			Fcntl(proc_handle, &protection, PGETFLAGS);
+@@ -514,7 +518,7 @@
+ 
+ /* Spawn the mouse server */
+ 	MOUSE_in_pipe=(int)Fopen("u:\\pipe\\mouse.XA", O_CREAT|O_RDWR);	/* kernals end of pipe mouse packet pipe */
+-	sprintf(a1,"%d",V_handle);
++	sprintf(a1,"%d",P_handle);
+ 	mouse_pid=Pvfork();
+ 	if (!mouse_pid)
+ 	{				/* In child here */
+--- u:\n\XaAES\orig-src/form_do.c	Thu Mar 28 01:47:04 1996
++++ form_do.c	Fri Apr 19 21:04:28 1996
+@@ -159,14 +159,12 @@
+ 		if (watch_object(form, f, is, os))
+ 		{
+ 			set_clip(x,y,w,h);
+-			
+-			form[f].ob_state|=SELECTED;
+-	
++
+ 			if (form[f].ob_flags&RBUTTON)	/* Was click on a radio button? */
+ 			{
+ 				Radio_b(form,f);
+ 			}
+-					
++
+ 			if (form[f].ob_flags&EXIT)		/* Exit button? */
+ 			{
+ 				clients[wt->owner].waiting_pb->intout[0]=f;
+--- u:\n\XaAES\orig-src/forms.c	Thu Mar 28 02:08:30 1996
++++ forms.c	Fri Apr 19 22:32:18 1996
+@@ -115,7 +115,7 @@
+ {
+ 	OBJECT *tree=(OBJECT*)pb->addrin[0];
+ 	short ob=pb->intin[0];
+-	short is,os,x,y,w,h;
++	short is,os,x,y;
+ 
+ 	pb->intout[1]=0;
+ 
+@@ -133,9 +133,7 @@
+ 	}
+ 
+ 	object_abs_coords(tree, ob, &x, &y);
+-	w=(tree+ob)->ob_width;
+-	h=(tree+ob)->ob_height;
+-	set_clip(x,y,x+w,y+h);
++	set_clip(x, y, tree[ob].ob_width, tree[ob].ob_height);
+ 
+ 	os=tree[ob].ob_state;
+ 	if (tree[ob].ob_state&SELECTED)
+@@ -145,10 +143,12 @@
+ 
+ 	if (tree[ob].ob_flags&TOUCHEXIT)		/* Change state & exit for TOUCHEXIT objects */
+ 	{
+-		tree[ob].ob_state=is;
+-		v_hide_c(V_handle);
+-		draw_object_tree(tree,ob,2);
+-		v_show_c(V_handle,1);
++		/* Only selectable objects change appearance! */
++		if (tree[ob].ob_flags&SELECTABLE)
++		{
++			tree[ob].ob_state=is;
++			draw_object_tree(tree,ob,2);
++		}
+ 
+ 		pb->intout[1]=ob;
+ 		
+--- u:\n\XaAES\orig-src/frm_alrt.c	Sun Mar 31 17:55:00 1996
++++ frm_alrt.c	Fri Apr 19 23:09:04 1996
+@@ -122,6 +122,14 @@
+ 	alert_form->ob_x=x;
+ 	alert_form->ob_y=y;
+ 
++	if ( display.colours<16 )	/* hmm... perhaps this should be done in */
++	{									/* "color mode" too? <mk> */
++		long obspec=(long)alert_form->ob_spec;
++		obspec &= ~0xfL ;
++		obspec |= (display.dial_colours.bg_col & 0xf);	/* interior color */
++		alert_form->ob_spec = (void*)obspec;
++	}
++
+ 	for(f=ALR_IC_DRIVE; f<=ALR_IC_BOMB; f++)
+ 	{
+ 		((ICONBLK*)(alert_icons+f)->ob_spec)->ib_xicon=((ICONBLK*)(alert_form+ALERT_D_ICON)->ob_spec)->ib_xicon;
+@@ -163,6 +171,13 @@
+ 	
+ 	for(f=0; f<n_buttons; f++)		/* Fill in & show buttons */
+ 	{
++		if ( display.colours<16 )
++		{
++			/* Make sure we can *READ* the button text: */
++			alert_form[ALERT_BUT1+f].ob_flags &= ~FLD3DANY ;	/* clear 3D flags */
++			/* (this is just a stopgag measure - apparently the 3D button code
++				isn't quite mono-compatible yet...) */
++		}
+ 		sprintf((char*)alert_form[ALERT_BUT1+f].ob_spec,"%s",button_text[f]);
+ 		alert_form[ALERT_BUT1+f].ob_width=button_w[f];
+ 		alert_form[ALERT_BUT1+f].ob_x=x;
+--- u:\n\XaAES\orig-src/logo.c	Tue Feb 27 01:54:40 1996
++++ logo.c	Wed Apr  3 20:57:48 1996
+@@ -5,6 +5,10 @@
+ 
+ #include <VDI.H>
+ #include <AES.H>
++#ifndef WM_BOTTOMED
++#define WM_BOTTOMED	33
++#define WF_BOTTOM 25
++#endif
+ 
+ #define LOGO_W 0x00C0
+ #define LOGO_H 0x003D
+--- u:\n\XaAES\orig-src/mousesrv.c	Sun Mar 31 19:55:50 1996
++++ mousesrv.c	Sat Apr 20 00:53:50 1996
+@@ -28,6 +28,7 @@
+ #include <TIME.H>
+ #include <MINTBIND.H>
+ #include <FILESYS.H>
++#include <signal.h>
+ #include "XA_CODES.H"
+ #include "K_DEFS.H"
+ #include "KERNAL.H"
+@@ -113,6 +114,15 @@
+ 	vex_timv(V_handle, timer_handler, &old_timer_vector,&temp);
+ }
+ 
++short Terminated=0 ;
++
++/* This SIGTERM handler only sets a flag - VDI calls
++	are not allowed from within a signal handler! */
++__saveds void DoTerminate(void)
++{
++	Terminated=1 ;
++}
++
+ /* Hard coded Double-Click timing = 25 timer ticks */
+ /* (50 ticks a second, this == 0.5 seconds) - this should really be replaced with a  */
+ /* value that is changable on the fly. */
+@@ -138,10 +148,11 @@
+ 
+ 	Pnice(-5);					/* We run as a low priority process */
+ 	
++	Psignal(SIGTERM, (long)DoTerminate);
+ 	hook_mouse();				/* Hook into the vex_butv() VDI vector */
+ 
+-/* Main loop - we never exit this */
+-	while (1)
++/* Main loop - we almost never exit this */
++	while (!Terminated)
+ 	{
+ 		if (button_state)		/* Yes, I know it's busy waiting - hopefully someone can help me out here */
+ 		{
+--- u:\n\XaAES\orig-src/objects.c	Fri Mar 29 00:49:18 1996
++++ objects.c	Fri Apr 19 22:32:18 1996
+@@ -48,39 +48,38 @@
+ 
+ /*
+ 	Draw a 2d box outline (allows 'proper' thickness - 1,2,3,etc)
++	Note: expects writing mode to be set up by caller.
+ */
+ void draw_2d_box(short x, short y, short w, short h, short border_thick, short colour)
+ {
+-	short coords[4];
+-	
+-	if (border_thick<0)
+-		border_thick++;
+-	else
+-		border_thick--;
++	short coords[10];
++	short x2,y2;
+ 
+-	vsf_interior(V_handle, FIS_SOLID);
+-	vsf_color(V_handle, colour);
+-			
+-	coords[0]=x;
+-	coords[1]=y;
+-	coords[2]=coords[0]+border_thick;
+-	coords[3]=coords[1]+h;
+-	v_bar(V_handle, coords);
+-	coords[0]=x+w;
+-	coords[1]=y;
+-	coords[2]=x+w-border_thick;
+-	coords[3]=y+h;
+-	v_bar(V_handle, coords);
+-	coords[0]=x;
+-	coords[1]=y;
+-	coords[2]=x+w;
+-	coords[3]=y+border_thick;
+-	v_bar(V_handle, coords);
+-	coords[0]=x;
+-	coords[1]=y+h;
+-	coords[2]=x+w;
+-	coords[3]=y+h-border_thick;
+-	v_bar(V_handle, coords);
++	if ( border_thick<0 )	/* outside border */
++	{
++		border_thick = -border_thick;
++		x -= border_thick;
++		y -= border_thick;
++		w += 2*border_thick;
++		h += 2*border_thick;
++	}
++
++#if 0		/* is this necessary??? */
++	vsl_type(V_handle, 1);
++	vsl_width(V_handle, 1);
++	vsl_ends(V_handle, 0, 0);
++#endif
++	vsl_color(V_handle, colour);
++
++	x2=x+w-1;
++	y2=y+h-1;
++	do {
++		coords[0]=coords[6]=coords[8]=x++;
++		coords[1]=coords[3]=coords[9]=y++;
++		coords[2]=coords[4]=x2--;
++		coords[5]=coords[7]=y2--;
++		v_pline(V_handle, 5, coords);
++	} while (--border_thick);
+ }
+ 
+ /*
+@@ -133,7 +132,7 @@
+ 	OBJC_COLORWORD *colourword;
+ 	OBJECT *ob=tree+object;
+ 	unsigned short t,zap;
+-	short border_thick,coords[10];
++	short border_thick=0,coords[10];
+ 	short temp,icx,icy,cols[2];
+ 	TEDINFO *textblk;
+ 	ICONBLK *iconblk;
+@@ -147,6 +146,12 @@
+ 	char temp_text[200];
+ 	short tx,ty,txt_curs,tw,th;
+ 	short selected;
++	short colourmode=(display.colours>=16) ;
++	short state_mask=(SELECTED|CROSSED|CHECKED|DISABLED); /* -> G_PROGDEF */
++	short obx=parent_x+ob->ob_x;
++	short oby=parent_y+ob->ob_y;
++	short obx2=obx+ob->ob_width-1;
++	short oby2=oby+ob->ob_height-1;
+ 
+ 	ob_spec=(unsigned long)ob->ob_spec;
+ 	t=(ob->ob_type)&0xff;
+@@ -154,47 +159,37 @@
+ 	
+ 	colourword=(OBJC_COLORWORD*)&zap;
+ 
+-	if (ob->ob_state&SHADOWED)				/* Are we shadowing this object? */
+-	{
+-		vsf_color(V_handle,BLACK);
+-		vsf_interior(V_handle, FIS_SOLID);
+-		coords[0]=parent_x+ob->ob_x+SHADOW_OFFSET;
+-		coords[1]=parent_y+ob->ob_y+SHADOW_OFFSET;
+-		coords[2]=coords[0]+ob->ob_width;
+-		coords[3]=coords[1]+ob->ob_height;
+-		v_bar(V_handle, coords);
+-	}
+-
+-	if (ob->ob_flags&DEFAULT)				/* Default exit object */
++#if 1
++	if ((ob->ob_flags&DEFAULT) &&	/* Default exit object */
++		(t==G_BUTTON) &&				/* Only BUTTONS change appearance! */
++		(ob->ob_flags&FLD3DANY))	/* 2D buttons are handled elsewhere */
+ 	{
+ 		vsf_color(V_handle,BLACK);
+ 		vsf_interior(V_handle, FIS_SOLID);
+ 		coords[0]=parent_x+ob->ob_x-2;
+ 		coords[1]=parent_y+ob->ob_y-2;
+-		coords[2]=coords[0]+ob->ob_width+4;
+-		coords[3]=coords[1]+ob->ob_height+4;
++		coords[2]=coords[0]+ob->ob_width+3;
++		coords[3]=coords[1]+ob->ob_height+3;
+ 		v_bar(V_handle, coords);
+ 	}
+-
++#endif
+ 	switch(t)	/* Sort out the colourword */
+ 	{
+ 		case G_BOXCHAR:
+-			temp_text[0]=(ob_spec&0xff000000)>>24;
++			temp_text[0]=(ob_spec&0xff000000L)>>24;
+ 			temp_text[1]='\0';
+ 			zap=(unsigned short)ob->ob_spec&0xffff;
+-			border_thick=(short)((ob_spec&0xff0000)>>16);
++			border_thick=(short)((ob_spec&0xff0000L)>>16);
+ 			if (border_thick&128)
+ 				border_thick=-(1+(border_thick^0xff));
+-			colourword->opaque=0;
+ 			break;
+ 			
+ 		case G_BOX:
+ 		case G_IBOX:
+ 			zap=(unsigned short)ob->ob_spec&0xffff;
+-			border_thick=(short)((ob_spec&0xff0000)>>16);
++			border_thick=(short)((ob_spec&0xff0000L)>>16);
+ 			if (border_thick&128)
+ 				border_thick=-(1+(border_thick^0xff));
+-			colourword->opaque=1;
+ 			break;
+ 			
+ 		case G_FTEXT:
+@@ -254,6 +249,12 @@
+ 			
+ 		case G_BUTTON:
+ 			zap=0x11f8;
++			/* Negative border thickness - outside border! */
++			border_thick=-1;
++			if (ob->ob_flags&EXIT)
++				border_thick--;
++			if (ob->ob_flags&DEFAULT)
++				border_thick--;
+ 			ty=parent_y + ob->ob_y + ((ob->ob_height-display.c_max_h)/2);
+ 			break;
+ 			
+@@ -294,15 +295,32 @@
+ 		case G_IMAGE:
+ 			bitblk=(BITBLK*)ob->ob_spec;
+ 			zap=(unsigned short)bitblk->bi_color;
+-			colourword->opaque=1;
+ 			colourword->pattern=7;
+ 			break;
+ 	}
+ 
+-	if (colourword->opaque)
+-		vswr_mode(V_handle, MD_REPLACE);
+-	else
+-		vswr_mode(V_handle, MD_TRANS);
++	/*	Are we shadowing this object? (Borderless objects aren't shadowed!) */
++	if (border_thick && (ob->ob_state&SHADOWED))
++	{
++		short offset, increase;
++
++		if (border_thick>0)
++			{ offset=border_thick ; increase=border_thick-1 ; }
++		else
++			{ offset=0 ; increase=-3*border_thick-1 ; }
++
++		vsf_color(V_handle,colourword->borderc);
++		vsf_interior(V_handle, FIS_SOLID);
++		coords[0]=parent_x+ob->ob_x+offset;
++		coords[1]=parent_y+ob->ob_y+offset;
++		coords[2]=coords[0]+ob->ob_width+increase;
++		coords[3]=coords[1]+ob->ob_height+increase;
++		v_bar(V_handle, coords);
++	}
++
++	/* Note: `colourword->opaque' applies *only* to the text
++		part of an object!!!!!! */
++	vswr_mode(V_handle, MD_REPLACE);
+ 	
+ 	vsf_interior(V_handle, FIS_PATTERN);
+ 	if (colourword->pattern==7)
+@@ -323,7 +341,7 @@
+ 		}
+ 	}
+ 
+-	if (selected)
++	if (colourmode && selected)
+ 	{
+ 		if (ob->ob_flags&FLD3DANY)		/* Allow a different colour set for 3d push  */
+ 			vsf_color(V_handle, selected3D_colour[colourword->fillc]);
+@@ -358,8 +376,12 @@
+ 				p.pb_hc=global_clip[3]-global_clip[1]+1;
+ 				
+ 				p.pb_parm=ab->ab_parm;
+-			
+-				(*(ab->ab_code))(&p);
++
++				/* The PROGDEF function returns the ob_state bits that
++					remain to be handled by the AES: */
++				state_mask = (short)(*(ab->ab_code))(&p);
++				/* BUG: SELECTED bit only handled in non-color mode!!! */
++				/* (Not too serious I believe... <mk>) */
+ 			}
+ 			break;
+ 		case G_BOX:
+@@ -369,8 +391,8 @@
+ 			}else{
+ 				coords[0]=parent_x+ob->ob_x;
+ 				coords[1]=parent_y+ob->ob_y;
+-				coords[2]=coords[0]+ob->ob_width;
+-				coords[3]=coords[1]+ob->ob_height;
++				coords[2]=coords[0]+ob->ob_width-1;
++				coords[3]=coords[1]+ob->ob_height-1;
+ 				v_bar(V_handle, coords);
+ 				if (border_thick)			/* Display a border? */
+ 				{
+@@ -400,12 +422,11 @@
+ 					tx+=PUSH3D_DISTANCE; ty+=PUSH3D_DISTANCE;
+ 				}
+ 			}else{
+-				if (colourword->opaque)
+ 				{
+ 					coords[0]=parent_x+ob->ob_x;
+ 					coords[1]=parent_y+ob->ob_y;
+-					coords[2]=coords[0]+ob->ob_width;
+-					coords[3]=coords[1]+ob->ob_height;
++					coords[2]=coords[0]+ob->ob_width-1;
++					coords[3]=coords[1]+ob->ob_height-1;
+ 					v_bar(V_handle, coords);
+ 				}
+ 				if (border_thick)			/* Display a border? */
+@@ -420,7 +441,7 @@
+ 			vst_point(V_handle,display.standard_font_point,&temp,&temp,&temp,&temp);
+ 			vst_alignment(V_handle,0,5,&x,&x);
+ 			vst_color(V_handle, colourword->textc);
+-							
++			vswr_mode(V_handle, colourword->opaque ? MD_REPLACE:MD_TRANS);
+ 			v_gtext(V_handle,tx,ty,temp_text);
+ 			break;
+ 		case G_FBOXTEXT:
+@@ -446,21 +467,23 @@
+ 				{
+ 					tx+=PUSH3D_DISTANCE; ty+=PUSH3D_DISTANCE;
+ 				}
++				vswr_mode(V_handle, colourword->opaque ? MD_REPLACE:MD_TRANS);
+ 				v_gtext(V_handle,tx,ty,temp_text);
+ 			}else{
+-				if (colourword->opaque)
+ 				{
+ 					coords[0]=parent_x+ob->ob_x;
+ 					coords[1]=parent_y+ob->ob_y;
+-					coords[2]=coords[0]+ob->ob_width;
+-					coords[3]=coords[1]+ob->ob_height;
++					coords[2]=coords[0]+ob->ob_width-1;
++					coords[3]=coords[1]+ob->ob_height-1;
+ 					v_bar(V_handle, coords);
+ 				}
+ 				
++				vswr_mode(V_handle, colourword->opaque ? MD_REPLACE:MD_TRANS);
+ 				v_gtext(V_handle,tx,ty,temp_text);
+ 				
+ 				if (border_thick)	/* Display a border? */
+ 				{
++					vswr_mode(V_handle, MD_REPLACE);
+ 					draw_2d_box(parent_x+ob->ob_x, parent_y+ob->ob_y, 
+ 								ob->ob_width, ob->ob_height, 
+ 								border_thick, colourword->borderc);
+@@ -500,21 +523,23 @@
+ 				{
+ 					tx+=PUSH3D_DISTANCE; ty+=PUSH3D_DISTANCE;
+ 				}
++				vswr_mode(V_handle, colourword->opaque ? MD_REPLACE:MD_TRANS);
+ 				v_gtext(V_handle,tx,ty,textblk->te_ptext);
+ 			}else{
+-				if (colourword->opaque)
+ 				{
+ 					coords[0]=parent_x+ob->ob_x;
+ 					coords[1]=parent_y+ob->ob_y;
+-					coords[2]=coords[0]+ob->ob_width;
+-					coords[3]=coords[1]+ob->ob_height;
++					coords[2]=coords[0]+ob->ob_width-1;
++					coords[3]=coords[1]+ob->ob_height-1;
+ 					v_bar(V_handle, coords);
+ 				}
+ 				
++				vswr_mode(V_handle, colourword->opaque ? MD_REPLACE:MD_TRANS);
+ 				v_gtext(V_handle,tx,ty,textblk->te_ptext);
+ 				
+ 				if (border_thick)	/* Display a border? */
+ 				{
++					vswr_mode(V_handle, MD_REPLACE);
+ 					draw_2d_box(parent_x+ob->ob_x, parent_y+ob->ob_y, 
+ 								ob->ob_width, ob->ob_height, 
+ 								border_thick, colourword->borderc);
+@@ -544,18 +569,12 @@
+ 					tx+=PUSH3D_DISTANCE; ty+=PUSH3D_DISTANCE;
+ 				}
+ 			}else{
+-				border_thick=2;
+-				if (ob->ob_flags&EXIT)
+-					border_thick=3;
+-				if (ob->ob_flags&DEFAULT)
+-					border_thick=4;
+-				
+-				if (selected)
++				if (colourmode && selected)
+ 				{
+-					coords[0]=parent_x+ob->ob_x-border_thick;
+-					coords[1]=parent_y+ob->ob_y-border_thick;
+-					coords[2]=coords[0]+ob->ob_width+border_thick*2-1;
+-					coords[3]=coords[1]+ob->ob_height+border_thick*2-1;
++					coords[0]=parent_x+ob->ob_x+border_thick;
++					coords[1]=parent_y+ob->ob_y+border_thick;
++					coords[2]=coords[0]+ob->ob_width-border_thick*2-1;
++					coords[3]=coords[1]+ob->ob_height-border_thick*2-1;
+ 					vswr_mode(V_handle, MD_REPLACE);
+ 					vsf_color(V_handle,BLACK);
+ 					vsf_interior(V_handle,FIS_SOLID);
+@@ -563,10 +582,10 @@
+ 					vst_color(V_handle,WHITE);
+ 				
+ 				}else{
+-					coords[0]=parent_x+ob->ob_x-border_thick;
+-					coords[1]=parent_y+ob->ob_y-border_thick;
+-					coords[2]=coords[0]+ob->ob_width+border_thick*2-1;
+-					coords[3]=coords[1]+ob->ob_height+border_thick*2-1;
++					coords[0]=parent_x+ob->ob_x+border_thick;
++					coords[1]=parent_y+ob->ob_y+border_thick;
++					coords[2]=coords[0]+ob->ob_width-border_thick*2-1;
++					coords[3]=coords[1]+ob->ob_height-border_thick*2-1;
+ 					vswr_mode(V_handle, MD_REPLACE);
+ 					vsf_color(V_handle,WHITE);
+ 					vsf_interior(V_handle,FIS_SOLID);
+@@ -595,6 +614,8 @@
+ 			break;
+ 		case G_FTEXT:
+ 			txt_curs=format_dialog_text(temp_text, textblk->te_ptmplt, textblk->te_ptext,textblk->te_tmplen);
++			vst_color(V_handle, colourword->textc);
++			vswr_mode(V_handle, colourword->opaque ? MD_REPLACE:MD_TRANS);
+ 			switch(textblk->te_just)
+ 			{
+ 				case 0:
+@@ -622,6 +643,8 @@
+ 			
+ 			break;
+ 		case G_TEXT:
++			vst_color(V_handle, colourword->textc);
++			vswr_mode(V_handle, colourword->opaque ? MD_REPLACE:MD_TRANS);
+ 			switch(textblk->te_just)
+ 			{
+ 				case 0:
+@@ -749,6 +772,74 @@
+ 			vrt_cpyfm(V_handle, MD_TRANS, coords, &Micon, &Mscreen, cols);
+ 			break;
+ 	}
++
++	/* Handle CHECKED object state: */
++	if ( ob->ob_state & state_mask & CHECKED )
++	{
++		vst_font(V_handle,display.standard_font_id);
++		vst_point(V_handle,display.standard_font_point,&temp,&temp,&temp,&temp);
++		vswr_mode(V_handle, MD_TRANS);
++		vst_alignment(V_handle,0,5,&temp,&temp);
++		vst_color(V_handle, BLACK);
++		v_gtext(V_handle, obx+2, oby, "\10");	/* ASCII 8 = checkmark */
++	}
++
++	/* Handle CROSSED object state: */
++	if ( ob->ob_state & state_mask & CROSSED )
++	{
++		coords[0]=coords[4]=obx-border_thick;
++		coords[1]=coords[7]=oby-border_thick;
++		coords[2]=coords[6]=obx2+border_thick;
++		coords[3]=coords[5]=oby2+border_thick;
++
++		vswr_mode(V_handle, MD_TRANS);
++		vsl_color(V_handle, WHITE);
++		vsl_width(V_handle, 1);
++		vsl_type(V_handle, 1);
++		v_pline(V_handle, 2, &coords[0]);
++		v_pline(V_handle, 2, &coords[4]);
++	}
++
++	coords[0]=obx;
++	coords[1]=oby;
++	coords[2]=obx2;
++	coords[3]=oby2;
++	if (border_thick > 0)		/* Inside border */
++	{
++		coords[0]+=border_thick;
++		coords[1]+=border_thick;
++		coords[2]-=border_thick;
++		coords[3]-=border_thick;
++	}
++
++	/* Handle DISABLED state: */
++	/* (May not look too hot in colour mode, but it's better than
++		no disabling at all...) */
++	if ( ob->ob_state & state_mask & DISABLED )
++	{
++		static short pattern[16]={
++			0x5555, 0xaaaa, 0x5555, 0xaaaa,
++			0x5555, 0xaaaa, 0x5555, 0xaaaa,
++			0x5555, 0xaaaa, 0x5555, 0xaaaa,
++			0x5555, 0xaaaa, 0x5555, 0xaaaa };
++
++		vswr_mode(V_handle, MD_TRANS);
++		vsf_color(V_handle, WHITE);
++		vsf_udpat(V_handle, pattern, 1);
++		vsf_interior(V_handle, FIS_USER);
++		vr_recfl(V_handle, coords);
++	}
++
++	/* Handle SELECTED state only in non-colour mode: */
++	if (!colourmode && selected && (state_mask&SELECTED))
++	{
++		vswr_mode(V_handle, MD_XOR);
++		vsf_color(V_handle, BLACK);
++		vsf_interior(V_handle, FIS_SOLID);
++		vr_recfl(V_handle, coords);
++	}
++
++	vswr_mode(V_handle,MD_TRANS);
+ }
+ 
+ /*
+@@ -760,6 +851,7 @@
+ 	short current=0,rel_depth=1,head;
+ 	short x=0,y=0,start_drawing=FALSE;
+ 	
++	v_hide_c(V_handle);
+ 	depth++;
+ 	
+ 	do {
+@@ -808,6 +900,7 @@
+ 	vst_font(V_handle,display.standard_font_id);
+ 	vst_point(V_handle,display.standard_font_point,&next,&next,&next,&next);
+ 	vsf_interior(V_handle, FIS_SOLID);
++	v_show_c(V_handle,1);
+ 
+ 	return TRUE;
+ }

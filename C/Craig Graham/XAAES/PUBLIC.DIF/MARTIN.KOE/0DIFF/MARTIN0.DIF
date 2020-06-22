@@ -1,0 +1,422 @@
+--- orig/handler.h	Mon Oct  2 20:58:50 1995
++++ handler.h	Thu Feb 15 16:05:24 1996
+@@ -2,6 +2,7 @@
+ #define _HANDLER_H_
+ 
+ void hook_into_vector(void);
++void unhook_from_vector(void);
+ 
+ void do_rte(short);
+ #pragma inline do_rte(d0) {"4E73";}
+--- orig/resource.h	Tue Jan 16 02:46:14 1996
++++ resource.h	Thu Feb 15 16:05:24 1996
+@@ -16,6 +16,8 @@
+ short XA_rsrc_gaddr(short clnt_pid,AESPB *pb);
+ short XA_rsrc_obfix(short clnt_pid,AESPB *pb);
+ 
++void obfix(OBJECT *tree, short object);
++
+ void FixColourIconData(CICONBLK *icon);
+ void *LoadResources(char *fname,short designWidth,short designHeight);
+ void FreeResources(void *base);
+--- orig/appl_ini.c	Tue Feb  6 13:12:18 1996
++++ appl_ini.c	Thu Feb 15 16:46:38 1996
+@@ -22,16 +22,20 @@
+ // defined as far global, the compiler generates refferances to them relative to the
+ // offset register which aren't valid when executing as the client process.
+ 
+-far char r_pipe_name[50];
+-far char r_fmt[]="u:\\pipe\\XaClnt.%d\0";
+-far short new_client_contrl[]={XA_NEW_CLIENT,0,0,0,0};
+-far short client_exit_contrl[]={XA_CLIENT_EXIT,0,0,0,0};
+-far AESPB new_client_pb;
+-far K_CMD_PACKET new_client_packet;
+-far	short *XAappin_intout;
+-far	short *XAappin_globl;
+-far	short XAappin_temp;
+-far	short Cpid;
++/* Note: since XA_handler now properly loads the global base register,
++	`far' data is no longer needed! <mk> */
++/* (Except if the 64 K limit is reached, of course...) */
++
++char r_pipe_name[50];
++char r_fmt[]="u:\\pipe\\XaClnt.%d\0";
++short new_client_contrl[]={XA_NEW_CLIENT,0,0,0,0};
++short client_exit_contrl[]={XA_CLIENT_EXIT,0,0,0,0};
++AESPB new_client_pb;
++K_CMD_PACKET new_client_packet;
++short *XAappin_intout;
++short *XAappin_globl;
++short XAappin_temp;
++short Cpid;
+ 
+ /*
+ 	Application initialise - appl_init()
+--- orig/bootup.c	Fri Feb  2 04:06:46 1996
++++ bootup.c	Thu Feb 15 16:23:20 1996
+@@ -28,7 +28,29 @@
+ #include "system.h"
+ #include "shellwrt.h"
+ 
+-short is_auto(void);
++/* aes.h confilcts with k_defs.h, so we can't use it here... :-( */
++#if defined(LATTICE)		/* ----- Lattice C ----- */
++extern short _AESglobal[15];
++#define global _AESglobal
++int __regargs _AESif(unsigned int);
++#define appl_init() _AESif(0)
++#elif defined(__PUREC__)	/* ----- Pure C 1.1 ----- */
++typedef struct
++{
++	int		contrl[15];
++	int		global[15];
++	int		intin[132];
++	int		intout[140];
++	void	*addrin[16];
++	void	*addrout[16];
++} GEMPARBLK;
++extern  GEMPARBLK _GemParBlk;
++#define global _GemParBlk.global
++extern int appl_init(void);
++#else						/* ----- others ----- */
++extern short global[] ;
++extern int appl_init(void) ;
++#endif
+ 
+ /*
+ 	Boot up code
+@@ -37,10 +59,12 @@
+ const char select_ink[]={27,'b',0};
+ const char select_paper[]={27,'c',0};
+ 
++#if 0		/* unused??? */
+ void _XCEXIT(void)
+ {
+ 	exit(0);
+ }
++#endif
+ 
+ void BootMessage(void)
+ {
+@@ -56,6 +80,7 @@
+ XA_SCREEN display;					// The display descriptor
+ far XA_SCREEN *p_display;			// pointer to the display descriptor
+ const XA_COLOUR_SCHEME default_colours={LWHITE,BLACK,LBLACK,WHITE,BLACK,CYAN};
++const XA_COLOUR_SCHEME bw_default_colours={WHITE,BLACK,BLACK,BLACK,BLACK,BLACK};
+ far int AES_in_pipe;				// The AES instruction input pipe handle
+ far int AES_in_pipe_clnt;			// The AES instruction input pipe handle (client end)
+ 
+@@ -138,6 +163,22 @@
+ 	}
+ }
+ 
++static short auto_program ;
++
++/*
++	Cleanup on exit
++	(Still quite incomplete - for example, we should kill all
++	currently running APPs...)
++*/
++static void Cleanup(void)
++{
++	v_clsvwk(V_handle);
++	if ( auto_program )
++		v_clswk(P_handle);	/* Auto version must close the physical workstation */
++	unhook_from_vector() ;
++	appl_exit() ;
++}
++
+ /*
+ 	Startup & Initialisation....
+ 	- Spawn off any extra programs we need (mouse server, etc).
+@@ -153,7 +194,7 @@
+ 	short work_in[12];
+ 	short work_out[58];
+ 	char a1[10];
+-	short auto_program,f,junk;
++	short f,junk;
+ 	long dummy;
+ 	XA_WIDGET_TREE *menu;
+ 
+@@ -180,9 +221,11 @@
+ 	Dgetcwd(XaAES_home,XaAES_home_drv+1,196);
+ 
+ // Are we an auto/mint.cnf launched program?
+-	auto_program=is_auto();
++	/* Not: global[0] (AES version number) is initially zero. */
++	appl_init();
++	auto_program=(global[0]==0);	/* global[0] still zero? */
+ 	
+-	if (auto_program==1)
++	if (auto_program)
+ 	{
+ 		v_opnwk(work_in,&P_handle,work_out);			// If we are an auto program we must open a physical workstation to the screen
+ 	}else{
+@@ -235,7 +278,8 @@
+ 	display.display_type=D_LOCAL;
+ 	display.P_handle=P_handle;
+ 	display.V_handle=V_handle;
+-	display.dial_colours=default_colours;
++	display.dial_colours=
++		(display.colours<16) ?	bw_default_colours : default_colours;
+ 	vq_extnd(V_handle,1,work_out);	// Get extended information
+ 	display.planes=work_out[4];		// number of planes in the display
+ 
+@@ -251,11 +295,15 @@
+ 	vst_font(V_handle,STANDARD_AES_FONTID);	
+ 	vst_point(V_handle,STANDARD_FONT_POINT,&f,&f,&f,&f);
+ 
+-// Get text extents for use by the resource loader
+-	vqt_extent(V_handle,"M",work_out);	
+-	display.c_max_w=abs(work_out[2]-work_out[0]);
+-	display.c_max_h=abs(work_out[1]-work_out[7]);
+-	
++/* Get font information for use by the resource loader */
++	vqt_attributes(V_handle, work_out) ;
++	display.c_max_w=work_out[8];	/* character cell width */
++	display.c_max_h=work_out[9];	/* character cell height */
++
++#if 0
++	printf("w= %d, h=%d\n", display.c_max_w, display.c_max_h) ;
++	Crawcin() ;
++#endif
+ // Fix up the window widget bitmaps and any others we might be using
+ //  (calls vr_trnfm() for all the bitmaps)
+ 	fix_bitmaps();
+@@ -300,13 +348,8 @@
+ 	root_window->handle=0;
+ 	root_window->is_open=TRUE;				// Flag window as open	
+ // Tack a menu onto the root widget
+-	for(f=0; f<16; f++)	// Fix the embedded resource
+-	{
+-		SYSTEM_MENU[f].ob_x*=display.c_max_w;
+-		SYSTEM_MENU[f].ob_y*=display.c_max_h;
+-		SYSTEM_MENU[f].ob_width*=display.c_max_w;
+-		SYSTEM_MENU[f].ob_height*=display.c_max_h;
+-	}
++	for(f=0; f<=16 ; f++)	// Fix the embedded resource
++		obfix(SYSTEM_MENU, f) ;
+ 	set_menu_widget(root_window, sys_menu_loc, SYSTEM_MENU);
+ 	menu=(XA_WIDGET_TREE*)(root_window->widgets[XAW_MENU].stuff);
+ 	menu->owner=AESpid;
+@@ -332,10 +375,7 @@
+ 
+ // Closedown & exit - we should never get here....especially as I've not done all the closedown
+ // handling yet.
+-	v_clsvwk(V_handle);
+-
+-	if (auto_program==1)
+-		v_clswk(P_handle);			// Auto version must close the physical workstation
++	Cleanup() ;
+ 
+ 	return 0;
+ }
+--- orig/c_window.c	Sat Jan 27 01:51:10 1996
++++ c_window.c	Thu Feb 15 16:05:24 1996
+@@ -5,6 +5,7 @@
+  *
+  */
+ 
++#include <memory.h>
+ #include <VDI.H>
+ #include "XA_TYPES.H"
+ #include "XA_DEFS.H"
+--- orig/handler.c	Thu Feb  1 03:08:32 1996
++++ handler.c	Thu Feb 15 16:44:38 1996
+@@ -51,20 +51,20 @@
+ #include "KERNAL.H"
+ 
+ __regargs short handler(unsigned short c, AESPB *pb);
+-__regargs short patch_handler(void *old_handler);
+ 
+-far void *super_stack;
+-
+-#define SUPER_STACK_SPACE	1000
+ #define AES_MAGIC			12345
+ 
++#if 0 /* unused? */
+ far char msg[]="in trap handler: clnt_handle=%d, Fwrite returned %d\n\0";
+ far char t[50];
+-far short dummy;
+-far K_CMD_PACKET client_request;
++#endif
++static short dummy;
++static K_CMD_PACKET client_request;
+ 
+ // Trap exception handler - this routine executes under the client applications pid
+-far __regargs short XA_handler(unsigned short c, AESPB *pb)
++// NOTE: the keyword `__saveds' causes the compiler to load the global base
++// register automatically - no need for `far' data kludges here!!!
++far __saveds __regargs short XA_handler(unsigned short c, AESPB *pb)
+ {
+ 	if (c==65534)							// Kludge for TOSWIN
+ 		return AES_MAGIC;
+@@ -98,7 +98,7 @@
+ 	return AES_MAGIC;
+ }
+ 
+-#define AES_VECTOR_TABLE	0x080			// Base of the TRAP vector table
++extern void * far old_trap2_vector; /* defined in a_handler.s (TEXT segment!) */
+ 
+ /*
+ 	HOOK INTO THE AES TRAP VECTOR
+@@ -105,20 +105,25 @@
+ */
+ void hook_into_vector(void)
+ {
+-	void **l=(void**)AES_VECTOR_TABLE;		// Location of AES trap vector
+ 	void *old_ssp;
+ 
+-	printf("- XaAES hooking into trap vector %d at location %lx\n",AES_TRAP,l+AES_TRAP);
+-
+-	super_stack=(void*)malloc(SUPER_STACK_SPACE);	// allocate a supervisor stack
++	printf("- XaAES hooking into trap vector %d at location %lx\n",
++			AES_TRAP, (0x20+AES_TRAP)*4L);
+ 
+-	old_ssp=Super((void*)NULL);		// We have to do the vector hook in Supervisor mode
+-	
+-	patch_handler(l[AES_TRAP]);		// Here's a bit of a nasty piece of code - self modify
+-									// the absolute jump to the VDI in the low-level handler.
+-									// I know some folks are going to criticise this - tough.
++	old_ssp=Super((void*)NULL);		// Enter Supervisor mode
++	/* We want to do this with task switching disabled in order
++		to prevent a possible race condition... */
++	old_trap2_vector = Setexc(0x20+AES_TRAP, (void*)handler) ;
++	Super(old_ssp);					// Back to User Mode
++}
+ 
+-	l[AES_TRAP]=(void*)handler;		// Install our new handler
++void unhook_from_vector(void)
++{
++	void *old_ssp;
+ 
+-	Super(old_ssp);					// Back to User Mode
++	old_ssp=Super((void*)NULL);
++	Setexc(0x20+AES_TRAP, old_trap2_vector) ;
++	Super(old_ssp);
++	/* Note: the above code unhooks all TSRs started after XaAES, too -
++		which may or may not be what we want... */
+ }
+--- orig/resource.c	Tue Feb  6 13:43:10 1996
++++ resource.c	Thu Feb 15 16:05:24 1996
+@@ -7,6 +7,7 @@
+ 
+ #include <FCNTL.H>
+ #include <STDIO.H>
++#include <memory.h>
+ #include <OSBIND.H>
+ #include <VDI.H>
+ #include "K_DEFS.H"
+@@ -120,12 +121,28 @@
+ #endif
+ #define rsrc_obfix obfix
+ 
++/*
++*	Fixup OBJECT coordinates; the lower byte contains a (character-based)
++*	coordinate, the upper byte an additional (pixel) offset.
++*/
++static short fixup(short val, short scale)
++{
++	return (val & 0xff)*scale + ((val>>8) & 0xff) ;
++}
++
+ void obfix(OBJECT *tree, short object)
+ {
+-	(tree+object)->ob_x*=display.c_max_w;
+-	(tree+object)->ob_y*=display.c_max_h;
+-	(tree+object)->ob_width*=display.c_max_w;
+-	(tree+object)->ob_height*=display.c_max_h;
++	OBJECT *o = &tree[object];
++
++	o->ob_x = fixup(o->ob_x, display.c_max_w) ;
++	o->ob_y = fixup(o->ob_y, display.c_max_h) ;
++	/*
++	* Special case handling: any OBJECT 80 characters wide is supposed
++	* to be a menu bar, which always covers the entire screen width...
++	*/
++	o->ob_width = (o->ob_width==80) ?
++			display.w : fixup(o->ob_width, display.c_max_w) ;
++	o->ob_height = fixup(o->ob_height, display.c_max_h) ;
+ }
+ 
+ /*
+--- orig/std_widg.c	Thu Feb  1 02:04:32 1996
++++ std_widg.c	Thu Feb 15 16:05:24 1996
+@@ -7,6 +7,7 @@
+ 
+ #include <OSBIND.H>
+ #include <VDI.H>
++#include <memory.h>
+ #include "XA_TYPES.H"
+ #include "XA_DEFS.H"
+ #include "XA_GLOBL.H"
+@@ -566,6 +567,8 @@
+ 	wind->widgets[XAW_MENU].behaviour[XACB_DRAG]=NULL;
+ 	wind->widgets[XAW_MENU].loc=loc;
+ 	wind->widgets[XAW_MENU].stat=XAW_MENU;	// Special status value for menu's
++	wind->widgets[XAW_MENU].w=obj[ROOT].ob_width; /* Use width of ROOT object */
++											/* as width of entire menu bar... */
+ 	wind->widgets[XAW_MENU].h=display.c_max_h;
+ 	wind->widgets[XAW_MENU].stuff=(void*)nt;
+ 
+--- orig/a_handlr.s	Mon Nov  6 13:26:28 1995
++++ a_handlr.s	Thu Feb 15 16:05:24 1996
+@@ -11,40 +11,40 @@
+ ; for me just written in C with this small kludge routine to handle the actual
+ ; exception itself. If anyone wants to recode it totally in assembler, the main Trap
+ ; to pipe interface in in HANDLER.C - I'll happily put the mods into a new release.
+-; WARNING: There is a small amount of self-modifiying code in here......
+ ;-------------------------------------------------------------------------------------
+ 
+ 	section trap_handler,CODE
+ 
+ 	xref	@XA_handler
+-	
++	xdef	_old_trap2_vector
++
++; XBRA structure immediately before the new vector address:
++	dc.b	'XBRA'
++	dc.b	'XaAE'		; XBRA id (just a proposal)
++_old_trap2_vector:
++	dc.l	0
++
+ ;Exception vector goes to here....
+ @handler:
+ 
+ 	btst	#7,d0			; Is this a VDI call? AES calls all have bit 7 of d0 set.
+-	beq		_is_vdi_call		; - if so, we should call the old vector as we haven't replaced
++	beq.s	_is_vdi_call		; - if so, we should call the old vector as we haven't replaced
+ 							;   the VDI and have to rely on the existing one.
+ 
++	movem.l	d0/d1/a0/a1,-(sp)	; save all registers used by Lattice C
+ 	move.l	d1,a0			; Place d1 arg in a0 as Lattice __regargs expects pointer to be
+ 							; in a0 not d1
+ 	jsr		@XA_handler		; Call the real handler written in C
++	movem.l	(sp)+,d0/d1/a0/a1
+ 
+ 	rte
+ 
+ 
+-; This is a jump to the old VDI/AES vector. The hook_into_vector() routine in HANDLER.C
+-; patches this jump instruction to point to the old vector (I know, self modifiying code
+-; shouldn't be used, but it's here to try and reduce the overhead in the trap handler
+-; for VDI calls.
+-; $4EF9 is the 68000 code for JMP
++; This is a jump to the old VDI/AES vector. No self-modifieng code
++; here - _old_trap_vector is data, not code... :-)
++
+ _is_vdi_call:
+-	dc.w	$4EF9			; Call the old trap 2 vector with the VDI command
+-_old_trap2_vector:
+-	dc.l	$12345678		; $123456578 is a dummy jump address that is replaced at run time.
++	move.l	_old_trap2_vector(pc),-(sp)
++	rts						; Call the old trap 2 vector with the VDI command
+ 
+-; Do the patch
+-@patch_handler:
+-	move.l	a0,_old_trap2_vector
+-	rts
+-	
+-	END
+\ No newline at end of file
++	END

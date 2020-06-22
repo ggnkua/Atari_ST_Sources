@@ -1,0 +1,277 @@
+--- ..\orig-src/xa_types.h	Thu Feb 15 00:27:38 1996
++++ xa_types.h	Fri Feb 23 04:54:50 1996
+@@ -34,6 +34,9 @@
+ 	short c_max_w,c_max_h;		// Maximum character dimensions in pixels
+ 	short c_min_w,c_min_h;		// Minimum (small font) character dimensions in pixels
+ 	XA_COLOUR_SCHEME dial_colours;	// Colour scheme used for dialogs
++	short pix_w,pix_h;			/* Pixel width/height in microns */
++	short standard_font_id;
++	short standard_font_point;
+ } XA_SCREEN;
+ 
+ //-----------------------------------------------------------------
+--- ..\orig-src/bootup.c	Tue Feb 20 23:05:28 1996
++++ bootup.c	Fri Feb 23 22:43:14 1996
+@@ -198,7 +198,7 @@
+ 	(Still quite incomplete - for example, we should kill all
+ 	currently running APPs...)
+ */
+-static void Cleanup(void)
++void Cleanup(void)
+ {
+ 	v_clsvwk(V_handle);
+ 	if ( auto_program )
+@@ -333,6 +333,8 @@
+ 	display.display_type=D_LOCAL;
+ 	display.P_handle=P_handle;
+ 	display.V_handle=V_handle;
++	display.pix_w=work_out[3];
++	display.pix_h=work_out[4];
+ 
+ 	display.dial_colours=
+ 		(display.colours<16) ?	bw_default_colours : default_colours;
+@@ -349,27 +351,16 @@
+ 	}
+ 
+ // Set standard AES font
+-	vst_font(V_handle,STANDARD_AES_FONTID);	
++	display.standard_font_id = vst_font(V_handle,STANDARD_AES_FONTID);
+ 
+-/* Get font information for use by the resource loader */
+-	vqt_attributes(V_handle, work_out) ;
+-	display.c_max_w=work_out[8];	/* character cell width */
+-	display.c_max_h=work_out[9];	/* character cell height */
++// Select standard font
++	display.standard_font_point = vst_point(V_handle,
++		(display.h<=280) ? 9 : STANDARD_FONT_POINT,
++		&f, &f, &display.c_max_w, &display.c_max_h);
+ 
+ #if 0
+ 	printf("w= %d, h=%d\n", display.c_max_w, display.c_max_h) ;
+ 	Crawcin() ;
+-#endif
+-
+-
+-// Select standard font
+-	vst_point(V_handle,STANDARD_FONT_POINT,&f,&f,&f,&f);
+-
+-#if 0	/* this was replaced by a call to vqt_attributes (see above) */
+-// Get standard character extents for use by the resource loader
+-	vqt_extent(V_handle,"M",work_out);	
+-	display.c_max_w=abs(work_out[2]-work_out[0]);
+-	display.c_max_h=abs(work_out[1]-work_out[7]);
+ #endif
+ 	
+ // Fix up the window widget bitmaps and any others we might be using
+--- ..\orig-src/frm_alrt.c	Tue Feb 20 21:16:08 1996
++++ frm_alrt.c	Fri Feb 23 22:59:26 1996
+@@ -119,6 +119,11 @@
+ 	alert_form->ob_x=x;
+ 	alert_form->ob_y=y;
+ 
++	/* Set background color to WHITE on mono systems */
++	if ( display.colours<16 )
++		alert_form[ALERT_BACK].ob_spec = 
++			(void*) ((long)alert_form[ALERT_BACK].ob_spec & ~0x0fL) ;
++
+ 	for(f=ALR_IC_DRIVE; f<=ALR_IC_BOMB; f++)
+ 	{
+ 		((ICONBLK*)(alert_icons+f)->ob_spec)->ib_xicon=((ICONBLK*)(alert_form+ALERT_D_ICON)->ob_spec)->ib_xicon;
+--- ..\orig-src/getinfo.c	Thu Feb  1 03:30:56 1996
++++ getinfo.c	Fri Feb 23 05:15:48 1996
+@@ -14,7 +14,7 @@
+ 	Data table for appl_getinfo
+ */
+ 
+-const short info_tab[15][4]={
++short info_tab[15][4]={
+ 		{STANDARD_FONT_POINT,STANDARD_AES_FONTID,0,0},	/*0*/
+ 		{SMALL_FONT_POINT,STANDARD_AES_FONTID,0,0},		/*1*/
+ 		{1,16,1,1},										/*2*/
+@@ -37,11 +37,22 @@
+ */
+ short XA_appl_getinfo(short clnt_pid, AESPB *pb)
+ {
+-	pb->intout[0]=0;
+-	pb->intout[1]=info_tab[pb->intin[0]][0];
+-	pb->intout[2]=info_tab[pb->intin[0]][1];
+-	pb->intout[3]=info_tab[pb->intin[0]][2];
+-	pb->intout[4]=info_tab[pb->intin[0]][3];
++	unsigned short gi_type=pb->intin[0];
++
++	if ( gi_type>14 )
++	{
++		pb->intout[0] = 0 ;		/* "error" - unimplemented info type */
++		return TRUE ;
++	}
++
++	info_tab[0][0]=display.standard_font_point ;
++	info_tab[0][1]=display.standard_font_id  ;
++
++	pb->intout[0]=1;				/* "OK" */
++	pb->intout[1]=info_tab[gi_type][0];
++	pb->intout[2]=info_tab[gi_type][1];
++	pb->intout[3]=info_tab[gi_type][2];
++	pb->intout[4]=info_tab[gi_type][3];
+ 	
+ 	return TRUE;
+ }
+--- ..\orig-src/graf_mou.c	Sun Feb 18 21:35:26 1996
++++ graf_mou.c	Fri Feb 23 22:43:42 1996
+@@ -275,12 +275,24 @@
+ 
+ short XA_graf_handle(short clnt_pid, AESPB *pb)
+ {
++	short w,h, pix_w, pix_h;
++
+ 	pb->intout[0]=P_handle;		// graf_handle returns the physical workstation handle
+-	pb->intout[1]=0;
+-	pb->intout[2]=0;
+-	pb->intout[3]=display.c_max_w;
+-	pb->intout[4]=display.c_max_h;
+-	
++	pb->intout[1] = w = display.c_max_w;
++	pb->intout[2] = h = display.c_max_h;
++	/*
++		Calculate a _square_ box large enough to hold a system font
++		character (used by GEM AES as size for window elements);
++		we have to take pixel size into account...
++	*/
++	pix_w = display.pix_w ;
++	pix_h = display.pix_h ;
++	if ( w * pix_w > h * pix_h )
++	{	w += 3 ; h=w*pix_w ; h=h/pix_h ; }
++	else
++	{	h += 3 ; w=h*pix_h ; w=w/pix_w ; }
++	pb->intout[3] = w;
++	pb->intout[4] = h;
+ 	return TRUE;
+ }
+ 
+--- ..\orig-src/keyboard.c	Mon Feb 19 14:08:54 1996
++++ keyboard.c	Thu Feb 22 17:05:26 1996
+@@ -9,6 +9,7 @@
+ #include <OSBIND.H>
+ #include <FILESYS.H>
+ #include <MINTBIND.H>
++#include <stdlib.h>
+ #include "XA_DEFS.H"
+ #include "XA_TYPES.H"
+ #include "XA_GLOBL.H"
+@@ -27,6 +28,7 @@
+ 	short shift_state;
+ 	XA_WINDOW *w=NULL;
+ 	short mx,my,mb,retv=XA_OK,kstate;
++	extern void Cleanup(void);	/* defined in bootup.c */
+ 
+ 	vq_mouse(V_handle, &mb,&mx,&my);
+ 
+@@ -63,6 +65,10 @@
+ 				status_dump();
+ 				return;
+ 				break;
++			case 0x2d18:	/* alt-ctrl-X: exit XaAES */
++				Cleanup() ;
++				exit(0) ;
++				break ;
+ 		}
+ 	}
+ #endif
+--- ..\orig-src/objc_drw.c	Sat Feb 17 19:26:10 1996
++++ objc_drw.c	Thu Feb 22 15:43:56 1996
+@@ -22,8 +22,8 @@
+ 	
+ 	clip[0]=pb->intin[2];
+ 	clip[1]=pb->intin[3];
+-	clip[2]=clip[0]+pb->intin[4];
+-	clip[3]=clip[1]+pb->intin[5];
++	clip[2]=clip[0]+pb->intin[4]-1;
++	clip[3]=clip[1]+pb->intin[5]-1;
+ 	
+ 	vs_clip(V_handle,1,clip);
+ 	pb->intout[0]=draw_object_tree(pb->addrin[0],pb->intin[0],pb->intin[1]+1);
+--- ..\orig-src/objects.c	Tue Feb 20 21:59:26 1996
++++ objects.c	Fri Feb 23 22:35:50 1996
+@@ -98,7 +98,8 @@
+ {
+ 	unsigned long ob_spec=(unsigned long)ob->ob_spec;
+ 	OBJC_COLORWORD *colourword;
+-	unsigned short t=ob->ob_type,zap;
++	unsigned short t=(ob->ob_type&0xff);	/* High word is "extended ob_type"! */
++	unsigned short zap;
+ 	short border_thick,coords[10];
+ 	short temp,icx,icy,cols[2];
+ 	TEDINFO *textblk;
+@@ -189,12 +190,12 @@
+ 					ty=parent_y + ob->ob_y + ((ob->ob_height-display.c_max_h)/2);
+ 					break;
+ 				case TE_STANDARD:		// Use the standard system font (probably 10 point)
+-					vst_font(V_handle,STANDARD_AES_FONTID);
+-					vst_point(V_handle,STANDARD_FONT_POINT,&temp,&temp,&temp,&temp);
++					vst_font(V_handle,display.standard_font_id);
++					vst_point(V_handle,display.standard_font_point,&temp,&temp,&temp,&temp);
+ 					ty=parent_y + ob->ob_y + ((ob->ob_height-display.c_max_h)/2);
+ 					break;
+ 				case TE_SMALL:			// Use the small syatem font (probably 8 point)
+-					vst_font(V_handle,STANDARD_AES_FONTID);
++					vst_font(V_handle,display.standard_font_id);
+ 					vst_point(V_handle,SMALL_FONT_POINT,&temp,&temp,&temp,&temp);
+ 					ty=parent_y + ob->ob_y + ((ob->ob_height-display.c_min_h)/2);
+ 					break;
+@@ -330,8 +331,8 @@
+ 				}
+ 			}
+ 			
+-			vst_font(V_handle,STANDARD_AES_FONTID);
+-			vst_point(V_handle,STANDARD_FONT_POINT,&temp,&temp,&temp,&temp);
++			vst_font(V_handle,display.standard_font_id);
++			vst_point(V_handle,display.standard_font_point,&temp,&temp,&temp,&temp);
+ 			vst_alignment(V_handle,0,5,&x,&x);
+ 			vst_color(V_handle, colourword->textc);
+ 							
+@@ -431,8 +432,8 @@
+ 								border_thick, colourword->borderc);
+ 				}
+ 			}
+-			vst_font(V_handle,STANDARD_AES_FONTID);
+-			vst_point(V_handle,STANDARD_FONT_POINT,&temp,&temp,&temp,&temp);
++			vst_font(V_handle,display.standard_font_id);
++			vst_point(V_handle,display.standard_font_point,&temp,&temp,&temp,&temp);
+ 			vswr_mode(V_handle, MD_TRANS);
+ 			vst_alignment(V_handle,1,5,&temp,&temp);
+ 			vst_color(V_handle, colourword->textc);
+@@ -439,8 +440,8 @@
+ 			v_gtext(V_handle,tx,ty,(char*)ob->ob_spec);
+ 			break;
+ 		case G_STRING:
+-			vst_font(V_handle,STANDARD_AES_FONTID);
+-			vst_point(V_handle,STANDARD_FONT_POINT,&temp,&temp,&temp,&temp);
++			vst_font(V_handle,display.standard_font_id);
++			vst_point(V_handle,display.standard_font_point,&temp,&temp,&temp,&temp);
+ 			vswr_mode(V_handle, MD_TRANS);
+ 			vst_alignment(V_handle,0,5,&temp,&temp);
+ 			vst_color(V_handle, colourword->textc);
+@@ -626,8 +627,8 @@
+ 
+ 	vst_alignment(V_handle,0,5,&x,&x);
+ 	vswr_mode(V_handle, MD_TRANS);
+-	vst_font(V_handle,STANDARD_AES_FONTID);
+-	vst_point(V_handle,STANDARD_FONT_POINT,&next,&next,&next,&next);
++	vst_font(V_handle,display.standard_font_id);
++	vst_point(V_handle,display.standard_font_point,&next,&next,&next,&next);
+ 	vsf_interior(V_handle, FIS_SOLID);
+ 
+ 	return TRUE;
+--- ..\orig-src/watchbox.c	Sun Feb 11 19:16:26 1996
++++ watchbox.c	Fri Feb 23 04:55:58 1996
+@@ -74,8 +74,8 @@
+ 	vst_alignment(V_handle,0,5,&x,&x);
+ 	vsf_interior(V_handle,FIS_SOLID);
+ 	vswr_mode(V_handle, MD_TRANS);
+-	vst_font(V_handle,STANDARD_AES_FONTID);
+-	vst_point(V_handle,STANDARD_FONT_POINT,&x,&x,&x,&x);
++	vst_font(V_handle,display.standard_font_id);
++	vst_point(V_handle,display.standard_font_point,&x,&x,&x,&x);
+ 
+ 	if (obf==ob)
+ 		return 1;

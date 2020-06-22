@@ -1,0 +1,436 @@
+--- ..\orig-src/xa_defs.h	Mon Feb 19 14:15:02 1996
++++ xa_defs.h	Tue Feb 20 19:00:58 1996
+@@ -23,7 +23,7 @@
+ #define SOLID_BOXES				0		// Do graf_dragbox, graf_rubberbox, etc using a solid box instead of
+ 										// an outline
+ 
+-#define MONO_WIDGETS			0		// Compile with black & white widgets instead of colour ones
++#define MONO_WIDGETS			1		// Compile with black & white widgets instead of colour ones
+ 
+ #define DISPLAY_LOGO_IN_TITLE_BAR	1	// Display the XaAES logo in the title bar of each window
+ 
+@@ -89,7 +89,7 @@
+ #define XAC_M_TIMEOUT		3	/* Block client, but timeout (evnt_multi format) */
+ #define XAC_TVAL		0xfff0	/* Mask to get the timeout value */
+ 
+-#if 1
++#if defined(LATTICE)
+ //-----------------------------------------------------------------
+ // Inline functions to store / set Lattice C data pointers
+ unsigned long get_a4(void);
+--- ..\orig-src/app_man.c	Mon Feb 19 14:02:12 1996
++++ app_man.c	Tue Feb 20 21:14:00 1996
+@@ -15,6 +15,7 @@
+ #include "K_DEFS.H"
+ #include "XA_CODES.H"
+ #include "NEW_CLNT.H"
++#include "c_window.h"
+ 
+ /*
+ 	Application Manager
+--- ..\orig-src/appl_ini.c	Thu Feb 15 22:59:22 1996
++++ appl_ini.c	Tue Feb 20 21:03:56 1996
+@@ -9,6 +9,7 @@
+ #include <FILESYS.H>
+ #include <OSBIND.H>
+ #include <MINTBIND.H>
++#include <stdio.h>
+ #include "XA_GLOBL.H"
+ #include "XA_TYPES.H"
+ #include "XA_DEFS.H"
+--- ..\orig-src/bootup.c	Mon Feb 19 13:45:20 1996
++++ bootup.c	Tue Feb 20 23:05:28 1996
+@@ -12,6 +12,8 @@
+ #include <FILESYS.H>
+ #include <SIGNAL.H>
+ #include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
+ #include <IOCTL.H>
+ #include "xa_defs.h"
+ #include "k_defs.h"
+@@ -36,6 +38,8 @@
+ #define global _AESglobal
+ int __regargs _AESif(unsigned int);
+ #define appl_init() _AESif(0)
++extern int graf_handle(short *,short *,short *,short *);
++#define appl_exit()	_AESif(36)
+ #elif defined(__PUREC__)	/* ----- Pure C 1.1 ----- */
+ typedef struct
+ {
+@@ -49,9 +53,13 @@
+ extern  GEMPARBLK _GemParBlk;
+ #define global _GemParBlk.global
+ extern int appl_init(void);
++extern int graf_handle(int *,int *,int *,int *);
++extern int appl_exit(void);
+ #else						/* ----- others ----- */
+ extern short global[] ;
+ extern int appl_init(void) ;
++extern int graf_handle(int *,int *,int *,int *);
++extern int appl_exit(void);
+ #endif
+ 
+ /*
+@@ -196,6 +204,14 @@
+ 	if ( auto_program )
+ 		v_clswk(P_handle);	/* Auto version must close the physical workstation */
+ 	unhook_from_vector() ;
++	/* Remove semaphores: */
++	Psemaphore(1,APPL_INIT_SEMAPHORE,0);
++	Psemaphore(1,TRAP_HANDLER_SEMAPHORE,0);
++	Psemaphore(1,WIN_LIST_SEMAPHORE,0);
++	Psemaphore(1,ROOT_SEMAPHORE,0);
++	Psemaphore(1,CLIENTS_SEMAPHORE,0);
++	Psemaphore(1,UPDATE_LOCK,0);
++	Psemaphore(1,MOUSE_LOCK,0);
+ 	appl_exit() ;
+ }
+ 
+@@ -287,8 +303,9 @@
+ 	KBD_device=Fopen("u:\\dev\\console",O_RDONLY);
+ 	if (KBD_device<0)
+ 	{
+-		DIAGS(("ERROR: Cann't open /dev/console ?\n"));
+-		exit(0);
++		printf("XaAES ERROR: Can't open /dev/console ?\n");
++		Cleanup() ;
++		return 1;
+ 	}
+ 
+ // Initialise the client descriptors
+@@ -348,10 +365,12 @@
+ // Select standard font
+ 	vst_point(V_handle,STANDARD_FONT_POINT,&f,&f,&f,&f);
+ 
++#if 0	/* this was replaced by a call to vqt_attributes (see above) */
+ // Get standard character extents for use by the resource loader
+ 	vqt_extent(V_handle,"M",work_out);	
+ 	display.c_max_w=abs(work_out[2]-work_out[0]);
+ 	display.c_max_h=abs(work_out[1]-work_out[7]);
++#endif
+ 	
+ // Fix up the window widget bitmaps and any others we might be using
+ //  (calls vr_trnfm() for all the bitmaps)
+@@ -359,6 +378,12 @@
+ 
+ // Load the system resource file (we can probably embed this later)
+ 	system_resources=LoadResources("system.rsc",DU_RSX_CONV, DU_RSY_CONV);
++	if ( system_resources==NULL )
++	{
++		printf("XaAES ERROR: can't load system.rsc\n");
++		Cleanup();
++		return 1;
++	}
+ 
+ // Set the default clipboard
+ 	sprintf(scrap_path,"c:\\clipbrd\\");
+--- ..\orig-src/c_window.c	Thu Feb 15 22:53:04 1996
++++ c_window.c	Tue Feb 20 20:05:56 1996
+@@ -15,6 +15,7 @@
+ #include "BOX3D.H"
+ #include "C_WINDOW.H"
+ #include "RECTLIST.H"
++#include "messages.h"
+ 
+ /*
+ 	Low-level Window Stack Management Functions
+--- ..\orig-src/event_q.c	Wed Nov  1 01:36:38 1995
++++ event_q.c	Tue Feb 20 20:04:42 1996
+@@ -5,6 +5,7 @@
+  *
+  */
+ 
++#include <memory.h>
+ #include "EVENT_Q.H"
+ #include "XA_DEFS.H"
+ #include "K_DEFS.H"
+--- ..\orig-src/evnt_mes.c	Tue Feb  6 13:29:38 1996
++++ evnt_mes.c	Tue Feb 20 20:04:54 1996
+@@ -5,6 +5,7 @@
+  *
+  */
+ 
++#include <memory.h>
+ #include "XA_DEFS.H"
+ #include "XA_TYPES.H"
+ #include "XA_GLOBL.H"
+--- ..\orig-src/evnt_mul.c	Mon Feb 19 14:14:42 1996
++++ evnt_mul.c	Tue Feb 20 20:04:36 1996
+@@ -5,6 +5,7 @@
+  *
+  */
+ 
++#include <memory.h>
+ #include "EVENT_Q.H"
+ #include "XA_DEFS.H"
+ #include "XA_GLOBL.H"
+--- ..\orig-src/forms.c	Sun Feb 18 22:44:10 1996
++++ forms.c	Tue Feb 20 20:08:08 1996
+@@ -5,6 +5,7 @@
+  *
+  */
+ 
++#include <stdio.h>
+ #include "XA_DEFS.H"
+ #include "XA_TYPES.H"
+ #include "XA_GLOBL.H"
+@@ -13,6 +14,7 @@
+ #include "FRM_ALRT.H"
+ #include "STD_WIDG.H"
+ #include "C_WINDOW.H"
++#include "watchbox.h"
+ 
+ /*
+ 	FORM HANDLERS INTERFACE
+--- ..\orig-src/frm_alrt.c	Fri Feb 16 00:42:12 1996
++++ frm_alrt.c	Tue Feb 20 21:16:08 1996
+@@ -7,6 +7,8 @@
+ 
+ #include <VDI.H>
+ #include <OSBIND.H>
++#include <stdio.h>
++#include <stdlib.h>
+ #include "XA_TYPES.H"
+ #include "XA_GLOBL.H"
+ #include "XA_DEFS.H"
+--- ..\orig-src/graf_box.c	Wed Jan 31 22:45:16 1996
++++ graf_box.c	Tue Feb 20 20:09:28 1996
+@@ -11,6 +11,7 @@
+ #include "K_DEFS.H"
+ #include "XA_GLOBL.H"
+ #include "DRAG_BOX.H"
++#include "watchbox.h"
+ 
+ /*
+ 	INTERFACE TO INTERACTIVE BOX ROUTINES
+--- ..\orig-src/handler.c	Mon Feb 19 13:36:56 1996
++++ handler.c	Tue Feb 20 22:50:12 1996
+@@ -48,6 +48,7 @@
+ #include <OSBIND.H>
+ #include <MINTBIND.H>
+ #include <FILESYS.H>
++#include <stdio.h>
+ #include "K_DEFS.H"
+ #include "HANDLER.H"
+ #include "XA_DEFS.H"
+--- ..\orig-src/kernal.c	Mon Feb 19 14:14:52 1996
++++ kernal.c	Tue Feb 20 20:04:30 1996
+@@ -9,6 +9,7 @@
+ #include <FILESYS.H>
+ #include <MINTBIND.H>
+ #include <sys/types.h>
++#include <memory.h>
+ #include "K_DEFS.H"
+ #include "KERNAL.H"
+ #include "XA_GLOBL.H"
+--- ..\orig-src/messages.c	Mon Feb 19 13:20:02 1996
++++ messages.c	Tue Feb 20 20:04:22 1996
+@@ -7,6 +7,7 @@
+ 
+ #include <MINTBIND.H>
+ #include <OSBIND.H>
++#include <memory.h>
+ #include "XA_DEFS.H"
+ #include "XA_TYPES.H"
+ #include "XA_GLOBL.H"
+--- ..\orig-src/mouse_cl.c	Mon Feb 19 13:20:20 1996
++++ mouse_cl.c	Tue Feb 20 21:18:28 1996
+@@ -7,6 +7,7 @@
+ 
+ #include <MINTBIND.H>
+ #include <OSBIND.H>
++#include <memory.h>
+ #include "K_DEFS.H"
+ #include "KERNAL.H"
+ #include "XA_DEFS.H"
+@@ -16,6 +17,7 @@
+ #include "EVNT_BTN.H"
+ #include "C_WINDOW.H"
+ #include "EVNT_MUL.H"
++#include "std_widg.h"
+ 
+ /*
+ 	Mouse button click handler 
+--- ..\orig-src/new_clnt.c	Mon Feb 19 01:08:40 1996
++++ new_clnt.c	Tue Feb 20 21:22:12 1996
+@@ -8,6 +8,8 @@
+ #include <FILESYS.H>
+ #include <OSBIND.H>
+ #include <MINTBIND.H>
++#include <stdio.h>
++#include <memory.h>
+ #include "XA_DEFS.H"
+ #include "XA_TYPES.H"
+ #include "XA_GLOBL.H"
+@@ -14,6 +16,7 @@
+ #include "C_WINDOW.H"
+ #include "SYSTEM.H"
+ #include "RESOURCE.H"
++#include "events.h"
+ 
+ /*
+ 	Open the clients reply pipe in response to an XA_NEW_CLIENT message
+--- ..\orig-src/objcwidg.c	Sat Feb 17 19:25:58 1996
++++ objcwidg.c	Tue Feb 20 21:24:28 1996
+@@ -7,6 +7,7 @@
+ 
+ #include <OSBIND.H>
+ #include <VDI.H>
++#include <memory.h>
+ #include "XA_TYPES.H"
+ #include "XA_DEFS.H"
+ #include "XA_GLOBL.H"
+@@ -19,6 +20,7 @@
+ #include "BOX3D.H"
+ #include "OBJECTS.H"
+ #include "MESSAGES.H"
++#include "std_widg.h"
+ 
+ /*
+ 	Menu Widget display
+--- ..\orig-src/objects.c	Sat Feb 17 19:26:24 1996
++++ objects.c	Tue Feb 20 21:59:26 1996
+@@ -5,6 +5,11 @@
+  *
+  */
+ 
++#include <stdlib.h>
++#ifdef LATTICE
++#undef abs		/* MiNTlib (PL46) #define is buggy! */
++#define abs(i)	__builtin_abs(i)
++#endif
+ #include "XA_DEFS.H"
+ #include "XA_TYPES.H"
+ #include "XA_GLOBL.H"
+--- ..\orig-src/rectlist.c	Sun Feb 18 23:43:32 1996
++++ rectlist.c	Tue Feb 20 20:03:54 1996
+@@ -7,6 +7,7 @@
+ 
+ #include <VDI.H>
+ #include <MINTBIND.H>
++#include <memory.h>
+ #include "XA_DEFS.H"
+ #include "XA_TYPES.H"
+ #include "XA_GLOBL.H"
+--- ..\orig-src/resource.c	Mon Feb 19 10:51:04 1996
++++ resource.c	Tue Feb 20 19:28:42 1996
+@@ -37,8 +37,15 @@
+ 
+ // If the client is overwriting it's existing resource then better free it
+ // (it shouldn't, but just in case)
++/* I don't think this is a good idea - much better to have a memory leak
++	than a process continuing to access a free'd memory region; GEM AES
++	doesn't auto-free an existing RSC either, so this would be
++	incompatible anyway... <mk>
++*/
++#if 0
+ 	if (clients[clnt_pid].std_resource)
+ 		FreeResources(clients[clnt_pid].std_resource);
++#endif
+ 
+ // What sort of path is it?
+ 	for(f=0; (n[f])&&(n[f]!='\\'); f++);
+@@ -213,6 +220,7 @@
+ 	base = (char*)malloc(size+100);
+ 	if (!base)
+ 	{
++		Fclose(handle);
+ 		return NULL;
+ 	}
+ 	Fread(handle,size,base);
+--- ..\orig-src/reszwidg.c	Tue Nov 28 00:39:10 1995
++++ reszwidg.c	Tue Feb 20 22:44:40 1996
+@@ -18,6 +18,7 @@
+ #include "RECTLIST.H"
+ #include "ALL_WIDG.H"
+ #include "STD_WIDG.H"
++#include "drag_box.h"
+ 
+ /*======================================================
+ 	RESIZE WIDGET BEHAVIOUR
+--- ..\orig-src/scrap.c	Sun Feb 11 19:57:44 1996
++++ scrap.c	Tue Feb 20 19:37:06 1996
+@@ -5,6 +5,7 @@
+  *
+  */
+ 
++#include <string.h>
+ #include "XA_TYPES.H"
+ #include "XA_DEFS.H"
+ #include "XA_GLOBL.H"
+--- ..\orig-src/scrlwidg.c	Wed Dec 13 02:20:04 1995
++++ scrlwidg.c	Tue Feb 20 22:44:50 1996
+@@ -7,6 +7,7 @@
+ 
+ #include <OSBIND.H>
+ #include <VDI.H>
++#include <memory.h>
+ #include "XA_TYPES.H"
+ #include "XA_DEFS.H"
+ #include "XA_GLOBL.H"
+--- ..\orig-src/shell.c	Sun Feb 18 23:01:58 1996
++++ shell.c	Tue Feb 20 21:54:56 1996
+@@ -7,6 +7,8 @@
+ 
+ #include <OSBIND.H>
+ #include <stdlib.h>
++#include <stdio.h>
++#include <string.h>
+ #include "k_defs.h"
+ #include "xa_globl.h"
+ #include "shellwrt.h"
+--- ..\orig-src/shellwrt.c	Sun Feb 18 23:21:44 1996
++++ shellwrt.c	Tue Feb 20 20:03:28 1996
+@@ -5,10 +5,12 @@
+  *
+  */
+ 
++#include <string.h>
+ #include <OSBIND.H>
+ #include <MINTBIND.H>
+ #include <stdio.h>
+ #include <stdlib.h>
++#include <memory.h>
+ #include "k_defs.h"
+ #include "xa_defs.h"
+ #include "xa_types.h"
+--- ..\orig-src/signals.c	Mon Feb 19 13:46:24 1996
++++ signals.c	Tue Feb 20 19:41:44 1996
+@@ -14,6 +14,7 @@
+ #include "xa_globl.h"
+ #include "xa_defs.h"
+ #include "xa_codes.h"
++#include "new_clnt.h"
+ 
+ /*
+ 	SIGNAL HANDLERS
+--- ..\orig-src/titlwidg.c	Thu Feb  8 02:32:28 1996
++++ titlwidg.c	Tue Feb 20 22:45:08 1996
+@@ -18,6 +18,7 @@
+ #include "RECTLIST.H"
+ #include "ALL_WIDG.H"
+ #include "STD_WIDG.H"
++#include "drag_box.h"
+ 
+ /*======================================================
+ 	TITLE WIDGET BEHAVIOUR
+--- ..\orig-src/wind_fns.c	Thu Feb 15 00:12:58 1996
++++ wind_fns.c	Tue Feb 20 21:58:04 1996
+@@ -8,6 +8,7 @@
+ #include <VDI.H>
+ #include <MINTBIND.H>
+ #include <OSBIND.H>
++#include <memory.h>
+ #include "XA_DEFS.H"
+ #include "XA_TYPES.H"
+ #include "XA_GLOBL.H"
+@@ -19,6 +20,8 @@
+ #include "INFOWIDG.H"
+ #include "TITLWIDG.H"
+ #include "STD_WIDG.H"
++#include "graf_mou.h"
++#include "messages.h"
+ 
+ /*
+ 	AES window handling functions
