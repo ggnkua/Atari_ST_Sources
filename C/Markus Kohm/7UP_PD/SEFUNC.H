@@ -1,0 +1,24 @@
+WORD ESActive(void);
+WORD ESinit(WORD apid, WORD shellapid, WORD se_commands, LONG es_commands);
+WORD ESok(WORD apid, WORD se_commands, LONG es_commands);
+WORD ESack(WORD apid, WORD answer);
+WORD EScompile(WORD apid, char *pathname);
+WORD ESmake(WORD apid, char *pathname);
+WORD ESmakeall(WORD apid, char *pathname);
+WORD ESlink(WORD apid, char *pathname);
+WORD ESexec(WORD apid, char *pathname);
+WORD ESmakeexec(WORD apid, char *pathname);
+WORD ESproject(WORD apid, char *pathname);
+WORD ESquit(WORD apid);
+WORD ESaction(WORD apid, char *pathname, WORD exitcode);
+
+WORD SEActive(void);
+WORD SEinit(WORD apid, WORD editorapid, WORD se_commands, LONG es_commands);
+WORD SEok(WORD apid, WORD se_commands, LONG es_commands);
+WORD SEack(WORD apid, WORD answer);
+WORD SEopen(WORD apid, char *pathname);
+WORD SEerror(WORD apid, ERRINFO *errinfo);
+WORD SEerrfile(WORD apid, char *pathname, char *errorfile);
+WORD SEproject(WORD apid, char *pathname);
+WORD SEquit(WORD apid);
+WORD SEterminate(WORD apid);
