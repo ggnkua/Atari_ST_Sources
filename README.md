@@ -17,3 +17,25 @@ TODO (tl;dr: get some dev tools and dig in!)
 1. Upload your source somewhere and raise an issue
 1. E-mail the maintainer (ggnkua [at] gmail [dot] com) with archive(s) of files and optionally the location of the archive the files should be placed
 1. Fork the repository and create a pull request (note that the maintainer has no experience with this and is likely to mess up things. But hey we can try!)
+
+# Verified to compile
+
+## ASM
+
+## C
+
+|Location|Comment|
+|--|--|
+|`C/Alan Pratt/Gulam`|Compiles with Mark Williams C 3.0.5|
+|`C/Michael Thänitz/7UP_PD`|Compiles with Pure C|
+|`C/Markus Kohm/7UP_PD`|Compiles with Pure C|
+
+## GFA Basic
+
+## Omikron Basic
+
+## Pascal
+
+## STOS
+
+## Various
