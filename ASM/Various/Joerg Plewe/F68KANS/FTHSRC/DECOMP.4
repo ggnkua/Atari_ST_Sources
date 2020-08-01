@@ -1,0 +1,333 @@
+( ANPASSUNG AN F68KANS 1.0 von Zbigniew Diaczyszyn )
+( email: Z.Diaczyszyn@sontap.zer.de)
+
+
+( Hilfsdefinitionen                          5.08.93)
+( ---------------------------------------------------------------- )
+HEX
+
+: perform   @ EXECUTE ;
+: clearstack    s0 @ sp! ;
+( header: key?  3F3C0002 code, 3F3C0001 code, 4E4D588F code,)
+(              2D004E75 code, reveal)
+: off   ( adr -- ) 0 SWAP ! ;
+: on    ( adr -- ) -1 SWAP ! ;
+: UNDER     DUP -rot ;
+header: w>l  201648C0 code, 2C804E75 code, reveal
+header: b>l  20164880 code, 48C02C80 code, 4E75 codew, reveal
+: 2+ ( n -- n+2 ) 2 + ;
+: 2-              2 - ;
+: case?     OVER = DUP IF NIP THEN ;
+
+( ---------------------------------------------------------------- )
+
+
+VARIABLE codelen        ( enthaelt die Gesamtlaenge des Codes in words)
+VARIABLE codestart      ( enthaelt cfa des analysierten Wortes)
+
+( Grundwoerter zur Tabellenerzeugung)
+
+: associative:      ( Aufruf:  k associative: <name> n1 , ... nk ,)
+    CREATE , DOES>              ( n adr -- ) ( <name> ( n -- index )
+                DUP @           ( -- n pfa COUNT ) ( 1.Zelle enthaelt maxindex)
+                -rot DUP @ 0    ( -- COUNT n pfa COUNT 0 )
+        DO      CELL+ 2DUP @ =  ( -- COUNT n pfa' flag )
+            IF  2DROP DROP I 0 0 LEAVE THEN ( Index uebergeben und fertig)
+        LOOP    2DROP ;
+
+: table-exec:             ( n case: <name> ' action.1 , ... ' action.n ,)
+    CREATE ,                           ( Maxindex eintragen)
+    DOES>                              ( n adr -- )
+    2DUP @ <                           ( Index n > Maxindex?)
+ IF CELL+ SWAP CELLS + perform         ( Adresse holen und ausfuehren)
+ ELSE ABORT" Index in TABLE-EXEC:-Struktur ueberschritten! " THEN ;
+
+
+: .tes_linkfield ( index -- lfa.ptr )
+    1+ CELLS vocpa @ + @ ;
+
+: (cfa>nfa) ( cfa vocstart -- nfa | false )     ( searches for cfa in wordlist)
+    @ ( cfa lfa)
+    BEGIN   2DUP
+     CELL- @ ( cfa cfa')
+    <> WHILE
+    @ DUP 0=    ( Ende der Suche, wenn lfa=0)
+    UNTIL NIP EXIT  THEN NIP CELL+ ;
+
+: cfa>nfa ( rel.cfa -- nfa | false )        ( searches cfa in all wordlists)
+    vocpa @ @ 4 /       ( Anzahl der Wortlisten)
+    0 DO
+    ( GLEICHE LISTEN AUF DEM STACK?)
+    ( cfa) DUP I .tes_linkfield
+    (cfa>nfa) ?DUP IF NIP UNLOOP EXIT THEN    LOOP
+    NIP FALSE ;
+
+: .name ( rel.cfa -- )  cfa>nfa ?DUP IF  COUNT TYPE SPACE THEN ;
+
+( Tabulator-Kram     5.08.93)
+
+8 VALUE tabsize         0 VALUE #tab
+
+: tab+  ( -- )  #tab tabsize +   COLUMNS @ tabsize - MIN  TO #tab ;
+: tab-  ( -- )  #tab tabsize -   0 MAX TO #tab ;
+: >tab  ( -- )  #tab TAB ;
+: cr?   ( -- )  COLUMNS @ 10 -  out @ < IF  CR #tab TAB  THEN ;
+
+
+(   CALL SUBROUTINE  )
+
+(  Letzte Aenderung: 7.08.93)
+
+
+( NAMEHEADER:  cfa | lfa | nfa )
+( CODEHEADER:  controlbyte | sizebyte => codelength in words )
+
+(       Bit0    smudge, word cannot be found                            * )
+(       Bit1    immediate, word will execute during compilation         * )
+(       Bit2    restrict, word may only be used in compiletime          * )
+(       Bit3    macro, word is a macro                                  * )
+
+1 CONSTANT #smudge
+2 CONSTANT #immediate
+4 CONSTANT #restrict
+8 CONSTANT #macro
+
+: .nfa ( cfa -- )
+    DUP cfa>nfa  SWAP  code>data 1 - C@ #immediate AND
+    IF ." POSTPONE " THEN  cr? COUNT TYPE ;
+
+: .jsr_d(a5)    ( cfa -- cfa' )
+    2+ DUP w@ w>l      ( hole offset = code-rel. Adresse
+    .nfa SPACE 2+   ;   ( cfa korrigieren
+
+: .bsr          ( cfa -- cfa' )
+    2+ DUP OVER w@      ( word-offset nach Sprungbefehl holen
+    w>l + data>code ( zur cfa' addieren und zum Codesegement relativ verwandeln)
+    .nfa SPACE 2+   ;   ( cfa korrigieren)
+
+: .bsr.s ( ip -- ip' )
+    2+ DUP 1- C@ b>l OVER + data>code .nfa SPACE ;
+
+(   10.08.93 )
+
+: lfa>cfa ( lfa -- cfa )    CELL- @ code>data ;
+: #vocs ( -- n )            vocpa @ @ 4 / ;
+
+: macrobit? ( lfa -- flag ) lfa>cfa 1 - C@ #macro AND ;
+
+: macro=?   ( cfa lfa -- lfa | FALSE )
+    lfa>cfa    ( cfa1 cfa2 )
+    DUP 2- C@ 0                             ( Vergleichsschleife in words )
+    DO  ( cfa1 cfa2) 2DUP w@ SWAP w@  =     ( Codewords vergleichen )
+        0= IF 2DROP FALSE UNLOOP EXIT THEN  ( ungleicher Code, raus... )
+        2+ SWAP  2+                         ( beide cfa's erhoehen )
+    LOOP 2DROP TRUE ;
+
+: (macro?)  ( cfa lfa -- lfa'| FALSE )   ( Vocabulary durchsuchen )
+    BEGIN   DUP macrobit?           ( cfa lfa flag )
+            DUP IF  DROP ( cfa lfa -- ) 2DUP macro=?  THEN
+ 0= WHILE   @ DUP 0=
+    UNTIL THEN NIP ;         ( lfa=0 beendet )
+
+: macro?    (  cfa -- lfa / FALSE )
+    #vocs 0 DO
+    DUP I .tes_linkfield @ (macro?)
+    ?DUP IF NIP UNLOOP EXIT THEN
+    LOOP DROP FALSE ;
+
+: macrotest        ( cfa -- cfa' flag )
+    DUP macro? ?DUP
+    IF  ( cfa lfa ) DUP CELL+ COUNT TYPE SPACE
+        lfa>cfa 2- C@ 2 * + TRUE EXIT THEN FALSE ;
+
+: .others       ( cfa -- cfa' )
+    macrotest IF EXIT THEN
+    [CHAR] [ EMIT DUP w@ 4 .R [CHAR] ] EMIT SPACE 2+  ;
+
+: .rts ( cfa' -- 0 | cfa'+2 )
+    DUP codestart @ - 2 /  codelen @  =     ( Codeende schon erreicht?)
+    IF  DROP 0 ." ; "  EXIT  THEN
+    ." EXIT " 2+ ;
+
+( IF ELSE THEN   9.08.93 )
+
+HEX
+
+4EAD9F68 CONSTANT #ifbra        4EAD9F8A CONSTANT #bra   ( 17.08.93)
+
+CREATE then-array   10 CELLS ALLOT     then-array off
+CREATE begin-array  10 CELLS ALLOT     begin-array off
+CREATE repeat-array 10 CELLS ALLOT     repeat-array off
+
+: then-array+! ( adr -- )    1 then-array +!  then-array DUP @ CELLS + ! ;
+: repeat-array+! ( adr -- )  1 repeat-array +!  repeat-array DUP @ CELLS + ! ;
+
+: .ifbra ( cfa -- cfa' )
+    CELL+ DUP @ code>data                       ( ( ip *ip -- , ip=Sprungziel)
+    2DUP >                                      ( ( ip *ip flag -- )
+    IF  CR tab- >tab
+        ." UNTIL " -1 repeat-array +! DROP CELL+ EXIT  THEN  ( ip (ip)
+    repeat-array @ ?DUP
+    IF  CELLS repeat-array + @ OVER <
+        IF CR tab- >tab ." WHILE " ELSE CR >tab ." IF " THEN
+    ELSE  CR >tab ." IF " THEN  tab+ >tab then-array+! CELL+ ;
+
+: .repeat ( ip -- ) then-array DUP @ CELLS + @ <> IF ." AGAIN " EXIT THEN
+    -1 then-array +!  CR tab- >tab ." REPEAT " ;
+
+: .bra ( cfa -- cfa' )
+    CELL+ DUP @ code>data ( ip bra )
+    2DUP > IF  DROP CELL+ DUP .repeat  -1 repeat-array +! EXIT  THEN
+    CR tab- >tab ." ELSE "  tab+ >tab
+    then-array DUP @ CELLS + !  CELL+ ;
+
+( BEGIN UNTIL    9.08.93 )
+
+
+: .then ( ip -- ip' )
+    BEGIN then-array @ ?DUP                         ( Anzahl der THENs)
+    WHILE CELLS then-array + @ OVER =               ( IP = THEN ?)
+    WHILE -1 then-array +!
+        CR tab- >tab ." THEN "  REPEAT THEN ;
+
+: begin-array+!  ( adr -- ) 1 begin-array +!   begin-array DUP @ CELLS + ! ;
+
+: backjump? ( ip -- backadr / FALSE )
+    DUP @  DUP #bra = SWAP  #ifbra =  OR       ( ip flag )
+    IF  DUP CELL+ @ code>data UNDER > IF EXIT THEN THEN DROP FALSE ;
+
+: >begin ( ip -- )
+     BEGIN  DUP backjump?
+            ?DUP IF begin-array+! DUP repeat-array+! THEN
+            DUP w@ 4E75 <> WHILE  DUP w@ 2D3C = IF CELL+ THEN 2+
+     REPEAT DROP ;
+
+: .begin ( ip -- ip' )
+    BEGIN   begin-array @ ?DUP                         ( Anzahl der BEGINs )
+    WHILE   CELLS begin-array + @ OVER =               ( IP = BEGIN ? )
+    WHILE   -1 begin-array +! CR >tab ." BEGIN "
+            tab+ >tab REPEAT THEN ;
+
+( 11.08.93 )
+
+: (.string) ( ip -- ip' )   CELL+ DUP @  COUNT cr? TYPE
+                            [CHAR] " EMIT SPACE CELL+ ;
+
+: .." ( ip -- ip' )     [CHAR] . EMIT [CHAR] " EMIT SPACE (.string) ;
+: .string ( ip -- ip' ) [CHAR] S EMIT [CHAR] " EMIT SPACE (.string) ;
+: .abort" ( ip -- ip' ) ." ABORT" [CHAR] " EMIT SPACE (.string) ;
+
+: .do ( ip -- ip' )     CELL+ CELL+ ." DO " ;
+: .?do ( ip -- ip' )    CELL+ CELL+ ." ?DO " ;
+: .loop ( ip -- ip' )   CELL+       ." LOOP " ;
+: .+loop ( ip -- ip' )  CELL+       ." +LOOP " ;
+
+( 11.08.93 )
+
+: .does> ( ip -- ip' )      CELL+ CELL+ ." DOES> " ;
+
+: .to ( storeadr -- )       FFFF AND C - ." TO " .name SPACE ;
+
+: .var ( ip -- FALSE )
+    CELL+ DUP @
+    4EAA9D80 case?     IF  ." VALUE = "         CELL+ @ @ . FALSE EXIT THEN
+    4EAA9C6C case?     IF  ." VARIABLE  Wert: " CELL+ @ @ . FALSE EXIT THEN
+                        .to CELL+ ;
+
+
+: .defer ( ip -- 0 )       ." deferred: IS " CELL+ @ @ .name FALSE ;
+
+( 15.08.93 )
+
+: .is   ;
+: defered?  FALSE ; ( zunaechst einmal... )
+
+: .constant ( ip -- )    2+ @ . ." CONSTANT " ;
+
+: constant? ( ip -- flag )  DUP 2- w@ 0=    SWAP 6 + w@ 4E75 =  AND ;
+
+\ : compile? ( ip lit -- compiled.cfa | FALSE )
+\    SWAP CELL+ @ 4EAD8934 =
+\    IF @ ELSE DROP FALSE THEN ;
+\ : .compile ( cfa -- ) ." POSTPONE " cr? .name SPACE ;
+
+: .lit ( ip -- ip' )
+    DUP constant?        IF  .constant  FALSE          EXIT THEN
+    2+ DUP @
+    \ DUP defered? ?DUP  IF  .is  DROP CELL+ CELL+     EXIT THEN
+    \ 2DUP compile?  ?DUP  IF  .compile DROP CELL+ CELL+ EXIT THEN
+    ( ip lit ) DUP cfa>nfa ?DUP
+    IF   COUNT ?DUP        ( ip lit nfa -- )
+         IF     ." ['] " TYPE SPACE DROP CELL+ EXIT THEN DROP
+    THEN [CHAR] $ EMIT . CELL+ ;
+
+\ : .vocabulary ( ip -- 0 )       ." IS VOCABULARY " DROP FALSE ;
+
+
+
+HEX
+( --------------------------------------------------------------)
+1 associative: byte-class ( byte -- index )
+( 0) 61 ,
+2 table-exec: .byte-class ( index -- )
+( 0) ' .bsr.s ,         ( 1) ' .others ,
+
+: test-byte ( ip -- ip' )       DUP C@ byte-class .byte-class ;
+( --------------------------------------------------------------)
+
+5 associative: word-class ( word -- index )
+( 0) 4EAD ,            ( 1)    4E75 ,     ( 2)    6100 ,
+( 3) 2D3C ,            ( 4)    246B ,
+6 table-exec: .word-class ( index -- )
+( 0) ' .jsr_d(a5) ,     ( 1) ' .rts ,       ( 2) ' .bsr ,
+( 3) ' .lit ,           ( 4) ' .var ,       ( 5) ' test-byte ,
+
+: test-word ( cfa -- cfa' )     DUP w@ word-class .word-class ;
+( --------------------------------------------------------------)
+
+( Tabellen fuer long-class Woerter                                 28.03.93zd)
+
+( --------------------------------------------------------------)
+C associative:     long-class ( long -- index )
+( 0) 4EAD9F68 ,        ( 1) 4EAD9F8A ,    ( 2) 4EAD8E26 ,
+( 3) 4EAD8E06 ,        ( 4) 4EAD9EA4 ,    ( 5) 4EAD9EE4 ,
+( 6) 4EAD9EFE ,        ( 7) 4EAD9EBC ,    ( 8) 4EAD9036 ,
+( 9) 4EAD9C9C ,        ( A) 4EAD8122 ,    ( B) 4EAD8176 ,
+( --------------------------------------------------------------)
+D table-exec:   .long-class ( index -- )
+
+( 0) ' .ifbra ,        ( 1) ' .bra ,       ( 2) ' .." ,
+( 3) ' .string ,        ( 4) ' .do ,        ( 5) ' .loop ,
+( 6) ' .+loop  ,        ( 7) ' .?do ,       ( 8) ' .abort" ,
+( 9) ' .does>  ,        ( A) ' .defer ,     ( B) ' NOOP ( .vocabulary) ,
+( C) ' test-word ,
+( --------------------------------------------------------------)
+
+: test-long ( ip -- ip' )       @ long-class .long-class ;
+
+
+: .adr  ( cfa.abs -- cfa.rel ) CR data>code . SPACE ; ( fuer Testzwecke)
+
+: .immediate ( cfa -- )
+    1 - C@ DUP
+    2  AND IF ." IMMEDIATE "  THEN DUP
+    4  AND IF ." restrict "   THEN
+    8  AND IF ." macro "      THEN ;
+
+: stop?     ( Ersatzweise fuer STOP?)
+    KEY [ HEX ] 1B = ;
+
+: decom     ( cfa -- )
+    DUP 2- C@ codelen !    DUP codestart !
+    DUP >begin
+    BEGIN    ( DUP .adr )
+             cr?       .then .begin
+          DUP test-long DUP 0= STOP? OR UNTIL DROP ;
+
+: (see)     ( rel.cfa -- )    code>data DUP decom .immediate ;
+: see   CR 0 TO #tab   ' (see) CR .S ;
+
+
+
+
+

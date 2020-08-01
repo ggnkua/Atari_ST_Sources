@@ -1,0 +1,295 @@
+( 												)
+( The BLOCK wordset								)
+(												)
+
+DECIMAL
+
+10 CONSTANT #block-buffer
+
+1024 CONSTANT b/blk
+
+VARIABLE block-fileid
+VARIABLE last-buffer
+
+0 block-fileid !
+0 last-buffer !
+
+
+: blocks ( n -- n*b/blk )
+	b/blk * ;
+
+
+CREATE buffers #block-buffer blocks ALLOT
+CREATE manage-buffer #block-buffer 2* CELLS ALLOT
+
+manage-buffer #block-buffer 2* CELLS  -1 FILL
+
+
+( handling the buffers )
+
+: >buffer ( n -- bufferaddr )
+	blocks buffers + ;
+
+: >manage-entry ( n -- addr-of-manager-entry )
+	2* CELLS manage-buffer + ;
+
+: >blockno ( n -- addr-of-blockno )
+	>manage-entry ;
+
+: >update ( n -- addr-of-updateflag )
+	>manage-entry CELL+ ;
+
+
+: MOD ( n1 n2 -- n1MODn2 )
+	/MOD DROP ;
+
+
+: next-buffer ( -- bufferindex )
+	last-buffer @  
+	1+  #block-buffer MOD  
+	DUP last-buffer ! 
+	;
+
+
+: block-read? ( n -- index flag )
+	#block-buffer 0
+	DO
+		I >blockno  @ 
+		OVER = 
+		IF	DROP I TRUE UNLOOP EXIT THEN		 
+	LOOP
+	FALSE ;
+
+
+
+( handling the disk ) 
+
+: reposition-blockfile ( blockno -- )
+	blocks S>D block-fileid @ REPOSITION-FILE
+	IF -35 ( invalid block number ) THROW  THEN
+	;
+
+
+
+
+: unupdate ( bufferindex -- )
+	>update  0 SWAP ! ;
+
+: assign-block ( bufferindex blocknr -- )
+	OVER >blockno !
+	unupdate
+	;
+
+
+: read-block ( bufferindex n -- )
+	DUP >R reposition-blockfile
+	DUP >buffer  b/blk  block-fileid @ READ-FILE  
+	SWAP b/blk <> OR 
+	IF -33 ( block read exception ) THROW  THEN 
+	R> assign-block
+	;
+
+
+: ?save-buffer ( bufferindex -- )
+	DUP >update @ 
+	IF
+		DUP >blockno @  reposition-blockfile
+		DUP >buffer  b/blk  block-fileid @  WRITE-FILE
+		IF -34 ( block write exception ) THROW  THEN 
+		unupdate
+	ELSE  DROP
+	THEN  
+	;
+
+
+: BLOCK ( n -- a-addr )									( BLOCK )
+	DUP block-read?
+	IF 						( block already in memory )
+		NIP >buffer
+	ELSE					( block not in memory )
+		DROP		( n )
+		next-buffer DUP ?save-buffer	( n bufind )
+		TUCK SWAP read-block 
+		>buffer
+	THEN ;
+
+
+
+: BUFFER ( n -- a-addr )								( BLOCK )
+	DUP block-read?
+	IF 						( block already in memory )
+		NIP >buffer
+	ELSE					( block not in memory )
+		DROP		( n )
+		next-buffer DUP ?save-buffer	( n bufind )
+		TUCK SWAP assign-block 
+		>buffer
+	THEN 
+	;
+
+: LOAD ( u -- )											( BLOCK )
+	SAVE-INPUT 	DUP 
+	BEGIN  DUP  WHILE  1- ROT >R  REPEAT DROP  >R
+	0 >IN !  BLK !   0 >source-id !
+	['] interpret CATCH
+	0 BLK ! 
+	R> DUP  BEGIN  DUP  WHILE  1- R> ROT ROT  REPEAT
+ 	DROP RESTORE-INPUT
+  	THROW  
+ 	; 
+
+
+
+
+: SAVE-BUFFERS ( -- ) 									( BLOCK )
+	#block-buffer 0
+	DO
+		I ?save-buffer
+	LOOP 
+	;
+
+
+
+: UPDATE ( -- )											( BLOCK )
+	last-buffer @ DUP -1 > SWAP 
+	#block-buffer < AND
+	IF 
+		-1 last-buffer @ >update !  
+	THEN 
+	; 
+
+
+\ FLUSH is defined in the extensions part, because it uses the 
+\ extensions word EMPTY-BUFFERS
+
+
+(            )
+( extensions )
+(            )
+
+VARIABLE SCR											( BLOCK EXT ) 
+-1 SCR !
+
+
+\ there has to be an initialisation routine for the 
+\ manage-buffer. Luckily, this is exactly the behaviour
+\ of EMPTY-BUFFERS
+: EMPTY-BUFFERS ( -- )									( BLOCK EXT )
+	#block-buffer 0
+	DO
+		-1 I >blockno !
+		 0 I >update !
+	LOOP
+	;
+EMPTY-BUFFERS
+
+
+
+: FLUSH ( -- )											( BLOCK )
+	SAVE-BUFFERS
+	EMPTY-BUFFERS
+	;
+
+
+
+: LIST ( u -- )											( BLOCK EXT )
+	DUP SCR !  
+	BLOCK  CR  
+	16 0 
+	DO
+		I 64 * OVER + 
+		64 TYPE CR 
+	LOOP
+	DROP ;
+
+
+: \ ( -- ) 												( BLOCK EXT )
+	BLK @ 
+	IF
+		>IN @ [ HEX ] FFFFFF40 AND  40 + 
+		>IN !
+	ELSE  POSTPONE \  
+	THEN
+	;
+IMMEDIATE
+
+DECIMAL
+
+
+: THRU ( i*x u1 u2 -- j*x )								( BLOCK EXT )
+	1+ SWAP
+	DO	 I LOAD 	LOOP
+	;
+
+
+
+\ the REFILL definition is not only the extensions to the common 
+\ REFILL from e.g. CORE EXT, but it is the complete REFILL!
+
+: REFILL ( -- flag ) 									( BLOCK EXT )
+														( CORE EXT )
+														( FILE EXT )
+	SOURCE-ID  -1 = 		\ EVALUATE ?
+	IF	FALSE  EXIT	THEN
+
+	SOURCE-ID  0> 			\ input from file?
+	IF
+		>file-ib @ 265  >source-id @  READ-LINE 0= AND  0=
+		IF DROP FALSE EXIT THEN 
+		DROP	0 >IN !
+		TRUE  EXIT
+	THEN
+
+	BLK @ 					\ input from block?
+	IF
+		1 BLK +!
+		0 >IN !
+		TRUE EXIT
+	THEN
+
+	QUERY TRUE
+	;
+
+
+(									)
+( related stuff 					)
+(									)
+
+: OPEN-BLOCKS ( c-addr u -- ior )
+	R/W OPEN-FILE SWAP block-fileid ! 
+	;
+
+
+: CLOSE-BLOCKS ( -- ior )
+	block-fileid @ CLOSE-FILE 
+	0 block-fileid ! 
+	;
+
+
+: --> ( -- )
+	1 BLK +!
+	0 >IN !
+	;
+
+: USE ( <name> -- )
+	block-fileid @ 
+	IF	CLOSE-BLOCKS	THEN 
+	BL WORD  COUNT OPEN-BLOCKS
+	ABORT" Cannot open blockfile!"
+	;
+
+
+(							)
+( install the package 		)
+( 							)
+
+: block-source ( -- a-addr u ) 
+	BLK @ BLOCK b/blk  ;
+
+' block-source (block-source) !
+
+S" BLOCK"		TRUE	1 SET-ENVIRONMENT
+S" BLOCK-EXT"	TRUE	1 SET-ENVIRONMENT
+
+
+
