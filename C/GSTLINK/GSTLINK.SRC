@@ -1,0 +1,1319 @@
+This program was published in the german magazine ST-Computer (3/88 if i
+remember correctly). It is a new (faster, better) linker for the GST BIN format
+(used by Lattice-C, Metacomco-Pascal, ...).  It supports the same options like
+the default GST-linker (-with, -prog, -sym, -debug, -list, ...) plus several
+new ones:
+	-sec	= generate seperate TEXT, DATA and BSS segments and leave BSS
+		  out of the generated program
+	-nosec	= generate the same output as the old linker
+	-mem	= specify internal memory size used for linking the program in
+		  RAM (yes, therefore it's so fast)
+	-buf	= specify buffer size used to read in libraries
+
+If you use '-sec' the programs will be much smaller than with the original
+linker from GST.
+
+A friend (of a friend of a ...) hacked this code into the computer so it's
+poorly documented. But the linker seems to be well debugged, so you should not
+need to alter the code.
+
+The compiled program uses extended argument passing via
+either PBP/ARGV (as proposed by Allan Pratt) or ARGV with io_vector like the
+MWC msh. The use is triggered with the presence or absence of PBP in the
+environment (and of course the right pointer should be there). I have not
+included the modified startup.asm for Lattice-C (but if there is some interest,
+...) .
+
+- Edgar
+
+--------------------- (cut here) ---------------------
+/* */
+/* */
+
+#include <stdio.h>
+#include <osbind.h>
+#include <string.h>
+#include <ctype.h>
+
+#define FMSIZE     64
+#define MAX_LEN    32
+#define MAX_PDEF  500
+#define MAX_NDEF   20
+#define BLEN     1024
+#define XMAX       10
+
+#define sgn(x)  ((x)<0?-1:((x)==0?0:1))
+
+typedef enum direct  { data,source,comment,org,section,offset,xdef,xref,
+                       define,common,end,eofsy } DIRECT;
+                       
+typedef char ALFA[MAX_LEN];
+
+typedef struct oper
+   {
+      short id;
+      char  op;
+   } OPER;
+
+typedef struct symbol
+   {
+      short          length;
+      DIRECT         directive;
+      char           string[81];
+      long           longword;
+      short          id;
+      char           trunc_rule;
+      unsigned char  data_byte;
+      short          n_xref;
+      OPER           xref_oper[XMAX];
+   } SYMBOL;
+   
+typedef struct mod_item
+   {
+      struct mod_item   *mod_next;
+      char              mod_name[2];
+   } MOD_ITEM;
+   
+typedef struct section
+   {
+      struct section *sec_next;
+      short          sec_id;
+      char           *sec_start;
+      long           sec_length;
+      long           sec_oldlen;
+      long           sec_fxref;
+      long           sec_xptr;
+      MOD_ITEM       *sec_module;
+      char           sec_name[MAX_LEN];
+   } SECTION;
+   
+typedef struct xsym
+   {
+      SECTION        *xsy_sect;
+      MOD_ITEM       *xsy_mod;
+      long           xsy_value;
+      short          xsy_defd;
+      struct   xsym  *xsy_left;
+      struct   xsym  *xsy_right;
+      char           xsy_name[MAX_LEN];
+   } XSYMBOL;
+   
+typedef struct xoper
+   {
+      char     xop_oper;
+      char     xop_optyp;
+      union
+      {
+         SECTION  *xop_sec;
+         XSYMBOL  *xop_sym;
+      } xop_ptr;
+   } XOPER;
+   
+typedef struct xref
+   {
+      struct xref    *xref_next;
+      long           xref_pos;
+      long           xref_abs;
+      short          xref_trunc;
+      short          xref_ops;
+      struct xoper   xref_oper[XMAX];
+   } XREF;
+   
+extern void       app_xsy(XSYMBOL**,XSYMBOL*);
+extern XSYMBOL*   src_xsy(XSYMBOL*,char*);
+extern void       app_sec(SECTION**,SECTION*);
+extern SECTION*   src_sec(SECTION*,char*);
+extern int        read_b();
+extern void       printsy();
+extern void       nxsy();
+extern void       move_up(SECTION*);
+extern SECTION*   def_section(SECTION*,char*,short);
+extern long       calc_xsy(XSYMBOL*);
+
+SYMBOL   sy;
+char     message[]="68000 GST-Format-Linker Version 2.4 / 8.1.1988\n\n";
+char     module_name[80];
+ALFA     *pdef_name;
+ALFA     *ndef_name;
+char     input_name[FMSIZE],file_name[FMSIZE],control_name[FMSIZE];
+char     listing_name[FMSIZE],program_name[FMSIZE];
+short    control_flag,listing_flag,program_flag,debug_flag,symbol_flag;
+short    spar_flag;
+char     *membot,*memtop,*memstart,*memend,*altstart,*code_ptr,*neustart;
+char     *altxref,*debug_start,*debug_end;
+long     mem_size,buf_size;
+unsigned char *module_buffer,*module_end,*module_ptr,*module_top,*module_max;
+SECTION  *curr_sec,*sec_liste,*moved_sec;
+SECTION  **sec_lptr=&sec_liste;
+MOD_ITEM *mod_liste,*curr_mod;
+XSYMBOL  *xsy_liste;
+XREF     *xref_liste;
+FILE     *list_file;
+int      undefd_sym,double_sym,range_err;
+short    header[14]={0x601a,0,0,0,0,0,0,0,0,0,0,0,0,0};
+
+char     *errmsg[] = {
+   "Out of memory",
+   "Program memory too small",
+   "Error in binary file",
+   "Too many operands in XREF",
+   "Illegal section id",
+   "Illegal symbol id",
+   "ORG encountered",
+   "Should not occur",
+   "Word or longword at odd address",
+   "Cannot write file correctly"
+};
+
+void halt(n)
+int n;
+{
+   printf("Error %2d: %s.\n",n,errmsg[n]);
+   printf("Press any key to continue\n");
+   gemdos(1);
+   exit(1);
+}
+
+int strnicmp(x,y,n)
+register char           *x,*y;
+register unsigned int   n;
+{
+   if (n<1) return(0);
+   while(toupper(*x)==toupper(*y) && *x && *y && --n)
+      { x++; y++; }
+   return((int)(toupper(*x)-toupper(*y)));
+}
+
+void statistic()
+{
+   SECTION  *s;
+   fprintf(list_file,"\n---------------------------\n");
+   fprintf(list_file,"SECTION      START   LENGTH\n");
+   fprintf(list_file,"---------------------------\n");
+   for (s=sec_liste;s!=NULL;s=s->sec_next)
+      fprintf(list_file,
+         "%-9s %8X %8X\n",s->sec_name,s->sec_start-membot,s->sec_length);
+   fprintf(list_file,"---------------------------\n");
+}
+
+MOD_ITEM *app_mod(mod_liste,name)
+MOD_ITEM **mod_liste;
+char     *name;
+{
+   MOD_ITEM *new;
+   
+   new = (MOD_ITEM*)malloc(sizeof(MOD_ITEM)+strlen(name));
+   if (new==NULL) halt(0);
+   strcpy(new->mod_name,name);
+   new->mod_next = *mod_liste;
+   *mod_liste = new;
+   return(new);
+}
+
+void     app_xsy(xsy_liste,xsy_neu)
+XSYMBOL  **xsy_liste,*xsy_neu;
+{
+   int   c;
+   if (*xsy_liste==NULL)
+   {
+      *xsy_liste=xsy_neu;
+      xsy_neu->xsy_left=xsy_neu->xsy_right=NULL;
+   }
+   else
+      if ((c=stricmp(xsy_neu->xsy_name,(*xsy_liste)->xsy_name))<0)
+            app_xsy(&(*xsy_liste)->xsy_left,xsy_neu);
+      else  app_xsy(&(*xsy_liste)->xsy_right,xsy_neu);
+}
+
+XSYMBOL  *src_xsy(xsy_liste,name)
+XSYMBOL  *xsy_liste;
+char     *name;
+{
+   int   c;
+   if (xsy_liste==NULL) return(NULL);
+   if ((c=stricmp(name,xsy_liste->xsy_name))==0) return(xsy_liste);
+   if (c<0) return(src_xsy(xsy_liste->xsy_left,name));
+   else     return(src_xsy(xsy_liste->xsy_right,name));
+   return(NULL);
+}
+
+long calc_xsy(s)
+XSYMBOL *s;
+{
+   long  value;
+   
+   value=s->xsy_value;
+   if (s->xsy_sect!=NULL) value+=s->xsy_sect->sec_start-membot;
+   return(value);
+}
+
+void debug_table(x)
+XSYMBOL  *x;
+{
+   register char  *p;
+   register short i;
+   if (x!=NULL)
+   {
+      if (code_ptr+14>=memtop) halt(1);
+      debug_table(x->xsy_left);
+      p=x->xsy_name;
+      for (i=8;i--;) { *code_ptr++=*p; if (*p) p++; }
+      if (x->xsy_sect!=NULL) *((short*)code_ptr)=0xA200;
+      else *((short*)code_ptr)=0xA000;
+      code_ptr+=2;
+      *((long*)code_ptr)=calc_xsy(x);
+      code_ptr+=4;
+      debug_table(x->xsy_right);
+   }
+}
+
+void list_xsy(xsy_liste,u_flag)
+XSYMBOL  *xsy_liste;
+int      u_flag;
+{
+   if (xsy_liste!=NULL)
+   {
+      list_xsy(xsy_liste->xsy_left,u_flag);
+      if (u_flag)
+      {
+         if (!(xsy_liste->xsy_defd&1))
+         {
+            fprintf(list_file,"Undefined Symbol: '%s'\n",xsy_liste->xsy_name);
+            undefd_sym++;
+         }
+      }
+      else
+      {
+         if (xsy_liste->xsy_defd&1)
+         {
+            fprintf(list_file,
+               "%-20s %08X%c",xsy_liste->xsy_name,calc_xsy(xsy_liste),
+                  xsy_liste->xsy_defd&2?' ':'*');
+            if (xsy_liste->xsy_sect!=NULL)
+               fprintf(list_file," %15s",xsy_liste->xsy_sect->sec_name);
+            else fprintf(list_file," %20s"," ");
+            if (xsy_liste->xsy_mod!=NULL)
+               fprintf(list_file," %15s",xsy_liste->xsy_mod->mod_name);
+            fprintf(list_file,"\n");
+         }
+         else fprintf(list_file,"%-20s undefined\n",xsy_liste->xsy_name);
+      }
+      list_xsy(xsy_liste->xsy_right,u_flag);
+   }
+}
+
+void app_sec(sec_liste,sec_neu)
+SECTION  **sec_liste,*sec_neu;
+{
+   if (*sec_liste==NULL)
+   {
+      *sec_liste=sec_neu;
+      sec_neu->sec_next=NULL;
+   }
+   else  if (sec_neu->sec_id<=(*sec_liste)->sec_id)
+            app_sec(&(*sec_liste)->sec_next,sec_neu);
+         else
+         {
+            sec_neu->sec_next=*sec_liste;
+            *sec_liste=sec_neu;
+         }
+}
+
+SECTION* src_sec(sec_liste,name)
+SECTION  *sec_liste;
+char     *name;
+{
+   while(sec_liste!=NULL)
+   {
+      if (stricmp(sec_liste->sec_name,name)==0) return(sec_liste);
+      sec_liste=sec_liste->sec_next;
+   }
+   return(NULL);
+}
+
+unsigned char  inp_buf[BLEN],*buf_ptr,*buf_end;
+int            inp_hnd;
+int read_b()
+{
+   if (buf_end-inp_buf<BLEN) return(-1);
+   buf_end=inp_buf+Fread(inp_hnd,BLEN,inp_buf);
+   buf_ptr=inp_buf;
+   return(buf_ptr<buf_end ? (int)*buf_ptr++ : -1);
+}
+
+int get_drct()
+{
+   return(buf_ptr<buf_end ? (int)*buf_ptr++ : read_b());
+}
+
+int get_byte()
+{
+   return(module_ptr<module_end ? (int)*module_ptr++ : get_drct());
+}
+
+void nxsy()
+{
+   int   c;
+   if ((c=get_byte())==0xFB)
+   {
+      register char  *p;
+      register int   i;
+      switch(get_byte())
+      {
+         case -1     :  sy.directive=eofsy;
+                        sy.length=0;
+                        break;
+         case 0x01   :  sy.directive=source;
+                        sy.length=0;
+                        p=sy.string;
+                        for(i=get_byte();i--;) *p++=get_byte();
+                        *p='\0';
+                        break;
+         case 0x02   :  sy.directive=comment;
+                        sy.length=0;
+                        p=sy.string;
+                        for(i=get_byte();i--;) *p++=get_byte();
+                        *p='\0';
+                        break;
+         case 0x03   :  sy.directive=org;
+                        sy.length=0;
+                        sy.longword=(get_byte()<<24)+(get_byte()<<16)+
+                           (get_byte()<<8)+(get_byte());
+                        break;
+         case 0x04   :  sy.directive=section;
+                        sy.length=0;
+                        sy.id=(get_byte()<<8)+(get_byte());
+                        break;
+         case 0x05   :  sy.directive=offset;
+                        sy.length=0;
+                        sy.longword=(get_byte()<<24)+(get_byte()<<16)+
+                           (get_byte()<<8)+(get_byte());
+                        break;
+         case 0x06   :  sy.directive=xdef;
+                        sy.length=0;
+                        p=sy.string;
+                        for(i=get_byte();i--;) *p++=get_byte();
+                        *p='\0';
+                        sy.longword=(get_byte()<<24)+(get_byte()<<16)+
+                           (get_byte()<<8)+(get_byte());
+                        sy.id=(get_byte()<<8)+(get_byte());
+                        break;
+         case 0x07   :  sy.directive=xref;
+                        sy.longword=(get_byte()<<24)+(get_byte()<<16)+
+                           (get_byte()<<8)+(get_byte());
+                        sy.trunc_rule=get_byte();
+                        sy.length=sy.trunc_rule&7;
+                        for (i=0;(c=get_byte())!=0xFB && i<XMAX;i++)
+                        {
+                           if (c!='+' && c!='-')
+                           { printf("Illegal XREF Operator : %c\n",c); halt(2); }
+                           sy.xref_oper[i].op=c;
+                           sy.xref_oper[i].id=(get_byte()<<8)+(get_byte());
+                        }
+                        if (c!=0xFB) halt(3);
+                        sy.n_xref=i;
+                        break;
+         case 0x10   :  sy.directive=define;
+                        sy.length=0;
+                        sy.id=(get_byte()<<8)+(get_byte());
+                        p=sy.string;
+                        for (i=get_byte();i--;) *p++=get_byte();
+                        *p='\0';
+                        break;
+         case 0x12   :  sy.directive=common;
+                        sy.length=0;
+                        sy.id=(get_byte()<<8)+(get_byte());
+                        break;
+         case 0x13   :  sy.directive=end;
+                        sy.length=0;
+                        break;
+         case 0xFB   :  sy.directive=data;
+                        sy.length=1;
+                        sy.data_byte=0xFB;
+                        break;
+         default     :  printf("Illegal Directive\n"); halt(2);
+                        break;
+      }
+   }
+   else
+   {
+      if (c==-1)
+      {
+         sy.directive=eofsy;
+         sy.length=0;
+      }
+      else
+      {
+         sy.directive=data;
+         sy.data_byte=c;
+         sy.length=1;
+      }
+   }
+}
+
+void move_up(s)
+SECTION *s;
+{
+   if (memend!=memtop) halt(-1);
+   moved_sec=s;
+   if (s!=NULL)
+      if (s->sec_start!=NULL)
+      {
+         altstart=memstart;
+         memstart=s->sec_start;
+         memend=memtop-(altstart-memstart);
+         if (altstart>memstart) movmem(memstart,memend,altstart-memstart);
+      }
+      else moved_sec=NULL;
+}
+
+void comment_dir()
+{
+   fprintf(list_file,"COMMENT: %s\n",sy.string);
+   nxsy();
+}
+
+void xdef_dir(body_flag)
+int   body_flag;
+{
+   XSYMBOL  *s;
+   
+   if ((s=src_xsy(xsy_liste,sy.string))==NULL)
+   {
+      if ((s=(XSYMBOL*)malloc(sizeof(XSYMBOL)))==NULL) halt(0);
+      strupr(sy.string);
+      strncpy(s->xsy_name,sy.string,MAX_LEN-1);
+      s->xsy_defd=0;
+      s->xsy_mod=NULL;
+      app_xsy(&xsy_liste,s);
+   }
+   if (s->xsy_defd&1)
+   {
+      fprintf(list_file,"Double defined Symbol: %s\n",sy.string);
+      double_sym++;
+   }
+   else
+   {
+      if (sy.id)
+      {
+         if (sy.id>0 || -sy.id>MAX_NDEF) halt(4);
+         if ((s->xsy_sect=src_sec(sec_liste,ndef_name[-sy.id]))==NULL)
+         {
+            if (body_flag) halt(2);
+            s->xsy_sect=def_section(sec_liste,ndef_name[-sy.id],sy.id);
+         }
+      }
+      else s->xsy_sect=NULL;
+      s->xsy_value=sy.longword;
+      if (s->xsy_sect!=NULL) s->xsy_value += s->xsy_sect->sec_oldlen;
+      s->xsy_defd |= 1;
+      s->xsy_mod = curr_mod;
+   }
+   nxsy();
+}
+
+void define_dir()
+{
+   strupr(sy.string);
+   if (sy.id>0)
+   {
+      if (sy.id>MAX_PDEF) halt(4);
+      strncpy(pdef_name[sy.id],sy.string,MAX_LEN-1);
+   }
+   else
+   {
+      if (-sy.id>MAX_NDEF) halt(5);
+      strncpy(ndef_name[-sy.id],sy.string,MAX_LEN-1);
+   }
+   nxsy();
+}
+
+SECTION *def_section(sec_liste,name,id)
+SECTION  *sec_liste;
+char     *name;
+short    id;
+{
+   SECTION  *sec;
+   
+   if (NULL==(sec=(SECTION*)malloc(sizeof(SECTION)))) halt(0);
+   strupr(name);
+   strncpy(sec->sec_name,name,MAX_LEN-1);
+   sec->sec_start  = NULL;
+   sec->sec_length = 0;
+   sec->sec_oldlen = 0;
+   sec->sec_id     = -1;
+   sec->sec_module = curr_mod;
+   if (!stricmp(sec->sec_name,"DATA")) sec->sec_id=-2;
+   if (!stricmp(sec->sec_name,"BSS")) sec->sec_id=-3;
+   if (!stricmp(sec->sec_name,"UDATA")) sec->sec_id=-3;
+   sec->sec_fxref = NULL;
+   sec->sec_xptr  = (long)&sec->sec_fxref;
+   app_sec(sec_lptr,sec);
+   return(sec);
+}
+
+void sec_com_dir()
+{
+   if (sy.id>=0 || -sy.id>= MAX_NDEF) halt(4);
+   if (NULL==(curr_sec=src_sec(sec_liste,ndef_name[-sy.id])))
+   {
+      curr_sec=def_section(sec_liste,ndef_name[-sy.id],sy.id);
+      move_up(curr_sec->sec_next);
+      curr_sec->sec_start=memstart;
+   }
+   else
+   {
+      move_up(curr_sec->sec_next);
+      if (curr_sec->sec_start==NULL) curr_sec->sec_start=memstart;
+   }
+}
+
+void section_dir()
+{
+   sec_com_dir();
+   code_ptr=neustart=memstart;
+   nxsy();
+}
+
+void org_dir()
+{
+   halt(6);
+   nxsy();
+}
+
+void common_dir()
+{
+   sec_com_dir();
+   neustart=memstart;
+   code_ptr=curr_sec->sec_start;
+   nxsy();
+}
+
+void data_dir()
+{
+   if (code_ptr>=memend) halt(1);
+   *code_ptr++=sy.data_byte;
+   nxsy();
+}
+
+void offset_dir()
+{
+   if (code_ptr>neustart) neustart=code_ptr;
+   code_ptr=memstart+sy.longword;
+   if (code_ptr>neustart) neustart=code_ptr;
+   nxsy();
+}
+
+void xref_dir()
+{
+   XREF     *x;
+   XSYMBOL  *xsy;
+   SECTION  *sec;
+   short    i,xid;
+   
+   if ((x=(XREF*)malloc(sizeof(XREF)+(sy.n_xref-XMAX)*sizeof(XOPER)))==NULL)
+      halt(0);
+   if (curr_sec==NULL) halt(2);
+   x->xref_pos    = code_ptr-curr_sec->sec_start;
+   x->xref_abs    = sy.longword;
+   x->xref_ops    = sy.n_xref;
+   x->xref_trunc  = sy.trunc_rule;
+   x->xref_next   = NULL;
+   for (i=0;i<sy.n_xref;i++)
+   {
+      x->xref_oper[i].xop_oper=sy.xref_oper[i].op;
+      xid=sy.xref_oper[i].id;
+      switch(x->xref_oper[i].xop_optyp=sgn(xid))
+      {
+         case -1  :  if (-xid>MAX_NDEF) halt(4);
+                     if ((sec=src_sec(sec_liste,ndef_name[-xid]))==NULL)
+                        sec=def_section(sec_liste,ndef_name[-xid],xid);
+                     x->xref_oper[i].xop_ptr.xop_sec=sec;
+                     if (x->xref_oper[i].xop_oper=='+')
+                          x->xref_abs += sec->sec_oldlen;
+                     else x->xref_abs -= sec->sec_oldlen;
+                     break;
+         case  0  :  break;
+         case  1  :  if ((xsy=src_xsy(xsy_liste,pdef_name[xid]))==NULL)
+                     {
+                        if ((xsy=(XSYMBOL*)malloc(sizeof(XSYMBOL)))==NULL)
+                           halt(0);
+                        strncpy(xsy->xsy_name,pdef_name[xid],MAX_LEN-1);
+                        xsy->xsy_defd=0;
+                        xsy->xsy_mod=NULL;
+                        app_xsy(&xsy_liste,xsy);
+                     }
+                     xsy->xsy_defd |= 2;
+                     x->xref_oper[i].xop_ptr.xop_sym=xsy;
+                     break;
+      }
+   }
+   *((XREF**)curr_sec->sec_xptr)=x;
+   curr_sec->sec_xptr=(long)&x->xref_next;
+   code_ptr += sy.trunc_rule & 7;
+   if (code_ptr>=memend) halt(1);
+   nxsy();
+}
+
+void header_command()
+{
+   int   in_header_com=1;
+   
+   while (in_header_com)
+      switch (sy.directive)
+      {
+         case comment : comment_dir();break;
+         case xdef    : xdef_dir(0);break;
+         case define  : define_dir();break;
+         default      : in_header_com=0;break;
+      }
+}
+
+void section_command()
+{
+   switch (sy.directive)
+   {
+      case section : section_dir();break;
+      case org     : org_dir();break;
+      case common  : common_dir();break;
+      default      : halt(2);break;
+   }
+}
+
+void body()
+{
+   while (sy.directive==data || sy.directive==offset ||
+          sy.directive==xdef || sy.directive==xref ||
+          sy.directive==define || sy.directive ==comment)
+   {
+      switch(sy.directive)
+      {
+         case data     : data_dir();break;
+         case offset   : offset_dir();break;
+         case xdef     : xdef_dir(1);break;
+         case xref     : xref_dir();break;
+         case define   : define_dir();break;
+         case comment  : comment_dir();break;
+         default       : halt(2);break;
+      }
+   }
+}
+
+void chunk()
+{
+   SECTION *s;
+
+   while (sy.directive==xdef || sy.directive==comment ||
+          sy.directive==define) header_command();
+   if (sy.directive==section || sy.directive==org ||
+       sy.directive==common)
+   {
+      section_command();
+      body();
+      if (((long)code_ptr&1) && code_ptr>=neustart)
+      {
+         if (code_ptr>=memend) halt(1);
+         *code_ptr++='\0';
+      }
+      if (code_ptr>neustart) neustart=code_ptr;
+      curr_sec->sec_length+=neustart-memstart;
+      if (altstart!=NULL)
+      {
+         if (altstart>memstart) movmem(memend,neustart,altstart-memstart);
+         for(s=moved_sec;s!=NULL;s=s->sec_next)
+            if (s->sec_start!=NULL) s->sec_start += neustart-memstart;
+         memend=memtop;
+         neustart+=altstart-memstart;
+         altstart=NULL;
+      }
+      memstart=neustart;
+   }
+}
+
+void module()
+{
+   SECTION  *sec;
+   short    i;
+   
+   if (sy.directive!=source) halt(2);
+   curr_mod=app_mod(&mod_liste,sy.string);
+   strcpy(module_name,sy.string);
+   nxsy();
+   while (sy.directive==xdef || sy.directive==comment ||
+          sy.directive==define || sy.directive==section ||
+          sy.directive==org || sy.directive==common) chunk();
+   if (sy.directive!=end) halt(2);
+   if (listing_flag) fprintf(list_file,"%-12.12s:",module_name);
+   i=0;
+   for (sec=sec_liste;sec!=NULL;sec=sec->sec_next)
+   {
+      if (listing_flag)
+      {
+         if (i++>3) { fprintf(list_file,"\n"); i=0; }
+         fprintf(list_file," %8.8s=%08X",
+                 sec->sec_name,sec->sec_length-sec->sec_oldlen);
+      }
+      sec->sec_oldlen=sec->sec_length;
+   }
+   if (listing_flag) fprintf(list_file,"\n");
+   strcpy(module_name,"NO MODULE");
+   nxsy();
+}
+
+void calc_xref(x,c,modname)
+XREF  *x;
+char  *c,*modname;
+{
+   short i;
+   long  value;
+   
+   value = x->xref_abs;
+   c += x->xref_pos;
+   /* printf("XREF at %8X %8X",c-membot,value); */
+   for (i=0;i<x->xref_ops;i++)
+   {
+      /* printf("%c",x->xref_oper[i].xop_oper); */
+      switch (x->xref_oper[i].xop_optyp)
+      {
+         case -1 : if (x->xref_oper[i].xop_oper=='+')
+                        value+=x->xref_oper[i].xop_ptr.xop_sec->sec_start
+                               -membot;
+                   else value-=x->xref_oper[i].xop_ptr.xop_sec->sec_start
+                              -membot;
+                   /* printf("%s/%x",x->xref_oper[i].xop_ptr.xop_sec->sec_name,
+                              x->xref_oper[i].xop_ptr.xop_sec->sec_start); */
+                   break;
+         case  0 : if (x->xref_oper[i].xop_oper=='+')
+                        value+=c-membot;
+                   else value-=c-membot;
+                   printf("&");
+                   break;
+         case  1 : if (x->xref_oper[i].xop_oper=='+')
+                         value+=calc_xsy(x->xref_oper[i].xop_ptr.xop_sym);
+                   else  value-=calc_xsy(x->xref_oper[i].xop_ptr.xop_sym);
+                   /* printf("%s"/%x",x->xref_oper[i].xop_ptr.xop_sym->xsy_name,
+                              calc_xsy(x->xref_oper[i].xop_ptr.xop_sym)); */
+                   break;
+      }
+      /* printf("\n"); */
+   }
+   if (c<membot || c>memstart) halt(2);
+   if (x->xref_trunc & 32) value -=c-membot;
+   switch(x->xref_trunc & 7)
+   {
+      case 4 : if (((long)c)&1) halt(1); *((long*)c)=value; break;
+      case 2 : if (((long)c)&1) halt(1); *((short*)c)=value;
+               if (x->xref_trunc & 8)
+               {
+                  if (value<-32768L || value>32767L)
+                  {
+                     range_err++;
+                     printf("XREF.W-value out of range in module '%s'\n",
+                             modname);
+                  }
+               }
+               else
+               {
+                  if (value>65535L)
+                  {
+                     range_err++;
+                     printf("XREF.UW-value out of range in module '%s'\n",
+                             modname);
+                  }
+               }
+               break;
+      case 1 : *c=value;
+               if (x->xref_trunc & 8)
+               {
+                  if (value<-128L || value>128L)
+                  {
+                     range_err++;
+                     printf("XREF.B-value out of range in module '%s'\n",
+                             modname);
+                  }
+               }
+               else
+               {
+                  if (value>255L)
+                  {
+                     range_err++;
+                     printf("XREF.UB-value out of range in module '%s'\n",
+                             modname);
+                  }
+               }
+               break;
+      default: halt(2);
+   }
+   if (x->xref_trunc & 64)
+   {
+      if (altxref==NULL)
+      {
+         if (code_ptr>=memtop-4) halt(1);
+         altxref=c;
+         *((long*)code_ptr)=c-membot;
+         code_ptr+=4;
+      }
+      else
+      {
+         while (c-altxref>254)
+         {
+            altxref+=254;
+            if (code_ptr>=memtop) halt(1);
+            *code_ptr++='\001';
+         }
+         if (code_ptr>=memtop) halt(1);
+         *code_ptr++=c-altxref;
+         altxref=c;
+      }
+   }
+}
+
+void all_xrefs(sec_liste)
+SECTION  *sec_liste;
+{
+   XREF  *x;
+   
+   while (sec_liste!=NULL)
+   {
+      x=(XREF*)sec_liste->sec_fxref;
+      while (x!=NULL)
+      {
+         calc_xref(x,sec_liste->sec_start,sec_liste->sec_module->mod_name);
+         x=x->xref_next;
+      }
+      sec_liste=sec_liste->sec_next;
+   }
+   if (altxref==NULL)
+   {
+      if (code_ptr>=memtop-8) halt(1);
+      *((long*)code_ptr)=0; code_ptr+=4;
+      *((long*)code_ptr)=0; code_ptr+=4;
+   }
+   else
+   {
+      if (code_ptr>=memtop) halt(1);
+      *code_ptr++='\0';
+   }
+}
+
+void init_mem()
+{
+   pdef_name=(ALFA*)malloc(MAX_PDEF*sizeof(ALFA));
+   ndef_name=(ALFA*)malloc(MAX_NDEF*sizeof(ALFA));
+   membot=(char*)malloc(mem_size);
+   module_buffer=(char*)malloc(buf_size);
+   if (membot==NULL || module_buffer==NULL ||
+       ndef_name==NULL || pdef_name==NULL) halt(0);
+       
+   memtop=membot+mem_size;
+   memstart=membot;
+   memend=memtop;
+   altstart=NULL;
+   module_top=module_buffer+buf_size;
+   module_max=module_ptr=module_end=module_buffer;
+}   
+
+
+void make_ext(make_name,name,ext)
+char  *make_name,*name,*ext;
+{
+   char  oldtext[FMSIZE];
+   
+   stcgfe(oldtext,name);
+   if (!*oldtext) strmfe(make_name,name,ext);
+   else           strcpy(make_name,name);
+}
+
+void command_line(argc,argv)
+int   argc;
+char  *argv[];
+{
+   int   i=2;
+   int   x;
+   
+   if (argc<2) { printf("No Filename specified\n"); exit(1); }
+   strcpy(file_name,argv[1]);
+   strmfe(input_name,file_name,"BIN");
+   strmfe(listing_name,file_name,"MAP");
+   strmfe(control_name,file_name,"LNK");
+   strmfe(program_name,file_name,"PRG");
+   listing_flag=0;
+   control_flag=0;
+   program_flag=1;
+   debug_flag=0;
+   symbol_flag=0;
+   spar_flag=0;
+   i=2;
+   if (argc>i) if (*argv[i]!='-')
+      { make_ext(control_name,argv[i++],"LNK"); control_flag=1; }
+   if (argc>i) if (*argv[i]!='-')
+      { make_ext(listing_name,argv[i++],"MAP"); listing_flag=1; }
+   if (argc>i) if (*argv[i]!='-') make_ext(program_name,argv[i++],"PRG");
+   for (;i<argc;i++)
+   {
+      if (!stricmp(argv[i],"-NOLIST")) {listing_flag=0; continue;}
+      if (!stricmp(argv[i],"-NODEBUG")) {debug_flag=0; continue;}
+      if (!stricmp(argv[i],"-NOPROG")) {program_flag=0; continue;}
+      if (!stricmp(argv[i],"-DEBUG")) {debug_flag=1; continue;}
+      if (!stricmp(argv[i],"-SYM")) {symbol_flag=1; continue;}
+      if (!stricmp(argv[i],"-NOSYM")) {symbol_flag=0; continue;}
+      if (!stricmp(argv[i],"-SEC")) {spar_flag=1; continue;}
+      if (!stricmp(argv[i],"-NOSEC")) {spar_flag=0; continue;}
+      if (!stricmp(argv[i],"-WITH"))
+      {
+         if (i+1<argc) if (*argv[i+1]!='-')
+            make_ext(control_name,argv[++i],"LNK"); 
+         control_flag=1;
+         continue;
+      }
+      if (!stricmp(argv[i],"-LIST"))
+      {
+         if (i+1<argc) if (*argv[i+1]!='-')
+            make_ext(listing_name,argv[++i],"LST");
+         listing_flag=1;
+         continue;
+      }
+      if (!stricmp(argv[i],"-PROG"))
+      {
+         if (i+1<argc) if (*argv[i+1]!='-')
+            make_ext(program_name,argv[++i],"PRG");
+         program_flag=1;
+         continue;
+      }
+      if (!stricmp(argv[i],"-MEM"))
+      {
+         if (i+1<argc) if (*argv[i+1]!='-')
+         {
+            x=atoi(argv[++i]);
+            if (x>2 && x<800) mem_size=x*1024;
+         }
+         continue;
+      }
+      if (!stricmp(argv[i],"-BUF"))
+      {
+         if (i+1<argc) if (*argv[i+1]!='-')
+         {
+            x=atoi(argv[++i]);
+            if (x>2 && x<800) buf_size=x*1024;
+         }
+         continue;
+      }
+      printf("Invalid Option: '%s'\n",argv[i]);
+   }
+}
+
+int test_module()
+{
+   register int   c;
+   int            end_test=0;
+   int            result=0;
+   register short i;
+   char           string[80];
+   register char  *p;
+   XSYMBOL        *s;
+   
+   module_end=module_ptr=module_buffer;
+   
+   do
+   {
+      c=get_drct(); if (c<0) halt(2);
+      if (module_end+128>module_top) halt(9);
+      *module_end++=c;
+      if (c==0xFB)
+      {
+         c=get_drct(); *module_end++=c;
+         switch(c)
+         {
+            case   -1 : halt(2); break;
+            case 0xFB : break;
+            case 0x01 :
+            case 0x02 : i=get_drct(); *module_end++=i;
+                        while(i--) *module_end++=get_drct();
+                        break;
+            case 0x03 :
+            case 0x05 : *module_end++=get_drct();
+                        *module_end++=get_drct();
+                        *module_end++=get_drct();
+                        *module_end++=get_drct();
+                        break;
+            case 0x12 :
+            case 0x04 : *module_end++=get_drct();
+                        *module_end++=get_drct();
+                        break;
+            case 0x06 : p=string;
+                        i=get_drct(); *module_end++=i;
+                        while (i--)
+                           { *p=get_drct(); *module_end++=*p++; }
+                        *p='\0';
+                        *module_end++=get_drct();
+                        *module_end++=get_drct();
+                        *module_end++=get_drct();
+                        *module_end++=get_drct();
+                        *module_end++=get_drct();
+                        *module_end++=get_drct();
+                        s=src_xsy(xsy_liste,string);
+                        if (s!=NULL) if (!(s->xsy_defd&1))
+                           end_test=result=1;
+                        break;
+            case 0x07 : *module_end++=get_drct();
+                        *module_end++=get_drct();
+                        *module_end++=get_drct();
+                        *module_end++=get_drct();
+                        *module_end++=get_drct();
+                        while (1)
+                        {
+                           c=get_drct(); *module_end++=c;
+                           if (c==0xFB || c==-1) break;
+                           *module_end++=get_drct();
+                           *module_end++=get_drct();
+                        }
+                        break;
+            case 0x10 : *module_end++=get_drct();
+                        *module_end++=get_drct();
+                        i=get_drct(); *module_end++=i;
+                        while (i--) *module_end++=get_drct();
+                        break;
+            case 0x13 : end_test=1;
+                        break;
+            default   : halt(2);
+         }
+      }
+   } while (!end_test);
+   if (module_end>module_max) module_max=module_end;
+   return(result);
+}
+
+void link_file(name,lib_mode)
+char  *name;
+int   lib_mode;
+{
+   inp_hnd=Fopen(name,0);
+   buf_ptr=buf_end=inp_buf+BLEN;
+   strcpy(module_name,"*NO MODULE");
+   if (inp_hnd<0)
+   {
+      printf("Cannot open binary file: '%s'\n",name);
+      exit(1);
+   }
+   
+   nxsy();
+   while (sy.directive!=eofsy)
+   {
+      if (lib_mode)
+      {
+         if(!test_module())
+         {
+            module_end=module_ptr=module_buffer;
+            nxsy();
+         }
+         else module();
+      }
+      else module();
+   }
+   Fclose(inp_hnd);
+}
+
+void write_prog()
+{
+   int      handle;
+   int      n,h;
+   SECTION  *sec;
+   char     *start,*endcode;
+   
+   if ((handle=Fcreate(program_name,0))<0)
+   {
+      printf("Cannot open %s for writing\n"); halt(10);
+   }
+   *((long*)&header[7])=debug_end-memstart;
+   n=Fwrite(handle,28,header); if (n!=28) halt(10);
+   
+   if (spar_flag)
+   {
+      h=1;
+      sec=sec_liste;
+      start=membot;
+      
+      while (sec->sec_id>-2 && sec->sec_next!=NULL) sec=sec->sec_next;
+      if (sec->sec_id==-2)
+      {
+         endcode=sec->sec_start;
+         *((long*)&header[h])=endcode-start;
+         if (endcode-start)
+         {
+            n=Fwrite(handle,endcode-start,start);
+            if (n!=endcode-start) halt(10);
+         }
+         h=3;
+         start=endcode;
+      }
+      
+      while (sec->sec_id>-3 && sec->sec_next!=NULL) sec=sec->sec_next;
+      if (sec->sec_id==-3)
+      {
+         endcode=sec->sec_start;
+         {
+            *((long*)&header[h])=endcode-start;
+            if (endcode-start)
+            {
+               n=Fwrite(handle,endcode-start,start);
+               if (n!=endcode-start) halt(10);
+            }
+         }
+         h=5;
+         start=endcode;
+      }
+      
+      /* Rest in (h)-Section schreiben */
+      endcode=debug_start;
+      *((long*)&header[h])=endcode-start;
+      if (h<5)
+      {
+         if (endcode-start)
+         {
+            n=Fwrite(handle,endcode-start,start);
+            if (n!=endcode-start) halt(10);
+         }
+      }
+   }
+   else
+   {
+      start=membot;
+      endcode=debug_start;
+      *((long*)&header[1])=debug_start-membot;
+      if (endcode-start)
+      {
+         n=Fwrite(handle,endcode-start,start);
+         if (n!=endcode-start) halt(10);
+      }
+   }
+   /* Symboltabelle und Relocation Table schreiben */
+   *((long*)&header[7])=debug_end-debug_start;
+   start=debug_start;
+   endcode=code_ptr;
+   if (endcode-start)
+   {
+      n=Fwrite(handle,endcode-start,start);
+      if (n!=endcode-start) halt(10);
+   }
+   Fseek(0L,handle,0);
+   n=Fwrite(handle,28,header); if (n!=28) halt(10);
+   if (Fclose(handle)<0) halt(10);
+}
+
+void main(argc,argv)
+int   argc;
+char  *argv[];
+{
+
+   char  line[80],*name;
+   FILE  *fp;
+   int   lib_mode;
+   int   err_code=0;
+   
+   printf(message);
+   mem_size=100*1024; buf_size=32*1024;
+   double_sym=undefd_sym=range_err=0;
+   command_line(argc,argv);
+   mod_liste=NULL;
+   list_file=stdout;
+   if (listing_flag)
+   {
+      list_file=fopen(listing_name,"w");
+      if (list_file==NULL)
+      {
+         printf("Cannot open list_file '%s' for writing\n"); exit(1);
+      }
+      if (list_file!=stdout) fprintf(list_file,message);
+   }
+   
+   init_mem();
+   sec_liste=curr_sec=moved_sec=NULL;
+   xsy_liste=NULL;
+   xref_liste=NULL;
+   altxref=NULL;
+   
+   if (control_flag)
+   {
+      fp=fopen(control_name,"r");
+      if (fp==NULL)
+      {
+         printf("Cannot open control_file : '%s'\n",control_name);
+         exit(1);
+      }
+      while (!feof(fp))
+      {
+         if ((name=fgets(line,80,fp))==NULL) *line='\0';
+         for (name=line; *name!='\n' && *name; name++);
+         *name='\0';
+         if (!*line) continue;
+         if (*line=='*') continue;
+         name=NULL;
+         lib_mode=0;
+         if (!strnicmp(line,"INPUT",5)) name=line+5;
+         else if (!strnicmp(line,"LIBRARY",7)) { name=line+7; lib_mode=1; }
+         if (name==NULL) printf("Invalid control line : %s\n",line);
+         else
+         {
+            name=stpblk(name);
+            if (*name=='*') strmfe(name,file_name,"BIN");
+            else            make_ext(name,name,"BIN");
+            link_file(name,lib_mode);
+         }
+      }
+      fclose(fp);
+   }
+   else link_file(input_name,0);
+   code_ptr=memstart;
+   debug_start=code_ptr;
+   if (debug_flag) debug_table(xsy_liste);
+   debug_end=code_ptr;
+   all_xrefs(sec_liste);
+   
+   statistic();
+   fprintf(list_file,"Program length   = %8X\n",memstart-membot);
+   fprintf(list_file,"Symbol table     = %8X\n",debug_end-memstart);
+   fprintf(list_file,"Relocation table = %8X\n",code_ptr-debug_end);
+   fprintf(list_file,"--------------------\n");
+   fprintf(list_file,
+      "Memory Usage     = %7d%%\n",(code_ptr-membot)*100/mem_size);
+   fprintf(list_file,
+      "Buffer Usage     = %7d%%\n",(module_max-module_buffer)*100/buf_size);
+   fprintf(list_file,"--------------------\n");
+   list_xsy(xsy_liste,1);
+   if (program_flag) write_prog();
+   if (symbol_flag)
+   {
+      fprintf(list_file,"\nSymbol Table:\n");
+      fprintf(list_file,"-------------\n");
+      list_xsy(xsy_liste,0);
+      fprintf(list_file,"\n");
+   }
+   if (undefd_sym)
+   {
+      if (list_file!=stdout)
+         fprintf(list_file,"Undefined Symbols: %8d\n",undefd_sym);
+      printf("Undefined Symbols: %8d\n",undefd_sym);
+      err_code=1;
+   }
+   if (double_sym)
+   {
+      if (list_file!=stdout)
+         fprintf(list_file,"Multiply defined : %8d\n",double_sym);
+      printf("Multiply defined : %8d\n",double_sym);
+      err_code=1;
+   }
+   if (range_err)
+   {
+      if (list_file!=stdout)
+         fprintf(list_file,"Range errors     : %8D\n",range_err);
+      printf("Range errors     : %8D\n",range_err);
+      err_code=1;
+   }
+   
+   printf("\nLink completed\n");
+   if (list_file!=stdout) fprintf(list_file,"\nLink completed\n");
+   if (listing_flag) fclose(list_file);
+   exit(err_code);
+}
+
+

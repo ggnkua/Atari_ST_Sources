@@ -1,0 +1,470 @@
+/************************************************************************
+*									*
+* The SB-Prolog System							*
+* Copyright SUNY at Stony Brook, 1986; University of Arizona, 1987	*
+*									*
+************************************************************************/
+
+/*-----------------------------------------------------------------
+SB-Prolog is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY.  No author or distributor
+accepts responsibility to anyone for the consequences of using it
+or for whether it serves any particular purpose or works at all,
+unless he says so in writing.  Refer to the SB-Prolog General Public
+License for full details.
+
+Everyone is granted permission to copy, modify and redistribute
+SB-Prolog, but only under the conditions described in the
+SB-Prolog General Public License.   A copy of this license is
+supposed to have been given to you along with SB-Prolog so you
+can know your rights and responsibilities.  It should be in a
+file named COPYING.  Among other things, the copyright notice
+and this notice must be preserved on all copies. 
+------------------------------------------------------------------ */
+/* $tprog1.P */
+
+/* This program is the beginning of an attempt to write a translator that
+will take a preprocessed prolog program and produce a list of PIL
+instructions that implements the program.  The preprocessor adds pragma
+information to the program to make it possible for it to be processed.  We
+use the following representation: 
+
+  preddef(Name,Arity,Clauses,Pragma,Exrefs)
+    where
+	Name is the predicate name.
+	Arity is the arity of the predicate.
+	Clauses is a list of clause terms that represent the defining rules.
+	Pragma is a list, empty for the moment.
+	Exrefs is a list (with tail a var) of external references: 
+	  er(Predname,Ep) where Ep is the entry point addr of predicate
+	  Predname.
+
+  clause(Args,Clause,Pragma)
+    where
+	Args is a list of the formal parameters in the head of the clause.
+	  (Arity long).
+	Clause is a term representing the literals on the rhs of the rule.
+	Pragma is a list; s(_,_) is a symbol table with information
+	  concerning the variables that appear in the clause. 
+	  all(y) indicates alloc-dealloc is necessary, all(n) indicates 
+	  it's not nec.
+
+A clause is represented as a term with structure symbols
+and(Firstconjunct,Pragma,Secondconjunct),
+or(Firstdisjunct,Pragma,Seconddisjunct), not(Negformula,Pragma), or nil if
+it is empty.  Goals on the right hand side are represented as:
+
+'_call'(Predname,Arglist,Pragma):
+    where
+	Predname is the predicate name.
+	Arglist is the list of arguments.
+	Pragma is the pragma; nv(N) means that N is the size of the 
+	  activation record at this point.
+
+For example p(a,b) is represented as '_call'(p,[[a],[b]],[nv(1)]).
+Structure and constants are represented as lists, not as normal structures.
+Thus f(a,b) would be represented as [f,[a],[b]].  Constants are represented
+as 0-ary structures, i.e., lists of length one.  Variables are represented
+using v(Vid,Pragma), where Vid is a constant symbol representing the name,
+and Pragma is a list.  In the pragma, d(L) indicates that L is the location
+in the AR of this variable (or its register if it is a temporary) ; occ(f)
+indicates that this is the first occurrence and occ(s) a subsequent
+occurrence; k(t) indicates it is a temporary variable, k(p) indicates a
+permanent variable, k(u) indicates an unsafe occurrence of a permanent
+variable.  k(vh) indicates a void (anonymous) variable occurring at the top
+level in the head of a clause, k(vb) indicates a void variable occurring at
+the top level in the body of a clause.  */
+
+/* For the clauses:
+	p(X,a) :- r(Y,X),s(Y,f(g(g(X)),f(Y,b))).
+	p(B,c).
+	p(f(a,g(X)),f(g(a),X)).
+
+The query is:
+
+tpred(preddef(p,
+	   2,
+	   [clause([v(x,[k(p),d(2),occ(f)]),[a]],
+		   and('_call'(r,
+			    [v(y,[k(p),d(3),occ(f)]),
+			     v(x,[k(p),d(2),occ(s)])],
+			    [nv(2)]),
+		       [],
+		       '_call'(s,
+			    [v(y,[k(u),d(3),occ(s)]),
+			     [f,[g,[g,v(x,[k(p),d(2),occ(s)])]],
+				[f,v(y,[k(p),d(3),occ(s)]),[b]]]],
+			    [nv(2)])
+		      ),
+		   [all(y)]),
+	    clause([v(b,[k(t),d(1),occ(f)]),[c]],nil,[nv(0),all(n)]),
+	    clause([[f,[a],[g,v(x,[k(t),d(3),occ(f)])]],
+		    [f,[g,[a]],v(x,[k(t),d(3),occ(s)])]],
+		   nil,
+		   [all(n)])
+	   ],
+	   []),
+      Label,
+      Pil,[],Exref).
+
+*/
+
+/* ----------------------------------------------------------------------
+
+   change to pragma representation for variables : for greater efficiency,
+   the Pragma information for variables is being represented as a term,
+   "vrec(Type,Occ,Loc,Misc)" where Type is the type of the variable (k(T)
+   in old representation), Occ indicates whether this is a first or
+   subsequent occurrence (occ(Occ) of older representation), Loc gives the
+   location of the variable (d(Loc) in old representation), and Misc stores
+   other information as a list.
+
+   - saumya debray, july 8 1985
+   ---------------------------------------------------------------------- */
+
+/* **********************************************************************
+$tprog1_export([$tprog/3]).
+
+$tprog1_use($index1,[$index/7]).
+$tprog1_use($blist,[$append/3,_,$member1/2]).
+$tprog1_use($meta,[_,_,$length/2]).
+$tprog1_use($computil1,[$reserve/3,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_]).
+$tprog1_use($inline1,[$inline/2]).
+$tprog1_use($geninline1,[$geninline/7]).
+$tprog1_use($tgoal1,[_,$tpar/8,$tgoalargs/7]).
+$tprog1_use($glob,[_,$gennum/1,_]).
+$tprog1_use($aux1,[_,_,_,_,_,_,$disj_targ_label/2,_,_]).
+$tprog1_use($tcond1,[$tcond/7]).
+$tprog1_use($listutil1,[_,$merge/3,_,_,_,_,_,_]).
+$tprog1_use($disjunc1,[$disj_branch/8,$optimize_CP/2]).
+********************************************************************** */
+
+
+/* $tprog(Progdef,Pil,Pilr) is true if the translation of the Progdef (a
+list of Predicates) is the difference list Pil-Pilr.			*/
+
+$tprog([],Pil,Pil,_).
+$tprog([Preddef|Prog],Pil,Pilr,Prag) :-
+    $tpred(Preddef,Pil,Pilr1,Prag),
+    $tprog(Prog,Pilr1,Pilr,Prag).
+
+/* $tpred(Preddef,Label,Pil,Pilr) is true if the translation of Preddef
+is the difference list Pil-Pilr, with entry point Label. $tpred loops
+through the clauses.  */
+
+$tpred(preddef(Pname,Arity,[Oneclause],P),Pil,Pilr,_) :- !,
+    ($comp_builtin(Pname,Arity,_) ->
+	$umsg(['*** Warning: redefining builtin ',Pname,'/',Arity]) ;
+	true
+    ),
+    $tclause(Oneclause,P,Pil,Pilr,0).
+$tpred(preddef(Pname,Arity,CList,P),Pil,Pilr,Prag) :- 
+	($comp_builtin(Pname,Arity,_) ->
+		$umsg(['*** Warning: redefining builtin ',Pname,'/',Arity]) ;
+		true
+	),
+	$index(Pname,Arity,CList,P,Pil,Pil0,Prag,SwList),
+	$length(CList,N),
+	((N =< 3, not($member2(trace,Prag)), $tail_rec(CList,Pname,Arity)) ->
+		$get_indexinst(Pil,IndList) ;
+		IndList = []
+	),
+	$tclauses(CList,P,Pil1,Pilr,SwList),
+	((IndList = [Inst|_],
+	  (Inst ?= switchonterm(_,_,_) ; Inst ?= switchonlist(_,_,_))
+	 ) ->
+		$subst_exec(Pil1,Pname,Arity,IndList,Pil0,Pilr) ;
+		Pil1 = Pil0
+	).
+
+/* $tclauses generates retry and trust instructions for each clause */
+
+$tclauses([],_,Pil,Pil,_).
+$tclauses([Clause|Restclauses],PredPrag,Pil,Pilr,SwList) :- 
+    $tclause(Clause,PredPrag,Pil,Pil1,SwList),
+    $tclauses(Restclauses,PredPrag,Pil1,Pilr,SwList).
+
+
+/* $tclause(Clause,Pil,Piltail) is true if Pil-Piltail is the code that
+translates clause Clause. */
+
+$tclause(clause(Args,Body,Prag),PredPrag,[label(L)|Pil],Pilr,SwL) :- 
+    $member1(all(A),Prag),
+    $member1(label(L),Prag),
+    $length(Args,N),
+    $reserve(N, [], Tin), !,
+    $tprog_getnvars(Body,Nv), 
+    (SwL =:= 1 ->
+    	$theadpars_swlist(Args,A,L,PredPrag,Nv,Pil,Pilr1,Tin,TRegs1) ;
+	((A ?= y ->
+	     Pil = [allocate(Nv)|Pil1] ;
+	     Pil = Pil1
+	 ),
+    	 $theadpars(Args,1,PredPrag,Pil1,Pilr1,Tin,TRegs1)
+	)
+    ),
+    $tbody(Body,A,Pilr1,Pilr,TRegs1,_,[]).
+
+/* $theadpars_swlist loops through the formal parm list.  It's similar
+   to $theadpars, expect that it generates special code for the first
+   parameter, to handle the switchonlist instruction properly.       */
+
+$theadpars_swlist([Arg1|ARest],A,L,PPrag,Nv,Pil,Pilr,Tin,Tout) :-
+     $tpar_swlist(Arg1,A,L,Nv,Pil,Pilm,Tin,Tmid),
+     $theadpars(ARest,2,PPrag,Pilm,Pilr,Tmid,Tout).
+
+$tpar_swlist([[]],A,(P,N,L),Nv,Pil,Pilr,Tin,Tout) :-
+     $concat_atom(L,nil,L1),
+     $release(1,Tin,Tout),
+     (A = y ->
+     	Pil = [label((P,N,L1)),allocate(Nv),getnil(1)|Pilr] ;
+		/* not worth optimizing away getnil if must allocate */
+	(L3 = (P,N,L4), $gennum(L4),
+     	 Pil = [getnil(1),label((P,N,L1))|Pilr]
+	)
+     ).
+$tpar_swlist(['.'|Args],A,(P,N,L),Nv,Pil,Pilr,Tin,Tout) :-
+     $concat_atom(L,lis,L1),
+     $release(1,Tin,Tmid),
+     L3 = (P,N,L4), $gennum(L4),
+     (A = y ->
+     	(Pil = [allocate(Nv), getlist(1)|Pilm1],
+	 Pilm2 = [allocate(Nv),getlist_k(1)|Pilm3]
+	) ;
+	(Pil = [getlist(1)|Pilm1],
+	 Pilm2 = [getlist_k(1)|Pilm3]
+	)
+     ),
+     (Args = [v(_,vrec(t,_,_,_)),v(_,vrec(t,_,_,_))] ->
+     	($tsubpars(h,Args,Pilm1,[jump(L3),label((P,N,L1))|Pilm2],Tmid,Tout),
+	 $tsubpars(h,Args,Pilm3,[label(L3)|Pilr],Tmid,_)
+	) ;
+	(Pilm1 = [jump(L3),label((P,N,L1))|Pilm2],
+	 Pilm3 = [label(L3)|Pilm3a],
+	 $tsubpars(h,Args,Pilm3a,Pilr,Tmid,Tout)
+	)
+     ).     
+
+/* $theadpars loops through the formal parameter list */
+
+$theadpars([],_,_,Pil,Pil,T,T).
+
+/* TRin = list of temp registers in use at entry; TRout = list of temps
+   in use at exit.							*/
+
+$theadpars([Par|Rest],N,PredPrag,Pil,Pilr,TRin,TRout) :-
+    $tpar(h,Par,N,Pil,Pil1,TRin,TRmid,PredPrag),
+    N1 is N+1,
+    $theadpars(Rest,N1,PredPrag,Pil1,Pilr,TRmid,TRout).
+
+:- mode($tbody,7,[nv,d,d,d,d,d,d]).
+
+$tbody(nil,_,[proceed|Pil],Pil,T,T,_) :- !.
+$tbody('_call'(Pred,Args,CPrag),A,Pil,Pilr,Tin,Tout,HoldRegs) :-	
+	$tbodycall(Args,A,Pil,Pilr,Tin,Tout,HoldRegs,Pred,CPrag).
+$tbody(and(Goal,_,Goals),A,Pil,Pilr,Tin,Tout,HoldRegs) :- 
+    $tbody(Goal,A,Pil,Pil1,Tin,Tmid,HoldRegs),
+    $tbody(Goals,A,Pil1,Pilr,Tmid,Tout,HoldRegs).
+$tbody(if_then_else(Test,P,TGoal,FGoal),A,Pil,Pilr,Tin,Tout,Hold0) :-
+    $gen_label(TLabel), $gen_label(FLabel), $gen_label(After),
+    $member1(tvars(TV),P),
+    $append(TV,Hold0,Hold1),
+    $tcond(Test,TLabel,FLabel,Pil,[label(TLabel)|Pilm1],Tin,Tmid,Hold1),
+    $tbody(TGoal,A,Pilm1,[jump(After),label(FLabel)|Pilm2],Tmid,Tout0,Hold1),
+    $merge(Tmid,Tout0,Tout1),
+    $tbody(FGoal,A,Pilm2,[label(After)|Pilr],Tout1,Tout2,Hold0), /* tvar may be in */
+    $merge(Tout1,Tout2,Tout), !.		/* branches of an i-t-e */
+$tbody(or(Goal,_,Goals),A,Pil,Pilr,Tin,[],Hold) :-
+    $tprog_getnvars(Goal,Nv),
+    $gen_label(DLabel), arg(1,DLabel,D),
+    $gen_label(NDisj), $gen_label(After),
+    XPil = [call(D,-1,Nv),label(DLabel),trymeelse(NDisj,0)|Pilm1],
+    $tbody(Goal,A,Pilm1,Pilm2,Tin,_,Hold),
+    Pilm2 = [jump(After),label(NDisj),trustmeelsefail(0)|Pilm3],
+    $tbody(Goals,A,Pilm3,[label(After)|Pilr],Tin,_,Hold),
+    $optimize_CP(XPil,Pil), !.
+
+$tbodycall(Args,A,Pil,Pilr,Tin,Tout,Hold,Pred,CPrag) :-
+    $member1(lastlit,CPrag),
+    !,
+    $length(Args, Arity),
+    (($inline(Pred,Arity), 
+      ((A = y, Pil1 = [deallocate,proceed|Pilr]) ;
+       (A = n, Pil1 = [proceed | Pilr])
+      ),
+      $geninline(Pred,Args,Hold,Pil,Pil1,Tin,Tout)
+     ) ;
+     (((A = y, Pil1 = [deallocate,execute((Pred,Arity))|Pilr]) ;
+       (A = n, Pil1 = [execute((Pred,Arity)) | Pilr])
+      ),
+      $reserve(Arity,Tin,T1), Tout = [],
+      $tgoalargs(Args,1,Pil,Pil1,CPrag,T1,_)
+     )
+    ).
+$tbodycall(Args,_,Pil,Pilr,Tin,Tout,Hold,Pred,CPrag) :-
+    $length(Args, Arity),
+    (($inline(Pred,Arity),
+      $geninline(Pred,Args,Hold,Pil,Pilr,Tin,Tout)
+     ) ;
+     (($member1(nv(Nv), CPrag),
+       $reserve(Arity,Tin,T1), Tout = [],
+       $tgoalargs(Args,1,Pil,[call(Pred,Arity,Nv)|Pilr],CPrag,T1,_)
+      )
+     )
+    ).
+
+$optimize_CP(XPil,XPil) :- var(XPil), !.
+$optimize_CP([Inst|Tail], [Inst|Tail]) :- var(Tail), !.
+$optimize_CP([trymeelse(L1,N),
+	     call(D0,-1,_),
+	     label((D0,-1,_)),
+	     trymeelse(L2,N)|Xr],
+	    [trymeelse(L2,N)|Pr]) :-
+    $optimize_CP_1(L1,L2,Xr,Pr1),
+    $optimize_CP_2(Pr1,Pr).
+$optimize_CP([trustmeelsefail(N),
+	     call(D0,-1,_),
+	     label((D0,-1,_)),	     
+	     trymeelse(L2,N)|Xr],
+	    [retrymeelse(L2,N)|Xr]).
+$optimize_CP([Inst|XPRest],[Inst|PRest]) :-
+    $optimize_CP(XPRest,PRest).
+
+
+$optimize_CP_1(L1,L2,XPil,XPil) :- var(XPil).
+$optimize_CP_1(L1,L2,[label(L2),retrymeelse(L3,N)|XPRest],
+		    [label(L2),retrymeelse(L3,N)|PRest]) :-
+	    $optimize_CP_1(L1,L3,XPRest,PRest).
+$optimize_CP_1(L1,L2,[label(L2),trustmeelsefail(N)|XPRest],
+		    [label(L2),retrymeelse(L1,N)|PRest]) :-
+	    $optimize_CP_1(L1,L2,XPRest,PRest).
+$optimize_CP_1(L1,L2,[Inst|XPRest],[Inst|PRest]) :-
+	    $optimize_CP_1(L1,L2,XPRest,PRest).
+
+
+$optimize_CP_2(Pil,Pil) :- var(Pil).
+$optimize_CP_2([trustmeelsefail(N),
+	       call(D0,-1,_),
+	       label((D0,-1,_)),
+	       trymeelse(L1,N)|Rest],
+	      [retrymeelse(L1,N)|Rest]).
+$optimize_CP_2([Inst|Rest],[Inst|Rest1]) :- $optimize_CP_2(Rest,Rest1).
+
+:- mode($tprog_getnvars,2,[nv,d]).
+
+$tprog_getnvars('_call'(_,_,CPrag), NVars) :-
+	(($member1(nv(NVars),CPrag),
+	  (NVars = 0 ; true)) ;
+	 NVars = 0
+	).
+$tprog_getnvars(nil,0).
+$tprog_getnvars(and(Goal,_,_),NVars) :- $tprog_getnvars(Goal,NVars).
+$tprog_getnvars(or(Goal,_,_),NVars) :- $tprog_getnvars(Goal,NVars).
+$tprog_getnvars(not(Goal,_),NVars) :- $tprog_getnvars(Goal,NVars).
+$tprog_getnvars(if_then_else(_,_,Goal,_),NVars) :- $tprog_getnvars(Goal,NVars).
+
+$get_indexinst(IList,IndexInst) :- 
+	var(IList) ->
+		IndexInst = [] ;
+		(IList = [Inst|IRest],
+		 (Inst = label(_) ->
+		    IndexInst = IndInstRest ; IndexInst = [Inst|IndInstRest]
+		 ),
+		 $get_indexinst(IRest,IndInstRest)
+		).
+
+$subst_exec(Pil,P,N,IList,Pil0,Pilr) :-
+	var(Pil) ->
+		Pil0 = Pilr ;
+		(Pil = [Inst|IRest],
+		 (Inst = execute((P,N)) ->
+		 	(Pil0 = ['_$execmarker'|Pil0a],   /* '_$execmarker' tells the peephole */
+			 $subst_exec1(IList,Pil0a,Pil1)   /*  optimizer that there was an "execute" */
+			) ;				  /*  here.  The PO uses this info to  */
+			Pil0 = [Inst|Pil1]		  /* when registers can be considered dead */
+		 ),
+		 $subst_exec(IRest,P,N,IList,Pil1,Pilr)
+		).
+
+$subst_exec1([],L,L).
+$subst_exec1([I|IRest],[I|LRest],L) :- $subst_exec1(IRest,LRest,L).
+
+$tail_rec([clause(_,Body,_)|ClRest],P,N) :-
+	$tail_rec1(Body,P,N) ;
+	$tail_rec(ClRest,P,N).
+
+$tail_rec1('_call'(P,Args,_),P,N) :- $length(Args,N).
+$tail_rec1(and(_,_,G),P,N) :- $tail_rec1(G,P,N).
+$tail_rec1(if_then_else(_,_,G1,G2),P,N) :- $tail_rec1(G1,P,N) ; $tail_rec1(G2,P,N).
+$tail_rec1(or(G1,_,G2),P,N) :- $tail_rec1(G1,P,N) ; $tail_rec1(G2,P,N).
+
+
+$tgoal('_call'(Pred,Args,Prag),Pil,Pilr,Tin,Tout) :-
+    $length(Args, Arity),
+    $inline(Pred,Arity),
+    !,
+    $geninline(Pred,Args,Prag,Pil,Pilr,Tin,Tout).
+
+$tgoal('_call'(Pred,Args,Prag),Pil,Pilr,Tin,Tout) :-
+    $length(Args, Arity),
+    $member1(nv(Nvars),Prag),
+    $reserve(Arity,Tin,T1),
+    $tgoalargs(Args,1,Pil,[call(Pred,Arity,Nvars)|Pilr],Prag,T1,Tout).
+
+/* loops through args */
+$tgoalargs([],_,Pil,Pil,_,T,T).
+$tgoalargs([Arg|Args],N,Pil,Pilr,Prag,Tin,Tout) :-
+    $tpar(b,Arg,N,Pil,Pil1,Tin,T1,[]),
+    N1 is N + 1,
+    $tgoalargs(Args,N1,Pil1,Pilr,Prag,T1,Tout).
+
+/* generates gets,puts,blds,unis for a par*/
+
+:- index($tpar,8,2).
+
+$tpar(W,[Cid],N,Pil,Pilr,Tin,Tout,PredPrag) :- 
+    $coninst(W,Cid,N,Pil,Pilr),
+    (W = h -> $release(N,Tin,Tout) ; Tin = Tout).
+
+$tpar(h,v(Vid,Prag),N,Pil,Pil,Tin,Tout,_) :-
+    $type(Prag,vh),		/* ignore void variables in head */
+    $release_if_done(Vid,N,Prag,[],Tin,Tout).
+
+$tpar(W,v(Vid,Prag),N,Pil,Pilr,Tin,Tout,PredPrag) :-
+     Prag = vrec(T,L,Loc,_),
+     ((W = h, $release_if_done(Vid,N,Prag,[],Tin,Tmid)) ; Tin = Tmid),
+     ((T = t, $alloc_reg1(Prag,N,Tmid,Tout)) ; Tmid = Tout),
+     $varinst(W,L,T,Loc,N,Pil,Pilr,Tout).
+
+$tpar(W,[Sid|Args],N,[Inst|Pil],Pilr,Tin,Tout,Prag) :-
+    Args=[_|_],
+    $length(Args,Arity),
+    $strinst(W,(Sid,Arity),N,Inst),
+    (W = h -> $release(N,Tin,Tmid) ; Tmid = Tin),
+    $tsubpars(W,Args,Pil,Pilr,Tmid,Tout).
+
+/* loops through sub fields of a par */
+:- index($tsubpars,6,2).
+
+$tsubpars(_,[],Pil,Pil,T,T).
+$tsubpars(W,[Subpar|Subpars],Pil,Pilr,T1,T2) :-
+    $tsubpar(W,Subpar,Pil,Pil1,T1,T3),
+    $tsubpars(W,Subpars,Pil1,Pilr,T3,T2).
+
+/* generates code for a subfield of par */
+:- index($tsubpar,6,2).
+
+$tsubpar(W,v(Vid,Prag),Pil,Pilr,Tin,Tout) :-
+    $alloc_reg(Prag,Tin,Tmid),
+    $occ(Prag,L),  $loc(Prag,Loc), $type(Prag,T),
+    $varsubinst(W,L,T,Loc,Pil,Pilr,Tmid),
+    ((T = t, $release_if_done(Vid,Loc,Prag,[],Tmid,Tout)) ;
+     Tmid = Tout
+    ).
+
+$tsubpar(W,[Cid],[Inst|Pilr],Pilr,T,T) :-
+    $consubinst(W,Cid,Inst).
+
+
+
+/* end $tprog1.P *************************************************/

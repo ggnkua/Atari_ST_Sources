@@ -1,0 +1,273 @@
+/************************************************************************
+*									*
+* The SB-Prolog System							*
+* Copyright SUNY at Stony Brook, 1986; University of Arizona, 1987	*
+*									*
+************************************************************************/
+
+/*-----------------------------------------------------------------
+SB-Prolog is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY.  No author or distributor
+accepts responsibility to anyone for the consequences of using it
+or for whether it serves any particular purpose or works at all,
+unless he says so in writing.  Refer to the SB-Prolog General Public
+License for full details.
+
+Everyone is granted permission to copy, modify and redistribute
+SB-Prolog, but only under the conditions described in the
+SB-Prolog General Public License.   A copy of this license is
+supposed to have been given to you along with SB-Prolog so you
+can know your rights and responsibilities.  It should be in a
+file named COPYING.  Among other things, the copyright notice
+and this notice must be preserved on all copies. 
+------------------------------------------------------------------ */
+/* $asm1.P */
+
+/* **********************************************************************
+$asm1_export([$asm/3,$asm_PIL/2]).
+
+$asm1_use($blist,[$append/3,$member/2,$member1/2]).
+$asm1_use($bio,[$writename/1,$writeqname/1,$put/1,$nl/0,$tab/1,$tell/1,
+	$telling/1,$told/0,$get/1,$get0/1,$see/1,$seeing/1,$seen/0]).
+$asm1_use($asmpass11,[$asm_pass1/6]).
+$asm1_use($asmpass21,[$asm_syminst/4,$asm_lookup0/3,$asm_lookup/3]).
+$asm1_use($read,[$read/1,_]).
+********************************************************************** */
+
+
+$asm(Infile,Outfile,Opts) :- 
+	(($member1(v,Opts), $writename(' - assembly phase commenced'),$nl) ;
+	 true),
+	$see(Infile),
+	$asm_getaslist(Inprog,Index, Nindex, [], 0), $seen,
+	$asm_pass1( Inprog, Index, Psctable, Labeltable, Ntext, Npsc), 
+	(($member1(v,Opts), $tab(15), $writename('pass 1 complete'),$nl,
+	  $told) ;
+	 true),
+	$tell(Outfile),
+	$asm_magic(3),
+	$asm_putnum(Npsc, 4), $asm_putnum(Ntext, 4), $asm_putnum(Nindex, 4),
+	$asm_pass2(Inprog, Index, Psctable, Labeltable,Opts),
+	$asm_mark_eot,
+	$told, $tell(user),
+	(($member1(v,Opts), $tab(15), $writename('pass 2 complete'),$nl) ;
+	true).
+
+$asm_PIL(Inprog,Opts) :- /* already telling outfile */
+	$asm_get_index(Inprog, NInprog, Index, Nindex, [], 0),
+	$asm_pass1(NInprog, Index, Psctable, Labeltable, Ntext, Npsc), 
+	$asm_magic(3), 
+	$asm_putnum(Npsc, 4), $asm_putnum(Ntext, 4), $asm_putnum(Nindex, 4),
+	$asm_pass2(NInprog, Index, Psctable, Labeltable,Opts),
+	$asm_mark_eot.
+
+
+$asm_get_index([],[],[],N,_,N).
+$asm_get_index([Inst|Rest],Inprog,Index,Nindex,Tail,Ni) :-
+	$asm_index_inst(Inst,Size) ->
+		(N is Ni + Size,
+		 Index = [Inst|Rindex],
+		 $asm_get_index(Rest,Inprog,Rindex,Nindex,Tail,N)
+		);
+		(Inprog = [Inst|Rprog],
+		 $asm_get_index(Rest, Rprog, Index, Nindex, Tail, Ni)
+		).
+
+/* ---------------------------------------------------------------------- */
+
+$asm_getaslist(Insts,Index,Nindex,Tail,Ni) :-
+	$read(Inst0),
+	(Inst0 ?= end_of_file ->
+		(Insts = Tail, 
+	  	 Index = Tail, Nindex = Ni) ;
+	 	($asm_index_inst(Inst0,Size) ->
+		  	(N is Ni + Size,
+		  	 Index = [Inst0|Rindex],
+	  	  	 $asm_getaslist(Insts,Rindex,Nindex,Tail,N)) ;
+	 	 	(Insts = [Inst0 | Rinsts],
+	  	  	 $asm_getaslist(Rinsts,Index,Nindex,Tail,Ni))
+		)
+	).
+
+
+/*	$asm_pass2 takes as input a program containing symbolic labels, 
+structure symbols and constants and the symbol tables and returns
+a program in which all symbols have been replaced by their byte
+code offsets of PSC indices. Also, for "internal" predicates, i.e.
+those which are not exported, static linking is carried out as far as
+possible.								*/
+
+$asm_pass2(Prog,Index,Csym,Lsym,Opts) :-
+	$asm_symbol(Csym),
+	$asm_pass2a(Prog,Csym,Lsym,Opts),
+	$asm_index(Index, Csym, Lsym).
+
+$asm_index(Index,Csym,Lsym) :-
+	$member(Inst, Index),
+	$asm_proc_index(Inst, Csym, Lsym).
+$asm_index(_,_,_).
+
+$asm_proc_index(pred(Label, Num), Csym, Lsym) :-
+	Label = (P, N, _), 
+	$asm_lookup((P, N, _), Csym, Index),
+	$asm_putnum(Index, 4), $asm_putnum(Num, 4),
+	!, 
+	fail.
+$asm_proc_index(arglabel(T,Val,Label), Csym, Lsym) :-
+	(T ?= c ->
+	     $asm_lookup((Val,0,_), Csym, Nval) ;
+	     (T ?= s ->
+	          (Val = (Str, Arity),
+	  	   $asm_lookup((Str, Arity, _), Csym, Nval)
+		  ) ;
+	 	  Nval = Val
+	     )
+	),
+	$asm_lookup((Label, L), Lsym, _),
+	$writename(T),
+	(((T ?= i; T ?= c; T ?= s),
+	 (integer(Nval) -> $asm_putnum(Nval,4) ; $write4(Nval)));
+	 true
+	),
+	$asm_putnum(L, 4),
+	!,
+	fail.
+
+$asm_pass2a(Prog,Csym,Lsym,Opts) :-
+	$member(Inst,Prog),
+	$asm_process_pil_inst(Inst,Csym,Lsym,Opts).
+$asm_pass2a(_,_,_,_).
+
+$asm_process_pil_inst(label((_,_,_)),_,_,_) :-
+	!,
+	fail.
+$asm_process_pil_inst(call(P,A,N),Csym,Lsym,Opts) :-
+	!,
+	$asm_proc_call(P,A,N,Csym,Lsym,Inst,Opts),
+	$asm_emit(Inst),
+	!,
+	fail.
+$asm_process_pil_inst(execute(Pred),Csym,Lsym,Opts) :-
+	!,
+	$asm_proc_exec(Pred,Csym,Lsym,Inst,Opts),
+	$asm_emit(Inst),
+	!,
+	fail.
+$asm_process_pil_inst(Inst,Csym,Lsym,Opts) :-
+	$asm_syminst(Inst, NInst, Csym, Lsym),
+	$asm_emit(NInst),
+	!,
+	fail.
+
+$asm_proc_call(Pred,Arity0,Nv,_,Lsym,Instr,Opts) :-
+	$not_member1(t,Opts),
+	$asm_lookup0( ((Pred,Arity0,_),EPaddr), Lsym, _),
+	(Arity0 < 0 ->
+	     Arity1 = 0 ; 	/* no regs being used here */
+	     Arity1 = Arity0
+	),
+	Instr = calld(EPaddr,Arity1,Nv),
+	!.
+$asm_proc_call(Pred,Arity,Nv,Csym,_,call(PSC_Index,Arity,Nv),Opts) :-
+	$asm_lookup( (Pred,Arity,_), Csym, PSC_Index).
+
+$asm_proc_exec((Pred,Arity),_,Lsym,jump(EPaddr),Opts) :-
+	$not_member1(t,Opts),
+	$asm_lookup0( ((Pred,Arity,_),EPaddr), Lsym, _),
+	!.
+$asm_proc_exec((Pred,Arity),Csym,_,execute(PSC_Index),Opts) :-
+	$asm_lookup( (Pred,Arity,_), Csym, PSC_Index).
+
+$asm_emit(Inst) :-
+	functor(Inst,Name,_),
+	$opcode(Name,Opcode,Type),
+	$asm_putnum(Opcode, 2), 
+	$asm_emit_operands(Type,Inst).
+
+:- mode $asm_emit_operands(c,c).
+
+$asm_emit_operands(p, _) :-
+	$asm_putnum(0,2).
+$asm_emit_operands(pss, Inst) :-
+	$asm_putnum(0, 2),
+	arg(1,Inst,X), $asm_putnum(X, 2),
+	arg(2,Inst,Y), $asm_putnum(Y, 2).
+$asm_emit_operands(pl, Inst) :-
+	$asm_putnum(0, 2),
+	arg(1,Inst,I), $asm_putnum(I, 4).
+$asm_emit_operands(s,Inst) :-
+	arg(1,Inst,X), $asm_putnum(X, 2).
+$asm_emit_operands(sss,Inst) :-
+	arg(1,Inst,X), $asm_putnum(X, 2),
+	arg(2,Inst,Y), $asm_putnum(Y, 2),
+	arg(3,Inst,Z), $asm_putnum(Z,2).
+$asm_emit_operands(sl,Inst) :-
+	arg(2,Inst,X), $asm_putnum(X,2),
+	arg(1,Inst,Y), $asm_putnum(Y,4).
+$asm_emit_operands(as,Inst) :-
+	arg(1,Inst,X), $asm_putnum(X,2),
+	arg(2,Inst,Y), $asm_putnum(Y,4).
+$asm_emit_operands(saa,Inst) :-
+	arg(1,Inst,R), $asm_putnum(R,2),
+	arg(2,Inst,A1), $asm_putnum(A1,4),
+	arg(3,Inst,A2), $asm_putnum(A2,4).
+$asm_emit_operands(bba,Inst) :-
+	arg(2,Inst,N), $asm_putnum(N,1),
+	arg(3,Inst,B), $asm_putnum(B,1),
+	arg(1,Inst,I), $asm_putnum(I,4).
+$asm_emit_operands(sf,Inst) :-
+	arg(2,Inst,R), $asm_putnum(R,2),
+	arg(1,Inst,F), $write4(F).
+$asm_emit_operands(pf,Inst) :-
+	$asm_putnum(0,2),
+	arg(1,Inst,F), $write4(F).
+
+
+$asm_magic(N) :-
+	$asm_putnum(17, 1),
+	$asm_putnum(18, 1),
+	$asm_putnum(19, 1),
+	$asm_putnum(N, 1).
+
+$asm_index_inst(pred(_,_),8).
+$asm_index_inst(arglabel(T,_,_),N) :-
+	($asm_index_inst1(T,N), !) ;
+	N = 5.
+
+$asm_index_inst1(i,9).
+$asm_index_inst1(c,9).
+$asm_index_inst1(s,9).
+
+/* $asm_symbol outputs the PSC table in byte file header format */
+
+$asm_symbol(Symtab) :- $member(Sym, Symtab), $asm_putsym(Sym), fail.
+$asm_symbol(_).
+$asm_putsym((String, Arity, Value)) :-
+	$asm_putnum(Value, 4),
+	$asm_putnum(Arity, 1),
+	$conlength(String,L),
+	$asm_putnum(L,1),
+	$writename(String),
+	!.
+
+/*	Putnum(Number, Length) will write Number as a binary number
+which will be Length bytes long */
+
+$asm_putnum(Num,NBytes) :-
+	NBytes > 1 ->
+		(Byte is Num /\ 255,
+		 Rest is Num >> 8,
+		 N is NBytes - 1,
+		 $asm_putnum(Rest,N),
+		 $put(Byte)
+		) ;
+		(Num < 256, $put(Num)).
+
+$asm_mark_eot :-
+	$opcode( endfile, X ), 
+	$asm_putnum(X,2),
+	$asm_putnum(0,2),
+	$asm_putnum(0,4).
+
+
+/* end $asm1.P ***************************************************/

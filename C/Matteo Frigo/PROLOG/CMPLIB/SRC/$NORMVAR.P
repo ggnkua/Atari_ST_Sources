@@ -1,0 +1,157 @@
+/************************************************************************
+*									*
+* The SB-Prolog System							*
+* Copyright SUNY at Stony Brook, 1986; University of Arizona, 1987	*
+*									*
+************************************************************************/
+
+/*-----------------------------------------------------------------
+SB-Prolog is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY.  No author or distributor
+accepts responsibility to anyone for the consequences of using it
+or for whether it serves any particular purpose or works at all,
+unless he says so in writing.  Refer to the SB-Prolog General Public
+License for full details.
+
+Everyone is granted permission to copy, modify and redistribute
+SB-Prolog, but only under the conditions described in the
+SB-Prolog General Public License.   A copy of this license is
+supposed to have been given to you along with SB-Prolog so you
+can know your rights and responsibilities.  It should be in a
+file named COPYING.  Among other things, the copyright notice
+and this notice must be preserved on all copies. 
+------------------------------------------------------------------ */
+/* $normvarocc1.P */
+
+/* ********************************************************************** 
+$normvarocc1_export([$normalize_var_occ/7]).
+
+$normvarocc1_use($computil1,[_,_,_,_,_,$union_varsets/3,_,
+		   $diff_sets/3,$intersect_sets/3,_,_,_,_,_,_,_,_,_,_,_]).
+$normvarocc1_use($aux1,[_,_,_,_,_,_,_,_,$logical_or/3]).
+$normvarocc1_use($blist,[_,_,$member1/2]).
+$normvarocc1_use($listutil1,[_,_,_,_,_,_,_,$closetail/1]).
+$normvarocc1_use($prococcbody1,[_,$list_pvars/2]).
+********************************************************************** */
+
+/*  "$normalize_var_occ" normalizes variable occurrences in disjunctive
+     paths, so that every variable has a unique first/subsequent occurrence,
+     irrespective of the disjunctive path considered. The algorithm is as
+     follows:  If u0, u1, u2 and u3 be the variable occurring in goals at
+     the points specified below, and V1 and V2 the set of variables that
+     are added to normalize occurrences, then
+
+		V1 = (u2 - u1) * (u3 - u0), and
+
+		V2 = (u1 - u2) * (u3 - u0),  where  `*' = set intersection,
+						    `-' = set difference.
+
+			   +--------+ +--------+
+		      -----+   u1   +-+   V1   +---- 
+	+------+     /	   +--------+ +--------+     \       +------+
+--------|  u0  |----<			   	      >------+  u3  +-->
+	+------+     \     +--------+ +--------+     /       +------+
+		      -----+   u2   +-+   V2   +----
+			   +--------+ +--------+
+									*/
+
+$norm_newaddlist(L1,L2,L3,L) :-
+	$diff_sets(L2,L1,D1), $intersect_sets(D1,L3,L).
+
+
+$normalize_var_occ(nil,nil,[],[],[],[],0) :- !.
+$normalize_var_occ(Body1,Body2,LinLeft,LinRight,Lout,Used,Chg) :-
+	Body1 = and(A1,P,B1),
+	!,
+	$norm_pvars_seen(A1,PVars1), $union_varsets(LinLeft,PVars1,LinLeft1),
+	$normalize_var_occ(B1,B2,LinLeft1,LinRight,L1,Used1,Chg1),
+	$normalize_var_occ(A1,A2,LinLeft,L1,Lout,Used2,Chg2),
+	$union_varsets(Used1,Used2,Used),
+	$logical_or(Chg1,Chg2,Chg),
+	((Chg =:= 0, Body2 = Body1) ;
+	 (Chg =\= 0, Body2 = and(A2,P,B2))
+	).
+$normalize_var_occ(Body1,Body2,LinLeft,LinRight,Lout,Used,Chg) :-
+	Body1 = if_then_else(T,P,A1,B1),
+	!,
+	$normalize_varocc_disj(A1,B1,LinLeft,LinRight,A2,B2,Used1,Used2,Chg),
+	((Chg =:= 0, Body2 = Body1) ;
+	 (Chg =\= 0, Body2 = if_then_else(T,P,A2,B2))
+	),
+	$union_varsets(Used1,Used2,Used0),
+	$norm_pvars_seen(T,PvarsT), $union_varsets(PvarsT,Used0,Used),
+	$union_varsets(Used,LinRight,Lout),
+	$intersect_sets(Used1,Used2,PVars0),
+	$union_varsets(PvarsT,PVars0,PVars),
+	$member1(pvars(PVars),P),
+	$closetail(P).
+$normalize_var_occ(Body1,Body2,LinLeft,LinRight,Lout,Used,Chg) :-
+	Body1 = or(A1,P,B1),
+	!,
+	$normalize_varocc_disj(A1,B1,LinLeft,LinRight,A2,B2,Used1,Used2,Chg),
+	((Chg =:= 0, Body2 = Body1) ;
+	 (Chg =\= 0, Body2 = or(A2,P,B2))
+	),
+	$union_varsets(Used1,Used2,Used),
+	$union_varsets(Used,LinRight,Lout),
+	$intersect_sets(Used1,Used2,PVars),
+	$member1(pvars(PVars),P),
+	$closetail(P).
+$normalize_var_occ(not(A1,P),not(A2,P),LinLeft,LinRight,Lout,Lused,Chg) :-
+	!,
+	$normalize_var_occ(A1,A2,LinLeft,LinRight,Lout,Lused,Chg).
+$normalize_var_occ('_call'(P,Args,X),'_call'(P,Args,X),_,LinRight,Lout,L,0) :-
+	!,
+	$list_pvars(Args,L),
+	$union_varsets(L,LinRight,Lout),
+	$member1(pvars(L),X).
+$normalize_var_occ(C,C,_,L,L,[],0).
+
+$normalize_varocc_disj(A1,B1,LinLeft,LinRight,A2,B2,Used1,Used2,Chg0) :-
+	$normalize_var_occ(A1,A1a,LinLeft,LinRight,L1,Used1a,Chg1),
+	$normalize_var_occ(B1,B1a,LinLeft,LinRight,L2,Used2a,Chg2),
+	$logical_or(Chg1,Chg2,Chg3),
+	$diff_sets(LinRight,LinLeft,LinNew),
+	$norm_newaddlist(Used1a,Used2a,LinNew,NewAdd1),
+	$norm_newaddlist(Used2a,Used1a,LinNew,NewAdd2),
+	((NewAdd1 = [], NewAdd2 = []) ->
+ 	     (A2 = A1a, B2 = B1a,
+	      Used1 = Used1a, Used2 = Used2a,
+	      Chg4 = 0
+	     ) ;
+	     ($normalize1(A1a,NewAdd1,A2),
+	      $normalize1(B1a,NewAdd2,B2),
+	      $union_varsets(Used1a,NewAdd1,Used1),
+	      $union_varsets(Used2a,NewAdd2,Used2),
+	      Body2 = if_then_else(T,P,A2,B2),
+	      Chg4 = 1
+	     )
+	),
+	$logical_or(Chg3,Chg4,Chg0).
+
+$norm_pvars_seen(and(C1,_,C2),L) :-
+	$norm_pvars_seen(C1,L1),
+	$norm_pvars_seen(C2,L2),
+	$union_varsets(L1,L2,L).
+$norm_pvars_seen(or(C1,_,C2),L) :-
+	$norm_pvars_seen(C1,L1),
+	$norm_pvars_seen(C2,L2),
+	$union_varsets(L1,L2,L).
+$norm_pvars_seen(if_then_else(T,_,G1,G2),L) :-
+	$norm_pvars_seen(T,L1),
+	$norm_pvars_seen(G1,L2),
+	$norm_pvars_seen(G2,L3),
+	$union_varsets(L2,L3,L4),
+	$union_varsets(L1,L4,L).
+$norm_pvars_seen(not(C,_),L) :- $norm_pvars_seen(C,L).
+$norm_pvars_seen('_call'(_,Args,_),L) :- $list_pvars(Args,L).
+
+:- index($normalize1,3,2).
+
+$normalize1(A,[],A).
+$normalize1(A1,[v(Vid,vrec(T,_,L,M))|VRest],A2) :-
+   Prag1 = vrec(T,_,L,M), Prag2 = vrec(T,_,L,M),
+   A3 = and(A1,_,'_call'('=',[v(Vid,Prag1),v(Vid,Prag2)],_)),
+   $normalize1(A3,VRest,A2).
+
+/* end normvarocc1.P *********************************/

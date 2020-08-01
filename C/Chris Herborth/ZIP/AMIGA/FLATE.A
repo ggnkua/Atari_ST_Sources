@@ -1,0 +1,362 @@
+; Not copyrighted by Paul Kienitz, 20 Jun 94.
+;
+; Assembly language version of inflate_codes(), for Amiga.  Prototype:
+;
+;   int flate_codes(struct huft *tl, struct huft *td, int bl, int bd,
+;                   unsigned char *slide);
+;
+; It is called by defining inflate_codes(tl, td, bl, bd) as
+; flate_codes(tl, td, bl, bd, slide).
+;
+; Define the symbol FUNZIP if this is for fUnZip.  Define CRYPT if this is
+; for fUnZip with decryption enabled.  Define AZTEC to use the Aztec C
+; buffered input macro instead of the library getc() with FUNZIP.
+;
+; => int MUST BE 16 BITS!!! <=                    => WSIZE MUST BE 32K! <=
+;
+; struct huft is defined as follows:
+;
+;   struct huft {
+;     uch e;                /* number of extra bits or operation */
+;     uch b;                /* number of bits in this code or subcode */
+;     union {
+;       ush n;              /* literal, length base, or distance base */
+;       struct huft *t;     /* pointer to next level of table */
+;     } v;
+;   };                      /* sizeof(struct huft) == 6 */
+;
+; so here we define the offsets of the various members of this struct:
+
+h_e		equ	0
+h_b		equ	1
+h_n		equ	2
+h_t		equ	2
+SIZEOF_HUFT	equ	6
+
+; There are several global variables we need to access.  Their definitions:
+;
+;   unsigned long bb;
+;   unsigned int bk, wp;
+;   unsigned short mask[17];
+;   FILE *in;
+;   int encrypted;			/* FUNZIP CRYPT only */
+;
+;   int incnt, mem_mode;		/* non-FUNZIP only */
+;   long csize;				/* non-FUNZIP only */
+;   unsigned long outcnt;		/* non-FUNZIP only */
+;   unsigned char *inptr;		/* non-FUNZIP only */
+;
+; bb is the global buffer that holds bits from the huffman code stream, which
+; we cache in the register variable b.  bk is the number of valid bits in it,
+; which we cache in k.  The macros NEEDBITS(n) and DUMPBITS(n) have side effects
+; on b and k.
+
+	xref	_bb
+	xref	_bk
+	xref	_mask
+	xref	_wp
+		IFD	FUNZIP
+		 IFD	CRYPT
+	xref	_encrypted
+	xref	_update_keys	; int update_keys(int)
+	xref	_decrypt_byte	; int decrypt_byte(void)
+		 ENDC	; CRYPT
+	xref	_in
+	xref	_getc		; int getc(FILE *)
+		ELSE	; !FUNZIP
+	xref	_csize
+	xref	_incnt
+	xref	_mem_mode
+	xref	_inptr
+	xref	_readbyte	; int readbyte(void)
+		ENDC
+	xref	_flush		; if FUNZIP:  int flush(unsigned long)
+	; ...if !FUNZIP:  int flush(unsigned char *, unsigned long *, int)
+
+; Here are our register variables.  Remember that int == short!
+
+b	equr	d2		; unsigned long
+k	equr	d3		; unsigned int <= 32
+e	equr	d4		; unsigned int < 256 for most use
+w	equr	d5		; unsigned int
+n	equr	d6		; unsigned int
+d	equr	d7		; unsigned int
+
+; assert: we always maintain w and d as valid unsigned longs.
+
+t	equr	a2		; struct huft *
+slide	equr	a3		; unsigned char *
+mask	equr	a6		; unsigned short *
+
+; Couple other items we need:
+
+savregs	reg	d2-d7/a2/a3/a6
+
+WSIZE	equ	$8000		; 32k... be careful not to treat as negative!
+
+		IFD	FUNZIP
+; This does getc(in).  Aztec version is based on #define getc(fp) in stdio.h
+
+		 IFD	AZTEC
+	xref	__filbuf
+GETC		  MACRO
+	move.l		_in,a0
+	move.l		(a0),a1		; in->_bp
+	cmp.l		4(a0),a1	; in->_bend
+	blo.s		gci\@
+	move.l		a0,-(sp)
+	jsr		__filbuf
+	addq		#4,sp
+	bra.s		gce\@
+gci\@:	moveq		#0,d0		; must be valid as longword
+	move.b		(a1)+,d0
+	move.l		a1,(a0)
+gce\@:
+		  ENDM
+		 ELSE	; !AZTEC
+GETC		  MACRO
+	move.l		_in,-(sp)
+	jsr		_getc
+	addq		#4,sp
+		  ENDM
+		 ENDC	; AZTEC
+		ENDC	; FUNZIP
+
+; Input depends on the NEXTBYTE macro.  This exists in three different forms.
+; The first two are for fUnZip, with and without decryption.  The last is for
+; regular UnZip with or without decryption.  The resulting byte is returned
+; in d0 as a longword, and d1, a0, and a1 are clobbered.
+
+		IFD	FUNZIP
+		 IFD	CRYPT
+NEXTBYTE	  MACRO
+	GETC
+	tst.w		_encrypted
+	beq.s		nbe\@
+	move.w		d0,-(sp)	; save thru next call
+	jsr		_decrypt_byte
+	eor.w		d0,(sp)		; becomes arg to update_keys
+	jsr		_update_keys
+	addq		#2,sp
+nbe\@:	ext.l		d0		; assert -1 <= d0 <= 255
+		  ENDM
+		 ELSE	; !CRYPT
+NEXTBYTE	  MACRO
+	GETC			; nothing else in this case
+		  ENDM
+		 ENDC
+		ELSE	; !FUNZIP
+NEXTBYTE	 MACRO
+	subq.l		#1,_csize
+	bge.s		nbg\@
+	moveq		#-1,d0		; return EOF
+	bra.s		nbe\@
+nbg\@:	subq.w		#1,_incnt
+	bge.s		nbs\@
+	jsr		_readbyte
+	bra.s		nbe\@
+nbs\@:	moveq		#0,d0
+	move.l		_inptr,a0
+	move.b		(a0)+,d0
+	move.l		a0,_inptr
+nbe\@:
+		 ENDM
+		ENDC
+
+; FLUSH has different versions for fUnZip and UnZip.  Arg must be a longword.
+
+		IFD	FUNZIP
+FLUSH		 MACRO
+	move.l		\1,-(sp)
+	jsr		_flush
+	addq		#4,sp
+		 ENDM
+		ELSE	; !FUNZIP
+	xref	_mem_mode
+	xref	_outcnt
+FLUSH		 MACRO
+	tst.w		_mem_mode
+	bne.s		fm\@
+	move.w		#0,-(sp)	; unshrink flag: always false
+	move.l		\1,-(sp)		; length
+	move.l		slide,-(sp)	; buffer to flush
+	jsr		_flush
+	lea		10(sp),sp
+	bra.s		fe\@
+fm\@:	move.l		w,_outcnt
+fe\@:
+		 ENDM
+		ENDC	; FUNZIP
+
+; Here are the two bit-grabbing macros, defined in their non-CHECK_EOF form:
+;
+;   define NEEDBITS(n) {while(k<(n)){b|=((ulg)NEXTBYTE)<<k;k+=8;}}
+;   define DUMPBITS(n) {b>>=(n);k-=(n);}
+;
+; NEEDBITS clobbers d0, d1, a0, and a1, none of which can be used as the arg
+; to the macro specifying the number of bits.  The arg can be a shortword memory
+; address, or d2-d7.  The result is copied into d1 as a word ready for masking.
+; DUMPBITS has no side effects; the arg must be a d-register (or immediate in the
+; range 1-8?) and only the lower byte is significant.
+
+NEEDBITS	MACRO
+nb\@:	cmp.w		\1,k		; assert 0 < k <= 32 ... arg may be 0
+	bhs.s		ne\@
+	NEXTBYTE			; returns in d0.l
+	lsl.l		k,d0
+	or.l		d0,b
+	addq.w		#8,k
+	bra.s		nb\@
+ne\@:	move.w		b,d1
+		ENDM
+
+DUMPBITS	MACRO
+	lsr.l		\1,b		; upper bits of \1 are ignored??
+	sub.b		\1,k
+		ENDM
+
+
+; ******************************************************************************
+; Here we go, finally:
+
+	xdef	_flate_codes	; (pointer, pointer, int, int, pointer)
+
+_flate_codes:
+	link		a5,#-4
+	movem.l		savregs,-(sp)
+; 8(a5) = tl, 12(a5) = td, 16(a5) = bl, 18(a5) = bd, 20(a5) = slide,
+; -2(a5) = ml, -4(a5) = md.  Here we cache some globals and args:
+	move.l		20(a5),slide
+	lea		_mask,mask
+	move.l		_bb,b
+	move.w		_bk,k
+	moveq		#0,w		; keep this usable as longword
+	move.w		_wp,w
+	moveq		#0,e		; keep this usable as longword too
+	move.w		16(a5),d0
+	add.w		d0,d0
+	move.w		(mask,d0.w),-2(a5)	; ml = mask[bl]
+	move.w		18(a5),d0
+	add.w		d0,d0
+	move.w		(mask,d0.w),-4(a5)	; md = mask[bd]
+
+main_loop:
+	NEEDBITS	16(a5)		; bl
+	and.w		-2(a5),d1	; ml
+	mulu		#SIZEOF_HUFT,d1
+	move.l		8(a5),a0	; tl
+	lea		(a0,d1.l),t
+	move.b		h_e(t),e
+	cmp.w		#16,e
+	bls.s		topdmp
+intop:	 moveq		#1,d0
+	 cmp.w		#99,e
+	 beq		return		; error in zipfile
+	 move.b		h_b(t),d0
+	 DUMPBITS	d0
+	 sub.w		#16,e
+	 NEEDBITS	e
+	 move.w		e,d0
+	 add.w		d0,d0
+	 and.w		(mask,d0.w),d1
+	 mulu		#SIZEOF_HUFT,d1
+	 move.l		h_t(t),a0
+	 lea		(a0,d1.l),t
+	 move.b		h_e(t),e
+	 cmp.w		#16,e
+	 bgt.s		intop
+topdmp:	move.b		h_b(t),d0
+	DUMPBITS	d0
+
+	cmp.w		#16,e		; is this huffman code a literal?
+	bne		lenchk		; no
+	move.w		h_n(t),d0	; yes
+	move.b		d0,(slide,w.l)	; stick in the decoded byte
+	addq.w		#1,w
+	cmp.w		#WSIZE,w
+	blo		main_loop
+	FLUSH		w
+	moveq		#0,w
+	bra		main_loop	; do some more
+
+lenchk:	cmp.w		#15,e		; is it an end-of-block code?
+	beq		finish		; if yes, we're done
+	NEEDBITS	e		; no: we have a duplicate string
+	move.w		e,d0
+	add.w		d0,d0
+	and.w		(mask,d0.w),d1
+	move.w		h_n(t),n
+	add.w		d1,n		; length of block to copy
+	DUMPBITS	e
+	NEEDBITS	18(a5)		; bd
+	and.w		-4(a5),d1	; md
+	mulu		#SIZEOF_HUFT,d1
+	move.l		12(a5),a0	; td
+	lea		(a0,d1.l),t
+	move.b		h_e(t),e
+	cmp.w		#16,e
+	bls.s		middmp
+inmid:	 moveq		#1,d0
+	 cmp.w		#99,e
+	 beq		return		; error in zipfile
+	 move.b		h_b(t),d0
+	 DUMPBITS	d0
+	 sub.w		#16,e
+	 NEEDBITS	e
+	 move.w		e,d0
+	 add.w		d0,d0
+	 and.w		(mask,d0.w),d1
+	 mulu		#SIZEOF_HUFT,d1
+	 move.l		h_t(t),a0
+	 lea		(a0,d1.l),t
+	 move.b		h_e(t),e
+	 cmp.w		#16,e
+	 bgt.s		inmid
+middmp:	move.b		h_b(t),d0
+	DUMPBITS	d0
+	NEEDBITS	e
+	move.w		e,d0
+	add.w		d0,d0
+	and.w		(mask,d0.w),d1
+	move.l		w,d
+	sub.w		h_n(t),d
+	sub.w		d1,d		; distance back to block to copy
+	DUMPBITS	e
+
+indup:	 move.w		#WSIZE,e	; violate the e < 256 rule
+	 and.w		#WSIZE-1,d
+	 cmp.w		d,w
+	 blo.s		ddgw
+	  sub.w		w,e
+	 bra.s		dadw
+ddgw:	  sub.w		d,e
+dadw:	 cmp.w		n,e
+	 bls.s		delen
+	  move.w	n,e
+delen:	 sub.w		e,n		; size of sub-block to copy
+	 move.l		slide,a0
+	 move.l		a0,a1
+	 add.l		w,a0		; w and d are valid longwords
+	 add.l		d,a1
+	 move.w		e,d0
+	 subq		#1,d0		; assert >= 0 if sign extended
+dspin:	  move.b	(a1)+,(a0)+	; string is probably short, so
+	  dbra		d0,dspin	; don't use any fancier copy method
+	 add.w		e,w
+	 add.w		e,d
+	 cmp.w		#WSIZE,w
+	 blo.s		dnfl
+	 FLUSH		w
+	 moveq		#0,w
+dnfl:	 tst.w		n		; need to do more sub-blocks?
+	 bne		indup		; yes
+	moveq		#0,e		; restore zeroness in upper bytes
+	bra		main_loop	; do some more
+
+finish:	move.w		w,_wp		; restore cached globals
+	move.w		k,_bk
+	move.l		b,_bb
+	moveq		#0,d0			; return "no error"
+return:	movem.l		(sp)+,savregs
+	unlk		a5
+	rts

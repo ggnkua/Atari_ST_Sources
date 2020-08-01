@@ -1,0 +1,198 @@
+/************************************************************************
+*									*
+* The SB-Prolog System							*
+* Copyright SUNY at Stony Brook, 1986; University of Arizona, 1987	*
+*									*
+************************************************************************/
+
+/*-----------------------------------------------------------------
+SB-Prolog is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY.  No author or distributor
+accepts responsibility to anyone for the consequences of using it
+or for whether it serves any particular purpose or works at all,
+unless he says so in writing.  Refer to the SB-Prolog General Public
+License for full details.
+
+Everyone is granted permission to copy, modify and redistribute
+SB-Prolog, but only under the conditions described in the
+SB-Prolog General Public License.   A copy of this license is
+supposed to have been given to you along with SB-Prolog so you
+can know your rights and responsibilities.  It should be in a
+file named COPYING.  Among other things, the copyright notice
+and this notice must be preserved on all copies. 
+------------------------------------------------------------------ */
+/* $computil1.P */
+
+/*  			some compiler utilities				*/
+
+/* **********************************************************************
+$computil1_export([$reserve/3,$hold/3,$release/3,
+		   $getreg/2,$max/3,$union_varsets/3,$union_vars2/3,
+		   $diff_sets/3,$intersect_sets/3,$length1/2,$prefix_list/3,
+		   $check_type/2,$type/2,$occ/2,$loc/2,$misc/2,
+		   $alloc_reg1/4,$alloc_reg/3,$release_if_done/6,
+		   $release_if_done0/5]).
+
+$computil1_use($blist,[$append/3,$member/2,$memberchk/2]).
+$computil1_use($aux1,[_,_,_,_,$umsg/1,_,_,_,_]).
+$computil1_use($listutil1,[_,_,_,_,_,_,_,$closetail/1]).
+$computil1_use($compare,['$=='/2,_,_,_,_,_,_]).
+********************************************************************** */
+
+
+$reserve(0,In,In).
+$reserve(N,In,Out) :- N > 0,
+	((not($memberchk(N, In)), Out = [N|Out1]) ;
+	 (Out = Out1)),
+	N1 is N - 1,
+	$reserve(N1, In, Out1).
+
+$hold(N, [], [N]).
+$hold(N, In, Out) :- ($memberchk(N, In) -> Out = In ; Out = [N | In]).
+
+
+$release(N,[],[]).
+$release(N,[N|R],R) :- !.
+$release(N,[L|R],[L|T]) :- $release(N,R,T).
+
+$computil_choose(1).
+$computil_choose(N) :- $computil_choose(N1),
+	     N is N1 + 1,
+	     (
+	      (N =< 256) ;
+	      (N > 256,
+	       $umsg('*** out of registers ... aborting execution ***'),
+	       abort)
+	     ).
+
+$getreg(TRList, Reg) :-
+	$computil_choose(Reg),
+	not($memberchk(Reg, TRList)).
+
+
+$max(L,M,Max) :- (L >= M, Max = L) ; (L < M, Max = M).
+
+$union_varsets(L1,L2,L3) :-
+	$computil_union_vars1(L1,L3),
+	$computil_union_vars1(L2,L3),
+	$closetail(L3).
+
+$computil_union_vars1([],_).
+$computil_union_vars1([v(Vid,Prag)|Rest],L) :-
+	$union_vars2(Vid,Prag,L),
+	$computil_union_vars1(Rest,L).
+
+$union_vars2(Vid,Prag,L) :-
+	((var(L), L = [v(Vid,Prag)|_]) ;
+	 (nonvar(L), L = [v(Vid1,_)|Rest],
+	  (Vid = Vid1 ; $union_vars2(Vid,Prag,Rest))
+	 )).
+
+$diff_sets([],_,L) :- $closetail(L).
+$diff_sets([H|L1],L2,L3) :-
+	H = v(Vid,_),
+	($memberchk(v(Vid,_),L2) ; $memberchk(H,L3)),
+	$diff_sets(L1,L2,L3).
+
+$intersect_sets([],_,L) :- $closetail(L).
+$intersect_sets([H|L1],L2,L) :-
+	H = v(Vid,_),
+	(($memberchk(v(Vid,_),L2), $memberchk(H,L)) ; true),
+	$intersect_sets(L1,L2,L).
+
+$length1(X,N) :- ((var(X), N = 0) ;
+		 (nonvar(X), X = [_|Y], $computil_length1a(Y,1,N))
+		).
+
+$computil_length1a(X,M,N) :-
+	((var(X), N = M) ;
+	 (nonvar(X), X = [_|Y], M1 is 1 + M, $computil_length1a(Y,M1,N))
+	).
+
+$prefix_list(_,0,_).
+$prefix_list([H|T],N,[H|T1]) :- N1 is N - 1, $prefix_list(T,N1,T1).
+
+/*   This file contains routines for accessing and managing the symbol table
+     for variables.  At this point, it is used only for the "Pragma" field
+     of variables.							    */
+
+$check_type(vrec(T0,_,_,_),T) :- '$=='(T,T0).
+
+$type(vrec(T,_,_,_),T).
+
+$occ(vrec(_,Occ,_,_),Occ).
+
+$loc(vrec(_,_,Loc,_),Loc).
+
+$misc(vrec(_,_,_,M),M).
+
+$alloc_reg1(vrec(t,_,N,Misc),N,Tin,Tout) :-
+    (($memberchk(use(U),Misc), $memberchk(N,U)) ;
+     ($memberchk(nouse(NU), Misc), not($memberchk(N,NU)))
+    ),
+    $hold(N,Tin,Tout).
+$alloc_reg1(Prag,N,Tin,Tout) :- $alloc_reg(Prag,Tin,Tout).
+
+$alloc_reg(vrec(t,f,R,Misc),Tin,Tout) :-
+    !,
+    ((var(R),
+      $computil_find_reg(Misc,Tin,R),
+      $hold(R, Tin, Tout)
+     ) ;
+     (nonvar(R), Tin = Tout)
+    ).
+$alloc_reg(Prag,T,T).
+
+$computil_find_reg(Prag,T,R) :-
+    $memberchk(use(L),Prag),
+    $computil_find_reg1(L,T,R).	 /* find reg in "use" list that's available */
+$computil_find_reg(Prag,T,R) :-
+    $memberchk(nouse(L),Prag),
+    $append(L,T,T1),
+    $getreg(T1,R).		/* find available reg not in "nouse" list */
+$computil_find_reg(Prag,T,R) :- $getreg(T,R).
+
+$computil_find_reg1([Reg|_],Tin,Reg) :- not($memberchk(Reg,Tin)).
+$computil_find_reg1([_|Rest],Tin,Reg) :- $computil_find_reg1(Rest,Tin,Reg).
+
+$release_if_done(Vid,R,vrec(T,_,L,Misc),HoldR,Tin,Tout) :-
+	(nonvar(L),
+	 $release_if_done1(Vid,R,T,HoldR,Tin,Tout,L,Misc)
+	) ;
+	(var(L), $release_if_done2(Vid,R,T,HoldR,Tin,Tout,L,Misc)).
+$release_if_done(_,_,_,_,T,T).
+
+:- index($release_if_done1,8,3).
+
+$release_if_done1(Vid,R,t,HoldR,Tin,Tout,L,Misc) :-
+    not($memberchk(Vid,HoldR)),
+    ($memberchk(tail,Misc) ->
+	($release(R,Tin,Tmid),
+	 ((R =:= L, Tmid = Tout) ;
+	  (R =\= L, $release(R,Tmid,Tout))
+	 )
+	) ;
+	(R =\= L, $release(R,Tin,Tout))
+    ).
+$release_if_done1(Vid,R,p,HoldR,Tin,Tout,L,Misc) :-
+    $release(R,Tin,Tout).
+$release_if_done1(Vid,R,d,HoldR,Tin,Tout,L,Misc) :-
+    $release(R,Tin,Tout).
+$release_if_done1(Vid,R,u,HoldR,Tin,Tout,L,Misc) :-
+    $release(R,Tin,Tout).
+$release_if_done1(Vid,R,vh,HoldR,Tin,Tout,L,Misc) :-
+    $release(R,Tin,Tout).
+
+
+$release_if_done2(Vid,R,T,HoldR,Tin,Tout,L,Misc) :-
+    T = t -> Tin = Tout ; $release(R,Tin,Tout).
+
+$release_if_done0(v(Vid,Prag),R,HoldR,Tin,Tout) :-
+	!,
+	$release_if_done(Vid,R,Prag,HoldR,Tin,Tout).
+$release_if_done0(Term,R,_,Tin,Tout) :-
+	$release(R,Tin,Tout).
+
+
+/* ---------------------------------------------------------------------- */
+

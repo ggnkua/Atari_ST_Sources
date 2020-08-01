@@ -1,0 +1,193 @@
+/************************************************************************
+*									*
+* The SB-Prolog System							*
+* Copyright SUNY at Stony Brook, 1986; University of Arizona, 1987	*
+*									*
+************************************************************************/
+
+/*-----------------------------------------------------------------
+SB-Prolog is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY.  No author or distributor
+accepts responsibility to anyone for the consequences of using it
+or for whether it serves any particular purpose or works at all,
+unless he says so in writing.  Refer to the SB-Prolog General Public
+License for full details.
+
+Everyone is granted permission to copy, modify and redistribute
+SB-Prolog, but only under the conditions described in the
+SB-Prolog General Public License.   A copy of this license is
+supposed to have been given to you along with SB-Prolog so you
+can know your rights and responsibilities.  It should be in a
+file named COPYING.  Among other things, the copyright notice
+and this notice must be preserved on all copies. 
+------------------------------------------------------------------ */
+/* $factor1.P */
+
+/*  the predicates in this file handle factoring of clauses to decrease
+    the amount of nondeterminism.  The process is as follows: first, the
+    clauses of a predicate are checked to see if adjacent clauses contain
+    complementary inline literals that might be factorable.  If this is the
+    case, then the heads of the clauses are checked to see if they subsume
+    each other, in which case the two clauses can be merged.  If the heads
+    are not similar, then an attempt is made to factor the heads by moving
+    "dont-know" arguments from the head into the body so that variables in
+    tests appearing in the body are "covered" by what's left in the head.
+    This, of course, needs mode information.  If this still doesn't work,
+    the attempt at factoring fails and nothing is done.			*/
+
+$factor(pred(P,N,_,_,Clauses),Mode,pred(P,N,_,_,FClauses)) :-
+	$check_compl(Clauses) ->
+		$factor0(Clauses,Mode,FClauses) ;
+		Clauses = FClauses.
+
+/* check_comp does a quick scan of the clauses to see if there's any
+   potential for factoring of inline clauses to produce if-then-elses, by
+   checking whether adjacent clauses contain literals that appear to be
+   complementary.							*/
+
+$check_compl([Cl1,Cl2|Rest]) :-
+	$check_compl1(Cl1,Cl2) -> true ; $check_compl([Cl2|Rest]).
+
+$check_compl1(rule(H1,B1,_,_),rule(H2,B2,_,_)) :- $check_compl2(B1,B2).
+
+$check_compl2(','(L11,B1), ','(L21,B2)) :- $compl_lits(L11,L21), !.
+$check_compl2(','(not(_),B1), ','(not(_),B2)) :- $check_compl2(B1,B2), !.
+$check_compl2(B1, ','(not(_),B2)) :- $check_compl2(B1,B2).
+$check_compl2(','(not(_),B1), B2) :- $check_compl2(B1,B2).
+
+$compl_lits(L1,not(L2)) :- functor(L1,F,N), functor(L2,F,N).
+$compl_lits(L1,L2) :-
+	functor(L1,F1,N),
+	functor(L2,F2,N),
+	( ($factor_arith_test(F1,N), $complementary(F1,N,F2)) ;
+	  $implied_mutex(F1,N,F2)
+	).
+
+/* $factor0 runs down the list of clauses "backwards", trying to combine
+   clauses wherever possible.						*/
+
+$factor0([Cl],_,[Cl]).
+$factor0([Cl1|ClRest],Mode,FClauses) :-
+	$factor0(ClRest,Mode,FClRest),
+	$factor1(Cl1,FClRest,Mode,FClauses).
+
+$factor1(Cl1,[Cl2|CRest],Mode,Clauses) :-
+	($check_compl1(Cl1,Cl2) -> $factor2(Cl1,Cl2,Mode,Cl)) ->
+		Clauses = [Cl|CRest] ;
+		Clauses = [Cl1,Cl2|CRest].
+
+$factor2(rule(H1,B1,_,_), rule(H2,B2,_,_), Mode, rule(H3,B3,_,_)) :-
+	$factor3(H1,B1,H2,B2,H3,B3,Mode).
+
+$factor3(H1,B1,H2,B2,H3,B3,_) :- 
+	subsumes(H1,H2), subsumes(H2,H1),
+	!,
+	H1 = H2, H3 = H2,
+	$factor4(B1,B2,B3).
+$factor3(H1,B1,H2,B2,H3,B3,Mode) :-
+	H1 =.. [P|Args1], H2 =.. [P|Args2],
+	$factor_pullout(Args1,Mode,NArgs1,Eqs1,CV1),
+	$factor_pullout(Args2,Mode,NArgs2,Eqs2,CV2),
+	subsumes(NArgs1,NArgs2),
+	subsumes(NArgs2,NArgs1),
+	!,
+	H3 =.. [P|NArgs1], NArgs1 = NArgs2,
+	$factor_hb(Eqs1,CV1,B1,B1a),
+	$factor_hb(Eqs2,CV2,B2,B2a),
+	$factor4(B1a,B2a,B3).
+
+$factor_pullout([],_,[],[],CV) :- $closetail(CV), !.
+$factor_pullout([A|ARest],[M|MRest],NHArgs,Eqs,CV) :-
+	((M =< 0, nonvar(A)) ->
+		(NHArgs = [NA|NARest], Eqs = [(NA = A)|EqRest]) ;
+		(NHArgs = [A|NARest],
+		 Eqs = EqRest,
+		 (M =:= 2 -> $factor_addvars(A,CV) ; true)
+		)
+	),	
+	$factor_pullout(ARest,MRest,NARest,EqRest,CV).
+
+$factor_hb(Eqs,CV,Bin,Bout) :-
+	$factor_coveredtests(CV,Bin,[],CTests,BRest),
+	$app_comma(Eqs,BRest,B0),
+	$app_comma(CTests,B0,Bout).
+
+/* $factor_coveredtests takes a list of variables that are guaranteed to
+   be ground in the input, and splits the leading tests in the body into
+   those whose variables are covered by this, and the rest.  If any
+   argument is being moved out of the head into the body, it can be safely
+   moved past any of the tests which are in the first group, i.e. whose
+   variables are covered by the ground arguments in the head.		*/
+
+$factor_coveredtests(CV,','(Test,Body),Tin,Tout,BRest) :-
+	functor(Test,F,N),
+	$factor_arith_test(F,N),
+	!,
+	$factor_testcov(Test,CV),
+	$factor_coveredtests(CV,Body,[Test|Tin],Tout,BRest).
+$factor_coveredtests(_,Body,T,T,Body).
+
+$factor_testcov(T,V) :-
+	$factor_addvars(T,VList),
+	$closetail(VList),
+	!,
+	$factor_testcov1(VList,V).
+
+$factor_testcov1([],_).
+$factor_testcov1([V|VRest],VList) :-
+	$absmember(V,VList),
+	$factor_testcov1(VRest,VList).
+
+$factor4(','(L1,B1), ','(L2,B2), ','(L1,B3)) :-
+	L1 == L2,
+	!,
+	$factor4(B1,B2,B3).
+$factor4(','(L1,B1), ','(L2,B2), ((L1,B1) ; (not(L1),L2,B2)) ) :-
+	L1 =.. [F1|Args1], L2 =.. [F2|Args2],
+	functor(L1,F1,N), functor(L2,F2,N),
+	$implied_mutex(F1,N,F2),
+	Args1 == Args2.
+$factor4(B1,B2,';'(B1a,B2)) :-
+	functor(B1,'->',2) -> B1a = (B1 ; fail) ; B1a = B1.
+
+$implied_mutex('=:=',2,'>').
+$implied_mutex('=:=',2,'<').
+$implied_mutex('>',2,'<').
+$implied_mutex('<',2,'>').
+$implied_mutex('>',2,'=:=').
+$implied_mutex('<',2,'=:=').
+
+/* 	$factor_chmode $checks that the mode given has at least one 0,
+	so that it is worth trying to pull head arguments in.		*/
+
+$factor_chmode([M|MRest]) :-
+	M =:= 0 -> true ; $factor_chmode(MRest).
+
+$factor_arith_test('>',2).
+$factor_arith_test('>=',2).
+$factor_arith_test('=:=',2).
+$factor_arith_test('=\=',2).
+$factor_arith_test('=<',2).
+$factor_arith_test('<',2).
+
+$factor_addvars(A,VList) :-
+	var(A) ->
+		$factor_addvars1(A,VList) ;
+		(A =.. [_|Args],
+		 $factor_addvarslist(Args,VList)
+		).
+
+$factor_addvarslist([],_).
+$factor_addvarslist([A|ARest],VList) :-
+	$factor_addvars(A,VList),
+	$factor_addvarslist(ARest,VList).
+
+$factor_addvars1(A,VList) :-
+	var(VList) ->
+		VList = [A|_] ;
+		(VList = [H|L], (H == A ; $factor_addvars1(A,L))).
+
+
+$app_comma([],L,L).
+$app_comma([H|L1],L2,','(H,L3)) :- $app_comma(L1,L2,L3).
+

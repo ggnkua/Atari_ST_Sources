@@ -1,0 +1,501 @@
+/************************************************************************
+*									*
+* The SB-Prolog System							*
+* Copyright SUNY at Stony Brook, 1986; University of Arizona, 1987	*
+*									*
+************************************************************************/
+
+/*-----------------------------------------------------------------
+SB-Prolog is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY.  No author or distributor
+accepts responsibility to anyone for the consequences of using it
+or for whether it serves any particular purpose or works at all,
+unless he says so in writing.  Refer to the SB-Prolog General Public
+License for full details.
+
+Everyone is granted permission to copy, modify and redistribute
+SB-Prolog, but only under the conditions described in the
+SB-Prolog General Public License.   A copy of this license is
+supposed to have been given to you along with SB-Prolog so you
+can know your rights and responsibilities.  It should be in a
+file named COPYING.  Among other things, the copyright notice
+and this notice must be preserved on all copies. 
+------------------------------------------------------------------ */
+/* $prof.P */
+
+/* profiling package */
+/* To be able to profile execution, you should either consult the
+file containing the predicate definitions or compile them with the 't'
+option and load them. The 't' option keeps the assembler from optimizing
+subroutine linkage and allows the trace to intercept any call. To profile
+the system, predicates to be traced must be passed to count/1 or time/1. For 
+example,
+	:- count([pred1/1,pred2/2]),time(pred3/2).
+will set up counting calls of pred1, pred2 and timing pred3 (of the indicated
+arities.)  The compile and consult predicates have been modified to
+return a list of predicates defined, which can be directly passed to count
+or time to set up interception. This also turns profiling on. 
+*/
+
+$prof_export([$count/1,$time/1,$nocount/1,$notime/1,$profiling/0,
+	      $prof_reset/1, $prof_resetcount/1,$prof_resettime/1,
+	      $profile/0,$noprofile/0,$timepreds/1,$countpreds/1,
+	      $prof_stats/0, $prof_stats/1]).
+
+/* 
+$prof_use($glob,[$globalset/1,$gennum/1,$gensym/2]).
+$prof_use($call,[call/1,'_$interp'/2,'_$call'/1]).
+$prof_use($meta,[$functor/3,$univ/2,$length/2]).
+$prof_use($name,[$name/2,$name0/2]).
+$prof_use($bio,[$writename/1,$writeqname/1,$put/1,$nl/0,$tab/1,$tell/1,$tell/2,
+                $telling/1,$told/0,$get/1,$get0/1,$see/1,$seeing/1,$seen/0]).
+$prof_use($io,[$write/1,$writeq/1,$display/1,$print/1]).
+$prof_use($assert,[$assert/1,$asserti/2,$assert_union/2,$assert_call_s/1,
+		$assert_get_prref/2,$assert_put_prref/2,$assert_abolish_i/1]).
+$prof_use($retr,[$retract/1,_,_]).
+$prof_use($defint,[$defint_call/4]).
+$prof_use($buff,[$alloc_perm/2,$alloc_heap/2,$trimbuff/3,$buff_code/4,
+		 $symtype/2,$substring/6,$subnumber/6,$subdelim/6,
+                 $conlength/2,$pred_undefined/1, $hashval/3]).
+*/
+
+'_$prof_count'(_,_,_,_,_,_,_,_) :- fail.	/* initially defined and empty */
+'_$prof_time'(_,_,_,_,_,_,_)  :- fail.	/* initially defined and empty */
+
+
+$prof_ile(Call) :-
+	$prof_iling(N),
+	N =:= 0 -> '_$call'(Call) ; $prof_process(Call).
+
+$prof_process(Call) :-
+	functor(Call,Clpred,A),
+	('_$profiling'(Clpred,A) ->
+	    (('_$prof_count'(Clpred,A,OCntval,Oldcount,_,_,_,_) ->
+	      ('_$call'(OCntval),		/* get old count */
+	       Newcount is Oldcount + 1,
+	       $globalset1(OCntval,Newcount)		/* set new count */
+	      ) ;
+	      true		/* not being counted */
+	     ),
+	     ('_$prof_time'(Clpred,A,OTcall,OTval,ORcall,ORval,CpuPred) ->
+	         ('_$call'(ORcall),
+	          (ORval =:= 1 -> true ;   /* recursive call, don't time */
+	           ($globalset1(ORcall,1),  /* turn off timing for recursive calls */
+	            $functor(Cpucall0,CpuPred,1),
+	            $cputime(T0), $globalset1(Cpucall0,T0)  /* note entry time */
+	           )
+	          )
+	         ) ;
+	         ORval = 1
+	     ),
+	     ( ('_$call'(Call),
+	        ($cputime(T1) ;			/* Call succeeds */
+	         $prof_bktrack(Clpred,A,ORval,CpuPred)	/* backtrack */
+	        ),
+	        $prof_exit(Clpred,Arity,OTcall,OTval,T1,ORcall,ORval,CpuPred)
+	       ) ;
+	       $prof_fail(Clpred,A,ORcall,ORval)		/* fail */
+	     )
+	    ) ;
+	    '_$call'(Call)		/* not being timed or counted */
+	).
+
+$count(X) :- $prof_setcount(X), $profile0.
+
+$prof_setcount(X) :-
+	(nonvar(X), $prof_setcount0(X)) ;
+	(var(X), print('*** count: argument cannot be a variable ***'), nl).
+
+$prof_setcount0(P/A) :- 
+	(atomic(P), integer(A)) ->
+	    ($name(P,Pname),
+	     $name(ProfP,[112,114,111,102,36|Pname]), /* prof$ */
+	     ('_$prof_count'(ProfP,A,_,_,_,_,_,_) ->
+		true ;			/* noop if already there */
+		($functor(F,P,A),
+		 $symtype(F,Symtype),
+		 ((Symtype > 0) ->
+			($get_profname(P,A,[95,36,99,111,117,110,116,36|Rest],Rest,Tname),
+			 $get_profname(P,A,[95,36,98,107,36|Rest1],Rest1,Bname),
+			 $get_profname(P,A,[95,36,102,97,105,108,36|Rest2],Rest2,Fname),
+			 Tcall =.. [Tname,Tvar],
+			 Bcall =.. [Bname,Bvar],
+			 Fcall =.. [Fname,Fvar],
+			 $asserti('_$prof_count'(ProfP,A,Tcall,Tvar,Bcall,Bvar,Fcall,Fvar),1),
+			 Tval =.. [Tname,0], $globalset(Tval),
+			 Bval =.. [Bname,0], $globalset(Bval),
+			 Fval =.. [Fname,0], $globalset(Fval),
+			 ('_$prof_time'(ProfP,A,_,_,_,_,_) -> 
+			 	true ;		 /* already being profiled */
+		 	 	($prof_set(P,A,$prof_ile(_)),
+				 $asserti('_$profiling'(ProfP,A),1)
+				)
+			 )
+			) ;
+			(print('*** '), print(P), print('/'), print(A),
+			 print(' not defined, cannot count ***'), $nl)))
+	     )  /* '_$prof_count'(ProfP,A,_,_,_,_,_,_) -> ... */
+	    ) ;
+	    (print('*** illegal argument to count: '),print(P),
+	     print('/'), print(A), $nl).
+$prof_setcount0([Pred|More]) :- $prof_setcount0(Pred),$prof_setcount(More).
+$prof_setcount0([]).
+
+$time(X) :- $prof_settime(X), $profile0.
+
+$prof_settime(X) :-
+	(nonvar(X), $prof_settime0(X)) ;
+	(var(X), print('*** time: argument cannot be a variable ***'), nl).
+
+$prof_settime0(P/A) :-
+	(atomic(P), integer(A)) ->
+	    ($name(P,Pname),
+	     $name(ProfP,[112,114,111,102,36|Pname]), /* prof$ */
+	     ('_$prof_time'(ProfP,A,_,_,_,_,_) ->
+		true ;			/* noop if already there */
+		($functor(F,P,A),
+		 $symtype(F,Symtype),
+		 (Symtype > 0 ->
+			($get_profname(P,A,[95,36,116,105,109,101,36|Rest1],Rest1,Tname),
+			 $get_profname(P,A,[95,36,114,101,99,99,97,108,108,36|Rest2],Rest2,Rname),
+			 $get_profname(P,A,[95,36,99,112,117,36|Rest3],Rest3,Cname),
+			 Tcall =.. [Tname,Tvar], Rcall =.. [Rname,Rvar],
+			 $asserti('_$prof_time'(ProfP,A,Tcall,Tvar,Rcall,Rvar,Cname),1),
+			 Tval =.. [Tname,0], $globalset(Tval),
+			 Rval =.. [Rname,0], $globalset(Rval),
+			 ('_$prof_count'(ProfP,A,_,_,_,_,_,_) -> 
+			 	true ;		 /* already being profiled */
+		 	 	($prof_set(P,A,$prof_ile(_)),
+				 $asserti('_$profiling'(ProfP,A),1)
+				)
+			 )
+			) ;
+			(print('*** '), print(P), print('/'), print(A),
+			 print(' not defined, cannot time ***'), $nl))))
+	     ) ;
+	     (print('*** illegal argument to time: '),print(P),
+	      print('/'), print(A),$nl
+	     ).
+$prof_settime0([Pred|More]) :- $prof_settime0(Pred),$prof_settime(More).
+$prof_settime0([]) :- $cputime(T), $globalset('_$oldcpu'(T)).
+
+$prof_resettime(P/A) :-
+	$name(P,Pname),
+	$name(ProfP,[112,114,111,102,36|Pname]), /* prof$ */
+	'_$prof_time'(ProfP,A,Tcall,0,Rcall,0,_) ->
+	    ($globalset(Tcall),
+	     $globalset(Rcall)
+	    ) ;
+	    (print('*** resettime: '), print(P), print('/'), print(A),
+	     print(' not being timed'), $nl
+	    ).
+
+$prof_resetcount(P/A) :-
+	$name(P,Pname),
+	$name(ProfP,[112,114,111,102,36|Pname]), /* prof$ */
+	'_$prof_count'(ProfP,A,Tval,0,Bcall,0,Fcall,0) ->
+	      ($globalset(Tval),	/* '_$count$PA': keeps count of # of calls */
+	       $globalset(Bcall), $globalset(Fcall)
+	      ) ;
+	      (print('*** resetcount: '), print(P), print('/'), print(A),
+	       print(' not being counted'), $nl
+	      ).
+
+$prof_reset(Pred) :- $prof_resetcount(Pred), $prof_resettime(Pred).
+
+$get_profname(P,A,L,Tail,Lname) :-
+	$name(P,Pname), $name(A,Aname), $append(Pname,Aname,Tail),
+	$name(Lname,L).
+
+$profile0 :-
+	$globalset($prof_iling(1)),
+	$prof_initcputimes,
+	$cputime(T),
+	$globalset('_$oldcpu'(T)).
+
+$profile :- $prof_iling(N), (N =:= 1 -> true ; $profile0).
+		
+$noprofile :- $globalset($prof_iling(0)).
+
+$prof_initcputimes :-
+	'_$prof_time'(_,_,_,_,_,_,C),
+	Ccall =.. [C,Currtime],
+	$cputime(Currtime),
+	$globalset(Ccall),
+	fail.
+$prof_initcputimes.
+
+$prof_set(P,A,Profrout) :- 
+	$name(P,Pnamelist),
+	$name(Profpname,[112,114,111,102,36|Pnamelist]), /* prof$p */
+	$functor(Profcall,Profpname,A),
+	$functor(Pcall,P,A),
+	  /* make PRED and prof$PRED have identical ep's */
+	$buff_code(Profcall,0,19 /* copy ep */ ,Pcall),
+	  /* now define PRED(A1,..,An) :- $prof_ile(prof$PRED(A1,..,An)). */
+	$defint_call(Pcall,A,Profcall,Profrout).
+
+$nocount(X) :-
+	(nonvar(X), $prof_nocount0(X)) ;
+	(var(X), print('*** nocount: argument cannot be a variable ***'), nl).
+
+$prof_nocount0(P/A) :- 
+	(atomic(P), integer(A)) ->
+		( ($name(P,Pname),
+		   $name(ProfP,[112,114,111,102,36|Pname]), /* prof$ */
+		   '_$prof_count'(ProfP,A,_,_,_,_,_,_),	/* no-op if not there */
+		   $retract('_$prof_count'(ProfP,A,_,_,_,_,_,_)),!,
+		   ('_$prof_time'(ProfP,A,_,_,_,_,_) ->
+		   	true ;		/* still profiling */
+		   	($prof_unset(P/A)),
+			 $retract('_$profiling'(ProfP,A))
+			)
+		  ) ;
+		  true
+		) ;
+		(print('*** illegal argument to nocount: '), print(P), print('/'), print(A), nl).
+$prof_nocount0([Pred|More]) :- $prof_nocount0(Pred),$nocount(More).
+$prof_nocount0([]).
+
+$notime(X) :-
+	(nonvar(X), $prof_notime0(X)) ;
+	(var(X), print('*** notime: argument cannot be a variable ***'), nl).
+
+$prof_notime0(P/A) :-
+	(atomic(P), integer(A)) ->
+		( ($name(P,Pname),
+		   $name(ProfP,[112,114,111,102,36|Pname]), /* prof$ */
+		   '_$prof_time'(ProfP,A,_,_,_,_,_),
+		   $retract('_$prof_time'(ProfP,A,_,_,_,_,_)),!,
+		   ('_$prof_count'(ProfP,A,_,_,_,_,_,_) ->
+		   	true ;		/* still profiling */
+			($prof_unset(P/A)),
+			 $retract('_$profiling'(ProfP,A))
+			)
+		  ) ;
+		  true		/* succeed even if retract fails */
+		) ;
+		(print('*** illegal argument to notime: '), print(P), print('/'), print(A), nl).
+$prof_notime0([Pred|More]) :- $prof_notime0(Pred),$notime(More).
+$prof_notime0([]).
+
+$prof_unset(P/A) :- /* add checks */
+	$name(P,Pnamelist),
+	$name(Profpname,[112,114,111,102,36|Pnamelist]), /* prof$p */
+	$functor(Profcall,Profpname,A),
+	$functor(Pcall,P,A),
+	$buff_code(Pcall,0,19 /* copy ep */ ,Profcall).
+
+$profiling :- not( $profiling_0 ).
+
+$profiling_0 :-
+	$prof_iling(X),
+	((X =:= 1, print('Profile mode on')) 
+         ; 
+         (X =\= 1, print('Profile mode off'))), nl,
+          $timepreds(L0),
+	  (L0 = [] -> ( print('No predicates being timed'), nl) ;
+		     (print('Timing predicates: '), $nl, tab(5), 
+                      $prof_printplist(L0))
+	),
+	$countpreds(L1),
+	(L1 = [] -> (print('No predicates being counted'), nl) ;
+		   (print('Counting predicates: '), $nl, tab(5), 
+                      $prof_printplist(L1))
+	),
+	!,
+	fail.
+
+$timepreds(L) :- 
+      $findall('/'(P,A), 
+      ('_$prof_time'(Prof,A,_,_,_,_,_), $prof_getpname(Prof,P)), L).
+
+$countpreds(L) :-
+      $findall('/'(P,A), 
+      ('_$prof_count'(Prof,A,_,_,_,_,_,_), 
+      $prof_getpname(Prof,P)), L).
+
+$prof_getpname(ProfP,P) :-
+	$name(ProfP,[112,114,111,102,36|Pname]), /* prof$ */
+	$name(P,Pname).	
+
+
+$prof_printplist([]) :- $nl.
+$prof_printplist([(P/N)|L]) :-
+	print(P), print('/'), print(N), print(', '), $prof_printplist(L).
+
+$prof_stats :- $prof_stats(1).
+
+$prof_stats(N) :-
+	print('predicate count statistics: '),
+	$countpred_stats(N),
+	$nl,
+	print('predicate time statistics: '),
+	$timepred_stats(N),
+	$nl.
+
+$countpred_stats(N) :-
+	'_$prof_count'(_,_,_,_,_,_,_,_) ->
+		($nl, $countpred_stats1(N)) ;
+		(print('no predicates being counted'), $nl).
+
+$countpred_stats1(N) :-
+	findall(f(P,A,Cval,Bval,Fval),
+		('_$prof_count'(Prof,A,Ccall,Cval,Bcall,Bval,Fcall,Fval),
+		 '_$call'(Ccall), '_$call'(Bcall), '_$call'(Fcall),
+		 $prof_getpname(Prof,P)	), CList0),
+	$prof_sort_count(CList0,CList1),
+	$prof_disp_count(CList1),
+	(N =:= 1 -> $profstats_resetcount(CList1) ; true).
+
+$timepred_stats(N) :-
+	'_$prof_time'(_,_,_,_,_,_,_) ->
+		($nl, $timepred_stats1(N)) ;
+		(print('no predicates being timed'), $nl).
+
+$timepred_stats1(N) :-
+	$cputime(Now),
+	findall(f(P,A,T),
+		('_$prof_time'(Prof,A,Tcall,T,_,_,_), '_$call'(Tcall),
+		 $prof_getpname(Prof,P)), TList0),
+	$prof_sort_time(TList0,TList1),
+	'_$oldcpu'(Then), T1 is (Now - Then) * 1.0,
+	$prof_disp_time(TList1,T1),
+	(N =:= 1 -> $profstats_resettime(TList1) ; true).
+
+$prof_bktrack(Clpred,A,Rval,CpuPred) :-
+	(Rval =:= 0 ->
+	     ($cputime(T2), $functor(Cpucall1,CpuPred,1),  /* backtrack reentry */
+	      $globalset1(Cpucall1,T2)
+	     ) ;
+	     true
+	),
+	('_$prof_count'(Clpred,A,_,_,OBcall,OBcount,_,_) ->
+	      ('_$call'(OBcall),
+	       NBcount is OBcount+1,
+	       $globalset1(OBcall,NBcount)
+	      ) ;
+	      true
+	),
+	fail.
+
+$prof_exit(Clpred,A,OTcall,OTval,T1,ORcall,Rval,CpuPred) :-
+	Rval =:= 0  ->
+		('_$call'(OTcall),	/* get old time-used value */
+		 Cpucall2 =.. [CpuPred,LastT],
+		 '_$call'(Cpucall2),	/* cputime at last entry */
+		 NTval is OTval + (T1-LastT),
+		 $functor(Cpucall3,CpuPred,1), $globalset1(Cpucall3,T1),
+		 $globalset1(OTcall,NTval),	/* set new time-used value */
+		 $globalset(ORcall)  /* success exit: turn timing back on */
+		) ;
+		true.
+
+$prof_fail(Clpred,A,ORcall,Rval) :-
+	((Rval =:= 0, '_$prof_time'(Clpred,A,OTcall,OTval,ORcall,Rval,CpuPred)) ->
+	      (cputime(T1),		/* Call fails */
+	       '_$call'(OTcall),	/* get old time-used value */
+	       Cpucall4 =.. [CpuPred,LastT], '_$call'(Cpucall4),
+	       NTval is OTval + (T1-LastT),
+	       $globalset1(OTcall,NTval),	/* set new time-used value */
+	       $globalset(ORcall)	/* turn timing back on */
+	      ) ;
+	      true
+	),
+	('_$prof_count'(Clpred,A,_,_,_,_,OFcall,OFcount) ->
+	      ('_$call'(OFcall),
+	       NFcount is OFcount+1,
+	       $globalset1(OFcall,NFcount)
+	      ) ;
+	      true
+	),
+	fail.
+
+$prof_sort_count([],[]).
+$prof_sort_count([M|L],R) :-
+	$prof_part_count(L,M,U1,U2),
+	$prof_sort_count(U1,V1), $prof_sort_count(U2,V2),
+	$append(V1,[M|V2],R).
+
+$prof_part_count([],_,[],[]).
+$prof_part_count([E|L],M,U1,U2) :-
+	($prof_count_le(M,E) ->
+		(U1 = [E|U1a], U2 = U2a) ;
+		(U2 = [E|U2a], U1 = U1a)
+	),
+	$prof_part_count(L,M,U1a,U2a).
+
+$prof_count_le(E1,E2) :-
+	E1 = f(P1,A1,C1,B1,F1), E2 = f(P2,A2,C2,B2,F2),
+	(C2 > C1 ->
+	    true ;
+	    ((C2 =:= C1, B2 > B1) ->
+	        true ;
+	        (C2 =:= C1, B2 =:= B1, F2 >= F1)
+	    )
+	).
+
+$prof_disp_count([]).
+$prof_disp_count([f(P,A,C,B,F)|L]) :-
+	tab(2), print(P), print('/'), print(A), tab(1),
+	conlength(P,N1), conlength(A,N2), N3 is 19-N1-N2, $prof_dots(N3),
+	print(' called : '), $print_ar(5,C),
+	print('; backtracked into : '), $print_ar(5,B),
+	print('; failed : '), $print_ar(5,F),
+	nl,
+	$prof_disp_count(L).
+
+$prof_dots(N) :-
+	N > 0 ->
+		(print('.'), N1 is N-1, $prof_dots(N1)) ;
+		true.
+
+$profstats_resetcount([]).
+$profstats_resetcount([f(P,A,_,_,_)|L]) :-
+	$prof_resetcount(P/A),
+	$profstats_resetcount(L).
+
+$prof_sort_time([],[]).
+$prof_sort_time([M|L],R) :-
+	M = f(P,A,T),
+	$prof_part_time(L,T,U1,U2),
+	$prof_sort_time(U1,V1), $prof_sort_time(U2,V2),
+	$append(V1,[M|V2],R).
+
+$prof_part_time([],_,[],[]).
+$prof_part_time([E|L],T1,U1,U2) :-
+	E = f(P,A,T0),
+	(T0 > T1 ->
+		(U1 = [E|U1a], U2 = U2a) ;
+		(U2 = [E|U2a], U1 = U1a)
+	),
+	$prof_part_time(L,T1,U1a,U2a).
+
+$prof_disp_time([],_) :- cputime(T), $globalset('_$oldcpu'(T)).
+$prof_disp_time([f(P,A,T)|L],T0) :-
+	tab(2), print(P), print('/'), print(A), tab(1),
+	conlength(P,N1), conlength(A,N2), N3 is 19-N1-N2, $prof_dots(N3),
+	F0 is T/T0,
+	(F0 > 1 -> F1 is 1.0 ; F1 is F0),
+	$name(F1,F1name), $prof_get2dec(F1name,F2name), $name(F2,F2name),
+	$tab(1), $print(F2), nl,
+	$prof_disp_time(L,T0).
+
+$prof_get2dec([46|L],[46,D0,D1]) :-
+	$length(L,N),
+	(N >= 2 ->
+		L = [D0,D1|_] ;
+		(N =:= 1 -> (L = [D0], D1 = 48) ;
+			    (D0 = 48, D1 = 48)
+		)
+	).
+$prof_get2dec([X|L],[X|L0]) :- X =\= 46, $prof_get2dec(L,L0).
+
+$profstats_resettime([]).
+$profstats_resettime([f(P,A,_)|L]) :-
+	$prof_resettime(P/A),
+	$profstats_resettime(L).
+
+
+/* ------------------------------ $prof.P ------------------------------ */
+

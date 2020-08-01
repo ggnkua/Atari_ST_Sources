@@ -1,0 +1,538 @@
+%   File   : READ.PL
+%   Author : D.H.D.Warren + Richard O'Keefe
+%   Modified for SB-Prolog by Saumya K. Debray & Deeporn Beardsley
+%   Updated: July 1988
+%   Purpose: Read Prolog terms in Dec-10 syntax.
+/*
+    Modified by Alan Mycroft to regularise the functor modes.
+    This is both easier to understand (there are no more '?'s),
+    and also fixes bugs concerning the curious interaction of cut with
+    the state of parameter instantiation.
+ 
+    Since this file doesn't provide "metaread", it is considerably
+    simplified.  The token list format has been changed somewhat, see
+    the comments in the RDTOK file.
+ 
+    I have added the rule X(...) -> apply(X,[...]) for Alan Mycroft.
+*/
+ 
+$read_export([$read/1,$read/2]).
+ 
+/* $read_use($bmeta,[$atom/1,$atomic/1,$integer/1,$number/1,$structure/1,
+        $functor0/2,$bldstr/3,$arg/3,$arity/2,$real/1,$floor/2]).
+   $read_use($meta,[$functor/3,$univ/2,$length/2]).
+   $read_use($bio,[$writename/1,$writeqname/1,$put/1,$nl/0,$tab/1,
+        $tell/1,_,$telling/1,$told/0,$get/1,$get0/1,$see/1,$seeing/1,
+        $seen/0]).
+   $read_use($io,[$write/1,$writeq/1,$display/1,$print/1]).
+   $read_use($blist,[$append/3,$member/2,$memberchk/2]).
+   $read_use($retr,[$retract/1,_,_]).
+   $read_use($name,[$name/2,$name0/2]).
+*/
+ 
+%   $read(?Answer).
+ 
+$read(Answer) :- $read(Answer,_).
+ 
+%   $read(?Answer, ?Variables)
+%   reads a term from the current input stream and unifies it with
+%   Answer.  Variables is bound to a list of [Atom=Variable] pairs.
+ 
+$read(Answer, Variables) :-
+        repeat,
+            $read_tokens(Tokens, Variables),
+            (   $read(Tokens, 1200, Term, LeftOver), $read_all(LeftOver) ;
+                $read_syntax_error(Tokens)
+            ),
+        !,
+        Answer = Term.
+ 
+ 
+%   $read_all(+Tokens)
+%   checks that there are no unparsed tokens left over.
+ 
+$read_all([]) :- !.
+$read_all(S) :-
+        $read_syntax_error(['operator expected after expression'], S).
+ 
+ 
+%   $read_expect(Token, TokensIn, TokensOut)
+%   reads the next token, checking that it is the one expected, and
+%   giving an error message if it is not.  It is used to look for
+%   right brackets of various sorts, as they're all we can be sure of.
+ 
+$read_expect(Token, [Token|Rest], Rest) :- !.
+$read_expect(Token, S0, _) :-
+        $read_syntax_error([Token,'or operator expected'], S0).
+ 
+ 
+%   I want to experiment with having the operator information held as
+%   ordinary Prolog facts.  For the moment the following predicates
+%   remain as interfaces to curr_op.
+%   $read_prefixop(O -> Self, Rarg)
+%   $read_postfixop(O -> Larg, Self)
+%   $read_infixop(O -> Larg, Self, Rarg)
+ 
+ 
+$read_prefixop(Op, Prec, Prec) :-
+        $read_curr_op(Prec, fy, Op), !.
+$read_prefixop(Op, Prec, Less) :-
+        $read_curr_op(Prec, fx, Op), !,
+        Less is Prec-1.
+ 
+ 
+$read_postfixop(Op, Prec, Prec) :-
+        $read_curr_op(Prec, yf, Op), !.
+$read_postfixop(Op, Less, Prec) :-
+        $read_curr_op(Prec, xf, Op), !, Less is Prec-1.
+ 
+ 
+$read_infixop(Op, Less, Prec, Less) :-
+        $read_curr_op(Prec, xfx, Op), !, Less is Prec-1.
+$read_infixop(Op, Less, Prec, Prec) :-
+        $read_curr_op(Prec, xfy, Op), !, Less is Prec-1.
+$read_infixop(Op, Prec, Prec, Less) :-
+        $read_curr_op(Prec, yfx, Op), !, Less is Prec-1.
+ 
+ 
+$read_ambigop(F, L1, O1, R1, L2, O2) :-
+        $read_postfixop(F, L2, O2),
+        $read_infixop(F, L1, O1, R1), !.
+ 
+ 
+%   $read(+TokenList, +Precedence, -Term, -LeftOver)
+%   parses a Token List in a context of given Precedence,
+%   returning a Term and the unread Left Over tokens.
+ 
+:- mode($read,4,[nv,nv,d,d]).
+ 
+$read([Token|RestTokens], Precedence, Term, LeftOver) :-
+        $read(Token, RestTokens, Precedence, Term, LeftOver).
+$read([], _, _, _) :-
+        $read_syntax_error(['expression expected'], []).
+ 
+ 
+%   $read(+Token, +RestTokens, +Precedence, -Term, -LeftOver)
+ 
+:- mode($read,5,[nv,nv,c,d,d]).
+ 
+$read(var(Variable,_), ['('|S1], Precedence, Answer, S) :- !,
+        $read(S1, 999, Arg1, S2),
+        $read_args(S2, RestArgs, S3), !,
+        $read_exprtl0(S3,apply(Variable,[Arg1|RestArgs]),Precedence,Answer,S).
+ 
+$read(var(Variable,_), S0, Precedence, Answer, S) :- !,
+        $read_exprtl0(S0, Variable, Precedence, Answer, S).
+ 
+$read(atom(-), [number(Num)|S1], Precedence, Answer, S) :-
+        Negative is -Num, !,
+        $read_exprtl0(S1, Negative, Precedence, Answer, S).
+ 
+$read(atom(Functor), ['('|S1], Precedence, Answer, S) :- !,
+        $read(S1, 999, Arg1, S2),
+        $read_args(S2, RestArgs, S3),
+        $univ(Term,[Functor,Arg1|RestArgs]), !,
+        $read_exprtl0(S3, Term, Precedence, Answer, S).
+ 
+$read(atom(Functor), S0, Precedence, Answer, S) :-
+        $read_prefixop(Functor, Prec, Right), !,
+        $read_aft_pref_op(Functor, Prec, Right, S0, Precedence, Answer, S).
+ 
+$read(atom(Atom), S0, Precedence, Answer, S) :- !,
+        $read_exprtl0(S0, Atom, Precedence, Answer, S).
+ 
+$read(number(Num), S0, Precedence, Answer, S) :- !,
+        $read_exprtl0(S0, Num, Precedence, Answer, S).
+ 
+$read('[', [']'|S1], Precedence, Answer, S) :- !,
+        $read_exprtl0(S1, [], Precedence, Answer, S).
+ 
+$read('[', S1, Precedence, Answer, S) :- !,
+        $read(S1, 999, Arg1, S2),
+        $read_list(S2, RestArgs, S3), !,
+        $read_exprtl0(S3, [Arg1|RestArgs], Precedence, Answer, S).
+ 
+$read('(', S1, Precedence, Answer, S) :- !,
+        $read(S1, 1200, Term, S2),
+        $read_expect(')', S2, S3), !,
+        $read_exprtl0(S3, Term, Precedence, Answer, S).
+ 
+$read(' (', S1, Precedence, Answer, S) :- !,
+        $read(S1, 1200, Term, S2),
+        $read_expect(')', S2, S3), !,
+        $read_exprtl0(S3, Term, Precedence, Answer, S).
+ 
+$read('{', ['}'|S1], Precedence, Answer, S) :- !,
+        $read_exprtl0(S1, '{}', Precedence, Answer, S).
+ 
+$read('{', S1, Precedence, Answer, S) :- !,
+        $read(S1, 1200, Term, S2),
+        $read_expect('}', S2, S3), !,
+        $read_exprtl0(S3, '{}'(Term), Precedence, Answer, S).
+ 
+$read(string(List), S0, Precedence, Answer, S) :- !,
+        $read_exprtl0(S0, List, Precedence, Answer, S).
+ 
+$read(Token, S0, _, _, _) :-
+        $read_syntax_error([Token,'cannot start an expression'], S0).
+ 
+ 
+%   $read_args(+Tokens, -TermList, -LeftOver)
+%   parses {',' expr(999)} ')' and returns a list of terms.
+ 
+$read_args([Tok|S1], Term, S) :-
+        '_$savecp'(CP),
+        $read_args1(Tok,Term,S,S1,CP), '_$cutto'(CP).
+$read_args(S, _, _) :-
+        $read_syntax_error([', or ) expected in arguments'], S).
+ 
+:- mode($read_args1,5,[c,nv,d,d,d]).
+ 
+$read_args1(',',[Term|Rest],S,S1,CP) :- 
+        $read(S1, 999, Term, S2), '_$cutto'(CP),
+        $read_args(S2, Rest, S).
+$read_args1(')',[],S,S,_).
+ 
+ 
+ 
+%   $read_list(+Tokens, -TermList, -LeftOver)
+%   parses {',' expr(999)} ['|' expr(999)] ']' and returns a list of terms.
+ 
+$read_list([Tok|S1],Term,S) :-
+        '_$savecp'(CP),
+        $read_list1(Tok,Term,S,S1,CP),
+        '_$cutto'(CP).
+$read_list(S, _, _) :-
+        $read_syntax_error([', | or ] expected in list'], S).
+ 
+ 
+:- mode($read_list1,5,[c,nv,d,d,d]).
+ 
+$read_list1(',',[Term|Rest],S,S1,CP) :-
+        $read(S1, 999, Term, S2), '_$cutto'(CP),
+        $read_list(S2, Rest, S).
+$read_list1('|',Rest,S,S1,CP) :-
+        $read(S1, 999, Rest, S2), '_$cutto'(CP),
+        $read_expect(']', S2, S).
+$read_list1(']',[],S,S,_).
+ 
+ 
+%   $read_aft_pref_op(+Op, +Prec, +ArgPrec, +Rest, +Precedence, -Ans, -LeftOver)
+ 
+:- mode($read_aft_pref_op,7,[nv,nv,nv,nv,nv,d,d]).
+ 
+$read_aft_pref_op(Op, Oprec, Aprec, S0, Precedence, _, _) :-
+        Precedence < Oprec, !,
+        $read_syntax_error(['prefix operator',Op,'in context with precedence '
+                        ,Precedence], S0).
+ 
+$read_aft_pref_op(Op, Oprec, Aprec, S0, Precedence, Answer, S) :-
+        $read_peepop(S0, S1),
+        $read_prefix_is_atom(S1, Oprec), % can't cut but would like to
+        $read_exprtl(S1, Oprec, Op, Precedence, Answer, S).
+ 
+$read_aft_pref_op(Op, Oprec, Aprec, S1, Precedence, Answer, S) :-
+        $read(S1, Aprec, Arg, S2),
+        $univ(Term,[Op,Arg]), !,
+        $read_exprtl(S2, Oprec, Term, Precedence, Answer, S).
+ 
+ 
+%   The next clause fixes a bug concerning "mop dop(1,2)" where
+%   mop is monadic and dop dyadic with higher Prolog priority.
+ 
+$read_peepop([atom(F),'('|S1], [atom(F),'('|S1]) :- !.
+$read_peepop([atom(F)|S1], [infixop(F,L,P,R)|S1]) :- 
+        $read_infixop(F, L, P, R).
+$read_peepop([atom(F)|S1], [postfixop(F,L,P)|S1]) :- 
+        $read_postfixop(F, L, P).
+$read_peepop(S0, S0).
+ 
+ 
+%   $read_prefix_is_atom(+TokenList, +Precedence)
+%   is true when the right context TokenList of a prefix operator
+%   of result precedence Precedence forces it to be treated as an
+%   atom, e.g. (- = X), p(-), [+], and so on.
+ 
+$read_prefix_is_atom([Token|_], Precedence) :-
+        $read_prefix_is_atom(Token, Precedence).
+ 
+$read_prefix_is_atom(infixop(_,L,_,_), P) :- L >= P.
+$read_prefix_is_atom(postfixop(_,L,_), P) :- L >= P.
+$read_prefix_is_atom(')', _).
+$read_prefix_is_atom(']', _).
+$read_prefix_is_atom('}', _).
+$read_prefix_is_atom('|', P) :- 1100 >= P.
+$read_prefix_is_atom(',', P) :- 1000 >= P.
+$read_prefix_is_atom([],  _).
+ 
+ 
+%   $read_exprtl0(+Tokens, +Term, +Prec, -Answer, -LeftOver)
+%   is called by read/4 after it has read a primary (the Term).
+%   It checks for following postfix or infix operators.
+ 
+$read_exprtl0([atom(F)|S1], Term, Precedence, Answer, S) :-
+	$read_ambigop(F, L1, O1, R1, L2, O2), !,
+	(   $read_exprtl([infixop(F,L1,O1,R1)|S1],0,Term,Precedence,Answer,S)
+	;   $read_exprtl([postfixop(F,L2,O2) |S1],0,Term,Precedence,Answer,S)
+	).
+$read_exprtl0([atom(F)|S1], Term, Precedence, Answer, S) :-
+	$read_infixop(F, L1, O1, R1), !,
+	$read_exprtl([infixop(F,L1,O1,R1)|S1],0,Term,Precedence,Answer,S).
+$read_exprtl0([atom(F)|S1], Term, Precedence, Answer, S) :-
+	$read_postfixop(F, L2, O2), !,
+	$read_exprtl([postfixop(F,L2,O2)|S1], 0, Term, Precedence, Answer, S).
+$read_exprtl0([','|S1], Term, Precedence, Answer, S) :-
+	Precedence >= 1000, !,
+	$read(S1, 1000, Next, S2), !,
+	$read_exprtl(S2, 1000, (Term,Next), Precedence, Answer, S).
+$read_exprtl0(['|'|S1], Term, Precedence, Answer, S) :-
+	Precedence >= 1100, !,
+	$read(S1, 1100, Next, S2), !,
+	$read_exprtl(S2, 1100, (Term;Next), Precedence, Answer, S).
+$read_exprtl0([Thing|S1], _, _, _, _) :-
+	$read_cfexpr(Thing, Culprit), !,
+	$read_syntax_error([Culprit,follows,expression], [Thing|S1]).
+$read_exprtl0(S, Term, _, Term, S).
+
+:- mode($read_cfexpr,2,[nv,d]).
+ 
+$read_cfexpr(atom(_),       atom).
+$read_cfexpr(var(_,_),      variable).
+$read_cfexpr(number(_),     number).
+$read_cfexpr(string(_),     string).
+$read_cfexpr(' (',          bracket).
+$read_cfexpr('(',           bracket).
+$read_cfexpr('[',           bracket).
+$read_cfexpr('{',           bracket).
+ 
+ 
+:- mode($read_exprtl,6,[nv,d,d,c,d,d]).
+
+$read_exprtl([infixop(F,L,O,R)|S1], C, Term, Precedence, Answer, S) :-
+	Precedence >= O, C =< L, !,
+	$read(S1, R, Other, S2),
+	Expr =.. [F,Term,Other], /*!,*/
+	$read_exprtl(S2, O, Expr, Precedence, Answer, S).
+$read_exprtl([postfixop(F,L,O)|S1], C, Term, Precedence, Answer, S) :-
+	Precedence >= O, C =< L, !,
+	Expr =.. [F,Term],
+	$read_peepop(S1, S2),
+	$read_exprtl(S2, O, Expr, Precedence, Answer, S).
+$read_exprtl([','|S1], C, Term, Precedence, Answer, S) :-
+	Precedence >= 1000, C < 1000, !,
+	$read(S1, 1000, Next, S2), /*!,*/
+	$read_exprtl(S2, 1000, (Term,Next), Precedence, Answer, S).
+$read_exprtl(['|'|S1], C, Term, Precedence, Answer, S) :-
+	Precedence >= 1100, C < 1100, !,
+	$read(S1, 1100, Next, S2), /*!,*/
+	$read_exprtl(S2, 1100, (Term;Next), Precedence, Answer, S).
+$read_exprtl(S, _, Term, _, Term, S).
+
+ 
+%   This business of syntax errors is tricky.  When an error is detected,
+%   we have to write out a message.  We also have to note how far it was
+%   to the end of the input, and for this we are obliged to use the data-
+%   base.  Then we fail all the way back to $read(), and that prints the
+%   input list with a marker where the error was noticed.  If subgoal_of
+%   were available in compiled code we could use that to find the input
+%   list without hacking the data base.  The really hairy thing is that
+%   the original code noted a possible error and backtracked on, so that
+%   what looked at first sight like an error sometimes turned out to be
+%   a wrong decision by the parser.  This version of the parser makes
+%   fewer wrong decisions, and $ goal was to get it to do no backtracking
+%   at all.  This goal has not yet been met, and it will still occasionally
+%   report an error message and then decide that it is happy with the input
+%   after all.  Sorry about that.
+ 
+/*  Modified by Sau$a Debray, Nov 18 1986, to use SB-Prolog's database
+    facilities to print out error messages.                             */
+ 
+$read_syntax_error(Message, List) :-
+/*      $print('**'), $print_list(Message), $nl, */
+ 
+        $length(List,Length),
+        $symtype('_$synerr'(_),X),
+        ( (X =:= 0 ; not('_$synerr'(_))) ->     /* _$synerr/1 undefined */
+                $assert('_$synerr'(Length)) ;
+                true
+        ),
+        !,
+        fail.
+ 
+$read_syntax_error(List) :-
+        $nl, $print('*** syntax error ***'), $nl,
+        '_$synerr'(AfterError),
+        $retract('_$synerr'(AfterError)),
+        $length(List,Length),
+        BeforeError is Length - AfterError,
+        $read_display_list(List,BeforeError), !,
+        fail.
+ 
+$read_display_list(X, 0) :-
+        $print('<<here>> '), !,
+        $read_display_list(X, 99999).
+$read_display_list([Head|Tail], BeforeError) :-
+        $print_token(Head),
+        $writename(' '),
+        Left is BeforeError-1, !,
+        $read_display_list(Tail, Left).
+$read_display_list([], _) :-
+        $nl.
+ 
+ 
+$print_list([]) :- $nl.
+$print_list([Head|Tail]) :-
+        $tab(1),
+        $print_token(Head),
+        $print_list(Tail).
+ 
+$print_token(atom(X))    :- !, $print(X).
+$print_token(var(V,X))   :- !, $print(X).
+$print_token(number(X)) :-  !, $print(X).
+$print_token(string(X))  :- !, $print(X).
+$print_token(X)          :-    $print(X).
+ 
+ 
+/*
+%   $read_tokens(TokenList, Dictionary)
+%   returns a list of tokens.  It is needed to "prime" read_tokens/2
+%   with the initial blank, and to check for end of file.  The
+%   Dictionary is a list of AtomName=Variable pairs in no particular order.
+%   The way end of file is handled is that everything else FAILS when it
+%   hits character "-1", sometimes printing a warning.  It might have been
+%   an idea to return the atom 'end_of_file' instead of the same token list
+%   that you'd have got from reading "end_of_file. ", but (1) this file is
+%   for compatibility, and (b) there are good practical reasons for wanting
+%   this behaviour. */
+ 
+$read_tokens(TokenList, Dictionary) :-
+        $read_next_token(Type,Value),
+	$read_insert_token(Type,Value,Dict,ListOfTokens),
+        $append(Dict, [], Dict), !, /*  fill in the "hole" at the end */
+        Dictionary = Dict,              /*  unify explicitly so we read and */
+        TokenList = ListOfTokens.       /*  then check even with filled in */
+                                        /*  arguments */
+$read_tokens([atom(end_of_file)], []).   /*  only thing that can go wrong */
+ 
+$read_next_token(Type, Value) :- '_$builtin'(135).
+
+
+/*
+$read_insert_token(0,Val,Dict,Tokens):-		 % number 
+	Tokens = [number(Val) | TokRest],
+        $read_next_token(Type,Value),
+	$read_insert_token(Type,Value,Dict,TokRest).
+ 
+$read_insert_token(1,Val,Dict,Tokens):-   	% atom 
+	Tokens = [atom(Val) | TokRest]
+        $read_next_token(Type,Value),
+	$read_insert_token(Type,Value,Dict,TokRest).
+ 
+$read_insert_token(2,Val,Dict,Tokens):-		% atom( 
+	Tokens = [atom(Val) | ['(' | TokRest]],
+        $read_next_token(Type,Value),
+	$read_insert_token(Type,Value,Dict,TokRest).
+ 
+$read_insert_token(3,Name,Dict,Tokens):-   	% var 
+	Tokens = [var(Var,Name) | TokRest],
+	$read_lookup(Dict, Name=Var),
+        $read_next_token(Type,Value),
+	$read_insert_token(Type,Value,Dict,TokRest).
+ 
+$read_insert_token(4,Val,Dict,Tokens):-		% uscore 
+	Tokens = [var(_,Val) | TokRest],
+        $read_next_token(Type,Value),
+	$read_insert_token(Type,Value,Dict,TokRest).
+ 
+$read_insert_token(5,Val,Dict,Tokens):-		% string 
+	Tokens = [string(Val) | TokRest],
+        $read_next_token(Type,Value),
+	$read_insert_token(Type,Value,Dict,TokRest).
+ 
+$read_insert_token(6,Val,Dict,Tokens):-		% punctuation 
+	Tokens = [Val | TokRest], 
+        $read_next_token(Type,Value),
+	$read_insert_token(Type,Value,Dict,TokRest).
+ 
+$read_insert_token(7,_,Dict,Tokens):-		% semicolon 
+	Tokens = [atom((';')) | TokRest],
+        $read_next_token(Type,Value),
+	$read_insert_token(Type,Value,Dict,TokRest).
+ 
+$read_insert_token(8,_,_,[]).    % end of clause 
+ 
+*/
+
+$read_insert_token(X,Val,Dict,Tokens):-		    
+  (X=:=0 ->
+      /**0**/			       		/* punctuation */
+      (Tokens = [Val | TokRest],
+       $read_next_token(Type,Value),
+       $read_insert_token(Type,Value,Dict,TokRest)
+      );
+      (X<3 ->
+	 (X=:=1 ->  			        /* var */
+	    /**1**/
+	    (Val = Name, Tokens = [var(Var,Name) | TokRest], 
+	     $read_lookup(Dict, Name=Var),
+	     $read_next_token(Type,Value), 
+	     $read_insert_token(Type,Value,Dict,TokRest)
+	    );
+	    /**2**/    				/* atom( */
+	    (Tokens = [atom(Val) | ['(' | TokRest]],
+             $read_next_token(Type,Value),
+	     $read_insert_token(Type,Value,Dict,TokRest)
+	    )
+	 );
+	 (X<5 ->
+	    (X=:=3 ->
+	       /**3**/				/* number */
+	       (Tokens = [number(Val) | TokRest],
+	        $read_next_token(Type,Value),
+	        $read_insert_token(Type,Value,Dict,TokRest)
+	       ) ;
+	       /**4**/				/* atom */
+	       (Tokens = [atom(Val) | TokRest],
+	        $read_next_token(Type,Value),
+ 		$read_insert_token(Type,Value,Dict,TokRest)
+	       )
+	    );
+	    (X<7 ->
+	       (X=:=5 ->
+		   /**5**/    			/* end of clause */
+		   Tokens = [] ;
+		   /**6**/			/* uscore */
+		   (Tokens = [var(_,Val) | TokRest],
+		    $read_next_token(Type,Value),
+	            $read_insert_token(Type,Value,Dict,TokRest)
+		   )
+	       ) ;
+	       (X=:=7 ->
+		   /**7**/			/* semicolon */
+		   (Tokens = [atom((';')) | TokRest],
+		    $read_next_token(Type,Value),
+	            $read_insert_token(Type,Value,Dict,TokRest)
+		   );
+	      	   (X=:=8 ->
+		       /**8**/			/* end of file */
+		       fail ;
+		       /**9**/			/* string */
+		       (Tokens = [string(Val) | TokRest],
+		        $read_next_token(Type,Value),
+			$read_insert_token(Type,Value,Dict,TokRest)
+		       )
+		   )
+	       )
+	    )
+         )
+      )
+  ).
+
+
+/* 
+%   read_lookup is identical to memberchk except for argument order and
+%   mode declaration.
+*/
+
+$read_lookup([X|_], X) :- !.
+$read_lookup([_|T], X) :- $read_lookup(T, X).

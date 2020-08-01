@@ -1,0 +1,304 @@
+From sce!mitel!uunet!cs.utexas.edu!tut.cis.ohio-state.edu!unmvax!ogccse!blake!uw-beaver!tektronix!zephyr.ens.tek.com!tekcrl!tekgvs!toma Tue Aug 29 08:42:34 EDT 1989
+Article: 139 of comp.lang.lisp.x
+Path: cognos!sce!mitel!uunet!cs.utexas.edu!tut.cis.ohio-state.edu!unmvax!ogccse!blake!uw-beaver!tektronix!zephyr.ens.tek.com!tekcrl!tekgvs!toma
+From: toma@tekgvs.LABS.TEK.COM (Tom Almy)
+Newsgroups: comp.lang.lisp.x
+Subject: Some Xlisp 2.0 read/print bugs
+Message-ID: <5818@tekgvs.LABS.TEK.COM>
+Date: 24 Aug 89 15:44:30 GMT
+Reply-To: toma@tekgvs.LABS.TEK.COM (Tom Almy)
+Organization: Tektronix, Inc., Beaverton,  OR.
+Lines: 262
+Posted: Thu Aug 24 08:44:30 1989
+
+I discovered these problems with characters, strings, and symbols while 
+working on some Common Lisp-like enhancements.
+
+(I will post the enhancements when finished.  These include COERCE, 
+CONCATENATE, and enhancements to functions that CL states take sequence
+arguments (lists, arrays, or strings in XLISP case) which XLISP implements
+typically only for lists (except for SUBSEQ which only works on strings).
+
+
+Problem: Uninterned symbols do not print with leading #:
+Example: (GENSYM)
+Fix:
+
+1) At the beginning of xlprint, replace the code to print NIL with:
+
+    /* print nil */
+    if (vptr == NIL) {
+        xlputstr(fptr,
+            (((!flag) || (getvalue(s_printcase) != k_downcase))?"NIL":"nil"));
+        return;
+    }
+
+2) In putsymbol, add these declarations:
+
+    int i;
+    LVAL sym,array;
+
+3> In putsymbol, add the following *after* the code section titled "check
+   for printing without escapes":
+
+    /* check for uninterned symbol */
+    i = hash(str,HSIZE);
+    array = getvalue(obarray);
+    for (sym = getelement(array,i);sym; sym = cdr(sym))
+        if (strcmp(str,(char*)getstring(getpname(car(sym)))) == 0)
+            goto internedSymbol;
+    
+    xlputc(fptr,'#');   /* indicate uninterned */
+    xlputc(fptr,':');
+
+internedSymbol:         /* sorry about the "goto" */
+
+
+*******************************************************************
+
+Problem: strings containing nulls cannot be read or printed.
+(Note, strcat has the same problem, but I have a new version, the
+ Common Lisp CONCATENATE function, which will replace it.
+
+
+Example: Enter "A string\000will forget these"
+
+Fix: 
+
+1) In rmdquote change section "check for buffer overflow" to:
+
+    if (blen >= STRMAX) {
+        newstr = newstring(len + STRMAX + 1);
+        sptr = getstring(newstr); 
+        if (str) memcpy((char *)sptr,(char *)getstring(str),len);
+        *p = '\0'; 
+        memcpy((char *)sptr+len,(char *)buf,blen+1);
+        p = buf; 
+        blen = 0;
+        len += STRMAX;
+        str = newstr;
+    }
+
+2) In rmdquote, change section "append the last substring" to:
+
+    if (str == NIL || blen) {
+        newstr = newstring(len + blen + 1);
+        sptr = getstring(newstr);
+        if (str) memcpy((char *)sptr,(char *)getstring(str),len);
+        *p = '\0'; 
+        memcpy((char *)sptr+len,(char *)buf,blen+1);
+        str = newstr;
+    }
+
+3) New versions of putstring and putqstring
+
+
+/* putstring - output a string */
+/* rewritten to  print strings containing nulls TAA mod*/
+LOCAL VOID putstring(fptr,str)
+  LVAL fptr,str;
+{
+    unsigned char* p = getstring(str);
+    int len = getslength(str) - 1;
+
+    /* output each character */
+    while (len-- > 0) xlputc(fptr,*p++);
+}
+
+/* putqstring - output a quoted string */
+/* rewritten to  print strings containing nulls TAA mod*/
+LOCAL VOID putqstring(fptr,str)
+  LVAL fptr,str;
+{
+    unsigned char* p = getstring(str);
+    int len = getslength(str) - 1;
+    int ch;
+
+    /* output the initial quote */
+    xlputc(fptr,'"');
+
+    /* output each character in the string */
+    while (len-- > 0) {
+        ch = *p++;
+
+        /* check for a control character */
+        if (ch < 040 || ch == '\\' || ch > 0176) {
+            xlputc(fptr,'\\');
+            switch (ch) {
+                case '\011':
+                    xlputc(fptr,'t');
+                    break;
+                case '\012':
+                    xlputc(fptr,'n');
+                    break;
+                case '\014':
+                    xlputc(fptr,'f');
+                    break;
+                case '\015':
+                    xlputc(fptr,'r');
+                    break;
+                case '\\':
+                    xlputc(fptr,'\\');
+                    break;
+                default:
+                    putoct(fptr,ch);
+                    break;
+            }
+        }
+
+        /* output a normal character */
+        else
+            xlputc(fptr,ch);
+    }
+
+
+    /* output the terminating quote */
+    xlputc(fptr,'"');
+}
+
+
+********************************************
+
+Problem: Control and meta characters print "raw" with prin1.
+
+Example: Execute (int-char 7)
+
+Fix: New version of putchcode:
+
+/* putchcode - output a character */
+/* modified to print control and meta characters TAA Mod */
+/* Format: #\[M-][C-]c
+   Where "M-" denotes character is meta character (value > 127).
+         "C-" denotes character is control character ( value modulo 128 < 32)
+   and "c" is either a printing character or "Space", "Newline", or "Rubout".
+*/
+
+
+LOCAL VOID putchcode(fptr,ch,escflag)
+  LVAL fptr; int ch,escflag;
+{
+    if (escflag) {
+        xlputstr(fptr,"#\\");
+        if (ch > 127) {
+            ch -= 128;
+            xlputstr(fptr,"M-");
+        }
+        switch (ch) {
+            case '\n':
+                xlputstr(fptr,"Newline");
+                break;
+            case ' ':
+                xlputstr(fptr,"Space");
+                break;
+            case 127:
+                xlputstr(fptr,"Rubout");
+                break;
+            default:
+                if (ch < 32) {
+                    ch += '@';
+                    xlputstr(fptr,"C-");
+                }
+                xlputc(fptr,ch);
+                break;
+        }
+    }
+    else xlputc(fptr,ch);
+}
+
+*******************************************
+
+Problem: Inability to declare character literals for control and meta
+ characters.
+
+Fix: in rmhash(), first add declaration "int i", then 
+     change case '\\' code to:
+
+    case '\\':
+        for (i = 0; i < STRMAX-1; i++) {
+            if ((tentry(buf[i] = checkeof(fptr))  != k_const) &&
+                buf[i] != '\\' && buf[i] != '|') {
+                xlungetc(fptr, buf[i]);
+                break;
+            }
+        }
+        buf[i] = 0;
+
+        ch = buf[0];
+        if (strlen(buf) > 1) {
+            upcase(buf);
+            bufp = &buf[0];
+            ch = 0;
+            if (strncmp(bufp,"M-",2) == 0) {
+                ch = 128;
+                bufp += 2;
+            }
+            if (strcmp(bufp,"NEWLINE") == 0)
+                ch += '\n';
+            else if (strcmp(bufp,"SPACE") == 0)
+                ch += ' ';
+            else if (strcmp(bufp,"RUBOUT") == 0)
+                ch += 127;
+            else if (strlen(bufp) == 1) 
+                ch += *bufp;
+            else if (strncmp(bufp,"C-",2) == 0 && strlen(bufp) == 3) 
+                ch += bufp[2] & 31;
+            else xlerror("unknown character name",cvstring(buf));
+        }
+        rplaca(val,cvchar(ch));
+        break;
+
+***********************************************
+
+Problem: Invalid symbols can be created with intern and make-symbol.
+	Also, you can make NIL, which is highly irregular.
+
+Example: (intern "abc\017def")  (intern "NIL")
+
+
+Fix: Add to makesymbol(), before section "make the symbol":
+
+    /* check for making "NIL" -- very bad */
+    if (strcmp((char *)getstring(pname),"NIL") == 0)
+        xlerror("you've got to be kidding!");
+
+    /* check for containing only printable characters */
+    i = getslength(pname)-1;
+    while (i-- > 0) if (((signed char)(pname->n_string[i])) < 32 )
+        xlerror("string contains non-printing characters",pname);
+    
+
+
+*****************
+
+Tom Almy
+toma@tekgvs.labs.tek.com
+Standard Disclaimers Apply
+
+
+From sce!mitel!uunet!zephyr.ens.tek.com!tekcrl!tekgvs!toma Tue Aug 29 11:30:44 EDT 1989
+Article: 140 of comp.lang.lisp.x
+Path: cognos!sce!mitel!uunet!zephyr.ens.tek.com!tekcrl!tekgvs!toma
+From: toma@tekgvs.LABS.TEK.COM (Tom Almy)
+Newsgroups: comp.lang.lisp.x
+Subject: Yet Another XLISP Bug
+Message-ID: <5824@tekgvs.LABS.TEK.COM>
+Date: 25 Aug 89 14:37:30 GMT
+Reply-To: toma@tekgvs.LABS.TEK.COM (Tom Almy)
+Organization: Tektronix, Inc., Beaverton,  OR.
+Lines: 13
+
+
+Problem: Functions NTH and NTHCDR give errors when applied to zero length
+	 lists.
+
+Example: (NTH 1 '())
+
+Fix: In function nth(), replace call of xlgacons() with xlgalist()
+
+(That was simple, wasn't it?)
+
+Tom Almy
+toma@tekgvs.labs.tek.com
+Standard Disclaimers Apply
+
+

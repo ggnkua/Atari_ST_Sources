@@ -1,0 +1,566 @@
+/* modified with labels 32/33 in buff_code */
+/************************************************************************
+*									*
+* The SB-Prolog System							*
+* Copyright SUNY at Stony Brook, 1986; University of Arizona, 1987	*
+*									*
+************************************************************************/
+
+/*-----------------------------------------------------------------
+SB-Prolog is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY.  No author or distributor
+accepts responsibility to anyone for the consequences of using it
+or for whether it serves any particular purpose or works at all,
+unless he says so in writing.  Refer to the SB-Prolog General Public
+License for full details.
+
+Everyone is granted permission to copy, modify and redistribute
+SB-Prolog, but only under the conditions described in the
+SB-Prolog General Public License.   A copy of this license is
+supposed to have been given to you along with SB-Prolog so you
+can know your rights and responsibilities.  It should be in a
+file named COPYING.  Among other things, the copyright notice
+and this notice must be preserved on all copies. 
+------------------------------------------------------------------ */
+/* $dbcmpl.P */
+
+/* This file contains Prolog predicates that compiles a clause into a 
+buffer. It treats all rules as though they had a single literal on the
+right-hand-side. Thus it compiles a clause with more than one literal
+on the right-hand-side as a call to the predicate ,/2 */
+
+$dbcmpl_export([$db_cmpl/5,$db_putbuffop/4,$db_putbuffbyte/4,
+	$db_putbuffnum/4]).
+
+/* 
+$dbcmpl_use($buff,[$alloc_perm/2,$alloc_heap/2,$trimbuff/3,$buff_code/4,
+                   $symtype/2,$substring/6,$subnumber/6,$subdelim/6,
+                   $conlength/2,$pred_undefined/1, $hashval/3]).
+$dbcmpl_use($bmeta,[$atom/1,$atomic/1,$integer/1,$number/1,$structure/1,
+                    $functor0/2,$bldstr/3,$arg/3,$arity/2,$real/1,$floor/2]).
+$db_use($bio,[$writename/1,$writeqname/1,$put/1,$nl/0,$tab/1,$tell/1,$tell/2,
+              $telling/1,$told/0,$get/1,$get0/1,$see/1,$seeing/1,$seen/0]).
+*/
+
+$db_putbuffop(Opn,Buff,Li,Lo) :- 
+	$buff_code(Buff, Li, 3 /*ps*/ ,Opn), Lo is Li+2.
+
+$db_putbuffope(Opn,Buff,Li,Lo) :- 
+	$buff_code(Buff, Li,  3 /*ps*/ ,Opn), Li1 is Li+2,
+	$buff_code(Buff, Li1, 3 /*ps*/ ,0),   Lo  is Li1+2.
+
+$db_putbuffbyte(Num,Buff,Li,Lo) :- 
+	$buff_code(Buff, Li, 3 /*ps*/ ,Num), Lo is Li+2.
+
+$db_putbuffnum(Num,Buff,Li,Lo) :- 
+	$buff_code(Buff, Li, 32 /*pn*/ ,Num), Lo is Li+4.
+
+$db_putbuffloat(Num,Buff,Li,Lo) :- 
+	$buff_code(Buff, Li, 27 /*pf*/ ,Num), Lo is Li+4.
+
+$db_putbuffptr(Num,Buff,Li,Lo) :- 
+	$buff_code(Buff, Li, 1 /*pppsc*/ ,Num), Lo is Li+4.
+
+$db_putbuffpsc(Num,Buff,Li,Lo) :- 
+	$buff_code(Buff, Li, 0 /*ppsc*/ ,Num), Lo is Li+4.
+
+
+/* $db_cmpl(Clause,Clref,Index,Where,Supbuff): where Clause is a fact or
+rule. Clref is a variable through which is returned the Clref, and 
+Index is the argument to index on (0 if none). Where is 0 if the 
+buffer is to be allocated from the permanent area, and 2 if from a
+superbuff, which is in Supbuff. */
+
+$db_cmpl(Clause,Buff,Index,Where,Supbuff) :- 
+	$alloc_buff(10000,Buff,Where,Supbuff,_),	/* must return Buff */
+	((Clause ?= (_:-_) -> Clause=(Head:-Body); Clause=Head, Body=true),
+	 $arity(Head,Arity),
+	 Tempreg is Arity+1, 
+	 $buff_code(Buff, 0, 14 /*ptv*/ ,Buff), /*set back pointer*/
+         $opcode( noop, NoOp ),
+	 $db_putbuffop(NoOp, Buff, 12, _),
+	 $buff_code(Buff, 14, 3, 2),  /* skip next 2*2 = 4 bytes */
+	 $db_putbuffpsc(Head, Buff, 16, _),
+	 $db_gentop(Head,Arity,1,Tempreg,Freereg,Buff,20,Lhd,uniq),
+	 $db_flatten(Body,FBody,[],Unifs),
+	 $db_flcode(Unifs,Freereg,R0,Buff,Lhd,Lm0,uniq),
+	 $arity(FBody,Barity),
+	 $db_genbod(FBody,Barity,1,[],Mvl,R0,Maxreg,Buff,Lm0,Lm1,uniq),
+	 (Index > 0 -> $db_putbuffchain(Buff, Lm1, Length);
+			    Length = Lm1),
+	 (Length > 10000,!,
+             $db_mfail('Asserted clause too long ',Length);
+	  Length =< 10000,
+	   (Maxreg > 255,!,
+	     $db_mfail('Assert: too many registers required ',Maxreg);
+	    Maxreg =< 255,
+	     $trimbuff(Length,Buff,Where,Supbuff), fail
+	   )
+	 )
+	;
+	 true
+	).
+
+
+$db_mfail(Msg,Val) :- 
+	$telling(F),$tell(user),
+	$writename(Msg),$writename(Val),$nl,
+	$tell(F),fail.
+
+$db_putbuffchain(Buff, Lin, Lout) :-
+        /* put code at the end for chaining clauses in the same bucket  */
+        $opcode( noop, NoopOp ),
+        $opcode( jump, JmpOp ),
+	$db_putbuffop(   NoopOp /* noop */, Buff, Lin, L1),
+        $db_putbuffbyte(  2, Buff, L1, L2),   /* 2 noop's */
+        $db_putbuffnum(   0, Buff, L2, L3),
+        $db_putbuffope(  JmpOp /* jump */, Buff, L3, L4),
+        $buff_code(Buff, 12, 33, EPADDR), /* get start address of the code*/
+        $db_putbuffnum(EPADDR, Buff, L4, Lout).
+
+$db_gentop(Fact,Arity,Argno,Ri,Ro,Buff,Li,Lo,U) :- 
+	Argno > Arity,
+	 Ri = Ro, Li=Lo
+	;
+	Argno =< Arity, arg(Argno,Fact,T),
+	 $db_gentopinst(T,Argno,Ri,Rm,Buff,Li,Lm,U),
+	 Argno1 is Argno + 1,
+	 $db_gentop(Fact,Arity,Argno1,Rm,Ro,Buff,Lm,Lo,U).
+
+$db_gentopinst(T,Argno,Ri,Ro,Buff,Li,Lo,U) :-
+	var(T), T='$var'(Argno,U), Ri = Ro, Li = Lo 
+	;
+	nonvar(T),
+	 ($atom(T) ->
+	   ((T ?= [] ->
+		 ($opcode( getnil, GetNilOp ),
+                  $db_putbuffop(GetNilOp,Buff,Li,Li1),  /* getnil(Argno) */
+		  $db_putbuffbyte(Argno,Buff,Li1,Lo)
+	  	 ) ;
+		 ($opcode( getcon, GetConOp ),
+                  $db_putbuffop(GetConOp,Buff,Li,Li1),   /* getcon(T,Argno) */
+	   	  $db_putbuffbyte(Argno,Buff,Li1,Li2),
+	   	  $db_putbuffptr(T,Buff,Li2,Lo)
+	  	 )
+	    ),
+	    Ri = Ro
+	   ) ;
+	   (integer(T) -> 			/* getnumcon(T,Argno) */
+		($opcode( getnumcon, GetNumOp ),
+                 $db_putbuffop(GetNumOp,Buff,Li,Li1),
+		 $db_putbuffbyte(Argno,Buff,Li1,Li2),
+		 $db_putbuffnum(T,Buff,Li2,Lo),
+		 Ri = Ro
+		) ;
+		(real(T) -> 			/* getfloatcon(T,Argno) */
+			($opcode( getfloatcon, GetFltOp ),
+                        $db_putbuffop(GetFltOp,Buff,Li,Li1),
+		 	$db_putbuffbyte(Argno,Buff,Li1,Li2),
+		 	$db_putbuffloat(T,Buff,Li2,Lo),
+		 	Ri = Ro
+			) ;
+			((T='$var'(Rt,Un), nonvar(Un), Un=U ) ->
+					 /* gettval(Rt,Argno) */
+				($opcode( gettval, GetTValOp ),
+                                 $db_putbuffope(GetTValOp,Buff,Li,Li1),
+		 	 	 $db_putbuffbyte(Rt,Buff,Li1,Li2),
+		 	 	 $db_putbuffbyte(Argno,Buff,Li2,Lo),
+		 	 	 Ri = Ro
+				) ;
+				$db_genterms([Argno,T],Ri,Ro,Buff,Li,Lo,U)
+			)
+	    	)
+	    )
+	 ).
+
+$db_genterms([],R,R,_,L,L,_).
+$db_genterms([R,T|Ts],Ri,Ro,Buff,Li,Lo,U) :-
+	$db_genstruc(T,R,Buff,Ri,Rm,Li,Lm2,Substrs,U),
+	$db_genterms(Substrs,Rm,Rm2,Buff,Lm2,Lm3,U),
+	$db_genterms(Ts,Rm2,Ro,Buff,Lm3,Lo,U).
+
+$db_genstruc((A1,A2),R,Buff,Ri,Ro,Li,Lo,[],U) :-
+	var(A1),var(A2),A1 \== A2,!,A1 = '$var'(Ri,U),
+	Rm1 is Ri+1, A2 = '$var'(Rm1,U), Ro is Rm1+1,
+	/* generate a getcomma_tvar_tvar */
+	$opcode( getcomma_tvar_tvar, GetCTvTvOp ),
+	$db_putbuffop( GetCTvTvOp,Buff,Li,Lm1),
+	$db_putbuffbyte(R,Buff,Lm1,Lm2),
+	$db_putbuffbyte(Ri,Buff,Lm2,Lm3),
+	$db_putbuffbyte(Rm1,Buff,Lm3,Lo).
+
+$db_genstruc([A1|A2],R,Buff,Ri,Ro,Li,Lo,[],U) :-
+	var(A1),var(A2),not(A1==A2),!,A1 = '$var'(Ri,U),
+	Rm1 is Ri+1, A2 = '$var'(Rm1,U), Ro is Rm1+1,
+	/* generate a getlist_tvar_tvar */
+	$opcode( getlist_tvar_tvar, GetLTvTvOp ),
+	$db_putbuffop( GetLTvTvOp,Buff,Li,Lm1),
+	$db_putbuffbyte(R,Buff,Lm1,Lm2),
+	$db_putbuffbyte(Ri,Buff,Lm2,Lm3),
+	$db_putbuffbyte(Rm1,Buff,Lm3,Lo).
+
+$db_genstruc(T,R,Buff,Ri,Rm,Li,Lo,Substrs,U) :-
+	$db_genget(T,R,Buff,Li,Lm1),$arity(T,Arity),
+	$db_dosubs(T,0,Arity,Ri,Rm,Buff,Lm1,Lo,Substrs,[],U).
+
+
+$db_genget([_|_],R,Buff,Li,Lo) :- !,
+	/* getlist(R) */
+	$opcode( getlist, GetLOp ),
+	$db_putbuffop( GetLOp,Buff,Li,Li1),
+	$db_putbuffbyte(R,Buff,Li1,Lo).
+
+$db_genget((_,_),R,Buff,Li,Lo) :- /* not(T=[_|_]) */ !,
+	/* getcomma(R) */
+	$opcode( getcomma, GetCOp ),
+	$db_putbuffop( GetCOp,Buff,Li,Li1),
+	$db_putbuffbyte(R,Buff,Li1,Lo).
+
+$db_genget(T,R,Buff,Li,Lo) :- /* not(T=(_,_)),not(T=[_|_]) */
+	/* functor(T,F,Arity), getstr((F,Arity),R) */
+	$opcode( getstr, GetSOp ),
+	$db_putbuffop( GetSOp,Buff,Li,Li1),
+	$db_putbuffbyte(R,Buff,Li1,Li2),
+	$db_putbuffpsc(T,Buff,Li2,Lo).
+
+$db_dosubs(T,I,Arity,Ri,Ro,Buff,Li,Lo,Si,So,U) :-
+	I < Arity, I1 is I+1, arg(I1,T,Sub),
+	 $db_geninst(Sub,Ri,Rm,Si,Sm,Buff,Li,Lm,U),
+	 $db_dosubs(T,I1,Arity,Rm,Ro,Buff,Lm,Lo,Sm,So,U)
+	;
+	I >= Arity,		/* just to avoid having to lay down a CP */
+	 I = Arity,Ri = Ro,Li = Lo,Si = So.
+
+$db_geninst(Sub,Ri,Ro,Si,So,Buff,Li,Lo,U) :-
+	var(Sub), Si = So,
+	  Ro is Ri+1, Sub='$var'(Ri,U), 	/* unitvar(Ri) */
+          $opcode( unitvar, UniTvarOp1 ),
+	  $db_putbuffop(UniTvarOp1,Buff,Li,Li1),
+	  $db_putbuffbyte(Ri,Buff,Li1,Lo)
+	 ;
+ 	 nonvar(Sub),
+	     ($atom(Sub) ->
+	        ((Sub ?= [] -> 
+	    	     $opcode( uninil, UniNOp ),
+                     $db_putbuffope(UniNOp,Buff,Li,Lo) ;   /* uninil */
+	    	     ($opcode( unicon, UniCOp ),
+                      $db_putbuffope(UniCOp,Buff,Li,Li1),  /* unicon(Sub) */
+		      $db_putbuffptr(Sub,Buff,Li1,Lo))
+		 ),
+	 	 Ri = Ro, Si = So) ;
+		(integer(Sub) ->		  	 /* uninumcon(Sub) */
+		      ($opcode( uninumcon, UniNCOp ),
+                       $db_putbuffope(UniNCOp,Buff,Li,Li1),
+		       $db_putbuffnum(Sub,Buff,Li1,Lo),
+		       Ri = Ro, Si = So) ;
+		       (real(Sub) ->		  	 /* unifloatcon(Sub) */
+		      	    ($opcode( unifloatcon, UniFltOp ),
+                             $db_putbuffope(UniFltOp,Buff,Li,Li1),
+		       	     $db_putbuffloat(Sub,Buff,Li1,Lo),
+		             Ri = Ro, Si = So) ;
+		             ((Sub='$var'(R,Un),nonvar(Un),Un=U) ->
+							/* unitval(R) */
+			    	($opcode( unitval, UniTvalOp ),
+                                 $db_putbuffop(UniTvalOp,Buff,Li,Li1),
+			     	 $db_putbuffbyte(R,Buff,Li1,Lo),
+			     	 Ri = Ro, Si = So) ;
+			    	(Ro is Ri+1,		/* unitvar(Ri) */
+			     	 Si = [Ri,Sub|So],
+                                 $opcode( unitvar, UniTvarOp2 ),
+			     	 $db_putbuffop(UniTvarOp2,Buff,Li,Li1),
+			     	 $db_putbuffbyte(Ri,Buff,Li1,Lo))
+		      	     )
+			)
+		)
+	     ).
+
+$db_genbod(true,0,1,Mvlst,Mvlst,R,R,Buff,Li,Lo,U) :- !,
+	$opcode( proceed, ProOp ),
+	$db_putbuffope( ProOp /*proceed*/ ,Buff,Li,Lo).
+
+$db_genbod(Body,Arity,Argno,Mvlst,Mvlsto,Ri,Ro,Buff,Locin,Locout,U) :-
+	$db_genbo1(Body,Arity,Argno,Mvlst,Mvlsto,Ri,Ro,Buff,Locin,Locout,U).
+
+$db_genbo1(Body,Arity,Argno,Mvlst,Mvlsto,Ri,Ro,Buff,Locin,Locout,U) :-
+	Argno > Arity ->
+	 Mvlst=Mvlsto,
+	 $db_genmvs(Mvlst,Ri,Ro,Buff,Locin,Lm1),
+	 functor(Body,Bodyn,Arity), /* wnl(execute(Bodyn,Arity)), */
+         $opcode( execute, ExecOp ),
+	 $db_putbuffope( ExecOp,Buff,Lm1,Lm2),
+	 $db_putbuffpsc(Body,Buff,Lm2,Locout)
+	;
+	 arg(Argno,Body,T),
+	 $db_genaput(T,Argno,Mvlst,Mvlstm,Ri,Rm,Buff,Locin,Locm,U),
+	 Argno1 is Argno+1,
+	 $db_genbo1(Body,Arity,Argno1,Mvlstm,Mvlsto,Rm,Ro,Buff,Locm,Locout,U).
+
+$db_genaput(T,Argno,Mvlst,Mvlsto,Ri,Ro,Buff,Locin,Locout,U) :-
+	var(T) ->
+	 Ro is Ri+1,Locout=Locin,Mvlsto=[puttvar(Tempvar),Argno|Mvlst],
+	 T='$var'(Tempvar,U)
+	;
+	 (T='$var'(Rt,U) ->
+	   (var(Rt) -> Mvlsto=[puttvar(Rt),Argno|Mvlst];
+		       Mvlsto=[movreg(Rt),Argno|Mvlst]),
+	   Ro=Ri,Locout=Locin
+	  ;
+	   (integer(T) ->
+	     Mvlsto=[putnumcon(T),Argno|Mvlst],Ro=Ri,Locout=Locin
+	    ;
+	     (real(T) ->
+	       (Mvlsto=[putfloatcon(T),Argno|Mvlst],Ro=Ri,Locout=Locin)
+	      ;
+	      ($atom(T) ->
+		(T ?= [] -> Mvlsto=[putnil,Argno|Mvlst];
+			 Mvlsto=[putcon(T),Argno|Mvlst]),
+		Ro=Ri,Locout=Locin
+	      ;
+		Mvlsto=[movreg(Ri),Argno|Mvlst],Rm is Ri+1,
+	        $db_putterm(Ri,T,Rm,Ro,Buff,Locin,Locout,U)
+	     )
+	   )
+	 )
+	).
+
+$db_putterm(R,T,Ri,Ro,Buff,Li,Lo,U) :-
+	$arity(T,Arity),
+	$db_putsubstr(T,0,Arity,Ri,Rm,Buff,Li,Lm1,[],Subterms,U),
+	$db_genputstr(T,R,Buff,Lm1,Lm2),
+	$db_putsubs(Subterms,Rm,Ro,Buff,Lm2,Lo).
+
+$db_genputstr([_|_],R,Buff,Li,Lo) :- !,
+	/* wnl(putlist(R)), */
+	$opcode( putlist, PutLOp ),
+	$db_putbuffop(PutLOp,Buff,Li,Li1),
+	$db_putbuffbyte(R,Buff,Li1,Lo).
+
+$db_genputstr(T,R,Buff,Li,Lo) :- /* not(T=(_,_)),not(T=[_|_]) */
+	/* functor(T,F,Arity), wnl(putstr((F,Arity),R)), */
+	$opcode( putstr, PutSOp ),
+	$db_putbuffop(PutSOp,Buff,Li,Li1),
+	$db_putbuffbyte(R,Buff,Li1,Li2),
+	$db_putbuffpsc(T,Buff,Li2,Lo).
+
+$db_putsubstr(T,I,Arity,Ri,Ro,Buff,Li,Lo,Si,So,U) :-
+	I < Arity -> I1 is I+1, arg(I1,T,Sub),
+	 $db_bldsubs(Sub,Ri,Rm,Si,Sm,Buff,Li,Lm,U),
+	 $db_putsubstr(T,I1,Arity,Rm,Ro,Buff,Lm,Lo,Sm,So,U)
+	;
+	 I = Arity,Ri = Ro,Li = Lo,Si = So.
+
+$db_bldsubs(Sub,Ri,Ro,Si,So,Buff,Li,Lo,U) :-
+	var(Sub) -> So = [bldtvar(Ri)|Si],
+	  Ro is Ri+1, Li = Lo, Sub='$var'(Ri,U) 	/* bldtvar(Ri) */
+	 ;
+	  ($atom(Sub) ->
+	     (Sub ?= [] -> So = [bldnil|Si];	/* bldnil */
+			So = [bldcon(Sub)|Si]), /* bldcon(Sub) */
+	     Ri = Ro, Li = Lo
+	    ;
+	     (integer(Sub) ->		  	 /* bldnumcon(Sub) */
+		So = [bldnumcon(Sub)|Si], Ri = Ro, Li = Lo
+	      ;
+	        (real(Sub) ->		  	 /* bldfloatcon(Sub) */
+		   (So = [bldfloatcon(Sub)|Si], Ri = Ro, Li = Lo) ;
+		   ((Sub='$var'(R,Un),nonvar(Un),Un=U) ->
+		      So = [bldtval(R)|Si],	/* bldtval(R) */
+		      Ri = Ro,Li = Lo
+		     ;
+		      Rm is Ri+1,		/* bldtvar(Ri) */
+		      So = [bldtval(Ri)|Si], 
+		      $db_putterm(Ri,Sub,Rm,Ro,Buff,Li,Lo,U)
+		  ) 
+		)
+	     )
+	  ).
+
+$db_putsubs([],R,R,_,L,L).
+$db_putsubs([Bld|Rest],Ri,Ro,Buff,Li,Lo) :-
+	$db_putsubs(Rest,Ri,Ro,Buff,Li,Lm),
+	$db_bldinst(Bld,Buff,Lm,Lo).
+
+:- mode($db_bldinst,4,[c,d,d,d]).
+
+$db_bldinst(bldtvar(R),Buff,Li,Lo) :-
+	/* wnl(bldtvar(R)), */
+	$opcode( bldtvar, BldOp ),
+	$db_putbuffop(BldOp,Buff,Li,Li1),
+	$db_putbuffbyte(R,Buff,Li1,Lo).
+$db_bldinst(bldnil,Buff,Li,Lo) :-
+	/* wnl(bldnil), */
+	$opcode( bldnil, BldOp ),
+	$db_putbuffope(BldOp,Buff,Li,Lo).
+$db_bldinst(bldcon(Sub),Buff,Li,Lo) :-
+	/* wnl(bldcon(Sub)), */
+	$opcode( bldcon, BldOp ),
+	$db_putbuffope(BldOp,Buff,Li,Li1),
+	$db_putbuffptr(Sub,Buff,Li1,Lo).
+$db_bldinst(bldnumcon(Sub),Buff,Li,Lo) :-
+	/* wnl(bldnumcon(Sub)), */
+	$opcode( bldnumcon, BldOp ),
+	$db_putbuffope(BldOp,Buff,Li,Li1),
+	$db_putbuffnum(Sub,Buff,Li1,Lo).
+$db_bldinst(bldfloatcon(Sub),Buff,Li,Lo) :-
+	/* wnl(bldfloatcon(Sub)), */
+	$opcode( bldfloatcon, BldOp ),
+	$db_putbuffope(BldOp,Buff,Li,Li1),
+	$db_putbuffloat(Sub,Buff,Li1,Lo).
+$db_bldinst(bldtval(R),Buff,Li,Lo) :-
+	/* wnl(bldtval(R)), */
+	$opcode( bldtval, BldOp ),
+	$db_putbuffop(BldOp,Buff,Li,Li1),
+	$db_putbuffbyte(R,Buff,Li1,Lo).
+
+
+/* this is a simple routine to generate  a series  of instructions to
+load a series of  registers with  constants or  from other registers.
+It is  given a  list of  Source,Target pairs.   Target  is always a
+register  number.  Source may be a putcon(con), putnumcon(num), putfloatcon(num),
+puttvar(reg),  puttvar(Var),  or  movreg(reg).    The  registers  can
+overlap in any way.  $db_genmvs tries to generate  a reasonably efficient
+series  of  instructions  to  load  the indicated  registers with the
+indicated values.  */ 
+
+$db_genmvs([],R,R,B,L,L).
+$db_genmvs([I,T|Rest],Ri,Ro,Buff,Li,Lo) :- $db_genmvs(I,T,Ri,Ro,Buff,Li,Lo,Rest).
+
+:- mode($db_genmvs,8,[c,c,d,d,d,d,d,d]).
+
+$db_genmvs(puttvar(R),T,Ri,Ro,Buff,Li,Lo,Rest) :-
+	$db_genmvs(Rest,Ri,Ro,Buff,Li,Lm),
+	(nonvar(R) -> 
+		/* wnl(movreg(R,T)), */
+		$opcode( movreg, MovOp ),
+                $db_putbuffope( MovOp,Buff,Lm,Lm1),
+		$db_putbuffbyte(R,Buff,Lm1,Lm2),
+		$db_putbuffbyte(T,Buff,Lm2,Lo)
+	  ;
+		R=T, /* wnl(puttvar(R,R)), */
+		$opcode( puttvar, PutOp ),
+                $db_putbuffope(PutOp,Buff,Lm,Lm1),
+		$db_putbuffbyte(R,Buff,Lm1,Lm2),
+		$db_putbuffbyte(R,Buff,Lm2,Lo)
+	).
+
+$db_genmvs(putcon(C),T,Ri,Ro,Buff,Li,Lo,Rest) :- !,
+	$db_genmvs(Rest,Ri,Ro,Buff,Li,Lm),
+	/* wnl(putcon(T,C)), */
+	$opcode( putcon, PutOp ),
+	$db_putbuffop(PutOp,Buff,Lm,Lm1),
+	$db_putbuffbyte(T,Buff,Lm1,Lm2),
+	$db_putbuffptr(C,Buff,Lm2,Lo).
+
+$db_genmvs(putnil,T,Ri,Ro,Buff,Li,Lo,Rest) :- !,
+	$db_genmvs(Rest,Ri,Ro,Buff,Li,Lm),
+	/* wnl(putnil(T)), */
+	$opcode( putnil, PutOp ),
+	$db_putbuffop(PutOp,Buff,Lm,Lm1),
+	$db_putbuffbyte(T,Buff,Lm1,Lo).
+
+$db_genmvs(putnumcon(I),T,Ri,Ro,Buff,Li,Lo,Rest) :- !,
+	$db_genmvs(Rest,Ri,Ro,Buff,Li,Lm),
+	/* wnl(putnumcon(T,I)), */
+	$opcode( putnumcon, PutOp ),
+	$db_putbuffop(PutOp,Buff,Lm,Lm1),
+	$db_putbuffbyte(T,Buff,Lm1,Lm2),
+	$db_putbuffnum(I,Buff,Lm2,Lo).
+
+$db_genmvs(putfloatcon(I),T,Ri,Ro,Buff,Li,Lo,Rest) :- !,
+	$db_genmvs(Rest,Ri,Ro,Buff,Li,Lm),
+	/* wnl(putfloatcon(T,I)), */
+	$opcode( putfloatcon, PutOp ),
+	$db_putbuffop(PutOp,Buff,Lm,Lm1),
+	$db_putbuffbyte(T,Buff,Lm1,Lm2),
+	$db_putbuffloat(I,Buff,Lm2,Lo).
+
+$db_genmvs(movreg(R),R,Ri,Ro,Buff,Li,Lo,Rest) :- !,
+	$db_genmvs(Rest,Ri,Ro,Buff,Li,Lo).
+
+$db_genmvs(movreg(S),T,Ri,Ro,Buff,Li,Lo,Rest) :- not($dbcmpl_frstmem(T,Rest)),!,
+	/* wnl(movreg(S,T)), */
+	$opcode( movreg, MovOp ),
+	$db_putbuffope( MovOp,Buff,Li,Lm1),
+	$db_putbuffbyte(S,Buff,Lm1,Lm2),
+	$db_putbuffbyte(T,Buff,Lm2,Lm),
+	$db_genmvs(Rest,Ri,Ro,Buff,Lm,Lo).
+
+$db_genmvs(movreg(S),T,Ri,Ro,Buff,Li,Lo,Rest) :-
+	not($dbcmpl_scndmem(S,Rest)), !,
+	$db_genmvs(Rest,Ri,Ro,Buff,Li,Lm),
+	/* wnl(movreg(S,T)), */
+	$opcode( movreg, MovOp ),
+	$db_putbuffope( MovOp,Buff,Lm,Lm1),
+	$db_putbuffbyte(S,Buff,Lm1,Lm2),
+	$db_putbuffbyte(T,Buff,Lm2,Lo).
+
+$db_genmvs(movreg(S),T,Ri,Ro,Buff,Li,Lo,Rest) :- 
+	/* wnl(movreg(S,Ri)), */
+	$opcode( movreg, MovOp ),
+	$db_putbuffope( MovOp,Buff,Li,Lm1),
+	$db_putbuffbyte(S,Buff,Lm1,Lm2),
+	$db_putbuffbyte(Ri,Buff,Lm2,Lm3),
+	Rm is Ri+1,
+	$db_genmvs(Rest,Rm,Ro,Buff,Lm3,Lm4),
+	/* wnl(movreg(Ri,T)), */
+	$db_putbuffope( MovOp,Buff,Lm4,Lm5),
+	$db_putbuffbyte(Ri,Buff,Lm5,Lm6),
+	$db_putbuffbyte(T,Buff,Lm6,Lo).
+
+
+/* wnl(X) :- write(X),nl. */
+
+
+$dbcmpl_frstmem(T,[movreg(T),_|_]).
+$dbcmpl_frstmem(T,[_|Rest]) :- $dbcmpl_frstmem(T,Rest).
+
+
+$dbcmpl_scndmem(S,[_,S|_]).
+$dbcmpl_scndmem(S,[_|Rest]) :- $dbcmpl_scndmem(S,Rest).
+
+/*  This is a kludge to fix up a problem with the depth-first
+    traversal of arguments interacting in a bad way with the
+    flattening of terms.  The problem is that when translating
+    arguments in the body, the depth first traversal doesn't take
+    into account the fact that subterms may move forward due to
+    flattening, thereby changing "first" and "subsequent"
+    occurrences of variables.  To make things work, though much
+    less efficiently than before, I'm just going through an
+    explicit flattening stage beforehand.  I don't doubt there
+    are more elegant solutions, I'm just a user who wants to
+    use assert to do other things. --skd, Sept. 1986		*/
+
+$db_flatten(Term,NewTerm,Si,So) :-
+	$structure(Term) ->
+		(functor(Term,F,N),
+		 functor(NewTerm,F,N),
+		 $db_flatten1(Term,0,N,NewTerm,Si,So)
+		);
+		(NewTerm = Term, Si = So).
+
+$db_flatten1(Term,N,Arity,NewTerm,Si,So) :-
+	(N =:= Arity) ->
+		(Si = So) ;
+		(ArgNo is N + 1,
+		 arg(ArgNo,Term,OldArg),
+		 arg(ArgNo,NewTerm,NewArg),
+		 (($structure(OldArg), OldArg \= '$var'(_,_)) ->
+		 		  /* nested structure, needs flattening */
+		 	(Sm0 = [NewArg,NewArg0|Si],
+			 $db_flatten(OldArg,NewArg0,Sm0,Sm1)
+			) ;
+			(OldArg = NewArg, Sm1 = Si)
+		 ),
+		 N1 is N + 1,
+		 $db_flatten1(Term,N1,Arity,NewTerm,Sm1,So)
+		).
+
+$db_flcode([],R,R,_Buff,Loc,Loc,_).
+$db_flcode([Temp,Str|Rest],Ri,Ro,Buff,Li,Lo,U) :-
+	Temp = '$var'(R,U),
+	((var(R), R = Ri, Rm0 is Ri+1) ;
+	 (nonvar(R), Rm0 = Ri)
+	),
+	$db_putterm(R,Str,Rm0,Rm1,Buff,Li,Lm,U),
+	$db_flcode(Rest,Rm1,Ro,Buff,Lm,Lo,U).
+

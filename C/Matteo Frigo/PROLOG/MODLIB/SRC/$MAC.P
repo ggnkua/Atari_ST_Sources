@@ -1,0 +1,382 @@
+/************************************************************************
+*									*
+* The SB-Prolog System							*
+* Copyright SUNY at Stony Brook, 1986; University of Arizona,1987	*
+*									*
+************************************************************************/
+
+/*-----------------------------------------------------------------
+SB-Prolog is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY.  No author or distributor
+accepts responsibility to anyone for the consequences of using it
+or for whether it serves any particular purpose or works at all,
+unless he says so in writing.  Refer to the SB-Prolog General Public
+License for full details.
+
+Everyone is granted permission to copy, modify and redistribute
+SB-Prolog, but only under the conditions described in the
+SB-Prolog General Public License.   A copy of this license is
+supposed to have been given to you along with SB-Prolog so you
+can know your rights and responsibilities.  It should be in a
+file named COPYING.  Among other things, the copyright notice
+and this notice must be preserved on all copies. 
+------------------------------------------------------------------ */
+
+
+/* This file contains code that supports a macro facility for Prolog.
+Its exported  predicate is  $macexp which  takes a  list of predicate
+definitions constructed by $getclauses and produces another such list
+with  macros  expanded.    Its  basic  mechanism is  a simple partial
+evaluator.  It is to be called by $consult and $compile.
+
+`Macros', or predicates to be evaluated at compile-time, are defined 
+in a predicate ::-(Head,Body), where facts have `true' as their body.
+For easy input, the following addition to the read op-table can be made:
+	assert($read_curr_op(1200,xfx,('::-'))).
+so then macro clauses can be input to look very much like regular
+clauses (except that facts need a `true' body.)
+
+The  partial  evaluator  will  expand  any  deterministic  call  to a
+predicate with a definition in ::-/2. A call is deterministic if it
+unifies with the head of only one clause in ::-/2. If a call is not
+deterministic, it will not be expanded. Notice that this is not a
+fundamental restriction, since `;' is permitted in the body of a
+clause. 
+
+The  partial  evaluator  is  actually  a  Prolog  interpreter written
+`purely'  in  Prolog,  i.e.,  variable   assignments  are  explicitly
+handled.  This is necessary  to be  able to  handle impure constructs
+such  as  `var(X),X=a'.    As  a  result this  is a  VERY SLOW Prolog
+evaluator.  
+
+Since  the partial  evaluator can  be put  into an  infinite loop, it
+maintains a depth-bound  and will  not expand  recursive calls deeper
+than  that.    The  depth  is  determined by  the globalset predicate
+$mac_depth.  */
+
+$mac_export([$macexp/3]).
+
+/* $mac_use($blist,[$append/3,$member/2,$memberchk/2]).
+   $mac_use($bio,[$writename/1,$writeqname/1,$put/1,$nl/0,$tab/1,
+	$tell/1,$tell/2,$telling/1,$told/0,$get/1,$get0/1,$see/1,$seeing/1,
+	$seen/0]).
+   $mac_use($inlines,['='/2,'<'/2,'=<'/2,'>='/2,'>'/2,'=:='/2,
+	'=\='/2,is/2,eval/2,'_$savecp'/1,'_$cutto'/1,var/1,nonvar/1,
+	fail/0,true/0,halt/0]).
+   $mac_use($setof,[$setof/3,$bagof/3,$findall/3,$sort/2,$keysort/3]).
+   $mac_use($meta,[$functor/3,$univ/2,$length/2]).
+   $mac_use($bmeta,[$atom/1,$atomic/1,$integer/1,$number/1,$structure/1,
+	$functor0/2,$bldstr/3,$arg/3,$arity/2,$real/1,$float/1,_,_]).
+*/
+
+/* $macexp(Clslist,Opts,Expclslist) takes an input list of
+predicates Clslist (as produced by $getclauses) and produces another
+list, Expclslist, in which macros are expanded. Also the macros are
+also converted so as to define equivalent run-time predicates, too.
+(e.g., p ::- q. is converted to the clause p :- q.). Opts is an
+options list: v: verbose and print that macros are (or are not)
+being expanded; e: expand macros; d: dump all clauses after
+expanding to user, used for debugging and determining exactly what
+the expander did. */
+
+$macexp(Clslist,Opts,Expclslist) :-
+	$member(pred((::-),2,_,_,Dblist),Clslist) ->
+	 ($member(e,Opts) -> 
+	   ($member(v,Opts) -> tab(15),write('expanding macros:'),nl;true),
+	   ($pred_undefined($mac_depth(_)) -> 
+		$globalset($mac_depth(50));true),
+	   $maccvtcls(Dblist,Db),
+	   $macexpall(Clslist,Nclslist,Db),
+	   $mactocls(Nclslist,Expclslist),
+	   ($member(d,Opts) -> $macprintprds(Expclslist);true)
+	 ;
+	   ($member(v,Opts) -> tab(15),$writename('Not expanding macros'),$nl;
+				true),
+	   $mactocls(Clslist,Expclslist)
+	 )
+	;
+	Expclslist=Clslist.
+
+/* convert macro db from fact(..) form to ::-(.,.) form */
+$maccvtcls([],[]).
+$maccvtcls([fact(Cls,_)|R],[Cls|Rp]) :- $maccvtcls(R,Rp).
+$maccvtcls([rule(H,B,_,_)|R],Rp) :-
+     $telling(Ostr), $tell(stderr),
+     $writename('Illegal macro: '),
+     $write(H), $write((':-')), $write(B),
+     $nl,$maccvtcls(R,Rp).
+
+
+
+/* add to end of open-tailed list */
+$macmemberadd(X,L) :- var(L),!,L=[X|_].
+$macmemberadd(X,[_|L]) :- $macmemberadd(X,L).
+
+
+$macmktail(X,L) :- var(L),!,X=L.
+$macmktail(X,[_|L]) :- $macmktail(X,L).
+
+/* expand macros in every clause */
+$macexpall([],[],Db).
+$macexpall([P|R],[P|Rp],Db) :- P = pred((::-),_,_,_,_),!,$macexpall(R,Rp,Db).
+$macexpall([pred(P,A,X1,X2,Clauselist)|R],
+	   [pred(P,A,X1,X2,Nclauselist)|Rp],Db) :-
+	$macexpall1(Clauselist,Nclauselist,Db),$macexpall(R,Rp,Db).
+
+$macexpall1([],[],_).
+$macexpall1([fact(Fact,A1)|R],[fact(Fact,A1)|Rp],Db) :- $macexpall1(R,Rp,Db).
+$macexpall1([rule(Head,Body,A1,A2)|R],[rule(Head,Nbody,A1,A2)|Rp],Db) :-
+/*	$maceximp(Body,Nbody,Db), */
+	$macpartevg(Body,Nbody,Db), 
+	$macexpall1(R,Rp,Db).
+
+/* convert ::- facts to :- rules and facts */
+$mactocls([],[]).
+$mactocls([pred((::-),2,_,_,Clauses)|Clslist],Nclslist) :- !,
+	$mactopred(Clauses,Nclslist),$macmktail(Rem,Nclslist),
+	$mactocls(Clslist,Rem).
+$mactocls([P|R],[P|Rp]) :- $mactocls(R,Rp).
+
+$mactopred([],_).
+$mactopred([fact(::-(Head,Body),A1)|More],List) :- !,
+	$functor(Head,Fun,Arity),
+	$member(pred(Fun,Arity,_,_,Clist),List),!,
+	(Body=true -> $macmemberadd(fact(Head,_),Clist);
+		$macmemberadd(rule(Head,Body,_,_),Clist)),
+	$mactopred(More,List).
+$mactopred([rule(::-(Head,Body),Rbody,A1,A2)|More],List) :- !,
+	$mactopred(More,List).
+
+
+/* $maceximp traverses a body and treats each goal separately. This
+is just for efficiency, and is used only at the top level.
+partevalgoal could be called directly instead of this. */
+
+$maceximp((A,B),(Ea,Eb),D) :- !,$maceximp(A,Ea,D),$maceximp(B,Eb,D).
+$maceximp((A->B;C),(Ea->Eb;Ec),D) :- !,$maceximp(A,Ea,D),$maceximp(B,Eb,D),
+	$maceximp(C,Ec,D).
+$maceximp((A;B),(Ea;Eb),D) :- !,$maceximp(A,Ea,D),$maceximp(B,Eb,D).
+$maceximp(not(A),not(Ea),D) :- !,$maceximp(A,Ea,D).
+$maceximp(\+(A),\+(Ea),D) :- !,$maceximp(A,Ea,D).
+$maceximp(A,Ea,D) :- not(not($member(::-(A,_),D))),!,$macpartevg(A,Ea,D).
+$maceximp(A,A,_).
+
+
+
+/* This is a Prolog partial evaluator in which ALL variable manipulation is
+done explicitly. */
+
+$macpartevg(Q,A,Db) :- 
+	$mac_depth(N),$macpartev(Q,R,[],V,Db,N),$macpartevp(Q,R,V,A).
+
+$macpartevp(Q,R,V,A) :-
+	$macgetfreev(Q,Fv),$macgetbnds(Fv,V,Bnd),$macgetfvb(V,Fv,Vfb),
+	$macapplyfv(V,Vfb,R,Rp),
+	(Bnd=true->A=Rp;(Rp=true->A=Bnd;A=(Rp,Bnd))).
+
+
+/*   $macpartev(G,R,Vi,Vo,Db) where G is the goal, R is the result of the 
+partial evluation (the residue), V is a list of _V=binding pairs, 
+Db is a list of clauses that define what predicates are to be 
+evaluated.  */
+
+$macpartev(A,B,C,D,E,F) :- /* write(call(A,B)),nl, */
+	$macpartev1(A,B,C,D,E,F).
+	/* write(exit(A,B)),nl. */
+
+$macpartev1((A,B),R,Vi,Vo,Db,N) :- !,$macpartev(A,Ra,Vi,Vm,Db,N),
+	(Ra=fail -> R=fail,Vo=Vm;
+	 Ra=true -> $macpartev(B,R,Vm,Vo,Db,N);
+	   $macpartev(B,Rb,Vm,Vo,Db,N),(Rb=true -> R=Ra;R=(Ra,Rb))
+	).
+
+$macpartev1(true,true,V,V,_,_) :- !.
+
+$macpartev1(A,R,Vi,Vo,_,_) :- $macbichk(A,Vi),!,
+	$macapplynv(Vi,A,Ag),	/* new variables! */
+	('_$call'(Ag) ->
+		$macunify(A,Ag,Vi,Vo),R=true;
+		R=fail,Vi=Vo
+	).
+
+$macpartev1((A->B;C),R,Vi,Vo,Db,N) :- !,$macpartev(A,Ea,Vi,Vm,Db,N),
+	(Ea=true -> $macpartev(B,R,Vm,Vo,Db,N);
+	 Ea=fail -> $macpartev(C,R,Vi,Vo,Db,N);
+	 	$macpartev(B,Eb,Vm,V1,Db,N),$macpartevp(B,Eb,V1,Ebb),
+		$macpartev(C,Ec,Vi,V2,Db,N),$macpartevp(C,Ec,V2,Ecc),
+			R=(Ea->Ebb;Ecc),Vo=Vi
+	).
+
+$macpartev1((A;B),R,Vi,Vo,Db,N) :- !,
+	$macpartev(A,Ea,Vi,V1,Db,N),
+	$macpartev(B,Eb,Vi,V2,Db,N),
+	(Ea=fail -> R=Eb,Vo=V2;
+	 Eb=fail -> R=Ea,Vo=V1;
+	    $macpartevp(A,Ea,V1,Eaa),
+	    $macpartevp(B,Eb,V2,Ebb),
+	    R=(Eaa;Ebb),Vo=Vi
+	).
+
+$macpartev1(not(A),R,Vi,Vi,Db,N) :- !,$macpartev(A,Ea,Vi,_,Db,N),
+	(Ea=true -> R=fail;
+	 Ea=fail -> R=true;
+	     R=not(Ea)
+	).
+
+$macpartev1(\+(A),R,Vi,Vi,Db,N) :- !,$macpartev(A,Ea,Vi,_,Db,N),
+	(Ea=true -> R=fail;
+	 Ea=fail -> R=true;
+	     R= \+(Ea)
+	).
+
+$macpartev1('!','!',V,V,_,_) :- !,
+	$writename('Expansion error: illegal cut(!)'),$nl.
+
+$macpartev1(A,R,Vi,Vo,Db,N) :- 
+	$macapplyv(Vi,A,Ag),
+	$findall(::-(Ag,B),$member(::-(Ag,B),Db),Clauses),
+	(Clauses=[Clause] ->
+	  (N=<0 -> $writename('Too deeply nested macros'),$nl,R=Ag,Vo=Vi;
+	    N1 is N-1,$maccbv(Clause,::-(Nh,Nb),Vi,Vm),
+	    $macunify(Ag,Nh,Vm,Vm2),$macpartev(Nb,R,Vm2,Vo,Db,N1)
+	  );
+	  R=Ag,Vo=Vi
+	).
+
+
+$macbichk(X=Y,_).
+$macbichk(X is Y,V) :- $macground(Y,V).
+$macbichk(A,V) :- $macarith(A),$macground(A,V).
+$macbichk($arg(N,T,X),V) :- $macground(N,V),$macnonvar(T,V).
+$macbichk(arg(N,T,X),V) :- $macground(N,V),$macnonvar(T,V).
+$macbichk($functor(T,F,N),V) :- $macnonvar(N,V),$macnonvar(F,V).
+$macbichk($functor(T,F,N),V) :- $macnonvar(T,V).
+$macbichk($functor(T,F,N),V) :- integer(T,V).
+$macbichk(var(X),V) :- $macnonvar(X,V).
+$macbichk(nonvar(X),V) :- $macnonvar(X,V).
+
+$macarith(_<_).
+$macarith(_>_).
+$macarith(_=<_).
+$macarith(_>=_).
+$macarith(_=:=_).
+$macarith(_=\=_).
+
+
+$macunify(Term1,Term2,Vi,Vo) :- 
+	$macderef(Term1,T1,Vi),$macderef(Term2,T2,Vi),
+	(var(T1) -> (T1==T2 -> Vo=Vi;Vo=[T1=T2|Vi]);
+	 var(T2) -> Vo=[T2=T1|Vi];
+		$functor(T1,F,N),$functor(T2,F,N),$macunifyl(T1,T2,N,Vi,Vo)
+	).
+
+$macunifyl(T1,T2,0,V,V) :- !.
+$macunifyl(T1,T2,N,Vi,Vo) :- 
+	arg(N,T1,A1),arg(N,T2,A2),$macunify(A1,A2,Vi,Vm),
+	N1 is N-1,$macunifyl(T1,T2,N1,Vm,Vo).
+
+$macderef(T1,T2,V) :- nonvar(T1) -> T1=T2;$macderef(T1,T2,V,V).
+
+$macderef(T1,T1,[],_) :- !.
+$macderef(T1,T2,[T1p=T3|_],Vb) :- T1==T1p,!,$macderef(T3,T2,Vb).
+$macderef(T1,T2,[_|V],Vb) :- $macderef(T1,T2,V,Vb).
+
+
+
+$macapplyv(V,Ti,To) :- $macderef(Ti,Tt,V),
+	(var(Tt) -> To=Tt;
+	 $atomic(Tt) -> To=Tt;
+	    $functor(Tt,F,N),$functor(To,F,N),$macapplyvl(V,Tt,To,N)
+	).
+$macapplyvl(_,_,_,0) :- !.
+$macapplyvl(V,Ti,To,N) :- arg(N,Ti,A1),$macapplyv(V,A1,Ta1),arg(N,To,Ta1),
+	N1 is N-1,$macapplyvl(V,Ti,To,N1).
+
+$macapplynv(V,Ti,To) :- $macderef(Ti,Tt,V),
+	(var(Tt) -> true;	/* new variables! */
+	 $atomic(Tt) -> To=Tt;
+	    $functor(Tt,F,N),$functor(To,F,N),$macapplynvl(V,Tt,To,N)
+	).
+$macapplynvl(_,_,_,0) :- !.
+$macapplynvl(V,Ti,To,N) :- arg(N,Ti,A1),$macapplynv(V,A1,Ta1),arg(N,To,Ta1),
+	N1 is N-1,$macapplynvl(V,Ti,To,N1).
+
+
+
+
+$macnonvar(X,V) :- $macderef(X,Xd,V),nonvar(Xd).
+
+$macground(X,V) :- $macderef(X,Xd,V),nonvar(Xd),$arity(Xd,N),$macgndl(Xd,N,V).
+$macgndl(X,N,V) :- N=:=0 -> true;
+		     arg(N,X,A),$macground(A,V),N1 is N-1,$macgndl(X,N1,V).
+
+$maccbv(Term,Newterm,Vi,Vo) :- var(Term),!,$macchkbnding(Term=Newterm,Vi,Vo).
+$maccbv(T,Nt,Vi,Vo) :- 
+	$functor(T,F,N),$functor(Nt,F,N),$maccbvl(N,T,Nt,Vi,Vo).
+
+$maccbvl(N,T,Nt,Vi,Vo) :- 
+	N=:=0 -> Vi=Vo;
+		arg(N,T,T1),
+		$maccbv(T1,Nt1,Vi,Vm),
+		arg(N,Nt,Nt1),
+		N1 is N-1,$maccbvl(N1,T,Nt,Vm,Vo).
+
+$macchkbnding(Nv=Ov,[],[Nv=Ov]) :- !.
+$macchkbnding(Nv=Ov,V,V) :- V=[Nv1=Ov|_],Nv == Nv1,!.
+$macchkbnding(P,[X|Vi],[X|Vo]) :- $macchkbnding(P,Vi,Vo).
+
+
+$macgetfreev(Q,V) :- $macgetfreev(Q,V,[]).
+$macgetfreev(Q,Vo,Vi) :- 
+	var(Q) -> $macaddee(Q,Vi,Vo);
+	    $functor(Q,F,N),$macgetfreel(Q,Vo,Vi,N).
+$macgetfreel(Q,Vo,Vi,N) :- N=:=0 -> Vo=Vi;
+	arg(N,Q,A),$macgetfreev(A,Vm,Vi),N1 is N-1,$macgetfreel(Q,Vo,Vm,N1).
+
+$macaddee(Q,[],[Q]).
+$macaddee(Q,V,V) :- V=[Qp|_],Qp==Q,!.
+$macaddee(Q,[X|Vi],[X|Vo]) :- $macaddee(Q,Vi,Vo).
+
+$macgetbnds(Fv,V,B) :- $macgetbnds(Fv,V,B,true).
+$macgetbnds([],_,B,B).
+$macgetbnds([X|Fv],V,Bo,Bi) :- 
+	$macapplyv(V,X,T),
+	(var(T) -> $macgetbnds(Fv,V,Bo,Bi);
+		(Bi=true -> Bm=(X=T);Bm=(X=T,Bi)),
+		$macgetbnds(Fv,V,Bo,Bm)
+	).
+
+
+$macgetfvb(V,[],[]).
+$macgetfvb(V,[X|Fvs],[X=T|Fbs]) :- $macvderef(X,T,V),$macgetfvb(V,Fvs,Fbs).
+
+$macvderef(T1,T2,V) :- $macvderef(T1,T2,V,V).
+$macvderef(T1,T1,[],_) :- !.
+$macvderef(T1,T2,[T1p=T3|V],Vb) :- 
+	T1==T1p,!,(var(T3) -> $macvderef(T3,T2,Vb);T2=T1).
+$macvderef(T1,T2,[_|V],Vb) :- $macvderef(T1,T2,V,Vb).
+
+$macapplyfv(V,Vf,Ti,To) :- 
+	var(Ti) -> $macvderef(Ti,T1,V),$macunderef(T1,To,Vf);
+	    $functor(Ti,F,N),$functor(To,F,N),$macapplyfvl(V,Vf,Ti,To,N).
+$macapplyfvl(V,Vf,Ti,To,N) :- N=:=0 -> true;
+	arg(N,Ti,A1),$macapplyfv(V,Vf,A1,Ta1),arg(N,To,Ta1),
+	N1 is N-1,$macapplyfvl(V,Vf,Ti,To,N1).
+
+$macunderef(T1,T1,[]) :- !.
+$macunderef(T1,T2,[T2=T3|V]) :- T1==T3,!.
+$macunderef(T1,T2,[_|V]) :- $macunderef(T1,T2,V).
+
+
+
+$macprintprds([]).
+$macprintprds([pred(_,_,_,_,Clauses)|R]) :-
+	$macprintcls(Clauses),nl,$macprintprds(R).
+
+$macprintcls([]).
+$macprintcls([fact(Fact,_)|R]) :-
+	$portray_term(Fact), $write('.'), $nl, $macprintcls(R).
+$macprintcls([rule(Head,Body,_,_)|R]) :-
+	$portray_clause((Head :- Body)),
+	$macprintcls(R).
+

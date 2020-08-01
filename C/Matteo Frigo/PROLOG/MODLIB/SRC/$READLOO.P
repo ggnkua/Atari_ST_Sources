@@ -1,0 +1,420 @@
+/************************************************************************
+*									*
+* The SB-Prolog System							*
+* Copyright SUNY at Stony Brook, 1986; University of Arizona, 1987	*
+*									*
+************************************************************************/
+
+/*-----------------------------------------------------------------
+SB-Prolog is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY.  No author or distributor
+accepts responsibility to anyone for the consequences of using it
+or for whether it serves any particular purpose or works at all,
+unless he says so in writing.  Refer to the SB-Prolog General Public
+License for full details.
+
+Everyone is granted permission to copy, modify and redistribute
+SB-Prolog, but only under the conditions described in the
+SB-Prolog General Public License.   A copy of this license is
+supposed to have been given to you along with SB-Prolog so you
+can know your rights and responsibilities.  It should be in a
+file named COPYING.  Among other things, the copyright notice
+and this notice must be preserved on all copies. 
+------------------------------------------------------------------ */
+/* $readloop.P */
+
+/* This is the top-level read-eval-print loop for Prolog. 
+
+   $readloop also sets up some global values to allow it to handle
+   break levels. It defines break/0 and abort/0. (repeat/0 is also
+   defined here, for lack of a better place for now.)
+
+$readl_export([break/0,abort/0,repeat/0]).
+ */
+
+$readloop :- 
+	$init_sys,
+	$load_mod($io),
+	$load_mod($read),
+	$load($prorc),call($prorc),
+	$globalset('_$abort_cutpoint'(0)),
+	$globalset('_$break_level'(0)),
+	$writename('SB-Prolog Version '), $version(V), $writename(V), $nl,
+	$readlp1.
+
+'_$tab_size'(17).
+
+$readlp1 :- repeat,'_$savecp'(Cp),
+	$globalset_a('_$abort_cutpoint'(Cp),Cp),
+	$flags(2,0), /* set flag to intercept stack overflow */
+	$globalset('_$break_level'(0)),
+	$readl_userio(I,O),
+	$writename('| ?- '),
+	$read(X, Vars),
+	$expand_body(X,Y),
+	$readl_resetio(I,O),
+	($readl_stop(Y),!;$readl_procq(Y,Vars)).
+
+$readl_stop(halt) :- halt. /* quit entire system, regardless of break level */
+$readl_stop(end_of_file).	/* pop a break level, out if at top */
+
+$readl_procq(X,[]) :- !,$readl_docall(X),!,
+	$readl_userio(I,O),$writename(yes),$nl,$readl_resetio(I,O),fail.
+
+$readl_procq(X,Vars) :- $readl_docall(X),
+	$readl_userio(I,O),$readl_printans(Vars),
+	$readl_ifnomo(I,O),!,$writename(yes),$nl,$readl_resetio(I,O),fail.
+
+$readl_ifnomo(_,_) :- $get0(10),!.
+$readl_ifnomo(I,O) :- $readl_ifnomo(I,O),$readl_resetio(I,O),fail.
+
+$readl_docall(X) :- call(X).
+$readl_docall(_) :- $readl_userio(I,O),$writename(no),$nl,
+	$readl_resetio(I,O),fail.
+
+$readl_printans([]) :- !.
+$readl_printans([=(Name, Val)|Tail]) :-
+		$nl,$writename(Name),
+		$writename(' = '),
+		$write(Val),
+		$readl_printans(Tail).
+
+break :- '_$break_level'(Blevel),
+	Nblevel is Blevel+1, $globalset('_$break_level'(Nblevel)),
+	$readl_userio(I,O),
+	$writename('[ Break (level '),$writename(Nblevel),
+	$writename(') ]'),$nl,
+	$readl_brklp1,
+	$globalset('_$break_level'(Blevel)),
+	$writename('[ End break (level '),$writename(Nblevel),
+	$writename(') ]'),$nl,
+	$readl_resetio(I,O).	/* should we reset here ? */
+
+$readl_brklp1 :- repeat,'_$break_level'(Blevel),
+	$writename(Blevel),$writename(': ?- '),
+	$read(X, Vars),
+	($readl_stop(X),!;$readl_procq(X,Vars)).
+
+abort :- '_$abort_cutpoint'(Cp), '_$cutto'(Cp), fail.
+
+$readl_userio(Oi,Oo) :- 
+	$seeing(Oi),$see(user),
+	$telling(Oo),$tell(user).
+
+$readl_resetio(Oi,Oo) :- $see(Oi),$tell(Oo).
+
+repeat.
+repeat :- repeat.
+
+$flags(Which,What) :- '_$builtin'(113).
+
+
+/* These are the module handling routines. The main routine is the
+   undefined_pred interrupt handler. The system keeps a table of modules
+   and routines that are needed from each. When a predicate is found to
+   be undefined, the table is searched to see if it is defined by 
+   some module. If so, that module is loaded (if it hasn't been previously
+   loaded) and the association is made between the routine name as 
+   defined in the module, and the routine name as used by the invoker.
+
+   The table of modules and needed routines is:
+   defined_mods(modname,[pred1/arity1,...,predn/arityn]).
+     where modname is the name of the module. The module exports n
+	predicate definitions. The first exported pred is of arity 
+	arity1, and needs to be invoked by the name of pred1.
+
+   The table of modules that have already been loaded is:
+   loaded_mods(modname).
+
+   A module is a file of predicate definitions. Consider a module name
+   `mod'. It contains a single fact, named mod_export, that is true of
+   the list of predicate/arity's that are exported. 
+   e.g. mod_export([mod_p1/2,mod_p2/4]).
+   For each module, m, which contains predicates needed by this module,
+   there is a mod_use fact, describing what module is needed and the names
+   of the predicates defined there that are needed. For example, if module
+   mod needs to import predicates from mod m, there would be a fact:
+   mod_use(m,[mod_ip1/2,mod_ip2/4]), where m is a module that exports two
+   predicates: one 2-ary and one 4-ary. This list corresponds to the export
+   list of module m.
+
+*/
+$init_sys_export([$define_mod/2,$load/1,$load_mod/1]).
+
+$init_sys :- 
+	$load($opcode),    /* THIS FILE MUST BE THE FIRST LOADED */
+	$load($assert),
+	$load($db),
+	$load($dbcmpl),
+	$load($bio),
+	$load($bmeta),
+	$load($name),
+	$load($blist),
+	$load($call),
+	$load($glob),
+	$load($funrel),
+	$assert_union(loaded_mods(_),$loaded_mods(_)), /* nec for compile */
+	$assert_abolish_i(defined_mods(_,_)),	/* nec for compile [a] */
+	$globalset('_$nofile_msg'(1)).
+
+$loaded_mods($buff). /* with readloop */
+$loaded_mods($init_sys). /* with readloop */
+$loaded_mods($assert).
+$loaded_mods($db).
+$loaded_mods($dbcmpl).
+$loaded_mods($bio).
+$loaded_mods($bmeta).
+$loaded_mods($name).
+$loaded_mods($blist).
+$loaded_mods($call).
+$loaded_mods($glob).
+$loaded_mods($funrel).
+
+
+$define_mod(Mod,Implist) :- defined_mods(Mod,Implist),!. /* no-op if there */
+$define_mod(Mod,Implist) :- $assert(defined_mods(Mod,Implist)).
+
+/* the undefined_pred interrupt handler: */
+
+'_$undefined_pred'(Term) :-
+	$functor0(Term,Pred),
+	$arity(Term,Arity),
+	('_$nodynload'(Pred,Arity) ->
+		fail ;
+		(not(not('_$definable'(Term))),'_$call'(Term))
+	).
+
+'_$nodynload'(_,_) :- fail.
+
+'_$definable'(Term) :- 
+	$functor0(Term,Pred),$arity(Term,Arity),
+/*	  $telling(F),$tell(user),$writename('loading: '),$writename(Pred),
+	  $writename('/'),$writename(Arity),$nl,$tell(F), */
+	defined_mods(Module_name,Pred_name_list),  /* for each module.. */
+	$init_membernv(Pred/Arity,Pred_name_list), 
+		/* is needed pred in this one? */
+	!,				/* yes! */
+	$load_mod(Module_name),		/* go load it if necessary */
+	$name(Module_name,Mod_name_chars),
+	$append(Mod_name_chars,"_export",Exp_name_chars),
+	$name(Exp_name,Exp_name_chars),
+	$bldstr(Exp_name,1,Modcall),arg(1,Modcall,Explist),
+	'_$call'(Modcall),
+	$load_preds(Explist,Pred_name_list,Module_name). 
+
+'_$definable'(Term) :-	/* no module to define pred */
+	$functor0(Term,Pred),
+	$load(Pred),!,		/* file exists */
+	(not($pred_undefined(Term))	/* file defines pred */
+	 ;
+	 $arity(Term,Arity),
+	 $telling(Fi),$tell(user),
+	 $writename(Pred),$writename('/'),$writename(Arity),
+	 $writename(' not defined by file'),$nl,$tell(Fi),fail
+	).
+
+'_$definable'(Term) :- 
+	'_$nofile_msg'(1),	/* if message is to be displayed */
+	$telling(Fi),$tell(user),
+	$writename('No file to define '),
+	$functor0(Term,Pred),$arity(Term,Arity),
+	$writename(Pred),$writename('/'),$writename(Arity),$nl,$tell(Fi),fail.
+
+$load_mod(Module_name) :-
+	loaded_mods(Module_name),!.	/* already loaded, noop */
+$load_mod(Module_name) :-
+/* 	  $telling(Fi),$tell(user),$writename('load module: '),
+	  $writename(Module_name),$nl,$tell(Fi), */
+	$load(Module_name),!, 		/* now loaded */
+	$assert(loaded_mods(Module_name)).
+	/*	$load_sub_mods(Module_name). */
+$load_mod(Module_name) :-		/* no such file */
+	$telling(Fi),$tell(user),
+	$writename('No file to define module '),
+	$writename(Module_name),$nl,$tell(Fi),fail.
+
+/* $load_sub_mods(Module_name) :-
+	$name(Module_name,Mod_name_chars),
+	$append(Mod_name_chars,"_use",Use_name_chars),
+	$name(Use_name,Use_name_chars),
+	$bldstr(Use_name,2,Modusecall),
+	not($pred_undefined(Modusecall)),
+	arg(1,Modusecall,M),arg(2,Modusecall,U),
+	'_$call'(Modusecall),not(defined_mods(M,U)),!,
+	$assert_union(defined_mods(_,_),Modusecall).
+
+$load_sub_mods(_). */
+
+$load_preds([],[],_) :- !.
+$load_preds([],[_|_],Mod) :- !,
+	$telling(Fi),$tell(user),
+	$writename('Illegal use list for module: '),
+	$writename(Mod),$nl,$tell(Fi),fail.
+$load_preds([_|_],[],Mod) :- !,
+	$telling(Fi),$tell(user),
+	$writename('Illegal use list for module: '),
+	$writename(Mod),$nl,$tell(Fi),fail.
+$load_preds([Inname|Explist],[Inname|Pred_name_list],Mod) :- !,
+	$load_preds(Explist,Pred_name_list,Mod).
+$load_preds([Inname/Arity|Explist],[Outname/Arity|Pred_name_list],
+		Mod) :- !,
+	$bldstr(Outname,Arity,Outstr),$bldstr(Inname,Arity,Instr),
+	($pred_undefined(Outstr),!,$assert_union(Outstr,Instr),
+		$load_preds(Explist,Pred_name_list,Mod)
+	;
+		$telling(Fi),$tell(user),
+		$writename('Attempt to redefine '),$writename(Outname),
+		$writename('/'),$writename(Arity),$nl,
+		$tell(Fi),
+		$load_preds(Explist,Pred_name_list,Mod)
+	).
+$load_preds([Inname/Inarity|Explist],[Outname/Outarity|Pred_name_list],
+		Mod) :-
+	$telling(Fi),$tell(user),
+	$writename('Incorrect import arity: '),$writename(Outname),
+	$writename('/'),$writename(Outarity),$nl,
+	$tell(Fi),
+	$load_preds(Explist,Pred_name_list,Mod),
+	fail.
+
+
+$init_membernv(Pa,[Tpa|_]) :- nonvar(Tpa),Pa=Tpa.
+$init_membernv(Pa,Pn_list) :- nonvar(Pn_list),
+	Pn_list=[_|Pn_tail],$init_membernv(Pa,Pn_tail).
+
+
+/* the keyboard interrupt handler */
+
+'_$keyboard_int'(Call) :- break,'_$call'(Call).
+
+/* the general interrupt handler! */
+
+'_$interrupt'(Call,Code) :-
+	Code =:= 0 -> '_$undefined_pred'(Call);
+	  (Code =:= 1 -> '_$keyboard_int'(Call);
+	      (Code =:= 2 -> 
+		$tell(user),$writename('Stack Overflow!!'),$nl,abort
+		;
+		$writename('Illegal interrupt code'),halt
+	      )
+	  ).
+
+/********************************************************/
+/* This is the dynamic load routine. It gets the SIMPATH global variable
+and uses it to determine what files to try to load. */
+
+load(File) :- $load(File).	/* for now */
+$load(File) :- $buff_code(File, 0, 31 /*gb*/,0'/) -> $loadqual(File,0);
+			not(not($nnload(File))).
+
+$loadqual(File,Rc) :- '_$builtin'(11).
+
+$nnload(File) :- 
+	$conlength(File,Flen),
+	$readl_simpath(Dir),
+	$conlength(Dir,Dlen),Wlen is Flen+Dlen+1,
+	$alloc_heap(Wlen,Wname),
+	$substring(0,Dlen,Dir,0,Wname,Dlen),
+	$substring(0,1,'/',Dlen,Wname,Floc),
+	$substring(0,Flen,File,Floc,Wname,Wlen),
+	$loadqual(Wname,0),! .
+
+$readl_simpath(Dir) :- 
+	$getenv_simpath(Simpath),
+	$readl_getenvdir(Simpath,0,Dir).
+
+$readl_getenvdir(Simpath,Loc,Dir) :- 
+	$subdelim(1,':',Dir1,Loc,Simpath,Nloc) ->
+		(Dir = Dir1;
+		 $readl_getenvdir(Simpath,Nloc,Dir)
+		)
+	/* else */ ;
+		$conlength(Simpath,Len),Llen is Len-Loc,
+		$substring(1,Llen,Dir,Loc,Simpath,_).
+
+/* get environment variable value */
+
+$getenv_simpath(X) :- '_$builtin'(12).
+
+/* $buff *******************************************************/
+/* needed for dynamic loader */
+
+$buff_export([$alloc_perm/2,$alloc_heap/2,$trimbuff/3,$buff_code/4,$symtype/2,
+		$substring/6,$subnumber/6,$subdelim/6,$conlength/2,
+		$pred_undefined/1, $hashval/3]).
+
+$alloc_perm(Size, Buff) :- $alloc_buff(Size,Buff,0,0,0).
+
+$alloc_heap(Size, Buff) :- $alloc_buff(Size,Buff,1,0,0).
+
+/* Type 0: perm, 1: heap, 2: from Supbuff */
+$alloc_buff(Size,Buff,Type,Supbuff,Retcode) :- 
+	$alloc_buff1(Size,Buff,Type,Supbuff,Retcode),
+	(Retcode =\= 0 -> 
+		$writename('alloc failed'),$nl,fail;
+		true).
+$alloc_buff1(Size,Buff,Type,Supbuff,Retcode) :- '_$builtin'(76).
+
+$trimbuff(Size,Buff,Type) :- '_$builtin'(79).
+$trimbuff(Size,Buff,Type,Supbuff) :- '_$builtin'(79).
+
+$buff_code(Buff,Offset,Disc,Term) :- '_$builtin'(77).
+
+/* Type = 0: no ep, 1: dynamic, 2: ep to compiled code, 3: buffer */
+$symtype(Term,Type) :- '_$builtin'(42).
+
+$substring(Dir,NumBytes,Const,Locin,Buff,Locout) :- '_$builtin'(51).
+
+$subnumber(Dir,NumBytes,NumCon,Locin,Buff,Locout) :- '_$builtin'(52).
+
+$subdelim(Dir,Delim,Const,Locin,Buff,Locout) :- '_$builtin'(53).
+
+$conlength(Const,Len) :- '_$builtin'(54).
+
+$pred_undefined(Term) :- 
+	$symtype(Term,D),
+	(D=:=0;
+	 D=\=0,D=:=3).
+
+$hashval(Arg, Size, Hashval) :- '_$builtin'(43).
+
+/* These routines put numbers into buffers in internet format */
+$buff_putnum_n(Buff,Loc,Len,Num) :-
+	Len =< 1 -> 
+		$buff_code(Buff,Loc,30 /*pb*/ ,Num)
+	/* else */ ;
+		Byte is Num /\ 255,
+		Rest is Num >> 8,
+		Nlen is Len-1,Sloc is Loc+Nlen,
+		$buff_code(Buff,Sloc,30,Byte),
+		$buff_putnum_n(Buff,Loc,Nlen,Rest).
+
+$buff_getnum_n(Buff,Loc,Len,Num) :-
+	Len =< 1 -> 
+		$buff_code(Buff,Loc,31 /*gb*/ ,Num)
+	/*else*/ ;
+		Nlen is Len-1,Sloc is Loc+Nlen,
+		$buff_code(Buff,Sloc,31,Byte),
+		$buff_getnum_n(Buff,Loc,Nlen,Rest),
+		Num is (Rest << 8) + Byte.
+
+$globalset_a(Place,Value) :- 
+	integer(Value) -> 
+	     ($opcode( getnumcon, GetNumOp ),
+              $buff_code(Place, 0, 7, /*gepb*/ Buff),
+	      $buff_code(Buff,  4, 3, /*ps*/   GetNumOp /*getnumcon*/),
+	      $buff_code(Buff,  8, 2, /*pn*/   Value)
+	     ) ;
+	(real(Value) ->
+	     ($opcode( getfloatcon, GetFltOp ),
+              $buff_code(Place, 0, 7, /*gepb*/ Buff),
+	      $buff_code(Buff,  4, 3, /*ps*/   GetFltOp /*getfloatcon*/),
+	      $buff_code(Buff,  8,27, /*pf*/   Value)
+	     )
+	).
+
+/* for debugging */
+$writename(X) :- '_$builtin'(133).
+$nl :- '_$builtin'(26).
+
+

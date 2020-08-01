@@ -1,0 +1,347 @@
+
+%              ------------------------------------------------
+%                 HEXAPAWN - Demonstration fr TOY Prolog ST
+%
+%                            (c) 1986 Jens Kilian
+%                      GEM-Version (c) 1987 Jens Kilian
+%              ------------------------------------------------
+
+hexapawn :- grf_mode, graf_mouse(0), open_screen, open_window,
+      abolish(i_did, 2), tag(game),
+      close_window, close_screen, txt_mode.
+
+game :- repeat, change_pos([c, c, c, u, u, u, p, p, p]), tag(game_loop(p)).
+
+% Hauptschleife : Zun„chst prfen, ob einer der Spieler gewonnen hat.
+%                 Ansonsten den entsprechenden Spieler ziehen lassen.
+
+game_loop(Player) :- position(Pos), wins(Pos, Winner), decide(Winner),
+      tag(move(Player)), switch_players(Player, NewPlayer), !,
+      game_loop(NewPlayer).
+
+switch_players(c, p).   % Umschalten des Spielers (zwischen zwei Zgen)
+switch_players(p, c).
+
+% move wartet auf eine Aktion oder fhrt einen Computerzug durch
+
+% Spielerzug :
+
+move(p) :- !, repeat,
+      evnt_multi(18, [1, 1, 1], _, _, Msg, _, _, [Which, X, Y | _]),
+      handle_event(Which, Msg, X, Y).
+
+% Computerzug :
+
+move(c) :- position(Pos), think(Pos, NPos), !, remember(Pos, NPos),
+      change_pos(NPos).
+
+% Computer hat keinen m”glichen Zug gefunden :
+
+move(c) :- lose, winmessage('Ich gebe auf !').
+
+% Abarbeitung von Ereignissen :
+
+handle_event(Which, _, X, Y)   :- 2 is Which and 2,
+      once(handle_button(X, Y)), evnt_button([1, 1, 0], _), fail.
+handle_event(Which, Msg, _, _) :- 16 is Which and 16,
+      once(handle_msg(Msg)), fail.
+
+% Mausknopfereignis aufgetreten - auswerten :
+
+handle_button(X, Y) :- wind_get(window_handle, 4, [Xw, Yw | _]),
+      X >= Xw, X < Xw + 150, Y >= Yw, Y < Yw + 150,   % Feldnummer berechnen
+      BPos is 3 * ((Y - Yw) / 50) + (X - Xw) / 50,
+      do_button(BPos).
+
+do_button(BPos) :- marked(MPos), !, do_move(MPos, BPos).         % schon markiert
+do_button(BPos) :- position(Pos), nth(BPos, Pos, p), mark(BPos). % Feld markieren
+do_button(_).
+
+% Spielerzug ausfhren :
+
+do_move(MPos, BPos) :- position(Pos), not nth(BPos, Pos, p),
+      replace(Pos, MPos, u, Pos1), replace(Pos1, BPos, p, NewPos),
+      legal(Pos, NewPos), !, unmark, change_pos(NewPos),
+      tagexit(move(_)).
+do_move(_, _) :- unmark.   % Illegaler Zug - Markierung l”schen
+
+% Nachricht wurde empfangen - auswerten :
+
+handle_msg([10, _, _, Title, Item | _]) :- handle_menu(Title, Item).
+handle_msg([20, _, _, _ | Area]) :- handle_redraw(Area).
+handle_msg([21 | _]) :- wind_set(window_handle, 10, _).
+handle_msg([22 | _]) :- tagexit(game).
+handle_msg([28, _, _, _ | Rect]) :- wind_set(window_handle, 5, Rect).
+
+% Menpunkte behandeln :
+
+handle_menu(3, 7) :- !, do_about, menu_tnormal(menu_handle, 3, 1).
+handle_menu(4, 16) :- !, menu_tnormal(menu_handle, 4, 1), win,
+      tagfail(game_loop(_)).
+handle_menu(4, 18) :- menu_tnormal(menu_handle, 4, 1), tagexit(game).
+
+do_about :- form_center(about_handle, TheRect), SmallRect = [10, 10, 20, 20],
+      form_dial(0, SmallRect, TheRect), form_dial(1, SmallRect, TheRect),
+      objc_draw(about_handle, 0, 8, TheRect), form_do(about_handle, 0, SelObj),
+      objc_change(about_handle, SelObj, 8, TheRect, 0, 1),
+      form_dial(2, SmallRect, TheRect), form_dial(3, SmallRect, TheRect).
+
+% Fenster neu zeichnen
+
+handle_redraw(Area) :- v_hide_c(vdi_handle), wind_update(1),
+      do_redraw(Area), wind_update(0), v_show_c(vdi_handle, 0).
+
+do_redraw(Area) :- get_rectangle(Rect), intersection(Area, Rect, Clip),
+      set_clip(Clip), redraw, fail.
+do_redraw(_) :- reset_clip.
+
+% Beim ersten Aufruf holt get_rectangle das erste Rechteck in der Liste der
+% sichtbaren Rechtecke, beim Wiedererfllen die jeweils n„chsten Rechtecke.
+% Fehlschlag, wenn kein Rechteck mehr brig ist.
+
+get_rectangle(Rect) :- wind_get(window_handle, 11, Rect). % erstes Rechteck
+get_rectangle(Rect) :- get_next(Rect).                    % andere Rechtecke
+
+get_next(Rect) :- wind_get(window_handle, 12, NextRect),  % n„chstes Rechteck
+      get_next(NextRect, Rect).
+
+get_next([_, _, 0, 0], _) :- !, fail.  % Fehlschlag, wenn kein Rechteck mehr da
+get_next(ThisRect, ThisRect).          % Erfolg, wenn noch ein Rechteck da
+get_next(_, Rect) :- get_next(Rect).   % n„chstes Rechteck holen
+
+set_clip([X, Y, W, H]) :- X1 is X + W - 1, Y1 is Y + H - 1,
+      vs_clip(vdi_handle, 1, X, Y, X1, Y1).
+
+reset_clip :- vs_clip(vdi_handle, 0, 0, 0, 0, 0).
+
+% redraw/0 siehe unten
+
+%                    ----- Hilfsfunktionen -----
+
+% Momentane Spielsituation „ndern
+
+change_pos(NewPos) :- redefine, assert(position(NewPos)), redefine,
+      wind_get(window_handle, 4, WorkArea),
+      handle_redraw(WorkArea).
+
+% ein Feld markieren und invers darstellen
+
+mark(Pos) :- assert(marked(Pos)), reverse(Pos).
+
+unmark :- retract(marked(Pos)), reverse(Pos).
+
+% Zustand des Feldes Nr. N feststellen
+
+nth(0, [H | _], X) :- !, H = X.
+nth(N, [_ | T], H) :- N1 is N - 1, nth(N1, T, H).
+
+% Zustand des Feldes Nr. N „ndern
+
+replace([_ | T], 0, El, [El | T]) :- !.
+replace([H | T], N, El, [H | RT]) :- N1 is N - 1, replace(T, N1, El, RT).
+
+% Entscheidungen im Spiel
+
+wins([p, _, _, _, _, _, _, _, _], p) :- !.   % Liste der Gewinnsituationen
+wins([_, p, _, _, _, _, _, _, _], p) :- !.
+wins([_, _, p, _, _, _, _, _, _], p) :- !.
+wins([_, _, _, _, _, _, c, _, _], c) :- !.
+wins([_, _, _, _, _, _, _, c, _], c) :- !.
+wins([_, _, _, _, _, _, _, _, c], c) :- !.
+wins(_, none).
+
+decide(none) :- !.
+decide(p) :- !, lose, winmessage('Du gewinnst !').
+decide(c) :- win, winmessage('Ich gewinne !').
+
+winmessage(Text) :- vst_height(vdi_handle, 32), vst_effects(vdi_handle, 16),
+      vst_alignment(vdi_handle, 0, 5), wind_get(desk_handle,7,[X, Y, W, H]),
+      vqt_extent(vdi_handle, Text, [_, _, _, _, Wt1, Ht1 | _]),
+      Xt is X + (W - Wt1) / 2 - 1, Yt is Y + (H - Ht1) / 2 - 1,
+      Wt is Wt1 + 2, Ht is Ht1 + 2, Xt1 is Xt + 1, Yt1 is Yt + 1,
+      reserve_screen([Xt, Yt, Wt, Ht]),
+      v_hide_c(vdi_handle), v_gtext(vdi_handle, Xt1, Yt1, Text),
+      v_show_c(vdi_handle, 0), evnt_button([1,1,1],_), evnt_button([1,1,0],_),
+      free_screen([Xt, Yt, Wt, Ht]), tagfail(game_loop(_)).
+
+% Liste der legalen Spielerzge
+
+legal([_, _, _, u, _, _, p, _, _], [_, _, _, p, _, _, u, _, _]) :- !.
+legal([_, _, _, _, c, _, p, _, _], [_, _, _, _, p, _, u, _, _]) :- !.
+legal([_, _, _, c, _, _, _, p, _], [_, _, _, p, _, _, _, u, _]) :- !.
+legal([_, _, _, _, u, _, _, p, _], [_, _, _, _, p, _, _, u, _]) :- !.
+legal([_, _, _, _, _, c, _, p, _], [_, _, _, _, _, p, _, u, _]) :- !.
+legal([_, _, _, _, c, _, _, _, p], [_, _, _, _, p, _, _, _, u]) :- !.
+legal([_, _, _, _, _, u, _, _, p], [_, _, _, _, _, p, _, _, u]) :- !.
+legal([u, _, _, p, _, _, _, _, _], [p, _, _, u, _, _, _, _, _]) :- !.
+legal([_, c, _, p, _, _, _, _, _], [_, p, _, u, _, _, _, _, _]) :- !.
+legal([c, _, _, _, p, _, _, _, _], [p, _, _, _, u, _, _, _, _]) :- !.
+legal([_, u, _, _, p, _, _, _, _], [_, p, _, _, u, _, _, _, _]) :- !.
+legal([_, _, c, _, p, _, _, _, _], [_, _, p, _, u, _, _, _, _]) :- !.
+legal([_, c, _, _, _, p, _, _, _], [_, p, _, _, _, u, _, _, _]) :- !.
+legal([_, _, u, _, _, p, _, _, _], [_, _, p, _, _, u, _, _, _]).
+
+% Computerstrategie : Suche den bestm”glichen Zug, der angewendet werden kann.
+
+think(Pos, NPos) :- bagof((Code, NP), think1(Pos, Code, NP), Bag),
+      not Bag = [], findmax(Bag, -32767, _, NPos).
+
+findmax([], _, NPos, NPos) :- !.
+findmax([(Code, NP) | Rest], Max, _, NPos) :- less(Max, Code), !,
+      findmax(Rest, Code, NP, NPos).
+findmax([_ | Rest], Max, NP, NPos) :- findmax(Rest, Max, NP, NPos).
+
+% Finden eines legalen Zuges : Erst direkt suchen, dann nach einem
+% symmetrischen Zug suchen.
+
+think1(Pos, Code, NPos) :- mem(Code, Pos, NPos).
+think1(Pos, Code, NPos) :- symmetrical(Pos, SPos), mem(Code, SPos, SNPos),
+      symmetrical(SNPos, NPos).
+
+% Das Ged„chtnis des Computers : alle m”glichen Situationen und Zge.
+
+% Das erste Argument gibt die momentane Bewertung des Zuges an.
+
+mem(0, [c, c, c, p, u, u, u, p, p], [c, u, c, c, u, u, u, p, p]).
+mem(0, [c, c, c, p, u, u, u, p, p], [c, u, c, p, c, u, u, p, p]).
+mem(0, [c, c, c, p, u, u, u, p, p], [c, c, u, p, u, c, u, p, p]).
+
+mem(0, [c, c, c, u, p, u, p, u, p], [u, c, c, c, p, u, p, u, p]).
+mem(0, [c, c, c, u, p, u, p, u, p], [u, c, c, u, c, u, p, u, p]).
+
+mem(0, [c, u, c, c, p, u, u, u, p], [u, u, c, c, c, u, u, u, p]).
+mem(0, [c, u, c, c, p, u, u, u, p], [c, u, u, c, c, u, u, u, p]).
+mem(0, [c, u, c, c, p, u, u, u, p], [c, u, u, c, p, c, u, u, p]).
+mem(0, [c, u, c, c, p, u, u, u, p], [c, u, c, u, p, u, c, u, p]).
+
+mem(0, [u, c, c, p, c, u, u, u, p], [u, c, u, p, c, c, u, u, p]).
+mem(0, [u, c, c, p, c, u, u, u, p], [u, c, c, p, u, u, u, c, p]).
+mem(0, [u, c, c, p, c, u, u, u, p], [u, c, c, p, u, u, u, u, c]).
+
+mem(0, [c, u, c, p, p, u, u, p, u], [u, u, c, p, c, u, u, p, u]).
+mem(0, [c, u, c, p, p, u, u, p, u], [c, u, u, p, c, u, u, p, u]).
+mem(0, [c, u, c, p, p, u, u, p, u], [c, u, u, p, p, c, u, p, u]).
+
+mem(0, [c, c, u, p, u, p, u, u, p], [c, u, u, c, u, p, u, u, p]).
+mem(0, [c, c, u, p, u, p, u, u, p], [c, u, u, p, c, p, u, u, p]).
+mem(0, [c, c, u, p, u, p, u, u, p], [c, u, u, p, u, c, u, u, p]).
+
+mem(0, [u, c, c, u, c, p, p, u, u], [u, u, c, u, c, c, p, u, u]).
+mem(0, [u, c, c, u, c, p, p, u, u], [u, c, c, u, u, p, c, u, u]).
+mem(0, [u, c, c, u, c, p, p, u, u], [u, c, c, u, u, p, p, c, u]).
+
+mem(0, [u, c, c, c, p, p, p, u, u], [u, u, c, c, p, c, p, u, u]).
+mem(0, [u, c, c, c, p, p, p, u, u], [u, c, u, c, c, p, p, u, u]).
+
+mem(0, [c, u, c, c, u, p, u, p, u], [c, u, c, u, u, p, c, p, u]).
+mem(0, [c, u, c, c, u, p, u, p, u], [c, u, c, u, u, p, u, c, u]).
+
+mem(0, [u, c, c, u, p, u, u, u, p], [u, c, u, u, c, u, u, u, p]).
+mem(0, [u, c, c, u, p, u, u, u, p], [u, c, u, u, p, c, u, u, p]).
+
+mem(0, [u, c, c, u, p, u, p, u, u], [u, c, u, u, c, u, p, u, u]).
+mem(0, [u, c, c, u, p, u, p, u, u], [u, c, u, u, p, c, p, u, u]).
+
+mem(0, [c, u, c, p, u, u, u, u, p], [c, u, u, p, u, c, u, u, p]).
+
+mem(0, [u, u, c, c, c, p, u, u, u], [u, u, c, u, c, p, c, u, u]).
+mem(0, [u, u, c, c, c, p, u, u, u], [u, u, c, c, u, p, u, c, u]).
+
+mem(0, [c, u, u, p, p, p, u, u, u], [u, u, u, p, c, p, u, u, u]).
+
+mem(0, [u, c, u, c, p, p, u, u, u], [u, u, u, c, p, c, u, u, u]).
+mem(0, [u, c, u, c, p, p, u, u, u], [u, c, u, u, p, p, c, u, u]).
+
+mem(0, [c, u, u, c, c, p, u, u, u], [c, u, u, u, c, p, c, u, u]).
+mem(0, [c, u, u, c, c, p, u, u, u], [c, u, u, c, u, p, u, c, u]).
+
+mem(0, [u, u, c, c, p, u, u, u, u], [u, u, u, c, c, u, u, u, u]).
+mem(0, [u, u, c, c, p, u, u, u, u], [u, u, u, c, p, c, u, u, u]).
+mem(0, [u, u, c, c, p, u, u, u, u], [u, u, c, u, p, u, c, u, u]).
+
+mem(0, [u, c, u, p, c, u, u, u, u], [u, u, u, c, c, u, u, u, u]).
+mem(0, [u, c, u, p, c, u, u, u, u], [u, c, u, p, u, u, u, c, u]).
+
+mem(0, [c, u, u, c, p, u, u, u, u], [u, u, u, c, c, u, u, u, u]).
+mem(0, [c, u, u, c, p, u, u, u, u], [c, u, u, u, p, u, c, u, u]).
+
+% Finde die symmetrische Situation
+
+symmetrical([A, B, C, D, E, F, G, H, I], [C, B, A, F, E, D, I, H, G]).
+
+% Der durchgefhrte Zug wird aufgezeichnet :
+
+remember(P, NP) :- assert(i_did(P, NP)).
+
+% Der Computer hat verloren : Die durchgefhrten Zge werden abgewertet.
+
+lose :- retract(i_did(P, NP)), update(P, NP, -1), fail.
+lose.
+
+% Der Computer hat gewonnen : Die durchgefhrten Zge werden aufgewertet.
+
+win :- retract(i_did(P, NP)), update(P, NP, 1), fail.
+win.
+
+update(Pos, NPos, Add) :- retract(mem(Code, Pos, NPos)), !,
+      NCode is Code + Add, assert(mem(NCode, Pos, NPos)).
+update(Pos, NPos, Add) :- symmetrical(Pos, SPos), symmetrical(NPos, SNPos),
+      retract(mem(Code, SPos, SNPos)), NCode is Code + Add,
+      assert(mem(NCode, SPos, SNPos)).
+
+% Grafik etc.
+
+open_screen :- v_hide_c(vdi_handle), vsf_interior(vdi_handle, 2),
+      vsf_style(vdi_handle, 4), vr_recfl(vdi_handle, 0, 0, 639, 399),
+      v_show_c(vdi_handle, 0), menu_bar(menu_handle, 1).
+
+close_screen :- menu_bar(menu_handle, 0).
+
+reserve_screen(Rect) :- form_dial(0, Rect, Rect), wind_update(3).
+
+free_screen(Rect) :- wind_update(2), form_dial(3, Rect, Rect).
+
+open_window :- wind_get(desk_handle, 7, [X, Y, W, H]),
+      X1 is X + W/2 - 75, Y1 is Y + H/2 - 75,
+      wind_calc(0, 11, [X1, Y1, 150, 150], Rect),
+      wind_create(11, Rect, window_handle),
+      wind_set(window_handle, 2, ' Hexapawn '), wind_open(window_handle, Rect).
+
+close_window :- wind_close(window_handle), wind_delete(window_handle).
+
+redraw :- wind_get(window_handle, 4, [X, Y | _]), position(Pos),
+      lines(Pos, X, Y), redraw_mark.
+
+redraw_mark :- marked(M), !, reverse(M).
+redraw_mark.
+
+lines([], _, _) :- !.
+lines([A, B, C | Rest], X, Y) :- squares([A, B, C], X, Y), Y1 is Y + 50,
+      lines(Rest, X, Y1).
+
+squares([], _, _) :- !.
+squares([A | Rest], X, Y) :- square(A, X, Y), X1 is X + 50,
+      squares(Rest, X1, Y).
+
+square(Symbol, X, Y) :- X1 is X + 49, Y1 is Y + 49,
+      vsf_interior(vdi_handle, 0), v_bar(vdi_handle, X, Y, X1, Y1),
+      show_symbol(Symbol, X, Y).
+
+show_symbol(u, _, _) :- !.
+show_symbol(p, X, Y) :- !, X1 is X + 25, Y1 is Y + 25,
+      v_pieslice(vdi_handle, X1, Y1, 15, 1300, 500).
+show_symbol(c, X, Y) :- X1 is X + 25, Y1 is Y + 25, vsf_interior(vdi_handle,1),
+      v_pieslice(vdi_handle, X1, Y1, 15, 3100, 2300).
+
+reverse(Pos) :- wind_get(window_handle, 4, [Xw, Yw | _]),
+      X is Xw + 50 * (Pos mod 3), Y is Yw + 50 * (Pos / 3),
+      X1 is X + 49, Y1 is Y + 49, v_hide_c(vdi_handle),
+      vswr_mode(vdi_handle, 3), vsf_interior(vdi_handle, 1),
+      vr_recfl(vdi_handle, X, Y, X1, Y1), vswr_mode(vdi_handle, 1),
+      v_show_c(vdi_handle, 0).
+
+%  Resource-Datei laden :
+
+:- rsrc_load('hexapawn.rsc'), rsrc_handle(0, 0, menu_handle),
+   rsrc_handle(0, 1, about_handle).
+

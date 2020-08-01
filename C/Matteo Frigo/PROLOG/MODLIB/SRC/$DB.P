@@ -1,0 +1,455 @@
+/************************************************************************
+*									*
+* The SB-Prolog System							*
+* Copyright SUNY at Stony Brook, 1986; University of Arizona, 1987	*
+*									*
+************************************************************************/
+
+/*-----------------------------------------------------------------
+SB-Prolog is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY.  No author or distributor
+accepts responsibility to anyone for the consequences of using it
+or for whether it serves any particular purpose or works at all,
+unless he says so in writing.  Refer to the SB-Prolog General Public
+License for full details.
+
+Everyone is granted permission to copy, modify and redistribute
+SB-Prolog, but only under the conditions described in the
+SB-Prolog General Public License.   A copy of this license is
+supposed to have been given to you along with SB-Prolog so you
+can know your rights and responsibilities.  It should be in a
+file named COPYING.  Among other things, the copyright notice
+and this notice must be preserved on all copies. 
+------------------------------------------------------------------ */
+/* $db.P */
+/* Last modification: Aug 25, 1989 -- Paco Romero */
+/*
+These are the basic routines that support assert and retract in our system.
+
+The system supports a concept of a Prref, a predicate reference.
+A Prref is a database reference to a sequence of asserted clauses.
+Normally a Prref is associated with a psc-entry (in the e.p.  field),
+the psc entry of the main functor symbol of all the clauses.  But that
+need not be the case. A Prref can be created, asserted to, and
+called explicitly. 
+
+The system also supports a concept of Clref, a clause reference.
+These are quite similar to the db references in CProlog.  A Clref is
+a reference to a single clause.  A Clref can also be called.
+Normally a Clref is chained into a Prref.  
+*/
+
+$db_export([$db_new_prref/1,$db_assert_fact/5,
+            $db_assert_fact/7, $db_add_clref/6,
+            $db_call_prref/2,$db_call_prref_s/2,$db_call_prref_s/3,
+            $db_call_clref/2,$db_get_clauses/3,$db_kill_clause/1]).
+
+$db_use($dbcmpl,[$db_cmpl/5,$db_putbuffop/4,
+                 $db_putbuffbyte/4,$db_putbuffnum/4]).
+
+$db_use($buff, [$alloc_perm/2,$alloc_heap/2,$trimbuff/3,$buff_code/4,
+                $symtype/2,$substring/6,$subnumber/6,$subdelim/6,$conlength/2,
+		$pred_undefined/1, $hashval/3]).
+
+$db_use($bmeta,[$atom/1,$atomic/1,$integer/1,$number/1,$structure/1,
+                $functor0/2,$bldstr/3,$arg/3,$arity/2,$real/1,$floor/2]).
+
+
+$db_use($bio,[$writename/1,$writeqname/1,$put/1,$nl/0,$tab/1,$tell/1,$tell/2,
+              $telling/1,$told/0,$get/1,$get0/1,$see/1,$seeing/1,$seen/0]).
+
+
+/* $db_new_prref(Prref):  creates an empty Prref, i.e.  one with no
+clauses in it.  If called, it will simply fail.  Prref must be a
+variable at the time of call.  */
+
+$db_new_prref(Prref) :- $db_new_prref(Prref,0,0).
+$db_new_prref(Prref,Where,Supbuff) :-
+	$alloc_buff(20,Prref,Where,Supbuff,0),
+		/* disp 16 for pointer to last clause */
+        $opcode( fail, FailOp ),
+	$buff_code(Prref,  0, 14 /*ptv*/ ,Prref), /*set back pointer*/
+	$buff_code(Prref,  4,  3 /*ps*/ ,FailOp /* fail*/ ),
+	$buff_code(Prref,  6,  3 /*ps*/ ,0),
+	$buff_code(Prref, 12,  3 /*ps*/ ,FailOp /* fail*/ ),
+	$buff_code(Prref, 14,  3 /*ps*/ ,0).
+
+
+
+/* $db_assert_fact(Fact,Prref,AZ,Index,Clref):  where Fact is a fact to
+be asserted; Prref is a predicate reference to which to add the
+asserted fact; AZ is either 0 indicating the fact should be inserted
+as the first clause in Prref, or 1 indicating it should be inserted
+as the last; Index is 0 if no index is to be built, or n if an index
+on the nth argument of the fact is to be used; Clref is returned and
+it is the clause reference of the asserted fact. */
+
+$db_assert_fact(Fact,Prref,AZ,Index,Clref) :- 
+	$db_assert_fact(Fact,Prref,AZ,Index,Clref,0,0).
+
+$db_assert_fact(Clause,Prref,AZ,Index,Clref,Where,Supbuff) :- 
+	$db_cmpl(Clause,Clref,Index,Where,Supbuff),
+	(var(Prref) -> $db_new_prref(Prref,Where,Supbuff) ; true),
+	(Clause = (Head:-_) -> ($arity(Head,Arity));
+			(Clause=Head, $arity(Head,Ar1),Arity is Ar1+1)
+	),
+	$db_add_clref(Head,Arity,Prref,AZ,Index,Clref,Where,Supbuff).
+
+/* $db_add_clref(Fact,Arity,Prref,AZ,Index,Clref) adds a clause buffer to a
+prref. So Prref and Clref must be bound. Arity is the number of registers
+to save in a choice point (if Fact is a fact, it is Arity(Fact)+1, for cut)
+The other parameters are as above.
+*/
+
+$db_add_clref(Fact,Arity,Prref,AZ,Index,Clref) :-
+	$db_add_clref(Fact,Arity,Prref,AZ,Index,Clref,0,0).
+$db_add_clref(Fact,Arity,Prref,AZ,Index,Clref,Where,Supbuff) :-
+	Index =< 0 ->
+	  (AZ =:= 0 ->
+	    $db_addbuffa(Arity,Clref,Prref);
+	    $db_addbuffz(Arity,Clref,Prref));
+	  (AZ =:= 0 -> 
+	    $writename('Indexed add to beginning not supported'),$nl,fail
+	   ;
+	    ((arg(Index, Fact, Arg), nonvar(Arg)) ->
+	          $db_addbuffz_i(Arity,Clref,Prref,Index,Arg,Where,Supbuff) ;
+	          $db_addbuffz(Arity,Clref,Prref)
+	    )
+	  ).
+
+/* Add Clref to empty Prref */
+$db_addbuffonly(Arity,Clref,Prref) :-
+         $opcode( jumptbreg, JmpOp ),
+	 $buff_code(Prref,  4,  3 /*ps*/ ,JmpOp /*jump and save breg */ ),
+	 $buff_code(Prref,  6,  3 /*ps*/ ,Arity),
+	 $buff_code(Prref,  8, 10 /*pbr*/ ,Clref),
+	 $buff_code(Prref, 16, 10 /*pbr*/ ,Clref), /* ptr to last clause */
+         $opcode( noop, NoopOp ),
+	 $buff_code(Clref,  4,  3 /*ps*/ ,NoopOp /*noop*/ ),
+	 $buff_code(Clref,  6,  3 /*ps*/ ,2).
+
+/* add Clref to end of Prref */
+$db_addbuffz(Arity,Clref,Prref) :-
+		/* Prref must be dummy header */
+        $opcode( fail, FailOp ),
+	$buff_code(Prref, 4, 6 /*gs*/ ,Op),
+	(Op =:= FailOp,   /*fail*/
+	 $db_addbuffonly(Arity,Clref,Prref)
+	;
+	 Op =\= FailOp,   /*fail*/
+	  ($opcode( jumptbreg, JmpOp ),
+           Op =:= JmpOp,   /* must be a jump-and-save-breg to next clause */
+	   $buff_code(Prref, 16, 8 /*gpb*/ ,Lbuff), /* last buff */
+	   $buff_code(Lbuff,  4, 6 /*gs*/ ,Sop),
+           $opcode( noop, NoopOp ),
+           $opcode( trustmeelsefail, TrustOp ),
+	   (Sop =:= NoopOp, /* noop, change to try */
+            $opcode( trymeelse, TryOp ),
+	    $buff_code(Lbuff, 4, 3 /*ps*/ ,TryOp /*trymeelse*/)
+	   ;
+	    Sop =\= NoopOp,
+	    Sop =:= TrustOp,	/* must be a trustmeelsefail */
+            $opcode( retrymeelse, RetryOp ),
+	    $buff_code(Lbuff, 4, 3 /*ps*/ ,RetryOp /*retrymeelse*/)
+	   ),
+	   $buff_code(Lbuff,  6,  3 /*ps*/ ,Arity),
+	   $buff_code(Lbuff,  8, 10 /*pbr*/ ,Clref),
+	   $buff_code(Clref,  4,  3 /*ps*/ ,TrustOp /*trustmeelsefail*/ ),
+	   $buff_code(Clref,  6,  3 /*ps*/ ,Arity),
+	   $buff_code(Clref,  8,  3 /*ps*/ ,NoopOp /*noop*/ ),
+	   $buff_code(Clref, 10,  3 /*ps*/ ,0),
+	   $buff_code(Prref, 16, 10 /*pbr*/ ,Clref) /* point to new last */
+	  )
+	).
+
+
+/* add a buffer to the beginning of the chain */
+$db_addbuffa(Arity,Clref,Prref) :-
+        $opcode( fail, FailOp ),
+	$buff_code(Prref, 4, 6 /*gs*/ ,Op),
+	(Op =:= FailOp,				/* fail */
+		/* only dummy clause there */
+	 $db_addbuffonly(Arity,Clref,Prref)
+	;
+	 Op =\= FailOp,
+	  ($opcode( jumptbreg, JmpOp ),
+	   $opcode( trymeelse, TryOp ),
+           Op =:= JmpOp,   /* must be a jump-and-save-breg, otw fail */
+	   $buff_code(Prref, 8, 8 /*gpb*/ ,Sbuff), /* next buff */
+	   $buff_code(Sbuff, 4, 6 /*gs*/ ,Sop),
+           $opcode( noop, NoopOp ),
+	   (Sop =:= NoopOp, /* noop, change to trust */
+	    $opcode( trustmeelsefail, TrustOp ),
+	    $buff_code(Sbuff,  4, 3 /*ps*/ ,TrustOp ),
+	    $buff_code(Sbuff,  6, 3 /*ps*/ ,Arity),
+	    $buff_code(Sbuff,  8, 3 /*ps*/ ,NoopOp /*noop*/ ),
+	    $buff_code(Sbuff, 10, 3 /*ps*/ ,0)
+	   ;
+	    Sop =\= NoopOp, /* not noop */
+	    Sop =:= TryOp, /* must be try, else fail */
+	    $opcode( retrymeelse, RetryOp ),
+	    $buff_code(Sbuff, 4,3  /*ps*/ ,RetryOp ) /* make retry */
+	   ),
+	   $buff_code(Prref, 8, 10 /*pbr*/, Clref), /* point first to new */
+	   $buff_code(Clref, 4,  3 /*ps*/ , TryOp /*trymeelse*/), 
+	   $buff_code(Clref, 6,  3 /*ps*/ , Arity),
+	   $buff_code(Clref, 8, 10 /*pbr*/, Sbuff) /* point new to old 2nd*/
+	 )
+	).
+
+/* adds a buffer to an index chain */
+$db_addbuffz_i(Arity,Clref,Prref,Index,Arg,_,_) :-
+        $opcode( fail, FailOp ),
+        $opcode( noop, NoopOp ),
+        $opcode( switchonbound, SobOp ),
+	$buff_code(Prref,  4, 6 /*gs*/ ,Op),
+        Op =\= FailOp, /* fail if no clrefs */
+	$buff_code(Prref, 16, 8 /*gpb*/ ,Lbuff),  /* last buff */
+	$buff_code(Lbuff, 12, 6 /*gs*/ ,NoopOp),  /* noop if SOB */
+	$buff_code(Lbuff, 20, 6 /*gs*/ ,SobOp),   /* op code must be sob */
+	$buff_code(Lbuff, 22, 6,Index),		  /* must be same arg */
+	!,
+	$buff_code(Lbuff, 28, 5 /*gn*/, N), /* tabsize */
+	$db_proc_all_chain(Arity,Lbuff,Clref),
+	$db_proc_hash_chain(Arg,Arity,Lbuff,Clref,N).
+
+$db_addbuffz_i(Arity,Clref,Prref,Index,Arg,Where,Supbuff) :-
+	 	/* must add new sop buffer */
+	$db_create_sob(Sbuff,N,Where,Supbuff), /* get sob buffer */
+	$db_gen_sobcode(Index, Sbuff, Clref, N),
+	$db_proc_hash_chain(Arg, Arity, Sbuff, Clref, N),
+	$db_addbuffz(Arity,Sbuff,Prref).
+
+$db_create_sob(Sbuff,N,Where,Supbuff) :-
+	'_$tab_size'(N), Size is 12 + 8 + 12 + 8 + 4 * N + 4,
+	$alloc_buff(Size,Sbuff,Where,Supbuff,0),
+	$buff_code(Sbuff, 0, 14 /*ptv*/, Sbuff). /* backptr */
+
+$db_gen_sobcode(Narg, Sbuff, Clref, N) :-
+        $opcode( noop, NoopOp ),
+        $opcode( switchonbound, SobOp ),
+        $opcode( jump, JumpOp ),
+        $buff_code(Sbuff, 12, 3 /*ps*/ , NoopOp /*noop*/),
+        $buff_code(Sbuff, 14, 3 /*ps*/ , 2),
+	$buff_code(Sbuff, 16, 10 /*pbr*/ ,Clref),
+        $buff_code(Sbuff, 20, 3 /*ps*/ , SobOp /*switchonbound*/),
+        $buff_code(Sbuff, 22, 3 /*ps*/ , Narg),
+        $buff_code(Sbuff, 40, 33, AddrTab), /* get addr of tab */
+        $buff_code(Sbuff, 24, 32, AddrTab), /* store addr of tab */
+        $buff_code(Sbuff, 28, 2, N /* size of hashtab */),
+        $buff_code(Sbuff, 32, 3 /*ps*/ , JumpOp /* jump */),
+        $buff_code(Sbuff, 34, 3 /*ps*/ , 0),
+        $buff_code(Sbuff, 36, 10, Clref),
+        $buff_code(Clref,  4, 3 /*ps*/, NoopOp /*noop*/),
+        $buff_code(Clref,  6, 3 /*ps*/, 2),
+        $db_init_tab(Sbuff, N).
+
+$db_init_tab(Clref, N) :-
+        Disp is 40 + 4 * N, 
+        $opcode( fail, FailOp ),
+        $buff_code(Clref, Disp, 3 /*ps*/ , FailOp /*fail*/),
+        Disp1 is Disp + 2,
+        $buff_code(Clref, Disp1, 3 /*ps*/ , 0),
+        $buff_code(Clref, Disp, 33, FailAddr),
+        $db_init_hashtab(0, 40, N, Clref, FailAddr).
+
+$db_init_hashtab(N, Lin, Size, Clref, FailAddr) :-
+        N >= Size;
+        N < Size,
+        $buff_code(Clref, Lin, 32 /* word num */, FailAddr),
+        Lout is Lin + 4,
+        N1 is N + 1,
+        $db_init_hashtab(N1, Lout, Size, Clref, FailAddr).
+
+$db_proc_all_chain(Arity, Sbuff, Clref) :-
+        $opcode( noop, NoopOp ),
+        $opcode( trustmeelsefail, TrustOp ),
+        $buff_code(Sbuff, 16, 8, Lbuff), /* last buff on all chain */
+	$buff_code(Lbuff,  4, 6 /*gs*/ ,Sop),
+	(Sop =:= NoopOp, /* noop, change to try */
+        $opcode( trymeelse, TryOp ),
+	$buff_code(Lbuff, 4, 3 /*ps*/ ,TryOp /*trymeelse*/)
+	;
+	 Sop =\= NoopOp,
+	 Sop =:= TrustOp,		/* must be a trustmeelsefail */
+         $opcode( retrymeelse, RetryOp ),
+	 $buff_code(Lbuff, 4, 3 /*ps*/ , RetryOp /*retrymeelse*/)
+	),
+	$buff_code(Lbuff,  6,  3 /*ps*/ ,Arity),
+	$buff_code(Lbuff,  8, 10 /*pbr*/ ,Clref),
+	$buff_code(Clref,  4,  3 /*ps*/ ,TrustOp /*trustmeelsefail*/ ),
+	$buff_code(Clref,  6,  3 /*ps*/ ,Arity),
+ 	$buff_code(Clref,  8,  3 /*ps*/ ,NoopOp /*noop*/ ),
+	$buff_code(Clref, 10,  3 /*ps*/ ,0), 
+	$buff_code(Sbuff, 16, 10 /*pbr*/ ,Clref). /* point to new last */
+
+$db_proc_hash_chain(Arg, Arity, Tbuff, Buff, N) :-
+        nonvar(Arg), 
+        $hashval(Arg, N, Hashval),
+        Bucket is 40 + 4 * Hashval,
+        $buff_code(Tbuff, Bucket, 5, Addr),
+        Faild is 40 + 4 * N,
+        $buff_code(Tbuff, Faild, 33, Faddr),
+        ((Addr = Faddr, $db_link_first(Bucket, Tbuff, Buff), !);
+         ($db_get_hash_next(Bucket, Tbuff, NextBuff, Disp, B),
+          $db_link_all(Arity, NextBuff, Disp, Buff, B))
+        ).
+
+$db_link_first(Bucket, Tbuff, Buff) :-
+        $db_get_addr(Buff, _, Hash_addr),
+        $buff_code(Tbuff, Bucket, 32, Hash_addr).
+
+
+$db_get_addr(Buff, Disp, Hash_addr) :-
+        $conlength(Buff, Len),
+        Disp is Len - 16,
+        $buff_code(Buff, Disp, 33, Hash_addr).
+
+$db_get_hash_next(Bucket, Tbuff, NextBuff, Disp, B) :-
+        /* get buffer pointed to by the bucket        */
+        $buff_code(Tbuff, Bucket, 21 /* gnb */, NextBuff), 
+        $conlength(NextBuff, Len),
+        Disp is Len - 16,
+        $buff_code(NextBuff, Disp, 6 /*gb*/ , B).
+
+$db_link_all(Arity, NextBuff, Disp, Buff, B) :-
+        $opcode( noop, NoopOp ),
+        $opcode( trymeelse, TryOp ),
+        ((B =:= NoopOp, /* noop */
+          $db_putbuffop( TryOp /* trymeelse */, NextBuff, Disp, L1),
+          $db_putbuffbyte(Arity, NextBuff, L1, L2),
+          $db_get_addr(Buff, BuffDisp, Hash_addr),
+          $db_putbuffnum(Hash_addr, NextBuff, L2, _),
+          $db_set_index_trust(Arity, Buff, BuffDisp));
+         (B =\= NoopOp, 
+          B =:= TryOp, /* trymeelse */
+          Loc is Disp + 4,
+          $db_get_hash_next(Loc, NextBuff, Clref, NewDisp, NewB),
+          $db_link_rest(Arity, Clref, NewDisp, Buff, NewB))
+        ).
+
+$db_link_rest(Arity, NextBuff, Disp, Buff, B) :-
+        $opcode( retrymeelse, RetryOp ),
+        ((B =:= RetryOp, /* retrymeelse */
+          Loc is Disp + 4,
+          $db_get_hash_next(Loc, NextBuff, Clref, NewDisp, NewB),
+          $db_link_rest(Arity, Clref, NewDisp, Buff, NewB));
+         (B =\= RetryOp, 
+          $opcode( trustmeelsefail, TrustOp ),
+          B =:= TrustOp, /* trustmeelsefail */
+          $db_get_addr(Buff, BDisp, Hash_addr),
+          $db_set_index_retry(Arity, NextBuff, Disp, Hash_addr),
+          $db_set_index_trust(Arity, Buff, BDisp))
+        ).
+
+$db_set_index_trust(Arity, Buff, Disp) :-
+        $opcode( trustmeelsefail, TrustOp ),
+        $opcode( noop, NoopOp ),
+        $db_putbuffop( TrustOp, Buff, Disp, L1),
+        $db_putbuffbyte(Arity, Buff, L1, L2),
+        $db_putbuffop( NoopOp, Buff, L2, L3),
+        $db_putbuffbyte(0, Buff, L3, _).
+
+$db_set_index_retry(Arity, Buff, Disp, Addr) :-
+        $opcode( retrymeelse, RetryOp ),
+        $db_putbuffop( RetryOp, Buff, Disp, L1),
+        $db_putbuffbyte(Arity, Buff, L1, L2),
+        $db_putbuffnum(Addr, Buff, L2, _).
+
+
+/* $db_call_prref(Call,Prref):  where Call is a literal and Prref is a
+predicate reference.  This calls the Prref using Call as the call.
+The call is done by simply branching to the first clause.  Thus the
+trust optimization is used, and so new facts added to the Prref after
+the last fact is retrieved but before the call is failed through will
+NOT be used. */
+
+$db_call_prref(Call,Prref) :- $buff_code(Prref,4,13 /*execb*/ ,Call).
+
+
+/* $db_call_prref_s(Call,Prref):  with the same arguments as the
+previous and also calling the clauses.  The difference from 
+$db_call_prref is that it does not use the trust optimization so that any
+new fact addd before final failure will be used.  */
+
+$db_call_prref_s(Goal,Prref) :- $db_call_prref_s(Goal,Prref,_).
+
+/* same as above, but also returns cl_ref of successful clause */
+$db_call_prref_s(Goal,Prref,Cur_clref) :-
+	$db_get_first_clref(Prref,Clref),$db_get_clrefs(Clref,Cur_clref,0),
+	$db_call_clref(Goal,Cur_clref).
+
+
+/* $db_call_clref(Call,Clref): will call the clause referenced by Clref
+using the literal Call as the call. */
+
+$db_call_clref(Call,Clref) :- $buff_code(Clref,12,13 /*execb*/ ,Call).
+
+
+/* $db_get_clauses(Prref,Clref,Dir): This returns nondeterministically all
+the clause references for clauses asserted to Prref. If Dir is 0, then
+the first on the list is returned first; if Dir is 1, then they are 
+returned in reverse order.
+*/
+
+$db_get_clauses(Prref,Clref,Dir) :- 
+	$db_get_first_clref(Prref,Fclref),
+	$db_get_clrefs(Fclref,Clref,Dir).
+
+
+/* given a pr_ref, get the cl_ref for the first clause. */
+$db_get_first_clref(Prref,Clref) :-
+        $opcode( jumptbreg, JmpOp ),
+	$buff_code(Prref, 4, 6 /*gs*/ , JmpOp), /* must be jump-and-save-breg */
+	$buff_code(Prref, 8, 8 /*gpb*/ ,Clref).
+
+/* return, through backtracking, the sequence of cl_refs chained from
+the given one, returning given one first */
+
+$db_get_clrefs(Clref,N_clref,1) :- 
+	$db_get_next_clref(Clref,Nxt_clref),
+	$db_get_clrefs(Nxt_clref,N_clref,1).
+
+$db_get_clrefs(Clref,N_clref,Dir) :-
+	$buff_code(Clref,12,6 /*gs*/ ,Nop), 		/* if sob, is noop */
+        $opcode( noop, NoopOp ),
+	(Nop =:= NoopOp ->
+	  $buff_code(Clref,20,6 /*gs*/ ,Sop),	/* op code must be sob */
+          $opcode( switchonbound, SobOp ),
+	  (Sop =:= SobOp ->				/* sob buffer */
+	    $buff_code(Clref, 36, 8 /*gpb*/ ,Tclref),	/* first of all */
+	    $db_get_clrefs(Tclref,N_clref,Dir)	/* and recurse */
+	    ;
+	    N_clref=Clref			/* not a sob buffer */
+	  )
+	  ;
+	  N_clref=Clref
+	).
+
+$db_get_clrefs(Clref,N_clref,0) :- 
+	$db_get_next_clref(Clref,Nxt_clref),
+	$db_get_clrefs(Nxt_clref,N_clref,0).
+
+/* get the next cl_ref following the given one. */
+$db_get_next_clref(Clref,Nxt_clref) :-
+        $opcode( retrymeelse, RetryOp ),
+	$buff_code(Clref,4,6 /*gs*/ ,B), 
+	(B =:= RetryOp, /* retrymeelse, so there is another clause */
+		$buff_code(Clref,8,8 /*gpb*/ ,Nxt_clref)
+	 ;
+	 B =\= RetryOp,
+          $opcode( trymeelse, TryOp ),
+	  B =:= TryOp, /* trymeelse, so ditto */
+	  $buff_code(Clref,8,8 /*gpb*/ ,Nxt_clref)
+	).
+
+
+/* $db_kill_clause(Clref):  retracts the fact referenced by Clref.  It
+does this by simply making the first instruction of the clause a
+fail instruction. */
+
+$db_kill_clause(Clref) :- 
+       $opcode( fail, FailOp ),
+       $buff_code(Clref, 12, 3 /*ps*/ ,FailOp /*fail*/ ).
+
+/* ---------------------------------------------------------------------- */

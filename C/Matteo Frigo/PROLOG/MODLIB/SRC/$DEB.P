@@ -1,0 +1,353 @@
+/************************************************************************
+*									*
+* The SB-Prolog System							*
+* Copyright SUNY at Stony Brook, 1986; University of Arizona, 1987	*
+*									*
+************************************************************************/
+
+/*-----------------------------------------------------------------
+SB-Prolog is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY.  No author or distributor
+accepts responsibility to anyone for the consequences of using it
+or for whether it serves any particular purpose or works at all,
+unless he says so in writing.  Refer to the SB-Prolog General Public
+License for full details.
+
+Everyone is granted permission to copy, modify and redistribute
+SB-Prolog, but only under the conditions described in the
+SB-Prolog General Public License.   A copy of this license is
+supposed to have been given to you along with SB-Prolog so you
+can know your rights and responsibilities.  It should be in a
+file named COPYING.  Among other things, the copyright notice
+and this notice must be preserved on all copies. 
+------------------------------------------------------------------ */
+/* $deb.P */
+
+/* Trace and Debug package */
+/* To be able to trace execution, you should either consult the
+file containing the predicate definitions or compile them with the 't'
+option and load them. The 't' option keeps the assembler from optimizing
+subroutine linkage and allows the trace to intercept any call. To trace
+the system, all predicates to be traced must be passed to trace/1. For 
+example,
+	:- trace([pred1/1,pred2/2]),trace(pred3/2).
+will set up tracing of pred1, pred2 and pred3 (of the indicated arities.)
+The compile and consult predicates have been modified to
+return a list of predicates defined, which can be directly passed to trace,
+to set up interception. This also turns tracing on. The facilities are 
+roughly  similar to CProlog's debugging facility, but you can only trace 
+routines for which you've done a trace/1. This makes trace and spy very 
+similar; it is essentially just two levels of spy points. The times that 
+tracing (and spying) occur differ somewhat from CProlog's. Here tracing 
+occurs at Call (i.e., entry to a predicate), successful Exit from a clause, 
+and Failure of an entire call. Skip, leap, etc. work in ways similar to
+CProlog. We do not support the leashing modes of CProlog (but it would be 
+easy enough to add).
+*/
+
+$deb_export([$debug/0,$nodebug/0,$trace/1,$untrace/1,$spy/1,$nospy/1,
+	$trace/0,$untrace/0, $debugging/0, $deb_tracepreds/1, $deb_spypreds/1]).
+
+/* $deb_use($glob,[$globalset/1,$gennum/1,$gensym/2]).
+   $deb_use($call,[call/1,'_$interp'/2,'_$call'/1]).
+   $deb_use($meta,[$functor/3,$univ/2,$length/2]).
+   $deb_use($name,[$name/2,$name0/2]).
+   $deb_use($bio,[$writename/1,$writeqname/1,$put/1,$nl/0,$tab/1,
+	$tell/1,$tell/2,$telling/1,$told/0,$get/1,$get0/1,$see/1,$seeing/1,
+	$seen/0]).
+   $deb_use($io,[$write/1,$writeq/1,$display/1,$print/1]).
+   $deb_use($assert,[$assert/1,$asserti/2,$assert_union/2,$assert_call_s/1,
+		$assert_get_prref/2,$assert_put_prref/2,$assert_abolish_i/1]).
+   $deb_use($retr,[$retract/1,_,_]).
+   $deb_use($defint,[$defint_call/4]).
+   $deb_use($buff,[$alloc_perm/2,$alloc_heap/2,$trimbuff/3,$buff_code/4,
+		$symtype/2,
+		$substring/6,$subnumber/6,$subdelim/6,$conlength/2,
+		$pred_undefined/1, $hashval/3]).
+*/
+
+$debug :- 
+	$globalset($deb_ugging(1)),
+	$globalset($deb_tracing(1)),
+	$globalset($deb_invoke_num(1)),
+	$globalset($deb_skipping(0)),
+	$globalset($deb_quasiskip(0)).
+
+$nodebug :- 
+	$globalset($deb_ugging(0)),
+	$globalset($deb_skipping(1)),
+	$globalset($deb_tracing(0)).
+
+$deb_trace(Call) :-
+	$deb_ugging(D),
+	(D=:=0,'_$call'(Call);
+	 D=\=0,
+	   $deb_invoke_num(N),N1 is N+1,$globalset($deb_invoke_num(N1)),
+	   $deb_tracing(T),
+	   (T=:=0,'_$call'(Call);
+	    T=\=0, /* $deb_tracing */
+	       $deb_quasiskip(S),	/* skipping implies quasiskipping */
+	       (S=\=0,'_$call'(Call) /* skipping or quasi_skipping */
+	       ;
+	        S=:=0,$deb_enterpred(N,Call,nospy)
+     	       )
+	   )
+	).
+
+/* routine for processing spy points */
+
+$deb_spy(Call) :-
+	$deb_ugging(D),
+	(D=:=0,'_$call'(Call)
+	;
+	 D=\=0,
+	    $deb_invoke_num(N),N1 is N+1,$globalset($deb_invoke_num(N1)),
+	    $deb_skipping(S),
+	    (S=\=0,'_$call'(Call) /* skipping */
+	    ;
+	     S=:=0,
+		$globalset($deb_tracing(1)),
+		$deb_enterpred(N,Call,spy)
+     	    )
+	).
+
+$deb_enterpred(N,Call,Spy) :-
+	$deb_traceget(N,Spy,'Call',Call,_),
+	$deb_tracing(D1),
+	(D1=:=0,'_$call'(Call)
+	;
+	 D1=\=0, /* $deb_tracing */
+	   ('_$call'(Call),
+	    $deb_tracing(D2),
+	    (D2=:=0;
+	     D2=\=0,
+	     $globalset($deb_quasiskip(0)),$globalset($deb_skipping(0)),
+	     $deb_traceget(N,Spy,'Exit',Call,_)
+	    )
+	   ;
+	    $globalset($deb_quasiskip(0)),$globalset($deb_skipping(0)),
+	    $deb_tracing(D3),
+	    D3=\=0, /*fail if not still tracing */
+	    $deb_traceget(N,Spy,'Fail',Call,C2),
+	    C2=114, /* r: retry, otherwise just fail */
+	    $globalset($deb_invoke_num(N)), /* reset call number */
+	    $deb_retry(Call,Spy)
+	   )
+	).
+
+$deb_retry(Call,spy) :- !,$deb_spy(Call).
+$deb_retry(Call,nospy) :- $deb_trace(Call).
+
+$deb_traceget(N,Spy,Type,Call,C) :-
+		$telling(Of),$tell(user),
+		$deb_writepref(Spy),
+		$writename(' ('),$writename(N),$writename(') '),
+		$writename(Type),$writename(': '),
+		Call =.. [Clpred|Args],
+		$name(Clpred,[99,111,100,101,36|Namelist]), /* code$ */
+		$name(Pname,Namelist),
+		Tcall =.. [Pname|Args],$write(Tcall),
+		$deb_prompt(Of,Type,Spy,C).
+
+$deb_writepref(spy) :- $writename('**').
+$deb_writepref(nospy) :- $writename('  ').
+
+$deb_prompt(Of,'Call',nospy,C) :-
+	$deb_getonechar(C),$tell(Of),$deb_ug(C).
+
+$deb_prompt(Of,'Fail',nospy,C) :-
+	/*nl,$tell(Of).*/
+	$deb_getonechar(C),$tell(Of),$deb_ug(C).
+
+$deb_prompt(Of,'Exit',nospy,C) :-
+	$nl,$tell(Of).
+
+$deb_prompt(Of,_,spy,C) :-
+	$deb_getonechar(C),$tell(Of),$deb_ug(C).
+
+$deb_ug(10) :- !,	/* <cr>: creep */
+	$globalset($deb_tracing(1)).
+$deb_ug(97) :- !,abort.	/* a: abort */
+$deb_ug(98) :- !,	/* break */
+	break.	/* and creep when return */
+$deb_ug(99) :- !,	/* c: creep */
+	$globalset($deb_tracing(1)).
+$deb_ug(101) :- !,halt.	/* e: exit Prolog */
+$deb_ug(102) :- !,fail.	/* f: fail */
+$deb_ug(108) :- !,	/* l: leap */
+	$globalset($deb_tracing(0)).
+$deb_ug(110) :- !,	/* n: nodebug */
+	$nodebug.
+$deb_ug(113) :- !,	/* q: quasi-skip */
+	$globalset($deb_quasiskip(1)).
+$deb_ug(114) :- !.	/* r: retry */
+$deb_ug(115) :- !,	/* s: skip */
+	$globalset($deb_quasiskip(1)),
+	$globalset($deb_skipping(1)).
+
+$deb_printhelp :- $telling(Of),$tell(user),
+	$tab(3),$writename('<cr>'),$tab(3),$writename('creep'),
+	$tab(10),$writename('a'),$tab(6),$writename('abort'),$nl,
+	$tab(3),$writename('c'),$tab(6),$writename('creep'),
+	$tab(10),$writename('f'),$tab(6),$writename('fail'),$nl,
+	$tab(3),$writename('r'),$tab(6),$writename('retry (fail)'),
+	$tab(3),$writename('h'),$tab(6),$writename('help'),$nl,
+	$tab(3),$writename('n'),$tab(6),$writename('nodebug'),
+	$tab(8),$writename('e'),$tab(6),$writename('exit'),$nl,
+	$tab(3),$writename('b'),$tab(6),$writename('break'),
+	$tab(10),$writename('s'),$tab(6),$writename('skip'),$nl,
+	$tab(3),$writename('q'),$tab(6),$writename('quasi-skip'),
+	$tab(5),$writename('l'),$tab(6),$writename('leap'),
+	$tell(Of).
+
+$deb_getonechar(C) :- 
+	$writename(' ? '),
+	$seeing(If),$see(user),$get0(C1),
+	(C1=:=10,C=C1,$see(If)
+	;
+	 C1=\=10,$deb_skiptoaft,
+	    (C1=:=104, /*help*/
+		$deb_printhelp,$deb_getonechar(C)
+	    ;
+	     C1=\=104,C=C1,$see(If)
+	    )
+	).
+	
+$deb_skiptoaft :- $get0(C),C=\=10,!,$deb_skiptoaft.
+$deb_skiptoaft.
+
+$spy(X) :- $untrace(X),$deb_setspy(X),$debug,$globalset($deb_tracing(0)).  
+
+$deb_setspy(X) :-
+	(nonvar(X), $deb_setspy0(X)) ;
+	(var(X), print('*** spy: argument cannot be a variable ***'), nl).
+
+$deb_setspy0(P/A) :- 
+	(atomic(P), integer(A)) ->
+		( ($symtype('_$spy_points'(_),Type),
+		   Type > 0,
+		   not('_$spy_points'(P/A)),!,	/* noop if already there */
+		   $assert('_$spy_points'(P/A)),
+		   $deb_set(P,A,$deb_spy(_))
+		  ) ;
+		  true
+		) ;
+		(print('*** illegal arguments to spy: '), print(P), print('/'), print(A), $nl).
+$deb_setspy0([Pred|More]) :- $deb_setspy0(Pred),$deb_setspy(More).
+$deb_setspy0([]).
+
+$trace(X) :- $debug,$deb_settrace(X).
+
+$deb_settrace(X) :-
+	(nonvar(X), $deb_settrace0(X)) ;
+	(var(X), print('*** trace: argument cannot be a variable ***'), nl).
+
+$deb_settrace0(P/A) :-
+	(atomic(P), integer(A)) ->
+		(($symtype('_$traced_preds'(_),Type),
+		   Type > 0,
+		  '_$traced_preds'(P/A)
+		  ) ->
+			(print('*** trace: already tracing '), print(P), print('/'), print(A),
+			 nl
+			) ;
+			($functor(F,P,A),
+			 $symtype(F,Symtype),
+			 ((Symtype =:= 1 ; Symtype =:= 2) ->
+				($assert('_$traced_preds'(P/A)),
+			 	 $deb_set(P,A,$deb_trace(_))
+				) ;
+				(print('*** '), print(P), print('/'), print(A),
+				 print(' not defined, cannot trace ***'), $nl
+				)
+			 )
+			)
+		) ;
+		(print('*** illegal argument to trace: '),print(X), nl).
+$deb_settrace0([Pred|More]) :- $deb_settrace0(Pred),$deb_settrace(More).
+$deb_settrace0([]).
+
+/* add a check so that give error if try to trace undefined pred */
+$deb_set(P,A,Tracerout) :- 
+	$name(P,Pnamelist),
+	$name(Codepname,[99,111,100,101,36|Pnamelist]), /* code$p */
+	$functor(Codecall,Codepname,A),
+	$functor(Pcall,P,A),
+	  /* make PRED and code$PRED have identical ep's */
+	$buff_code(Codecall,0,19 /* copy ep */ ,Pcall),
+	  /* now define PRED(A1,..,An) :- $deb_trace(code$PRED(A1,..,An)). */
+	$defint_call(Pcall,A,Codecall,Tracerout).
+
+$nospy(X) :- $deb_nospy(X),$trace(X),$nodebug.
+
+$deb_nospy(X) :-
+	(nonvar(X), $deb_nospy0(X)) ;
+	(var(X), print('*** nospy: argument cannot be a variable ***'), nl).
+
+$deb_nospy0(P/A) :- 
+	(atomic(P), integer(A)) ->
+		( ($symtype('_$spy_points'(_),Type),
+		   Type > 0,
+		   '_$spy_points'(P/A),	/* no-op if not there */
+		   $retract('_$spy_points'(P/A)),!,
+		   $deb_unset(P/A)
+		  ) ;
+		  true
+		) ;
+		(print('*** illegal argument to nospy: '), print(P), print('/'), print(A), nl).
+$deb_nospy0([Pred|More]) :- $deb_nospy0(Pred),$deb_nospy(More).
+$deb_nospy0([]).
+
+$untrace(X) :- $deb_unsettrace(X).
+
+$deb_unsettrace(X) :-
+	(nonvar(X), $deb_unsettrace0(X)) ;
+	(var(X), print('*** untrace: argument cannot be a variable ***'), nl).
+
+$deb_unsettrace0(P/A) :-
+	(atomic(P), integer(A)) ->
+		( ($symtype('_$traced_preds'(_),Type),
+		   Type > 0,
+		   '_$traced_preds'(P/A),
+		   $retract('_$traced_preds'(P/A)),!,
+		   $deb_unset(P/A)
+		  ) ;
+		  true		/* succeed even if retract fails */
+		) ;
+		(print('*** illegal argument to untrace: '), print(P), print('/'), print(A), nl).
+$deb_unsettrace0([Pred|More]) :- $deb_unsettrace0(Pred),$deb_unsettrace(More).
+$deb_unsettrace0([]).
+
+$deb_unset(P/A) :- /* add checks */
+	$name(P,Pnamelist),
+	$name(Codepname,[99,111,100,101,36|Pnamelist]), /* code$p */
+	$functor(Codecall,Codepname,A),
+	$functor(Pcall,P,A),
+	$buff_code(Pcall,0,19 /* copy ep */ ,Codecall).
+
+$trace :- $flags(1,1). /* Simulator generated trace */
+$untrace :- $flags(1,0).
+
+$debugging :- not( $debugging_0 ).
+
+$debugging_0 :-
+	$deb_ugging(X),
+	((X =:= 1, print('Debug mode on')) ; (X =\= 1, print('Debug mode off'))), nl,
+	$deb_tracepreds(L0),
+	(L0 = [] -> ( print('No predicates being traced'), nl) ;
+		   (print('Traced predicates: '), $nl, tab(5), $deb_printtrace(L0))
+	),
+	$deb_spypreds(L1),
+	(L1 = [] -> (print('No spy points set'), nl) ;
+		   (print('Spy points set on: '), $nl, tab(5), $deb_printtrace(L1))
+	),
+	!,
+	fail.
+
+$deb_tracepreds(L) :- 	$findall(X,'_$traced_preds'(X), L).
+$deb_spypreds(L) :- 	$findall(X, '_$spy_points'(X), L).
+
+$deb_printtrace([]) :- $nl.
+$deb_printtrace([(P/N)|L]) :- print(P), print('/'), print(N), print(', '), $deb_printtrace(L).
+
+/* ------------------------------ $deb.P ------------------------------ */

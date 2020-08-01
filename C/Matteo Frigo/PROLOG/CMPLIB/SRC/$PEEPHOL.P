@@ -1,0 +1,394 @@
+/************************************************************************
+*									*
+* The SB-Prolog System							*
+* Copyright SUNY at Stony Brook, 1986; University of Arizona, 1987	*
+*									*
+************************************************************************/
+
+/*-----------------------------------------------------------------
+SB-Prolog is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY.  No author or distributor
+accepts responsibility to anyone for the consequences of using it
+or for whether it serves any particular purpose or works at all,
+unless he says so in writing.  Refer to the SB-Prolog General Public
+License for full details.
+
+Everyone is granted permission to copy, modify and redistribute
+SB-Prolog, but only under the conditions described in the
+SB-Prolog General Public License.   A copy of this license is
+supposed to have been given to you along with SB-Prolog so you
+can know your rights and responsibilities.  It should be in a
+file named COPYING.  Among other things, the copyright notice
+and this notice must be preserved on all copies. 
+------------------------------------------------------------------ */
+/* $peephole1.P */
+
+/*  "peephole_opt" is the top-level optimizer, it calls various others.	  */
+
+/* **********************************************************************
+$peephole1_export([$comp_peepopt/3]).
+
+$peephole1_use($blist,[_,_,$member1/2,$not_member1/2]).
+********************************************************************** */
+
+:- mode($comp_peepopt,3,[c,d,c]).
+
+$comp_peepopt(Pil,OptPil,Preds) :-
+     $comp_popt1(Pil, Pil1),
+     $comp_popt4(Pil1,[],_,Preds,OptPil).
+
+:- mode($comp_popt1,2,[c,d]).
+
+$comp_popt1([], []).
+$comp_popt1([Inst|Rest], Pil1) :- $comp_popt11(Inst, Rest, Pil1).
+
+:- mode($comp_popt11,3,[c,c,d]).
+
+$comp_popt11(puttvar(T,R), [getstr(S,R)|PRest], [putstr(S,T)|OptPRest]) :-
+	!,
+	$comp_popt1a(PRest, OptPRest).
+$comp_popt11(puttvar(T,R), [getlist(R)|PRest], [putlist(T)|OptPRest]) :-
+	!,
+	$comp_popt1a(PRest, OptPRest).
+$comp_popt11(movreg(T,R),[Inst|PRest],OptInstList) :-
+	!,
+	T =:= R ->
+	     $comp_popt11(Inst,PRest,OptInstList) ;
+	     $popt_movreg(Inst,R,T,PRest,OptInstList).
+$comp_popt11(putpvar(V,R), [getpval(V,R)|PRest], [putpvar(V,R)|OptPRest]) :-
+	!,
+	$comp_popt1(PRest, OptPRest).
+$comp_popt11(putpvar(V,R), [getstr(Str,R)|PRest], [putstrv(Str,V)|OptPRest]) :-
+	!,
+	$comp_popt1a(PRest, OptPRest).
+$comp_popt11(putpval(V,R), [getstr(Str,R)|PRest], [getstrv(Str,V)|OptPRest]) :-
+	!,
+	$comp_popt1(PRest, OptPRest).
+$comp_popt11(getlist(R), [unitvar(R1),unitvar(R2)|PRest],[getlist_tvar_tvar(R,R1,R2)|OptPRest]) :-
+	!,
+	$comp_popt1(PRest,OptPRest).
+$comp_popt11(getcomma(R), [unitvar(R1),unitvar(R2)|PRest],[getcomma_tvar_tvar(R,R1,R2)|OptPRest]) :-
+	!,
+	$comp_popt1(PRest,OptPRest).
+$comp_popt11(getlist_k(R), [unitvar(R1),unitvar(R2)|PRest],[getlist_k_tvar_tvar(R,R1,R2)|OptPRest]) :-
+	!,
+	$comp_popt1(PRest,OptPRest).
+$comp_popt11(gettval(R,R), PRest,OptPRest) :-
+	!,
+	$comp_popt1(PRest, OptPRest).
+$comp_popt11(unitvar(R), [movreg(R,S)|PRest], OptInstList) :-
+	!,
+	($peep_chk(PRest,R) ->
+	     OptInstList = [unitvar(S)|OptPRest] ;
+	     OptInstList = [unitvar(R),movreg(R,S)|OptPRest]
+	),
+	$comp_popt1(PRest, OptPRest).
+$comp_popt11(jump(L), [label(L)|PRest],  [label(L)|OptPRest]) :-
+	!,
+	$comp_popt1(PRest,OptPRest).
+$comp_popt11(jump(Addr), [jump(_)|PRest],  [jump(Addr)|OptPRest]) :-
+	!,
+	$comp_popt1(PRest,OptPRest).
+$comp_popt11(jumpz(_,L), [label(L)|PRest],  [label(L)|OptPRest]) :-
+	!,
+	$comp_popt1(PRest,OptPRest).
+$comp_popt11(jumpnz(_,L), [label(L)|PRest],  [label(L)|OptPRest]) :-
+	!,
+	$comp_popt1(PRest,OptPRest).
+$comp_popt11(jumplt(_,L), [label(L)|PRest],  [label(L)|OptPRest]) :-
+	!,
+	$comp_popt1(PRest, OptPRest).
+$comp_popt11(jumple(_,L), [label(L)|PRest],  [label(L)|OptPRest]) :-
+	!,
+	$comp_popt1(PRest, OptPRest).
+$comp_popt11(jumpgt(_,L), [label(L)|PRest],  [label(L)|OptPRest]) :-
+	!,
+	$comp_popt1(PRest,OptPRest).
+$comp_popt11(jumpge(_,L), [label(L)|PRest],  [label(L)|OptPRest]) :-
+	!,
+	$comp_popt1(PRest,OptPRest).
+$comp_popt11(Inst, PRest, [Inst|OptPRest]) :- 
+	$comp_popt1(PRest, OptPRest).
+
+:- mode($comp_popt1a,2,[c,d]).
+
+$comp_popt1a([], []).
+$comp_popt1a([Inst|PRest], OptPList) :-
+     $popt_uni2bld(Inst,BldInst) ->
+          (OptPList = [BldInst|OptPRest],
+	   $comp_popt1a(PRest,OptPRest)
+	  ) ;
+	  $comp_popt11(Inst,PRest,OptPList).
+
+:- mode($popt_uni2bld,2,[c,d]).
+
+$popt_uni2bld(unipvar(X), bldpvar(X)).
+$popt_uni2bld(unipval(X), bldpval(X)).
+$popt_uni2bld(unitvar(X), bldtvar(X)).
+$popt_uni2bld(unitval(X), bldtval(X)).
+$popt_uni2bld(unicon(X), bldcon(X)).
+$popt_uni2bld(uninil, bldnil).
+$popt_uni2bld(uninumcon(X), bldnumcon(X)).
+$popt_uni2bld(unifloatcon(X), bldfloatcon(X)).
+
+/*	  "popt4" eliminates some redundant instructions.	*/
+
+
+$comp_popt4([],_,_,Preds,[]).
+$comp_popt4([Inst|IRest],RCont,Seen,Preds,OList) :-
+	($popt_builtin(Inst,Preds,OList,ORest) ->
+		RCont1 = RCont ;
+		($peep_redundant(Inst,IRest,RCont,RCont1,Seen,El),
+		 (El =:= 1 -> OList = ORest ; OList = [Inst|ORest])
+		)
+	),
+	$comp_popt4(IRest,RCont1,Seen,Preds,ORest).
+
+:- mode($popt_builtin,4,[c,c,d,d]).
+
+$popt_builtin(call(P,N,_),Preds,[builtin(Bno)|IRest],IRest) :-
+	 $comp_builtin(P,N,Bno),
+	 $not_member1('/'(P,N),Preds),
+	 !.
+$popt_builtin(calld(P,N,_),Preds,[builtin(Bno)|IRest],IRest) :-
+	 $comp_builtin(P,N,Bno),
+	 $not_member1('/'(P,N),Preds),
+	 !.
+$popt_builtin(execute((P,N)),Preds,[builtin(Bno),proceed|IRest],IRest) :-
+	 $comp_builtin(P,N,Bno),
+	 $not_member1('/'(P,N),Preds).
+
+:- mode($popt_movreg,5,[c,c,c,c,d]).
+
+$popt_movreg(Inst,R,T,PRest,OptInstList) :-
+	( ($popt_movreg0(Inst,R,T,OptInst), $peep_chk(PRest,R))  ->
+	     OptInstList = [OptInst|OptInstRest] ;
+	     OptInstList = [movreg(T,R),Inst|OptInstRest]
+	),
+	$comp_popt1(PRest, OptInstRest).
+
+:- mode($popt_movreg0,4,[c,c,c,d]).
+
+$popt_movreg0(getstr(S,R),R,T,getstr(S,T)).
+$popt_movreg0(puttbreg(R),R,T,puttbreg(T)).
+$popt_movreg0(addreg(R,S),R,T,addreg(T,S)).
+$popt_movreg0(subreg(R,S),R,T,subreg(T,S)).
+$popt_movreg0(mulreg(R,S),R,T,mulreg(T,S)).
+$popt_movreg0(divreg(R,S),R,T,divreg(T,S)).
+$popt_movreg0(idivreg(R,S),R,T,idivreg(T,S)).
+$popt_movreg0(get_tag(R,S),R,T,get_tag(T,S)).
+$popt_movreg0(arg(R,R2,R3),R,T,arg(T,R2,R3)).
+$popt_movreg0(arg(R1,R,R3),R,T,arg(R1,T,R3)).
+$popt_movreg0(arg(R1,R2,R),R,T,arg(R1,R2,T)).
+$popt_movreg0(arg0(R,R2,R3),R,T,arg0(T,R2,R3)).
+$popt_movreg0(arg0(R1,R,R3),R,T,arg0(R1,T,R3)).
+$popt_movreg0(arg0(R1,R2,R),R,T,arg0(R1,R2,T)).
+$popt_movreg0(test_unifiable(R,R2,R3),R,T,test_unifiable(T,R2,R3)).
+$popt_movreg0(test_unifiable(R1,R,R3),R,T,test_unifiable(R1,T,R3)).
+$popt_movreg0(test_unifiable(R1,R2,R),R,T,test_unifiable(R1,R2,T)).
+
+
+$popt_chkmember(P,L,Flag) :-
+	(var(L), L = [P|_], Flag = 1) ;
+	(nonvar(L), L = [P1|L1],
+	 (P = P1 -> Flag = 0 ; $popt_chkmember(P,L1,Flag))
+	).
+
+/*  these instrs use the contents of a reg */
+
+:- mode($peep_use,2,[c,d]).
+
+$peep_use(getcon(_,R),R).
+$peep_use(getnumcon(_,R),R).
+$peep_use(getfloatcon(_,R),R).
+$peep_use(getpval(_,R),R).
+$peep_use(gettval(_,R),R).
+$peep_use(gettval(R,_),R).
+$peep_use(gettbreg(R),R).
+$peep_use(getpbreg(R),R).
+$peep_use(getstr(_,R),R).
+$peep_use(getstrv(_,R),R).
+$peep_use(getlist(R),R).
+$peep_use(getlist_tvar_tvar(R,_,_),R).
+$peep_use(getcomma(R),R).
+$peep_use(getcomma_tvar_tvar(R,_,_),R).
+$peep_use(get_tag(R,_),R).
+$peep_use(unitval(R),R).
+$peep_use(unipval(R),R).
+$peep_use(bldtval(R),R).
+$peep_use(bldpval(R),R).
+$peep_use(arg(R,_,_),R).
+$peep_use(arg(_,R,_),R).
+$peep_use(arg(_,_,R),R).
+$peep_use(arg0(R,_,_),R).
+$peep_use(arg0(_,R,_),R).
+$peep_use(arg0(_,_,R),R).
+$peep_use(test_unifiable(R,_,_),R).
+$peep_use(test_unifiable(_,R,_),R).
+$peep_use(and(R,_),R).
+$peep_use(and(_,R),R).
+$peep_use(negate(R),R).
+$peep_use(or(R,_),R).
+$peep_use(or(_,R),R).
+$peep_use(lshiftl(R,_),R).
+$peep_use(lshiftl(_,R),R).
+$peep_use(lshiftr(R,_),R).
+$peep_use(lshiftr(_,R),R).
+$peep_use(addreg(R,_),R).
+$peep_use(addreg(_,R),R).
+$peep_use(subreg(R,_),R).
+$peep_use(subreg(_,R),R).
+$peep_use(mulreg(R,_),R).
+$peep_use(mulreg(_,R),R).
+$peep_use(divreg(R,_),R).
+$peep_use(divreg(_,R),R).
+$peep_use(idivreg(R,_),R).
+$peep_use(idivreg(_,R),R).
+$peep_use(movreg(R,_),R).
+$peep_use(switchonterm(R,_,_),R).
+$peep_use(switchonlist(R,_,_),R).
+$peep_use(switchonbound(R,_,_),R).
+$peep_use(jump(_),_).		/* too lazy to chase jumps! */
+$peep_use(jumpeq(R,L),R) :- L \= abs(-1).
+$peep_use(jumpne(R,L),R) :- L \= abs(-1).
+$peep_use(jumplt(R,L),R) :- L \= abs(-1).
+$peep_use(jumple(R,L),R) :- L \= abs(-1).
+$peep_use(jumpgt(R,L),R) :- L \= abs(-1).
+$peep_use(jumpge(R,L),R) :- L \= abs(-1).
+
+$peep_chk([],_).
+$peep_chk([Inst|Rest],R) :-
+	not($peep_use(Inst,R)), 
+	(($peep_term(Inst,R), !) ; $peep_chk(Rest,R)).
+
+:- mode($peep_term,2,[c,d]).
+
+/* these instrs change contents of reg */
+
+$peep_term(call(_,_,_),_).
+$peep_term(calld(_,_,_),_).
+$peep_term(execute(_),_).
+$peep_term('_$execmarker',_).
+$peep_term(putcon(R),R).
+$peep_term(putnumcon(R),R).
+$peep_term(putfloatcon(R),R).
+$peep_term(puttvar(R,_),R).
+$peep_term(putpvar(_,R),R).
+$peep_term(putdval(_,R),R).
+$peep_term(putuval(_,R),R).
+$peep_term(puttbreg(R),R).
+$peep_term(putpval(_,R),R).
+$peep_term(putstr(_,R),R).
+$peep_term(putstrv(_,R),R).
+$peep_term(putlist(R),R).
+$peep_term(putnil(R),R).
+$peep_term(get_tag(_,R),R).
+$peep_term(movreg(_,R),R).
+$peep_term(bldtvar(R),R).
+$peep_term(test_unifiable(_,_,R),R).
+
+$peep_redundant('_$execmarker',_,R,R,_,1).
+$peep_redundant(Inst,IRest,RCont,RCont1,Seen,El) :-
+	$peep_elim(Inst,IRest,RCont,RCont1,Seen,El) ->
+		true ;
+		(RCont1 = RCont, El = 0).
+
+:- mode($peep_elim,6,[c,c,d,d,d,d]).
+
+$peep_elim(getpvar(V,R),_,RCont,[r(R,v(V))|RCont],_,0).
+$peep_elim(getpval(V,R),_,RCont,RCont1,Seen,El) :-
+	$member1(r(R,v(V)),RCont) ->
+		(El = 1, RCont1 = Rcont) ;
+		(El = 0, RCont1 = [r(R,v(V))|RCont]).
+$peep_elim(getcon(C,R),_,RCont,RCont1,Seen,El) :-
+	$member1(r(R,c(C)),RCont) ->
+		(El = 1, RCont1 = Rcont) ;
+		(El = 0, RCont1 = [r(R,c(C))|RCont]).
+$peep_elim(getnumcon(N,R),_,RCont,RCont1,Seen,El) :-
+	$member1(r(R,n(N)),RCont) ->
+		(El = 1, RCont1 = Rcont) ;
+		(El = 0, RCont1 = [r(R,n(N))|RCont]).
+$peep_elim(getfloatcon(N,R),_,RCont,RCont1,Seen,El) :-
+	$member1(r(R,nf(N)),RCont) ->
+		(El = 1, RCont1 = Rcont) ;
+		(El = 0, RCont1 = [r(R,nf(N))|RCont]).
+$peep_elim(getnil(R),_,RCont,RCont1,Seen,El) :-
+	$member1(r(R,c(nil)),RCont) ->
+		(El = 1, RCont1 = Rcont) ;
+		(El = 0, RCont1 = [r(R,c(nil))|RCont]).
+$peep_elim(putpvar(V,R),_,L0,L1,_,0) :- $peep_elim_upd(L0,R,v(V),L1).
+$peep_elim(putpval(V,R),_,RCont,RCont1,_,El) :-
+	$member1(r(R,v(V)),RCont) ->
+		(El = 1, RCont1 = RCont) ;
+		(El = 0, $peep_elim_upd(RCont,R,v(V),RCont1)).
+$peep_elim(puttvar(R,R1),_,L0,L1,_,0) :-
+	$peep_del(L0,r(R,_),L2), $peep_del(L2,r(R1,_),L1).
+$peep_elim(putcon(C,R),_,RCont,RCont1,_,El) :-
+	$member1(r(R,c(C)),RCont) ->
+		(El = 1, RCont1 = RCont) ;
+		(El = 0, $peep_elim_upd(RCont,R,c(C),RCont1)).
+$peep_elim(putnumcon(N,R),_,RCont,RCont1,_,El) :-
+	$member1(r(R,n(N)),RCont) ->
+		(El = 1, RCont1 = RCont);
+		(El = 0, $peep_elim_upd(RCont,R,n(N),RCont1)).
+$peep_elim(putfloatcon(N,R),_,RCont,RCont1,_,El) :-
+	$member1(r(R,nf(N)),RCont) ->
+		(El = 1, RCont1 = RCont) ;
+		(El = 0, $peep_elim_upd(RCont,R,nf(N),RCont1)).
+$peep_elim(putnil(R),_,RCont,RCont1,_,El) :-
+	$member1(r(R,c(nil)),RCont) ->
+		(El = 1, RCont1 = RCont);
+		(El = 0, $peep_elim_upd(RCont,R,c(nil),RCont1)).
+$peep_elim(putstr(F,R),_,L0,L1,_,0) :- $peep_del(L0,r(R,_),L1).
+$peep_elim(putlist(R),_,L0,L1,_,0) :- $peep_del(L0,r(R,_),L1).
+$peep_elim(and(_,R),_,L0,L1,_,0) :- $peep_del(L0,r(R,_),L1).
+$peep_elim(or(_,R),_,L0,L1,_,0) :- $peep_del(L0,r(R,_),L1).
+$peep_elim(negate(R),_,L0,L1,_,0) :- $peep_del(L0,r(R,_),L1).
+$peep_elim(lshiftr(_,R),_,L0,L1,_,0) :- $peep_del(L0,r(R,_),L1).
+$peep_elim(lshiftl(_,R),_,L0,L1,_,0) :- $peep_del(L0,r(R,_),L1).
+$peep_elim(addreg(_,R),_,L0,L1,_,0) :- $peep_del(L0,r(R,_),L1).
+$peep_elim(subreg(_,R),_,L0,L1,_,0) :- $peep_del(L0,r(R,_),L1).
+$peep_elim(mulreg(_,R),_,L0,L1,_,0) :- $peep_del(L0,r(R,_),L1).
+$peep_elim(divreg(_,R),_,L0,L1,_,0) :- $peep_del(L0,r(R,_),L1).
+$peep_elim(idivreg(_,R),_,L0,L1,_,0) :- $peep_del(L0,r(R,_),L1).
+$peep_elim(movreg(R,R1),_,L0,L1,_,0) :- $peep_elim_upd(L0,R1,r(R),L1).
+$peep_elim(gettbreg(R),_,L0,L1,_,0) :- $peep_del(L0,r(R,_),L1).
+$peep_elim(putdval(V,R),_,L0,L1,_,0) :- $peep_del(L0,r(R,_),L1).
+$peep_elim(putuval(V,R),_,L0,L1,_,0) :- $peep_del(L0,r(R,_),L1).
+$peep_elim(label((P,N,K)),_,_,[],Seen,0) :-
+	N >= 0 -> $member1((P,N),Seen) ; true.
+$peep_elim(call(_,_,_),_,_,[],_,0).
+$peep_elim(proceed,_,_,[],_,0).
+$peep_elim(execute((P,N)),IRest,_,[],Seen,El) :-
+	(IRest = [label((P,N,K))|_], N >= 0) ->
+		$popt_chkmember((P,N),Seen,El) ;
+		El = 0.
+$peep_elim(calld(_,_,_),_,_,[],_,0).
+$peep_elim(builtin(_),_,_,[],_,0).
+$peep_elim(trymeelse(_,_),_,_,[],_,0).
+$peep_elim(retrymeelse(_,_),_,_,[],_,0).
+$peep_elim(trustmeelsefail(_),_,_,[],_,0).
+$peep_elim(try(_,_),_,_,[],_,0).
+$peep_elim(retry(_,_),_,_,[],_,0).
+$peep_elim(trust(_),_,_,[],_,0).
+$peep_elim(jump(_),_,_,[],_,0).
+$peep_elim(jumpz(_,L),_,R0,R1,_,0) :- L ?= abs(-1) -> R1 = R0 ; R1 = [].
+$peep_elim(jumpnz(_,L),_,R0,R1,_,0) :- L ?= abs(-1) -> R1 = R0 ; R1 = [].
+$peep_elim(jumplt(_,L),_,R0,R1,_,0) :- L ?= abs(-1) -> R1 = R0 ; R1 = [].
+$peep_elim(jumple(_,L),_,R0,R1,_,0) :- L ?= abs(-1) -> R1 = R0 ; R1 = [].
+$peep_elim(jumpgt(_,L),_,R0,R1,_,0) :- L ?= abs(-1) -> R1 = R0 ; R1 = [].
+$peep_elim(jumpge(_,L),_,R0,R1,_,0) :- L ?= abs(-1) -> R1 = R0 ; R1 = [].
+$peep_elim(switchonterm(_,_,_),_,_,[],_,0).
+$peep_elim(switchonlist(_,_,_),_,_,[],_,0).
+$peep_elim(switchonbound(_,_,_),_,_,[],_,0).
+
+$peep_del([],_,[]).
+$peep_del([X|L],Y,L1) :- 
+	(X ?= Y -> L1 = L1Rest ; L1 = [X|L1Rest]),
+	$peep_del(L,Y,L1Rest).
+
+$peep_elim_upd(L0,R,Cont,[r(R,Cont)|L1]) :- $peep_del(L0,r(R,_),L1).
+
+/* ------------------------------ peephole.P ------------------------------ */
+
+

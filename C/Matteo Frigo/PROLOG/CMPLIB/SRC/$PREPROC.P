@@ -1,0 +1,349 @@
+/************************************************************************
+*									*
+* The SB-Prolog System							*
+* Copyright SUNY at Stony Brook, 1986; University of Arizona, 1987	*
+*									*
+************************************************************************/
+
+/*-----------------------------------------------------------------
+SB-Prolog is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY.  No author or distributor
+accepts responsibility to anyone for the consequences of using it
+or for whether it serves any particular purpose or works at all,
+unless he says so in writing.  Refer to the SB-Prolog General Public
+License for full details.
+
+Everyone is granted permission to copy, modify and redistribute
+SB-Prolog, but only under the conditions described in the
+SB-Prolog General Public License.   A copy of this license is
+supposed to have been given to you along with SB-Prolog so you
+can know your rights and responsibilities.  It should be in a
+file named COPYING.  Among other things, the copyright notice
+and this notice must be preserved on all copies. 
+------------------------------------------------------------------ */
+/* $preprocess1.P */
+
+/*   "preprocess0" effects a source-to-source translation of predicates whose
+      clauses contain cuts, negations etc.				   */
+
+/* **********************************************************************
+$preprocess1_export([$preprocess0/3]).
+
+$preprocess1_use($translcuts1,[$transl_cuts/5,
+			$transl_softcuts/5,$find_prag/4]).
+$preprocess1_use($tindex1,[$tindex/2]).
+$preprocess1_use($aux1,[_,_,_,_,_,_,_,_,$logical_or/3]).
+$preprocess1_use($cond1,[_,$get_test/3,$complementary/3,_]).
+$preprocess1_use($meta,[$functor/3,$univ/2,$length/2]).
+$preprocess1_use($compare,['$=='/2,_,_,_,_,_,_]).
+********************************************************************** */
+
+
+$preprocess0(PredDef,PragList,[NPredDefs]) :-
+	PredDef = pred(P,N,CFlag,CutFlag,Clauses),
+	$process_cpyflags(Clauses,CFlag,CutFlag),
+	(
+	 (CFlag =:= 0,
+	  $find_prag(P,N,PragList,Prag),
+	  $tindex(pred(P,N,CFlag,CutFlag,Clauses,Prag),NPredDefs)
+	 ) ;
+	 (CFlag =\= 0, $preprocess1(PredDef,PragList,NPredDefs))
+	).
+
+$preprocess1(Pred,PragList,[NPred]) :-
+   Pred = pred(P,N,0,C,Clauses), NPred = pred(P,N,0,C,Clauses,Prag),
+   $find_prag(P,N,PragList,Prag).
+$preprocess1(pred(P,N,1,0,Clauses),PragList,NPred) :-
+   $find_prag(P,N,PragList,Prag),
+   $preprocess_transform0(P,N,Clauses,NClauses),
+   					/* no cuts, but needs processing */
+   $tindex(pred(P,N,1,0,NClauses,Prag),NPred).
+$preprocess1(pred(P,N,1,1,Clauses),PragList,NPredDefs) :-
+   $transl_cuts(P,N,Clauses,PragList,NPredDefs).  /* predicate has cuts */
+
+:- index($preprocess_transform0,4,3).
+
+$preprocess_transform0(_,_,[],[]).
+$preprocess_transform0(P,N,[Fact|Rest],[Fact|NRest]) :-
+	Fact = fact(F,C),
+	$preprocess_transform0(P,N,Rest,NRest).
+$preprocess_transform0(P,N,[Rule|Rest],[NRule|NRest]) :-
+	Rule = rule(H,B,CFlag,CRest),
+	(
+	 (CFlag =:= 1, $transl_softcuts(P,N,B,NB,0),
+	  NRule = rule(H,NB,CFlag,CRest)) ;
+	 (CFlag =\= 1, NRule = Rule)
+	),
+	(
+	 (CRest =:= 1, $preprocess_transform0(P,N,Rest,NRest)) ;
+	 (CRest =\= 1, Rest = NRest)
+	).
+
+
+$process_cpyflags([],X,Y) :- (X = 0 ; X = 1), (Y = 0 ; Y = 1), !.
+$process_cpyflags([fact(_,CFlag)|CRest],CFlag,CutFlag) :-
+	$process_cpyflags(CRest,CFlag,CutFlag).
+$process_cpyflags([rule(H,B,CFlag0,CFlag1)|CRest],CFlag,CutFlag) :-
+	$process_cpyflags_1(B,CFlag0,CutFlag0),
+	$process_cpyflags(CRest,CFlag1,CutFlag1),
+	$logical_or(CFlag0,CFlag1,CFlag),
+	$logical_or(CutFlag0,CutFlag1,CutFlag).
+
+$process_cpyflags_1(V,1,0) :- var(V), !.
+$process_cpyflags_1(','(G1,G2),CFlag,CutFlag) :- 
+	!,
+	$process_cpyflags_1(G1,CFlag0,CutFlag0),
+	((CutFlag0 =:= 1, CFlag = 1, CutFlag = 1) ;
+	 (CutFlag0 =\= 1, $process_cpyflags_1(G2,CFlag1,CutFlag), $logical_or(CFlag0,CFlag1,CFlag))
+	).
+$process_cpyflags_1('->'(G1,G2),1,0) :- !.	   /* cuts in -> are soft */
+$process_cpyflags_1(';'('->'(T,G1),G2),1,0) :- !.   /* cuts in -> are soft */
+$process_cpyflags_1(';'(G1,G2),1,CutFlag) :-
+	$get_test(G1,T1,_), $get_test(G2,T2,_),
+	$univ(T1,[Op1 | Args1]), $univ(T2,[Op2 | Args2]),
+	Args1 == Args2,
+	$length(Args1,Arity),
+	$complementary(Op1,Arity,Op2),
+	!,					/* if-then-else */
+	$process_cpyflags_1(G1,_,CutFlag0),
+	((CutFlag0 =:= 1, CutFlag = 1) ;
+	 (CutFlag0 =\= 1, $process_cpyflags_1(G2,_,CutFlag))
+	).
+$process_cpyflags_1(';'(G1,G2),CFlag,CutFlag) :-
+	!,
+	$process_cpyflags_1(G1,CFlag0,CutFlag0),
+	((CutFlag0 =:= 1, CFlag = 1, CutFlag = 1) ;
+	 (CutFlag0 =\= 1, $process_cpyflags_1(G2,CFlag1,CutFlag), $logical_or(CFlag0,CFlag1,CFlag))
+	).
+$process_cpyflags_1(not(G),1,0) :- !.		/* cuts in not are soft */
+$process_cpyflags_1(G,1,1) :- $functor(G,'!',0), !.
+$process_cpyflags_1(call(X),1,0) :- !.
+$process_cpyflags_1([_|_], 1, 0) :- !.		/* consult */
+$process_cpyflags_1(G,0,0).
+
+
+$transl_cuts(P,N,Clauses,PragList,[PredDef1 | PredDefRest]) :-
+	$functor(Head,P,N),
+	N1 is N + 1,
+	$gensym_pred(P,NP),
+	$univ(Head,[_|Args]),
+	$append(Args,[B],NArgs),
+	$univ(NLit,[NP|NArgs]),
+	$transl_cut_clauses(NP,Clauses,NewCls),
+	((symtype('_$mode'(_,_,_),MDef), MDef > 0, '_$mode'(P,N,Mode)) ->
+	     ($append(Mode,[2],NMode),
+	      assert('_$mode'(NP,N1,NMode))
+	     ) ;			      /* new pred inherits mode */
+	     true
+	),
+	$find_prag(P,N,PragList,Prag),
+	PredDef1 = pred(P,N,1,1,[rule(Head,('_$savecp'(B),NLit),0,0)],Prag),
+	PredDef2 = pred(NP,N1,1,1,NewCls,Prag),
+	$tindex(PredDef2,PredDefRest).
+
+$transl_softcuts(P,N,Call,TCall,NCall) :-
+	var(Call) ->
+	    (
+		((NCall =:= 0, $translcuts_naked_var_msg(P,N)) ;
+		 (NCall =\= 0)
+		),
+		TCall = ('_$savecp'(X), '_$interp'(Call,X))
+	    ) ;
+	    $transl_softcuts1(P,N,Call,TCall,NCall).
+
+:- mode($transl_softcuts1,5,[c,c,nv,d,d]).
+:- index($transl_softcuts1,5,3).
+
+$transl_softcuts1(P,N,','(A,B), ','(NA,NB),Call) :- !,
+	$transl_softcuts(P,N,A,NA,Call),
+	$transl_softcuts(P,N,B,NB,Call).
+$transl_softcuts1(P,N,'->'(A,B),NB,Call) :-
+	!,
+	$transl_cuts_ifthenelse(P,N,A,B,fail,NB,Call).
+$transl_softcuts1(P,N,';'('->'(A,B),C),NB,Call) :-
+	!,
+	$transl_cuts_ifthenelse(P,N,A,B,C,NB,Call).
+$transl_softcuts1(P,N,';'(A,B),if_then_else(Test,TP,FP),Call) :-
+	$cond(A,B,Test,TP0,FP0),
+	!,
+	$transl_softcuts(P,N,TP0,TP,Call),
+	$transl_softcuts(P,N,FP0,FP,Call).
+$transl_softcuts1(P,N,';'(A,B), ';'(NA,NB),Call) :- !,
+	$transl_softcuts(P,N,A,NA,Call),
+	$transl_softcuts(P,N,B,NB,Call).
+$transl_softcuts1(P,N,not(Goal), NewGoal,Call) :- !,
+	(
+	 ($inline_neg(Goal, NewGoal)) ;
+	 (NewGoal = ('_$savecp'(B),((NegGoal,'_$cutto'(B),fail) ; true)),
+	  $transl_softcuts(P,N,Goal, NegGoal,Call)
+	 )
+	).
+$transl_softcuts1(P,N,call(Goal),NewGoal,_) :-
+	!,
+	$transl_softcuts(P,N,Goal,NewGoal,1).
+$transl_softcuts1(_,_,L,$consult_list(L), _) :- L = [_|_], !.
+$transl_softcuts1(P,N,Goal,Goal,_).
+
+:- index($transl_cut_clauses,3,2).
+
+$transl_cut_clauses(_,[],[]).
+$transl_cut_clauses(P,[C1|CRest],[NC1|NCRest]) :-
+	$transl_cut_clauses1(P,C1,NC1),
+	$transl_cut_clauses(P,CRest,NCRest).
+
+:- mode($transl_cut_clauses1,3,[c,nv,d]).
+:- index($transl_cut_clauses1,3,2).
+
+$transl_cut_clauses1(P,fact(Fact,CFlag),fact(NewFact,CFlag)) :-
+	$univ(Fact,[P1|Args]),
+	$append(Args,[_],NArgs),
+	$univ(NewFact,[P|NArgs]).
+$transl_cut_clauses1(P,rule(H,B,CFlag0,CFlag1),rule(NH,NB,CFlag0,CFlag1)) :-
+	$univ(H,[P1|Args]),
+	$append(Args,[V],NArgs),
+	$univ(NH,[P|NArgs]),
+	$transl_hardcuts(P,N,V,B,NB,0).
+
+$transl_hardcuts(P,N,V,Call,TCall,NCall) :-
+	var(Call) ->
+	    (
+	    	((NCall =:= 0, $translcuts_naked_var_msg(P,N)) ;
+		 (NCall =\= 0)
+		),
+		TCall = ('_$savecp'(X), '_$interp'(Call,X))
+	    ) ;
+	    $transl_hardcuts1(P,N,V,Call,TCall,NCall).
+
+:- mode($transl_hardcuts1,6,[c,c,d,nv,d,d]).
+:- index($transl_hardcuts1,6,4).
+
+$transl_hardcuts1(P,N,V,','(A1,B1),','(A2,B2),Call) :-
+	!,
+	$transl_hardcuts(P,N,V,A1,A2,Call),
+	$transl_hardcuts(P,N,V,B1,B2,Call).
+$transl_hardcuts1(P,N,V,'->'(A,B),NB,Call) :-
+	$transl_cuts_ifthenelse(P,N,A,B,fail,NB,Call).
+$transl_hardcuts1(P,N,V,';'('->'(A,B),C),NB,Call) :-
+	$transl_cuts_ifthenelse(P,N,A,B,C,NB,Call).
+$transl_hardcuts1(P,N,V,';'(A1,B1),if_then_else(Test,TP,FP),Call) :-
+	$cond(A1,B1,Test,TP0,FP0),
+	!,
+	$transl_hardcuts(P,N,V,TP0,TP,Call),
+	$transl_hardcuts(P,N,V,FP0,FP,Call).
+$transl_hardcuts1(P,N,V,';'(A1,B1),';'(A2,B2),Call) :-
+	!,
+	$transl_hardcuts(P,N,V,A1,A2,Call),
+	$transl_hardcuts(P,N,V,B1,B2,Call).
+$transl_hardcuts1(P,N,V,not(Goal),NewGoal,Call) :-
+	!,
+	(
+	 ($inline_neg(Goal, NewGoal)) ;
+	 (NewGoal = ('_$savecp'(B),((NegGoal,'_$cutto'(B),fail) ; true)),
+	  $transl_hardcuts(P,N,B,Goal, NegGoal,Call)
+	 )
+	).
+$transl_hardcuts1(P,N,V,'!','_$cutto'(V),_) :- !.
+$transl_hardcuts1(P,N,V,call(Goal),NewGoal,_) :-
+	!,
+	$transl_hardcuts(P,N,V,Goal,NewGoal,1).
+$transl_hardcuts1(_,_,_,L,$consult_list(L), _) :- L = [_|_], !.
+$transl_hardcuts1(_,_,_,L,L,_).
+
+:- mode($transl_contains_cut,1,[nv]).
+
+$transl_contains_cut(X) :- var(X), !, fail.
+$transl_contains_cut(','(A,B)) :-
+	$transl_contains_cut(A) ;
+	$transl_contains_cut(B).
+$transl_contains_cut(';'(A,B)) :-
+	$transl_contains_cut(A) ;
+	$transl_contains_cut(B).
+$transl_contains_cut('->'(A,B)) :-
+	$transl_contains_cut(A) ;
+	$transl_contains_cut(B).
+$transl_contains_cut(not(C)) :- $transl_contains_cut(C).
+$transl_contains_cut(call(C)) :- $transl_contains_cut(C).
+$transl_contains_cut('!').
+
+$translcuts_naked_var_msg(P,N) :-
+	$umsg(['*** Warning: naked variable being called in',P,'/',N,'***']).
+
+$translcuts_inline_ifthenelse(P,N,A,B,C,NewBody,Call) :-
+	(($transl_contains_cut(B), !,
+	  NewBody = ','('_$savecp'(X),if_then_else(NA,NB0,NC)),
+	  $transl_hardcuts(P,N,X,A,NA,Call),
+	  $transl_hardcuts(P,N,X,B,NB0,Call),
+	  $transl_hardcuts(P,N,X,C,NC,Call)
+	 ) ;
+	 (NewBody = if_then_else(NA,NB0,NC),
+	  $transl_softcuts(P,N,A,NA,Call),
+	  $transl_softcuts(P,N,B,NB0,Call),
+	  $transl_softcuts(P,N,C,NC,Call)
+	 )
+	).
+
+$transl_cuts_ifthenelse(P,N,A,B,C,NB,Call) :-
+	$transl_all_inlines(A),
+	$translcuts_inline_ifthenelse(P,N,A,B,C,NB,Call).
+$transl_cuts_ifthenelse(P,N,A,B,C,NB,Call) :-
+	NB = ','('_$savecp'(X),';'((T1,'_$cutto'(X),NB0),NC)),
+	$transl_hardcuts(P,N,X,A,T1,Call),
+	$transl_hardcuts(P,N,X,B,NB0,Call),
+	$transl_hardcuts(P,N,X,C,NC,Call).
+
+/*  at this point, a test is considered to be inline (and hence a candidate
+    for transformation to "if-then-else" iff it is either an inline test,
+    or a conjunction of inline tests, or a disjunction of inline tests.
+    We could set it up so that arbitrary constructs involving inlines are
+    allowed, but this complicates code generation quite a bit, and it's not
+    clear that more complex constructs are encountered frequently in
+    practice.								  */
+
+$transl_all_inlines(','(G1,G2)) :-
+	!,
+	$transl_all_inlines_conj(G1),
+	$transl_all_inlines_conj(G2).
+$transl_all_inlines(';'(G1,G2)) :-
+	!,
+	$transl_all_inlines_disj(G1),
+	$transl_all_inlines_disj(G2).
+$transl_all_inlines(A) :-
+	$functor(A,Pred,Arity),
+	$inline_test(Pred,Arity).
+
+$transl_all_inlines_conj(','(G1,G2)) :-
+	!,
+	$transl_all_inlines_conj(G1),
+	$transl_all_inlines_conj(G2).
+$transl_all_inlines_conj(A) :-
+	$functor(A,Pred,Arity),
+	$inline_test(Pred,Arity).
+
+$transl_all_inlines_disj(';'(G1,G2)) :-
+	!,
+	$transl_all_inlines_disj(G1),
+	$transl_all_inlines_disj(G2).
+$transl_all_inlines_disj(A) :-
+	$functor(A,Pred,Arity),
+	$inline_test(Pred,Arity).
+
+
+$find_prag(P,N,PragList,Prag) :- $member(prag(P,N,Prag),PragList), !.
+$find_prag(_,_,_,[]).
+
+
+:- mode($inline_test,2,[c,c]).
+
+$inline_test('>',2).
+$inline_test('>=',2).
+$inline_test('=<',2).
+$inline_test('<',2).
+$inline_test('=:=',2).
+$inline_test('=\=',2).
+$inline_test(var,1).
+$inline_test(nonvar,1).
+$inline_test(true,0).
+$inline_test(integer,1).
+
+/* --------------------------- $preprocess1.P --------------------------- */
+

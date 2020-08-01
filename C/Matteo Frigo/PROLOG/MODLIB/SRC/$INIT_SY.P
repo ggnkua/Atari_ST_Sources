@@ -1,0 +1,233 @@
+/************************************************************************
+*									*
+* The SB-Prolog System							*
+* Copyright SUNY at Stony Brook, 1986; University of Arizona, 1987	*
+*									*
+************************************************************************/
+
+/*-----------------------------------------------------------------
+SB-Prolog is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY.  No author or distributor
+accepts responsibility to anyone for the consequences of using it
+or for whether it serves any particular purpose or works at all,
+unless he says so in writing.  Refer to the SB-Prolog General Public
+License for full details.
+
+Everyone is granted permission to copy, modify and redistribute
+SB-Prolog, but only under the conditions described in the
+SB-Prolog General Public License.   A copy of this license is
+supposed to have been given to you along with SB-Prolog so you
+can know your rights and responsibilities.  It should be in a
+file named COPYING.  Among other things, the copyright notice
+and this notice must be preserved on all copies. 
+------------------------------------------------------------------ */
+/* $init_sys.P */
+
+/* These are the module handling routines. The main routine is the
+   undefined_pred interrupt handler. The system keeps a table of modules
+   and routines that are needed from each. When a predicate is found to
+   be undefined, the table is searched to see if it is defined by 
+   some module. If so, that module is loaded (if it hasn't been previously
+   loaded) and the association is made between the routine name as 
+   defined in the module, and the routine name as used by the invoker.
+
+   The table of modules and needed routines is:
+   defined_mods(modname,[pred1/arity1,...,predn/arityn]).
+     where modname is the name of the module. The module exports n
+	predicate definitions. The first exported pred is of arity 
+	arity1, and needs to be invoked by the name of pred1.
+
+   The table of modules that have already been loaded is:
+   loaded_mods(modname).
+
+   A module is a file of predicate definitions. Consider a module name
+   `mod'. It contains a single fact, named mod_export, that is true of
+   the list of predicate/arity's that are exported. 
+   e.g. mod_export([mod_p1/2,mod_p2/4]).
+   For each module, m, which contains predicates needed by this module,
+   there is a mod_use fact, describing what module is needed and the names
+   of the predicates defined there that are needed. For example, if module
+   mod needs to import predicates from mod m, there would be a fact:
+   mod_use(m,[mod_ip1/2,mod_ip2/4]), where m is a module that exports two
+   predicates: one 2-ary and one 4-ary. This list corresponds to the export
+   list of module m.
+
+   The routines $load_mod/1 and $define_mod/2 are exported.
+*/
+'$init_sys_export'([$define_mod/2,$load/1,$load/2,$load_mod/1]).
+
+inform(X) :- '_$builtin'(133), '_$builtin'(26).
+
+'$init_sys' :-
+        inform('init_sys !' ), 
+	inform('loading: assert'), $load($assert),
+	inform('loading: db    '), $load($db),
+	inform('loading: dbcmpl'), $load($dbcmpl),
+	inform('loading: bio   '), $load($bio),
+	inform('loading: bmeta '), $load($bmeta),
+	$load($name),
+	$load($blist),
+	$load($buff),
+	$load($call),
+	$load($glob),
+	$assert_union(loaded_mods(_),$loaded_mods(_)), /* nec for compile */
+	$assert_abolish_i(defined_mods(_,_)),	/* nec for compile [a] */
+	$globalset('_$nofile_msg'(1)),
+	$globalset('_$cputime'(0)).
+
+/* for tracing while debugging this module */
+$load_writename(X) :- $load_wn(X),$load_put(10).
+$load_wn(X) :- '_$builtin'(133). /* writename */
+$load_put(X) :- '_$builtin'(24). /* put */
+
+/* defined_mods(_,_) :- fail. */
+
+$define_mod(Mod,Implist) :- defined_mods(Mod,Implist),!. /* no-op if there */
+$define_mod(Mod,Implist) :- $assert(defined_mods(Mod,Implist)).
+
+$loaded_mods($init_sys).
+$loaded_mods($assert).
+$loaded_mods($db).
+$loaded_mods($dbcmpl).
+$loaded_mods($bio).
+$loaded_mods($bmeta).
+$loaded_mods($name).
+$loaded_mods($blist).
+$loaded_mods($buff).
+$loaded_mods($call).
+$loaded_mods($glob).
+
+/* the undefined_pred interrupt handler: */
+
+
+'_$undefined_pred'(Term) :-
+	$functor0(Term,Pred),
+	$arity(Term,Arity),
+	('_$nodynload'(Pred,Arity) ->
+		fail ;
+		(not(not('_$definable'(Term))),'_$call'(Term))
+	).
+
+'_$nodynload'(_,_) :- fail.
+
+/* **********
+'_$undefined_pred'(Term) :-
+	not(not('_$definable'(Term))),'_$call'(Term).
+********** */
+
+'_$definable'(Term) :- 
+	$functor0(Term,Pred),$arity(Term,Arity),
+/*	  $telling(F),$tell(user),$writename('loading: '),$writename(Pred),
+	  $writename('/'),$writename(Arity),$nl,$tell(F), */
+	defined_mods(Module_name,Pred_name_list),  /* for each module.. */
+	$init_membernv(Pred/Arity,Pred_name_list), 
+		/* is needed pred in this one? */
+	!,				/* yes! */
+	$load_mod(Module_name),		/* go load it if necessary */
+	$name(Module_name,Mod_name_chars),
+	$append(Mod_name_chars,"_export",Exp_name_chars),
+	$name(Exp_name,Exp_name_chars),
+	$bldstr(Exp_name,1,Modcall),arg(1,Modcall,Explist),
+	'_$call'(Modcall),
+	$load_preds(Explist,Pred_name_list,Module_name).
+
+'_$definable'(Term) :-	/* no module to define pred */
+	$functor0(Term,Pred),
+	$load(Pred,0),!,		/* file exists */
+	(not($pred_undefined(Term))	/* file defines pred */
+	 ;
+	 $arity(Term,Arity),
+	 $telling(Fi),$tell(user),
+	 $writename(Pred),$writename('/'),$writename(Arity),
+	 $writename(' not defined by file'),$nl,$tell(Fi),fail
+	).
+
+'_$definable'(Term) :- 
+	'_$nofile_msg'(1),	/* if message is to be displayed */
+	$telling(Fi),$tell(user),
+	$writename('No file to define '),
+	$functor0(Term,Pred),$arity(Term,Arity),
+	$writename(Pred),$writename('/'),$writename(Arity),$nl,$tell(Fi),fail.
+
+$load_mod(Module_name) :-
+	loaded_mods(Module_name),!.	/* already loaded, noop */
+$load_mod(Module_name) :-
+/* 	  $telling(Fi),$tell(user),$writename('load module: '),
+	  $writename(Module_name),$nl,$tell(Fi), */
+	$load(Module_name),!, 		/* now loaded */
+	$assert(loaded_mods(Module_name)),
+	$load_sub_mods(Module_name).
+$load_mod(Module_name) :-		/* no such file */
+	$telling(Fi),$tell(user),
+	$writename('No file to define module '),
+	$writename(Module_name),$nl,$tell(Fi),fail.
+
+$load_sub_mods(Module_name) :-
+	$name(Module_name,Mod_name_chars),
+	$append(Mod_name_chars,"_use",Use_name_chars),
+	$name(Use_name,Use_name_chars),
+	$bldstr(Use_name,2,Modusecall),
+	not($pred_undefined(Modusecall)),	/* must be defined */
+	/* if everything needed is already noted, no need to add them */
+	arg(1,Modusecall,M),arg(2,Modusecall,U),
+	'_$call'(Modusecall),not(defined_mods(M,U)),!,
+	$assert_union(defined_mods(_,_),Modusecall). /* This may result
+		in duplicates, but for now, that seems ok. It saves space
+		because we don't have to copy. It can make the search
+		slower. */
+
+$load_sub_mods(_).
+
+$load_preds([],[],_) :- !.
+$load_preds([],[_|_],Mod) :- !,
+	$telling(Fi),$tell(user),
+	$writename('Illegal use list for module: '),
+	$writename(Mod),$nl,$tell(Fi),fail.
+$load_preds([_|_],[],Mod) :- !,
+	$telling(Fi),$tell(user),
+	$writename('Illegal use list for module: '),
+	$writename(Mod),$nl,$tell(Fi),fail.
+$load_preds([Inname|Explist],[Inname|Pred_name_list],Mod) :- !,
+	$load_preds(Explist,Pred_name_list,Mod).
+$load_preds([Inname/Arity|Explist],[Outname/Arity|Pred_name_list],
+		Mod) :- !,
+	$bldstr(Outname,Arity,Outstr),$bldstr(Inname,Arity,Instr),
+	($pred_undefined(Outstr),!,$assert_union(Outstr,Instr),
+		$load_preds(Explist,Pred_name_list,Mod)
+	;
+		$telling(Fi),$tell(user),
+		$writename('Attempt to redefine '),$writename(Outname),
+		$writename('/'),$writename(Arity),$nl,
+		$tell(Fi),
+		$load_preds(Explist,Pred_name_list,Mod)
+	).
+$load_preds([Inname/Inarity|Explist],[Outname/Outarity|Pred_name_list],
+		Mod) :-
+	$telling(Fi),$tell(user),
+	$writename('Incorrect import arity: '),$writename(Outname),
+	$writename('/'),$writename(Outarity),$nl,
+	$tell(Fi),
+	$load_preds(Explist,Pred_name_list,Mod),
+	fail. /* load rest, but fail */
+
+
+$load(File) :- $load(File,0).
+$load(File,Rc) :- '_$builtin'(11).
+
+$init_membernv(Pa,[Tpa|_]) :- nonvar(Tpa),Pa=Tpa.
+$init_membernv(Pa,Pn_list) :- nonvar(Pn_list),
+	Pn_list=[_|Pn_tail],$init_membernv(Pa,Pn_tail).
+
+/* the keyboard interrupt handler */
+
+'_$keyboard_int'(Call) :- break,'_$call'(Call).
+
+/* the general interrupt handler! */
+
+'_$interrupt'(Call,Code) :-
+	Code =:= 0 -> '_$undefined_pred'(Call);
+	  (Code =:= 1 -> '_$keyboard_int'(Call);
+	      (Code =:= 2 -> $writename('Stack Overflow!!'),$nl,abort;
+		$writename('Illegal interrupt code'),halt
+	      )
+	  ).

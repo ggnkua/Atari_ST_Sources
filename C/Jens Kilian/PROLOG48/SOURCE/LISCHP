@@ -1,0 +1,612 @@
+%           -------------------------------------------------------
+%                 LISCHP - LISP-Interpreter fÅr TOY Prolog ST
+%
+%                          (c) 1986 Jens J. Kilian
+%           -------------------------------------------------------
+
+lisp :- cls, display('Willkommen beim LISP-Interpreter von TOY Prolog ST'),
+      nl, display('(c) 1986/87 Jens J. Kilian'), nl, tag(lispcycle).
+lisp :- display('LISCHP abgebrochen.'), nl.
+
+lispcycle :- repeat, display('> '), lisp_read(Term), lisp_eval(Term, Value),
+      lisp_print(Value), fail.
+
+%% Parser fÅr LISP-Terme :
+
+lisp_read(SomeThing) :- rdch(FirstCh), assemble(FirstCh, SomeThing, _), !.
+
+% 'assemble' baut den Term 'on the fly'; der erste Parameter ist das aktuelle
+% Eingabezeichen, der zweite der gelesene Term; im dritten Parameter wird das
+% erste nicht mehr verarbeitete Zeichen zurÅckgeliefert.
+
+assemble(';', WhatEver, NxC)            :- !, rch, lastch(Nxt),
+      skip_com(Nxt, Nx1), assemble(Nx1, WhatEver, NxC).
+
+assemble(' ', WhatEver, NxC)            :- !, rdch(Nxt),
+      assemble(Nxt, WhatEver, NxC).
+
+assemble('(', List, NxC)                :- !, rdch(Nxt),
+      ass_list(Nxt, Lst, NxC), tst_pair(Lst, List).
+
+assemble('''', [quote, SomeThing], NxC) :- !, rdch(Nxt),
+      assemble(Nxt, SomeThing, NxC).
+
+assemble('"', Literal, NxC)             :- !, rdch(Nxt),
+      quo_literal(Nxt, Chars, NxC), pname(Lit, Chars), tst_nil(Lit, Literal).
+
+assemble(Digit, Number, NxC)            :- digit(Digit), !, rdch(Nxt),
+      ass_digits(Nxt, Digits, NxC), pnamei(Number, [Digit | Digits]).
+
+assemble(Char, Literal, NxC)            :- rdch(Nxt),
+      ass_literal(Nxt, Chars, NxC), pname(Lit, [Char | Chars]),
+      tst_nil(Lit, Literal).
+
+skip_com(EoLn, Nxt) :- iseoln(EoLn), !, rdch(Nxt).
+skip_com(_, Nxt) :- rch, lastch(Some), skip_com(Some, Nxt).
+
+tst_pair([Car, '.', Cdr], [Car | Cdr]) :- !.
+tst_pair(L, L).
+
+tst_nil('NIL', []) :- !.
+tst_nil(nil,   []) :- !.
+tst_nil(L, L).
+
+% Listen : ']' ist eine Superklammer und schlieût ALLE offenen Klammern
+
+ass_list(' ', WhatEver, NxC) :- !, rdch(Nxt), ass_list(Nxt, WhatEver, NxC).
+ass_list(')', [], NxC) :- !, rdch(NxC).
+ass_list(']', [], ']') :- !.
+ass_list(Char, [Elem | Elems], NxC) :- assemble(Char, Elem, Nxt),
+      ass_list(Nxt, Elems, NxC).
+
+% Zahlen
+
+ass_digits(Digit, [Digit | Digits], NxC) :- digit(Digit), !, rdch(Nxt),
+      ass_digits(Nxt, Digits, NxC).
+ass_digits(Char, [], Char).
+
+% Literale
+
+quo_literal('"', [], NxC) :- !, rdch(NxC).
+quo_literal(Char, [Char | Chars], NxC) :- rdch(Nxt),
+      quo_literal(Nxt, Chars, NxC).
+
+ass_literal(Char, [], Char) :- dmember(Char, " ()]"), !.
+ass_literal(Char, [Char | Chars], NxC) :- rdch(Nxt),
+      ass_literal(Nxt, Chars, NxC).
+
+%% Ausgabe von LISP-Termen :
+
+lisp_print(SomeThing) :- lispprint(SomeThing), nl, !.
+
+lispprint(Var) :- var(Var), !, display('< invalid (non-LISP) variable>').
+lispprint(List) :- isclosedlist(List), !, prt_list(List).
+lispprint([Head | Tail]) :- !, wch('('), lispprint(Head), display(' . '),
+      lispprint(Tail), wch(')').
+lispprint(Atom) :- atomic(Atom), !, display(Atom).
+lispprint(Structure) :- display('<invalid (non-LISP) structure : '),
+      display(Structure), display(' >').
+
+atomic(X) :- atom(X).
+atomic(X) :- integer(X).
+
+prt_list([]) :- !, display(nil).
+prt_list([quote, SomeThing]) :- !, wch(''''), lispprint(SomeThing).
+prt_list([First | Rest]) :- wch('('), lispprint(First), prt_rest(Rest).
+
+prt_rest([]) :- !, wch(')').
+prt_rest([First | Rest]) :- wch(' '), lispprint(First), prt_rest(Rest).
+
+%% Kern des Interpreters : Auswertung von LISP-Termen
+
+lisp_eval(Term, Value) :- change_alist([]), tag(lispeval(Term, Value)), !.
+
+a_list([]).
+
+change_alist(NewAList) :- redefine, assert(a_list(NewAList), true, 0),
+      redefine.
+
+set_global(Global) :- assert(Global, true, 0).
+
+lispeval(Number, Number) :- integer(Number), !.
+lispeval(Literal, Value) :- atom(Literal), !, eval_lit(Literal, Value).
+
+% SpezialfÑlle werden gesondert behandelt : QUOTE, APPLY und FUNCALL
+
+lispeval([quote, SomeThing], SomeThing) :- !.
+lispeval([apply, Fun, Args], Value) :- !, lispeval(Fun, Func),
+      function(Func, Function, _, Spread), lispeval(Args, EvalArgs),
+      apply(Function, Spread, EvalArgs, Value).
+lispeval([funcall, Fun | Args], Value) :- !, lispeval(Fun, Func),
+      function(Func, Function, Lambda, Spread),
+      evalargs(Lambda, Args, EvalArgs),
+      apply(Function, Spread, EvalArgs, Value).
+
+lispeval([Fun | Args], Value) :- 
+      function(Fun, Function, Lambda, Spread),
+      evalargs(Lambda, Args, EvalArgs),
+      apply(Function, Spread, EvalArgs, Value).
+
+eval_lit(Literal, Value) :- a_list(AList), dmember(Literal-Value, AList), !.
+eval_lit(Literal, Value) :- Global =.. [Literal, '*global*', Val, _, _],
+      Global, !, evlit1(Literal, Val, Value).
+eval_lit(Literal, _) :- Global =.. [Literal, '*global*', _, [], []],
+      set_global(Global), unbound(Literal).
+
+evlit1(Literal, UnBound, _) :- var(UnBound), !, unbound(Literal).
+evlit1(_, Value, Value).
+
+function(Fun, Function, Lambda, Spread) :- atom(Fun),
+      Global =.. [Fun, '*global*', _, [LS | Function], _], Global,
+      lambda_spread(LS, Lambda, Spread), !.
+function(Fun, _, _, _) :- atom(Fun),
+      Global =.. [Fun, '*global*', _, _, _], not Global, !,
+      NewGlobal =.. [Fun, '*global*', _, [], []], set_global(NewGlobal),
+      undefined(Fun).
+function(SExpr, Function, Lambda, Spread) :- isclosedlist(SExpr),
+      lispeval(SExpr, [LS | Function]), !,
+      lambda_spread(LS, Lambda, Spread).
+function(Invalid, _, _, _) :- invalid(Invalid).
+
+lambda_spread(lambda, lambda, spread) :- !.
+lambda_spread('lambda*', lambda, nospread) :- !.
+lambda_spread(nlambda, nlambda, spread) :- !.
+lambda_spread('nlambda*', nlambda, nospread) :- !.
+lambda_spread(Invalid, _, _) :- invalid(Invalid).
+
+evalargs(nlambda, Args, Args) :- !.
+evalargs(lambda, [], []) :- !.
+evalargs(lambda, [Arg | Args], [EvalArg | EvalArgs]) :- lispeval(Arg, EvalArg),
+      evalargs(lambda, Args, EvalArgs).
+
+% NOSPREAD-Primitive werden genau wie SPREAD-Primitive aufgerufen, damit
+% keine doppelt verschachtelten Listen als Parameter Åbergeben werden mÅssen :
+
+apply([primitive, Functor], _, Args, Value) :-
+      Goal =.. [Functor, Args, Value], Goal, !.
+apply([primitive, Functor], _, _, _) :- !, inv_prim(Functor).
+
+apply([ [Var], Term ], nospread, Args, Value) :- !, a_list(AList),
+      change_alist([Var-Args | AList]), lispeval(Term, Value),
+      change_alist(AList).
+apply([Vars, Term], spread, Args, Value) :- !, a_list(AList),
+      match_args(AList, Vars, Args, NewAList), change_alist(NewAList),
+      lispeval(Term, Value), change_alist(AList).
+
+match_args(List, [], [], List) :- !.
+match_args(List, [Var | Vars], [Arg | Args], [Var-Arg | NewList]) :-
+      !, match_args(List, Vars, Args, NewList).
+match_args(_, _, _, _) :- display('Error : wrong number of arguments.'), nl,
+      tagfail(lispeval(_, _)).
+
+unbound(Literal) :- display('Error : unbound literal "'), lispprint(Literal),
+      wch('"'), nl, tagfail(lispeval(_, _)).
+
+undefined(Literal) :- display('Error : undefined function "'),
+      lispprint(Literal), wch('"'), nl, tagfail(lispeval(_, _)).
+
+invalid(Weird) :-
+      display('Error : undefined function or invalid invocation : "'),
+      lispprint(Weird), wch('"'), nl, tagfail(lispeval(_, _)).
+
+inv_prim(Funct) :- display('Error : invalid primitive invocation -- "'),
+      lispprint(Funct), wch('"'), nl, tagfail(lispeval(_, _)).
+
+%% Primitive LISP-Funktionen ...
+
+% Listenfunktionen : CAR, CDR, CONS, LAST, LENGTH, LIST, APPEND, ASSOC,
+%                    DELETE, SUBST, REVERSE
+
+car('*global*', _, [lambda, primitive, lispcar], []).
+
+lispcar([[]],[]) :- !.
+lispcar([[Car | Cdr]], Car).
+
+cdr('*global*', _, [lambda, primitive, lispcdr], []).
+
+lispcdr([[]], []) :- !.
+lispcdr([[Car | Cdr]], Cdr).
+
+cons('*global*', _, [lambda, primitive, lispcons], []).
+
+lispcons([Car, Cdr], [Car | Cdr]).
+
+last('*global*', _, [lambda, primitive, lisplast], []).
+
+lisplast([[Last]], Last) :- !.
+lisplast([[NotLast | Rest]], Last) :- lisplast([Rest], Last).
+
+length('*global*', _, [lambda, primitive, lisplength], []).
+
+lisplength([List], Length) :- length(List, Length).
+
+list('*global*', _, ['lambda*', primitive, lisplist], []).
+
+lisplist(ArgList, ArgList). % Schlau, oder ?
+
+append('*global*', _, ['lambda*', primitive, lispappend], []).
+
+lispappend([], []) :- !.
+lispappend([List | Lists], App) :- lispappend(Lists, App1),
+      once(append(List, App1, App)).
+
+assoc('*global*', _, [lambda, primitive, lispassoc], []).
+
+lispassoc([Elem, AssList], Value) :- isclosedlist(AssList),
+      lisp_ass(Elem, AssList, Value).
+
+lisp_ass(El, List, [El | RestEl]) :- dmember([El | RestEl], List), !.
+lisp_ass(_, _, []).
+
+delete('*global*', _, ['lambda*', primitive, lispdel], []).
+
+lispdel([SExpr, List], Value) :- !, lisp_del(SExpr, List, 32767, Value).
+lispdel([SExpr, List, Number], Value) :- lisp_del(SExpr, List, Number, Value).
+
+lisp_del(_, [], _, []) :- !.
+lisp_del(_, List, 0, List) :- !.
+lisp_del(Elem, [Elem | Rest], Num, Value) :- !, Num1 is Num - 1,
+      lisp_del(Elem, Rest, Num1, Value).
+lisp_del(Elem, [Some | Rest], Num, [Some | RestVal]) :-
+      lisp_del(Elem, Rest, Num, RestVal).
+
+subst('*global*', _, [lambda, primitive, lispsubst], []).
+
+lispsubst([_, _, []], []) :- !.
+lispsubst([S1, S2, [S2 | Rest]], [S1 | RestVal]) :- !,
+      lispsubst([S1, S2, Rest], RestVal).
+lispsubst([S1, S2, [Some | Rest]], [Some | RestVal]) :-
+      lispsubst([S1, S2, Rest], RestVal).
+
+reverse('*global*', _, [lambda, primitive, lisprev], []).
+
+lisprev([List], RevList) :- reverse2(List, [], RevList).
+
+% reverse2 - aus Kluzniak/Szpakowicz, 'Prolog for programmers' :
+
+reverse2([], Stack, Stack) :- !.
+reverse2([A |Tail], Stack, Final) :- reverse2(Tail, [A | Stack], Final).
+
+% Gewalt : EXPLODE und IMPLODE (explode arbeitet auch mit (positiven) Zahlen)
+
+explode('*global*', _, [lambda, primitive, lispexplode], []).
+
+lispexplode([Number], List) :- integer(Number), !, pnamei(Number, List).
+lispexplode([Literal], List) :- atom(Literal), pname(Literal, List).
+
+implode('*global*', _, [lambda, primitive, lispimplode], []).
+
+lispimplode([List], Literal) :- pname(Literal, List).
+
+% SET und SETQ (setq darf beliebig viele Argumente haben)
+
+set('*global*', _, [lambda, primitive, lispset], []).
+
+lispset([Lit, Value], Value) :- a_list(AList), dmember(Lit-_, AList), !,
+      replace(Lit-_, Lit-Value, AList, NewAList),
+      change_alist(NewAList).
+lispset([Lit, Value], Value) :- Global =.. [Lit, '*global*', _, Expr, PList],
+      Global, !, retract(Global),
+      NewGlobal =.. [Lit, '*global*', Value, Expr, PList],
+      set_global(NewGlobal).
+lispset([Lit, Value], Value) :- NewGlobal =.. [Lit, '*global*', Value, [], []],
+      set_global(NewGlobal).
+
+replace(_, _, [], []) :- !.
+replace(T1, T2, [T1 | Tail], [T2 | Tail]) :- !. % nur ERSTE Instanz von T1 !
+replace(T1, T2, [SomeT | Tail1], [SomeT | Tail2]) :-
+      replace(T1, T2, Tail1, Tail2).
+
+setq('*global*', _, [nlambda, primitive, lispsetq], []).
+
+lispsetq([Lit, Term], Value) :- !, lispeval(Term, Value),
+      lispset([Lit, Value], Value).
+lispsetq([L, T | LTs], Value) :- lispsetq([L, T], _), lispsetq(LTs, Value).
+
+% ein paar ARITHMETISCHE Funktionen :
+
+plus('*global*', _, ['lambda*', primitive, lispplus], []).
+'+'('*global*', _, ['lambda*', primitive, lispplus], []).
+
+lispplus([S], S) :- !.
+lispplus([A | As], S) :- lispplus(As, Ss), S is A + Ss.
+
+times('*global*', _, ['lambda*', primitive, lisptimes], []).
+'*'('*global*', _, ['lambda*', primitive, lisptimes], []).
+
+lisptimes([P], P) :- !.
+lisptimes([F | Fs], P) :- lisptimes(Fs, Ps), P is F * Ps.
+
+% difference, quotient und remainder funktionieren nur mit genau 2 Argumenten
+
+difference('*global*', _, [lambda, primitive, lispdiff], []).
+'-'('*global*', _, [lambda, primitive, lispdiff], []).
+
+lispdiff([M1, M2], D) :- D is M1 - M2.
+
+quotient('*global*', _, [lambda, primitive, lispquo], []).
+'/'('*global*', _, [lambda, primitive, lispquo], []).
+
+lispquo([D1, D2], Q) :- Q is D1 / D2.
+
+remainder('*global*', _, [lambda, primitive, lispmod], []).
+'mod'('*global*', _, [lambda, primitive, lispmod], []).
+
+lispmod([D1, D2], R) :- R is D1 mod D2.
+
+minus('*global*', _, [lambda, primitive, lispminus], []).
+
+lispminus([X], MX) :- MX is - X.
+
+add1('*global*', _, [lambda, primitive, lispadd1], []).
+
+lispadd1([X], X1) :- X1 is X + 1.
+
+sub1('*global*', _, [lambda, primitive, lispsub1], []).
+
+lispsub1([X], X1) :- X1 is X - 1.
+
+abs('*global*', _, [lambda, primitive, lispabs], []).
+
+lispabs([X], X) :- less(0, X), !.
+lispabs([X], MX) :- MX is - X.
+
+max('*global*', _, ['lambda*', primitive, lispmax], []).
+
+lispmax([M], M) :- !.
+lispmax([M | Ms], Mx) :- lispmax(Ms, Mx1), max(M, Mx1, Mx).
+
+max(A, B, A) :- less(B, A), !.
+max(A, B, B).
+
+min('*global*', _, ['lambda*', primitive, lispmin], []).
+
+lispmin([M], M) :- !.
+lispmin([M | Ms], Mx) :- lispmin(Ms, Mx1), min(M, Mx1, Mx).
+
+min(A, B, A) :- less(A, B), !.
+min(A, B, B).
+
+% EVAL
+
+eval('*global*', _, [lambda, primitive, lisp_ev], []).
+
+lisp_ev([Arg], Value) :- lispeval(Arg, Value).
+
+% MAPCAR fÅr einstellige Funktionen (wird noch erweitert)
+
+mapcar('*global*', _, [lambda, primitive, lispmapcar], []).
+
+lispmapcar([Fun, []], []) :- !.
+lispmapcar([Fun, [Arg | Args]], [Val | Vals]) :-
+      lispeval([Fun, [quote, Arg]], Val), lispmapcar([Fun , Args], Vals).
+
+% ein paar LOGISCHE Funktionen
+
+atom('*global*', _, [lambda, primitive, lispatomp], []).
+
+lispatomp([Atomic], t) :- atomic(Atomic), !.
+lispatomp([_], []).
+
+numberp('*global*', _, [lambda, primitive, lispnump], []).
+
+lispnump([Num], t) :- integer(Num), !.
+lispnump([_], []).
+
+zerop('*global*', _, [lambda, primitive, lispzerop], []).
+
+lispzerop([0], t) :- !.
+lispzerop([_], []).
+
+minusp('*global*', _, [lambda, primitive, lispminusp], []).
+
+lispminusp([X], t) :- less(X, 0), !.
+lispminusp([_], []).
+
+plusp('*global*', _, [lambda, primitive, lispplusp], []).
+
+lispplusp([X], t) :- less(0, X), !.
+lispplusp([_], []).
+
+greaterp('*global*', _, ['lambda*', primitive, lispgrtp], []).
+
+lispgrtp([_], t) :- !.
+lispgrtp([N1, N2 | Ns], Val) :- less(N2, N1), !, lispgrtp([N2 | Ns], Val).
+lispgrtp(_, []).
+
+lessp('*global*', _, ['lambda*', primitive, lisplessp], []).
+
+lisplessp([_], t) :- !.
+lisplessp([N1, N2 | Ns], Val) :- less(N1, N2), !, lisplessp([N2 | Ns], Val).
+lisplessp(_, []).
+
+member('*global*', _, [lambda, primitive, lispmember], []).
+
+lispmember([_, []], []) :- !.
+lispmember([Elem, [Elem | Cdr]], [Elem | Cdr]) :- !.
+lispmember([Elem, [_ | Cdr]], Val) :- lispmember([Elem, Cdr], Val).
+
+'not'('*global*', _, [lambda, primitive, lispnot], []).
+null('*global*', _, [lambda, primitive, lispnot], []).   % Hei diedel dum dei
+
+lispnot([[]], t) :- !.
+lispnot([_], []).
+
+'and'('*global*', _, ['nlambda*', primitive, lispand], []).
+
+lispand([], t) :- !.
+lispand([SExpr | _], []) :- test_nil(SExpr), !.
+lispand([_ | Rest], Val) :- lispand(Rest, Val).
+
+'or'('*global*', _, ['nlambda*', primitive, lispor], []).
+
+lispor([], []) :- !.
+lispor([SExpr | Rest], Val) :- test_nil(SExpr), !, lispor(Rest, Val).
+lispor(_, t).
+
+test_nil(SExpr) :- lispeval(SExpr, Val), !, Val = [].
+
+equal('*global*', _, [lambda, primitive, lispequal], []).
+
+lispequal([X, X], t) :- !. % perfekte Gleichheit (wegen Unifikation)
+lispequal([_, _], []).     % In Prolog gibt's keine 'primitive' Gleichheit !
+
+% Kontrollstrukturen : COND, SEQ und DO
+% seq ist ein 'prog' ohne Labels, 'go' oder 'return'
+
+cond('*global*', _, ['nlambda*', primitive, lispcond], []).
+
+lispcond([[]], []) :- !.
+lispcond([[Condition | Results] | OtherClauses], Value) :-
+      lispeval(Condition, Boolean),
+      condecide(Boolean, Results, OtherClauses, Value).
+
+condecide([], _, Clauses, Value) :- !, lispcond(Clauses, Value).
+condecide(Value, [], _, Value) :- !.
+condecide(_, Results, _, Value) :- sequence(Results, Value).
+
+seq('*global*', _, ['nlambda*', primitive, lispseq], []).
+
+lispseq([TempVars | SExprs], Value) :-isclosedlist(TempVars), a_list(AList),
+      new_vars(TempVars, AList, NewAList), change_alist(NewAList),
+      sequence(SExprs, Value), change_alist(AList).
+
+new_vars([], AL, AL) :- !.
+new_vars([Var | Vars], AL, [Var-[] | NAL]) :- new_vars(Vars, AL, NAL).
+
+sequence([SExpr], Value) :- !, lispeval(SExpr, Value).
+sequence([SExpr | SExprs], Value) :- lispeval(SExpr, _),
+      sequence(SExprs, Value).
+
+do('*global*', _, [nlambda, primitive, lispdo], []).
+
+lispdo([0, _], []) :- !.
+lispdo([1, Do], DoVal) :- !, lispeval(Do, DoVal).
+lispdo([Num, Do], DoVal) :- Num > 1, !, lispeval(Do, _), Num1 is Num - 1,
+      lispdo([Num1, Do], DoVal).
+
+% DE, DEFINE, DEFPRIM und DEFINITION
+
+de('*global*', _, [nlambda, primitive, lispde], []).
+
+lispde([FName, Vars, Term], FName) :- isclosedlist(Vars),
+      define(FName, [lambda, Vars, Term]).
+
+define('*global*', _, [nlambda, primitive, lispdef], []).
+
+lispdef([FName, LambdaSpread, Vars, Term], FName) :-
+      isclosedlist(Vars),
+      dmember(LambdaSpread, [lambda, 'lambda*', nlambda, 'nlambda*']),
+      define(FName, [LambdaSpread, Vars, Term]).
+
+defprim('*global*', _, [nlambda, primitive, lispdprim], []).
+
+lispdprim([FName, LambdaSpread, PrologFunctor], FName) :-
+      atom(PrologFunctor),
+      define(FName, [LambdaSpread, primitive, PrologFunctor]).
+
+define(Lit, Expr) :- Global =.. [Lit, '*global*', Value, _, PList], Global, !,
+      retract(Global), NewGlobal =.. [Lit, '*global*', Value, Expr, PList],
+      set_global(NewGlobal).
+define(Lit, Expr) :- NewGlobal =.. [Lit, '*global*', _, Expr, []],
+      set_global(NewGlobal).
+
+definition('*global*', _, [lambda, primitive, lispdefn], []).
+
+lispdefn([Lit], Expr) :- Global =.. [Lit, '*global*', _, Expr, _], Global, !.
+lispdefn([Lit], []) :- NewGlobal =.. [Lit, '*global*', _, [], []],
+      set_global(NewGlobal).
+
+% Verwaltung von Property-Listen : DEFPROP, PUTPROP, GET, REMPROP
+
+defprop('*global*', _, [nlambda, primitive, lispputp], []).
+putprop('*global*', _, [lambda, primitive, lispputp], []).
+
+lispputp([Literal, SExpr, PropName], SExpr) :- atom(Literal), atom(PropName),
+      Global =.. [Literal, '*global*', Value, Expr, PList], Global, !,
+      change_plist(PList, PropName, SExpr, NewPList),
+      NewGlobal =.. [Literal, '*global*', Value, Expr, NewPList],
+      retract(Global), set_global(NewGlobal).
+lispputp([Literal, SExpr, PropName], SExpr) :- atom(Literal), atom(PropName),
+      !, NewGlobal =.. [Literal, '*global*', _, [], [[PropName | SExpr]]],
+      set_global(NewGlobal).
+
+remprop('*global*', _, [lambda, primitive, lispremp], []).
+
+lispremp([Literal, PropName], t) :- atom(Literal), atom(PropName),
+      Global =.. [Literal, '*global*', Value, Expr, PList], Global, !,
+      change_plist(PList, PropName, [], NewPList),
+      NewGlobal =.. [Literal, '*global*', Value, Expr, NewPList],
+      retract(Global), set_global(NewGlobal).
+lispremp([Literal, PropName], []) :- atom(Literal), atom(PropName),
+      !, NewGlobal =.. [Literal, '*global*', _, [], []],
+      set_global(NewGlobal).
+
+change_plist([], PName, New, [[PName | New]]) :- !.
+change_plist([[PName | _] | Rest], PName, [], Rest) :- !.
+change_plist([[PName | _] | Rest], PName, New, [[PName | New] | Rest]) :- !.
+change_plist([Some | Others], PName, New, [Some | NewOthers]) :-
+      change_plist(Others, PName, New, NewOthers).
+
+get('*global*', _, [lambda, primitive, lispget], []).
+
+lispget([Literal, PropName], Value) :- atom(Literal), atom(PropName),
+      Global =.. [Literal, '*global*', _, _, PList], Global, !,
+      lisp_getp(PropName, PList, Value).
+lispget([Literal, PropName], []) :- atom(Literal), atom(PropName),
+      !, NewGlobal =.. [Literal, '*global*', _, [], []],
+      set_global(NewGlobal).
+
+lisp_getp(PName, PList, Val) :- dmember([PName | Val], PList), !.
+lisp_getp(_, _, []).
+
+% PROLOG und STOP
+
+prolog('*global*', _, ['lambda*', primitive, callProlog], []).
+
+callProlog([], _) :- tag(loop).  % neue Inkarnation von Prolog
+callProlog([], t) :- !.          % Fehlschlag von 'stop' auffangen
+
+callProlog(GoalList, t) :- Goal =.. GoalList, Goal, !.
+callProlog(_, []).
+
+stop('*global*', _, [nlambda, primitive, lispstop], []).
+
+lispstop([], []) :- tagfail(lispcycle).
+
+% Ein-/Ausgabe : READ, PRINT, PRIN1 und TERPRI
+
+read('*global*', _, [lambda, primitive, lisp_doread], []).
+
+lisp_doread([], Value) :- lisp_read(Value).
+
+print('*global*', _, [lambda, primitive, lisp_doprint], []).
+
+lisp_doprint([Value], Value) :- lisp_print(Value).
+
+prin1('*global*', _, [lambda, primitive, lisp_doprin1], []).
+
+lisp_doprin1([Value], Value) :- lispprint(Value), !.
+
+terpri('*global*', _, [lambda, primitive, lispterpri], []).
+
+lispterpri([], []) :- nl.
+
+:-lisp.
+
+(setq t 't)       ; ein paar vordefinierte Atome und Funktionen
+(setq nil 'nil)
+
+(de protect (literal) (prolog 'protect literal 4))
+
+(protect 't)
+(protect 'nil)
+
+(de cls () (prolog 'cls))
+(de status () (prolog 'status))
+
+(define load nlambda (file) (seq () (prolog 'see file) (prolog 'echo)))
+(de end () (seq () (prolog 'noecho) (prolog 'seen)))
+
+(stop)
+

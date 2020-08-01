@@ -1,0 +1,289 @@
+/************************************************************************
+*									*
+* The SB-Prolog System							*
+* Copyright SUNY at Stony Brook, 1986; University of Arizona, 1987	*
+*									*
+************************************************************************/
+
+/*-----------------------------------------------------------------
+SB-Prolog is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY.  No author or distributor
+accepts responsibility to anyone for the consequences of using it
+or for whether it serves any particular purpose or works at all,
+unless he says so in writing.  Refer to the SB-Prolog General Public
+License for full details.
+
+Everyone is granted permission to copy, modify and redistribute
+SB-Prolog, but only under the conditions described in the
+SB-Prolog General Public License.   A copy of this license is
+supposed to have been given to you along with SB-Prolog so you
+can know your rights and responsibilities.  It should be in a
+file named COPYING.  Among other things, the copyright notice
+and this notice must be preserved on all copies. 
+------------------------------------------------------------------ */
+/* $assert.P */
+
+$assert_export([$assert/1,$asserta/1,$asserta/2,$assertz/1,$assertz/2,
+		$assert/2,$asserti/2,$assert/4,$assert_union/2,$assert_call_s/1,
+		$assert_get_prref/2,$assert_put_prref/2,$assert_abolish_i/1]).
+
+/* $assert_use($meta,[$functor/3,$univ/2,$length/2]).
+   $assert_use($blist,[$append/3,$member/2,$memberchk/2]).
+   $assert_use($buff, [$alloc_perm/2,$alloc_heap/2,$trimbuff/3,
+                       $buff_code/4,$symtype/2,$substring/6,$subnumber/6,
+                       $subdelim/6,$conlength/2,$pred_undefined/1,$hashval/3]).
+   $assert_use($bio,[$writename/1,$writeqname/1,$put/1,$nl/0,$tab/1,
+	             $tell/1,$tell/2,$telling/1,$told/0,$get/1,$get0/1,
+                     $see/1,$seeing/1,$seen/0]).
+   $assert_use($db,[$db_new_prref/1,$db_assert_fact/5,
+                    $db_assert_fact/7, $db_add_clref/6,
+		    $db_call_prref/2,$db_call_prref_s/2,$db_call_prref_s/3,
+		    $db_call_clref/2,$db_get_clauses/3,$db_kill_clause/1]).
+*/
+
+$assert_exp_cut((Head:-Body),(Nhead:-Nbody)) :- !,
+	$univ(Head,Hlist),$append(Hlist,[Cutpoint],Nhlist),
+	$univ(Nhead,Nhlist),
+	$assert_exp_cutb(Body,Nbody,Cutpoint).
+
+$assert_exp_cut(Head,Head) .  /* leave unchanged, Arity is one less */
+
+$assert_exp_cutb(X,call(X),_) :- var(X),!.
+$assert_exp_cutb(!,'_$cutto'(Cutpoint),Cutpoint) :- !.
+$assert_exp_cutb((X,Y), (call(X), call(Y)), _) :-
+	var(X), var(Y), !.
+$assert_exp_cutb((X,Y,Z), (call(X), call(Y), call(Z)), _) :-
+	var(X), var(Y), var(Z), !.
+$assert_exp_cutb((A,B,C,D),','(Na,Nb,Nc,Nd),Cutpoint) :- !, /* opt */
+	$assert_exp_cutb(A,Na,Cutpoint),
+	$assert_exp_cutb(B,Nb,Cutpoint),
+	$assert_exp_cutb(C,Nc,Cutpoint),
+	$assert_exp_cutb(D,Nd,Cutpoint).
+$assert_exp_cutb((A,B),(Na,Nb),Cutpoint) :- !,
+	$assert_exp_cutb(A,Na,Cutpoint),
+	$assert_exp_cutb(B,Nb,Cutpoint).
+$assert_exp_cutb((A;B),(Na;Nb),Cutpoint) :- !,
+	$assert_exp_cutb(A,Na,Cutpoint),
+	$assert_exp_cutb(B,Nb,Cutpoint).
+$assert_exp_cutb((A->B),(A->Nb),Cutpoint) :- !,
+	$assert_exp_cutb(B,Nb,Cutpoint).
+$assert_exp_cutb(X,X,_).
+
+$assert(Clause) :-
+     $assert_get_index(Clause,Index),
+     $assert(Clause,1,Index,_).
+
+$asserta(Clause) :- $assert(Clause,0,0,_).
+$asserta(Clause,Ref) :- $assert(Clause,0,0,Ref).
+
+$assertz(Clause) :- 
+          $assert_get_index(Clause,Index),
+	  $assert(Clause,1,Index,_).
+
+$assertz(Clause,Ref) :-
+     $assert_get_index(Clause,Index),
+     $assert(Clause,1,Index,Ref).
+
+$assert(Clause,Clref) :-
+     $assert_get_index(Clause,Index),
+     $assert(Clause,1,Index,Clref).
+
+$asserti(Clause,Index) :- $assert(Clause,1,Index,_).
+
+$assert(Clause, AZ, Index, Clref) :- 
+	$assert_exp_cut(Clause,Nclause),  
+	$assert_cvt_dyn(Clause,Prref,Where,Supbuff),
+	$db_assert_fact(Nclause,Prref,AZ,Index,Clref,Where,Supbuff).
+
+
+$assert_get_index(Clause,Index) :-
+     (Clause \= (_ :- _) ->
+          ($functor0(Clause,P), $arity(Clause,N)) ;
+	  (arg(1,Clause,Hd), $functor0(Hd,P), $arity(Hd,N))
+     ),
+     (($symtype('_$index'(_,_,_),IType),
+       IType > 0,
+       '_$index'(P,N,Index)
+      ) ->
+           true ;
+	   Index = 1
+     ).
+     
+
+/* this is a translator for facts. It takes a term that represents 
+   a predicate call (a fact) and generates and writes the code 
+   corresponding to the fact into a buffer. It then asserts the fact 
+   by adding it to the end of the tryme-retryme-trustme sequence for
+   the main predicate of the fact.
+*/
+
+
+/* $assert(Fact,AZ,Index,Clref):  asserts a fact to a fact-defined 
+predicate. Fact is the fact to assert. AZ is 0 for insertion as the
+first clause; 1 for insertion as the last clause. Index is the number of 
+the argument on which to index; 0 for no indexing. Clref is returned as
+the clause reference of the fact newly asserted. */
+
+
+$assert_cvt_dyn(Clause,Prref,Where,Supbuff) :-
+	(Clause = (Fact:-B),! ; Clause=Fact),
+	$symtype(Fact, SYMTYPE),
+	(SYMTYPE =:= 1 ->		/* already dynamic */
+	  $assert_get_prref(Fact,Prref,Where,Supbuff)
+	  ;
+	  Where = 0,
+	  (SYMTYPE =:= 0 ->		/* undefined, this is first clause */
+	    $db_new_prref(Prref),
+	    $assert_put_prref(Fact,Prref)
+	    ;
+	    (SYMTYPE =:= 2 ->		/* compiled, so convert */
+	      $assert_cvt_buff(Fact,Ccls),
+	      $db_new_prref(Prref),
+	      $assert_put_prref(Fact,Prref),
+	      $arity(Fact,Arity1),Arity is Arity1+1,
+	      $db_add_clref(Fact,Arity,Prref,1,0,Ccls)
+	      ;
+	      $writename('Error, cannot assert into Buffer'),$nl,fail
+	    )
+	  )
+	).
+
+
+/* return a buffer with a branch to the clauses for Fact */
+$assert_cvt_buff(Fact,Tbuff) :-
+        $opcode( jump, JmpOp ),
+	$alloc_perm( 20,Tbuff),   /* buff to convert to dynamic */
+	$buff_code(Tbuff,  0, 14 /*ptv */ , Tbuff),	/* back ptr */
+	$buff_code(Tbuff, 12,  3 /*ps  */ , JmpOp /*jump*/ ),
+	$buff_code(Tbuff, 14,  3 /*ps  */ , 0),
+	$buff_code(Tbuff, 16, 20 /*pepb*/ , Fact).
+
+
+/* assert_union adds the clauses of the second predicate
+   to the first predicate. E.g., given p(X,Y) and q(X,Y), it adds the rule
+   p(X,Y) :- q(X,Y) as the last rule defining p. If p is not defined, then
+   it results in the call of q being the only clause for p */
+
+$assert_union(P,Q) :- 
+	$assert_cvt_buff(Q,Qclref),
+	$assert_cvt_dyn(P,Prref,0,0),
+	$arity(P,Arity1),Arity is Arity1+1,
+	$db_add_clref(P,Arity,Prref,1,0,Qclref).
+	
+/* This defines routines that can be used to assert facts onto the heap.
+*/
+
+/* We have introduced a new simulator instruction similar  to the one
+used to translate variables in globalset.  It is a branch
+instruction, called executev.  It  derefs its  argument and  if it is
+not a variable, does an execute to main functor symbol.  (Execute has
+been modified so that when a buffer is called, it branches  to disp 4
+in the name.)  If it  is a  variable, it  gives an  error message and
+fails.  */ 
+
+/* $assert_new_t_prref(Call,Prref,Supbuff):  Call must be
+instantiated to a term (just used for getting psc).  If  that psc has
+no e.p.  then this creates a permanent buffer  containing an executev
+instruction, and the constant  for the  Supbuff, and  points the e.p.
+of Call to it.  A Prref is allocated and  the target  of the executev
+is set to that.  If the psc already has an e.p., the predicate fails.
+*/ 
+
+$assert_new_t_prref(Call,Prref,Supbuff) :-
+	$opcode( noop, NoopOp ),
+	$opcode( executev, ExecOp ),
+	$symtype(Call,Type),
+	(Type =:= 1,	/* dynamic */
+	 $buff_code(Call,   0,  7 /*gepb*/ ,Vbuff),
+	 $buff_code(Vbuff,  4,  6 /*gs  */ , NoopOp /*noop*/ ),
+	 $buff_code(Vbuff,  6,  6, 0),
+	 $buff_code(Vbuff,  8,  6, ExecOp  /* executev */ ),
+	 $buff_code(Vbuff, 12, 18 /*ubv */ ,Prref),
+	 $db_new_prref(Prref,2,Supbuff),
+	 $buff_code(Vbuff, 16, 18 /*ubv */ ,Supbuff),
+	 !
+	;
+	 $buff_code(Call,0,11,0), /* this overrides everything!! */
+	 /* allocate new executev instruction, and supbuff ptr */
+	 $alloc_perm(20,Vbuff), /* must make permanent */
+	 $buff_code(Vbuff,  0, 14, Vbuff), /* set back ptr */
+	 $buff_code(Call,   0,  9 /*pep*/ ,Vbuff),
+	 $buff_code(Vbuff,  4,  3 /*ps */ , NoopOp /*noop*/ ),
+	 $buff_code(Vbuff,  6,  3, 0),
+	 $buff_code(Vbuff,  8,  3, ExecOp  /* executev */ ),
+	 $buff_code(Vbuff, 10,  3, 0),
+	 $buff_code(Vbuff, 12, 12 /*fv */ ,0),
+	 $buff_code(Vbuff, 16, 12 /*fv */ ,0),
+	 $db_new_prref(Prref,2,Supbuff),
+	 $buff_code(Vbuff, 12, 18 /*ubv*/ ,Prref),
+	 $buff_code(Vbuff, 16, 18 /*ubv*/ ,Supbuff)
+	).
+
+
+/* $assert_alloc_t must be called first to declare that a predicate (or set
+of predicates) are to have facts asserted into them on the  heap.  It
+is given a list of Pred/Arity pairs and a size.  That  amount of heap
+space is reserved for facts to  be asserted  to these  predicates.  A
+temporary prref buffer is created.  */ 
+
+$assert_alloc_t(Palist,Size) :- 
+	$alloc_heap(Size,Sbuff),
+	$assert_alloc_t1(Palist,Sbuff).
+
+$assert_alloc_t1([],_).
+$assert_alloc_t1([F|R],Supbuff) :- 
+	$assert_alloc_t1(F,Supbuff),$assert_alloc_t1(R,Supbuff).
+$assert_alloc_t1(P/A,Supbuff) :-
+	$bldstr(P,A,Term),
+	$assert_new_t_prref(Term,Prref,Supbuff).
+
+
+
+$assert_call_s(Goal) :- 
+	$assert_get_prref(Goal,Prref,_,_),$db_call_prref_s(Goal,Prref).
+
+
+/* $assert_get_prref(Fact,Prref,Where,Supbuff):  where Fact is a
+literal, which should be dynamic. The e.p. field of the main functor
+symbol of Fact points to either a permanent prref, or a execv buffer
+that points to a temporary prref. If it is a permanent prref, Where
+is returned as 0; if a temporary, Where is set to 2, and Supbuff is
+bound to the superbuffer containing the clauses. */
+
+$assert_get_prref(Fact,Prref) :- $assert_get_prref(Fact,Prref,_,_).
+$assert_get_prref(Fact,Prref,Where,Supbuff) :-
+	$symtype(Fact,Type),
+	(Type =:= 1 ->	/*DYNA: must be dynamic */
+	    $opcode( noop, NoopOp ),
+	    $opcode( executev, ExecOp ),
+	    $buff_code(Fact,     0,  7 /*gepb*/, Vbuff),
+	     ($buff_code(Vbuff,  4,  6 /*gs  */, NoopOp /*noop*/ ),
+	      $buff_code(Vbuff,  6,  6, 0),
+	      $buff_code(Vbuff,  8,  6, ExecOp /* executev */ ),
+	      Where=2,
+	      $buff_code(Vbuff, 12, 18 /*ubv*/ ,Prref),
+	      $buff_code(Vbuff, 16, 18 /*ubv*/ ,Supbuff),
+	      !
+	     ;
+	      Prref=Vbuff,Where=0
+	     )
+	    ;
+	     Type =\= 0, /* if undefined, just fail */
+	     $writename('Error, Illegal Predicate ref: '),
+	     $write(Fact),$nl,fail
+	).
+
+/* $assert_put_prref(Fact,Prref):  where Fact is a literal and Prref
+is an prref.  Prref must  be bound  to an  existing prref.   The e.p.
+field of the psc entry for the main functor symbol of Fact  is set to
+point to the Prref.  */ 
+
+$assert_put_prref(Fact,Prref) :-
+	$buff_code(Fact, 0, 9 /*pep*/ ,Prref).
+
+/* $assert_abolish_i(Fact): initializes the predicate that is the main 
+functor symbol of Fact to be empty, by allocating a new empty Prref and 
+assigning it. */
+
+$assert_abolish_i(Fact) :- 
+	$db_new_prref(Prref),$assert_put_prref(Fact,Prref).

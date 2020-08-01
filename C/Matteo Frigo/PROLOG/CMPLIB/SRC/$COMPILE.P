@@ -1,0 +1,276 @@
+/************************************************************************
+*									*
+* The SB-Prolog System							*
+* Copyright SUNY at Stony Brook, 1986; University of Arizona, 1987	*
+*									*
+************************************************************************/
+
+/*-----------------------------------------------------------------
+SB-Prolog is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY.  No author or distributor
+accepts responsibility to anyone for the consequences of using it
+or for whether it serves any particular purpose or works at all,
+unless he says so in writing.  Refer to the SB-Prolog General Public
+License for full details.
+
+Everyone is granted permission to copy, modify and redistribute
+SB-Prolog, but only under the conditions described in the
+SB-Prolog General Public License.   A copy of this license is
+supposed to have been given to you along with SB-Prolog so you
+can know your rights and responsibilities.  It should be in a
+file named COPYING.  Among other things, the copyright notice
+and this notice must be preserved on all copies. 
+------------------------------------------------------------------ */
+/* $compile1.P */
+
+/* This Prolog program is a first attempt to take an input Prolog program in
+a simple syntax, relatively close to standard Prolog, and to output an
+annotated term, with pragmas attached, so that the pilgen translator can
+generate correct intermediate code. 
+
+The input clauses will be read (using Prolog's read command) one at a time
+from standard input (for now), until end-of-file is reached.  
+
+During the translation of a clause, a Symbol Table (St) is constructed.  It
+contains information on each occurrence of a variable in the clause, as
+follows.  It is a record st(Clist,Vlist); where Clist is the list of records
+c(Litno,Npars,Pragma) where Litno is the number of the literal on the rhs of
+the rule, Npars is the number of arguments to that literal, and Pragma is
+the pragma associated with the _call record for that literal in the clause;
+Vlist is a list of records, v(id,Occlist), one for each variable; where id
+the unique identifier for the variable, and Occlist is a list of occurrence
+records, o(Occno,Litno,Argno,Context,Pragma), one for each occurrence of the
+variable in the clause; where Occno uniquely determines the occurrence of
+this variable; Litno is the number of the literal (0=head, 1=first on
+rhs,...); Argno is the number of the argument in which it appears (starting
+with 1) Context is `s' if it is in a structure and `t' if it is at the top
+level; and Pragma is the list that is the Pragma for the occurrence of the
+variable in the code.  
+*/ 
+
+$compile_export([$compile/0,$compile/1,$compile/2,$compile/3,$compile/4]).
+
+$compile_use($name,[$name/2,_]).
+$compile_use($blist,[$append/3,$member/2,$member1/2,$not_member1/2]).
+$compile_use($bio,[$writename/1,$writeqname/1,$put/1,$nl/0,$tab/1,$tell/1,
+	$telling/1,$told/0,$get/1,$get0/1,$see/1,$seeing/1,$seen/0]).
+$compile_use($bmeta,[$atom/1,$atomic/1,$integer/1,$number/1,$structure/1,
+	$functor0/2,$bldstr/3,$arg/3,$arity/2,$real/1,$floor/2]).
+$compile_use($osys,[$cputime/1,_,_,_]).
+$compile_use($compare,['$=='/2,_,_,_,_,_,_]).
+$compile_use($listutil1,[$reverse/2,$merge/3,$absmember/2,$absmerge/3,
+		$nthmember/3,$nthmember1/3,$member2/2,$closetail/1]).
+$compile_use($getclauses,[$getclauses/2,$getclauses/3,$attach/2,_]).
+$compile_use($mac,[$macexp/3]).
+
+/* **********************************************************************
+$compile_use($aux1,[$roundtosq/2,$get_compiletime/2,$message1/1,
+			$output_msg/3,$umsg/1,$name_aslfile/2,_,_,_]).
+$compile_use($translate1,[$translateasm/3,$translate/3]).
+********************************************************************** */
+
+
+$compile :- $writename('compile: Usage: compile(<inputfile> [,<outputfile>, [,<option>] ])'), $nl.
+
+$compile(InFile) :-
+	$atomic(InFile) ->
+		($name(InFile,Fname),
+		 $append(Fname,".out",OFname),
+		 $name(OutFile,OFname),
+		 $compile_default_opts(Options),
+		 $compile0(InFile,OutFile,Options,_)
+		) ;
+		($writename('*** Error: filenames must be atomic! ***'),
+		 $nl,
+		 abort
+		).
+
+$compile(InFile,Opt2) :-
+	$atomic(InFile) ->
+		($atomic(Opt2), !, /* Opt2 is filename */
+		 $compile_default_opts(Options),
+		 $compile0(InFile,Opt2,Options,_)
+		) ;
+		($writename('*** Error: input filename must be atomic! ***'),
+		 $nl,
+		 abort
+		).
+$compile(InFile,Opt2) :- /* Opt2 is Options */
+		$name(InFile,Fname),
+		$append(Fname,".out",OFname),
+		$name(OutFile,OFname),
+		$compile0(InFile,OutFile,Opt2,_).
+
+$compile(InFile, Opt1, Opt2) :-
+	$atomic(InFile) ->
+		($atomic(Opt1), !, /* Opt1 is filename */
+		 $compile0(InFile,Opt1,Opt2,_)
+		) ;
+		($writename('*** Error: input filename must be atomic! ***'),
+		 $nl,
+		 abort
+                ).
+$compile(InFile, Opt1, Opt2) :-
+	$atomic(Opt2) ->
+		( /* Opt2 is filename */
+		  $compile0(InFile,Opt2,Opt1,_)
+		) ;
+		( $writename('*** Error: output filename must be atomic! ***'),
+		  $nl,
+		  abort
+		).
+
+$compile(InFile, Opt1, Opt2,PredList) :-
+	$atomic(InFile) ->
+		($atomic(Opt1), !, /* Opt1 is filename */
+	 	 $compile0(InFile,Opt1,Opt2,PredList)
+		) ;
+		($writename('*** Error: input filename must be atomic! ***'),
+		 $nl,
+		 abort
+                ).
+$compile(InFile, Opt1, Opt2,PredList) :-
+	$atomic(Opt2) ->
+		( /* Opt2 is filename */
+		  $compile0(InFile,Opt2,Opt1,PredList)
+		) ;
+		( $writename('*** Error: output filename must be atomic! ***'),
+		  $nl,
+		  abort
+		).
+
+/* default_opts([v]). */
+
+$compile_default_opts([l]).
+
+/* translate */
+$compile0(InFile, OutFile, Options, PredList) :- 
+	$nl, 
+        $writename( 'Compile : ' ), $writename( InFile ),  $writename(' => '),
+	$writename( OutFile ), $nl,
+	$exists(InFile) -> $compile1(InFile,OutFile,Options,PredList) ;
+			   $umsg(['*** No such file:',InFile]).
+
+$compile1(InFile, OutFile, Options, PredList) :- 
+	$init_indexinfo,
+	$cputime(X1),
+	($member1(a,Options) -> /* create intermediate .asl file */
+	  	($message1(Options),
+	  	 $name_aslfile(InFile, OutFile1),
+	  	 $compile_gen_PIL(InFile,OutFile1,Options,PredList),
+	  	 $asm(OutFile1,OutFile,Options)
+	 	) ;
+	 	$compile_gen_BC(InFile,OutFile,Options,PredList)
+	),
+	($member1(l, Options) ->  /* load byte code */
+		load(OutFile) ;
+		true
+	),
+	$compile_cleanup,
+	$tell(user),
+	$cputime(X2),
+	CTime is X2 - X1, $get_compiletime(CTime,Time),
+	$writename('compilation complete -- '),
+	$writename(Time),$writename(' secs'),$nl.
+
+$compile_gen_PIL(InFile, OutFile1, Options,PredList) :-
+	$getclauses(InFile,IProg,PredList),
+	$macexp(IProg,Options,Prog),
+	$compile_indexinfo(PredList,IndexInfo),
+	$compile_getmodes(Prog,Options,IndexInfo,PredList,Modes),
+	$tell(OutFile1),
+	!,
+	$compile_transl_preds(Prog,Options,IndexInfo,Modes,PredList),
+	$told.
+
+$compile_transl_preds(ClauseList,Options,Prag,Modes,PredList) :-
+	$member(PredDef, ClauseList),
+	PredDef = pred(P,N,_,_,_),
+	$output_msg(P,N,Options),
+	($member2([P,N,Mode],Modes) -> true ; $zerolist(N,Mode)),
+	$translate(PredDef,Options,Prag,Mode,PredList),
+	fail.
+$compile_transl_preds(_,_,_,_,_).
+
+$compile_gen_BC(InFile, OutFile, Options,PredList) :-
+	$getclauses(InFile,IProg,PredList),
+	$macexp(IProg,Options,Prog),
+	$compile_indexinfo(PredList,IndexInfo),
+	$compile_getmodes(Prog,Options,IndexInfo,PredList,Modes),
+	$tell(OutFile),
+	$compile_translasm_preds(Prog,Options,IndexInfo,Modes,PredList),
+	$told.
+
+$compile_translasm_preds(ClauseList,Options,Prag,Modes,PredList) :-
+	$member(PredDef, ClauseList),
+	PredDef = pred(P,N,_,_,_),
+	$output_msg(P,N,Options),
+	($member2([P,N,Mode],Modes) -> true ; $zerolist(N,Mode)),
+	$translateasm(PredDef,Options,Prag,Mode,PredList),
+	fail.
+$compile_translasm_preds(_,_,_,_,_).
+
+$compile_getmodes(Prog,Options,Prag,PredList,Modes) :-
+	 ((symtype('_$mode'(_,_,_),MDef), MDef > 0) ->
+	     $bagof([P,N,M],'_$mode'(P,N,M),Modes1) ;
+	     Modes1 = []
+	),
+	($member1(m,Options) ->
+		($mode_inf(Prog,Options,Prag,PredList,Modes0),
+		 $rplc_mode(Modes1,Modes0,Modes)
+		) ;
+		Modes = Modes1
+	).
+
+$rplc_mode([],M,M).
+$rplc_mode([M|MRest0],Modes1,Modes) :-
+	$rplc_mode1(Modes1,M,Modes2),
+	$rplc_mode(MRest0,Modes2,Modes).
+
+$rplc_mode1([],M,[M]).
+$rplc_mode1([[P,N,Mode1]|Rest],[P,N,Mode0],[[P,N,Mode0]|Rest]) :- !.
+$rplc_mode1([M1|MRest],M0,[M1|NRest]) :- $rplc_mode1(MRest,M0,NRest).
+
+$zerolist(0,[]).
+$zerolist(N,[0|L]) :- N > 0, N1 is N-1, $zerolist(N1,L).
+
+$compile_indexinfo(PredList,Index) :-
+     $check_legit_index(PredList),
+     $compile_indexinfo1(PredList,Index).
+
+$check_legit_index(Preds) :-
+     $bagof((P/N), K^'_$index'(P,N,K), IndexList),
+     $telling(OFile), $tell(user),
+     $check_legit1(IndexList,Preds),
+     $told, $tell(OFile).
+
+$check_legit1([],_).
+$check_legit1([X|L],Preds) :-
+     ($member1(X,Preds) ->
+          true ;
+	  (X = '/'(P,N),
+	   $write('*** Warning: index set on undefined predicate '),
+	   $write(P), $write('/'), $write(N), $nl
+	  )
+     ),
+     $check_legit1(L,Preds).	  
+
+$compile_indexinfo1([],[]).
+$compile_indexinfo1([(P/N)|Preds],[prag(P,N,[index(K)])|IRest]) :-
+     ('_$index'(P,N,K) ->
+          true ;
+	  K = 1
+     ),
+     $compile_indexinfo1(Preds,IRest).          
+
+$init_indexinfo :-
+     $symtype('_$index'(_,_,_), L),
+     (L > 0 -> true ; $assert(('_$index'(_,_,_) :- fail))).
+
+$compile_cleanup :-
+	$abolish('_$mode'(_,_,_)),
+	$abolish('_$emode'(_,_,_)),
+	$abolish('_$index'(_,_,_)).
+
+/* ---------------------------- $compile1.P ---------------------------- */
+

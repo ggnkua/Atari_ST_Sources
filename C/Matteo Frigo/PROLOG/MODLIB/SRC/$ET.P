@@ -1,0 +1,430 @@
+/************************************************************************
+*									*
+* The SB-Prolog System							*
+* Copyright SUNY at Stony Brook, 1986; University of Arizona, 1987	*
+*									*
+************************************************************************/
+
+/*-----------------------------------------------------------------
+SB-Prolog is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY.  No author or distributor
+accepts responsibility to anyone for the consequences of using it
+or for whether it serves any particular purpose or works at all,
+unless he says so in writing.  Refer to the SB-Prolog General Public
+License for full details.
+
+Everyone is granted permission to copy, modify and redistribute
+SB-Prolog, but only under the conditions described in the
+SB-Prolog General Public License.   A copy of this license is
+supposed to have been given to you along with SB-Prolog so you
+can know your rights and responsibilities.  It should be in a
+file named COPYING.  Among other things, the copyright notice
+and this notice must be preserved on all copies. 
+------------------------------------------------------------------ */
+/* $et.P */
+
+$et_export([$et/1,$et_noet/1,$et_star/1,$et_points/1,
+	    $et_remove/1,$et_answers/2,$et_calls/2]).
+
+$et_use($glob,[$globalset/1,$gennum/1,$gensym/2]).
+
+$et_use($call,[call/1,'_$interp'/2,'_$call'/1]).
+
+$et_use($meta,[$functor/3,$univ/2,$length/2]).
+
+$et_use($name,[$name/2,$name0/2]).
+
+$et_use($bio,[$writename/1,$writeqname/1,$put/1,$nl/0,$tab/1,
+	$tell/1,$tell/2,$telling/1,$told/0,$get/1,$get0/1,$see/1,$seeing/1,
+	$seen/0]).
+
+$et_use($io,[$write/1,$writeq/1,$display/1,$print/1]).
+
+$et_use($assert,[$assert/1,$asserti/2,$assert_union/2,$assert_call_s/1,
+		$assert_get_prref/2,$assert_put_prref/2,$assert_abolish_i/1]).
+
+$et_use($retr,[$retract/1,$abolish/1,_]).
+
+$et_use($defint,[$defint_call/4]).
+
+$et_use($buff,[$alloc_perm/2,$alloc_heap/2,$trimbuff/3,$buff_code/4,
+		$symtype/2,
+		$substring/6,$subnumber/6,$subdelim/6,$conlength/2,
+		$pred_undefined/1, $hashval/3]).
+
+$et_use($bmeta,[$atom/1,$atomic/1,$integer/1,$number/1,$structure/1,
+	$functor0/2,$bldstr/3,$arg/3,$arity/2,$real/1,$floor/2]).
+
+/***********************  ERROR CHECKING  *******************************/
+
+/************************************************************************
+ *  			      $et_check					*
+ *  This is a general error testing routine for the et module.		*
+ *  The flag $et_error is initialized to 0 at the start of the error	*
+ *  checking. All elements of the input list are checked. The second	*
+ *  parameter Errorcheck is the name of a routine, that is supplied	*
+ *  to $et_check that must be satisfied in addition to the general 	*
+ *  error checking. If an error is encountered the $et_error flag is 1 	*
+ *  and $et_check will fail. 						*
+ ************************************************************************/
+
+$et_check(Etlist,Errorcheck) :-
+	$globalset($et_error(0)),		/* Assume no error */
+	(not($et_unbound(Etlist)) ->
+	    $et_checkit(Etlist,Errorcheck),!,
+	    $et_error(0)).			/* Succeeds if no error */
+
+/*   NOTE: 	$et_checkit ASSUMES that it is never called with 	*
+ *		an unbound variable as the first argument		*/
+
+$et_checkit(P/A,Errorcheck) :- 
+	($et_invalid(P/A) ; not($et_check_then_fail(P/A,Errorcheck))),!.
+$et_checkit([Pred|More],Errorcheck) :- !,
+	($et_unbound(Pred) ->
+	    ($et_unbound(More) -> 
+		true
+		;
+	        $et_checkit(More,Errorcheck))
+	    ;
+	    $et_checkit(Pred,Errorcheck),
+	    $et_checkit(More,Errorcheck)).
+$et_checkit([],_) :- !.
+
+$et_check_then_fail(P/A,Errorcheck) :-
+	arg(1,Errorcheck,P/A),
+	call(Errorcheck),			
+	fail.					/* Fail to unbind P/A */
+
+/************************************************************************
+ *				$et_set_check				*
+ *  To set an et point, the predicate specified must be defined (either *
+ *  via a consult or load), and must not have an et point already.	*
+ ************************************************************************/
+
+$et_set_check(P/A) :-
+	not($et_undefined(P/A)),
+	not($et_exists(P/A)).
+
+/************************************************************************
+ *  The error checking predicates $et_unbound, $et_invalid, $et_exists	*
+ *  $et_undefined, $et_exists and $et_notexists succeed and display an 	*
+ *  error message if the error condition being checked is true. The 	*
+ *  global $et_error flag is set so that $et_check can determine if it 	*
+ *  should fail.							*
+ ************************************************************************/
+
+$et_unbound(Arg) :-
+	var(Arg),
+	$globalset($et_error(1)),
+	$write('*et* unbound argument '),$write(Arg),$nl.
+
+$et_invalid(P/A) :-
+	atomic(P),integer(A),!,fail.
+$et_invalid(Arg) :-
+	$globalset($et_error(1)),
+	$write('*et* invalid argument '),$write(Arg),$nl.
+
+$et_undefined(P/A) :-
+	$functor(Pred,P,A),
+	$pred_undefined(Pred),
+	$globalset($et_error(1)),
+	$write('*et* Undefined predicate: '),
+	$write(P),$write('/'),$write(A),$nl.
+
+$et_exists(P/A) :-
+	not($pred_undefined($et_preds(_))),     /* $et_preds defined */
+	$et_preds(P/A),
+	$globalset($et_error(1)),
+	$write('*et* already defined for: '),
+	$write(P),$write('/'),$write(A),$nl.
+
+$et_notexists(P/A) :-
+	($pred_undefined($et_preds(_)),!       /* $et_preds defined */
+	;
+	not($et_preds(P/A))),
+	$globalset($et_error(1)),
+	$write('*et* no et point exists for: '),
+	$write(P),$write('/'),$write(A),$nl.
+
+/**********************  END ERROR CHECKING  *************************/
+
+$et(Etlist) :- 
+	$globalset('$et_flag'(0)),	/* required for general alg */
+	$globalset('_$nofile_msg'(0)),
+	$et_check(Etlist,$et_set_check(_)),
+	$et_setit(Etlist).
+
+$et_setit(P/A) :-
+	$et_set(P/A),
+	$assert($et_preds(P/A)).
+$et_setit([Pred|More]) :-
+	$et_setit(Pred),
+	$et_setit(More).
+$et_setit([]).
+
+$et_set(P/A) :- 
+	$name(P,Pnamelist),
+	$functor(Pred,P,A),
+	$name(Codepname,[99,111,100,101,36|Pnamelist]), /* code$p */
+	$functor(Code,Codepname,A),
+	$et_copfargs(Pred,Code,1,A),
+	  /* make PRED and code$PRED have identical ep's */
+	$buff_code(Code,0,19 /* copy ep */ ,Pred),
+		/* define terms required for ET algorithm */
+	$functor(Pred1,P,A),
+		/* call$ */
+	$name(Callpred,[99,97,108,108,36|Pnamelist]), 	
+	$functor(Call,Callpred,A),
+	$et_copfargs(Pred,Call,1,A),
+	$functor(Call1,Callpred,A),
+	$et_copfargs(Pred1,Call1,1,A),
+		/* et$ */
+	$name(Etpred,[101,116,36 | Pnamelist]),		
+	$functor(Et,Etpred,A),	
+	$et_copfargs(Pred,Et,1,A),
+	$functor(Et1,Etpred,A),	
+	$et_copfargs(Pred1,Et1,1,A),
+/*		Set up appropriate call to $et_tat  		*/
+	Etcall = $et_tat(Pred,Pred1,Call,Call1,Et,Et1,Code),
+/*  int$PRED(A1,...,An,B) stores arguments in Ai & Etroutine call in B. */
+	$name(Intname,[105,110,116,36 | Pnamelist]),	/* int$ */
+	A1 is A + 1,
+	$functor(Intterm,Intname,A1),
+	$et_copfargs(Pred,Intterm,1,A),
+	arg(A1,Intterm,Etcall),
+	$assert(Intterm),
+/*  define PRED(A1,..,An) :- $et_intercept(int$PRED(A1,...,An,B),B). */
+	$defint_call(Pred,A,Intterm,$et_intercept(_,_)). 
+
+$et_points(List) :-
+	findall(P,$et_preds(P),List).
+
+$et_noet(Etlist) :- 
+	$et_check(Etlist,$et_notexists(_)),
+	$et_unsetit(Etlist).
+
+$et_unsetit(P/A) :-
+	$et_unset(P/A),
+	$retract($et_preds(P/A)).
+$et_unsetit([Pred|More]) :-
+	$et_unsetit(Pred),
+	$et_unsetit(More).
+$et_unsetit([]).
+
+$et_unset(P/A) :-
+	$et_removeit(P/A),	/* Use of predicate that ASSUMES no errors */
+	$name(P,Pnamelist),
+	/* remove int$P fact for predicate  */
+	$name(Intname,[105,110,116,36 | Pnamelist]),	/* int$ */
+	A1 is A + 1,
+	$functor(Intterm,Intname,A1),
+	$retract(Intterm),
+	/* restore original definition of predicate */
+	$name(Codepname,[99,111,100,101,36|Pnamelist]), /* code$p */
+	$functor(Code,Codepname,A),
+	$functor(Pred,P,A),
+	$buff_code(Pred,0,19 /* copy ep */ ,Code).
+
+$et_copfargs(Fact,Genclfact,K,Arity) :- 
+	K > Arity;
+	K =< Arity,
+	 arg(K,Fact,A),arg(K,Genclfact,A),
+	 K1 is K+1, $et_copfargs(Fact,Genclfact,K1,Arity).
+
+/************************************************************************/
+/* et-intercept is the predicate that is called to intercept an et call.*/
+/* This is accomplished by the following transformation of the code	*/
+/*  PRED(A1,..,An) :- $et_intercept(int$PRED(A1,...,An,B),B).		*/
+/*  int$PRED(A1,...,An,B) stores arguments in Ai & $et_tat call in B.   */
+/************************************************************************/
+
+$et_intercept(Intpred,Etinterp) :-
+	'_$call'(Intpred),
+	'_$call'(Etinterp).
+
+$et_subsumes(X,Y) :- not(X=Y),!,fail.
+$et_subsumes(X,Y) :- $et_numbervars(Y,0,_),not(X=Y),!,fail.
+$et_subsumes(_,_).
+
+$et_numbervars(Y,I,J) :- var(Y),!,Y='$var'(I),J is I+1.
+$et_numbervars(Y,I,J) :- $functor(Y,F,N),$et_numvargs(Y,I,J,0,N).
+$et_numvargs(Y,I,I,N,N) :- !.
+$et_numvargs(Y,I,J,C,N) :- C1 is C+1, arg(C1,Y,A),$et_numbervars(A,I,I1),
+	$et_numvargs(Y,I1,J,C1,N).
+
+$et_changed :-
+	'$et_flag'(D),
+	(D =:= 1;
+	 D \== 1,$globalset('$et_flag'(1))).
+
+/*****************  Complete Extension Table Algorithm  ******************/
+
+$et_star(Query) :-
+	$globalset('$et_flag'(0)),
+	$abolish(et$ANSWER(_)),
+	repeat,
+ 	   ($et_points(L),		
+	    $et_rem_calls(L),	/* Use of predicate that ASSUMES no errors */
+	    call(Query),
+	    not((not($pred_undefined(et$ANSWER(_))),
+		 et$ANSWER(Answer),$et_subsumes(Answer,Query))),  
+	    $assert(et$ANSWER(Query));	/* remove duplicate answers */
+	    $et_nochange,!,fail).
+
+$et_nochange :-
+	/* no need to check if '$et_flag' defined since it is 
+	   always defined for the general algorithm		*/
+	'$et_flag'(D),
+	(D =:= 0 ;
+	 D \== 0, $globalset('$et_flag'(0)),fail).
+
+$et_remove(Etlist) :-
+	$et_check(Etlist,$et_notexists(_)),
+	$et_removeit(Etlist).
+
+$et_removeit(P/A) :-
+	/* remove calls and answers */
+	$name(P,Pname),
+	$name(C,[99,97,108,108,36 | Pname]),	/* call$ */
+	$functor(Callpred,C,A),
+	$abolish(Callpred),			/* undefine Callpred */
+	$name(E,[101,116,36 | Pname]),		/* et$ */
+	$functor(Etpred,E,A),
+	$abolish(Etpred).
+$et_removeit([Pred|More]) :-
+	$et_removeit(Pred),
+	$et_removeit(More).
+$et_removeit([]).
+
+$et_remove_calls(Etlist) :-
+	$et_check(Etlist,$et_notexists(_)),
+	$et_rem_calls(Etlist).
+
+$et_rem_calls(P/A) :-
+	$name(P,Pname),
+	$name(C,[99,97,108,108,36 | Pname]),	/* call$ */
+	$functor(Callpred,C,A),
+	$abolish(Callpred).
+$et_rem_calls([Pred|More]) :-
+	$et_rem_calls(Pred),
+	$et_rem_calls(More).
+$et_rem_calls([]).
+
+$et_remove_answers(Etlist) :-
+	$et_check(Etlist,$et_notexists(_)),
+	$et_rem_answers(Etlist).
+
+$et_rem_answers(P/A) :-
+	$name(P,Pname),
+	$name(E,[101,116,36 | Pname]),		/* et$ */
+	$functor(Etpred,E,A),
+	$abolish(Etpred).
+$et_rem_answers([Pred|More]) :-
+	$et_rem_answers(Pred),
+	$et_rem_answers(More).
+$et_rem_answers([]).
+
+/*  Retrieves answers from the extension table for a predicate. */
+$et_answers(Arg,Pred) :-
+	not($et_unbound(Arg)),
+	not($et_invalid(Arg)),
+	not($et_notexists(Arg)),
+	Arg = P/A,
+	$name(P,Pname),
+	$functor(Pred,P,A),
+	Pred =.. [P | Args],
+	$name(E,[101,116,36 | Pname]),			/* et$ */
+	Etpred =.. [E | Args],
+	not($pred_undefined(Etpred)),
+	'_$call'(Etpred).
+
+/*    Retrieves calls from the et for a predicate.		 */
+$et_calls(Arg,Pred) :-
+	not($et_unbound(Arg)),
+	not($et_invalid(Arg)),
+	not($et_notexists(Arg)),
+	Arg = P/A,
+	$name(P,Pname),
+	$functor(Pred,P,A),
+	Pred =.. [P | Args],
+	$name(C,[99,97,108,108,36 | Pname]),		/* call$ */
+	Callpred =.. [C | Args],
+	not($pred_undefined(Callpred)),
+	'_$call'(Callpred).
+
+/************************************************************************
+ *			ET tuple-at-a-time				*
+ * 	for 	Predterm = p(X,Y),					*
+ *		Predterm1 = p(X1,Y1),					*
+ *		Callterm = call$p(X,Y),					*
+ *		Callterm1 = call$p(X1,Y1),				*
+ *		Etterm = et$p(X,Y),					*
+ *		Etterm1 = et$p(X1,Y1),					*
+ *	   	Codeterm = code$p(X,Y),					*
+ *	   generate code for:						*
+ *		( call$p(X1,Y1),					*
+ *		  subsumes(p(X1,Y1),p(X,Y)),!,				*
+ *		  et$p(X,Y);						*
+ *		  assert(call$p(X,Y)), 					*
+ *  		 (et$p(X,Y);						*
+ *		  code$p(X,Y),						*
+ *		  not(et$p(X1,Y1),subsumes(p(X1,Y1),p(X,Y))),		*
+ *		  et_changed,						*
+ *		  assert(et$p(X,Y)) ) ).				*
+ ************************************************************************/
+
+$et_tat(Predterm,Predterm1,Callterm,Callterm1,Etterm,Etterm1,Codeterm) :-
+      ( '_$call'(Callterm1),$et_subsumes(Predterm1,Predterm),!,
+	$assert_call_s(Etterm);		
+	$assert(Callterm),
+	($assert_call_s(Etterm);
+	call(Codeterm),
+	not(('_$call'(Etterm1),$et_subsumes(Predterm1,Predterm))),
+	$et_changed,			/* for use in ET* algorithm	*/
+	$assert(Etterm) )).
+
+/* ------------------------------ $et.P ------------------------------ */
+
+
+/*
+-----------------------------DISCLAIMER----------------------------------
+Beware:	
+    Using impure code with the ET algorithm can be dangerous to your health. 
+
+Since the ET saves answers which are not instances of that already in the
+table and uses these answers if the current call is an instance of a call
+already made, then predicates such as var/1 and nonvar/1 should not be used.
+
+Example:
+	if p(X,Y) is called before and the current call is p(X,b)
+	then the answers stored in the extension table are used to
+	answer the current call. However, these answers could be
+	incorrect if var/nonvar tests are used on the second argument
+	in the evaluation of p.
+
+Another problem with using impure code is that if you cut over an ET predicate
+then the saved call implies that you computed all answers for that predicate
+but there are only partial results in the ET because of the cut.
+So on a subsequent call the incomplete extension table answers are used
+when all answers are expected.
+
+Example:
+	r(X,Y) :- p(X,Y),q(Y,Z),!,fail.
+
+	?-  r(X,Y) ; p(X,Y).			
+
+	Let p be an ET predicate whose evaluation yields many tuples.
+	In the evaluation of the query, r(X,Y) makes a call to p(X,Y).
+	Assuming that there is a tuple such that q(Y,Z) succeeds with the
+	first p tuple then the evaluation of p is cut over. The call to p(X,Y)
+	in the query uses the extension table because of the previous call
+	in the evaluation of r(X,Y). Only one answer is found, whereas the
+	relation p contains many tuples, so the computation is not complete.
+
+Note that "cuts" used within the evaluation of an ET predicate are ok 
+(as long as they don't cut over the evaluation of another ET predicate). 
+The evaluation of the predicate that uses cuts does not cut over any et
+processing (such as storing or retrieving answers) so that the tuples that
+are computed are saved. In the following example, the ET is used to generate
+prime numbers where an ET point is put on prime/1.
+*/

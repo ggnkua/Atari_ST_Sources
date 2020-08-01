@@ -1,0 +1,65 @@
+/* Indice du ressource pour WINDOW */
+
+#define WINDOW   0   /* Formulaire/Dialogue */
+#define W_ULSIZE 1   /* BOX dans l'arbre WINDOW */
+#define W_PCLOSE 2   /* BOX dans l'arbre WINDOW */
+#define W_CLOSER 3   /* BOXTEXT dans l'arbre WINDOW */
+#define W_TSIZE  4   /* BOX dans l'arbre WINDOW */
+#define W_URSIZE 5   /* BOX dans l'arbre WINDOW */
+#define W_PCASC  6   /* BOX dans l'arbre WINDOW */
+#define W_FULLER 7   /* BOXTEXT dans l'arbre WINDOW */
+#define W_LSIZE  8   /* BOX dans l'arbre WINDOW */
+#define W_RSIZE  9   /* BOX dans l'arbre WINDOW */
+#define W_LLSIZE 10  /* BOX dans l'arbre WINDOW */
+#define W_PSLLT  11  /* BOX dans l'arbre WINDOW */
+#define W_SLLT   12  /* BOXTEXT dans l'arbre WINDOW */
+#define W_BSIZE  13  /* BOX dans l'arbre WINDOW */
+#define W_LRSIZE 14  /* BOX dans l'arbre WINDOW */
+#define W_PSLDN  15  /* BOX dans l'arbre WINDOW */
+#define W_SLDN   16  /* BOXTEXT dans l'arbre WINDOW */
+#define W_MOVER  17  /* BOXTEXT dans l'arbre WINDOW */
+#define W_CASCADE 18  /* BOXTEXT dans l'arbre WINDOW */
+#define W_MENU   19  /* BOX dans l'arbre WINDOW */
+#define W_MENU_L 20  /* BOXTEXT dans l'arbre WINDOW */
+#define W_MENU_R 21  /* BOXTEXT dans l'arbre WINDOW */
+#define W_INFO   22  /* BOXTEXT dans l'arbre WINDOW */
+#define W_INFO_R 23  /* BOXTEXT dans l'arbre WINDOW */
+#define W_INFO_L 24  /* BOXTEXT dans l'arbre WINDOW */
+#define WORKAREA 25  /* BOXTEXT dans l'arbre WINDOW */
+#define W_SLUP   26  /* BOXTEXT dans l'arbre WINDOW */
+#define W_VERTRK 27  /* BOX dans l'arbre WINDOW */
+#define W_VERSL  28  /* BOX dans l'arbre WINDOW */
+#define W_HORTRK 29  /* BOX dans l'arbre WINDOW */
+#define W_HORSL  30  /* BOX dans l'arbre WINDOW */
+#define W_SLRT   31  /* BOXTEXT dans l'arbre WINDOW */
+#define W_OPTION 32  /* BOXTEXT dans l'arbre WINDOW */
+
+#define WINDSM   1   /* Formulaire/Dialogue */
+#define S_ULSIZE 1   /* BOX dans l'arbre WINDSM */
+#define S_CLOSER 3   /* BOXTEXT dans l'arbre WINDSM */
+#define S_TSIZE  4   /* BOX dans l'arbre WINDSM */
+#define S_URSIZE 5   /* BOX dans l'arbre WINDSM */
+#define S_FULLER 7   /* BOXTEXT dans l'arbre WINDSM */
+#define S_CASCADE 8   /* BOXTEXT dans l'arbre WINDSM */
+#define S_RSIZE  9   /* BOX dans l'arbre WINDSM */
+#define S_LRSIZE 10  /* BOX dans l'arbre WINDSM */
+#define S_SLDN   12  /* BOXTEXT dans l'arbre WINDSM */
+#define S_SLRT   13  /* BOXTEXT dans l'arbre WINDSM */
+#define S_BSIZE  14  /* BOX dans l'arbre WINDSM */
+#define S_LLSIZE 15  /* BOX dans l'arbre WINDSM */
+#define S_SLLT   17  /* BOXTEXT dans l'arbre WINDSM */
+#define S_LSIZE  18  /* BOX dans l'arbre WINDSM */
+#define S_MOVER  19  /* BOXTEXT dans l'arbre WINDSM */
+#define S_MENU   20  /* BOX dans l'arbre WINDSM */
+#define S_MENU_L 21  /* BOXTEXT dans l'arbre WINDSM */
+#define S_MENU_R 22  /* BOXTEXT dans l'arbre WINDSM */
+#define S_INFO   23  /* BOXTEXT dans l'arbre WINDSM */
+#define S_INFO_R 24  /* BOXTEXT dans l'arbre WINDSM */
+#define S_INFO_L 25  /* BOXTEXT dans l'arbre WINDSM */
+#define S_OPTIONS 26  /* BOXTEXT dans l'arbre WINDSM */
+#define S_UP     27  /* BOXTEXT dans l'arbre WINDSM */
+#define S_VERTRK 28  /* BOX dans l'arbre WINDSM */
+#define S_VERSL  29  /* BOX dans l'arbre WINDSM */
+#define S_HORTRK 30  /* BOX dans l'arbre WINDSM */
+#define S_HORSL  31  /* BOX dans l'arbre WINDSM */
+#define S_WORK   32  /* BOXTEXT dans l'arbre WINDSM */

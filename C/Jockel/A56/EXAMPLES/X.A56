@@ -1,0 +1,588 @@
+;***************************************************************
+; 
+; A stereo reverb for the DSP56001 signal processor.  Based on,
+; 
+;	Moorer, James A. "About This Reverberation Business."
+;	Computer Music Journal Vol 3, No. 2 (1979), pp. 13-28.
+;
+;   reprinted in,
+;
+;	Roads, Curtis, and Strawn, John, ed., _Foundations
+;	of Computer Music_, pp. 605-639, MIT Press, 1985.
+;	ISBN 0-262-68051-3 (paper)
+;	ISBN 0-262-181142 (hard)
+;
+; Each comb filter uses a low-pass filter in the feedback path.
+; The combs and all-pass filter delay lines use a prime-number
+; of stages to improve diffusion.
+;
+; The output all-pass stage is replicated for left/right
+; decorrelation.  Each side uses slightly different gains
+; and delay lengths.  This works a lot better than just inverting
+; one side and adding in the input.
+;
+; I left out the early-reflection FIR filter because I needed the cycles
+; for other effects.
+;
+; Quinn Jensen (jensenq@qcj.icon.com)
+;
+;***************************************************************
+	psect	vectors		p:$0000:$0040
+	psect	hf_code		p:$0040:$0200
+	psect	hf_datax	x:$0000:$0040
+	psect	hf_datax1	x:$0040:$0100
+	psect	hf_datay	y:$0000:$0040
+	psect	hf_datay1	y:$0040:$0100
+	psect	midi_data	x:$0400:$1000
+	psect	lo_data		x:$1000:$F000
+	psect	lo_code		p:$F000:$FE00
+	psect	loader		p:$FE00:$FFFF
+	psect	iox		x:$FFC0:$FFFF
+	psect	ioy		y:$FFC0:$FFFF
+;
+; some oft-used constants
+;
+	psect	hf_datax
+ffff	dc	$FFFF		;used a lot for modulus
+ONE	equ	$7FFFFF		;"one"
+one	dc	ONE		;"one"
+;
+; L/R inputs and outputs
+;
+in_l	dc	0.0      
+in_r	dc	0.0      
+out_l	dc	0.0      
+out_r	dc	0.0      
+;
+; recompute comb gains g1 and g2
+;
+recalc_comb_gains
+	move		x:<constsp,r0
+	movec		x:<ffff,m0
+	move		x:lowpass_cutoff_start,b
+	move		x:lowpass_cutoff_slope,y1
+	move		x:comb_g,x1
+	move		#0.5,x0
+
+	do	#6,recalc_loop
+	  clr	a	(r0)+		;skip over the modulus const
+	  add	x0,a	b,y0
+	  mac	x0,y0,a			;g1 = .5 * b + .5
+	  clr	a	a,y0		;y0 = g1
+	  add	x1,a	y0,y:(r0)+	;store g1 in table
+	  macr	-x1,y0,a		;g2 = g(1-g1) = g - g*g1 with limiting
+	  add	y1,b	a,y:(r0)+	;update b, store g2 in table
+recalc_loop
+	rts
+
+	psect	midi_data
+;
+; default values for midi-derived parameters
+;
+lowpass_cutoff_start
+	dc	-0.3906250	; ctl value of 39
+lowpass_cutoff_slope
+	dc	0.0468750	; ctl value of 67
+comb_g
+	dc	0.8325507974	; ctl value of 57
+;
+; preset comb-length arrays
+;
+
+
+
+; comb lenths 383,433,467,523,557,601
+comblen_1
+	dc	383-1
+	dc	433-1
+	dc	467-1
+	dc	523-1
+	dc	557-1
+	dc	601-1
+
+
+; comb lenths 509,577,631,701,743,797
+comblen_2
+	dc	509-1
+	dc	577-1
+	dc	631-1
+	dc	701-1
+	dc	743-1
+	dc	797-1
+
+
+; comb lenths 683,769,839,937,991,1069
+comblen_3
+	dc	683-1
+	dc	769-1
+	dc	839-1
+	dc	937-1
+	dc	991-1
+	dc	1069-1
+
+
+; comb lenths 919,1021,1117,1249,1319,1427
+comblen_4
+	dc	919-1
+	dc	1021-1
+	dc	1117-1
+	dc	1249-1
+	dc	1319-1
+	dc	1427-1
+
+
+; comb lenths 1223,1367,1489,1657,1759,1901
+comblen_5
+	dc	1223-1
+	dc	1367-1
+	dc	1489-1
+	dc	1657-1
+	dc	1759-1
+	dc	1901-1
+
+
+; comb lenths 1627,1823,1987,2213,2341,2539
+comblen_6
+	dc	1627-1
+	dc	1823-1
+	dc	1987-1
+	dc	2213-1
+	dc	2341-1
+	dc	2539-1
+
+
+;;;;;;;;;;;;;;;;;;;;;;;
+; reverb filters
+;;;;;;;;;;;;;;;;;;;;;;;
+
+;  Reverb filter lengths and coefficients     
+;  6 comb reverb with prime delay lines
+;  Sun Oct 24 13:53:51 1993
+;  
+;                          Sample rate        32.5520830 kHz      
+;                          g                   0.8400000
+;  
+;                    status      STABLE       
+;         delay      near prime lengths actual
+;  stage   (ms)   1  high   low  best  delay        g1        g2
+;  ---------------------------------------------------------------
+;  Comb 1  50.0  1628  1637  1627  1627 49.981 0.3064583 0.5825750
+;  Comb 2  56.0  1823  1823  1823  1823 56.003 0.3264583 0.5657750
+;  Comb 3  61.0  1986  1987  1979  1987 61.041 0.3464583 0.5489750
+;  Comb 4  68.0  2214  2221  2213  2213 67.983 0.3594792 0.5380375
+;  Comb 5  72.0  2344  2347  2341  2341 71.916 0.3694792 0.5296375
+;  Comb 6  78.0  2539  2539  2539  2539 77.998 0.4243750 0.4835250
+;  All      6.0   195   197   193   193  5.929 0.7000000
+
+; COMB(name, length, modulus, g1, g2)
+
+
+
+
+; storage for "c1" length=1627 modulus=2048 g1=0.3046875 g2=0.5812382
+
+	psect	lo_data
+	align	2048
+c1d
+c1m	equ	1627-1
+	org	x:c1d+c1m
+	psect	hf_datax
+c1g1	equ	0.3046875
+c1g2	equ	0.5812382
+
+
+; storage for "a1" length=193 modulus=256 g1=0.7000000 g2=0.0000000
+
+	psect	lo_data
+	align	256
+a1d
+a1m	equ	193-1
+	org	x:a1d+a1m
+	psect	hf_datax
+a1g1	equ	0.7000000
+a1g2	equ	0.0000000
+
+
+; storage for "c2" length=1823 modulus=2048 g1=0.3281250 g2=0.5616459
+
+	psect	lo_data
+	align	2048
+c2d
+c2m	equ	1823-1
+	org	x:c2d+c2m
+	psect	hf_datax
+c2g1	equ	0.3281250
+c2g2	equ	0.5616459
+
+
+; storage for "c3" length=1987 modulus=2048 g1=0.3515625 g2=0.5420536
+
+	psect	lo_data
+	align	2048
+c3d
+c3m	equ	1987-1
+	org	x:c3d+c3m
+	psect	hf_datax
+c3g1	equ	0.3515625
+c3g2	equ	0.5420536
+
+
+; storage for "c4" length=2213 modulus=4096 g1=0.3750000 g2=0.5224613
+
+	psect	lo_data
+	align	4096
+c4d
+c4m	equ	2213-1
+	org	x:c4d+c4m
+	psect	hf_datax
+c4g1	equ	0.3750000
+c4g2	equ	0.5224613
+
+
+; storage for "a2" length=207 modulus=256 g1=0.7500000 g2=0.0000000
+
+	psect	lo_data
+	align	256
+a2d
+a2m	equ	207-1
+	org	x:a2d+a2m
+	psect	hf_datax
+a2g1	equ	0.7500000
+a2g2	equ	0.0000000
+
+
+; storage for "c5" length=2341 modulus=4096 g1=0.3984375 g2=0.5028690
+
+	psect	lo_data
+	align	4096
+c5d
+c5m	equ	2341-1
+	org	x:c5d+c5m
+	psect	hf_datax
+c5g1	equ	0.3984375
+c5g2	equ	0.5028690
+
+
+; storage for "c6" length=2539 modulus=4096 g1=0.4218750 g2=0.4832767
+
+	psect	lo_data
+	align	4096
+c6d
+c6m	equ	2539-1
+	org	x:c6d+c6m
+	psect	hf_datax
+c6g1	equ	0.4218750
+c6g2	equ	0.4832767
+
+
+	psect	hf_datax
+a1r	dc	a1d
+a1md	dc	a1m
+a1g1d	dc	a1g1
+a2r	dc	a2d
+a2md	dc	a2m
+a2g1d	dc	a2g1
+	psect	hf_datay
+curaddrp
+	dc	curaddr
+	psect	hf_datax
+constsp	dc	consts
+lowstatep
+	dc	lowstate
+
+	psect	hf_datax1
+curaddr
+	dc	c1d
+	dc	c2d
+	dc	c3d
+	dc	c4d
+	dc	c5d
+	dc	c6d
+
+	psect	hf_datay1
+consts
+	dc	c1m
+	dc	c1g1
+	dc	c1g2
+	dc	c2m
+	dc	c2g1
+	dc	c2g2
+	dc	c3m
+	dc	c3g1
+	dc	c3g2
+	dc	c4m
+	dc	c4g1
+	dc	c4g2
+	dc	c5m
+	dc	c5g1
+	dc	c5g2
+	dc	c6m
+	dc	c6g1
+	dc	c6g2
+
+	psect	hf_datax1
+lowstate
+	dc	0
+	dc	0
+	dc	0
+	dc	0
+	dc	0
+	dc	0
+
+;;;;;;;;;;;;;;;;;;;;;;;
+; miscellaneous signals
+;;;;;;;;;;;;;;;;;;;;;;;
+
+	psect	hf_datax
+L_overall
+	dc	$7FFFFF
+R_overall
+	dc	$7FFFFF
+
+;;;;;;;;;;;;;;;;;;;;;;;
+; signal vector
+;;;;;;;;;;;;;;;;;;;;;;;
+	psect	hf_datax
+	align 8
+signal_vector
+Lin	dc	0.0
+Rin	dc	0.0
+Reverb_L
+	dc	0.0
+Reverb_R	
+	dc	0.0
+
+Lout
+	dc	0
+Rout
+	dc	0
+
+	psect hf_datay
+signal_vectorp
+	dc	signal_vector
+signal_mod
+	dc	4-1
+
+gain_vectorsp
+	dc	gain_vectors
+;;;;;;;;;;;;;;;;;;;;;;;
+; gain matrix
+;;;;;;;;;;;;;;;;;;;;;;;
+	psect	hf_datay1
+gain_vectors
+Reverb_gain_vector
+Reverb_Lin	dc 0.5
+Reverb_Rin	dc 0.5
+Reverb_Reverb_L	dc 0.0
+Reverb_Reverb_R	dc 0.0
+
+Lout_gain_vector
+Lout_Lin	dc 0.0
+Lout_Rin	dc 0.0
+Lout_Reverb_L	dc ONE
+Lout_Reverb_R	dc 0.0
+
+Rout_gain_vector
+Rout_Lin	dc 0.0
+Rout_Rin	dc 0.0
+Rout_Reverb_L	dc 0.0
+Rout_Reverb_R	dc -1.0
+
+;***************************************************************
+;
+;	init code - call hf_init at first and any time when
+;	parameters change
+;
+;***************************************************************
+	psect	lo_code
+
+hf_init
+;
+;	clear out the filter delay lines
+;
+
+
+
+	move		#c1d,r0
+	movec		#c1m,m0
+	jsr	clear_line_r0
+
+
+	move		#c2d,r0
+	movec		#c2m,m0
+	jsr	clear_line_r0
+
+
+	move		#c3d,r0
+	movec		#c3m,m0
+	jsr	clear_line_r0
+
+
+	move		#c4d,r0
+	movec		#c4m,m0
+	jsr	clear_line_r0
+
+
+	move		#c5d,r0
+	movec		#c5m,m0
+	jsr	clear_line_r0
+
+
+	move		#c6d,r0
+	movec		#c6m,m0
+	jsr	clear_line_r0
+
+
+	move		#a1d,r0
+	movec		#a1m,m0
+	jsr	clear_line_r0
+
+
+	move		#a2d,r0
+	movec		#a2m,m0
+	jsr	clear_line_r0
+
+	jsr	recalc_comb_gains
+	rts
+
+clear_line_r0
+	clr	a
+	rep	#0
+	  move		a,x:(r0)+
+	rts
+
+;***************************************************************
+;
+;	sample rate computations
+;
+;	Call hf_comp once per sample.
+;	Globals in_l and in_r should have the left and right
+;	input samples.  When hf_comp returns, out_l and out_r
+;	will be ready.
+;
+;***************************************************************
+
+;
+; fs = 32.552083 kHz
+;
+	psect	hf_code
+
+hf_comp
+;
+;	copy inputs
+;
+	move		x:<in_l,a
+	move		a,x:<Lin
+	move		x:<in_r,a
+	move		a,x:<Rin
+;
+;	compute outputs using matrix multiply
+;
+; [reverb_in out_l out_r] = [gain_vector] * [signal_vector]
+;
+	move		y:<signal_vectorp,r0
+	movec		y:<signal_mod,m0
+	move		y:<gain_vectorsp,r4
+	movec		x:<ffff,m4
+	move		x:<L_overall,y1		;and wait for m4
+	clr	a	x:(r0)+,x0 y:(r4)+,y0
+	mac	x0,y0,a	x:(r0)+,x0 y:(r4)+,y0
+	mac	x0,y0,a	x:(r0)+,x0 y:(r4)+,y0
+	mac	x0,y0,a	x:(r0)+,x0 y:(r4)+,y0
+	macr	x0,y0,a	x:(r0)+,x0 y:(r4)+,y0
+	clr	a	a,b			;b is reverb_in
+	mac	x0,y0,a	x:(r0)+,x0 y:(r4)+,y0
+	mac	x0,y0,a	x:(r0)+,x0 y:(r4)+,y0
+	mac	x0,y0,a	x:(r0)+,x0 y:(r4)+,y0
+	macr	x0,y0,a	x:(r0)+,x0 y:(r4)+,y0
+	clr	a	a,x1
+	mpy	x1,y1,a	x:<R_overall,y1
+	clr	a	a,x:<out_l
+	mac	x0,y0,a	x:(r0)+,x0 y:(r4)+,y0
+	mac	x0,y0,a	x:(r0)+,x0 y:(r4)+,y0
+	mac	x0,y0,a	x:(r0)+,x0 y:(r4)+,y0
+	macr	x0,y0,a	x:(r0)+,x0 y:(r4)+,y0
+	clr	a	a,x1
+	mpy	x1,y1,a
+	clr	a	a,x:<out_r
+;
+; r1	lowstate vector
+; m1	-1
+; r4	ptr to modulus,g1,g2 constants
+; m4	-1
+; r5	curaddr ptr
+; m5	-1
+; b	comb out accum
+; x0	scaled comb in
+;
+;
+;	set up reverb input
+;
+	clr	b	b,x0			;get reverb_in
+	move		#1.0/16,x1		;allow 4 bits of headroom
+	mpyr	x0,x1,a				;and 4 bits of noise
+	move		a,x0
+	move		x:<lowstatep,r1
+	movec		x:<ffff,m1
+	move		x:<constsp,r4
+	movec		m1,m4
+	move			y:<curaddrp,r5
+	movec		m1,m5
+;
+;	do the six combs
+;
+	do	#6,comb_loop
+	  move		x:(r5),r0		;r0=curaddr
+	  movec		y:(r4)+,m0		;m0=modulus
+	  move		x:(r1),x1 y:(r4)+,y1	;x1=lowstate, y1=g1, wait for m0
+	  move		x:(r0)+,y0		;y0=delay out
+	  add	y0,b		y0,a		;a=delay out
+	  macr	x1,y1,a		y:(r4)+,y1	;a=out+g1*lowstate, y1=g2
+	  clr	a      	a,x:(r1)+ a,y0		;y0=new lowstate
+	  add	x0,a	r0,x:(r5)+		;a=in, save ptr
+	  macr	y0,y1,a				;a=in+g2*g1*lowstate
+	  move		a,x:-(r0)		;store delay in (takes 2 cyc)
+comb_loop
+;
+;	scale
+;
+	rnd	b	#$15,x0		;scale by ~1/6
+	move		b,y0
+	mpyr	x0,y0,b
+	move		b,y1		;save b for right chan
+;
+;	allpass L
+;
+	move		x:<a1r,r0
+	movec		x:<a1md,m0
+	move		x:<a1g1d,x0
+	move		x:(r0),x1
+	macr	x0,x1,b	x1,a
+	move			b,y0
+	macr	-x0,y0,a b,x:(r0)+
+	asl	a      	r0,x:<a1r
+	asl	a			;get rid of the headroom
+	asl	a
+	asl	a
+	move		a,x:<Reverb_L
+;
+;	allpass R
+;
+	tfr	y1,b	x:<a2r,r0
+	movec		x:<a2md,m0
+	neg	b	x:<a2g1d,x0
+	move		x:(r0),x1
+	macr	x0,x1,b	x1,a
+	move			b,y0
+	macr	-x0,y0,a b,x:(r0)+
+	asl	a	r0,x:<a2r
+	asl	a
+	asl	a
+	asl	a
+	move		a,x:<Reverb_R
+;
+;	done
+;
+	rts
+
+	end
