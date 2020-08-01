@@ -1,0 +1,465 @@
+------------------------------
+
+Date: 9 May 91 21:18:36 GMT
+From: imagen!atari!apratt@sun.com (Allan Pratt)
+Subject: ARGV spec repost as promised
+To: Info-Atari16@naucse.cse.nau.edu
+
+In a discussion about Pexec and command lines, the question of the
+ARGV standard came up.  Here is our documentation on this convention.
+It dates from August 22, 1990.
+
+GEMDOS EXTENDED ARGUMENT (ARGV) SPECIFICATION
+
+Introduction
+
+The Pexec() function of GEMDOS allows a program to pass to a child
+process a command line up to 125 characters long, with arguments
+separated by spaces.  No provision is made in GEMDOS for the child to
+know its own name.  This makes it difficult for C programs to correctly
+fill in argv[0], the standard place where a C program finds the command
+which invoked it.  Because the command line arguments are separated by
+spaces, it is difficult to pass an argument with an embedded space.
+This document will specify a method of passing arguments which allows
+arbitrary argument length, embedded spaces, and support for argv[0].
+
+Standard Argument Passing
+
+The Pexec Cookbook specifies how to use Pexec() to launch a child
+process, passing a command tail (argument string) and an environment.
+Before getting into the extended argument scheme, let's review how
+arguments are normally passed to a child.
+
+A parent process builds a command line into an argument string - a null
+terminated string whose first byte contains the length of the rest of
+the string - and its address is passed as one of the arguments to
+Pexec().  GEMDOS copies this argument string to the basepage which it
+creates for the child.  Thus the parent is responsible for gathering
+all the child's arguments into one string.  This is normally handled by
+a library exec() function.  The child is responsible for parsing the
+string of space-separated arguments back into an array of strings.
+This parsing is normally handled by the child's startup code.
+
+Evolution
+
+Several methods of bypassing the limits imposed by Pexec() have been
+used by GEMDOS programs.  Some allow a user to specify a file on the
+command line which contains the rest of the arguments.  Others get a
+pointer to the arguments, or the arguments themselves, from the
+environment string.  Most MS-DOS programs use a command file for the
+extra arguments.  This can be inconvenient for a user, cluttering the
+file system with command files, and making the operation of batch files
+and makefiles more confusing.
+
+Several "standards" have arisen on the ST which use the environment to
+pass arguments.  While more convenient than command files, these
+standards have other problems.  Some rely on sharing memory between
+parent and child processes.  Some take advantage of undocumented
+features of the operating system to get argv[0].  Others give the
+child process no way to validate that the arguments it finds are
+intended for it.
+
+Rationale
+
+In order to pass more than the standard 125 characters worth of
+arguments to a child, or to let the child find its name, the parent
+must place the extra information in a place where the child can access
+it safely and legally.  The most convenient place is in the child's
+environment string.  An environment string is a series of
+null-terminated strings of the format "VARIABLE=value" (e.g.
+PATH=c:\bin,c:\etc, or ShellP=YES).   The last null-terminated string
+in the environment is followed by a zero byte, thus two consecutive
+nulls indicates the end of the environment.   The environment is
+allocated for the child by GEMDOS, it is owned by the child, and its
+contents can be specified by the parent.
+
+The child must have some way of knowing that the arguments which
+it finds in its environment are intended for it.  The child may have
+been invoked by a parent which does not conform to this specification.
+Such a parent would leave _its_ arguments in the environment, and could
+pass that environment on to the child.  The child would mistakenly
+interpret its parent's arguments as its own.
+
+Placing arguments in the environment passed to the child gets around
+all of the command line limits of the standard Pexec() command tail.
+Because there is no limit on the length of the environment, arbitrary
+length arguments are supported.  Arguments placed in the environment
+are null terminated, so they may contain spaces.  A parent can also
+place the name of the command with which it invokes the child in the
+child's environment, providing support for argv[0].  Validation of the
+extended arguments can be placed in the standard Pexec() command line,
+by assigning a special meaning to an invalid length byte.
+
+The GEMDOS Extended Argument Specification
+
+This specification uses the convention that the presence of an
+environment variable named ARGV (all upper case) indicates that extended
+arguments are being passed to the child in its environment.  This means
+that ARGV is a "boolean" environment variable.  For the purpose of this
+specification, its value is not significant, but its presence indicates
+that the strings following it are the arguments for the child.
+Implementations of this specification are free to give the ARGV
+environment variable any value.  The ARGV environment variable must be
+the last one in the environment passed to the child, so that the child
+can truncate its environment at that point, and treat everything before
+the ARGV as environment, and everything after it as arguments.
+
+The first argument to the child (argv[0]) is the first string in the
+environment after the ARGV variable.  This argument is the "pathname"
+parameter passed by the parent to Pexec().  The remaining arguments are
+those that the child would normally find in the command tail in its
+basepage.  Even if all of the arguments would normally fit in a child's
+command tail, the parent should set up the arguments in the environment
+to take advantage of the benefits of this extended argument scheme.
+
+As many arguments as will fit in the command tail will be passed there
+as well as in the environment, to support non-conforming programs.  As
+a flag that arguments are also in the environment, the length byte of
+the command tail will be 127 (hex 7f).  Non-conforming programs should
+not have a problem with this length byte, because it is longer than the
+maximum 125 bytes allowed by Pexec().
+
+As an aside, the Pexec Cookbook erroneously implies that a command line
+can be 126 or 127 characters long.  In fact, GEMDOS only copies to the
+child's basepage up to 125 bytes, or until it encounters a null, from
+the argument string passed to Pexec().  It ignores the length byte,
+placing a null at the same place it found one or at the 126th byte if
+no null is found.  This has several implications: the length byte is
+not validated by GEMDOS (necessitating validation in the child's
+startup code, but also making this extended argument spec possible),
+and the null terminator _can_ be located after the end of the real
+command tail (the Desktop places a CR character after the command tail
+and before the null).  The ARGSTART.S startup code listing below
+demonstrates how to correctly validate and parse a GEMDOS command tail.
+
+A child which finds an ARGV environment variable can use the command
+tail length byte value of 127 to validate that the arguments following
+the variable are valid, and not just left over from a non-conforming
+parent which left its own ARGV arguments in the environment.
+
+Because the strings in the environment following an ARGV variable are
+not environment variables, a child should truncate its own environment
+at the ARGV variable by changing the 'A' to a null.
+
+Implementation: Parental Responsibilities
+
+To pass arguments in the environment, a parent must create an
+environment string for the child.  This can be achieved by first
+allocating as much space as is used in the parent's own environment,
+plus enough room for the ARGV variable and the arguments to the child,
+and then copying the parent's environment to the newly allocated area.
+Next, the ARGV variable must be appended, since it must be the last
+variable in the child's environment string.  Following the ARGV variable
+is the null-terminated pathname of the child as passed to Pexec(), then
+the null-terminated arguments to the child, followed by a final null
+byte indicating the end of the environment.
+
+After setting up the arguments in the environment, the parent must
+place as many arguments as it can fit in the command tail it passes
+to Pexec().  This way, a child which does not conform to this
+specification can still get arguments from the command tail in its
+basepage.  When placing arguments in the environment, the parent must
+set the first (length) byte of the command tail to 127 (hex 7f),
+validating the arguments in the environment.
+
+Here is an example execv() library routine in C.  It uses three local
+utility routines, e_strlen(), e_strcpy(), and str0cpy() for getting
+environment size and copying strings into the environment created for
+the child.
+
+
+/* EXECV.C - example execv() library routine
+ * ================================================================
+ * 890910 kbad
+ */
+
+long Malloc( long nbytes );
+long Pexec( short mode, char *filename, char *tail, char *env );
+long Mfree( void *address );
+
+/* Return the total length of the characters and null terminators in
+ *   an array of strings.
+ * `strings' is an array of pointers to strings, with a null pointer
+ *   as the last element.
+ */
+static long
+e_strlen( char *strings[] )
+{
+	char	*pstring;
+	long	length = 0;
+
+    while( *strings != 0 ) {	    /* Until reaching null pointer,	*/
+	pstring = *strings++;	    /* get a string pointer,		*/
+	do {			    /* find the length of this string,  */
+	    ++length;		    /* using do-while to count the	*/
+	} while( *pstring++ != 0 ); /* null terminator.			*/
+    }
+    return length;		    /* Return total length of all strings */
+}
+
+/* Copy a string, including the null terminator, and return a pointer
+ * to the end of the destination string.
+ */
+static char *
+str0cpy( char *dest, char *source )
+{
+    do { /* use do-while to include null terminator */
+	*dest++ = *source;
+    } while( *source++ != 0 );
+    return dest;
+}
+
+/* Copy an array of strings into an environment string, and return a pointer
+ * to the end of the environment string.
+ * `strings' is an array of pointers to strings with a null pointer
+ *   as the last element.
+ * `envstring' points to the environment string.
+ */
+static char *
+e_strcpy( char *envstring, char *strings[] )
+{
+    while( *strings != 0 ) {
+	envstring = str0cpy( envstring, *strings );
+	++strings;
+    }
+    return envstring;		    /* Return end of environment string */
+}
+
+
+/* Run a program, passing it arguments according to the
+ * GEMDOS Extended Argument Spec.
+ *
+ * `childname' is the relative path\filename of the child to execute.
+ * `args' is an array of pointers to strings to be used as arguments
+ *   to the child.  The last array element must be a null pointer.
+ * `environ' is a global array of pointers to strings
+ *   which make up the caller's environment.
+ */
+long
+execv( char *childname, char *args[] )
+{
+	long    envsize, ret;
+	char    *parg, *penvargs, *childenv, *pchildenv;
+	short	lentail;
+	char    argch, tail[128], *ptail;
+static  char	argvar[] = "ARGV=";
+extern  char	*environ[];
+
+/*
+ * Find out how much memory we'll need for the child's environment
+ */
+    envsize = e_strlen( environ );	/* length of environment	*/
+    envsize += e_strlen( args );	/* plus command tail args	*/
+/* plus length of argv[0] */
+    parg = childname;
+    do { /* use do-while to include null terminator */
+	++envsize;
+    } while( *parg++ != 0 );
+/* plus length of ARGV environment variable and final null */
+    envsize += 7;
+    envsize += envsize & 1; /* even # of bytes */
+/*
+ * Allocate and fill in the child's environment
+ */
+    ret = Malloc( envsize );
+    if( ret < 0 )
+	return ret; /* Malloc error */
+    childenv = (char *)ret;
+    pchildenv = e_strcpy( childenv, environ );	 /* copy caller environment */
+    pchildenv = str0cpy( pchildenv, argvar );	 /* append ARGV variable */
+    pchildenv = str0cpy( pchildenv, childname ); /* append argv[0] */
+    penvargs = pchildenv;			 /* save start of args */
+    pchildenv = e_strcpy( pchildenv, args );	 /* append args */
+    *pchildenv = 0;				 /* terminate environment */
+/* put as much in the command tail as will fit */
+    lentail = 0;
+    ptail = &tail[1];
+    while( (lentail++ < 126) && (penvargs < pchildenv) ) {
+	argch = *penvargs++;
+	if( argch == 0 ) {
+	    *ptail++ = ' ';
+	} else {
+	    *ptail++ = argch;
+	}
+    }
+/* terminate command tail and validate ARGV */
+    *ptail = 0;
+    tail[0] = 127;
+/*
+ * Execute child, returning the return code from Pexec()
+ */
+    ret = Pexec( 0, childname, tail, childenv );
+    Mfree( childenv );
+    return ret;
+}
+/* End of execv() example code */
+
+
+Implementation: Prenatal Responsibilities
+
+A program's startup code must handle getting extended arguments out of
+the environment.  The startup code should get the basepage pointer off
+the stack, then get the environment pointer from the basepage, and
+search the environment for "ARGV=".  If "ARGV=" is found, the command
+line length byte in the basepage is checked.  If the command line
+length byte is 127, then the arguments in the environment are valid.
+The first argument begins after the first null following the "ARGV=".
+It is important not to assume that the null follows immediately after
+the "ARGV=", because some implementations may assign a value to the
+ARGV environment variable.  After setting up an array of pointers to the
+arguments, the startup code should set the 'A' of the "ARGV" variable
+to null, thus separating the environment from the argument strings
+(remember: a double null terminates the environment).
+
+Here is some example C startup code which shows how a child could
+look for arguments in its environment:
+
+* ARGSTART.S - example C startup code
+* using GEMDOS Extended Argument Specification
+* ================================================================
+* 890910 kbad
+
+.globl		_main		; external, C entry point
+.globl		_argv0		; external, name used for argv[0] if no ARGV
+.globl		_stksize	; external, size of application stack
+.globl		_basepage	; allocated here, -> program's basepage
+.globl		_environ	; allocated here, -> envp[]
+.globl		_argvecs	; allocated here, -> argv[]
+.globl		_stklimit	; allocated here, -> lower limit of stack
+.BSS
+_basepage:	ds.l	1
+_environ:	ds.l	1
+_argvecs:	ds.l	1
+_stklimit:	ds.l	1
+.TEXT
+_start:
+	move.l	4(sp),a5	; get basepage
+	move.l	a5,_basepage	; save it
+	move.l	24(a5),a0	; bss base
+	add.l	28(a5),a0	; plus bss size = envp[] base
+	move.l	a0,_environ	; save start of envp[]
+	move.l	a0,a1		; start of env/arg vectors
+	move.l	44(a5),a2	; basepage environment pointer
+	tst.b	(a2)		; empty environment?
+	beq.s	nargv		; yes, no envp[]
+
+	lea.l	(sp),a4		; use dummy return pc on stack for ARGV test
+* --- fill in the envp[] array
+nxenv:	move.l	a2,(a1)+	; envp[n]
+	move.l	a2,a3
+nxen1:	tst.b	(a2)+
+	bne.s	nxen1		; get the end of this variable
+	tst.b	(a2)		; end of env?
+	beq.s	xenv
+* --- check for ARGV
+	move.b	(a3)+,-(a4)	; get 1st 4 bytes of this var
+	move.b	(a3)+,-(a4)
+	move.b	(a3)+,-(a4)
+	move.b	(a3)+,-(a4)
+	cmp.l	#'VGRA',(a4)+	; is it ARGV?
+	bne.s	nxenv
+	cmp.b	#'=',(a3)	; is it ARGV=?
+	bne.s	nxenv
+	clr.b	-4(a3)		; ARGV marks the end of our environment
+	cmp.b	#127,$80(a5)	; command line validation?
+	bne.s	nargv		; nope... and we're done with the env.
+* --- got an ARGV=, create argv[] array
+	clr.l	(a1)+		; terminate envp[]
+	move.l	a1,_argvecs	; save base of argv[]
+nxarg:	move.l	a2,(a1)+	; argv[n]
+nxar1:	tst.b	(a2)+
+	bne.s	nxar1
+	tst.b	(a2)
+	bne.s	nxarg
+* --- end of environment
+xenv:	move.l	_argvecs,d0	; if we got an argv[]
+	bne.s	argok		; don't parse command tail
+* --- No ARGV, parse the command tail
+* NOTE: This code parses the command tail IN PLACE.  This can cause problems
+*       because the default DTA set up by GEMDOS for a program is located
+*       in the command tail part of the basepage.  You should use Fsetdta()
+*       to set up your own DTA before performing any operations which could
+*       use the DTA if you want to preserve the arguments in the command tail.
+nargv:	clr.l	(a1)+		; terminate envp[]
+	move.l	a1,_argvecs	; base of argv[]
+	move.l	#_argv0,(a1)+	; default name for argv[0]
+	lea	128(a5),a2	; command tail
+	move.b	(a2)+,d2	; length byte
+	ext	d2
+	moveq	#125,d1		; validate length
+	cmp	d1,d2
+	bcs.s	valen
+	move	d1,d2		; if invalid length, copy all of tail
+valen:	clr.b	0(a2,d2)	; null tail because desktop inserts <cr>
+	moveq	#' ',d1		; space terminator
+get1:	move.b	(a2)+,d2	; null byte?
+	beq.s	argok		; if so, we're done
+	cmp.b	d1,d2		; strip leading spaces
+	beq.s	get1
+	subq	#1,a2		; unstrip start char
+	move.l	a2,(a1)+	; and store that arg
+get2:	move.b	(a2)+,d2	; next char
+	beq.s	argok		; if null, we're done
+	cmp.b	d1,d2		; if not space...
+	bne.s	get2		; keep looking
+	clr.b	-1(a2)		; terminate argv[argc] in the command tail
+	bra.s	get1		; get next arg
+argok:	clr.l	(a1)+		; terminate argv[]
+* --- allocate stack
+	move.l	a1,_stklimit	; end of env/arg vectors is stack limit
+	add.l	_stksize,a1	; allocate _stksize bytes of stack
+	move.l	a1,sp		; set initial stack pointer
+* --- release unused memory
+	sub.l	a5,a1		; size to keep
+	move.l	a1,-(sp)
+	move.l	a5,-(sp)	; base of block to shrink
+	pea	$4a0000		; Mshrink fn code + junk word of 0
+	trap	#1
+	lea	12(sp),sp	; pop args
+*
+* Everything beyond here depends on implementation.
+* At this point, _environ points to envp[], _argvecs points to argv[],
+* and _stklimit points to the end of the argv array.  Thus argc can
+* be calculated as ((_stklimit-_argvecs)/4)-1.
+* _main could be invoked as follows:
+*
+	move.l	a5,-(sp)	; basepage
+	move.l	_environ,-(sp)	; envp[]
+	move.l	_argvecs,-(sp)	; argv[]
+	move.l	_stklimit,d0	; 4 bytes past end of argv[]
+	sub.l	(sp),d0		; (argc+1) * sizeof( char * )
+	asr.l	#2,d0		; argc+1
+	subq	#1,d0		; argc
+	move	d0,-(sp)
+	jsr	_main		; call mainline
+	lea	14(sp),sp	; pop args
+
+
+A Final Note
+
+This specification was formulated with careful deliberation, and with
+input from several companies and developers who have created
+development tools for GEMDOS.  The Mark Williams extended argument
+passing scheme was the main influence for this specification, because
+it has been in use, and supported by Mark Williams and other companies
+for several years.  This specification is very similar to the Mark
+Williams scheme, with the following important exceptions:
+
+1) Under the specification, the arguments after the ARGV environment
+variable may be validated by checking the command tail length byte.
+The Mark Williams execve() library function uses the command tail
+length byte as a telltale, but it is not checked by the crts0 startup
+code.  This validation is important for the reasons mentioned in the
+Rationale section above.
+
+2) The specification allows the ARGV environment variable to take on any
+value.  Mark Williams uses the value of ARGV as an iovector, which is
+described in the Mark Williams documentation.  The iovector should no
+longer be needed, as its primary purpose was to simplify the MWC
+implementation of the C library function isatty().
+
+3) Some versions of the MWC startup code do not require the ARGV= to
+have an `='.  Because ARGV is an actual environment variable in the
+specification, the equals character is required.
+
+------------------------------

@@ -1,0 +1,754 @@
+Modem programming guide
+
+The Atari ST modem programming guide
+October 12, 1991
+
+Copyright 1991 Steve Yelvington
+        Internet: <steve@thelake.mn.org>
+        GEnie:    S.YELVINGTO2
+
+
+Introduction
+------------
+
+Modem i/o on the ST is isn't difficult. In fact, compared with other
+personal systems, the ST is unusually easy to program for serial
+communications.
+
+The hard work is done for you. TOS includes interrupt-driven serial
+port routines. This means that when a character arrives at the serial
+port, TOS breaks away from whatever it's doing, grabs the character,
+stores it in a buffer, and returns to the task that was interrupted.
+You don't need to write code to do that.
+
+The serial port buffers -- one for input, one for output -- are FIFO
+(First In, First Out) queues. TOS provides functions for reading from
+the input buffer, writing to the output buffer, and even changing the
+size of the buffers.
+
+All you have to do is read from or write to the serial port as if it
+were a console.
+
+This document contains examples in C. If you're programming in another
+language, don't despair, because C is used here only to string together
+TOS functions. The strategies don't change when you shift to another
+system of notation.
+
+The modem i/o routines
+----------------------
+
+Both BIOS and GEMDOS provide functions for single-character serial
+i/o that work exactly like their console equivalents.
+
+>From GEMDOS:
+
+   Console      Serial         Description
+   -------      ------         -----------
+   Cconin                      Read a character with echo
+   Cnecin       Cauxin         Read a character without echo
+   Cconout      Cauxout        Write a character
+   Cconis       Cauxis         Return TRUE if a character is available         
+   Cconos       Cauxos         Return TRUE if output is possible, i.e.,
+                               the output buffer has room for more data
+
+There is not a serial port equivalent for Cconws, but you should be
+able to write one easily enough:
+
+#include <osbind.h>
+void Cauxws(s) /* write a nul-terminated string to the aux port */
+        register char *s;
+        {
+        register char c;
+        while (c=*s++)
+                Cauxout(c);
+        }
+
+
+In C, GEMDOS functions usually are implemented as preprocessor
+macros that translate into gemdos() function calls. Other
+languages may require that you write GEMDOS calls explicitly. If
+you're coding in assembler, you should be able to translate the
+following by keeping in mind that you push the arguments onto
+the stack from right to left and then call trap #1 for gemdos.
+
+Here are common C preprocessor definitions for the
+above-mentioned operations (plus a few more).
+
+#define Cconin()        (long)  gemdos(0x1)
+#define Cconout(a)      (void)  gemdos(0x2,(short)(a))
+#define Cauxin()        (short) gemdos(0x3)
+#define Cauxout(a)      (void)  gemdos(0x4,(short)(a))
+#define Cprnout(a)      (void)  gemdos(0x5,(short)(a))
+#define Cnecin()        (long)  gemdos(0x8)
+#define Crawio(a)       (long)  gemdos(0x6,(short)(a))
+#define Crawcin()       (long)  gemdos(0x7)
+#define Cconws(a)       (void)  gemdos(0x9,(char*)(a))
+#define Cconrs(a)       (void)  gemdos(0x0a,(char*)(a))
+#define Cconis()        (short) gemdos(0x0b)
+#define Cconos()        (short) gemdos(0x10)
+#define Cprnos()        (short) gemdos(0x11)
+#define Cauxis()        (short) gemdos(0x12)
+#define Cauxos()        (short) gemdos(0x13)
+
+
+What about BIOS?
+
+>From BIOS, the approach is slightly different. BIOS provides one
+function for each operation, with the device indicated by an
+argument. The first argument to the function is the device
+number: 
+
+   Console      Serial         Description
+   -------      ------         -----------
+   Bconin(2)    Bconin(1)      Read a character
+   Bconout(2,c) Bconout(1,c)   Write a character c
+   Bconstat(2)  Bconstat(1)    Return TRUE if a character is available         
+   Bcostat(2)   Bcostat(1)     Return TRUE if output is possible
+
+Note that the device numbers used by the BIOS are different from the
+file handles used at the GEMDOS level. The BIOS device numbers may be
+defined in this fashion:
+
+#define BCON_PRT        0 /* printer */
+#define BCON_AUX        1 /* aux (modem) port */
+#define BCON_CON        2 /* console */
+#define BCON_MIDI       3 /* MIDI port */
+#define BCON_KBD        4 /* intelligent keyboard device output */
+#define BCON_RAW        5 /* raw console output, no VT52 */
+
+The BIOS macros are defined as follows:
+
+#define Bconstat(dev)   bios(1,(short)(dev))
+#define Bconin(dev)     bios(2,(short)(dev))
+#define Bconout(dev,ch) bios(3,(short)(dev),(short)(ch))
+#define Bcostat(dev)    bios(8,(short)(dev))
+
+If you're using assembly language, the bios trap is #13.
+
+There is a no function to read a string from the serial port at
+either the GEMDOS level or the BIOS level. For reasons that will
+become clear shortly, you should write your own.
+
+All of the GEMDOS and BIOS input functions return 32-bit LONG values.
+
+In the case of the serial port, only the low 8 bits are interesting.
+
+In the case of the console, the low 8 bits will contain the
+ASCII code corresponding to the key -- if there is one. If the
+keystroke is a nonstandard key, such as a function key, HELP or
+UNDO, the low eight bits will be an ASCII nul value. In all
+cases, the upper 24 bits contain a unique keyscan code and
+information regarding the state of the shift keys.
+
+A simple terminal program
+------------------------- 
+
+A ``dumb'' terminal program using these functions is simple to write.
+All you need is a loop in which you will ``poll'' the console and the
+serial port. It might look like this:
+
+#include <osbind.h>
+#define BANNER "\033EIncredibly dumb full-duplex terminal version 0.1\r\n"
+
+main()
+        {
+        int c;
+        Cconws(BANNER);
+        for(;;)
+                {
+                if (Cauxstat()) /* data waiting at the aux port */
+                        {
+                        c = (int) (Cauxin() & 0xFF); /* get it and clean it */
+                        Cconout(c);
+                        }
+                if (Cconstat()) /* data waiting at the console */
+                        {
+                        c = (int) (Cnecin() & 0xFF); /* get it and clean it */
+                        if (c) /* if it's not a NUL from a function key */
+                                Cauxout(c);
+                        }
+                }
+        }
+
+You'll notice that the above example runs forever. Well, not quite.
+GEMDOS console i/o processes control-characters, and a control-C will
+kill the program.
+
+Of course, that means you can't send control-C out the modem port.
+That's one of many reasons it's called an ``incredibly dumb''
+terminal.
+
+You'll probably want to rewrite the program using BIOS functions and
+test for use of the UNDO or F10 keys.
+
+
+Whatever happened to GEM?
+-------------------------
+
+None of this discussion has dealt with GEM. Why? Because so far as
+GEM is concerned, the serial port doesn't exist.
+
+The AES Event Manager doesn't poll the aux port to determine whether
+an event has occurred.
+
+If you want to write a GEM event-driven communications program that
+will cooperate with desk accessories for multitasking, you'll need to
+use the timer with a time value of 0. This will allow a task switch
+to take place, and when you regain control you can check the serial
+port's status with GEMDOS or BIOS.
+
+If you're worried that the serial input buffer will overflow while
+some system-hog task is running, resize the buffer as described
+below.
+
+The real world intrudes
+-----------------------
+
+None of the above functions cares whether the modem is live or dead.
+They only deal with data. If your caller falls asleep at the keyboard
+or abruptly hangs up, the above functions won't worry about a thing.
+If you're writing a communications program or a BBS, you'll have to
+deal with these real-world conditions. Modems and phone lines are not
+perfect.
+
+There are many ways to handle such errors.  In C, you might want to
+use the setjmp and longjmp functions to ``bail out'' and restart your
+program. Assuming you have set up a jump buffer called ``panic,'' you
+might write a low-level aux port input function that looks like this:
+
+#include <time.h>
+#include <osbind.h>
+#define TIMEOUT         60      /* 60-second timeout */
+
+int auxin()
+        {
+        clock_t time1,elapsed;
+        if (!rs232cd())
+                {
+                hangup();
+                longjmp(panic);
+                }
+        time1 = clock();  /* get tick time */
+
+        /* loop for up to TIMEOUT seconds, waiting for aux input */
+        for(;;)
+                {
+                if (Cauxis()) /* these could just as well be BIOS calls */
+                        return Cauxin();
+
+                /* no activity yet, so ... */
+                /* get new tick time and convert to seconds */
+
+                elapsed = (clock() - time1) / CLK_TCK;
+
+                /* if too much time has elapsed, restart */
+
+                if (elapsed > TIMEOUT)
+                        {
+                        hangup();
+                        longjmp(panic);
+                        }
+                } /* continue the loop */       
+        }
+
+
+The above code has used a couple of functions that aren't in the
+library and bear some explaining. Here is the function that checks
+the carrier-detect status of the aux port by examining a hardware
+register:
+
+#include <osbind.h>
+int rs232cd()                   /* state of rs232 carrier detect line */
+        {
+        register long ssp;
+        register int *mfp, status;
+        mfp = ((int *) 0xFFFFFA00L);            /* base address of MFP */
+        ssp = Super(0L);                        /* enter supervisor mode */
+        status = *mfp;                          /* get MFP status */
+        Super(ssp);                             /* return to user mode */
+        return(!(status & 0x0002));             /* check for carrier */
+        }
+
+
+Here is a function that hangs up the phone line by dropping the DTR
+(Data Terminal Ready) signal. Note that most modems are shipped from
+the factory with DTR sensitivity disabled. You should be able to turn
+it back on by toggling a DIP switch or with a command from the
+keyboard.
+
+
+#include <osbind.h>
+void hangup()
+        {
+        Ongibit(0x10);  /* dtr off */
+        sleep(1);       /* wait one second */
+        Offgibit(0xEF); /* dtr on */
+        }
+
+Now, what about getting a string from the modem port? You'll need to
+call your custom auxin() function, as above. Here is an auxgets
+function modified from the dLibs getln. Note that it uses a function
+``auxput'' for output; you can rewrite or #define it to mirror the
+BIOS or GEMDOS-level routine you used for input:
+
+#define KEY_CR          0x0D /* carriage return */
+#define KEY_LF          0x0A /* linefeed */
+#define KEY_BS          0x08 /* backspace */
+#define KEY_DEL         0x7F /* delete */
+
+char *auxgets(buffer, limit)
+        char *buffer; /* where keystrokes will be stored */
+        register int limit; /* size of the buffer */
+        {
+        register char *bp = buffer;
+        register int c, i = 0;
+        for(;;)
+                {
+                c = auxin() & 0xFF; /* mask off high bits, just in case */
+
+                /* end of line */
+                if((c == KEY_CR) || (c == KEY_LF)) 
+                        {
+                        *bp = '\0';
+                        break;
+                        }
+
+                /* backspace or delete */
+                else if(((c == KEY_BS) || (c == KEY_DEL)) && (bp != buffer))
+                        {
+                        --bp;
+                        auxput('\b');
+                        auxput(' ');
+                        auxput('\b');
+                        --i;
+                        }
+                else if((c >= ' ') && (i < limit))
+                        {
+                        auxput(*bp++ = c);
+                        ++i;
+                        }
+                }
+        return(buffer);
+        }
+
+
+
+Configuring the serial port
+---------------------------
+
+In order to communicate with another machine over the serial port,
+speed and flow-control settings may need to be altered. Atari's XBIOS
+(Extended BIOS) provides a function that can configure the serial
+port. The function Rsconf sets the speed, flow-control and four
+bitmapped hardware registers. 
+
+Speed (bits per second, often incorrectly called baud) can be set to
+any of 16 values:
+
+#define BPS_19200       0 /* standard */
+#define BPS_9600        1 /* standard */
+#define BPS_4800        2 /* standard */
+#define BPS_3600        3
+#define BPS_2400        4 /* standard */
+#define BPS_2000        5
+#define BPS_1800        6
+#define BPS_1200        7 /* standard */
+#define BPS_600         8
+#define BPS_300         9 /* standard */
+#define BPS_200         10
+#define BPS_150         11
+#define BPS_134         12
+#define BPS_110         13
+#define BPS_75          14
+#define BPS_50          15
+
+Only the values marked /* standard */ are commonly used in modem
+communications.
+
+If you are using a slow- or medium-speed modem (under 9600bps) you
+probably will need to match the ST's serial port speed to that of the
+remote system.
+
+If you are using a high-speed modem, you may be able to set the speed
+at 19,200bps and let the modem handle speed-matching chores. In this
+case, you probably will need to use RTS/CTS (hardware) flow-control
+to avoid overloading the ST's input buffer and the modem's output
+buffer. RTS/CTS is broken in most versions of TOS, and an /auto/
+folder program must be installed to fix it.
+
+Flow control can be configured to any of four settings:
+
+#define FLOW_NONE       0 /* default */
+#define FLOW_XONXOFF    1 /* control-s, control-q software */
+#define FLOW_RTSCTS     2 /* hardware */
+#define FLOW_BOTH       3 /* both hardware and software */
+
+For binary file transfers, software flow control must not be used.
+
+The hardware registers are not useful in ordinary modem-related
+programming, and altering their values incorrectly will have
+unpleasant side effects. Passing -1 to Rsconf will leave the
+corresponding setting unchanged.
+
+Thus, to set bps rate to 2400 and flow control to none, the Rsconf
+function call would look like this:
+
+        Rsconf(BPS_1200,FLOW_NONE,-1,-1,-1,-1)
+
+
+Parity and duplex
+-----------------
+
+Parity is not commonly used in communicating with personal computers,
+but you may need to deal with it when communicating with a mainframe.
+
+The idea behind parity is to provide at least a small degree of
+assurance that the transmitted character is the same as the received
+character. The way this is done is by fiddling with the high bit of
+each byte, which ordinarily would be zero for an ASCII character.
+
+``Even parity'' means that the high bit is either set or unset, as
+necessary, to ensure that the result is an even number. ``Odd
+parity'' means the opposite. You can test this with the modulus
+operator in C, then strip the high bit by ANDing the byte with 0x7F
+or set the high bit by ANDing with 0xFF.
+
+TOS also can generate parity values automatically if the proper
+hardware register is set. However, setting the register requires that
+you also worry about start/stop bits, word length and the serial
+hardware frequency, which is a can of worms.
+
+Duplex is a potentially confusing term that describes whether you or
+a remote system is responsible for putting a character on your
+screen.
+
+Most bulletin board systems run ``full duplex,'' which means that a
+keystroke from a caller is sent to the BBS, which then echoes that
+character back to the caller. This relationship is not symmetrical.
+The caller doesn't echo anything back to the BBS, because the echoes
+would be interpreted as commands.
+
+``Half duplex'' means that each party is responsible for managing his
+or her own display. GEnie normally runs half duplex. Neither caller
+nor BBS echoes anything.
+
+If you're writing a BBS or a terminal program with a ``chat mode,''
+you may want to include a ``both local and remote echo'' option. This
+would allow the remote to run full duplex while you manage both your
+screen and the caller's screen.
+
+
+Resizing the serial buffers
+---------------------------
+
+When a character arrives at the serial port, TOS interrupts what
+it's doing, grabs the character before it disappears, and
+records it in an input buffer. When your program wishes to write
+to the serial port, TOS buffers the output so that your program
+can proceed with other chores without having to wait for a slow
+modem to transmit the data.
+
+TOS provides those buffers, but TOS also provides a facility for
+changing them. Why would you want to do so? Here's a scenario:
+
+You're using Xmodem and you have a slow floppy drive. Xmodem
+ACKS a block, then proceeds to write it to disk while the sender
+sends the next block. So far, so good. But if you switch to
+Ymodem's 1K blocks and a very fast modem, the TOS default buffer
+might overflow while you're writing the previous block to that
+slow floppy drive. Solution: Use a bigger input buffer.
+
+Another scenario: You're running a BBS. The caller is reading a
+long message and decides it's boring. The caller pushes the
+cancel key (control-C, or S, or whatever you've decided makes
+sense.) The BBS stops sending, but that big output buffer is
+full of data -- and it just keeps coming, and coming ....
+Solution: Use small i/o buffers for interacting with humans.
+
+TOS provides an XBIOS function that returns a pointer to an
+input buffer record. It requires one argument: The BIOS number
+of a device (see above).
+
+#define Iorec(dev) (void*) xbios(14, (short)(dev))
+
+Assembly programmers: The xbios trap is #14, so push the device
+number followed by two 14's, then do the trap. The pointer will
+be found in d0.
+
+The iorec structure is defined as follows:
+
+struct iorec
+        {
+        char *buf;    /* pointer to an array: char buffer[bufsiz] */
+        short bufsiz; /* size of the array         */
+        short head;   /* index for writing         */
+        short tail;   /* index for reading         */
+        short low;    /* low water mark, for XON   */
+        short high;   /* high water mark, for XOFF */
+        }
+
+For the AUX port, the output buffer record immediately follows
+the input buffer record.
+
+Before you go poking around inside these records, keep in mind
+that they are internal to TOS, and they are shared by all
+processes that run on your system. You can change the buffers
+and even bypass GEMDOS and BIOS for reading and writing, if you
+so desire, but you must be prepared to live with the
+consequences.
+
+In particular, be very careful to restore the original record
+when your program terminates (unless you're writing a TSR with
+the express purpose of enlarging a buffer).
+
+Immediately after the serial port's input and output records are
+some internal TOS variables that may be useful. The following
+code has worked on all versions of TOS that I've encountered. I
+don't know whether Atari guarantees that the variables won't be
+changed on future versions of TOS.
+
+With those cautions in mind, here is some code, originally
+lifted from an early ST communications program written by Dale
+Schumacher. I've been using the open_aux and close_aux functions
+for years, but I haven't had a need to deal with the rsr, tsr,
+and flow control variables.
+
+typedef struct 
+        {
+        struct iorec in;        /*  0 Input buffer record  */
+        struct iorec out;       /* 14 Output buffer record */
+        char rsr_status;        /* 28 MFP(0x1C) Receiver status */
+        char tsr_status;        /* 29 MFP(0x1D) Transmit status */
+        char xoff_sent;         /* 30 TRUE if we sent XOFF      */
+        char xoff_received;     /* 31 TRUE if we got XOFF       */
+        char mode;              /* 32 Bit 0 XON, Bit 1 RTS mode */
+        char filler;            /* 33 Unused                    */
+        } IOREC;
+
+#define IBUFSIZ 1200
+#define OBUFSIZ 2
+
+char    st_ibuf[IBUFSIZ];       /* our own input buffer         */
+char    st_obuf[OBUFSIZ];       /* and our own output buffer    */
+
+IOREC   *st_sysr;               /* ptr to system rs232 record   */
+IOREC   st_savr;                /* to save system rs232 record  */
+
+IOREC   st_myiorec = 
+        {
+        /* first, an input record */
+        st_ibuf, IBUFSIZ, 0, 0, (IBUFSIZ/4), (3*(IBUFSIZ/4)),
+
+        /* then an output record */
+        st_obuf, OBUFSIZ, 0, 0, 0, 1,
+
+        /* and the rsr, tsr, flow control stuff */
+        0, 0, 0, 0, 0, 0
+        };
+
+void openaux()          /* set up our own rs232 input and output buffers */
+        {
+        while(Bconstat(AUX))            /* flush existing buffer */
+                Bconin(AUX);
+        st_sysr = (IOREC *)Iorec(0);
+        st_savr = *st_sysr;             /* Save system buffer   */
+        *st_sysr = st_myiorec;          /* Set my io buffer     */
+        }
+
+void closeaux()         /* restore system i/o buffer */
+        {
+        *st_sysr = st_savr;
+        }
+
+
+Take a break
+------------
+
+Some remote systems, notably Unix sites, need a BREAK signal to
+wake them up and help them synchronize with a caller's bps rate.
+To generate a BREAK on the ST, you briefly toggle the transmit
+status register. Here is code that does so by directly accessing
+the hardware on the ST. I think Dale Schumacher is the author of
+this code.
+
+#include <time.h>
+#include <osbind.h>
+
+void nap(n)                     /* do nothing for n-100ths of a second */
+        register int n;
+        {
+        register clock_t t, dt;
+        dt = (CLK_TCK * ((clock_t) n)) / ((clock_t) 100);
+        t = clock() + dt;
+        while(clock() < t)
+                ;
+        }
+
+void snd_brk()          /* send a BREAK to the rs232 port */
+        {
+        register long ssp;
+        register char *tsr;
+        tsr = ((char *) 0xFFFFFA2DL);           /* address of tsr */
+        ssp = (long) Super(0L);                 /* enter supervisor mode */
+        *tsr = 0x09;                            /* turn break on */
+        Super(ssp);                             /* return to user mode */
+        nap(30);                                /* 0.3 second BREAK */
+        ssp = (long) Super(0L);                 /* enter supervisor mode */
+        *tsr = 0x01;                            /* turn break off */
+        Super(ssp);                             /* return to user mode */
+        }
+
+The clock() function should be available with most C compilers.
+If you're writing in a language that doesn't have an equivalent,
+the trick is simply to peek at memory location 4BA (hex), which
+is the 200Hz system timer. You must be in supervisor mode to do
+so. The value is a 32-bit long.
+
+
+File transfers
+--------------
+
+When transferring a binary file, the sender and the receiver
+have to agree on a method for signalling the end of the
+transmission. Ideally, they should have some method of
+determining whether the file was mangled by line noise. And if
+it was, there should be a way to retransmit the bad data.
+
+The methods for solving these problems are called file-transfer
+protocols, and their name should be legion, for they are many.
+Xmodem, Ymodem, Zmodem, Quick B, WXmodem, Kermit, Punter, FAST,
+Telink, UUCP 'G' ... the list goes on.
+
+Most of them follow the same basic strategy. A file is broken up
+into multiple packets. Each packet starts with a header that
+includes a packet number and a mathematical value, called a
+checksum, that can be used to determine whether the data in the
+packet has been corrupted.
+
+XMODEM is a very simple implementation of this strategy.
+
+It uses 128-byte data packets. It uses packet headers consisting
+of a a byte for the packet number, and (in the original version)
+a byte for a checksum. The checksum is calculated by adding the
+numeric value of each byte and throwing away the overflow. It's
+not foolproof, but it detects most errors.
+
+Later versions of Xmodem use a 16-bit ``cyclical redundancy
+check'' calculated by using a fairly complex algorithm. It's
+much harder to fool.
+
+If the Xmodem receiver adds up all the values and finds they
+don't match the total that was encoded in the packet header, it
+sends a NAK (Negative AcKnowledgement) signal to the sender,
+which then retransmits the corrupted packet. If they match, it
+the receiver sends an ACK.
+
+Because the packages are small, and because the sender always waits
+for an ACK before proceeding, Xmodem is not particularly fast. When
+XMODEM runs over a network that does its own error-checking and
+packet operations internally (such as CompuServe or GEnie's data
+systems), Xmodem can get painfully slow. That lonely ACK signal
+can take a long time to wander through the network and get back
+to you.
+
+There are two ways of dealing with Xmodem's speed problems. One is to
+use bigger packets, which is the approach taken by most alternatives,
+including Ymodem. The other is to use ``windowing,'' which is used by
+WXmodem, UUCP 'G' and Zmodem.
+
+A windowing protocol doesn't wait for an ACK before sending.
+Instead, it transmits the next block. If a NAK arrives, it can
+back up and resend the bad block. The number of blocks that can
+be ``remembered'' is the size of the ``window.'' A
+sliding-window implementation is one in which the sender's
+window moves along as you move through the file and get ACKs
+from the receiver.
+
+And now, the code.
+
+This document isn't going to attempt to present a C
+implementation of a file-transfer protocol. But the question of
+``how do I calculate a checksum'' comes up frequently, here is C
+code to create the values used by Xmodem, Ymodem and some
+related programs.
+
+Some CRC functions index the CRC values out of an array of
+precalculated numbers. That approach probably is faster than the
+one below, but the ST has plenty of horsepower for this sort of
+thing.
+
+Don't ask me to explain the math. I can't. I didn't write this;
+I just use it.
+
+ /*
+  * This function calculates the CRC used by the XMODEM/CRC
+  * Protocol.
+  * The first argument is a pointer to the message block.
+  * The second argument is the number of bytes in the message block.
+  * The function returns a short integer that contains the CRC value.
+  */
+ short crc16(ptr, count)
+ register char *ptr;
+ register short count;
+    {
+    register short crc = 0, i;
+    while(--count >= 0) 
+       {
+
+       crc = crc ^ (short)*ptr++ << 8;
+       for(i=0; i<8; ++i)
+          {
+          if(crc & 0x8000)
+             crc = crc << 1 ^ 0x1021;
+          else
+             crc = crc << 1;
+          }
+       }
+    return(crc & 0xFFFF);
+    }
+  
+ 
+If you want to port this to another language, keep in mind that 
+ 
+  a << b  evaluates to the bit pattern of a shifted left b bits
+ 
+  * dereferences a pointer; *ptr++ evaluates to the pointed-to value
+    and then increments ptr by the size of the pointed-to value
+ 
+  ^ is a bitwise exclusive OR operator; 11110000 (binary) ^ 00001111
+    evaluates to 11111111
+ 
+  & in the context above is a bitwise AND operator; crc & 0xFFFF
+    basically strips anything above 16 bits (important if your
+    environment supports 32-bit ints).
+ 
+
+Acknowledgements
+----------------
+
+This document wouldn't have been possible without the assistance
+of the following people. Some provided instructive code samples;
+others caught errors in earlier versions of this document or
+raised important questions. Thanks to: Dale Schumacher, John
+Stanley, Robert Royar, Adam David, Rob McMullen, Michael
+Fischer.
+
+Corrections
+-----------
+
+Send corrections to steve@thelake.mn.org (Internet),
+S.YELVINGTO2 (GEnie), plains!umn-cs!thelake!steve (UUCP), or
+snail mail to P.O. Box 38, Marine on St. Croix, MN 55047 USA.
+
+Permissions
+-----------
+
+This file may be distributed only in electronic format, and only
+in its original, unaltered state. All other reproduction is
+prohibited without written permission of the author. This
+information is intended to be accurate, but the author makes no
+representation that is is free of errors. This information is
+presented without warranty of any sort, and the author is not
+responsible for any side effects. None of this information is
+extracted from any proprietary documents or trade secrets.
+PS: Shakespeare was right about the lawyers.

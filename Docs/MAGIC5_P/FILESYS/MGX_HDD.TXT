@@ -1,0 +1,452 @@
+Beschreibung der Festplattentreiber-Funktionen von MagiC 3.00
+#############################################################
+
+Andreas Kromke
+Hannover, den 8.2.95
+
+
+Treiber-Installation
+====================
+
+FÅr Festplattentreiber existiert in MagiC die Dcntl-Funktion KER_DOSLIMITS.
+Sie liefert Informationen Åber die KapazitÑt des internen FAT-Dateisystem-
+Treibers, d.h. wieviele Cluster usw. bearbeitet werden kînnen. NÑheres
+siehe MGX_DOS.TXT und MGX_XFS.H.
+
+MagiC benîtigt einen AHDI-kompatiblen Festplattentreiber. Nach dem Start
+des Festplattentreibers muû MagiC seine interne Pufferliste umstrukturieren
+und benîtigt dafÅr die Information, wie groû die vom Treiber installierten
+Sektorpuffer sind. Wenn diese Information falsch ist, gibt es einen bîsen
+Absturz. MagiC ermittelt den Zeiger pun_ptr. Ist dieser NULL, wird davon
+ausgegangen, daû keine Puffer installiert wurden (MagiC verwendet dann
+seine 2+2 Puffer mit je 512 Bytes), ansonsten wird Åber pun_msectsize
+(als UWORD) die Grîûe der neuen Puffer ermittelt. Ist diese grîûer als
+die von MagiC bisher installierten, werden die alten Puffer freigegeben,
+d.h. in internen DOS-Speicher verwandelt. Anschlieûend werden die neuen
+Puffer installiert und _bufl[0] und _bufl[1] wieder auf NULL gesetzt.
+
+
+I Konzepte
+==========
+
+Das gesamte DOS einschlieûlich der Zugriffe auf DOS- Dateisysteme ist
+reentrant und lÑuft im Hintergrund ab. So ist es mîglich, auf Laufwerk A:
+Dateien zu bearbeiten, ohne den Rechner bei den Diskettenzugriffen merklich
+zu bremsen. Voraussetzung sind Disketten- und Festplattenroutinen, die im
+Hintergrund arbeiten.
+
+Die in dieser Datei enthaltenen AuszÅge aus dem BIOS dienen nur zur
+Information, wie das ganze funktioniert. Die Routinen kînnen sich jederzeit
+Ñndern.
+
+Damit der Plattentreiber diese Funktion nicht zur VerfÅgung zu stellen
+braucht, enthÑlt das BIOS von MagiC alle notwendigen Funktionen. Dazu wurde
+die Struktur
+
+typedef struct
+     {
+     long    config_status;
+     DOSVARS *dosvars;
+     AESVARS *aesvars;
+     } MAGX_COOKIE;
+
+erweitert auf
+
+typedef struct
+     {
+     long    config_status;
+     DOSVARS *dosvars;
+     AESVARS *aesvars;
+     void    *reserved;
+     HDFUNCS *hdf;
+     } MAGX_COOKIE;
+
+typedef struct
+     {
+     long      dma_begin ( void );
+     long      dma_end   ( void );
+     long      dma_wait  ( d0 = long ticks_200hz );
+     long      ncr_begin ( void );
+     long      ncr_end   ( void );
+     long      ncr_wait  ( d0 = long ticks_200hz );
+     } HDFUNCS;
+
+Direkt vor der Struktur (2 Bytes vorher) liegt ein WORD, das die
+TabellenlÑnge angibt, in diesem Fall 6. Alle 6 Zeiger liegen im
+Systemvariablenbereich und dÅrfen notfalls verÑndert werden. Die internen
+Funktionen fÅr die Floppy springen ebenfalls Åber die 6 Zeiger. Der Zeiger
+<hdf> im Cookie darf nicht verÑndert werden.
+
+Die Versionsnummer von MagiC, die das Vorhandensein dieses erweiterten
+Cookies enthÑlt, lÑût sich dummerweise nicht Åber AESVARS abfragen, weil
+dieser Zeiger auf die AES- Variablen zur Bootzeit noch NULL ist.
+GlÅcklicherweise gelangt man an den Zeiger auch Åber den TOS- Systemheader,
+dieser Zeiger ist immer gÅltig. Zur Bootzeit ist das prÑemptive Multitasking
+abgeschaltet (eigentlich ist auch das Multitasking abgeschaltet), aber
+jedenfalls funktionieren die Routinen auch vor Installation des AES, wobei
+die Warteroutinen dann ein "busy waiting" machen (wie auch beim Abschalten
+des prÑemptiven Multitasking), und die Semaphorenroutine machen einfach
+nichts (bis auf das Setzen und Lîschen von flock).
+
+Die Routinen acsi_xxx sind gleichzeitig fÅr ACSI und FDC, d.h. dma_begin
+setzt flock, dma_end lîscht es wieder.
+Die Routinen ncr_xxx sind fÅr TT-SCSI.
+
+Die Funktionen xxx_begin reservieren die jeweilige Semaphore. RÅckgabwert 0
+heiût "OK", -1 heiût "Semaphore gehîrte mir schon". Die Routinen verÑndern
+kein Register auûer d0. Es gibt keinen Timeout, die Semaphore wird bei
+Terminierung der Applikation aber freigegeben.
+
+Die Funktionen xxx_end geben die Semaphore wieder frei, kein Register wird
+verÑndert.
+
+dma_wait wartet auf einen Interrupt des ACSI-DMA-Controllers bzw. des FDC,
+ncr_wait ist fÅr den SCSI-Bus des TT.
+RÅckgabe von xxx_wait: 0 = OK, -1 = Timeout, -2 = Busfehler (Interrupt vom
+TT-SCSI),
+
+Semaphoren werden bei Programmterminierung freigegeben (exakt: bei
+Applikations-Terminierung), auch die mit dem DOS- Aufruf Psemaphore belegten
+(Im Gegensatz zu MiNT!!!!).
+Psemaphore() unterstÅtzt nur die Modi 2 und 3. Setzt man mit Psemaphore die
+Semaphore _DMA, darf man nicht vergessen, nach Erhalt der Semaphore flock zu
+setzen und nach Freigeben der Semaphore wieder freizugeben.
+
+System- Semaphoren:
+
+     _SCR      AES-Bildschirm (wind_update)
+     _DMA      ACSI und FDC
+     _NCR      TT-SCSI
+
+#####################################################
+####### Auszug aus dem BIOS : ACSI ##################
+#####################################################
+
+
+* Interruptsteuerung:
+*
+* Alles geht Åber den Eingang I5 des ST-MFP, hat den Interrupt #7
+* (aktiviert mit Bit 7 von ierb)
+* Polling Åber Bit 5 von gpip
+* 1. aer fÅr Bit 5 muû 0 sein, d.h. Interrupt wird ausgelîst beim
+*    öbergang von 1 auf 0
+* 2. Interrupt _mfpint (7) aktivieren und Vektor setzen (Adr. $11c)
+*
+
+**********************************************************************
+*
+* Sperre den FDC/ACSI-DMA
+* und gib ihn wieder frei.
+* Kein Register (auûer d0 bei dma_end) wird verÑndert
+*
+* FÅr die Zeit, in der AES noch nicht initialisiert ist, kann evnt_sem
+* nicht sperren, weil act_appl immer NULL ist.
+*
+
+dma_begin:
+ movem.l  d1-d2/a0-a2,-(sp)
+ lea      dma_sem,a0
+ moveq    #0,d1               ; kein Timeout
+ moveq    #SEM_SET,d0
+ jsr      evnt_sem
+ st       flock
+ movem.l  (sp)+,d1-d2/a0-a2
+ rts
+
+dma_end:
+ movem.l  d0-d2/a0-a2,-(sp)
+ lea      dma_sem,a0
+ moveq    #SEM_FREE,d0
+ jsr      evnt_sem
+ clr.w    flock
+ movem.l  (sp)+,d0-d2/a0-a2
+ rts
+
+
+**********************************************************************
+*
+* long wait_ACSI( d0 = long ticks_200hz )
+*
+* Röckgabe:    0    OK
+*             -1    TimeOut
+*             -2    Busfehler
+*
+
+wait_ACSI:
+ movem.l  d1-d2/a0-a2,-(sp)
+ tst.w    pe_slice            ; prÑemptiv ?
+ bmi.b    wdma_no_yield       ; nein, busy waiting
+ move.l   act_appl,d2
+ ble.b    wdma_no_yield       ; aktuelle Applikation ungÅltig
+
+* neue Routine Åber evnt_IO und MFP- Interrupt
+
+ lsr.l    #2,d0               ; AES: 50Hz statt 200Hz
+wdma_neu:
+ move     sr,d1
+ ori      #$700,sr
+ btst     #5,gpip             ; schon fertig ?
+ beq.b    wdma_ok2            ; ja, enable interrupt
+; Interrupt aufsetzen
+ pea      int_mfp7_unsel(pc)
+ move.l   d2,imfp7_appl       ; act_appl
+ move.l   sp,imfp7_unsel
+; Interrupt freigeben
+ move.w   d1,sr
+; Auf Interrupt warten
+ move.l   sp,a0
+;move.w   d0,d0               ; TimeOut in 50Hz- Ticks
+ jsr      evnt_IO
+ addq.l   #4,sp
+wdma_ende:
+ movem.l  (sp)+,d1-d2/a0-a2
+ rts
+
+* alte Routine mit busy waiting Åber _hz_200
+
+wdma_no_yield:
+ add.l    _hz_200,d0
+wdma_loop:
+ btst     #5,gpip
+ beq.b    wdma_ok
+ cmp.l    _hz_200,d0
+ bcc.b    wdma_loop
+wdma_timeout:
+ moveq    #-1,d0              ; Timeout
+ bra.b    wdma_ende
+wdma_ok2:
+ move.w   d1,sr
+wdma_ok:
+ moveq    #0,d0               ; OK
+ bra.b    wdma_ende
+
+
+**********************************************************************
+*
+* Interruptroutine fÅr MFP, Interruptkanal #7 = I/O-Port 5
+* (DMA/FDC busy)
+*
+* RÅckgabewert 0 (OK)
+*
+
+int_mfp7:
+ tst.l    imfp7_unsel                   ; Interrupt aktiviert ?
+ beq.b    imfp7_ende                    ; nein, weiter
+ movem.l  d0-d2/a0-a2,-(sp)
+
+ move.l   imfp7_unsel,a0
+ clr.l    imfp7_unsel                   ; Interrupt deaktivieren
+ clr.l    (a0)                          ; als eingetroffen markieren
+
+ move.l   imfp7_appl,a0
+ jsr      appl_IOcomplete               ; wartende APP aufwecken
+ movem.l  (sp)+,d0-d2/a0-a2
+imfp7_ende:
+ move.b   #$7f,isrb                     ; service- Bit lîschen
+ rte
+
+
+**********************************************************************
+*
+* void int_mfp7_unsel( a0 = long *unselect, a1 = APPL *ap );
+*
+* Deaktiviert den Interrupt wieder, wenn er nicht eingetroffen ist
+* RÅckgabewert -1 (Timeout)
+*
+
+int_mfp7_unsel:
+ clr.l    imfp7_unsel                   ; Interrupt deaktivieren
+ moveq    #-1,d0
+ move.l   d0,(a0)                       ; nicht eingetroffen
+ rts
+
+
+
+#####################################################
+####### Auszug aus dem BIOS : SCSI ##################
+#####################################################
+
+
+* Interruptsteuerung:
+*
+* SCSI-DMA-Busfehler: Eingang I5 des TT-MFP
+* 1. aer fÅr Bit 5 muû 0 sein, d.h. Interrupt wird ausgelîst beim
+*    öbergang von 1 auf 0
+* Polling Åber Bit 5 von gpip
+* Interrupt #7 des TT-MFP (Adresse $15c)
+
+* SCSI: Eingang I7 des TT-MFP
+* 1. aer fÅr Bit 7 muû 1 sein, d.h. Interrupt wird ausgelîst beim
+*    öbergang von 0 auf 1
+* Polling Åber Bit 7 von gpip
+* Interrupt #15 des TT-MFP (Adresse $17c)
+
+* WÑhrend der öbertragung muû offenbar im Betriebsartenregister
+* $fff785 des ncr 5380 das Bit 3 (enable process interrupt)
+* gesetzt sein.
+
+**********************************************************************
+*
+* Interruptroutine fÅr TT-MFP, Interruptkanal #7 = I/O-Port 5
+* (SCSI-DMA Busfehler)
+*
+* RÅckgabewert -2
+*
+
+int_scsidma:
+ tst.l    ncrdma_unsel                  ; Interrupt aktiviert ?
+ beq.b    incrdma_ende                  ; nein, weiter
+ movem.l  d0-d2/a0-a2,-(sp)
+
+ moveq    #-2,d0                        ; eingetroffen (Fehler)
+ move.l   ncrdma_unsel,a0
+ clr.l    ncrdma_unsel                  ; Interrupt deaktivieren
+ move.l   d0,(a0)                       ; als eingetroffen markieren
+
+ move.l   ncrdma_appl,a0
+ jsr      appl_IOcomplete               ; wartende APP aufwecken
+ movem.l  (sp)+,d0-d2/a0-a2
+incrdma_ende:
+ move.b   #$7f,isrb+$80                 ; service- Bit lîschen (TT-MFP)
+ rte
+
+
+**********************************************************************
+*
+* Interruptroutine fÅr TT-MFP, Interruptkanal #15 = I/O-Port 7
+* (SCSI)
+*
+* RÅckgabewert 0
+*
+
+int_ncr:
+ tst.l    ncrdma_unsel                  ; Interrupt aktiviert ?
+ beq.b    incr_ende                     ; nein, weiter
+ movem.l  d0-d2/a0-a2,-(sp)
+
+ move.l   ncrdma_unsel,a0
+ clr.l    ncrdma_unsel                  ; Interrupt deaktivieren
+ clr.l    (a0)                          ; als eingetroffen markieren
+
+ move.l   ncrdma_appl,a0
+ jsr      appl_IOcomplete               ; wartende APP aufwecken
+ movem.l  (sp)+,d0-d2/a0-a2
+incr_ende:
+ move.b   #$7f,isra+$80                 ; service- Bit lîschen (TT-MFP)
+ rte
+
+
+**********************************************************************
+*
+* void incrdma_unsel( a0 = long *unselect, a1 = APPL *ap );
+*
+* Deaktiviert den Interrupt wieder, wenn er nicht eingetroffen ist.
+* (RÅckgabewert -1)
+*
+
+incrdma_unsel:
+ clr.l    ncrdma_unsel                  ; Interrupt deaktivieren
+ moveq    #-1,d0                        ; Timeout
+ move.l   d0,(a0)                       ; nicht eingetroffen
+ rts
+
+
+**********************************************************************
+*
+* long wait_NCR( d0 = long ticks_200hz )
+*
+* Röckgabe:    0    OK
+*             -2    Busfehler
+*             -1    TimeOut
+*
+* kein Register auûer d0 wird verÑndert
+*
+
+wait_NCR:
+ movem.l  d1-d2/a0-a2,-(sp)
+ tst.w    pe_slice            ; prÑemptiv ?
+ bmi.b    wncr_no_yield       ; nein, busy waiting
+ move.l   act_appl,d2
+ ble.b    wncr_no_yield       ; aktuelle Applikation ungÅltig
+
+* neue Routine Åber evnt_IO und MFP- Interrupt
+
+ lsr.l    #2,d0               ; AES: 50Hz statt 200Hz
+wncr_neu:
+ move     sr,d1
+ ori      #$700,sr
+ btst     #5,gpip+$80         ; DMA- Busfehler ?
+ beq.b    wncr_err2           ; ja, return(-2)
+ btst     #7,gpip+$80         ; schon fertig ?
+ bne.b    wncr_ok2            ; ja, enable interrupt, return(0)
+; Interrupt aufsetzen
+ pea      incrdma_unsel(pc)
+ move.l   d2,ncrdma_appl      ; act_appl
+ move.l   sp,ncrdma_unsel
+; Interrupt freigeben
+ move.w   d1,sr
+; Auf Interrupt warten
+ move.l   sp,a0
+;move.w   d0,d0               ; TimeOut in 50Hz- Ticks
+ jsr      evnt_IO
+ addq.l   #4,sp
+wncr_ende:
+ movem.l  (sp)+,d1-d2/a0-a2
+ rts
+
+* alte Routine mit busy waiting Åber _hz_200
+
+wncr_no_yield:
+ add.l    _hz_200,d0
+wncr_loop:
+ btst     #5,gpip+$80
+ beq.b    wncr_err
+ btst     #7,gpip+$80
+ bne.b    wncr_ok
+ cmp.l    _hz_200,d0
+ bcc.b    wncr_loop
+ moveq    #-1,d0                   ; Timeout
+ bra.b    wncr_ende
+wncr_ok2:
+ move.w   d1,sr
+wncr_ok:
+ moveq    #0,d0
+ bra.b    wncr_ende
+wncr_err2:
+ move.w   d1,sr
+wncr_err:
+ moveq    #-2,d0
+ bra.b    wncr_ende
+
+
+**********************************************************************
+*
+* Sperre den NCR-SCSI
+*
+* kein Register auûer d0 wird verÑndert
+*
+* und gib ihn wieder frei.
+*
+* Kein Register wird verÑndert
+*
+* FÅr die Zeit, in der AES noch nicht initialisiert ist, kann evnt_sem
+* nicht sperren, weil act_appl immer NULL ist.
+*
+
+ncr_begin:
+ movem.l  d1-d2/a0-a2,-(sp)
+ lea      ncr_sem,a0
+ moveq    #0,d1               ; kein Timeout
+ moveq    #SEM_SET,d0
+ jsr      evnt_sem
+ movem.l  (sp)+,d1-d2/a0-a2
+ rts
+
+ncr_end:
+ movem.l  d0-d2/a0-a2,-(sp)
+ lea      ncr_sem,a0
+ moveq    #SEM_FREE,d0
+ jsr      evnt_sem
+ movem.l  (sp)+,d0-d2/a0-a2
+ rts
+

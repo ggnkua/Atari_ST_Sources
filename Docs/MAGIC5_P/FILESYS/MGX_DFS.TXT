@@ -1,0 +1,652 @@
+Beschreibung des DFS-Konzepts von Mag!X V3.00
+#############################################
+
+Andreas Kromke
+Hannover, den 6.4.95
+
+
+I Konzepte
+==========
+
+Im Dokument MGX_XFS.TXT ist der Aufbau eines Mag!X- Dateisystemtreibers (XFS)
+beschrieben. Fest in Mag!X integriert ist nur ein einziges XFS, das DOS_XFS.
+Auf diesem XFS setzen wiederum Untertreiber, sogenannte DFS (dos file system)
+auf, von denen zwei in Mag!X integriert sind, und zwar das FAT- Dateisystem
+und das U- Dateisystem (das fÅr Laufwerk U:).
+Ein DOS- Dateisystem (DFS) wird vom DOS_XFS aufgerufen. Hier stehen nur
+die Dateifunktionen, wÑhrend die Verzeichnisverwaltung im wesentlichen vom
+DOS_XFS Åbernommen wird.
+Weitere DFSs kînnen eingebunden werden. Der Aufwand fÅr ein DFS ist
+wesentlich geringer als fÅr ein XFS, da viele Funktionen vom DOS_XFS
+bereits ausgefÅhrt werden. Die wesentliche Voraussetzung ist eine DOS-
+konforme Verzeichnisstruktur (mit 32-Byte-EintrÑgen und Dateinamen des
+Formats 8+3).
+
+
+II Aufbau eines DFS
+===================
+
+Weil die Implementation nur in Assembler erfolgen kann, hier der Aufbau eines
+DFS in Assembler- Syntax.
+
+     OFFSET
+
+dfs_name:      DS.B      8    /* Untername des DOS-Dateisystems            */
+dfs_next:      DS.L      1    /* NÑchster Treiber                          */
+dfs_init:      DS.L      1    /* Initialisierung                           */
+
+     Diese EintrÑge haben die gleiche Bedeutung wie bei einem XFS
+
+dfs_sync:      DS.L      1    /* Synchronisiert Dateisystem                */
+                              /* a0 = DMD *d                               */
+                              /* -> d0 = long errcode                      */
+
+     Der Kernel hat dem DOS_XFS mitgeteilt, daû auf Laufwerk <d> alle Puffer
+     zurÅckzuschreiben sind. öbergeben wird in Register a0 ein Zeiger auf
+     einen DMD (drive media descriptor). Das DOS_XFS gibt diesen Aufruf
+     direkt an das DFS weiter.
+     ZurÅckgeliefert wird ein Fehlercode. Wenn das DFS keine Pufferverwaltung
+     hat (z.B. eine RAMDisk), muû eine 0 geliefert werden.
+
+dfs_drv_open:  DS.L      1    /* neues Laufwerk                            */
+                              /* a0 = DMD *d                               */
+                              /* -> d0 = long errcode                      */
+
+     Mag!X unterstÅtzt genau 26 gleichzeitig aktive Dateisysteme, denen die
+     Buchstaben 'A'..'Z' zugeordnet sind. Dieser Eintrag hat zwei Aufgaben:
+
+     1. Beim ersten Zugriff auf ein Laufwerk (etwa D:) legt der Kernel einen
+        DMD (drive media descriptor) an und "bietet" diesen den XFSs an. Der
+        DOS_XFS bietet diesen wiederum der Reihe nach allen DFS- Treibern an.
+        Der Eintrag d_dfs ist noch ein Nullzeiger, d_drive ist initialisiert
+        (zwischen 0 und 25, entsprechend 'A'..'Z').
+        Die DFS- Treiber versuchen nun, auf dem Laufwerk "ihr" Dateisystem zu
+        erkennen. Falls dies gelingt, mÅssen d_dfs und d_root initialisiert
+        werden, der RÅckgabewert ist dann E_OK.
+        Andernfalls wird EDRIVE gemeldet, und das DOS_XFS probiert das nÑchste
+        DFS.
+
+     2. Beim wiederholten Zugriff ist d_dfs bereits initialisiert, und das
+        DFS hat die Gelegenheit, auf Mediumwechsel zu testen. Ist alles in
+        Ordnung, muû E_OK zurÅckgegeben werden. Ansonsten muû die
+        Diskwechselroutine des Kernels aufgerufen und E_CHNG zurÅckgegeben
+        werden.
+        Den Zeiger auf die Diskwechselroutine des Kernels erhÑlt man bei der
+        per Dcntl (s.u.).
+
+dfs_drv_close: DS.L      1    /* Laufwerk freigeben                        */
+                              /* d0 = int mode                             */
+                              /* a0 = DMD *d                               */
+                              /* -> d0 = long errcode                      */
+
+     Auch diese Funktion erfÅllt, abhÑngig vom <mode>, zwei Aufgaben:
+
+     1. mode == 0:
+        Das DOS_XFS fragt das DFS, ob das Laufwerk geschlossen werden darf.
+        Wenn dies nicht erlaubt ist, muû EACCDN geliefert werden, sonst E_OK.
+        (nîtig z.B. fÅr Dlock())
+        Geîffnete Dateien wurden bereits von Kernel und DOS_XFS erkannt,
+        d.h. in solch einem Fall wird dfs_drv_close Åberhaupt nicht
+        aufgerufen.
+
+        Aus diesem Grund dÅrften i.A. keine verÑnderten Sektorpuffer
+        existieren, auch keine, die gerade gelesen oder beschrieben werden
+        (dies geschieht immer Åber Dateien!). In diesem Fall genÅgt es also,
+        immer ein E_OK zu liefern.
+        Problematischer wird es, wenn man einen Write-Back-Cache einsetzt.
+        Dabei kann es vorkommen, daû keine Datei mehr geîffnet ist, aber
+        noch Puffer belegt sind und zurÅckgeschrieben werden mÅssen. Der
+        Kernel macht einen Sync- Aufruf (xfs_sync, der weitergegeben
+        wird an dfs_sync), bevor die Anfrage gestellt wird; es dÅrften also
+        keine verÑnderten Puffer mehr existieren. Falls doch, sollte das DFS
+        aus SicherheitsgrÅnden ein EACCDN zurÅckliefern.
+
+     2. mode == 1:
+        Das DOS_XFS erzwingt das Schlieûen, das DFS muû E_OK liefern. Es
+        dÅrfen keine Caches zurÅckgeschrieben werden, da das Laufwerk bereits
+        ungÅltig ist.
+        (nachdem ein Diskwechsel bereits gemeldet wurde).
+
+     Beim Dlock() wird dfs_drv_close() zunÑchst mit Modus 0, dann, wenn es
+     keinen Fehler gegeben hat, mit Modus 1 aufgerufen.
+     Diese Vorgehensweise wird auch dann durchgefÅhrt, wenn einmal ein
+     Mechanismus eingebaut wird, der den Auswurfknopf von
+     Wechselplattenlaufwerken oder CD-ROM abfragt und ggf. den Auswurf
+     verweigert (meine Sun sagt dann immer: "device busy").
+
+dfs_dfree:     DS.L      1    /* FÅr Dfree()                               */
+                              /* a0 = FD *                                 */
+                              /* a1 = long df[4]                           */
+                              /* -> d0 = long errcode                      */
+
+     FÅr Dfree(). I.A. reicht es, aus dem DD den zugehîrigen DMD zu ermitteln
+     und den freien Platz auf dem ganzen Laufwerk anzugeben.
+
+dfs_sfirst:    DS.L      1    /* FÅr Fsfirst                               */
+                              /* a0 = FD * d                               */
+                              /* a1 = DIR *dir                             */
+                              /* d0 = long pos                             */
+                              /* d1 = DTA *dta                             */
+                              /* -> d0 = long errcode                      */
+                              /*    ggf.                                   */
+                              /*    a0 = LINK *l                           */
+
+     Der DOS_XFS hat bereits die Datei angesteuert. Das DFS braucht lediglich
+     fÅr den nÑchsten Fsnext die reservierten EintrÑge dta_usr1 und dta_usr2
+     zu initialisieren, damit die Stelle wiedergefunden wird.
+
+     Dateideskriptoren (FDs) kînnen in dta_usr nicht verwendet werden, weil
+     das Freigeben bei einer "garbage collection" nicht verhindert werden kann.
+     Die FDs einfach zu blockieren, ist auch nicht mîglich, da man das Ende
+     der Fsfirst/-next Operation nicht vorhersagen kann.
+     Eine bereits erfolglose Suche kann z.B. durch Lîschen von dta_sname
+     markiert werden.
+
+     <pos> zeigt bereits auf den nÑchsten Eintrag, also 32 Bytes hinter
+     <dir>. Bei symbolischen Links muû das DFS entsprechend reagieren, in d0
+     ELINK Åbergeben und in a0 einen Zeiger auf den Link. Ein Link beginnt
+     mit einem Wort (16 Bit) fÅr die LÑnge des Pfads, gefolgt vom Pfad selbst.
+
+     Achtung: Die LÑnge muû INKLUSIVE abschlieûendes
+              Nullbyte und auûerdem gerade sein. Der Link
+              muû auf einer geraden Speicheradresse
+              liegen.
+
+     Der Puffer fÅr den Link kann statisch oder auch flÅchtig sein, da der
+     Kernel die Daten sofort umkopiert, ohne daû zwischendurch ein
+     Kontextwechsel stattfinden kann.
+
+dfs_snext:     DS.L      1    /* FÅr Fsnext                                */
+                              /* a0 = DTA *dta                             */
+                              /* a1 = DMD *dmd                             */
+                              /* -> d0 = long errcode                      */
+                              /*    ggf.                                   */
+                              /*    a0 = LINK *l                           */
+
+     GestÅtzt auf die Daten, die dfs_sfirst im reservierten Bereich der DTA
+     abgelegt hat, wird die nÑchste passende Datei gesucht. Dabei kann auf
+     Funktionen des DOS_XFS zurÅckgegriffen werden, die per Dcntl ermittelt
+     werden kînnen:
+
+          _dir_srch           durchsucht ein Verzeichnis per FD
+          reopen_FD           îffnet einen FD
+          close_DD            schlieût einen FD
+          filename_match      vergleicht Dateinamen
+          conv_path_elem      wandelt Dateinamen um
+          init_DTA            kopiert Daten vom DIR in die DTA
+
+dfs_ext_fd:    DS.L      1    /* erweitere ein Verzeichnis                 */
+                              /* a0 = FD *fd                               */
+                              /* -> d0 = long errcode                      */
+
+     Wird benutzt, wenn eine Datei angelegt werden soll, aber das Verzeichnis
+     bereits voll ist. Wird auûerdem beim Anlegen eines Ordners (Dcreate)
+     verwendet.
+
+     <fd> ist ein Prototyp-FD, der bereits im exklusiven Modus geîffnet ist.
+     Die Datei muû erweitert und der neue Platz mit Nullen initialisiert
+     werden.
+
+dfs_fcreate:   DS.L      1    /* erstelle Datei oder Verzeichnis           */
+                              /* a0 = FD *dd                               */
+                              /* a1 = DIR *dir                             */
+                              /* d0 = int cmd                              */
+                              /* d1 = long arg                             */
+                              /* -> d0 = long errcode                      */
+
+     Wird bei Fcreate, Dcreate und Dcntl benutzt. Der DOS_XFS hat bereits im
+     Verzeichnis <dd> einen freien Platz gefunden und, zunÑchst im Speicher,
+     den neuen Verzeichniseintrag <dir> erstellt. Die nicht in jedem DFS
+     verwendeten Teile des DIR (auch Clusternummer) sind bereits mit Null
+     initialisiert. Das DFS hat hier die Gelegenheit, noch Korrekturen
+     vorzunehmen und die reservierten DIR- Bereiche je nach Dateityp zu
+     initialisieren, bevor der DOS_XFS den ganzen Eintrag in das Verzeichnis
+     schreibt.
+     Wenn der Aufruf von Dcntl oder Fsymlink kommt, stehen in d0 und a0 die
+     entsprechenden Parameter, sonst ist d0 == 0. Wenn d0 == SYMLINK_CREATE
+     ist, muû (oder zumindest kann, wenn mîglich) ein symbolischer Link
+     erstellt werden.
+
+dfs_fxattr:    DS.L      1    /* fÅr Fxattr                                */
+                              /* a0 = FD *dd                               */
+                              /* a1 = DIR *dir oder NULL                   */
+                              /* d0 = int mode                             */
+                              /* d1 = XATTR *xattr                         */
+                              /* -> d0 = long errcode                      */
+                              /*    ggf.                                   */
+                              /*    a0 = LINK *l                           */
+
+     FÅr Fxattr. Der DOS_XFS hat bereits alle Informationen, die fÅr alle
+     DFSs identisch sind, in den XATTR eingetragen. xattr_blksize und
+     xattr_nblocks mÅssen vom DFS noch initialisiert werden, xattr_size kann
+     z.B. bei Sonderdateien angepaût werden.
+     xattr_index ist vom DOS_XFS mit dem in Motorola- Format umgewandelten
+     dir_stcl initialisiert worden. In vielen FÑllen wird es nîtig sein, hier
+     eine Korrektur vorzunehmen und z.B. einen Zeiger auf einen Treiber oder
+     eine globale Datenstruktur zu Åbergeben.
+     Beim Modus d0 == 0 (d.h. folge symbolischen Links) muû der DFS
+     entsprechend reagieren und im Fall eines Links in d0 ELINK und in a0 den
+     Link zurÅckgeben.
+     Wenn <dir> == NULL ist, hat der DOS_XFS keinen Verzeichniseintrag,
+     sondern einen FD ermittelt (z.B. die Root oder eine geîffnete Datei).
+
+dfs_dir2index: DS.L      1    /* fÅr Dreaddir                              */
+                              /* a0 = FD *dd                               */
+                              /* a1 = DIR *dir                             */
+                              /* -> d0 = long index oder errcode           */
+
+     Gibt einfach einen Index (32 Bit) zu einem DIR- Eintrag zurÅck. Der
+     FAT_DFS nimmt dazu den ent-intellisierten Startcluster.
+     <dd> ist das Verzeichnis, in dem die Datei liegt.
+
+dfs_readlink:  DS.L      1    /* fÅr Freadlink                             */
+                              /* a0 = FD *dd                               */
+                              /* a1 = DIR *dir                             */
+                              /* -> d0 = long errcode                      */
+                              /*    ggf.                                   */
+                              /*    a0 = LINK *l                           */
+
+     FÅr Freadlink. d0 ist entweder EACCDN, wenn <dir> kein Symlink ist, oder
+     ein anderer Fehlercode.
+     Wenn kein Fehler aufgetreten ist, muû in a0 der Link zurÅckgegeben
+     werden, und d0 muû den Wert ELINK haben.
+
+dfs_dir2FD:    DS.L      1    /* FÅr Fopen                                 */
+                              /* a0 = FD *dd                               */
+                              /* a1 = DIR *dir                             */
+                              /* -> d0 = long errcode                      */
+                              /*    ggf.                                   */
+                              /*    a0 = LINK *l                           */
+
+     Initialisiert einen Prototyp-FD, und zwar die Felder
+
+          fd_len
+          fd_stcl
+          fd_attr
+          fd_ddev
+
+     und ggf.
+
+          fd_name
+          fd_xftype
+          fd_xdata usw.
+
+     und Ñndert ggf. andere Daten des FD.
+
+dfs_fdelete:   DS.L      1    /* FÅr Fdelete und Ddelete                   */
+                              /* a0 = FD *dd                               */
+                              /* a1 = DIR *dir                             */
+                              /* d0 = long dirpos                          */
+                              /* -> d0 = long errcode                      */
+
+     Die Datei mit dem Verzeichniseintrag <dir> im Verzeichnis <FD> soll
+     gelîscht werden.
+     FÅhrt das tatsÑchliche Lîschen der Datei durch, das Lîschen des
+     Verzeichniseintrags und ZugriffsprÅfungen werden vom DOS_XFS
+     durchgefÅhrt.
+
+dfs_pathconf:  DS.L      1    /* För Dpathconf                             */
+                              /* a0 = FD *dd                               */
+                              /* d0 = int which                            */
+                              /* -> d0 = long val oder Fehlercode          */
+
+     Verschiedene BeschrÑnkungen werden abgefragt, die fÅr einen bestimmten
+     Pfad <dd> gelten. Die meisten Werte fÅr <which> werden bereits vom
+     DOS_XFS eingesetzt, deshalb kommen nur folgende Werte vor:
+
+          DP_IOPEN (0)     maximale Anzahl gleichzeitig offener Dateien
+          DP_ATOMIC (4)    interne Blockgrîûe (Sektorgrîûe ?, CLustergrîûe ?)
+         ab 21.5.95:
+          DP_MODEATTR (7)     zulÑssige Dateitypen
+
+III Datenstrukturen
+===================
+
+1. Der DOS-GerÑtetreiber (MX_DDEV)
+----------------------------------
+
+Der Unter-GerÑtetreiber (MX_DDEV) wird beim ôffnen einer Datei von der DFS-
+Funktion dfs_dir2FD in den Dateideskriptor eingesetzt und vom DOS_XFS
+aufgerufen. Der MX_DDEV- GerÑtetreiber muû folgende Funktionen bereitstellen:
+
+     OFFSET
+
+ddev_open:     DS.L      1         /* a0 = FD *file                        */
+                                   /* -> d0 = long errcode                 */
+
+     Die Datei wird geîffnet, der FD ist bereits initialisiert. Im Open-
+     Modus (fd_mode) muû das Bit O_TRUNC ausgewertet werden. Ggf. ist ein
+     Fehlercode zurÅckzugeben, bei GerÑten kann O_TRUNC getrost ignoriert
+     werden.
+     Das Feld fd_fpos ist bereits auf 0L initialisiert. Falls dies nicht
+     ausreicht (z.B. merkt sich das FAT_DFS immer den aktuellen Cluster),
+     sind die entsprechenden Felder des Benutzerbereichs des FD zu
+     initialisieren oder andere Felder des FD anzupassen.
+
+     ddev_open wird sowohl beim ersten ôffnen einer Datei aufgerufen (nach
+     dfs_dir2FD) als auch beim Duplizieren eines Dateideskriptors (wenn z.B.
+     mehrere Programme gleichzeitig auf eine Datei oder ein Verzeichnis
+     zugreifen). Nicht jedoch dann, wenn Fdup() aufgerufen wird oder ein
+     Programm ein anderes aufruft und dabei geîffnete Dateien vererbt
+     werden (!). Grund ist, daû bei diesen Operationen keine neuen Datei-
+     Deskriptoren (FDs) angelegt werden, sondern lediglich mehrere Handles
+     bzw. Prozesse auf denselben FD zugreifen.
+
+     Die VertrÑglichkeit der Open-Modi (etwa "shared read") wird vom DOS-XFS
+     gewÑhrleistet. Der GerÑtetreiber kann z.B. den Openmodus derart
+     modifizieren, daû der FD immer "exklusiv" geîffnet ist, oder per Bit
+     OM_NOCHECK veranlassen, daû er den Openmodus selbst Åberwachen mîchte.
+     Wird ddev_open() fÅr den Prototyp-FD aufgerufen, ist
+     fd->fd_multi1 == fd.
+     Gibt ddev_open() einen Fehlercode zurÅck, wird der FD einfach wieder vom
+     DOS-XFS freigegeben.
+
+ddev_close:    DS.L      1         /* a0 = FD *file                        */
+                                   /* -> d0 = long errcode                 */
+
+     Die Datei wird geschlossen. Die Behandlung von fd_refcnt wird vom
+     DOS_XFS Åbernommen. Der MX_DDEV- Treiber braucht hier lediglich
+     eventuelle Puffer zurÅckzuschreiben.
+
+     Man beachte, daû die Aufrufe ddev_open/ddev_close nicht paarweise
+     aufzutreten brauchen. Grund ist, daû Fdup() oder das Vererben von
+     Handles kein ddev_open bewirken, sondern lediglich den fd_refcnt
+     inkrementieren. Dagegen wird jedoch fÅr das Schlieûen des Handles
+     ein ddev_close aufgerufen, damit eventuelle Puffer zurÅckgeschrieben
+     werden.
+
+ddev_read:     DS.L      1    /* a0 = FD *file                             */
+                              /* d0 = long count                           */
+                              /* a1 = char *buffer                         */
+                              /* -> d0 = long amount                       */
+
+     siehe dev_read in MGX_XFS.TXT
+
+ddev_write:    DS.L      1    /* a0 = FD *file                             */
+                              /* d0 = long count                           */
+                              /* a1 = char *buffer                         */
+                              /* -> d0 = long amount                       */
+
+     siehe dev_write in MGX_XFS.TXT.
+     Der MX_DDEV braucht sich nicht um eine Aktualisierung des Verzeichnisses
+     oder das Datum des letzten Zugriffs zu kÅmmern.
+
+ddev_stat:     DS.L      1    /* a0 = FD *file                             */
+                              /* a1 = MAGX_UNSEL *unselect   oder NULL     */
+                              /* d0 = int rwflag                           */
+                              /* d1 = long apcode                          */
+                              /* -> d0 = long status                       */
+
+     siehe dev_stat in MGX_XFS.TXT
+
+ddev_seek:     DS.L      1    /* a0 = FD *file                             */
+                              /* d0 = long where                           */
+                              /* d1 = int mode                             */
+                              /* -> d0 = long position                     */
+
+     siehe dev_seek in MGX_XFS.TXT
+
+ddev_datime:   DS.L      1    /* a0 = FD *file                             */
+                              /* a1 = int d[2]                             */
+                              /* d0 = int setflag                          */
+                              /* -> d0 = long errcode                      */
+
+     siehe dev_datime in MGX_XFS.TXT.
+     Der MX_DDEV kann hier einfach einen NULL- Zeiger einsetzen, dann fÅhrt das
+     DOS_XFS die Standardprozedur durch.
+     Das DOS_XFS setzt Fcntl(FUTIME, ...) auf Fdatime um.
+
+ddev_ioctl:    DS.L      1    /* a0 = FD *file                             */
+                              /* d0 = int cmd                              */
+                              /* a1 = void *buf                            */
+                              /* -> d0 = long errcode                      */
+
+     siehe dev_ioctl in MGX_XFS.TXT.
+     Es sollten zumindest die Funktionen FTRUNCATE, FIONREAD und FIONWRITE
+     unterstÅtzt werden.
+     Das DOS_XFS setzt Fcntl(FUTIME, ...) auf Fdatime() und damit auf
+     ddev_datime um, d.h. FUTIME braucht von ddev_ioctl nicht direkt
+     unterstÅtzt zu werden.
+
+ddev_delete:   DS.L      1    /* a0 = FD *directory                        */
+                              /* a1 = DIR *dir                             */
+                              /* -> d0 = long errcode                      */
+
+     Diese Funktion wird nur vom U_DFS, also dem integrierten DFS-
+     Dateisystem fÅr Laufwerk U: aufgerufen. Wenn man also einen eigenen
+     GerÑtetreiber installiert, ist genau hier der Zeitpunkt gekommen, seinen
+     Speicher freizugeben und sich damit aus dem System zurÅckzuziehen.
+     NÑheres in MGX_UDFS.TXT.
+
+ddev_getc:     DS.L      1    /* a0 = FD *file                             */
+                              /* d0 = int mode                             */
+                              /* -> d0 = unsigned long c                   */
+
+     siehe dev_getc in MGX_XFS.TXT.
+     Der MX_DDEV kann hier einfach einen NULL- Zeiger einsetzen, dann fÅhrt das
+     DOS_XFS die Standardprozedur durch, d.h. ruft ddev_read auf.
+
+ddev_getline:  DS.L      1    /* a0 = FD *file                             */
+                              /* a1 = char *buf                            */
+                              /* d1 = long size                            */
+                              /* d0 = int mode                             */
+                              /* -> d0 = long amount                       */
+
+     siehe dev_getline in MGX_XFS.TXT.
+     Der MX_DDEV kann hier einfach einen NULL- Zeiger einsetzen, dann fÅhrt das
+     DOS_XFS die Standardprozedur durch, d.h. ruft ddev_read auf.
+
+ddev_putc:     DS.L      1    /* a0 = FD *file                             */
+                              /* d0 = int mode                             */
+                              /* d1 = long value                           */
+                              /* -> d0 = unsigned long count               */
+
+     siehe dev_putc in MGX_XFS.TXT.
+     Der MX_DDEV kann hier einfach einen NULL- Zeiger einsetzen, dann fÅhrt das
+     DOS_XFS die Standardprozedur durch, d.h. ruft ddev_write auf.
+
+
+2. Der Dateideskriptor (FD) bzw. Verzeichnisdeskriptor (DD)
+-----------------------------------------------------------
+
+Die Dateideskriptoren werden vom DOS_XFS angelegt und verwaltet. Das DOS_XFS
+verwaltet Dateien und Ordner (Unterverzeichnisse) mit Hilfe der gleichen
+Datenstruktur. Innerhalb eines DFS siehe ein FD folgendermaûen aus (es ist
+eine von der Ausgangs- Objektklasse abgeleitete Objektklasse mit weiteren
+EintrÑgen (vgl. MGX_XFS.TXT).
+
+     OFFSET
+
+fd_dmd:        DS.L      1    /* 0x00: Zeiger auf DMD                      */
+fd_refcnt:     DS.W      1    /* 0x04: Ref.zÑhler fÅrs Schlieûen oder -1   */
+fd_mode:       DS.W      1    /* 0x06: Open- Modus (0,1,2) und flags       */
+fd_dev:        DS.L      1    /* 0x08: Zeiger auf MX_DEV                   */
+
+     die ersten EintrÑge entsprechen dem Ur-Objekt, d.h. sind fÅr alle XFSs
+     identisch, weil sie vom Kernel verwendet werden.
+
+; fÅr alle DFS
+; fd_name/attr/next/children
+; fd_dirch/time/date/stcl/len sind bei Clones ungÅltig
+; fd_parent/dirpos/dmd sind identisch mit dem Prototyp-FD
+
+fd_ddev:       DS.L      1    /* 0x0c: Zeiger auf MX_DDEV                  */
+
+     Hier muû das DFS beim Aufruf von "dir2FD" den MX_DDEV eintragen, also den
+     GerÑtetreiber.
+
+fd_name:       DS.B      11   /* 0x10: DD_FD: Name im internen Format      */
+fd_attr:       DS.B      1    /* 0x1b: Attribut                            */
+
+     Hier wird der Name (8+3) im internen Format sowie das Dateiattribut
+     abgelegt. Der Name ist nur gÅltig, wenn es sich um ein Unterverzeichnis
+     handelt.
+     Name und Attribut sind nur im "Prototyp-FD", d.h. in fd->multi1 gÅltig.
+     Am Attribut kann man erkennen, ob der FD ein Verzeichnis reprÑsentiert.
+     Der Name der Root (nicht der Rose) ist eine leere Zeichenkette.
+
+fd_owner:      DS.L      1    /* 0x1c: DD_FD: Eigner eines FD oder NULL    */
+
+     Hier wird ein Zeiger auf den Eigner eines FD abgelegt (d.h. ein Zeiger
+     auf die Basepage). Ein Wert von NULL bedeutet, daû der FD z.Zt. nicht
+     belegt ist.
+
+fd_parent:     DS.L      1    /* 0x20: Zeiger auf den Parent-DD_FD         */
+
+     Verkettungszeiger auf den Parent, d.h. auf das Verzeichnis, in dem die
+     Datei liegt bzw. das Elterverzeichnis eines Unterverzeichnisses.
+     fd_parent ist nur fÅr den Prototyp- FD gÅltig.
+
+fd_children:   DS.L      1    /* 0x24: DD_FD: Liste aller Kinder           */
+
+     Liste aller geîffneten Dateien und geîffneten Unterverzeichnisse.
+     fd_children ist nur fÅr den Prototyp- FD gÅltig.
+
+fd_next:       DS.L      1    /* 0x28: Zeiger auf FDs im selben Verzeichn. */
+
+     Zeiger auf den nÑchsten FD im selben Verzeichnis, d.h. auf das nÑchste
+     Geschwist, dieses kann eine geîffnete Datei oder ein Unterverzeichnis
+     sein, prinzipiell werden keine Unterschiede gemacht.
+     fd_next ist nur fÅr den Prototyp- FD gÅltig.
+
+fd_multi:      DS.L      1    /* 0x2c: Zeiger auf FD derselben Datei       */
+
+     Wenn eine Datei mehrmals geîffnet wird, wird ein "Clone" des Prototyp-
+     FD angelegt. FÅr diesen Clone sind die meisten Felder des FD ungÅltig,
+     im wesentlichen sind nur Treiber, Modus und Dateiposition gÅltig.
+     fd_multi ist eine verkettete Liste, die mit NULL abgeschlossen ist.
+
+fd_multi1:     DS.L      1    /* 0x30: Zeiger auf erstes Listenelement     */
+
+     Der zugehîrige Prototyp-FD, der die gÅltigen Dateiangaben enthÑlt. Wenn
+     eine Datei nur einmal geîffnet ist, gilt: fd->fd_multi1 == fd
+
+fd_fpos:       DS.L      1    /* 0x34: Position des Dateizeigers           */
+
+     Die Position des Dateizeigers, ist 0L bei einem GerÑt.
+
+fd_dirch:      DS.B      1    /* 0x38: Bit0: "dirty"                       */
+
+     Bit 0 zeigt an, ob eine Datei verÑndert wurde und daher beim Schlieûen
+     der Datei das Verzeichnis (fd_parent) aktualisiert werden muû (passiert
+     nicht, wenn es sich um einen Ordner handelt).
+     Die anderen Bits sind reserviert und werden teilweise vom DOS_XFS
+     verwendet.
+
+fd_unused:     DS.B      1    /* 0x39: */
+
+     unbenutzt und reserviert.
+
+fd_time:       DS.W      1    /* 0x3a: Zeit  (8086)                        */
+fd_date:       DS.W      1    /* 0x3c: Datum (8086)                        */
+fd_stcl:       DS.W      1    /* 0x3e: Start- Cluster (68000)              */
+fd_len:        DS.L      1    /* 0x40: DateilÑnge in Bytes (68000)         */
+
+     Daten aus dem Verzeichniseintrag, Datum und Uhrzeit unverÑndert, also im
+     Intel-Format (strÑwkcÅr).
+
+fd_dirpos:     DS.L      1    /* 0x44: Pos. des zug. Eintrags im Directory */
+
+     Position des zugehîrigen Eintrags im Parent. Ist nur fÅr den Prototyp-
+     FD gÅltig.
+
+fd_user1:      DS.L      1    /* 0x48: */
+fd_user2:      DS.L      1    /* 0x4c: */
+
+     2 Langworte zur freien VerfÅgung. Das FAT_DFS speichert hier zusÑtzliche
+     Informationen zu fd_fpos ab, und zwar den aktuellen Cluster. Andere DFSs
+     kînnen andere Daten ablegen.
+     Diese Felder sind zunÑchst auch nur fÅr den Prototyp- FD gÅltig, es sei
+     denn, beim ôffnen (ddev_open) werden die Daten explizit aus dem
+     Prototyp- FD in den Clone kopiert.
+
+3. Der Mediumdeskriptor (DMD)
+-----------------------------
+
+d_xfs:         DS.L      1    /* 0x00: Der Dateisystemtreiber              */
+d_drive:       DS.W      1    /* 0x04: Laufwerknummer 0..25                */
+d_root:        DS.L      1    /* 0x06: Zeiger auf DD der Root              */
+d_biosdev:     DS.W      1    /* 0x0a: BIOS-Laufwerk oder -1               */
+d_driver:      DS.L      1    /* 0x0c: def. zus. mit devcode das Medium    */
+d_devcode:     DS.L      1    /* 0x10: z.B. SCSI Target & Laufwerk         */
+
+     wie im Ur-Objekt. Siehe MGX_XFS.TXT.
+
+d_dfs:         DS.L      1    /* 0x14: DOS-spezifischer Dateisystemtreiber */
+
+GegenÅber der Ur- Objektklasse ist nur der Eintrag d_dfs hinzugekommen, der
+den zugehîrigen DFS- Treiber enthÑlt.
+
+4. Die DTA
+----------
+
+Die DTA wird von den alten DOS- Funktionen Fsfirst und Fsnext verwendet,
+deren ungeschickte Konzeption durch die MSDOS- Schîpfer immer noch wie ein
+Fluch auf uns lastet. Die Aufteilung in res1/res2 hat historische GrÅnde, um
+den Aufbau zumindest im DOS_XFS mîglichst kompatibel zum alten TOS zu
+machen. FÅr das DOS_XFS und damit alle DFSs sieht die Struktur folgendermaûen
+aus:
+
+dta_sname:     DS.B      12   /* 0x00: Suchname     (von Fsfirst)          */
+dta_usr1:      DS.L      1    /* 0x0c: zur freien Verwendung               */
+dta_usr2:      DS.L      1    /* 0x10: zur freien VerfÅgung                */
+dta_drive:     DS.B      1    /* 0x14: logisches Laufwerk (0..25)          */
+dta_attr:      DS.B      1    /* 0x15: gefundenes Attribut                 */
+dta_time:      DS.W      1    /* 0x16: gefundene Zeit                      */
+dta_date:      DS.W      1    /* 0x18: gefundenes Datum                    */
+dta_len:       DS.L      1    /* 0x1a: gefundene LÑnge                     */
+dta_name:      DS.B      14   /* 0x1e: gefundener Dateiname                */
+
+     Hier stehen 2 Langworte zur freien VerfÅgung. In <dta_sname> steht der
+     Suchname bereits im aktuellen Format.
+     In usr1 und usr2 muû die aktuelle Position der Suche eingetragen werden,
+     damit ein nachfolgendes Fsnext an der richtigen Stelle weitersucht.
+
+5. Der Verzeichniseintrag (DIR)
+
+Folgende Felder sind bei jedem DFS identisch:
+
+     OFFSET
+
+dir_name:      DS.B     11    /* 0x00: Dateiname                           */
+dir_attr:      DS.B      1    /* 0x0b: Attribut                            */
+dir_usr1:      DS.W      1    /* 0x0c: zur freien Verwendung               */
+dir_usr2:      DS.L      1    /* 0x0e: zur freien Verwendung               */
+dir_usr3:      DS.L      1    /* 0x12: zur freien Verwendung               */
+dir_time:      DS.W      1    /* 0x16: Zeit  der letzten énderung (Intel)  */
+dir_date:      DS.W      1    /* 0x18: Datum der letzten énderung (Intel)  */
+dir_stcl:      DS.W      1    /* 0x1a: erster Cluster bzw. andere Info     */
+dir_flen:      DS.L      1    /* 0x1c: DateilÑnge (Intel)                  */
+
+     Statt des Clusters sind auch andere Angaben mîglich. Das DOS_XFS
+     behandelt allerdings den Eintrag zunÑchst wie eine Clusterangabe (fÅr
+     xattr.index und fd_stcl sowie fÅr das Erstellen der EintrÑge "." und
+     ".." bei Dcreate). Im Fall Fxattr kann die Angabe vom DFS mit anderen
+     Daten Åberschrieben werden kann.
+
+
+IV Installation
+===============
+
+Ein DFS ist einfach ein Programm, das den Treiber installiert und sich
+resident beendet.
+Die Installation erfolgt durch
+
+     dosfunctions = Dcntl(DFS_INSTDFS, "U:\\", &myxfs);
+
+Der Pfad "U:\\" ist wichtig, weil der Dcntl-Aufruf nicht vom MagiC-Kernel,
+sondern vom DOS-XFS ausgefÅhrt wird. Gibt man z.B. einen Pfad auf einem
+Mac-Volume an, wird dieser Dcntl nicht verarbeitet, weil das Mac-XFS
+diesen Code nicht kennt.
+
+Man erhÑlt einen Zeiger auf wichtige DOS_XFS- Funktionen zurÅck (oder einen
+Fehlercode). Die DOS_XFS- Funktionen kann man auch unabhÑngig von der
+Installation eines DFS erfragen Åber
+
+     dosfunctions = Dcntl(DFS_GETINFO, "U:\\", NULL);
+
+Die Kernelfunktionen erhÑlt man Åber
+
+     kernel = Dcntl(KER_GETINFO, NULL, NULL);
+
+Die Deinstallation eines DFS ist nicht vorgesehen.
