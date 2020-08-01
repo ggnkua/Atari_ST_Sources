@@ -1,0 +1,154 @@
+MODULE Storage; (* SJ 19.10.94 *)
+
+
+(*
+ Basic technique: Memory below MaxBlockAllocSize is allocated in blocks
+ of size BlockSize. More memory is allocated directly by GEMDOS. All blocks
+ are entered in a linear list with blockRoot as root. The array freeArea
+ holds the biggest free areas currently available. These areas are used
+ first to allocate sizes below MaxBlockAllocSize. If no memory is found
+ there, a new block is allocated.
+ If memory is deallocated, its magic number is set to FreeMem.
+ This method provides extreme fast allocation and deallocation. In order to
+ make deallocated memory usable again, a background process must call
+ MergeFreeMemory from time to time. This procedure checks one block for
+ unused memory, links it if located in series, and enters it in the
+ freeArea table if more memory than an entry there. The next call checks
+ the following block. This way, its time consumption should not be noticed
+ by the user. Calling it once every second should be sufficient.
+
+ Storage needs some memory overhead on allocation. Usually, 8 additional
+ bytes are needed for every allocation. These are 2 bytes magic word, 2
+ bytes memory length, and 4 bytes pointer to type descriptor. Allocations
+ using SYSTEM.NEW will have 4 bytes overhead as they do not get a pointer
+ to a type descriptor.
+
+ There is one possibility to keep in mind: Your program might hold data
+ resident which is also found on disk (some sort of caching). Getting the
+ data from memory is much faster, but you should be able to free that
+ memory if needed. This is the best way to do so: You link a new procedure
+ in the variable Sys.Halt. If this procedure gets a call with parameter
+ Sys.OUTOFMEM, you know that memory is needed. You can try to free some
+ memory and return from that halt procedure. Storage will than retry to
+ allocate the memory. If still impossible, HALT(Sys.OUTOFMEM) is called
+ again. So you will have to free more memory. If there is no more memory to
+ dispose, call the previously linked halt procedure.
+
+ Storage uses magic words to identify correct memory locations. If a wild
+ running program destroys memory, it might be detected by Storage and
+ HALT(Sys.MEMERR) is called. There is no correction possibility and
+ resuming program execution will result in severe system errors.
+
+ Note: Most of the exported identifiers are for use by the garbage
+ collector.
+ *)
+
+
+CONST
+
+  (* magic numbers *)
+  FreeMem* = 6543H; UsedMem* = 6544H; CollMark* = 6545H;
+
+
+
+TYPE
+  Block* = POINTER TO BlockHeader;
+  BlockHeader* = RECORD
+    next-: Block;
+    size-: LONGINT;
+  END;
+
+  MemEntryD* = RECORD
+    magic-: INTEGER;
+    size- : INTEGER;
+  END;
+  MemEntry* = POINTER TO MemEntryD;
+
+  MemProc* = PROCEDURE (mem: MemEntry);
+  BlockProc* = PROCEDURE (block: Block);
+
+
+
+VAR
+  CollectGarbage*: PROCEDURE;	(* to be set by the GC *)
+  blockRoot-: Block;
+  mergingBlock-: Block; (* used by GC *)
+
+
+
+PROCEDURE BlockDo*(block: Block; proc: MemProc);
+(*
+ Execute proc for every memory part in block. Give it the address of the
+ part as parameter.
+ *)
+
+
+PROCEDURE BlocksDo*(proc: BlockProc);
+(*
+ Execute proc for every memory block. Give it the the block as parameter.
+ *)
+
+
+PROCEDURE IsMemAdr*(ptr: S.PTR; VAR mem: MemEntry) : BOOLEAN;
+(*
+ Answer true if ptr marks the start of a memory part and store the memory
+ part in mem.
+ *)
+
+
+PROCEDURE MarkNotCollectable*(ptr: S.PTR);
+(*
+ Mark the object identified by ptr to be not collectable. This must be done
+ if the pointer only exists on the stack, i.e. in local variables. Then you
+ must prevent the object from being collected on an out of memory
+ collection. There might be other cases when this is necessary.
+ *)
+
+
+PROCEDURE Statistics*(VAR free, freeParts, allocated, allocParts,
+  administrative : LONGINT);
+(*
+ Answer the memory available for allocating in free and the number of
+ parts it is divided into in freeParts. Answer the allocated memory in
+ allocated and the number of those parts in allocParts. Answer the memory
+ needed for administration in administrative.
+ *)
+
+
+PROCEDURE New*(tdptr: S.PTR; VAR ptr: S.PTR);
+(*
+ Called by NEW(ptr)
+ *)
+
+
+PROCEDURE SNew*(size: LONGINT; VAR ptr: S.PTR);
+(*
+ Equal to SYSTEM.NEW(ptr, size)
+ *)
+
+
+PROCEDURE Dispose*(ptr: S.PTR);
+(*
+ Equal to SYSTEM.DISPOSE(ptr)
+ *)
+
+
+PROCEDURE MergeFreeMemory*;
+(*
+ Used by GC
+ *)
+
+
+PROCEDURE CompleteMergeFreeMemory*;
+(*
+ Used by GC
+ *)
+
+
+PROCEDURE AddBlocks*(root: Block);
+(*
+ To be used to enter the blocks already allocated by the loader.
+ *)
+
+
+END Storage.

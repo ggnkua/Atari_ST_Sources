@@ -1,0 +1,328 @@
+DEFINITION MODULE WindowBase;           (* Hans Endl  25. 09. 1986 *)
+                                        (*            02. 06. 1987 *)
+                                        (*            01. 10. 1987 *)
+
+FROM SYSTEM     IMPORT ADDRESS;
+FROM GEMVDIbase IMPORT PxyArrayType;
+
+
+(*   Dieses Modul stellt eine Zwischenschicht zur Fensterprogrammierung
+     zur VerfÅgung, die etwas komfortablere Funktionen als die reinen
+     AES-Aufrufe enthÑlt, aber nicht so sehr einschrÑnkt wie die auf
+     MEDOS basierenden Moduln "Windows", "TextWindows" und "Graphic-
+     "Windows".
+
+     Wichtige Bestandteile von "WindowBase" sind
+
+     - die Struktur "windowtype", die die unter AES am hÑufigsten
+       benîtigten Fensterdaten enthÑlt
+
+     - Prozeduren zum Setzen der Schieber
+
+     - die automatische Abarbeitung der Rechteckliste bei Redraw-
+       Aufrufen
+*)
+
+
+
+CONST
+  maxwindow  = 12;       (* 7 Fenster in GEM-AES mîglich + 5 fÅr Debugger *)
+  deskhandle = 0;
+
+TYPE
+
+  window         = INTEGER;
+
+  (* Aus GrÅnden der KompatibilitÑt zu AES und MEDOS wird zur Iden-
+     tifikation eines Fensters nicht ein Zeiger auf den unten defi-
+     nierten Window-Record benutzt, sondern eine Integer-Zahl, die
+     mit dem AES-Window-Handle identisch ist und als Index eines
+     Feldes von Window-Records fungiert.
+  *)
+
+
+  rectangle      = RECORD
+                     x: INTEGER;  (* x-Koordinate der linken oberen Ecke *)
+                     y: INTEGER;  (* y-Koordinate der linken oberen Ecke *)
+                     w: INTEGER;  (* Breite *)
+                     h: INTEGER   (* Hîhe   *)
+                   END;
+
+  (* Definition eines Rechtecks in AES-spezifischer Form mit linker
+     oberer Ecke und Breite und Hîhe in Pixeln, im Gegensatz zu der
+     vom VDI meist benutzten Form des PxyArrays, das durch zwei dia-
+     gonal gegenÅberliegende Ecken definiert wird.
+  *)
+
+  RedrawProcType = PROCEDURE (window, rectangle);
+
+  WindowElement  = (Title, CloseButton, FullButton, Moveable,
+                    InfoLine, SizeButton, UpArrow, DownArrow,
+                    VertSlider, LeftArrow, RightArrow, HorizSlider);
+
+  WindowElements = SET OF WindowElement;
+
+
+CONST
+  AllElements = WindowElements {Title..HorizSlider};
+  NoElements  = WindowElements{};
+
+
+TYPE
+
+  wstring     = ARRAY [0..79] OF CHAR;  (* String fÅr Titel und Info *)
+
+  windowtype  = RECORD
+                  handle:     INTEGER;        (* AES-Fensternummer        *)
+                  max:        rectangle;      (* Maximale Fenstergrîûe    *)
+                  total:      rectangle;      (* Aussenmasse des Fensters *)
+                  work:       rectangle;      (* Innenmasse des Fensters  *)
+                  elements:   WindowElements; (* Menge der Fensterelemente*)
+                  fulled:     BOOLEAN;        (* Fenster auf max gesetzt  *)
+                  opened:     BOOLEAN;        (* Fenster geîffnet         *)
+                  ontop:      BOOLEAN;        (* TRUE, falls oberstes F.  *)
+                  text:       BOOLEAN;        (* TRUE, falls Textfenster  *)
+                  row, col:   INTEGER;        (* Zeile und Spalte bei Text*)
+                  maxrow:     INTEGER;        (* letzte sichtbare Zeile   *)
+                  maxcol:     INTEGER;        (* letzte sichtbare Spalte  *)
+                  colour:     INTEGER;        (* Hintergrundfarbe         *)
+                  style:      INTEGER;        (* FÅlltyp fÅr Hintergrund  *)
+                  textcolour: INTEGER;        (* Farbe des Textes         *)
+                  redrawproc: RedrawProcType; (* Redraw-Procedure         *)
+                  title:      wstring;        (* Titelzeile               *)
+                  info:       wstring;        (* Informationszeile        *)
+                  reference:  ADDRESS;        (* frei fÅr Anwender        *)
+                END;
+
+  windowptr   = POINTER TO windowtype;
+
+
+
+VAR
+  windowlist: ARRAY [0..maxwindow] OF windowtype;
+  handlelist: ARRAY [0..7] OF window;
+
+  growbox:    BOOLEAN;    (* Wenn diese Variable auf TRUE gesetzt ist,
+                             wachsen bzw. schrumpfen die Fenster beim
+                             ôffnen bzw. Schliessen, default = TRUE *)
+
+
+
+
+  PROCEDURE createWindow (VAR u:      window;
+                          x, y, w, h: INTEGER;
+                          parts:      WindowElements;
+                          title:      ARRAY OF CHAR;
+                          textwindow: BOOLEAN;
+                          rdp:        RedrawProcType);
+
+  (* Erzeugt die im AES und in diesem Modul notwendigen Datenstrukturen
+     zur Verwaltung eines Fensters, das jedoch noch nicht gezeichnet
+     wird.
+
+     x, y, w und h beschreiben die maximale Grîsse des Ñusseren Fenster-
+     randes. Sind w und h gleich 0, so wird die Grîsse des Desktops
+     ohne MenÅleiste Åbernommen.
+
+     "parts" ist ein Set aus den gewÅnschten Fensterelementen.
+
+     "title" ist der Fenstertitel.
+
+     "textwindow" soll bei Textfenstern auf TRUE gesetzt werden,
+     der Fensterursprung wird dann an das Textraster angepaût.
+
+     "rdp" ist die Redraw-Prozedur, also die Prozedur, die den Inhalt
+     des Fensters zeichnet. Sie wird beim Aufruf der Prozedur "DoRedraw"
+     (siehe unten) so oft aufgerufen wird, bis die Rechteckliste, die
+     die sichtbaren Teile des Fensters angibt, abgearbeitet worden ist.
+     An "rdp" wird beim Aufruf ein Rechteck Åbergeben, das die neu
+     zu zeichnende FlÑche angibt. Wurde beim Aufruf von "DoRedraw"
+     der Paramter "clip" auf FALSE gesetzt, muss "rdp" alle Ausgaben
+     selbst auf diese FlÑche begrenzen, was die Ausgabe vor allem bei
+     Text stark beschleunigen kann, aber bei teilweise verdeckten Fen-
+     stern kaum durchfÅhrbar ist. Beim Zeichnen von ObjektbÑumen wird
+     das Begrenzungsrechteck direkt beim "ObjectDraw"-Aufruf angegeben.
+  *)
+
+  PROCEDURE activate     (u: window);
+
+  (* aktiviert ein deaktiviertes Fenster wieder *)
+
+  PROCEDURE deactivate   (u: window);
+
+  (* Deaktiviert ein Fenster, indem ein AES.WindowDelete durchgefÅhrt
+     wird. Das Fenster existiert dann fÅr GEM-AES nicht mehr, der Fen-
+     sterdeskriptor wird jedoch nicht freigegeben, so daû das Fenster
+     spÑter mit "activate" mit den alten Parametern wieder aktiviert
+     werden kann. Dadurch kînnen mehr als die sieben von GEM-AES zuge-
+     lassenen Fenster verwaltet werden, es kînnen jedoch immer nur
+     maximal sieben aktiv sein. *)
+
+  PROCEDURE clearWindow  (u: window);
+
+  PROCEDURE closeWindow  (u: window);
+
+  PROCEDURE deleteWindow (u: window);
+
+  PROCEDURE fullWindow   (u: window);
+
+  PROCEDURE openWindow   (u: window; x, y, w, h: INTEGER);
+
+  PROCEDURE setWindow    (u: window; x, y, w, h: INTEGER);
+
+  PROCEDURE topWindow    (u: window);
+
+  PROCEDURE MouseOn;
+
+  PROCEDURE MouseOff;
+
+  (* Vor Ausgaben auf den Bildschirm muss die Maus ausgeschaltet werden,
+     da sonst das Maussymbol Åberschrieben wird und bei der nÑchsten
+     Bewegung der Maus der alte, zuvor von der Maus verdeckte Bildschirm-
+     inhalt wieder restauriert wird. Alle Prozeduren in diesem Modul, die
+     den Bildschirm verÑndern, schalten die Maus wÑhrend der Ausgabe aus.
+     WÑhrend des Aufrufs der vom Benutzer bereitgestellten Redraw-Prozedur
+     beim Abarbeiten der Rechteckliste in "DoRedraw" wird die Maus eben-
+     falls ausgeschaltet, ruft der Benutzer dagegen selbst seine Redraw-
+     Prozedur auf oder benutzt er die weiter unten beschriebenen Textaus-
+     gabeprozeduren, muss er sich selbst um die Maus kÅmmern.
+
+     Achtung:  Ein- und Ausschalten der Maus wird vom Betriebssystem
+               mitgezÑhlt. Wird die Maus mehrmals ausgeschaltet, muû
+               sie genausooft wieder eingeschaltet werden, damit sie
+               sichtbar wird. Wird die Maus zu oft eingeschaltet, dann
+               entstehen beim Bewegen von Fenstern und Schiebern Schmutz-
+               effekte.
+  *)
+
+
+  PROCEDURE SetHorSlider (u: window; wpos, wsize, total: INTEGER);
+
+  (* siehe "SetVertSlider", setzt den horizontalen Schieber entsprechend
+     der horizontalen Position des Fensters im Gesamtdokument.
+  *)
+
+  PROCEDURE SetInfo      (u: window; s: ARRAY OF CHAR);
+
+  (* Schreibt einen Text in die Info-Zeile des Fensters *)
+
+
+  PROCEDURE SetTitle     (u: window; s: ARRAY OF CHAR);
+
+  (* Schreibt einen Text in die Titel-Zeile des Fensters. Der Text
+     bleibt beim Schliessen erhalten und wird beim ôffnen wieder
+     angezeigt
+   *)
+
+  PROCEDURE SetVertSlider (u: window; wpos, wsize, total: INTEGER);
+
+  (* Berechnet die korrekte Position und -grîsse des vertikalen
+     Schiebers aus den Parametern, die die vertikale Position des
+     Fensters im Gesamtdokument beschreiben, und setzt den Schieber.
+     Die Schieber mÅssen, falls vorhanden, nach jeder VerÑnderung
+     der Fenstergrîsse oder des Fensterinhalts neu gesetzt werden.
+
+     Bedeutung der Parameter:
+
+     wpos:   Anfangsposition des Fensters im Gesamtdokument
+     wsize:  Grîsse des im Fenster dargestellten Teils des Gesamtdokuments
+     total:  Grîsse des Gesamtdokuments
+  *)
+
+  PROCEDURE clearrect (u: window; rect: rectangle);
+
+  (* Lîscht einen Rechteckbereich innerhalb des Fensters "u" in
+     Fensterkoordinaten *)
+
+
+  PROCEDURE copyrect (u: window; source, dest: rectangle);
+
+  (* Kopiert innerhalb eines Fensters den Rechteckbereich "source" in
+     den Rechteckbereich "dest" (Koordinaten relativ zum Fensterursprung
+     links oben). Der freiwerdende Bereich von "source" muss bei Bedarf
+     gelîscht werden. Mit dieser Prozedur lassen sich Scroll-,
+     Insert- und Deletefunktionen in Textfenstern realisieren *)
+     
+
+  PROCEDURE scrollup (u: window);
+
+  (* Schiebt den Inhalt eines Textfensters eine Zeile nach oben, die
+     oberste Zeile verschwindet, die unterste wird gelîscht. "row"
+     wird auf "maxrow", "col" auf 0 gesetzt *)
+
+
+  PROCEDURE scrolldown (u: window);
+
+  (* Schiebt den Inhalt eines Textfenster eine Zeile nach unten, die
+     unterste Zeile verschwindet, die oberste wird gelîscht. "row"
+     und "col" werden auf 0 gesetzt *)
+
+
+  PROCEDURE DrawCursor (u: window; row, col: INTEGER);
+
+  (* Zeichnet ein Rechteck in der Grîsse eines Zeichenfeldes an die
+     angegebene Stelle innerhalb des Fensters. Da alle Pixel inver-
+     tiert werden, nimmt ein zweiter Aufruf mit denselben Parametern
+     den Cursor wieder weg. *)
+
+
+  PROCEDURE WriteStr (u: window; row, col: INTEGER; s: ARRAY OF CHAR);
+
+  (* Gibt einen String ab der durch "row" (Zeile) und "col" (Spalte)
+     angegebenen Stelle aus. Zeile und Spalte beziehen sich auf den
+     Arbeitsbereich des Fensters. Das Zeichen in der linken oberen
+     Ecke hat die Koordinaten (0,0).  *)
+
+
+  PROCEDURE WriteTextBlock (u: window; row, col: INTEGER;
+                            adr: ADDRESS; count: INTEGER);
+
+  (* Wie "WriteStr", nur wird der auszugebende String durch die Adresse
+     des ersten Zeichens und die LÑnge angegeben
+  *)
+
+  PROCEDURE WriteTextBuffer (u: window; adr: ADDRESS;
+                             count, offset: INTEGER);
+
+  (* Gibt den ab der Adresse "adr" liegenden Text ins Fenster "u" ab
+     der Position (0,0) aus, bis entweder 0C im Text auftritt, "count"
+     erreicht wird oder das Fenster voll ist. Als Zeilenende wird lf
+     erkannt, cr wird ignoriert. Falls "offset" > 0, werden die ersten
+     "offset" Zeichen in jeder Zeile Åbersprungen, so dass sich hori-
+     zontale Fensterverschiebungen realisieren lassen. Diese Prozedur
+     eignet sich gut fÅr das Redrawing von Textfensterpuffern.
+  *)
+
+
+  PROCEDURE RectToPxy (VAR rect: rectangle; VAR pxy: PxyArrayType);
+
+  (* Wandelt die Koordinaten eines Rechtecks von der "rectangle"-Form
+     "PxyArray"-Form um (siehe obige Definition)
+  *)
+     
+
+  PROCEDURE DoRedraw (u: window; x, y, w, h: INTEGER; clip: BOOLEAN);
+
+  (* Holt sich von AES die Rechteckliste des Fensters w, schneidet die
+     erhaltenen Rechtecke mit dem Desktop und der als Parameter Åber-
+     gebenen FlÑche und fÅhrt dann die erforderliche Anzahl von Auf-
+     rufen der Redraw-Prozedur, die beim Create-Aufruf angegeben wurde,
+     aus. "DoRedraw" ist somit die Aktion auf eine Redraw-Message. Mit
+     "clip" kann angegeben werden, ob "DoRedraw" selbst den Clipping-
+     Aufruf fÅr VDI-Funktionen durchfÅhren soll. In jedem Fall wird
+     wÑhrend des Ablaufs von "DoRedraw" das Window-Update-Flag gesetzt
+     und die Maus ausgeschaltet.
+  *)
+
+
+  PROCEDURE wd (handle: INTEGER): window;
+
+  (* Findet anhand der AES-Fenster-Handle den zugehîrigen Fenster-
+     deskriptor. Wird benîtigt, wenn vom AES Ereignismeldung kommen,
+     die ein Fenster betreffen.
+  *)
+
+
+  PROCEDURE wp (u: window): windowptr;
+
+END WindowBase.
