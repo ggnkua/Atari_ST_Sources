@@ -1,0 +1,567 @@
+@(#)XHDI/xhdispec.eng
+@(#)Julian F. Reschke, 1999-05-02
+
+Specification of the `XHDI' cookie, 1999-05-02
+----------------------------------------------
+
+Cookie id: "XHDI". The contents of the cookie points to the start address of 
+a function, which provides procedures for dealing with block storage devices. 
+As an additional check, the function is preceded by the long constant 
+$27011992.
+
+The contents of the XHDI cookie may change (because it can be used by more 
+than one driver). Therefore, in some applications (example: DA's) the cookie 
+contents must be inquired each time before the handler is called.
+
+ALL FUNCTIONS HAVE TO BE CALLED FROM SUPERVISOR MODE. The effects of a call 
+in user mode are undefined. All processor registers except d0 are preserved. 
+EINVFN is returned for invalid opcodes.
+
+Some of the function calls -- notably `XHReadWrite()' -- might be implemented 
+by calls to BIOS or XBIOS functions and therefore can activate the `Critical 
+Error Handler'. It's the responsibility of the caller to switch of the `CEH', 
+if this is needed.
+
+Some error codes:
+
+TOS error codes:
+
+0:           OK (E_OK)
+-1:          unspecified error (ERROR)
+-2:          device not responding (EDRVNR)
+-15:         unknown device (EUNDEV)
+-32:         invalid function number (EINVFN)
+-36:         access denied, device is reserved (EACCDN)
+-46:         invalid drive number (EDRIVE)
+
+SCSI error codes (ranging from -200 to -455)
+
+(-200 - N):  SCSI error code N (the `Additional Sense Code', Byte 12 in the
+             `Extended Sense Format', see Appendix B in `draft proposed 
+             American National Standard for information systems -Revision 11a 
+             - SCSI-3 Primary Commands, 28 March 1997)
+
+IDE error codes (ranging from -456 to -711)
+
+(-456 - N):  IDE error code N (value of the IDE error register)
+
+Note: obviously, you can get SCSI error codes only for ACSI or SCSI devices. 
+For other device types like IDE drives the following assignments may be used:
+
+Bit in IDE
+error register  meaning                 SCSI error   XHDI error
+
+1               Track 0 not found       $06          -206
+0               DAM not found           $13          -219
+4               ID-Field not found      $12          -218
+7               Bad block mark          $10          -216
+6               Uncorrectable error     $11          -217
+2               Command aborted         $20          -232
+5               Media Change            $28          -240
+3               Media Change requested  $5A          -290
+
+(it is recommended to test the bits in the above order).
+
+For other devices (like disk drives connected to the floppy controller) there 
+may be other, not yet defined, error codes.
+
+Parameters are passed the same way as to GEMDOS functions. All values are put 
+onto the stack, with the 16 bit opcode last, i.e. at the lowest address. The 
+32 bit result is returned in d0.
+
+Wherever it is specified that `the caller may pass a zero pointer' for a 
+pointer parameter, then passing such a zero pointer indicates that the caller 
+is not interested in the value to be returned. Drivers must always check 
+pointers for zero before dereferencing them.
+
+
+Definition of data types:
+
+UWORD:  16-Bit, unsigned
+LONG:   32-Bit, signed
+ULONG:  32-Bit, unsigned
+char *: 32-Bit, pointer to a zero terminated string
+
+
+Terms:
+
+major:  Major Device Number
+
+           0..7: Devices on the ACSI bus with ATARI-compatible command set
+          8..15: Devices on the SCSI bus
+         16..17: Devices connected to the primary IDE interface
+         17..18: Devices connected to a secondary IDE interface
+         20..23: Additional IDE devices
+         24..63: Extensions as defined in the pun field in the PUN_INFO
+                 structure.
+             64: Devices on the standard floppy controller
+        65..255: Extensions outside the scope of AHDI.
+
+minor:  Minor Device Number (for `major' 0..15: LUN of the ACSI or SCSI 
+        device), maximal 255.
+
+key:	A 16 bit key, returned by `XHReserve()', or 0, if the device is not 
+        locked or if the key is unknown.
+
+
+Notation:
+
+Numerical values are, when not specified otherwise, decimal. Hex values 
+(base 16) are introduced by a dollar sign ($).
+
+
+The XHDI functions:
+
+-----------------------------------------------------------------------
+Opcode 0: UWORD XHGetVersion (void);
+
+Returns the current protocol version. Example: $0119 is Version 1.19 (the 
+format is similar to that returned by `Sversion()', but high and low byte are 
+not reversed). This version of the XHDI specification has the version number 
+$0130.
+
+-----------------------------------------------------------------------
+Opcode 1: LONG XHInqTarget (UWORD major, UWORD minor, ULONG *blocksize,
+                            ULONG *device_flags, char *product_name);
+
+Returns information about the device specified by `major' and `minor'. 
+Reservation made with `XHReserve()' are reflected in `device_flags'.
+
+block_size:   Block size for this device (important for `XHReadWrite()').
+              Usually 512.
+
+device_flags: (Bit set -> Capability available)
+
+      Bit 0:  Device is stoppable (XH_TARGET_STOPPABLE)
+      Bit 1:  The medium is removable (XH_TARGET_REMOVABLE)
+      Bit 2:  The eject mechanism can be locked (XH_TARGET_LOCKABLE)
+      Bit 3:  The device can physically eject the medium (XH_TARGET_EJECTABLE)
+      Bit 29: Eject mechanism has been locked by the driver 
+              (XH_TARGET_LOCKED, from XHDI 1.25 up)
+      Bit 30: Device has been stopped by the driver (XH_TARGET_STOPPED, from 
+              XHDI 1.25 up)
+      Bit 31: The device is currently reserved (XH_TARGET_RESERVED)
+
+              All other bits are reserved, drivers should set them to zero.
+
+product_name: Product name of the device, similar to the information returned 
+              by the SCSI command INQUIRE (max. 33 characters incl. 
+              terminating zero). If this information is not available, the 
+              driver should return a zero length string.
+
+Note: the caller may pass a zero pointer for `blocksize', `device_flags' and 
+`product_name'.
+
+Note: for IDE devices, product name information might have to be truncated to 
+fit into 32 characters. See `XHInqTarget2'.
+
+-----------------------------------------------------------------------
+Opcode 2: LONG XHReserve (UWORD major, UWORD minor, UWORD do_reserve,
+                          UWORD key);
+
+Reserves or releases a device. `XHLock()', `XHStop()' and `XHEject()' only 
+work for reserved devices if the correct key parameter is passed.
+
+Example: take a virtual memory manager which has locked a removable hard disk 
+with the swap partition. You don't want the user to be able to unlock this 
+device with a CPX module!
+
+On success, a 16 bit key different from 0 is returned.
+
+do_reserve: (1) Reserve or (0) release.
+key:        (only used for release).
+
+-----------------------------------------------------------------------
+Opcode 3: LONG XHLock (UWORD major, UWORD minor, UWORD do_lock,
+                       UWORD key);
+
+Locks or unlocks the eject mechanism of the device.
+
+do_lock: (1) Lock or (0) unlock.
+key:     if the device is reserved pass the key, otherwise zero.
+
+-----------------------------------------------------------------------
+Opcode 4: LONG XHStop (UWORD major, UWORD minor, UWORD do_stop,
+                       UWORD key);
+
+Stops (ships) or starts the device.
+
+do_stop: (1) Stop or (0) start.
+key:     if the device is reserved pass the key, otherwise zero.
+
+Note: if the drive is accessed, the driver should restart it without an 
+explicit restart call.
+
+-----------------------------------------------------------------------
+Opcode 5: LONG XHEject (UWORD major, UWORD minor, UWORD do_eject,
+                        UWORD key);
+
+Ejects or inserts the medium.
+
+do_eject: Eject (1) or insert (0) medium.
+key:      if the device is reserved pass the key, otherwise zero.
+
+-----------------------------------------------------------------------
+Opcode 6: ULONG XHDrvMap (void);
+
+Returns a bit mask of BIOS devices supported by the XHDI driver(s) (like the 
+return value from `Drvmap()').
+
+-----------------------------------------------------------------------
+Opcode 7: LONG XHInqDev (UWORD bios_device, UWORD *major, UWORD *minor,
+                         ULONG *start_sector, BPB *bpb);
+
+Returns major device number, minor device number, starting sector and BPB of 
+a given BIOS device (Note: getting the BPB this way will NOT reset the 
+internal media change state).
+
+Note: the caller provides a pointer to the BPB structure, which is filled by 
+the driver.
+
+Return values: E_OK, EDRNVR (device not responding, eg. medium not inserted), 
+EDRIVE (wrong BIOS device number) or some other applicable error code. If the 
+error code is EDRVNR, `major' and `minor' contain the correct values anyway.
+
+If `start_sector' is $FFFFFFFF, the device is only temporarily inaccessible 
+(example: you have inserted a cartridge with two partitions, but three drive 
+bits have been reserved for the device).
+
+The BPB is invalid if the structure element `recsiz' is zero.
+
+Note: a file system is fully described by major and minor device number and 
+the starting block number. This does NOT mean, that it is necessarely a FAT 
+file system.
+
+Note: the caller may pass a zero pointer for `major', `minor', `start_sector' 
+and `bpb'.
+
+-----------------------------------------------------------------------
+Opcode 8: LONG XHInqDriver (UWORD bios_device, char *name, char *version,
+                            char *company, UWORD *ahdi_version,
+                            UWORD *maxIPL);
+
+Gets information about the driver for the bios_device.
+
+name:         Name of driver (max. 17 characters).
+version:      String with version number (max. 7 characters).
+company:      Name of company/programmer (max. 17 characters).
+ahdi_version: AHDI version level (as defined in the PUN_INFO structure).
+maxIPL:       Highest IPL under which the driver can work (usually 5 for
+              drivers which use _hz_200 for timing loops).
+
+Note: the caller may pass a zero pointer for `name', `version', `company', 
+`ahdi_version' and `maxIPL'.
+
+-----------------------------------------------------------------------
+Opcode 9: LONG XHNewCookie (ULONG newcookie);
+
+- OPTIONAL function, may return EINVFN -
+
+/* send translations to reschke@muenster.de */
+
+
+------------------------------------------------------------------------
+Opcode 10: LONG XHReadWrite (UWORD major, UWORD minor, UWORD rwflag,
+                             ULONG recno, UWORD count, void *buf);
+
+Read or write physical blocks.
+
+rwflag:       Bits 0..2: as defined in the AHDI Release Notes (3.00, April
+              18, 1990). Bit 3 (physical mode) is ignored. All other bits
+              are reserved and should be set to zero.
+recno:        block number
+count:        block count
+buf:          pointer to buffer
+
+-----------------------------------------------------------------------
+Opcode 11: LONG XHInqTarget2 (UWORD major, UWORD minor, ULONG *blocksize,
+                              ULONG *device_flags, char *product_name,
+                              UWORD stringlen);
+
+- only with XHDI version 1.01 and above -
+
+Returns information about the device specified by `major' and `minor'. 
+Reservations made with `XHReserve()' are reflected in `device_flags'.
+
+block_size:   Block size for this device (important for `XHReadWrite()').
+              Usually 512.
+
+device_flags: (Bit set -> Capability available)
+
+      Bit 0:  Device is stoppable (XH_TARGET_STOPPABLE)
+      Bit 1:  The medium is removable (XH_TARGET_REMOVABLE)
+      Bit 2:  The eject mechanism can be locked (XH_TARGET_LOCKABLE)
+      Bit 3:  The device can physically eject the medium         
+              (XH_TARGET_EJECTABLE)
+      Bit 29: Eject mechanism has been locked by the driver 
+              (XH_TARGET_LOCKED, from XHDI 1.25 up)
+      Bit 30: Device has been stopped by the driver (XH_TARGET_STOPPED, from 
+              XHDI 1.25 up)
+      Bit 31: The device is currently reserved (XH_TARGET_RESERVED).
+
+              All other bits are reserved, drivers should set them to zero.
+
+product_name: Product name of the device, similar to the information returned 
+              by the SCSI command INQUIRE (max. `stringlen' characters incl. 
+              terminating zero). If this information is not available, the 
+              driver should return a zero length string.
+
+stringlen:    Length of string buffer passed in `product_name'.
+
+Note: the caller may pass a zero pointer for `blocksize', `device_flags' and 
+`product_name'. Product names of IDE devices may contain up to 40 characters.
+
+
+-----------------------------------------------------------------------
+Opcode 12: LONG XHInqDev2 (UWORD bios_device, UWORD *major, UWORD *minor,
+                           ULONG *start_sector, BPB *bpb, ULONG *blocks,
+                           char *partid);
+
+- only with XHDI version 1.10 and above -
+
+Returns major device number, minor device number, starting sector, BPB, size 
+and partition ID of a given BIOS device (Note: getting the BPB this way will 
+NOT reset the internal media change state).
+
+Note: the caller provides a pointer to the BPB structure, which is filled by 
+the driver.
+
+Return values: E_OK, EDRNVR (device not responding, eg. medium not inserted), 
+EDRIVE (wrong BIOS device number) or some other applicable error code. If the 
+error code is EDRVNR, `major' and `minor' `start_sector' contain the correct 
+values anyway.
+
+If `start_sector' is $FFFFFFFF, the device is only temporarily inaccessible 
+(example: you have inserted a cartridge with two partitions, but three drive 
+bits have been reserved for the device).
+
+The BPB is invalid if the structure element `recsiz' is zero.
+
+If the partition ID isn't available (possible reason: no standard Atari root 
+sector or no root sector at all), an empty string is returned.
+
+Starting with XHDI 1.20 for MSDOS compatible media the one byte partition 
+code is returned as: partid[0] = '\0' (zero byte), partid[1] = 'D' (for 
+'DOS'), partid[2] = partition code.
+
+Note: a file system is fully described by major and minor device number and 
+the starting block number. This does NOT mean, that it is necessarely a FAT 
+file system.
+
+Note: the caller may pass a zero pointer for `major', `minor', 
+`start_sector', `bpb', `blocks' and `partid'.
+
+
+-----------------------------------------------------------------------
+Opcode 13: LONG XHDriverSpecial (ULONG key1, ULONG key2,
+                                 UWORD subopcode, void *data);
+
+- OPTIONAL function, may return EINVFN -
+
+This opcode may be used for driver specific extensions. It's up to the driver 
+how to interpret the arguments in `subopcode' and `data'. `key1' and `key2' 
+are used to specify for which driver the call is: `key1' should contain four 
+printable ASCII characters, `key2' a `random' ULONG value (example: date of 
+definition in BCD format).
+
+
+-----------------------------------------------------------------------
+Opcode 14: LONG XHGetCapacity (UWORD major, UWORD minor, ULONG *blocks,
+                               ULONG *blocksize);
+
+- OPTIONAL function, may return EINVFN -
+
+This functions returns the number of adressable sectors in `blocks' and their 
+size in `blocksize'. Note that -- depending of the device used -- this 
+function may need several seconds to complete.
+
+
+-----------------------------------------------------------------------
+Opcode 15: LONG XHMediumChanged (UWORD major, UWORD minor);
+
+- OPTIONAL function, may return EINVFN -
+
+Informs the driver that the medium in the given device has been changed. Upon 
+receiving this notice, the driver should do the same things as if the device 
+itself would have returned a media change status. The return value is E_OK if 
+and only if this information has been correctly interpreted (this means: all 
+logical drives on the device are either disabled or ready to use).
+
+
+-----------------------------------------------------------------------
+Opcode 16: LONG XHMiNTInfo (UWORD opcode, void *data);
+
+- OPTIONAL function, may return EINVFN -
+
+A function for setting/inquiring MiNT related information.
+
+The following opcodes are defined (for unknown opcodes EINVFN is returned, 
+E_OK is returned if and only if the call has been executed correctly).
+
+XH_MI_SETKERINFO (0) [struct kerinfo *data]
+
+Sends (through `data') a pointer to the MiNT kernel info structure to the 
+driver. The driver can use it for direct calls of kernel functions.
+
+XH_MI_GETKERINFO (1) [struct kerinfo **data]
+
+Inquires for a previously set MiNT kernel info pointer. The pointer is 
+returned in the struct kerinfo * pointed by `data'. If the adress of the MiNT 
+kernel info structure is unknown, `data' is filled with a NULL pointer.
+
+
+-----------------------------------------------------------------------
+Opcode 17: LONG XHDOSLimits (UWORD which, ULONG limit);
+
+- OPTIONAL function, may return EINVFN -
+
+This functions aks the driver for the internal limits of the currently 
+running DOS (or sets the driver's limits). Example: it can be used by a FAT 
+file system driver to inform the driver about the change of some of the 
+limits. `which' describes the type of limit, `limit' is the new value (with 
+zero meaning that the value shouldn't be changed). The function returns the 
+previous value for the limit.
+
+As a requirered functionality starting with XHDI release 1.30, a driver shall 
+retrieve limit values from previously started XHDI drivers, if these exists. 
+When a limit is changed, this information then shall be passed through to 
+other XHDI drivers.
+
+Constants for `which':
+
+XH_DL_SECSIZ (0):    maximal sector size (BIOS level)
+XH_DL_MINFAT (1):    minimal number of FATs
+XH_DL_MAXFAT (2):    maximal number of FATs
+XH_DL_MINSPC (3):    sectors per cluster minimal
+XH_DL_MAXSPC (4):    sectors per cluster maximal
+XH_DL_CLUSTS (5):    maximal number of clusters of a 16 bit FAT
+XH_DL_MAXSEC (6):    maximal number of sectors
+XH_DL_DRIVES (7):    maximal number of BIOS drives supported by the DOS
+
+- with XHDI version 1.30 and above --
+
+XH_DL_RDLEN (9):     max. (bpb->rdlen * bpb->recsiz / 32)
+XH_DL_CLUSTS12 (12): max. number of clusters of a 12 bit FAT
+XH_DL_CLUSTS32 (13): max. number of clusters of a 32 bit FAT
+XH_DL_BFLAGS (14):   supported bits in bpb->bflags
+
+-----------------------------------------------------------------------
+Opcode 18: LONG XHLastAccess (UWORD major, UWORD minor, ULONG *ms);
+
+- only with XHDI version 1.25 and above -
+
+Returns in `ms' the amount of milliseconds since the last successfull read or 
+write operation on the device.
+
+
+-----------------------------------------------------------------------
+Opcode 19: LONG XHReaccess (UWORD major, UWORD minor);
+
+- only with XHDI version 1.25 and above -
+
+Calling this function causes the driver to check the device for a possible 
+media change and to actualize partition informations if needed (like 
+`XHMediumChange()', but the driver checks for the media change status before 
+continuing).
+
+
+------------------------------------------------------------------------
+
+
+How to install more than one XHDI driver
+----------------------------------------
+
+(1) During the installation, check if the cookie is alreay set. If so:
+    
+(2) For `XHGetVersion()' first jump through the old vector and return the
+    minimum of this and your own version number.
+    
+(3) For `XHDrvmap()' first jump through the old vector and then or-in the
+    drive bits for the devices supported by you.
+    
+(4) For all other functions: check, if one of `your' devices. If not, jump
+    through the old vector.
+
+
+------------------------------------------------------------------------
+
+Partition type `RAW'
+--------------------
+
+XHDI-1.10 compliant drivers shall support the third partition type `RAW' (in 
+addition to `GEM' and `BGM'). For these partitions, the following should be 
+true:
+
+(1) The partition size is `arbitrary' (32 bit sector numbers).
+
+(2) The partition can be accessed as BIOS device; Getbpb() returns a NULL 
+    pointer (so that GEMDOS won't access it; however, calling Getbpb() resets 
+    the driver internal media change state).
+
+(3) `Rwabs()' (in physical or logical mode) and `XHReadWrite()' may be used 
+    to access the partition. The physical block size of the medium is used 
+    (see `XHInqTarget()').
+
+(4) `XHInqDev2()' (as compared to `XHInqDev()') returns size and type of the 
+    partition.
+
+These extensions have been made to make it easier to create drivers for new 
+filesystems for MiNT or MagiC (like the Minix file system).
+
+
+------------------------------------------------------------------------
+
+Recommended partition types
+---------------------------
+
+BGM     GEMDOS partition > 16MB
+GEM     GEMDOS partition < 16MB
+RAW     see above
+
+The following types can be supported optionally (for example with a 
+configurable list of partition ID's in the driver).
+
+F32     TOS compatible FAT32 partition
+LNX     Linux Ext2 partition, should be handled like `RAW'
+MAC     MAC HFS partition, should be handled like `RAW'
+MIX     Minix partition, should be handled like `RAW'
+QWA     QDOS partition, should be handled like `RAW'
+SWP     Swap partition, should be handled like `RAW'
+UNX     ASV (Atari System V) partition, should be handled like `RAW'
+
+-------------------------------------------------------------------------
+
+Arbitration
+-----------
+
+For device drivers which support SCSI arbitration, the machine needs an own 
+SCSI device number which must be unique and shouldn't be stored on disk. 
+Atari has reserved byte 16 in the Non Volatile Memory of the Atari TT and 
+Falcon computers. Bit assignments:
+
+Bit 0..2:   device number
+   Bit 7:   arbitration on (1) or off (0)
+
+The current arbitration number could be inquired this way:
+
+int
+arbitration_id (void)
+{
+    long ret = EINVFN;
+    unsigned char nvmdata = 0;
+    OSHEADER *Sys;
+    long oldstack = Super (0L);
+    Sys = *_sysbase;
+    Super ((void *)oldstack);
+
+    host_id = -1;   /* no arbitration by default */
+
+    if (Sys->os_version >= 0x300)
+        ret = NVMaccess (0, 16, (int) sizeof (nvmdata), &nvmdata);
+
+    if (ret == E_OK && (nvmdata & 0x80))
+        host_id = nvmdata & 7;
+
+    return host_id;
+}
+
