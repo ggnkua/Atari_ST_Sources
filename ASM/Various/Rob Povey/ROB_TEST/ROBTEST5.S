@@ -1,4 +1,4 @@
-;*
+;
 ; Written by Rob Oct 90
 ; 
 ; Test code for driver binary... Loads in a tune and plays it
@@ -32,6 +32,7 @@ term
 	move.w	#0,-(sp)	any value
 	move.w	#$4c,-(sp)	P_Term/Quit.
 	trap	#1
+
 
 Prog
 
@@ -75,17 +76,23 @@ Prog
 *******************************************************************
 * Any processing or animation you want to do can go in here	  *
 *******************************************************************
+loop
+.loop1	move.l	$44e,a0
+	move.w	#32000/4-1,d1
+.loop2	eor.l	#-1,(a0)+
+	dbf	d1,.loop2
 
-main
-	* nop
+	move.w	#$ff,-(sp)		* use gem key scan cause I'm lazy
+	move.w	#6,-(sp)
+	trap	#1
+	addq.l	#4,sp
+	tst.w	d0
+	beq	loop
 
-	cmp.b	#185,$fffffc02.w
-	bne.s	main
 
 *******************************************************************
 * Just call Deinstall to turn everything off			  *
 *******************************************************************
-desinstall:
 
 	jsr	_DeInstall(a6)
 
@@ -108,6 +115,8 @@ keysend:
 
 keydat	dc.w	0
 
+
+
 *******************************************************************
 * This can be used to temporarilly stop a song			  *
 *******************************************************************
@@ -124,6 +133,9 @@ restartsong
 	lea	sing_s(pc),a6
 	jmp	_Restart(a6)		restart!
 
+
+
+
 * NB -- The following could be loaded into memory by the program
 *       I just find it convienient to binary include them
 
@@ -135,10 +147,9 @@ sing_s
 
 
 * include the song and voiceset
-song1_s	incbin	*.4V
+song1_s	incbin	madmak.4v
 	even
-voice_s	incbin	*.SET
+voice_s	incbin	pants.set
 	even
 
 	end
-
