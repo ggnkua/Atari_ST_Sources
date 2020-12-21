@@ -1,0 +1,2028 @@
+/******************************************************************************
+ * XRSRC.C
+ *
+ *			Extended Resource-Manager. RSC-Files can now have up to
+ *			4294967295 bytes length.
+ *			You can modify this source to handle more than one RSC-File
+ *			by calling the MLOCAL-Functions
+ *
+ *				rs_load(pglobal, re_lpfname);
+ *				rs_free(pglobal);
+ *				rs_gaddr(pglobal, re_gtype, re_gindex, re_gaddr);
+ *				rs_sadd(pglobal, re_stype, re_sindex, re_saddr);
+ *
+ *			with an integer-pointer to a 15 int array which will be
+ *			handled as single global-arrays for each RSC-File.
+ *
+ *			This Source is copyrighted material by
+ *					Oliver Groeger
+ *					Graf-Konrad-Str.25
+ *					8000 Munich 40
+ *					Germany
+ *
+ * Version  :  1.00
+ * Date     :  Aug 15th 1991
+ * Author   :  Oliver Groeger
+ *
+ * Version  :  1.10
+ * Datum    :  27 Sept. 1992
+ * Autor    :  Olaf Meisiek
+ * Žnderung :  - xrsrc_load l„dt jetzt auch das alte Atari-RCS-Format
+ *             - TOS-unabh„ngige Farbicon-Untersttzung hinzugefgt
+ *
+ *
+ * Anm.     : Um diese Routinen benutzen zu drfen, muž man im
+ *            Besitz eines Interface Originals sein!
+ *
+ * Version	: 1.20
+ * Date		: 02/05/1999
+ * Auteur	: Larrod‚ Alain
+ *			: Optimis‚ et s‚curis‚ par mes soins et d‚bogg‚ par endroit
+ *			  (xrsrc_gaddr)
+ *
+ *			Rajout de nouvelle options de compilation:
+ *			RSRC_PALETTE:	Utilisation de la palette du ressource
+ *			MIN_PALETTE	:   Forcage des 16 premiŠres couleurs sur
+ *							les couleurs systŠmes. (pratique en TC)
+ *							(force RSRC_PALETTE a TRUE)
+ *			MAX_PLANES		Nombre de plan maxi a rechercher lors des conversion
+ *							en r‚solution TC (plans >8)	.
+ *							(4 a l'origine (INTERFACE) mis … 8 par mes soins
+ *							Ne pas mettre plus que 8 merci. (valeur 4 ou 8)
+ *			FORM_ALERT_ERR	Mettre a 'TRUE' pour afficher les erreurs 
+ *
+ *	02/06/99
+ *		    	Modification de la fonction rsc_load:
+ *				Initialisation 'forc‚e' du bloc de paramŠtres car si des
+ *				valeurs "r‚siduelles" restent, des problŠmes (bombes) sont
+ *				possibles sur des ressources ne comportant pas d'icones couleurs
+ *
+ *  28/11/99
+ *              Ajout des USERDEF compatibles Magic:
+ *				- BUTTON  => FRAMEBOX,RADIO et BUTTON normal
+ *				- STRING  => STRING normal
+ *
+ ******************************************************************************/
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <tos.h>
+#include <portab.h>
+
+#include "\XRSRC\RSC_LOAD\XRSRC.H"
+#include "\XRSRC\RSC_LOAD\user.H"
+
+#include "\cdrom\init_gem.H"
+
+/****** options de compilation ************************************************/
+
+#define COLOR_ICONS 	TRUE	/* Gestion des icones couleurs         */
+#define SAVE_MEMORY 	FALSE
+#define RSRC_PALETTE	FALSE
+#define MIN_PALETTE		TRUE
+#define FORM_ALERT_ERR	FALSE
+#define MAX_PLANES		8
+
+#ifdef __TURBOC__
+	#pragma warn -sig
+#endif
+
+
+/****** TYPES ****************************************************************/
+
+
+/****** VARIABLES ************************************************************/
+
+LOCAL WORD  xgl_wbox, xgl_hbox;
+LOCAL GRECT xdesk;
+
+#if COLOR_ICONS == TRUE
+
+	LOCAL WORD 	  xvdi_handle;
+	LOCAL WORD    Farbtbl[256][32];
+	LOCAL ULONG   Farbtbl2[32];
+	LOCAL WORD    is_palette;
+	LOCAL WORD    rgb_palette[256][4];
+	LOCAL WORD    xpixelbytes;
+	LOCAL WORD    xscrn_planes;
+
+#endif
+
+LOCAL WORD		pGlobal[15]={0};
+
+LOCAL WORD		*rs_global;
+LOCAL RSXHDR  	*rs_hdr;
+LOCAL RSXHDR	*hdr_buf;
+
+/*
+	Format de rs_global (15 INT)
+	
+	0-1		adresse table OBBLK (malloc USERDEF xdraw_cicon)
+	2-3		adresse color_icon table	(malloc CICON)
+	4		nombre d'icones couleurs
+	5-6		adresse rs_treeindex
+	7-8		adresse malloc ressource (voir rs_load() )
+	9-10	taille du ressource en m‚moire (c'‚tait un INT a l'origine!)
+	11-12	flag 'magic' mis … 'XRSC' si tout va bien
+	13-15	adresse des USERDEF MAGIC (malloc)
+*/
+
+/****** FUNCTIONS ************************************************************/
+
+LOCAL VOID rs_obfix      _((OBJECT *rs_otree));
+LOCAL VOID rs_sglobal    _((WORD *base));
+LOCAL WORD rs_free       _((WORD *base));
+LOCAL WORD rs_gaddr      _((WORD *base, WORD re_gtype, WORD re_gindex, OBJECT **re_gaddr));
+LOCAL WORD rs_sadd       _((WORD *base, WORD rs_stype, WORD rs_sindex, OBJECT *re_saddr));
+LOCAL WORD rs_load       _((WORD *global, CONST CHAR *fname));
+LOCAL VOID *get_address  _((WORD type, WORD index));
+
+LOCAL VOID *get_sub      _((WORD index, LONG offset, WORD size));
+LOCAL VOID rs_fixindex   _((WORD *global));
+LOCAL VOID do_rsfix      _((ULONG rs_size));
+LOCAL VOID fix_treeindex _((VOID));
+LOCAL VOID fix_object    _((VOID));
+LOCAL VOID fix_tedinfo   _((VOID));
+LOCAL VOID fix_nptr      _((LONG index, WORD ob_type));
+LOCAL WORD fix_ptr       _((WORD type, LONG index));
+LOCAL WORD fix_long      _((LONG *lptr));
+LOCAL VOID fix_chp       _((WORD *pcoord, WORD flag));
+LOCAL VOID fix_userdef 	 _((VOID));
+
+LOCAL VOID do_ciconfix   _((ULONG header, RSXHDR *rsxhdr, LONG rs_len));
+LOCAL WORD xadd_cicon    _((CICONBLK *cicnblk, OBJECT *obj, WORD nub));
+LOCAL VOID draw_bitblk 	 _((WORD *p, GRECT *g, WORD num_planes, WORD mode, WORD *index));
+LOCAL VOID xfix_cicon    _((UWORD *col_data, LONG len_plane, WORD old_planes, MFDB *smfdb));
+LOCAL VOID std_to_byte   _((CONST UWORD *col_data, CONST LONG len_plane, CONST WORD old_planes, MFDB *smfdb));
+LOCAL VOID xrect2array   _((CONST GRECT *rect, WORD *array));
+LOCAL WORD test_rez      _((VOID));
+LOCAL VOID xfill_farbtbl _((VOID));
+LOCAL WORD fill_cicon_liste  _((LONG *cicon_liste, ULONG header, RSXHDR *rsxhdr));
+LOCAL WORD CDECL xdraw_cicon _((PARMBLK *pb));
+
+/*****************************************************************************/
+
+GLOBAL WORD xrsrc_load (CONST CHAR *re_lpfname, WORD *pglobal)
+{
+	if(!pglobal)
+		pglobal=pGlobal;
+
+	return (rs_load (pglobal, re_lpfname));
+}
+
+/*****************************************************************************/
+
+GLOBAL WORD xrsrc_free (WORD *pglobal)
+{
+	if(!pglobal)
+		pglobal=pGlobal;
+
+	return (rs_free (pglobal));
+}
+
+/*****************************************************************************/
+
+GLOBAL WORD xrsrc_gaddr (WORD re_gtype, WORD re_gindex, VOID *re_gaddr, WORD *pglobal)
+{
+	if(!pglobal)
+		pglobal=pGlobal;
+
+	return (rs_gaddr (pglobal, re_gtype, re_gindex, re_gaddr));
+}
+
+/*****************************************************************************/
+
+GLOBAL WORD xrsrc_saddr (WORD re_stype, WORD re_sindex, VOID *re_saddr, WORD *pglobal)
+{
+	if(!pglobal)
+		pglobal=pGlobal;
+
+	return (rs_sadd (pglobal, re_stype, re_sindex, re_saddr));
+}
+
+/*****************************************************************************/
+
+GLOBAL WORD xrsrc_obfix (OBJECT *re_otree, WORD re_oobject)
+{
+
+	rs_obfix (&re_otree[re_oobject]);
+
+	return (TRUE);
+}
+
+/*****************************************************************************/
+
+/*			Proc‚dure LOCALES												 */
+
+/*****************************************************************************/
+
+LOCAL VOID rs_obfix (OBJECT *rs_otree)
+{
+	WORD tmp = FALSE;
+	WORD count = 0;
+	WORD *coord = &rs_otree->ob_x;
+
+	while (count++ < 4)
+	{
+		fix_chp (coord++, tmp);
+		tmp^=1;
+	}
+
+	return;
+}
+
+/*****************************************************************************/
+
+LOCAL VOID rs_sglobal (WORD *base)
+{
+	rs_global = base;
+	hdr_buf = (RSXHDR *)*(LONG *)&rs_global[7];
+	(LONG)rs_hdr = (LONG)hdr_buf + sizeof (RSXHDR);
+
+	return;
+}
+
+/*****************************************************************************/
+
+LOCAL WORD rs_free (WORD *base)
+
+{
+#if COLOR_ICONS == TRUE
+
+	WORD     i;
+	CICON    *color_icn;
+	CICON	 *cicn;
+
+#endif
+
+	rs_global = base;
+	
+	if(	!rs_global || *((ULONG*)&rs_global[11])!='XRSC')
+		return FALSE;
+
+
+#if COLOR_ICONS == TRUE
+
+	if ((color_icn = (CICON *)*(LONG *)&rs_global[2]) != NULL)
+	{
+		cicn=color_icn;
+		
+#if SAVE_MEMORY == TRUE
+
+		RSXHDR *rsxhdr;
+		VOID   *rs_start, *rs_end;
+		
+		rsxhdr = (RSXHDR *)*(LONG *)&rs_global[7];
+
+		rs_start = (VOID *)((LONG)rsxhdr + sizeof (RSXHDR));
+		/*rs_end   = (VOID *)(*(LONG *)(rsxhdr->rsh_rssize + (rsxhdr->rsh_rssize & 1L) + (LONG)rs_start) + (LONG)rs_start - 1L);*/
+		rs_end   = (VOID *)(*(LONG *)(rsxhdr->rsh_rssize + (rsxhdr->rsh_rssize & 1L) + (LONG)rs_start) + (LONG)rs_start & 1L);
+
+		for (i = rs_global[4]; --i>=0; cicn++)
+		{
+			if (cicn->num_planes > 1)
+			{
+				if (cicn->col_data != NULL && (cicn->col_data < rs_start || cicn->col_data > rs_end))
+					free (cicn->col_data);
+				if (cicn->sel_data != NULL && (cicn->sel_data < rs_start || cicn->sel_data > rs_end))
+					free (cicn->sel_data);
+				if (cicn->sel_data == NULL && cicn->sel_mask != NULL && (cicn->sel_mask < rs_start || cicn->sel_mask > rs_end))
+					free (cicn->sel_mask);
+			}
+		}
+
+#else
+
+		for (i = rs_global[4]; --i>=0; cicn++)
+		{
+			if (cicn->num_planes > 1)
+			{
+				if (cicn->col_data != NULL)
+					free (cicn->col_data);
+				if (cicn->sel_data != NULL)
+					free (cicn->sel_data);
+				if (cicn->sel_data == NULL && cicn->sel_mask != NULL)
+					free (cicn->sel_mask);
+			}
+		}
+
+#endif
+		free (color_icn);
+		*(LONG *)&rs_global[2]=0L;		/* effacer table COLOR ICON	*/
+	}
+	if(*((ULONG*)&rs_global[13]))		/* effacer USERDERF			*/
+	{
+		free((VOID*)*((ULONG*)&rs_global[13]));
+		*((ULONG*)&rs_global[13])=0L;
+	}
+	if (*(LONG *)rs_global)
+	{
+		free ((VOID *)*(LONG *)rs_global);	/* effacer table OBBLK	*/
+		*(LONG *)rs_global=0L;
+	}
+#endif
+
+	if(*(LONG *)&rs_global[7])				/* effacer le ressource	*/
+	{
+		free ((RSXHDR *)*(LONG *)&rs_global[7]);
+		*(LONG *)&rs_global[7]=0L;
+	}
+
+	*((ULONG*)&rs_global[11])=0L;			/* enlever flag 'XRSC'	*/
+	
+	return (TRUE);
+}
+
+/*****************************************************************************/
+
+LOCAL WORD rs_gaddr (WORD *base, WORD re_gtype, WORD re_gindex, OBJECT **re_gaddr)
+{
+	rs_sglobal (base);
+
+	if(	!rs_global || *((ULONG*)&rs_global[11])!='XRSC')
+		return FALSE;
+
+	*re_gaddr = get_address (re_gtype, re_gindex);
+
+	if (*re_gaddr == (OBJECT *)NULL)
+		return (FALSE);
+
+	return (TRUE);
+}
+
+/*****************************************************************************/
+
+LOCAL WORD rs_sadd (WORD *base, WORD rs_stype, WORD rs_sindex, OBJECT *re_saddr)
+{
+	OBJECT *old_addr;
+
+	rs_sglobal (base);
+
+	if(	!rs_global || *((ULONG*)&rs_global[11])!='XRSC')
+		return FALSE;
+
+	old_addr = get_address (rs_stype, rs_sindex);
+
+	if (old_addr == (OBJECT *)NULL)
+		return (FALSE);
+
+	*old_addr = *re_saddr;
+
+	return (TRUE);
+}
+
+/*****************************************************************************/
+
+LOCAL VOID *get_address (WORD type, WORD index)
+{
+	union
+	{
+		VOID	*dummy;
+		BYTE	*string;
+		OBJECT	**dpobject;
+		OBJECT	*object;
+		TEDINFO	*tedinfo;
+		ICONBLK	*iconblk;
+		BITBLK	*bitblk;
+	} all_ptr;
+
+
+	VOID 	*the_addr = (VOID *)NULL;
+	LONG	indexl=(LONG)index;				/* simplifie la compilation	*/
+
+	switch (type)
+	{
+		case R_TREE:
+			if (indexl < hdr_buf->rsh_ntree)
+			{
+				all_ptr.dpobject = (OBJECT **)(*(long **)&rs_global[5]);
+				the_addr = all_ptr.dpobject[indexl];
+			}
+			break;
+
+		case R_OBJECT:
+			if (indexl < hdr_buf->rsh_nobs)
+				the_addr = get_sub (indexl, hdr_buf->rsh_object, sizeof(OBJECT));
+			break;
+
+		case R_TEDINFO:
+		case R_TEPTEXT:
+			if (indexl < hdr_buf->rsh_nted)
+				the_addr = get_sub (indexl, hdr_buf->rsh_tedinfo, sizeof(TEDINFO));
+			break;
+
+		case R_ICONBLK:
+		case R_IBPMASK:
+			if (indexl < hdr_buf->rsh_nib)
+				the_addr = get_sub (indexl, hdr_buf->rsh_iconblk, sizeof(ICONBLK));
+			break;
+
+		case R_BITBLK:
+		case R_BIPDATA:
+			if (indexl < hdr_buf->rsh_nbb)
+				the_addr = get_sub (indexl, hdr_buf->rsh_bitblk, sizeof(BITBLK));
+			break;
+
+		case R_STRING:
+			if (indexl < hdr_buf->rsh_nstring)
+				the_addr = *((VOID**)get_sub (indexl, hdr_buf->rsh_frstr, sizeof (BYTE *)));
+			break;
+
+		case R_IMAGEDATA:
+			if (indexl < hdr_buf->rsh_nimages)
+				the_addr = *((VOID**)get_sub (indexl, hdr_buf->rsh_imdata, sizeof (BYTE *)));
+			break;
+
+		case R_OBSPEC:
+			if (indexl < hdr_buf->rsh_nted)
+			{
+				all_ptr.object = get_address(R_OBJECT, indexl);
+				if(all_ptr.object)
+					the_addr = &all_ptr.object->ob_spec;
+			}
+			break;
+
+		case R_TEPVALID:
+		case R_TEPTMPLT:
+			if (indexl < hdr_buf->rsh_nted)
+			{
+				all_ptr.tedinfo = get_address(R_TEDINFO, indexl);
+				if(all_ptr.tedinfo)
+				{	
+					if (type == R_TEPVALID)
+						the_addr = &all_ptr.tedinfo->te_pvalid;
+					else
+						the_addr = &all_ptr.tedinfo->te_ptmplt;
+				}
+			}
+			break;
+
+		case R_IBPDATA:
+		case R_IBPTEXT:
+			if (indexl < hdr_buf->rsh_nib)
+			{
+				all_ptr.iconblk = get_address(R_ICONBLK, indexl);
+				if(all_ptr.iconblk)
+				{
+					if (type == R_IBPDATA)
+						the_addr = &all_ptr.iconblk->ib_pdata;
+					else
+						the_addr = &all_ptr.iconblk->ib_ptext;
+				}
+			}
+			break;
+
+		case R_FRIMG:
+			if (indexl < hdr_buf->rsh_nimages)
+				the_addr = get_sub (indexl, hdr_buf->rsh_frimg, sizeof (BYTE *));
+			break;
+
+		case R_FRSTR:
+			if (indexl < hdr_buf->rsh_nstring)
+				the_addr = get_sub (indexl, hdr_buf->rsh_frstr, sizeof (BYTE *));
+			break;
+	}
+
+	return (the_addr);
+}
+
+/*****************************************************************************/
+
+LOCAL VOID *get_sub (WORD index, LONG offset, WORD size)
+{
+	BYTE *ptr = (BYTE *)rs_hdr;
+
+	ptr += offset;
+	ptr += (index * size);
+
+	return ((VOID *)ptr);
+}
+
+/*****************************************************************************/
+
+LOCAL WORD rs_load (WORD *global, CONST CHAR *fname)
+{
+WORD 	i, fh;
+CHAR 	tmpnam[128];
+DTA  	dta,*old_dta;
+LONG 	size;
+WORD 	ret = FALSE;
+
+	strcpy (tmpnam, fname);
+	
+	if (shel_find (tmpnam))
+	{
+	
+		rs_global = global;
+		
+		if(*((ULONG*)&rs_global[11])=='XRSC')
+			return FALSE;
+			
+		memset(rs_global,0,15*sizeof(WORD));		/* modif 02/06/99	*/
+
+		old_dta = Fgetdta ();
+		Fsetdta (&dta);
+		if (Fsfirst (tmpnam, 0x10) == 0)
+			size = dta.d_length;
+		else
+			size = 0;
+		Fsetdta (old_dta);
+
+		if (size > sizeof (RSHDR) && (fh = Fopen (tmpnam, 0)) > 0)
+		{
+			if ((hdr_buf = (RSXHDR *)malloc (size + sizeof (RSXHDR))) != NULL)
+			{
+				(LONG)rs_hdr = (LONG)hdr_buf + sizeof (RSXHDR);
+				
+				if (Fread (fh, size, rs_hdr) == size)
+				{
+					if (((RSHDR *)rs_hdr)->rsh_vrsn == 3)
+						*(RSXHDR *)hdr_buf=*(RSXHDR *)rs_hdr;
+					else
+					{
+						ULONG	*phdr_buf=(ULONG *)hdr_buf;
+						UWORD	*prs_hdr=(UWORD *)rs_hdr;
+	
+						for (i = (sizeof (RSXHDR) / sizeof (LONG)); --i>=0;)
+							*phdr_buf++=*prs_hdr++;
+					}
+					do_rsfix (hdr_buf->rsh_rssize);
+	
+					if (size > (hdr_buf->rsh_rssize + 72L))	/* Icones couleur ? */
+						do_ciconfix ((ULONG)rs_hdr, hdr_buf, size);
+
+					rs_fixindex (global);
+					
+					fix_userdef();
+				
+					ret=TRUE;
+				}
+			}
+			else
+			{
+	#if FORM_ALERT_ERR==TRUE
+			form_error (-39);
+	#endif
+			}
+			
+			Fclose (fh);
+		}
+	}
+	else
+	{
+#if FORM_ALERT_ERR==TRUE
+		form_error (-39);
+#endif
+	}
+
+	return (ret);
+}
+
+#if !defined(OB_XSTATE)
+
+	#define OB_XSTATE(tree)		*((UBYTE*)&(tree)->ob_state)
+	#define OB_STATE(tree)		((UBYTE*)&(tree)->ob_state)[1]
+	#define OB_STATE2(tree,obj)	((UBYTE*)&((tree)[obj].ob_state))[1]
+	#define OB_XTYPE(tree)		*((UBYTE*)&(tree)->ob_type)
+	#define OB_TYPE(tree)		((UBYTE*)&(tree)->ob_type)[1]
+	#define OB_TYPE2(tree,obj)	((UBYTE*)&((tree)[obj].ob_type))[1]
+
+#endif
+
+OBJECT *Objc_addr(OBJECT *tree,WORD obj);
+
+LOCAL VOID fix_userdef (VOID)
+{
+	LONG 	count;
+	OBJECT 	*obj,*tree_obj;
+	WORD	nobj;
+	OBBLK	*user;
+
+	nobj=0;
+	tree_obj=obj=get_address (R_OBJECT, 0);
+
+	for(count= hdr_buf->rsh_nobs;--count>=0;obj++)
+	{
+		if((UBYTE)obj->ob_type==G_BUTTON || ( (UBYTE)obj->ob_type==G_STRING && (obj->ob_state & MASK3D)))
+			nobj++;
+		else if(obj->ob_type==(G_BOX|(22<<8)))
+			nobj++; 
+	}
+	if(nobj && (user=calloc(nobj,sizeof(OBBLK)))!=NULL)
+	{
+		int cdecl (*ub_code)(PARMBLK *);
+		WORD		offset,i;
+
+		*((ULONG*)&rs_global[13])=(LONG)user;
+		
+		for(count=hdr_buf->rsh_ntree;--count>=0;)
+		{
+			obj = tree_obj=get_address (R_TREE, count);
+			i=0;
+			do
+			{
+				ub_code=NULL;
+				offset=0;
+				switch(OB_TYPE(obj))
+				{
+					case G_BUTTON:
+	
+						if(obj->ob_state & WHITEBAK)
+						{
+							if(OB_XSTATE(obj)==0xFE)
+								ub_code=DIAL_FrameBox;
+							else if(obj->ob_state & 0x8000)
+								ub_code=DIAL_Rdbutton;
+						}
+						if(!ub_code)
+						{
+							offset=1;
+				
+							if(obj->ob_flags&EXIT)		offset=2;
+							if(obj->ob_flags&DEFAULT) 	offset=3;
+	
+							ub_code=DIAL_button;
+						}
+						break;
+
+					case G_STRING:
+						if(obj->ob_state & MASK3D)
+							ub_code=DIAL_String;
+						break;
+
+					case G_BOX:
+						if(OB_XTYPE(obj)==22)
+						{
+							ub_code=DIAL_Outline;
+						
+							if(obj->ob_state & OUTLINED)
+								offset=5;
+						}
+				}
+				
+				if(ub_code)
+				{
+					user->ublk.ub_parm=obj->ob_spec.index;
+					user->ublk.ub_code=ub_code;
+					user->old_type=obj->ob_type;
+					
+					OB_TYPE(obj)=G_USERDEF;
+					obj->ob_spec.index=(LONG)user;
+					
+					OB_XTYPE(obj)=*((UBYTE*)&obj->ob_flags);	/* recopier flags 3D	*/
+					obj->ob_flags &= ~FL3DMASK;
+					user++;
+
+					if(offset>0)
+					{
+					 	if(obj->ob_head>0)			/* des enfants ?							*/
+						{	
+							int		o;
+							
+							for(o=obj->ob_head;o!=i;)
+							{
+								OBJECT	*t=(tree_obj+o);
+								
+								t->ob_x+=offset;
+								t->ob_y+=offset;
+								o=t->ob_next;
+							}
+						}
+						if(i>0)				/* pas d'offset pour la racine		*/
+						{
+							obj->ob_x-=offset;
+							obj->ob_y-=offset;
+						}
+						offset<<=1;			/* corriger la taille				*/
+						obj->ob_width+=offset;
+						obj->ob_height+=offset;
+					}
+				}				
+				i++;
+			}while(!(obj++->ob_flags&LASTOB));
+		}
+	}
+}
+
+
+
+/*****************************************************************************/
+
+LOCAL VOID rs_fixindex (WORD *global)
+{
+	rs_sglobal (global);
+
+	fix_object ();
+}
+
+/*****************************************************************************/
+
+LOCAL VOID do_rsfix (ULONG size)
+{
+
+	*((RSXHDR**)&rs_global[7])=hdr_buf;
+
+	*((ULONG*)&rs_global[9])=size;
+
+	if(*((ULONG*)&rs_global[11])!='XRSC')
+	{
+		fix_treeindex ();
+		fix_tedinfo ();
+	
+		fix_nptr (hdr_buf->rsh_nib - 1, R_IBPMASK);
+		fix_nptr (hdr_buf->rsh_nib - 1, R_IBPDATA);
+		fix_nptr (hdr_buf->rsh_nib - 1, R_IBPTEXT);
+	
+		fix_nptr (hdr_buf->rsh_nbb - 1, R_BIPDATA);
+		fix_nptr (hdr_buf->rsh_nstring - 1, R_FRSTR);
+		fix_nptr (hdr_buf->rsh_nimages - 1, R_FRIMG);
+		
+		*((ULONG*)&rs_global[11])='XRSC';
+	}
+	
+}
+
+/*****************************************************************************/
+
+LOCAL VOID fix_treeindex (VOID)
+{
+	OBJECT **adr;
+	LONG   count;
+
+	adr = get_sub (0, hdr_buf->rsh_trindex, sizeof (OBJECT *));
+
+	*((LONG*)&rs_global[5])=(LONG)adr;
+
+	for(count=hdr_buf->rsh_ntree ; --count>=0;)
+	{
+		fix_long ( (LONG*)adr++);
+	}
+}
+
+/*****************************************************************************/
+
+LOCAL VOID fix_object (VOID)
+{
+	LONG 	count;
+	OBJECT 	*obj;
+
+	obj = get_address (R_OBJECT, 0);
+
+	for(count= hdr_buf->rsh_nobs;--count>=0;obj++)
+	{
+		rs_obfix (obj);
+		if ((UBYTE)obj->ob_type!= G_BOX && (UBYTE)obj->ob_type!= G_IBOX && (UBYTE)obj->ob_type!= G_BOXCHAR)
+			fix_long ((LONG *)&obj->ob_spec);
+	}
+}
+
+/*****************************************************************************/
+
+LOCAL VOID fix_tedinfo()
+{
+	LONG		count;
+	TEDINFO 	*tedinfo;
+
+	count = hdr_buf->rsh_nted - 1;
+
+	while (count >= 0)
+	{
+		tedinfo = get_address (R_TEDINFO, count);
+
+		/*if(tedinfo)*/
+		{
+			if (fix_ptr (R_TEPTEXT, count))
+				tedinfo->te_txtlen = (WORD)strlen (tedinfo->te_ptext) + 1;
+
+			if (fix_ptr (R_TEPTMPLT, count))
+				tedinfo->te_tmplen = (WORD)strlen (tedinfo->te_ptmplt) + 1;
+
+			fix_ptr (R_TEPVALID, count);
+		}
+
+		count--;
+	}
+
+	return;
+}
+
+/*****************************************************************************/
+
+LOCAL VOID fix_nptr (LONG count, WORD ob_type)
+{
+	while (count >= 0)
+		fix_long (get_address(ob_type, count--));
+}
+
+/*****************************************************************************/
+
+LOCAL WORD fix_ptr (WORD type, LONG index)
+{
+	return (fix_long (get_address (type, index)));
+}
+
+/*****************************************************************************/
+
+LOCAL WORD fix_long (LONG *lptr)
+{
+	LONG base;
+
+	base = *lptr;
+	if (base == 0L)
+		return (FALSE);
+
+	base += (LONG)rs_hdr;
+
+	*lptr = base;
+
+	return (TRUE);
+}
+
+/*****************************************************************************/
+
+LOCAL VOID fix_chp (WORD *pcoord, WORD flag)
+{
+	WORD	locoord;
+	
+	locoord=(WORD)(((UBYTE*)pcoord)[1]);	/* non sign‚					*/
+
+	if(flag)
+		locoord *= xgl_hbox;
+	else
+	{
+		if (locoord == 0x50)
+			locoord = xdesk.g_w;											
+		else
+			locoord *= xgl_wbox;
+	
+	}
+
+	*pcoord = (WORD)*((BYTE*)pcoord) + locoord;		/* sign‚ -> extension de signe	*/
+	
+}
+
+/*****************************************************************************/
+/* Farbicons fr aktuelle Aufl”sung initialisieren                           */
+/*****************************************************************************/
+
+LOCAL VOID do_ciconfix (ULONG header, RSXHDR *rsxhdr, LONG rs_len)
+
+{	LONG   *cicon_liste;
+	WORD   i;
+	OBJECT *obj;
+
+	cicon_liste = (LONG *)(*(LONG *)(rsxhdr->rsh_rssize + (rsxhdr->rsh_rssize & 1L) + header + sizeof (LONG)) + header);
+	if ((LONG)cicon_liste - header > rsxhdr->rsh_rssize && (LONG)cicon_liste - header < rs_len)
+	{
+		if (fill_cicon_liste (cicon_liste, header, rsxhdr) >0)
+		{
+#if COLOR_ICONS == TRUE
+			WORD nub = 0, work_out [57], *palette;
+			
+			if (*(LONG *)rs_global && *(LONG *)&rs_global[2])	/* problŠme m‚moire ?	*/
+			{
+				vq_extnd (xvdi_handle, TRUE, work_out);
+				if((xscrn_planes = work_out[4])<=0)
+					xscrn_planes = 1;
+
+				is_palette = FALSE;
+				xpixelbytes = test_rez ();
+
+#if RSRC_PALETTE==TRUE || MIN_PALETTE==TRUE
+
+				palette = (WORD *)*(LONG *)(rsxhdr->rsh_rssize + (rsxhdr->rsh_rssize & 1L) + header + 2 * sizeof (LONG));
+
+				if (palette != NULL)
+				{	
+					(LONG)palette += header;
+					memcpy (rgb_palette, palette, sizeof (rgb_palette));
+					is_palette = TRUE;
+				}
+#endif
+				
+				xfill_farbtbl ();
+			
+				{
+					CICON	*pcolor_icn = ((CICON *)*(LONG *)&rs_global[2]);
+					
+					obj = ((OBJECT *)(rsxhdr->rsh_object + header));
+					
+					for (i = rsxhdr->rsh_nobs; --i>=0 ; obj++)
+					{
+						if ((UBYTE)obj->ob_type == G_CICON)
+						{
+							if (xadd_cicon (obj->ob_spec.ciconblk, obj, nub) == FALSE)
+							{
+								memset (pcolor_icn, 0, sizeof (CICON));
+								((UBYTE*)&obj->ob_type)[1] = G_ICON;
+							}
+							pcolor_icn++;
+							nub++;
+							obj->ob_spec.index -= header;
+						}
+					}
+				}
+			}
+			else
+#endif
+			{	/* mettre les icones couleurs en icones monochromes	*/
+
+				obj = ((OBJECT *)(rsxhdr->rsh_object + header));
+
+				for (i = rsxhdr->rsh_nobs; --i>=0 ; obj++)
+				{
+					if ((UBYTE)obj->ob_type == G_CICON)
+					{
+						((UBYTE*)&obj->ob_type)[1] = G_ICON;
+						obj->ob_spec.index -= header;
+					}
+				}
+			}
+		}
+	}
+}
+
+/*****************************************************************************/
+/* Pointer fr Farbicons in der Resource initialisieren                      */
+/*****************************************************************************/
+
+LOCAL WORD fill_cicon_liste (LONG *cicon_liste, ULONG header, RSXHDR *rsxhdr)
+{
+LONG     	i, num = 0;
+BYTE     	*p;
+LONG     	iclen_mono, num_cicon;
+CICONBLK 	*cblk;
+CICON    	*cicon;
+LONG		*picnlist=cicon_liste;
+
+	while (!*picnlist)
+	{
+		num++;
+		picnlist++;
+	}
+	
+	if (*picnlist!=-1L)
+		return (NIL);
+
+	picnlist++;
+	cblk = (CICONBLK *)picnlist;
+	
+	picnlist=cicon_liste;
+	for (i = num; --i>=0 ; )
+	{
+		*picnlist++ = (LONG)cblk;
+
+		p = (BYTE *)&cblk[1];
+		cblk->monoblk.ib_pdata = (WORD *)p;
+		iclen_mono = cblk->monoblk.ib_wicon / 8 * cblk->monoblk.ib_hicon;
+		p += iclen_mono;
+		cblk->monoblk.ib_pmask = (WORD *)p;
+		p += iclen_mono;
+		
+	{
+		CONST LONG p2 = (LONG)cblk->monoblk.ib_ptext;
+/*
+	p2==0 si texte<12c
+			==> texte dans p (aprŠs les donn‚es)
+	sinon 
+		offset
+*/
+
+		if (!p2 || (header + p2) == (LONG)p || p2 < rsxhdr->rsh_string || p2 > rsxhdr->rsh_rssize)
+			cblk->monoblk.ib_ptext = (CHAR *)p;
+		else
+			(LONG)cblk->monoblk.ib_ptext = header + (LONG)cblk->monoblk.ib_ptext;
+	}
+		
+		p+=12;					/* sauter texte (‚ventuel!)	*/
+		cicon = (CICON *)p;
+		
+		if ((num_cicon = (LONG)cblk->mainlist) > 0)
+		{
+
+			CICON    *cold=cicon;
+			LONG     iclen_color;
+			LONG	 i2;
+			
+			cblk->mainlist = cicon;
+	
+			for (i2 = num_cicon; --i2>=0 ; )
+			{
+				iclen_color=iclen_mono*cicon->num_planes;
+
+				p = (BYTE *)&cicon[1];
+				cicon->col_data = (WORD *)p;
+				p += iclen_color;
+				cicon->col_mask = (WORD *)p;
+				p += iclen_mono;
+				if (cicon->sel_data != NULL)
+				{
+					cicon->sel_data = (WORD *)p;
+					p += iclen_color;
+					cicon->sel_mask = (WORD *)p;
+					p += iclen_mono;
+				}
+				cicon->next_res = (CICON *)p;
+				cold = cicon;
+				cicon = (CICON *)p;
+			}
+			cold->next_res = NULL;
+		}
+		cblk = (CICONBLK *)p;
+	}
+
+	*(LONG *)rs_global = 0L;
+	*(LONG *)&rs_global[2] = 0L;
+	rs_global[4] = 0;
+
+	if (num >0 )
+	{
+		OBJECT   *pobject;
+
+		rs_global[4] = (WORD)num;
+
+		*(LONG *)rs_global = (LONG)calloc (num , sizeof (OBBLK));
+
+		if(*(LONG *)rs_global)
+		{
+			*(LONG *)&rs_global[2] = (LONG)calloc (num , sizeof (CICON));
+			if(!*(LONG *)&rs_global[2])
+			{
+				free((VOID*)*(LONG *)rs_global);
+				*(LONG *)rs_global=0L;
+			}
+		}
+
+		pobject = (OBJECT *)(header + rsxhdr->rsh_object);
+  
+		for (i = rsxhdr->rsh_nobs; --i>=0 ; pobject++)
+		{
+			if ((UBYTE)pobject->ob_type == G_CICON)
+				pobject->ob_spec.index = cicon_liste[pobject->ob_spec.index];
+		}
+
+	}
+	
+	return (num);
+}
+
+#if COLOR_ICONS == TRUE
+
+/*******************************************************************************
+	Changer le format de l'ic“ne et l'adapter aux autres r‚solutions.
+*******************************************************************************/
+
+LOCAL VOID SetMask(WORD xmax,WORD ymax,UWORD *sel,UWORD	*col)
+{
+WORD	x;
+UWORD 	mask=0x5555;
+
+	xmax>>=4;
+	
+	for (; --ymax>=0 ; )
+	{
+		for (x = xmax; --x>=0 ; )
+			*sel++= (*col++) & mask;
+		mask=~mask;
+	}
+}
+
+#if MAX_PLANES!=8 && MAX_PLANES!=4
+	#undef MAX_PLANES
+	#define MAX_PLANES	4
+#endif
+
+LOCAL WORD xadd_cicon (CICONBLK *cicnblk, OBJECT *obj, WORD nub)
+{
+WORD  	 best_planes, find_planes;
+CICON    *cicn, *color_icn, *best_icn = NULL;
+LONG     len_mono_plane, len_color_plane,*next;
+MFDB     d;
+
+#if SAVE_MEMORY == TRUE
+	CICON    *max_icn = NULL;
+#endif
+
+	best_planes = 1;
+	if (xscrn_planes > 8)
+		find_planes = MAX_PLANES;
+	else
+		find_planes = xscrn_planes;
+
+	cicn = cicnblk->mainlist;
+	next = (LONG *)&cicnblk->mainlist;
+
+	while (cicn != NULL)
+	{
+		*next = (LONG)cicn;
+		next = (LONG *)&cicn->next_res;
+
+#if SAVE_MEMORY == TRUE
+		if (cicn->num_planes > xscrn_planes)
+			max_icn = cicn;
+#endif
+		if (cicn->num_planes >= best_planes && cicn->num_planes <= find_planes)
+		{
+			best_planes = cicn->num_planes;
+			best_icn = cicn;
+		}
+		cicn = cicn->next_res;
+	}
+	
+	if (best_icn == NULL)		/* aucune ic“ne couleur trouv‚e */
+	{
+		cicnblk->mainlist=NULL;
+		goto force_mono;
+		/*return (FALSE);*/
+	}
+
+/*	len_mono_plane = (LONG)cicnblk->monoblk.ib_wicon / 8 * cicnblk->monoblk.ib_hicon;*/
+
+	len_mono_plane =  ((LONG)cicnblk->monoblk.ib_wicon*cicnblk->monoblk.ib_hicon)>>3;
+
+	color_icn = &((CICON *)*(LONG *)&rs_global[2])[nub];
+
+	*color_icn = *best_icn;
+
+	if (best_planes > 1)
+		color_icn->num_planes = xscrn_planes;
+	else
+		color_icn->num_planes = 1;
+	
+/*
+	 Allouer la place pour le format universel
+*/
+	len_color_plane=len_mono_plane*color_icn->num_planes;
+
+	if ((color_icn->col_data = malloc (len_color_plane)) == NULL)
+	{
+#if FORM_ALERT_ERR==TRUE
+		form_error (-39);
+#endif
+		return (FALSE);
+	}
+	if (color_icn->sel_data)
+	{
+		if ((color_icn->sel_data = malloc (len_color_plane)) == NULL)
+		{
+			free (color_icn->col_data);
+#if FORM_ALERT_ERR==TRUE
+			form_error (-39);
+#endif
+			return (FALSE);
+		}
+	}
+
+	if (best_planes > 1)
+	{
+		if (best_icn->sel_data == NULL)
+		{
+/* 	
+	Pr‚parer le masque s‚lectionn‚ (monochrome)
+*/
+			if ((color_icn->sel_mask = malloc (len_mono_plane)) == NULL)
+			{
+				free (color_icn->col_data);
+				if (color_icn->sel_data)
+					free (color_icn->sel_data);
+#if FORM_ALERT_ERR==TRUE
+		form_error (-39);
+#endif
+				return (FALSE);
+			}
+	
+			SetMask(cicnblk->monoblk.ib_wicon,cicnblk->monoblk.ib_hicon,(UWORD*)color_icn->sel_mask,(UWORD*)best_icn->col_mask);
+			
+		}
+		
+		d.fd_addr  = color_icn->col_data;
+		d.fd_w = cicnblk->monoblk.ib_wicon;
+		d.fd_h	= cicnblk->monoblk.ib_hicon;
+		d.fd_wdwidth = d.fd_w >> 4;
+		d.fd_stand	= TRUE;
+		d.fd_nplanes	= xscrn_planes;
+	
+		xfix_cicon ((UWORD *)best_icn->col_data, len_mono_plane, best_planes, &d);
+		if (best_icn->sel_data)
+		{
+			d.fd_addr = color_icn->sel_data;
+			xfix_cicon ((UWORD *)best_icn->sel_data, len_mono_plane, best_planes, &d);
+		}
+	}
+	else
+	{
+		memcpy (color_icn->col_data, best_icn->col_data, len_mono_plane);
+		memcpy (color_icn->sel_data, best_icn->sel_data, len_mono_plane);
+	}
+
+#if SAVE_MEMORY == TRUE
+	if (best_icn->num_planes < color_icn->num_planes && max_icn != NULL)
+	{
+		if (best_icn->sel_data == NULL || max_icn->sel_data != NULL)
+		{
+			best_icn->col_data = max_icn->col_data;
+			best_icn->sel_data = max_icn->sel_data;
+			best_icn->num_planes = xscrn_planes;
+		}
+	}
+	
+	if (best_icn->num_planes == color_icn->num_planes)
+	{
+		memcpy (best_icn->col_data, color_icn->col_data, len_color_plane);
+		free (color_icn->col_data);
+		color_icn->col_data = NULL;
+		if (best_icn->sel_data != NULL)
+		{
+			memcpy (best_icn->sel_data, color_icn->sel_data, len_color_plane);
+			free (color_icn->sel_data);
+			color_icn->sel_data = NULL;
+		}
+		else
+		{
+			memcpy (cicnblk->monoblk.ib_pmask, color_icn->sel_mask, len_mono_plane);
+			best_icn->sel_mask = cicnblk->monoblk.ib_pmask;
+			free (color_icn->sel_mask);
+			color_icn->sel_mask = NULL;
+		}
+	}
+	else
+	{
+		if (best_icn->sel_data == NULL)
+		{
+			memcpy (cicnblk->monoblk.ib_pmask, color_icn->sel_mask, len_mono_plane);
+			free (color_icn->sel_mask);
+			color_icn->sel_mask = NULL;
+			best_icn->col_data = color_icn->col_data;
+			best_icn->sel_mask = cicnblk->monoblk.ib_pmask;
+			best_icn->num_planes = color_icn->num_planes;
+		}
+		else
+			*best_icn = *color_icn;
+	}
+
+
+	cicnblk->mainlist = best_icn;
+#else
+	color_icn->next_res = cicnblk->mainlist;
+	cicnblk->mainlist = color_icn;
+#endif
+
+force_mono:
+
+	{
+		OBBLK    *ub= &((OBBLK *)*(LONG *)rs_global)[nub];
+
+		ub->old_type = G_CICON;
+		ub->ublk.ub_parm = obj->ob_spec.index;
+		ub->ublk.ub_code = xdraw_cicon;
+		obj->ob_spec.index = (LONG)&ub->ublk;
+		((UBYTE*)&obj->ob_type)[1] = G_USERDEF;
+	}
+	
+	return (TRUE);
+}
+
+/*******************************************************************************
+	Combiens de bytes par pixels seront ‚chang‚s au format
+*******************************************************************************/
+
+LOCAL WORD test_rez ()
+{
+static	WORD     black[3] = {0, 0, 0};
+static	WORD     white[3] = {1000, 1000, 1000};
+static	MFDB     pixel = {NULL, 16, 1, 1, 0, 1, 0, 0, 0};
+static	MFDB     stdfm = {NULL, 16, 1, 1, 1, 1, 0, 0, 0};
+
+	WORD	bpp = 0;
+
+	if (xscrn_planes >= 8)
+	{
+		WORD     i, np, pxy[8], rgb[3];
+		UWORD    backup[32], test[32];
+		MFDB     screen;
+		UWORD	*ptest;
+
+		stdfm.fd_nplanes = pixel.fd_nplanes = xscrn_planes;
+
+		memset (test, 0, 32* sizeof (UWORD));
+
+		if (xscrn_planes == 8)		/* ‚cran orient‚ octet (PC) ou entrelac‚ (ST) ?	*/
+		{
+
+			ptest=test;
+
+			for (np = xscrn_planes; --np>=0 ; )
+				*ptest++=0x8000U;
+
+			pixel.fd_addr = stdfm.fd_addr = test;
+			vr_trnfm (xvdi_handle, &stdfm, &pixel);		/* convertir plan->pixel	*/
+			
+			ptest=test;
+			for (i = 1; i < xscrn_planes; i++,ptest++)	/* entrelac‚ ?	*/
+				if (*ptest)	break;
+			
+			if (i >= xscrn_planes && !(test[0] & 0x00ff))	/* si UN octet positionn‚	*/
+				bpp = 1;									/* orient‚ octet (PC)	*/
+		}
+		else
+		{
+			xrect2array (&xdesk, pxy);
+			vs_clip (xvdi_handle, FALSE, pxy);
+			screen.fd_addr = NULL;
+			
+			memset (backup, 0, sizeof (backup));
+		
+			vswr_mode (xvdi_handle, MD_REPLACE);
+			vsl_ends (xvdi_handle, 0, 0);
+			vsl_type (xvdi_handle, 1);
+			vsl_width (xvdi_handle, 1);
+			memset (pxy, 0, sizeof (pxy));
+			
+			graf_mouse (M_OFF, NULL);
+		
+			pixel.fd_addr = backup;	/* Punkt retten */
+			vro_cpyfm (xvdi_handle, S_ONLY, pxy, &screen, &pixel);
+		
+			/* sauver l'ancienne couleur */
+			vq_color (xvdi_handle, 15, 1, rgb);
+	
+			/* tester le format universel */
+			pixel.fd_addr = test;
+			vsl_color (xvdi_handle, 15);
+			vs_color (xvdi_handle, 15, white);
+			v_pline (xvdi_handle, 2, pxy);
+			
+			/*memset (test, 0, xscrn_planes * sizeof (WORD));*/
+			vro_cpyfm (xvdi_handle, S_ONLY, pxy, &screen, &pixel);
+			
+			np=((xscrn_planes + 15) & ~0xF)>>3 ;
+			ptest=&test[np];
+			for (i = np; i < xscrn_planes; i++)
+				if (*ptest++)	break;
+			
+			if (i >= xscrn_planes)
+			{
+				vs_color (xvdi_handle, 15, black);
+				v_pline (xvdi_handle, 2, pxy);
+				
+				memset (test, 0, xscrn_planes * sizeof (WORD));
+				vro_cpyfm (xvdi_handle, S_ONLY, pxy, &screen, &pixel);
+				
+				ptest=&test[np];
+				for (i = np ; i < xscrn_planes; i++)
+					if (*ptest++)	break;
+
+				if (i >= xscrn_planes)
+					bpp = (xscrn_planes + 7) >>3;
+			}
+
+			/* restaurer l'ancienne couleur */
+			vs_color (xvdi_handle, 15, rgb);
+	
+			pixel.fd_addr = backup;	/* restaurer le point */
+			vro_cpyfm (xvdi_handle, S_ONLY, pxy, &pixel, &screen);
+		
+			graf_mouse (M_ON, NULL);
+	
+			xrect2array (&xdesk, pxy);
+			vs_clip (xvdi_handle, TRUE, pxy);
+		}
+	}
+
+	return (bpp);
+}
+
+/*******************************************************************************
+	En mode True-Color, passer la valeur de point en palette RVB
+*******************************************************************************/
+
+LOCAL VOID xfill_farbtbl ()
+{
+static 	WORD pixtbl[16] = {0, 2, 3, 6, 4, 7, 5, 8, 9, 10, 11, 14, 12, 15, 13, 16};
+static 	MFDB pixel = {NULL, 16, 1, 1, 0, 1, 0, 0, 0};
+static	MFDB stdfm = {NULL, 16, 1, 1, 1, 1, 0, 0, 0};
+
+		WORD color;
+	
+	if (xscrn_planes == 8)	/* 256c							*/
+	{
+		if (xpixelbytes)	/* ‚cran orient‚ octet	(PC)	*/
+		{
+
+		UBYTE	*pFarbtbl2=(UBYTE *)Farbtbl2;
+
+			for (color = 0; color < 256; color++,pFarbtbl2+=sizeof(Farbtbl2[0]))
+				*pFarbtbl2 = color;
+
+		}
+	}
+	else if (xscrn_planes > 8)
+	{
+		WORD	np, pxy[8], backup[32], rgb[3];
+		WORD	*prgb_pal=rgb_palette[0];
+		MFDB 	screen;
+		
+#if MIN_PALETTE==TRUE
+		WORD	max_color=16;
+
+		is_palette=FALSE;
+#else
+
+		WORD 	max_color=255;
+
+#endif
+
+		if (is_palette == FALSE)	/* Keine Palette in der Resource */
+		{
+			WORD	*ppixtab=pixtbl;
+
+			for (color = 1; color <= max_color; color++,prgb_pal+=4)
+			{
+				if (color <= 16)
+				{
+					vq_color (xvdi_handle, *ppixtab, 1, prgb_pal);
+					prgb_pal[3] = *ppixtab++;
+					
+				}
+				else
+				{
+					vq_color (xvdi_handle, color , 1, prgb_pal);
+					prgb_pal[3] = color ;
+				}
+			}
+			if(max_color>16)
+			{
+				vq_color (xvdi_handle, 1, 1, rgb_palette[255]);
+				rgb_palette[255][3] = 1;
+			}
+			is_palette = TRUE;
+		}
+		
+		vs_clip (xvdi_handle, FALSE, pxy);
+		graf_mouse (M_OFF, NULL);
+
+		memset (backup, 0, sizeof (backup));
+ 		memset (Farbtbl, 0, sizeof(Farbtbl));	/*32 * 256 * sizeof (WORD));*/
+		screen.fd_addr = NULL;
+		stdfm.fd_nplanes = pixel.fd_nplanes = xscrn_planes;
+	
+		vswr_mode (xvdi_handle, MD_REPLACE);
+		vsl_ends (xvdi_handle, 0, 0);
+		vsl_type (xvdi_handle, 1);
+		vsl_width (xvdi_handle, 1);
+		memset (pxy, 0, sizeof (pxy));
+		
+		pixel.fd_addr = backup;	/* Punkt retten */
+		vro_cpyfm (xvdi_handle, S_ONLY, pxy, &screen, &pixel);
+	
+	/*
+		 calculer l'ancienne couleur 
+	*/
+		vq_color (xvdi_handle, 15, 1, rgb);
+
+		{
+	
+			WORD	*pFarbtbl=Farbtbl[0];
+			ULONG	*pFarbtbl2=Farbtbl2;
+		
+			prgb_pal=rgb_palette[0];
+				 
+			for (; prgb_pal < rgb_palette[256] ; prgb_pal+=4,pFarbtbl+=32,pFarbtbl2++)
+			{
+				vs_color (xvdi_handle, 15, prgb_pal);
+				vsl_color (xvdi_handle, 15);
+				v_pline (xvdi_handle, 2, pxy);
+				
+				stdfm.fd_addr = pixel.fd_addr = pFarbtbl;
+			/*
+				 vro_cpyfm,  car v_get_pixel ne fonctionne pas en TrueColor (>=24 Plans) 
+			*/
+				vro_cpyfm (xvdi_handle, S_ONLY, pxy, &screen, &pixel);
+	
+				if (xpixelbytes)
+				{	
+					*pFarbtbl2 = 0L;
+					memcpy (pFarbtbl2, pixel.fd_addr, xpixelbytes);
+				}
+					
+				vr_trnfm (xvdi_handle, &pixel, &stdfm);
+				for (np = 0; np < xscrn_planes; np++)
+					if (pFarbtbl[np])
+						pFarbtbl[np] = 0xffff;
+			}
+		}
+
+/*
+	 restaurer l'ancienne couleur
+ */
+		vs_color (xvdi_handle, 15, rgb);
+
+		pixel.fd_addr = backup;	/* restaurer le point */
+		vro_cpyfm (xvdi_handle, S_ONLY, pxy, &pixel, &screen);
+	
+		graf_mouse (M_ON, NULL);
+	}
+}
+
+/*******************************************************************************
+	Adapter l'ic“ne … la r‚solution graphique actuelle
+	(par exemple : une ic“ne de 4 Plans vers 24 Plans TrueColor)
+*******************************************************************************/
+
+LOCAL VOID xfix_cicon (UWORD *col_data, LONG len_plane, WORD old_planes, MFDB *smfdb)
+{
+CONST	LONG	len_new_planes = len_plane*smfdb->fd_nplanes;
+		MFDB  	d;
+		
+	if (old_planes == smfdb->fd_nplanes)
+	{
+		if (smfdb->fd_nplanes == xscrn_planes)
+		{
+			WORD  	got_mem = FALSE;
+		
+			d = *smfdb;
+			d.fd_stand = FALSE;
+			smfdb->fd_addr = col_data;
+			if (d.fd_addr == smfdb->fd_addr)
+			{
+				if ((d.fd_addr = malloc ( len_new_planes )) == NULL)
+					d.fd_addr = smfdb->fd_addr;
+				else
+					got_mem = TRUE;
+			}
+			
+			vr_trnfm (xvdi_handle, smfdb, &d);
+			if (d.fd_addr != smfdb->fd_addr && got_mem == TRUE)
+			{
+				memcpy (smfdb->fd_addr, d.fd_addr, len_new_planes );
+				free (d.fd_addr);
+			}
+		}
+		else
+			memcpy (smfdb->fd_addr, col_data, len_new_planes);
+	}
+	else
+	{
+		LONG  	xl, old_len, rest_len;
+		UWORD 	*new_data;
+	
+		old_len  = old_planes * len_plane;
+		rest_len = (smfdb->fd_nplanes * len_plane) - old_len;
+	
+		if (smfdb->fd_nplanes <= 8)
+		{
+			UBYTE 	*pcol;
+			LONG	pos;
+			UWORD 	mask;
+	
+			if (smfdb != NULL)
+			{
+				new_data = (UWORD*) &((UBYTE *)smfdb->fd_addr)[old_len];
+				memset (new_data, 0, rest_len );
+				memcpy (smfdb->fd_addr, col_data, old_len );
+				col_data = smfdb->fd_addr;
+			}
+			else
+				new_data = (UWORD *)&((UBYTE*)col_data)[old_len];
+	
+			for (xl = 0; xl < len_plane; xl+=2, col_data++,new_data++)
+			{
+				mask = 0xffff;
+		
+				pcol=(UBYTE*)col_data;
+				for (pos = 0; mask && pos < old_len; pos+=len_plane, pcol+=len_plane )
+					mask &= *(UWORD*)pcol;
+				
+				if (mask)
+				{	
+					pcol=(UBYTE*)new_data;
+					for (pos = 0; pos < rest_len; pos += len_plane, pcol+=len_plane)
+						*(UWORD*)pcol |= mask;
+				}
+			}
+			goto free_smfdb;
+	
+		}
+		else	/* TrueColor, valeur de points en RVB */
+		{
+			if (!xpixelbytes)
+			{
+	
+				UBYTE	*pcol;
+				UWORD	*pback, back[32];
+				UWORD	*pfarbtblcolor,old_col[32];
+				VOID	*pmaxcol;
+				WORD  	np;
+				LONG	bit, color;
+
+				if (old_planes < 8)
+				{
+					pmaxcol = Farbtbl[(1 << old_planes) - 1];
+					memcpy (old_col, pmaxcol , sizeof (WORD) * smfdb->fd_nplanes );
+					memset (pmaxcol, 0, smfdb->fd_nplanes * sizeof (WORD) );
+				}
+		
+				if (smfdb != NULL)
+				{
+					new_data = &((UWORD *)smfdb->fd_addr)[old_len];
+					memset (new_data, 0, rest_len * 2);
+					memcpy (smfdb->fd_addr, col_data, old_len * 2);
+					col_data = smfdb->fd_addr;
+				}
+	
+				for (xl = 0; xl < len_plane; xl+=2,((UBYTE*)col_data)+=2)
+				{
+					pback=back;
+					pcol=(UBYTE*)col_data;
+						
+					for (np = old_planes; --np>=0 ; pcol+=len_plane )
+						*pback++ = *(UWORD*)pcol;	
+					
+					for (bit=1; bit; bit <<= 1)
+					{
+						color = 0;
+						pback=back;
+						for (np = 0; np < old_planes; np++,pback++)
+						{
+							color += ((*pback & 1) << np);
+							*pback >>= 1;
+						}
+						
+						pcol=(UBYTE*)col_data;
+	
+						pfarbtblcolor=(UWORD*)Farbtbl[color];
+						for (np = smfdb->fd_nplanes; --np>=0; pcol+=len_plane,pfarbtblcolor++)
+						{
+							*((UWORD*)pcol)= (*((UWORD*)pcol) & ~bit) | (*pfarbtblcolor & bit);
+						}
+					}
+				}
+				if (old_planes < 8)
+					memcpy (pmaxcol, old_col, smfdb->fd_nplanes * sizeof (WORD));
+	
+	free_smfdb:
+	
+				if (smfdb != NULL)	/* convertir au format universel */
+				{
+					d = *smfdb;
+					d.fd_stand = 0;
+					if ((d.fd_addr = malloc ( len_new_planes )) == NULL)
+						d.fd_addr = smfdb->fd_addr;
+					
+					vr_trnfm (xvdi_handle, smfdb, &d);
+					if (d.fd_addr != smfdb->fd_addr)
+					{
+						memcpy (smfdb->fd_addr, d.fd_addr, len_new_planes );
+						free (d.fd_addr);
+					}
+	
+				}
+			}
+			else
+				std_to_byte (col_data, len_plane, old_planes, smfdb);
+		}
+	}
+}
+
+/*******************************************************************************
+	std_to_byte transforme un dessin du format standard au format
+	universel (pour les r‚solutions >= 16 Plans)
+*******************************************************************************/
+
+VOID std2byte(UBYTE *p1,UBYTE *col_data,WORD old_planes,LONG len_plane)
+{
+LONG 	x;
+UBYTE 	*pdata;
+UWORD 	bit;
+WORD	np;
+ULONG	color,mask;
+
+	for (x = (len_plane>>1); --x>=0;col_data+=2)		/* balayer la largeur du plan en mot	*/
+	{
+		for (bit=0x8000U;bit; bit>>=1)		/* pour chaque pixel/bit			*/
+		{
+			pdata=col_data;
+			mask=1L<<2;						/* extraire index couleur			*/
+			color = 0L;
+			for (np = old_planes; --np>=0; pdata+=len_plane)
+			{
+				if(*((UINT*)pdata) & bit)
+					color|=mask;
+				mask<<=1;
+			}
+
+/* mettre la nouvelle couleur correspondante	*/
+
+			pdata = ((UBYTE *)Farbtbl2)+color;
+			
+			switch (xpixelbytes)
+			{
+				case 4:
+					*(p1++) = *(pdata++);
+				case 3:
+					*(p1++) = *(pdata++);
+				case 2:					
+					*(p1++) = *(pdata++);	/* obligatoire pour le 24b en 68000	*/
+					*(p1++) = *(pdata++);
+					break;
+			}
+		}
+	}
+}
+
+LOCAL VOID std_to_byte (CONST UWORD *col_data,CONST LONG  len_plane,CONST WORD  old_planes,MFDB  *smfdb)
+{
+
+	ULONG  	colback;
+	WORD  	memflag = FALSE;
+	ULONG 	*farbtbl22=NULL;
+	
+	if (smfdb->fd_addr == col_data)
+	{
+		LONG len_malloc=len_plane*smfdb->fd_nplanes;
+
+		if ((col_data = malloc (len_malloc)) == NULL)
+		{
+#if FORM_ALERT_ERR==TRUE
+		form_error (-39);
+#endif
+			return;
+		}
+		memcpy (col_data, smfdb->fd_addr, len_malloc);
+		memflag = TRUE;
+	}
+
+	if (old_planes < 8)
+	{
+		farbtbl22 = &Farbtbl2[(1 << old_planes) - 1];
+		colback = *farbtbl22;
+		*farbtbl22 = Farbtbl2[255];
+	}
+	
+	std2byte((UBYTE *)smfdb->fd_addr,(UBYTE*)col_data,old_planes,len_plane);
+
+	if(farbtbl22)
+		*farbtbl22=colback;
+
+	if (memflag)
+		free (col_data);
+}
+
+/*******************************************************************************
+	Dessine l'ic“ne couleur
+*******************************************************************************/
+
+WORD RC_clipping( GRECT *box,GRECT *clip);
+void clipping(GRECT *clp );
+
+
+LOCAL WORD CDECL xdraw_cicon (PARMBLK *pb)
+{
+static CICON	monocicon={1,0,0,0,0,0};
+WORD	 	pxy[4], m_mode, i_mode, mskcol, icncol;
+ICONBLK 	*iconblk;
+CICON   	*cicn;
+WORD    	*mask, *data, *dark;
+CHAR    	letter[2];
+WORD    	selected, mindex[2], iindex[2], buf;
+BOOLEAN 	invert ;
+
+GRECT		gIcon;
+	
+	
+	if(RC_clipping((GRECT*)&pb->pb_x,(GRECT*)&pb->pb_xc))
+	{	
+	/*
+		xrect2array ((GRECT *)&pb->pb_xc, pxy);
+		vs_clip (xvdi_handle, TRUE, pxy);
+	*/
+		iconblk = (ICONBLK *)pb->pb_parm;
+		cicn    = ((CICONBLK *)pb->pb_parm)->mainlist;
+	
+		if(cicn && cicn->num_planes>1)	/* QUE pour les icones couleurs	*/
+		{
+			if(!(pb->pb_currstate & WHITEBAK) && !(Appl.App_3D & APP3D_ON) )
+			{
+				while(cicn && cicn->num_planes!=1)
+				{
+					cicn=cicn->next_res;
+				}
+			}
+		}
+	/*
+		 si pas d'icone couleur, fabriquer un "faux" icone monochrome
+	*/
+		if(!cicn)
+		{
+			cicn=&monocicon;
+			monocicon.col_data=iconblk->ib_pdata;
+			monocicon.col_mask=iconblk->ib_pmask;
+		}
+	
+		gIcon.g_x = pb->pb_x + iconblk->ib_xicon;
+		gIcon.g_y = pb->pb_y + iconblk->ib_yicon;
+		gIcon.g_w = iconblk->ib_wicon;
+		gIcon.g_h = iconblk->ib_hicon;
+	
+		if(pb->pb_currstate & DRAW3D)
+		{
+			iindex[0] = (WORD)(*((UBYTE*)&iconblk->ib_char) >> 4);
+			iindex[1] = WHITE;
+			m_mode=MD_REPLACE;
+			if(cicn->num_planes>1)
+				m_mode=S_ONLY;
+			draw_bitblk (cicn->col_data, &gIcon, cicn->num_planes, m_mode, iindex);
+			return 0;
+		}
+	
+		selected = pb->pb_currstate & SELECTED;
+		dark = NULL;
+		
+		m_mode  = MD_TRANS;
+		if (cicn->num_planes > 8)	/* TrueColor, carte couleur en mode RVB? */
+			i_mode = S_AND_D;
+		else
+			i_mode = S_OR_D;
+	
+		invert = FALSE;
+	
+		if (selected) /* it was an objc_change */
+		{
+	
+			if (cicn->sel_data != NULL)
+			{
+				mask = cicn->sel_mask;
+				data = cicn->sel_data;
+				if (cicn->num_planes < 2 )
+					i_mode = MD_TRANS;
+			}
+			else
+			{
+				mask = cicn->col_mask;
+				data = cicn->col_data;
+	
+				if (cicn->num_planes > 1)
+				{
+					dark = cicn->sel_mask;
+				}
+				else
+					invert = TRUE;
+			}
+		}
+		else
+		{
+			mask = cicn->col_mask;
+			data = cicn->col_data;
+		
+			if (cicn->num_planes < 2 )
+				i_mode = MD_TRANS;
+		}
+		
+		mskcol = *((UBYTE*)&iconblk->ib_char) & 0x0f;
+	
+		mindex[0] = mskcol;
+		if(mindex[0] == BLACK)
+			mindex[0] = WHITE;
+		mindex [1] = WHITE;
+		
+		icncol = iindex[0] = (WORD)(*((UBYTE*)&iconblk->ib_char) >> 4);
+		iindex[1] = WHITE;
+	
+	
+		if (invert)
+		{
+			buf       = iindex[0];
+			iindex[0] = mindex[0];
+			mindex[0] = buf;
+			i_mode    = MD_TRANS;
+		}
+		if (selected)
+		{
+			buf    = icncol;
+			icncol = mskcol;
+			mskcol = buf;
+		}
+		
+		draw_bitblk (mask, &gIcon, 1, m_mode, mindex);
+		draw_bitblk (data, &gIcon, cicn->num_planes, i_mode, iindex);
+		
+		if (dark)
+		{
+			mindex [0] = BLACK;
+			mindex [1] = WHITE;
+			draw_bitblk (dark, &gIcon, 1, MD_TRANS, mindex);
+		}
+	
+		if (iconblk->ib_ptext[0])
+		{
+			gIcon.g_x = pb->pb_x + iconblk->ib_xtext;
+			gIcon.g_y = pb->pb_y + iconblk->ib_ytext;
+			
+			pxy[0] = gIcon.g_x;
+			pxy[1] = gIcon.g_y;
+			pxy[2] = gIcon.g_x + iconblk->ib_wtext - 1;
+			pxy[3] = gIcon.g_y + iconblk->ib_htext - 1;
+			
+			vswr_mode     (xvdi_handle, MD_REPLACE);	/* dessiner la boŒte texte */
+			vsf_color     (xvdi_handle, mskcol);
+			vsf_interior  (xvdi_handle, FIS_SOLID);
+			vsf_perimeter (xvdi_handle, FALSE);
+			v_bar         (xvdi_handle, pxy);
+			vsf_perimeter (xvdi_handle, TRUE);
+		}
+	
+		vswr_mode     (xvdi_handle, MD_TRANS);
+		vst_font      (xvdi_handle, 1);	/* Systemfont */
+		vst_height    (xvdi_handle, 4, &buf, &buf, &buf, &buf);
+		vst_color     (xvdi_handle, icncol);
+		vst_effects   (xvdi_handle, TXT_NORMAL);
+		vst_alignment (xvdi_handle, ALI_LEFT, ALI_TOP, &buf, &buf);
+		vst_rotation  (xvdi_handle, 0);
+		
+		if (iconblk->ib_ptext[0])
+		{
+			gIcon.g_x += (iconblk->ib_wtext - (WORD)strlen (iconblk->ib_ptext) * 6) / 2;
+			gIcon.g_y += (iconblk->ib_htext - 6) / 2;
+			
+			v_gtext (xvdi_handle, gIcon.g_x, gIcon.g_y, iconblk->ib_ptext);
+		}
+	
+		letter[0] = (UBYTE)iconblk->ib_char;	/* & 0xff;*/
+		if (letter[0])
+		{
+			letter[1] = '\0';
+	
+			pb->pb_x += (iconblk->ib_xicon + iconblk->ib_xchar);
+			pb->pb_y += (iconblk->ib_yicon + iconblk->ib_ychar);
+		
+			v_gtext (xvdi_handle, pb->pb_x, pb->pb_y, letter);
+		}
+		
+		clipping(NULL);
+	}
+	
+	return (pb->pb_currstate & ~ (SELECTED|(~0x3F)));
+} /* draw_userdef */
+
+/*****************************************************************************/
+
+LOCAL VOID draw_bitblk (WORD *p, GRECT *g, WORD num_planes, WORD mode, WORD *index)
+{
+WORD	 	pxy[8];
+MFDB	 	smfdb, d;
+
+	d.fd_addr   = NULL; 		/* screen */
+	smfdb.fd_addr   = (VOID *)p;
+	smfdb.fd_w  = g->g_w;
+	smfdb.fd_h   = g->g_h;
+	smfdb.fd_wdwidth  = g->g_w >> 4;
+	smfdb.fd_stand   = FALSE;
+	smfdb.fd_nplanes   = num_planes;
+
+	pxy[0] = 0;
+	pxy[1] = 0;
+ 	pxy[2] = smfdb.fd_w - 1;
+ 	pxy[3] = smfdb.fd_h - 1;
+
+	pxy[4] = g->g_x;
+	pxy[5] = g->g_y;
+	pxy[6] = pxy[4] + pxy [2];
+	pxy[7] = pxy[5] + pxy [3];
+
+	if (num_planes > 1)
+		vro_cpyfm (xvdi_handle, mode, pxy, &smfdb, &d);
+	else
+		vrt_cpyfm (xvdi_handle, mode, pxy, &smfdb, &d, index);	 /* copy it */
+}
+
+/*****************************************************************************/
+
+LOCAL VOID xrect2array (CONST GRECT *rect, WORD *array)
+{
+  *array++ = rect->g_x;
+  *array++ = rect->g_y;
+  *array++ = rect->g_x + rect->g_w - 1;
+  *array   = rect->g_y + rect->g_h - 1;
+} /* xrect2array */
+
+/*****************************************************************************/
+
+GLOBAL BOOLEAN init_xrsrc (WORD vdi_handle, GRECT *desk, WORD gl_wbox, WORD gl_hbox)
+{
+	xvdi_handle = vdi_handle;
+	xdesk = *desk;
+	xgl_wbox = gl_wbox;
+	xgl_hbox = gl_hbox;
+	
+	return (TRUE);
+}
+
+/*****************************************************************************/
+
+GLOBAL VOID term_xrsrc ()
+{
+
+}
+
+#endif
