@@ -6,7 +6,7 @@ A repository collecting source code for the Atari ST, STE, Mega ST, Mega STE, ST
 
 ## How to get it?
 
-Just clone the repository. Make sure to init the submodules so that you get the code from linked repositories.
+Just clone the repository. Make sure to init the submodules while cloning (```--recurse-submodules```) so that you get the code from linked repositories.
 
 ## How to use the code on this archive?
 
