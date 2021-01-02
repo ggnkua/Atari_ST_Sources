@@ -2,35 +2,16 @@
 ;
 ;
 ; c2P utilisant les segment de 64k
-;
-; a0,a1,a2,a3 table c2p 4 8 12 16
-; a4 ecran
-; d0-d3 valeur de couleur d0.h=a0 d1.h = a1 ainsi de suite
-;
+; 3 sinus de 7 bit
+
+_NBlignes equ 37
+
 pcstart
 	clr.l -(sp)
 	move.w #$20,-(sp)
 	trap #1
 	addq.l #6,sp
 	
-	jmp init
-	dc.b 'delasoupe',0
-	even
-	
-;usec2p
-;	move.l d0,a6
-;	move.l (a6),d4
-;	move.l d1,a6
-;	or.l (a6),d4
-;	move.l d2,a6
-;	move.l (a6),d5
-;	move.l d3,a6
-;	or.l (a6),d5
-;	movep d4,0(a0)
-;	movep d5,161(a0)
-;	movep d5,0(a1)
-;	movep d5,161(a1)
-
 init:
 	move.b #0,$ffff8260.w
 	jsr wvbl
@@ -82,14 +63,20 @@ main
 	move.l (sp)+,a0
 	
 	; copie des ligne
-	rept 40
+	rept _NBlignes
 	 
 	movem.l (a0)+,d0-d7/a1-a6				14*4
+	movem.l d0-d7/a1-a6,160-14*4(a0)	
 	movem.l d0-d7/a1-a6,320-14*4(a0)	
+	movem.l d0-d7/a1-a6,480-14*4(a0)	
 	movem.l (a0)+,d0-d7/a1-a6				28*4
+	movem.l d0-d7/a1-a6,160-14*4(a0)
 	movem.l d0-d7/a1-a6,320-14*4(a0)
+	movem.l d0-d7/a1-a6,480-14*4(a0)
 	movem.l (a0)+,d0-d7/a1-a4				28+12*4=40*4
+	movem.l d0-d7/a1-a4,160-12*4(a0)
 	movem.l d0-d7/a1-a4,320-12*4(a0)
+	movem.l d0-d7/a1-a4,480-12*4(a0)
 
 	lea 640-80*2(a0),a0
 	endr
@@ -114,23 +101,30 @@ main
 	trap #1
 	
 palette	dc.w 0,$111,$112,$222,$223,$333,$334,$555,$666,$777,$775,$764,$753,$742,$731,$720,$710
-plasmaaa
-	; move.l d1,a3		; logscreen
-	move.l sinrefA,a6
-	move.l sinrefB,a4
-	move.l sinrefC,a5
+plasmaaa	
+	; a3 = logscreen
 	movem.w anglex4,d1-d3
-	move.l (a6,d1),a0
-	move.l (a4,d2),a1
-	move.l (a5,d3),a2
+	move.l adrrefA,a6
+	add d1,a6
+	move.l adrrefB,a4
+	add d2,a4
+	move.l adrrefC,a5
+	add d3,a5
+	move.l (a6),a6
+	move.l (a4),a4
+	move.l (a5),a5
+	move.l (a6)+,a0
+	move.l (a4)+,a1
+	move.l (a5)+,a2
 	move.l a6,d5
-	move.w #40,d7			; nombre de ligne
+	move.w #_NBlignes-1,d7			; nombre de ligne
 	move.l c2ptableptr,d0
+		
 	jsr codegenere
 	movem.w anglex4,d1-d3
 	add.w #(512-11)*4,d1
-	add.w #(13)*4,d2
-	add.w #(7)*4,d3
+	add.w #(3)*4,d2
+	add.w #(17)*4,d3
 	and.w #511*4,d1
 	move.w #1540*4,d0
 	cmp.w d0,d2
@@ -149,22 +143,13 @@ wvbl:	move.w d7,-(sp)
 		beq.s .1
 		move.w (sp)+,d7
 		rts
-	
-;jmpa4	equ $1234	;	jmp (a4)
-;adda3_320	equ $567801a0;   lea 320(a3),a3
 
 initc2ploop
-
-
 	lea codegenere,a6
-	;move.l #adda3_320,(a6)+				; premier jmp; a4=codegenere
-											
-										;	lea offsetscreen+screenadr,a3
-										;	jsr 4(a4)
-
 	lea automovep1,a1
 	lea automovep2,a2
-
+	move.w #0,(a1)			; pas necessaire sauf si on appelle une seconde fois la routine
+	move.w #1,(a2)
 	
 	lea c2ptounrol,a3
 	move.l a3,a4
@@ -188,16 +173,7 @@ initc2ploop
 	cmp.l a3,a5
 	bne.s .cpy2
 	rts
-
-;	add.w #320,(a1)
-;	add.w #320,(a2)
-;	dbf d6,.loopligne
-
-	;move.w #jmpa4,(a6)+
-		; dbf d7,(a4)
-		; rts
-	rts
-	
+		
 ; code mort a unrolé comme il faut
 
 ;cp2routinitline
@@ -219,43 +195,51 @@ automovep1 equ *+2
 automovep2 equ *+2
 	movep.l d4,1(a3)
 c2ptounrolend
-;
-; d5 = sinrefA
-; a4 =sinrefB
-; a5=sinrefC
-; a3 = ecran + offset
-; a0-a2 initialiser avec reftablesinus
-; d0.L = c2ptable
-; d7=nombre de ligne
 c2pinita0a1a2
-	add #(512-14)*4,d1					2
-	add #(1540-22)*4,d2					4
-	add #(1540-13)*4,d3					8
-	and.w #511*4,d1				12
-	move.w #1540*4,d0			16
-	cmp.w d0,d2					18
-	blt.s .2					20
-	sub d0,d2					22
-.2	cmp.w d0,d3					24
-	blt.s .3					26
-	sub d0,d3					28
-.3
 	move.l d5,a6
-	move.l (a6,d1.w),a0			30
-	move.l (a4,d2.w),a1			32
-	move.l (a5,d3.w),a2			34
-
-	lea 640(a3),a3				38
-	subq.w #1,d7				40
-	tst d7
-	beq.s .fin					42
-	jmp codegenere				48
-.fin
-	rts							50
+	move.l (a6)+,a0
+	move.l (a4)+,a1
+	move.l (a5)+,a2
+	move.l a6,d5
+	lea 640(a3),a3
+	; dbf d7,codegenere
+	dc.w $51CF,$FDC0
+	rts
 c2pfina0a1a2
-cpt	dc.w 0	
+
+
+;
+;
+; routine de test qui permet de calculer l'opcode du dbf d7,codegenere
+;superdupont
+;	rept 20
+;	move.w (a0)+,d0
+;	add.w (a1)+,d0
+;	add.w (a2)+,d0
+;	move.l d0,a6
+;	move.l (a6),d4
+;;automovep1 equ *+2
+;	movep.l d4,0(a3)
 	
-	; CODe that calculate c2phalftone	data
+;	move.w (a0)+,d0
+;	add.w (a1)+,d0
+;	add.w (a2)+,d0
+;	move.l d0,a6
+;	move.l (a6),d4
+;;utomovep2 equ *+2
+;	movep.l d4,1(a3)
+;	endr
+;	move.l d5,a6
+;	move.l (a6)+,a0
+;	move.l (a4)+,a1
+;	move.l (a5)+,a2
+;	move.l a6,d5
+;	lea 640(a3),a3;
+;	dbf d7,superdupont	; a voir la valeur au debuggueur: $51CF,$FDC0
+;	rts
+ 
+
+; CODe that calculate c2phalftone	data
 ; once the value calculated in debugger
 ; it cost less octet to put the data directly in dc.l
 ; and the code is deprecated but i need to keep this routine for the futur
@@ -422,15 +406,6 @@ makec2ptable
 	tst d2
 	bne.s .loop0
 	rts
-;paletteconstruct
-;	lea listecolorRGB,a0	couleur 15
-;	R,G,B = sinus parameters
-;	rgb2 idem
-;	calcul les intermediaires rgb0 rgb1
-;	move.w #7,d0
-;	ext.l d0
-;	mulu #$10000,d0
-	
 	
 createsintabspecial
 ; a0 ram
@@ -438,11 +413,13 @@ createsintabspecial
 ; d1 nombre d'element de la table
 ; d0 = pas interne
 
-	move d1,d2
-	ext.l d2
-	add.l d2,d2
-	add.l d2,d2
-	lea (a0,d2.l),a2				; a0 = refsintable adresse 4*nombre d'element
+	;move d1,d2
+	;ext.l d2
+	;add.l d2,d2
+	;add.l d2,d2
+	;lea (a0,d2.l),a2				; a0 = refsintable adresse 4*nombre d'element
+	
+	lea tempSinref,a2
 									; a2 = datasin
 	lea buffer2octet,a6						
 	lea tabflag,a3
@@ -460,7 +437,7 @@ createsintabspecial
 	move d2,d3
 	add d3,d3
 	add d3,d3
-	move.l a2,(a0,d3)
+	move.l a0,(a2,d3)
 	move.b (a1,d2),d3
 	move.b d3,(a6)
 	move.w (a6),d3
@@ -468,12 +445,12 @@ createsintabspecial
 	move.b (a1,d2),d3
 	add.b d3,d3
 	add.w d3,d3
-	move.w d3,(a2)+
+	move.w d3,(a0)+
 	bsr addd0d2
 	bra.s .while
 .flaga1
 	move.w d2,-(sp)
-	moveq #79,d4		; 80 valeur = 40 word on reste sur des adresse paire
+	moveq #39,d4		; 80 valeur = 40 word on reste sur des adresse paire
 .looprept
 	move.b (a1,d2),d3
 	;lsl.w #8,d3
@@ -483,7 +460,69 @@ createsintabspecial
 	move.b (a1,d2),d3
 	add.b d3,d3
 	add.w d3,d3
-	move.w d3,(a2)+
+	move.w d3,(a0)+
+	bsr addd0d2
+	dbf d4,.looprept
+	
+	move.w (sp)+,d2
+	addq #1,d2
+	tst.b (a3,d2)
+	beq.s .flaga0
+	rts
+addd0d2
+	add d0,d2
+	cmp.w d1,d2
+	bmi.s .1
+	sub.w d1,d2
+.1 	rts
+buffer2octet	dc.w 0
+createbufferadresse
+; meme principe que createsintabspecial
+; a2 ram adresse calculé d'apres a0
+; a0 =efadresse a0 +4*d1 = ram valeur pioché dans a1 = a2
+; a1 tempsinref
+; d1 nombre d'element de la table
+; d0 = pas interne
+
+
+	move.w d1,d2
+	add d2,d2
+	add d2,d2
+	lea (a0,d2),a2
+
+	lea tempSinref,a1
+
+	lea tabflag,a3
+	move d1,d2
+	subq #1,d2
+.1	clr.b (a3)+
+	dbf d2,.1
+	moveq #0,d2		; angle courant
+	lea tabflag,a3
+.while
+	tst.b (a3,d2)
+	bne.s .flaga1
+.flaga0
+	st.b (a3,d2)
+	move d2,d3
+	add d3,d3
+	add d3,d3
+	move.l a2,(a0,d3)
+	move.l (a1,d3),d7
+	move.l d7,(a2)+
+	bsr addd0d2
+	bra.s .while
+.flaga1
+	move.w d2,-(sp)
+	move.w #_NBlignes-1,d4		; 80 valeur = 40 word on reste sur des adresse paire
+.looprept
+	move.w d2,d3
+	add d3,d3
+	add d3,d3
+	
+	move.l (a1,d3),d7
+	move.l d7,(a2)+
+	
 	bsr addd0d2
 	dbf d4,.looprept
 	
@@ -496,13 +535,6 @@ createsintabspecial
 	move.l a2,a0
 	; on modifie a0 pour le metre a la fin
 	rts
-addd0d2
-	add d0,d2
-	cmp.w d1,d2
-	bmi.s .1
-	sub.w d1,d2
-.1 	rts
-buffer2octet	dc.w 0
 
 preparequartersin
 	lea quartsin1540,a0
@@ -525,9 +557,6 @@ preparequartersin
 .routine:
 .loop1
 	move.w (a0)+,d0
-	;move.w d0,d1
-;	move.w d0,d2
-;	move.w d0,d3
 	move.w d0,d1
 	add d7,d0
 	move.w d0,(a1)+
@@ -583,31 +612,36 @@ prepsinAsinBsinC
 	lea ramsinus,a0
 	lea sinA,a1
 	move.w #512,d1
-	move.w #49,d0
-	move.l a0,sinrefA
+	move.w #19,d0
+	;move.l a0,sinrefA
 	jsr createsintabspecial
+	move.w #512,d1
+	move.w #511-14,d0
+	move.l a0,adrrefA
+	jsr createbufferadresse
 	
 	lea sinB,a1
 	move.w #1540,d1
-	move.w #27,d0
-	move.l a0,sinrefB
+	move.w #17,d0
+	;move.l a0,sinrefB
 	jsr createsintabspecial
+	move.w #1540,d1
+	move.w #1540-24,d0
+	move.l a0,adrrefB
+	jsr createbufferadresse
 	
 	lea sinC,a1
 	move.w #1540,d1
-	move.w #1540-32,d0
-	move.l a0,sinrefC
+	move.w #33,d0
+	;move.l a0,sinrefC
 	jsr createsintabspecial
-	
+	move.w #1540,d1
+	move.w #1540-22,d0
+	move.l a0,adrrefC
+	jsr createbufferadresse
 	rts
-
-plasma
-	
-	
-	
-	
 		DATA
-		
+
 quartsin1540
 	dc.w 66,200,334,467,601,735,868,1002			;66=132/2,+134,+134,+133,+134,134,134,133,134
 	dc.w 1136,1269,1403,1536,1670,1803,1937,2070	;134,133
@@ -678,7 +712,7 @@ quartsin512
 	dc.w 32628,32662,32692,32717,32736,32751,32761,32766
 	
 
-anglex4	dc.w 10*4,20*4,30*4
+anglex4	dc.w 10*4,220*4,330*4
 	BSS
 
 sin1540		ds.w 1540
@@ -690,10 +724,13 @@ tabflag		ds.b 1540
 sinrefA		ds.l 1
 sinrefB		ds.l 1
 sinrefC		ds.l 1
-
+adrrefA		ds.l 1
+adrrefB		ds.l 1
+adrrefC		ds.l 1
 codegenere	ds.w 14*40+25+1		; 1 = rts
 			ds.w 90			; pour etre sur de pas depasser :p
 zonevariable	ds.l 16
+tempSinref	ds.l 1540
 ptrscreen	ds.l 2
 c2ptableptr	ds.l 1
 ramsinus	ds.l 32000	; 128k is enough	deja pris, les sinref: 512*4 +1540*2*4=14368 octet
@@ -703,9 +740,3 @@ c2ptable	ds.l 16384
 screens	ds.l 8000
 		ds.l 8000
 		ds.l 16000
-	
-	
-	
-
-
-
