@@ -1,0 +1,60 @@
+    { Profiler-Testversion zu A:\DEMOS.PAS\TOM07.PAS }  
+
+CONST ___ = 26;
+   ___2 =2;
+VAR __ : INTEGER ;
+VAR _ : ARRAY [1..___] OF REAL ;
+VAR _2 : ARRAY [1..___2] OF REAL ;
+VAR _h : STRING; 
+VAR _f : TEXT;
+VAR ANZAHL,ZAHL,I:INTEGER;
+MUENZE:ARRAY[1..8]OF INTEGER;
+PROCEDURE ZERLEGE(ZAHL:INTEGER;MAXIMUM:INTEGER);
+VAR I,M:INTEGER;
+BEGIN _[11] := _[11] + 1 ;  _2[1] := _2[1] + 1 ;  
+FOR I:=2 TO MAXIMUM DO BEGIN _[25] := _[25] + 1 ; 
+IF ZAHL-MUENZE[I]>=0 THEN BEGIN _[26] := _[26] + 1 ; 
+ANZAHL:=ANZAHL+1;   _[1]:=_[1]+1;  IF ANZAHL<_[2] THEN _[2]:=ANZAHL; 
+ IF ANZAHL>_[3] THEN _[3]:=ANZAHL;  ; 
+ZERLEGE(ZAHL-MUENZE[I],I);   _[19]:=_[19]+1;  IF I<_[20] THEN _[20]:=I; 
+ IF I>_[21] THEN _[21]:=I;    _[10]:=_[10]+1;    _[13]:=_[13]+1; 
+ IF ZAHL<_[14] THEN _[14]:=ZAHL;  IF ZAHL>_[15] THEN _[15]:=ZAHL;  ; 
+ END  ; 
+;   _[19]:=_[19]+1;  IF I<_[20] THEN _[20]:=I;  IF I>_[21] THEN _[21]:=I; 
+   _[10]:=_[10]+1;    _[13]:=_[13]+1;  IF ZAHL<_[14] THEN _[14]:=ZAHL; 
+ IF ZAHL>_[15] THEN _[15]:=ZAHL; END ;    _[16]:=_[16]+1; 
+ IF MAXIMUM<_[17] THEN _[17]:=MAXIMUM;  IF MAXIMUM>_[18] THEN _[18]:=MAXIMUM; 
+   _[19]:=_[19]+1;  IF I<_[20] THEN _[20]:=I;  IF I>_[21] THEN _[21]:=I;
+ ;IF _2[1] > _[12] THEN _[12] := _2[1]; _2[1]:=_2[1]-1; END ;
+BEGIN FOR __:= 1 TO ___ DO _[__]:=0;  FOR __:= 1 TO ___2 DO _2[__]:=-1;  
+_[2]:=1.9E+999;_[3]:=-1.9E+999;_[5]:=1.9E+999;_[6]:=-1.9E+999; 
+_[8]:=1.9E+999;_[9]:=-1.9E+999;_[14]:=1.9E+999;_[15]:=-1.9E+999; 
+_[17]:=1.9E+999;_[18]:=-1.9E+999;_[20]:=1.9E+999;_[21]:=-1.9E+999; 
+_[23]:=1.9E+999;_[24]:=-1.9E+999; 
+MUENZE[1]:=1;   _[10]:=_[10]+1;  ; MUENZE[2]:=2;   _[10]:=_[10]+1;  ; MUENZE[3
+]:=5;   _[10]:=_[10]+1;  ; MUENZE[4]:=10;   _[10]:=_[10]+1;  ; MUENZE[5]:=50;
+   _[10]:=_[10]+1;  ; 
+MUENZE[6]:=100;   _[10]:=_[10]+1;  ; MUENZE[7]:=200;   _[10]:=_[10]+1;  ; 
+MUENZE[8]:=500;   _[10]:=_[10]+1;  ; 
+WRITE('-> Summe in Pf ') ; READLN(ZAHL);   _[4]:=_[4]+1; 
+ IF ZAHL<_[5] THEN _[5]:=ZAHL;  IF ZAHL>_[6] THEN _[6]:=ZAHL;  ; ANZAHL:=0;
+   _[1]:=_[1]+1;  IF ANZAHL<_[2] THEN _[2]:=ANZAHL; 
+ IF ANZAHL>_[3] THEN _[3]:=ANZAHL;  ;
+ZERLEGE(ZAHL,8);   _[4]:=_[4]+1;  IF ZAHL<_[5] THEN _[5]:=ZAHL; 
+ IF ZAHL>_[6] THEN _[6]:=ZAHL; ; 
+WRITELN('<- Es gibt ',ANZAHL+1,' M”glichkeiten ');   _[1]:=_[1]+1; 
+ IF ANZAHL<_[2] THEN _[2]:=ANZAHL;  IF ANZAHL>_[3] THEN _[3]:=ANZAHL;  ;
+;ASSIGN(_f,'A:\TESTFILE.TST\TOM07.WRT');
+REWRITE(_f);
+WRITELN(_f,'(c)1989mkbmeersaukleintier');
+WRITELN(_f,'A:\DEMOS.PAS\TOM07.PAS');
+WRITELN(_f,'ja');
+WRITELN(_f,'26.0');
+FOR __ := 1 TO ___ DO BEGIN 
+STR(_[__],_h);
+WRITELN(_f,_h); END;
+CLOSE(_f);
+WRITELN;WRITELN;
+WRITELN('-> Profile-Testlauf beendet. Werte in A:\TESTFILE.TST\TOM07.WRT');
+WRITELN('-> Bitte profile_2.prg starten. ');
+END.

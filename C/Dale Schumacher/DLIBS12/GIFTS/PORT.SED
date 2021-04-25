@@ -1,0 +1,17 @@
+s/memory.h/string.h/
+s/strings.h/string.h/
+s/blkcpy/memmove/
+s/blkfill/memset/
+s/blkcmp/memcmp/
+s/blkicmp/memicmp/
+s/movemem/memmove/
+s/movmem/memmove/
+s/fillmem/memset/
+s/setmem/memset/
+s/rindex/strrchr/
+s/index/strchr/
+s/reverse/strrev/
+s/strsave/strdup/
+s/strsav/strdup/
+s/stridx/strpos/
+s/strridx/strrpos/

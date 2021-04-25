@@ -1,0 +1,2 @@
+compiler %1
+
