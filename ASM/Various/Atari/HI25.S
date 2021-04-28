@@ -1,0 +1,35 @@
+*************************************************************
+*
+*  Make hi rez screen bios handle 25 lines of 8x16 characters
+*	
+*  author:	j d eisenstein
+*
+*  date:		15-aug-85
+*
+*************************************************************
+
+LINEA_INIT	equ	$A000
+GET_REZ		equ	4	extended bios resolution inquiry
+
+
+hi25	lea	stack,sp	
+	move.w	#GET_REZ,-(sp)	get screen resolution
+	trap	#14
+	addq.w	#2,sp
+	cmp.w	#2,d0		only execute if already in hi rez
+	bne	exit
+	dc.w	LINEA_INIT	get the important pointers
+	move.l	08(a1),a1	a1 -> 8x16 font header
+	move.l	72(a1),-$0A(a0)	v_off_ad <- 8x16 offset table addr
+	move.l	76(a1),-$16(a0)	v_fnt_ad <- 8x16 font data addr
+	move.w	#0016,-$2E(a0)	v_cel_ht <- 16    8x16 cell height
+	move.w	#0024,-$2A(a0)	v_cel_my <- 24    maximum cell "Y"
+	move.w	#1280,-$28(a0)	v_cel_wr <- 1280  vertical byte offset
+
+exit	clr.w	-(sp)		back to the os
+	trap	#1
+
+	ds.l	$10
+stack	ds.l	$01		hey chef, gimme a short stack
+
+	end
