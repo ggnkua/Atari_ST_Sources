@@ -1,4 +1,5 @@
 ** GENERAL SUBROUTINES (STUFF)
+** Include file for scroller.s source file.
 
 *****************************************************************
 savestk		ds.l 1

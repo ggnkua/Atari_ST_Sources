@@ -1,6 +1,8 @@
 ** NEW AND IMPROVED SCROLLY INTRO FOR ST USER
 ** WITH ADDED ZIP, POW AND PEZAZ.
 ** by Bryan Kennerley.	28/4/90
+** Source file for SCROLLER.PRG, a full screen
+** multi-colour textscroller, ASTU Nov 1990!!!
 
 	bra progbit
 
@@ -15,7 +17,7 @@ currphysbase	dc.l 0
 	dc.b "Rhyl, Clwyd. LL18 3RS.",0
 	even
 pathname
-	dc.b "A:TITLE.PC1",0		; Any PC1 file will do
+	dc.b "A:\AUTO\TITLE.PC1",0
 	even
 
 filehandle	dc.w 0
