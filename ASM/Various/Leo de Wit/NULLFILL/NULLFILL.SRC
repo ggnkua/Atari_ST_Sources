@@ -1,0 +1,211 @@
+* Even when loading from ramdisk or harddisk the ROM program null fills all
+* uninitialized data, heap, stack (often the major part of your RAM).
+* This null filler makes loading programs faster. Its null filling is 7 times
+* as fast as the ROM's, using the quick movem.l instruction. Besides it only
+* clears the BSS space.
+* At least the fillhigh and filllow addresses have to be adapted to suit your
+* ROM version.
+
+
+*    module fastload
+
+    section s.ccode
+
+gemdos        equ 1
+bios        equ 13
+super        equ $20
+ptermres    equ $31
+conws        equ 9
+pterm        equ $4c
+vbl_queue    equ $456
+nvbl        equ $454
+bpaglen        equ $100
+textlen        equ 12
+datalen        equ 20
+bsslen        equ 28
+fillhigh    equ $fc859c
+filllow        equ $fc858a
+*bigint        equ $7cccccc0
+bigint        equ $7ffffff0
+
+         move.l #mess,-(sp)            print opening message
+         move #9,-(sp)
+         trap #1
+         addq.l #6,sp
+fastinit
+    clr.l    -(sp)
+    move.w    #super,-(sp)
+    trap    #gemdos
+    addq.l    #6,sp
+    move.l    d0,-(sp)    * Save ssp on stack
+    move.w    nvbl,d0
+    movea.l    vbl_queue,a0
+    addq.l    #4,a0
+    subq.l    #1,d0
+    bmi.s    tstque2
+    bra.s    tstque1
+tstque0
+    tst.l    (a0)+
+tstque1
+    dbeq    d0,tstque0
+    beq.s    tstok
+tstque2
+*    pea    noque(pc)
+    move.l  #noque,-(sp)
+    move.w    #conws,-(sp)
+    trap    #gemdos
+    addq.l    #6,sp
+    move.w    #1,-(sp)
+    move.w    #pterm,-(sp)
+    trap    #gemdos        * Ends here
+tstok
+    lea    fastload(pc),a1
+    move.l    a1,-(a0)
+    move.w    #super,-(sp)
+    trap    #gemdos        * Restore ssp that is on stack
+    addq.l    #6,sp
+    move.l    4(sp),a0    * Basepage start
+    move.l    #bpaglen,d0    * Basepage length
+    add.l    textlen(a0),d0    * + text length
+    add.l    datalen(a0),d0    * + data length
+    add.l    bsslen(a0),d0    * + bss length
+    clr.w    -(sp)        * Return value: 0 for success
+    move.l    d0,-(sp)    * # bytes to keep
+    move.w    #ptermres,-(sp)    * Keep process
+    trap    #gemdos        * Stops here
+
+*fastload
+*    movea.l    74(sp),a0    * PC
+*    cmpa.l    #fillhigh,a0
+*    bhi.s    fastdone
+*    cmpa.l    #filllow,a0
+*    blt.s    fastdone
+*    move.l    #bigint,32(sp)    * Maximize D5 on stack
+*fastdone
+*    rts
+
+
+fastload
+    movea.l    74(sp),a0    * PC
+    cmpa.l    #fillhigh,a0
+    bhi    fastdone
+    cmpa.l    #filllow,a0
+    blt    fastdone
+    tst.b 3611            if any shift keys are pressed, no nullfill
+    bne fastdone
+         move.b $ff8201,scrn+1  |find where the screen is and NOT top 20 lines
+         move.b $ff8203,scrn+2  |
+         move.l scrn,a0         |20 scan lines need to be NOT-ed
+         move #20*20+1,d0       |
+nloopa   not.l (a0)+            |
+         dbra d0,nloopa         |
+    lea.l    32(sp),a0    * Address D5 on stack
+    cmp.l    #bigint,(a0)
+    bge.s    fastdone    * Already filled
+    move.l    #bigint,(a0)    * Maximize D5 on stack
+    move.l    68(sp),a6    * Value of A6 on stack to A6
+    move.l    -4(a6),a4    * Start of block to fill
+    move.l    -58(a6),d0    * # bytes to fill: BSS size
+    move.l    d0,d1
+    and.w    #$7f,d1        * d1 = d0 & 0x7f
+    moveq.l    #0,d2
+    lea.l    0(a4,d0.l),a5    * End (one past)
+    bra.s    fastl1
+fastl0
+    move.b    d2,-(a5)    * Clear top d1 bytes
+fastl1
+    dbra    d1,fastl0
+    moveq.l    #0,d0        * Nullify d0-d7/a0-a3
+    move.l    d0,d1
+    move.l    d0,d2
+    move.l    d0,d3
+    move.l    d0,d4
+    move.l    d0,d5
+    move.l    d0,d6
+    move.l    d0,d7
+    move.l    d0,a0
+    move.l    d0,a1
+    move.l    d0,a2
+    move.l    d0,a3
+    bra.s    fastl3        * a5 - a4 is now a multiple of 128
+fastl2
+    movem.l    d0-d7/a0-a3,-(a5)  * Clear 4 * (12 + 12 + 8) = 128 bytes / turn
+    movem.l    d0-d7/a0-a3,-(a5)
+    movem.l    d0-d7,-(a5)
+fastl3
+    cmpa.l    a4,a5
+    bgt.s    fastl2        * Until start address A4 reached
+         move.l scrn,a0         |20 scan lines need to be NOT-ed
+         move #20*20+1,d0       |
+nloopb   not.l (a0)+            |
+         dbra d0,nloopb         |
+fastdone
+    rts
+
+    section s.data
+
+scrn     dc.l    0
+noque    dc.b    13,10,'No vbl entry available!',13,10,0
+mess     dc.b    13,10,'N_U_L_L_F_I_L_L___Speedster'
+         dc.b 13,10,10,'Hold any shift key or'
+         dc.b    13,10,'leave Caps locked to disable'
+         dc.b    13,10,'    6/1/88, 9/11/88',0
+
+    end
+
+
+
+Subject: Re: null fill eliminated
+To: info-atari16@score.stanford.edu
+
+Here are some small corrections for the fast loader I put on the net this week.
+1) There is a header for the module now. It says:
+
+* Even when loading from ramdisk or harddisk the ROM program null fills all
+* uninitialized data, heap, stack (often the major part of your RAM).
+* This null filler makes loading programs faster. Its null filling is 7 times
+* as fast as the ROM's, using the quick movem.l instruction. Besides it only
+* clears the BSS space.
+* At least the fillhigh and filllow addresses have to be adapted to suit your
+* ROM version.
+
+2) The bigint definition should read:
+
+bigint        equ $7ffffff0
+
+3) I abandoned the idea of no null filling at all. Some programs generated
+bus errors when started with this VBL routine active, so I've looked things
+up in K & R. In paragraph 4.9 (Initialization):
+...In the absence of explicit initialization, external and static variables
+are guaranteed to be initialized to zero; ...
+So the routine now clears the BSS space; the programs that generated errors
+now work OK. The null filling is performed by null filling chunks of 128
+bytes using movem.l instructions; that seems to be the fastest way, especially
+if you move many registers at a time. The 'modulo 128' part is cleared first,
+at the top of the BSS. Here it is (I have left the initialization routine out):
+
+
+
+Date: 1 Jun 88 06:58:11 GMT
+From: mcvax!philmds!leo@uunet.uu.net  (Leo de Wit)
+Subject: null fill eliminated
+To: info-atari16@score.stanford.edu
+
+Remember the discussion about the slow null filling routine TOS uses after
+loading a program? Here's a nice small, fast and, what you hackers will like
+most, dirty piece of code I made yesterday evening. It just eliminates the
+null fill (there could be a 1/(vbls/sec) delay %-) and is guaranteed NOT to
+work on all ROM versions 8-).
+The main problem will be the addresses (start, end) of the fill-routine in ROM.
+If you know them, you can substitute them (fillhigh and filllow). I don't have
+other ROM's or disassemblies. Maybe someone else can pop up a more general
+solution?
+The central function is fastload, that checks if the PC is the critical region;
+if so, D5 will be given a big value on return from the VBL interrupt, which
+causes the fill routine to end.
+The search for a zero VBL pointer starts at the queue address + 4, because I
+suspect some program (maybe it's GEM) to write a vector at queue_address[0],
+no matter what is already there. Now fastload.prg can be put into the AUTO
+folder.
+
+
