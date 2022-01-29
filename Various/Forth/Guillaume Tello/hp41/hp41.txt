@@ -1,0 +1,148 @@
+1 >prgflags                             ; flags for the PRG (fastLoad on)
+variable p                              ; record pointer
+variable saut                           ; =1 if CR was the provious character (to skip LF)
+variable fin                            ; =1 to exit program
+variable rec                            ; =1 when recording
+16 allot constant BUFFER                ; AES buffer for events
+65536 allot constant ZONE               ; 64 kB as a record buffer
+
+200 string FILEPATH                     ; path and file for the file selector
+20 string FILENAME
+20 14 array$ MENU                       ; the menu definition array
+22 string TITRE                         ; the title of my window
+" \*.TXT" FILEPATH $!                   ; default path
+" HP-41 Serial Receiver" TITRE $!       ; title
+
+>comp
+
+"  HP-41 "              0 MENU $!       ; defines the menu, first the titles
+"  File "               1 MENU $!
+"  Buffer "             2 MENU $!
+" "                     3 MENU $!
+"  About... "           4 MENU $!       ; then every drop down
+" "                     5 MENU $!
+"  Save buffer as... "  6 MENU $!
+" -------------------"  7 MENU $!
+"  Quit "               8 MENU $!
+" "                     9 MENU $!
+"  Start recording "   10 MENU $!
+"  Stop recording "    11 MENU $!
+"  Clear buffer "      12 MENU $!
+" "                    13 MENU $!
+
+0 MENU menu constant ARBRE              ; builds the menu tree in memory, save address in ARBRE
+
+>comp
+            ; **** on_off ****
+            ; this will switch between Start/Stop recording in the menu
+            ; according to rec variable
+: on_off
+   10 gemindex rec @ ARBRE menu_ienable
+   11 gemindex 1 rec @ - dup rec ! ARBRE menu_ienable
+;
+
+            ; **** manage_menu ****
+            ; this function is called when an MESSAGE is received from the AES
+            ; only one is currently managed: 10 (Menu Selected)
+: manage_menu
+   BUFFER w@                            ; first word, the message
+   case                                 ; select it
+   10 of                                ; is it 10?
+      BUFFER 8 + w@ strindex            ; forth word: the menu index selected
+      case
+      4 of 1 " [1][ HP-41 receiver ][ Ok ]" form_alert endof        ; 4 = "About...", display alert
+      6 of FILEPATH FILENAME fsel_input                             ; 6 = "Save buffer as...", open fileselector
+           intout w@
+           intout 2+ w@ w*
+           if                                                       ; if file selection OK
+              p @ ZONE -                                            ; size of data
+              FILEPATH FILENAME path                                ; builds path+file
+              ZONE                                                  ; start address of data
+              savebin                                               ; save to disk and return size
+              cls . ."  bytes saved." cr                            ; display how many bytes saved (or an error code)
+           then
+           endof
+      8 of p @ ZONE <> if                                           ; 8 = "Quit", if pointer shows existing data
+              1 " [1][ Buffer not empty ! ][ Quit | Cancel ]"       ; ask for confirm
+              form_alert
+              intout w@ 1 =                                         ; will return 1 if Quit
+           else
+              1                                                     ; if buffer empty, return 1
+           then
+           fin !                                                    ; returned value into fin
+           endof
+      10 of on_off endof                                            ; 10 = "Start recording", manage menu and update rec variable
+      11 of on_off endof                                            ; 11 = "Stop recording", same as above
+      12 of ZONE p ! endof                                          ; 12 = "Clear buffer", reset pointer to start
+         drop                                                       ; other option (impossible...) drop unused value
+      endcase
+      BUFFER 6 + w@ 1 ARBRE menu_tnormal                            ; return title from reverse video to normal
+   endof
+      drop                                                          ; other message than 10 ignored
+   endcase
+;
+
+            ; **** main ****
+        
+: main
+   fastopen TITRE 2 wind_set                ; open window and set my title
+   cls                                      ; clear window
+   0 v_show_c                               ; mouse ON
+   ZONE p !                                 ; record pointer at start
+   0 saut !
+   0 fin !
+   0 rec !
+   list
+      7 11                                  ; the two menu entries to be disabled
+   dolist
+      i gemindex 0 ARBRE menu_ienable
+   lloop
+   1 ARBRE menu_bar                         ; draws the menu bar
+   begin                                    ; start of main loop until fin=1
+      %b110000                              ; events = timer + message
+      0 0 0                                 ; unused options
+      0 0 0 0 0
+      0 0 0 0 0
+      10 BUFFER                             ; 10 ms for timer and the buffer for message
+      evnt_multi                            ; wait for an event
+      intout w@ %b10000 and                 ; is it a message ?
+      if
+         manage_menu                        ; if so, manages the user action
+      then
+      v_hide_c                              ; mouse OFF because we draw!
+      .b size                               ; size = byte for record
+      0                                     ; 0 to 10 to get as much as 10 consecutive bytes before event_multi
+      begin                                 ; the character loop
+         ->
+            1+ dup 10 <                     ; go on if <10
+         and->
+            1 bconstat                      ; and if a character is present on the serial port
+         ->.
+      while
+         1 bconin                           ; get one byte from RS232
+         rec @ if                           ; recording?
+            dup p )+!                       ; store and update pointer
+         then
+         case                               ; select char
+         13 of cr 1 saut ! endof            ; if 13 (return), performs CR to jump to next line
+         10 of saut @                       ; if 10 (line feed), performs CR only if no 13 before
+            0= if cr then
+            endof
+         emit                               ; default action: emit the character
+         0 saut !
+         endcase
+      repeat                                ; end of character loop
+      drop                                  ; remove the counter (0 to 10)
+      0 v_show_c                            ; mouse ON
+      fin @                                 ; test if fin=1
+   until                                    ; if not, go on to main loop
+   0 ARBRE menu_bar                         ; remove menu bar
+   cls                                      ; clear window
+;                                           ; and exit
+
+>comp
+
+main                                        ; runs "main" procedure at start.
+
+
+
