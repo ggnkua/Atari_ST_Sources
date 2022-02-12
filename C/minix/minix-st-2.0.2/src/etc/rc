@@ -1,0 +1,117 @@
+# This file performs various system initializations.
+
+umask 022
+PATH=/usr/local/bin:/bin:/usr/bin
+export PATH
+
+# National keyboard?
+test -f /etc/keymap && loadkeys /etc/keymap
+
+# Set timezone.
+. /etc/profile
+
+# Try to read the hardware real-time clock, otherwise do it manually.
+readclock || date -q
+
+# Initialize files.
+printroot >/etc/mtab			# /etc/mtab keeps track of mounts
+>/etc/utmp				# /etc/utmp keeps track of logins
+
+# /etc/fstab lists the root, tmp and usr devices.
+. /etc/fstab
+
+# Mount the /usr partition unless it is a single floppy Minix.
+if [ ! -d /usr/bin ]
+then
+	case $usr in
+	unknown)
+		# We need to ask what the /usr du jour is.
+		echo -n "Finish the name of device to mount as /usr: /dev/"
+		read usr
+		usr=/dev/$usr
+	esac
+	mount $usr /usr || {
+		echo "\
+Please try to mount something else as /usr, then hit CTRL-D to continue startup.
+Mount $usr /usr failed -- Single user."
+		sh
+	}
+fi
+
+# Check if the system crashed.
+if shutdown -C
+then
+	umount $usr
+	echo
+	echo "The system was not properly shut down.  Checking file systems."
+
+	fsck -r $root
+	fsck -r $usr
+
+	mount $usr /usr
+fi
+
+case "`printroot -r`" in
+/dev/ram)
+	# Don't need these things clogging up the RAM disk
+	rm -rf /boot /minix
+esac
+
+# National font?
+test -f /etc/font && loadfont /etc/font
+
+echo -n "Starting standard daemons:"
+test -f /usr/lib/crontab && cron=cron
+for daemon in update $cron
+do
+	if [ -f /usr/bin/$daemon ]
+	then
+		echo -n " $daemon"
+		$daemon &
+	fi
+done
+echo .
+
+# Network initialization.
+(</dev/eth </dev/tcp) 2>/dev/null && net=true	# Is there a TCP/IP server?
+
+if [ "$net" ]
+then
+	echo -n "Starting network daemons: "
+	for daemon in rarpd nonamed irdpd talkd
+	do
+		if [ -f /usr/bin/$daemon ]
+		then
+			echo -n " $daemon"
+			$daemon &
+		fi
+	done
+	echo .
+
+	# Get the nodename from the DNS and set it.
+	hostaddr -a >/etc/hostname.file || echo noname >/etc/hostname.file
+
+	echo -n "Starting network services:"
+	for pair in 'shell in.rshd' 'login in.rld' \
+			'telnet in.telnetd' 'ftp in.ftpd'
+	do
+		set $pair
+		if [ -f /usr/bin/$2 ]
+		then
+			echo -n " $1"
+			tcpd $1 /usr/bin/$2 &
+		fi
+	done
+	echo .
+fi
+
+# Don't let wtmp grow indefinitely.
+find /usr/adm/wtmp -size +100 -exec sh -c \
+	"cp /usr/adm/wtmp /usr/adm/wtmp.1; >/usr/adm/wtmp" \; 2>/dev/null
+
+# Cleanup.
+test -f /usr/bin/elvprsv && elvprsv /usr/tmp/elv*
+rm -rf /tmp/. /usr/tmp/. /usr/spool/lpd/. /usr/spool/locks/.
+
+# Any messages?
+test -f /etc/issue && cat /etc/issue

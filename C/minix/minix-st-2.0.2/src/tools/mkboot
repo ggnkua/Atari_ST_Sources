@@ -1,0 +1,138 @@
+#!/bin/sh
+#
+#	mkboot 2.0 - make boot floppy, make root device bootable, etc.
+#							Author: Kees J. Bot
+
+trap 'e=$?; rm -f /tmp/mkb.$$; exit $e' 0 2
+
+mdec=/usr/mdec	# bootstraps
+
+# Check arguments.
+case "$#:$1" in
+1:bootable | 1:hdboot | [12]:fdboot)
+	action=$1 dev=$2
+	;;
+*)	echo "Usage: $0 [bootable | hdboot | fdboot [device]]" >&2
+	exit 1
+esac
+
+# Get the device table.
+. /etc/fstab
+
+# The real root device may be the RAM disk.
+realroot=`printroot -r`
+
+case $action in
+bootable | hdboot)
+	# We need the root device.
+	if [ $realroot = $root ]
+	then
+		rootdir=
+	else
+		umount $root 2>/dev/null
+		mount $root /root || exit
+		rootdir=/root
+	fi
+esac
+
+case $action in
+bootable)
+	# Install the boot monitor on the root device and make it bootable.
+	install -cs -m 644 $mdec/boot $rootdir/boot || exit
+	sync
+	installboot -device $root $mdec/bootblock /boot || exit
+	test $realroot != $root && umount $root
+	;;
+hdboot)
+	# Install a new image on the root device.
+	if [ ! -d $rootdir/minix ]
+	then
+		# /minix is not yet a directory!  Fix it.
+		su root -c \
+		    "exec mv $rootdir/minix /M"
+		install -d $rootdir/minix
+		su root -c \
+		    "exec mv $rootdir/M $rootdir/minix/`uname -r`.`uname -v`"
+	fi
+
+	./tell_config OS_RELEASE . OS_VERSION >/tmp/mkb.$$
+	version=`sed 's/[" 	]//g;/^$/d' </tmp/mkb.$$`
+
+	revision=`cat revision 2>/dev/null`
+	oldrev=$revision
+	target="${version}r${revision}"
+
+	if [ -z "$revision" ]
+	then
+		revision=0
+	elif [ -f $rootdir/minix/$target ]
+	then
+		if [ $rootdir/minix/$target -newer image ]
+		then
+			echo "$root:/minix/$target is up to date"
+			test $realroot != $root && umount $root
+			exit 0
+		fi
+		revision=`expr $revision + 1`
+	fi
+	target="${version}r${revision}"
+
+	set -- `ls -t $rootdir/minix`
+
+	case $# in
+	0|1)
+		# Not much there, do not remove a thing.
+		;;
+	*)
+		# Remove the newest image in /minix.  This seems strange, but
+		# the old image is normally the "stable" image.
+
+		echo "rm $root:/minix/$1"
+		rm -f "$rootdir/minix/$1"
+	esac
+
+	# Install the new image.
+	echo "cp image $root:/minix/$target"
+	cp -p image $rootdir/minix/$target || exit
+
+	# Save the revision number.
+	test "$revision" != "$oldrev" && echo $revision >revision
+
+	test $realroot != $root && umount $root
+	echo "Done."
+	;;
+fdboot)
+	# fdboot: Make a boot floppy.
+
+	if [ -z "$dev" ]
+	then
+		echo -n \
+"Finish the name of the floppy device to write (by default 'fd0'): /dev/";
+		read dev
+		case "$dev" in
+		'')	dev=/dev/fd0
+			;;
+		/dev/*)
+			;;
+		*)	dev=/dev/$dev
+		esac
+	fi
+
+	# Make a file system.
+	umount $dev 2>/dev/null
+	mkfs -i 512 $dev || exit
+
+	# Install /dev, /boot and /minix.
+	mount $dev /mnt || exit
+	cpdir /dev /mnt/dev || exit
+	cp -p $mdec/boot /mnt/boot || exit
+	cp -p image /mnt/minix || exit
+	umount $dev || exit
+
+	# Make bootable and copy the boot parameters.
+	installboot -d $dev $mdec/bootblock boot || exit
+	dd if=$root of=$dev skip=1 seek=1 count=1 conv=silent || exit
+	edparams $dev 'main(){delay 2000;boot}; save' || exit
+	echo "Test kernel installed on $dev with boot parameters from $root"
+esac
+exit 0
