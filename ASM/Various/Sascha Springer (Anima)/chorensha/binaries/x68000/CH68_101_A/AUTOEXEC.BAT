@@ -1,0 +1,3 @@
+cd ’´˜AŽË68K
+GAME_START.BAT
+
