@@ -1,0 +1,108 @@
+	{$E+}
+	{====================================}
+
+	Procedure Chk_Registration;
+	Var
+		S : String[ 120 ];
+		E : String[ 240 ];
+		A, B, H, I, W : Integer;
+		L : Long_Integer;
+	Begin
+		Dummy_Routine;
+		If Exists( Key_File ) Then Begin
+			H := FOpen( Key_File, 0 );
+			L := BlockRead( H, 4096, Blkio );
+			I := Close_File( H );
+			I := 1;  E := '';
+			Repeat
+				A := BlkIo[ I ] - 48;  If ( A > 9 ) Then A := A - 7;
+				B := BlkIo[I+1] - 48;  If ( B > 9 ) Then B := B - 7;
+				W := ( A * 10 ) + B;   E := Concat( E, Chr( W ) );
+				I := I + 2;
+			Until ( I >= 401 );
+			I := 1;  S := '';
+			Repeat
+				A := Ord(E[ I ]) - 48;  If ( A > 9 ) Then A := A - 7;
+				B := Ord(E[I+1]) - 48;  If ( B > 9 ) Then B := B - 7;
+				W := ( A * 16 ) + B;   S := Concat( S, Chr( W ) );
+				I := I + 2;
+			Until ( I >= 201 );
+			I := 1;  E := ''; Line := '';
+			E := Copy( S, 11, 92 );  S[0]:= Chr(10);  Reg_Num := Copy( S, 1, 10 );
+			Repeat
+				A := Ord(E[ I ]) - 48;  If ( A > 9 ) Then A := A - 7;
+				B := Ord(E[I+1]) - 48;  If ( B > 9 ) Then B := B - 7;
+				If ( A=0 ) Then A := 5  Else If ( A=1 ) Then A := 12
+				Else If ( A= 2 ) Then A :=  7  Else If ( A= 3 ) Then A := 15
+				Else If ( A= 4 ) Then A :=  0  Else If ( A= 5 ) Then A := 10
+				Else If ( A= 6 ) Then A :=  3  Else If ( A= 7 ) Then A := 9
+				Else If ( A= 8 ) Then A := 11  Else If ( A= 9 ) Then A := 4
+				Else If ( A=10 ) Then A := 14  Else If ( A=11 ) Then A := 1
+				Else If ( A=12 ) Then A :=  6  Else If ( A=13 ) Then A := 13
+				Else If ( A=14 ) Then A :=  2  Else If ( A=15 ) Then A := 8;
+				If ( B=0 ) Then B := 5  Else If ( B=1 ) Then B := 12
+				Else If ( B= 2 ) Then B :=  7  Else If ( B= 3 ) Then B := 15
+				Else If ( B= 4 ) Then B :=  0  Else If ( B= 5 ) Then B := 10
+				Else If ( B= 6 ) Then B :=  3  Else If ( B= 7 ) Then B := 9
+				Else If ( B= 8 ) Then B := 11  Else If ( B= 9 ) Then B := 4
+				Else If ( B=10 ) Then B := 14  Else If ( B=11 ) Then B := 1
+				Else If ( B=12 ) Then B :=  6  Else If ( B=13 ) Then B := 13
+				Else If ( B=14 ) Then B :=  2  Else If ( B=15 ) Then B := 8;
+				W := ( A * 16 ) + B;   Line := Concat( Line, Chr( W ) );
+				I := I + 2;
+			Until ( I >= 93 );
+		End;
+		EchoSE ( Line );  CrLf;
+	End;
+
+	Function Security_Chk : Boolean;
+	Var
+		Ok : Boolean;
+    S  : String;
+    C  : CString;
+		X, Days1, Days2 : Long_Integer;
+		Dom: Packed Array[1..12] Of Byte;
+		M1, D1, Y1, Date, Days, H, I : Integer;
+		M2, D2, Y2 : Integer;
+	Begin
+		Chk_Registration;
+    S  := 'FTU.INT';  MakeCString( S, C );
+    H  := Open_File( C, 0 );
+		X  := BlockRead( H, 1024, BlkIO );
+    I  := Close_File( H );
+		Dom[1] := 31;  Dom [2] := 28;  Dom [3] := 31;  Dom [4] := 30;
+		Dom[5] := 31;  Dom [6] := 30;  Dom [7] := 31;  Dom [8] := 31;
+		Dom[9] := 30;  Dom[10] := 31;  Dom[11] := 30;  Dom[12] := 31;
+		Date := ( BlkIo[1] * 256 ) + BlkIO[2];
+		Convert_Date( Date );  Y := Y - 1980;  M1 := M - 1; D1 := D; Y1 := Y - 1;
+		Line := Concat( 'FTU Started On ', Line );  EchoSE( Line );
+		Get_Date;  Y := Y - 80;  M2 := M - 1; D2 := D; Y2 := Y - 1;
+		Days1 := ( Y1 * 365 ) + D1;
+		If ( M1>0 ) Then For Date := 1 To M1 Do Days1 := Days1 + Dom[Date];
+		Days2 := ( Y2 * 365 ) + D2;
+		If ( M2>0 ) Then For Date := 1 To M2 Do Days2 := Days2 + Dom[Date];
+		If ( Days2 > Days1 ) Then Days := Int(Days2 - Days1)
+		Else If ( Days1 = Days2 ) Then Days := 0
+		Else Days := 31;
+		WriteV( Line, 'FTU Has Been Active For \r', Days, '\b Days...' );
+		EchoSE( Line ); CrLf;
+		Ok := True;  M1 := Ord( Reg_Num[ 5 ] ) - 48;
+		If ( M1<>1 ) Then Begin
+			If ( Days > 30 ) Then Begin
+				EchoSE( 'FTU Has Been Running Now For More Than 30 Days!' );
+				EchoSE( 'IT WILL NOT RUN ANYMORE UNTIL IT HAS BEEN REGISTERED!!!' );
+				Ok := False;
+			End;
+		End;
+		M1 := Ord( Reg_Num[ 1 ] ) - 65;
+		D1 := Ord( Reg_Num[ 2 ] ) - 65;
+		Y1 := Ord( Reg_Num[ 3 ] ) - 65;
+		If ( M1 <> 5 ) And ( D1 <> 19 ) And ( Y1 <> 20 ) Then Begin
+			EchoSE( 'WARNING:  FTU  Key File Is Corrupted!!!  Program Aborted...' );
+			Ok := False;
+		End;
+		Press_Any;
+		Security_Chk := Ok;
+	End;
+
+

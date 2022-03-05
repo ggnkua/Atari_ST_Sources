@@ -1,0 +1,501 @@
+variable p
+variable q
+variable ADR
+variable N
+128000 allot constant DR5_MEM
+16 allot constant AES_BUFF
+16 22 array$ MENU
+
+>comp
+
+"  BOSS DR-5 " 0 MENU $!
+"  Save "      1 MENU $!
+"  Restore "   2 MENU $!
+"  Help "      3 MENU $!
+" "            4 MENU $!
+"  About... "  5 MENU $!
+" "            6 MENU $!
+"  Status "    dup 7 MENU $! 14 MENU $!
+"  Sequences " dup 8 MENU $! 15 MENU $!
+"  Chords "    dup 9 MENU $! 16 MENU $!
+"  All "       dup 10 MENU $! 17 MENU $!
+"  --------- " 11 MENU $!
+"  Quit "      12 MENU $!
+" "            13 MENU $!
+" "            18 MENU $!
+"  Help "      19 MENU $!
+"  Test link " 20 MENU $!
+" "            21 MENU $!
+
+0 MENU menu constant TREE
+11 gemindex 0 TREE menu_ienable
+
+>comp
+
+256 string CHEMIN
+20 string FICHIER
+256 string COMPLET
+
+start
+   dgetdrv 65 + pushc
+   58 pushc
+   pad 0 dgetpath drop
+   pad pushs
+   " \*.DR5" pushs
+getfmt
+CHEMIN $!
+
+>comp
+
+:: vide_midi
+   begin
+      3 bconstat
+   while
+      3 bconin drop
+   repeat
+;
+
+:: envoit
+   begin 3 bcostat until
+   3 swap bconout
+;
+
+:: recoit
+      begin 3 bconstat until
+      3 bconin %hFF and
+;
+
+:: fill_header
+   .b size
+   list
+      %hf0 %h41 %h09 %h65 %h12
+   dolist
+      i p )+!
+   lloop
+;
+
+:: get_header
+   begin
+      0
+      begin
+         256 *
+         recoit +
+         dup %hf0410965
+         =
+      until
+      drop
+      recoit
+      ." Got Message : $" dup h. cr
+      %h12 =
+   until
+;
+
+: on_off
+   p )+@
+   case
+      0 of
+         ." OFF" endof
+      1 of
+         ." ON" endof
+      2 of
+         ." REC" endof
+      ." Erreur " .
+   endcase
+   cr
+;
+
+:: verif_blocks
+   DR5_MEM q !
+   0 N !
+   .b size
+   begin
+      p @ q @ > if
+         0 4 ndo 256 * q )+@ + nloop
+         %hf0410965 <>
+         if
+            ." -> ERROR: bad header in block"
+            -1 1
+         else
+            q )+@ %h12 <>
+            if
+               ." -> Warning: not a DATA $12 block!" cr
+               ."             maybe MIDI Thru is ON"
+               -1 1
+            else
+               0
+               begin
+                  q )+@ dup
+                  %hF7 <>
+                  q @ p @ < and
+               while
+                  +
+               repeat
+               %hF7 =
+               if
+                  %h7F and 0= if
+                     N 1+! 0
+                  else
+                     drop
+                     ." -> Error: bad checksum in block!" -1 1
+                  then
+               else
+                  drop
+                  ." -> Error: block without $F7 end!" -1 1
+               then
+            then
+         then
+      else
+         N ? ."  checked blocks OK." 0 1
+      then
+   until
+   cr
+;
+
+: voir_statut
+   DR5_MEM 4 + p !
+   .l size
+   ." Adress            : $" p )+@ %hFFFFFF and h. cr
+   ." Master tune       : " p )+@ h. cr
+   .b size
+   ." Channel DRM/T1/2/3: " 4 ndo p )+@ 1+ . space nloop cr
+   ." Volume DRM/T1/2/3 : " 4 ndo p )+@ . space nloop cr
+   ." Program Change    : " on_off
+   ." Volume            : " on_off
+   ." Expression        : " on_off
+   ." MIDI Thru         : " on_off
+   ." Synchro MIDI      : " p )+@
+   case
+      0 of ." Internal" endof
+      1 of ." MIDI" endof
+      ." Error " .
+   endcase cr
+   ." Guitar Input      : " p )+@
+   case
+      0 of ." SIM/AMP" endof
+      1 of ." BYPASS" endof
+      2 of ." MIXOFF" endof
+      ." Erreur " .
+   endcase cr
+   ." External pitch    : " on_off
+   ." Fret shift        : " p )+@ . cr
+   ." Metronom volume   : " p )+@ . cr
+   ." Metronom type     : " p )+@
+   case
+      0 of ." 1/4" endof
+      1 of ." 1/6" endof
+      2 of ." 1/8" endof
+      3 of ." 1/12" endof
+      ." Error " .
+   endcase cr
+   ." Foot switch 1     : " p )+@ . cr
+   ." Foot switch 2     : " p )+@ . cr
+   DR5_MEM 23 + c@
+   if
+      0 v_show_c
+      1
+" [3][MIDI Thru is ON | it's better OFF | with this program][Turn OFF|Cancel]"
+      form_alert
+      intout w@ 1 =
+      v_hide_c
+      if
+         0 DR5_MEM 23 + c!   \ MIDI Thru OFF
+         DR5_MEM 32 + dup
+         c@ 1+ %h7F and     \ modify check sum
+         swap c!
+         33 DR5_MEM midiws
+      then
+   then
+;
+
+\ IN: file name
+\ OUT: full-pathname flag (0=cancel/other=ok)
+
+:: select_file
+   FICHIER $!
+   0 v_show_c
+   CHEMIN FICHIER fsel_input
+   intout w@
+   intout 2+ w@ *
+   v_hide_c
+   CHEMIN FICHIER path
+   swap
+   cls
+;
+
+:: get_blocks
+   cr
+   ADR !
+   physbase q !
+   vide_midi
+   2 graf_mouse
+   0 v_show_c
+   ADR @ 0> if
+      list
+         %hf0 %h41 %h09 %h65 %h11
+         ADR @ %h00 %h00
+         %h01 %h00 %h00
+         %h7f ADR @ - %hf7
+      dolist
+         i envoit
+      lloop
+   then
+   .b size
+   DR5_MEM p !
+   ADR @ -1 <> if
+      timer 400 + q !
+      begin
+         recoit dup
+         %hFE = over %hf8 = or
+         if
+            drop
+            timer q @ >
+         else
+            p )+!
+            timer 400 + q !
+            0
+         then
+      until
+   else
+      34 p +!
+   then
+   v_hide_c
+   0 graf_mouse
+   p @ DR5_MEM -
+   dup . ."  bytes received." cr
+   verif_blocks
+   if
+      drop
+   else
+      ADR @ case
+      %h20 of
+         " SEQUENCE.DR5" endof
+      %h30 of
+         " CHORDS.DR5" endof
+      0 of
+         " ALL.DR5" endof
+      -1 of
+         " STATUS.DR5" endof
+      endcase
+      select_file
+      if
+         DR5_MEM savebin
+         . ."  bytes saved in" cr
+         pad type
+      else
+         drop drop
+         ." Cancelled!"
+      then
+      cr
+   then
+;
+
+: get_seq
+   cls
+   ." Getting Sequences (Patterns & songs)..."
+   %h20 get_blocks
+;
+
+: get_chord
+   cls
+   ." Getting Chords..."
+   %h30 get_blocks
+;
+
+: get_all
+   cls
+   ." Getting DUMP ALL..." cr
+   ." On the BOSS DR-5 :" cr
+   ."  - Shift MIDI" cr
+   ."  - with right arrow go to DUMP ALL?" cr
+   ."  - press ENTER on the BOSS and you see DUMP SURE?" cr
+   ."  - press in this order:" cr
+   ."    RETURN on the computer" cr
+   ."    ENTER on the BOSS" cr
+   ."    (or ESC to cancel)" cr cr
+   key %hFF and
+   13 = if
+      ." Getting ALL Memory..."
+      0 get_blocks
+   else
+      2 7 bconout ." Cancelled!" cr
+   then
+;
+
+:: send_to_midi
+   DR5_MEM q !
+   .b size
+   begin
+      p @ q @ >   \ end of data?
+   while
+      q @         \ start address
+      begin
+         q )+@
+         %hF7 =   \ end of block?
+      until
+      q @ over - 1-   \ size-1
+      swap midiws     \ send to midi
+      timer 6 +       \ 6/200 = 30ms
+      ." *"
+      begin
+         timer
+         over >
+      until           \ delay between two blocks
+   repeat
+;
+
+
+: put_file
+   dup ADR !
+   cls
+   ." Select "
+   case
+      -1 of ." STATUS" endof
+      1 of ." SEQUENCE" endof
+      2 of ." CHORDS" endof
+      drop ." ALL"
+   endcase
+   ."  file to restore."
+   " " select_file
+   swap drop
+   if
+      ." Loading file..." cr
+      0 128000 pad DR5_MEM dup p ! loadbin
+      .. ."  bytes read." p +! cr
+      verif_blocks
+      0= if
+         ." Sending "
+         ADR @ case
+            -1 of ." STATUS" endof
+            1 of ." SEQUENCE" endof
+            2 of ." CHORDS" endof
+            drop ." ALL" endof
+         endcase
+         ."  data to BOSS DR-5..." cr
+         send_to_midi
+         cr
+         ." Transfert OK."
+      then
+   else
+      ." Cancelled!"
+   then
+;
+
+: req_status
+   ADR !
+   cls
+   ." Getting DR-5 status..." cr
+   vide_midi
+   list
+      %hf0 %h41 %h09 %h65 %h11
+      %h10 %h00 %h00
+      %h00 %h00 %h18
+      %h58 %hf7
+   dolist
+      i envoit
+   lloop
+   get_header
+   DR5_MEM p !
+   fill_header
+   .b size
+   0
+   28 ndo
+      recoit dup p )+! +
+   nloop
+   recoit dup p )+!
+   dup
+   %hf7 = if
+      ." EOX ok = $" 1
+   else
+      ." EOX error = $" 0
+   then
+   swap
+   h. cr
+   swap
+   %h7f and if
+      ." Checksum error" 0
+   else
+      ." Checksum ok" 1
+   then
+   cr
+   and if
+      ADR @ if
+         voir_statut
+      else
+         -1 get_blocks
+      then
+   then
+;
+
+: dump
+   begin
+      recoit h. space
+      ?terminal
+   until
+;
+
+: mn_quit
+   0 v_show_c
+   1 " [2][Really quit?][Yes|Cancel]" form_alert
+   intout w@
+   v_hide_c
+   1 =
+;
+
+: mn_about
+   0 v_show_c
+   1 " [0][ BOSS DR-5 memory |    managment | (save & restore) ][Ok]" form_alert
+   v_hide_c
+;
+
+: help
+   cls
+   ." Use Test link to verify that the MIDI connection is OK" cr
+   ." (this can hang the program if not OK)" cr
+   cr
+   ." Then use one of the SAVE entries to get data from the BOSS DR-5" cr
+   ." and save it into a file." cr cr
+   ." Use one of the RESTORE entries to send back a previous saved file" cr
+   ." to the BOSS DR-5." cr cr
+   ." Evrything works better with MIDI Thru OFF on the BOSS DR-5." cr cr
+   ." If any problem comes, I am here: guillaume.tello@orange.fr!"
+;
+
+: main
+   fastopen " V1.00 guillaume.tello@orange.fr" 2 wind_set
+   cls
+   TREE setmenu
+   begin
+      1 TREE menu_bar
+      0 v_show_c
+      begin
+         AES_BUFF evnt_mesag
+         AES_BUFF w@
+         10 =
+      until
+      v_hide_c
+      AES_BUFF 8 + w@ strindex
+      case
+         5  of mn_about   0 endof
+         7  of 0 req_status 0 endof
+         8  of get_seq    0 endof
+         9  of get_chord  0 endof
+         10 of get_all    0 endof
+         12 of mn_quit      endof
+         14 of -1 put_file 0 endof
+         15 of 1 put_file 0 endof
+         16 of 2 put_file 0 endof
+         17 of 3 put_file 0 endof
+         19 of help 0       endof
+         20 of 1 req_status 0 endof
+         drop 0
+      endcase
+      AES_BUFF 6 + w@ 1 TREE menu_tnormal
+   until
+   fastclose
+;
+
+>comp
+
+main
+
+
