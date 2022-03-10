@@ -1,0 +1,998 @@
+Programmer's Manual for access to the TapeBIOS software driver Version 1.5
+==========================================================================
+
+	TAPEBIOS.TOS is a program that provides the low-level BIOS routines
+to access a SCSI tape drive connected the the Atari ST's DMA bus and also
+the Atari TT's DMA bus(not the SCSI bus). The low-level routines are 
+documented in this section and all defines are provided for the GNU 'C'
+compiler through tapebind.h and tapebind.cpp.
+	Any calls to the tape BIOS need to be made through the trap #10
+vector with command $ACE, if this is not met then the command is then
+passed to the next vector in the XBRA chain, usually displaying a full line
+of the familiar bombs as nothing uses trap #10 as standard in the Atari
+Operating System.
+
+	Ah yes, When TAPEBIOS.TOS installs itself, it hooks itself into the OS
+with the XBRA ID of 'TAPE' into the trap #10 chain, and also installs itself
+into the COOKIE JAR, again with the ID of 'TAPE' with the vector containing
+the version number of the TapeBIOS software. The driver remains resident after
+loading with approximately 2KB taken from the system.
+
+
+The Commands
+============
+
+	Most commands documented below comply to the standard SCSI command
+set, although some commands are vendor specific and need to noted if any
+of these commands are going to be used over a variety of vendor specific
+tape drives.  
+
+Definitions taken from TAPEBIND.H
+---------------------------------
+
+/* DEFINITIONS FOR TAPE I/O FUNCTIONS */
+
+#define Tfunc	0x0ACE	/* BIOS Call for Tape function */
+
+#define Ready	0	/* Tape Ready */
+#define Read	1	/* Tape Read */
+#define Write	2	/* Tape Write */
+#define Rewind	3	/* Tape Rewind */
+#define Load	4	/* Tape Load */
+#define Unload	5	/* Tape Unload */
+#define WrtFM	6	/* Write FileMark */
+#define ReqSen	7	/* Request Sense */
+#define ModSel	8	/* Mode Select */
+#define ModSen	9	/* Mode Sense */
+#define Space	10	/* Tape Space */
+#define Erase	11	/* Tape Erase */
+#define Inquire 12	/* Tape Inquiry */
+
+#define Tready()	trap_10_wwll(Tfunc, Ready, 0L, 0L)
+#define Tread(a, b)	trap_10_wwll(Tfunc, Read, a, b)
+#define Twrite(a, b)	trap_10_wwll(Tfunc, Write, a, b)
+#define Trewind()	trap_10_wwll(Tfunc, Rewind, 0L, 0L)
+#define Tload(a)	trap_10_wwll(Tfunc, Load, 0L, a)
+#define Tunload(a)	trap_10_wwll(Tfunc, Unload, 0L, a)
+#define Tfmark(a)	trap_10_wwll(Tfunc, WrtFM, 0L, a)
+#define Trsense(a, b)	trap_10_wwll(Tfunc, ReqSen, a, b)
+#define Tmselect(a, b)	trap_10_wwll(Tfunc, ModSel, a, b)
+#define Tmsense(a, b)	trap_10_wwll(Tfunc, ModSen, a, b)
+#define Tspace(a)	trap_10_wwll(Tfunc, Space, 0L, a)
+#define Terase()	trap_10_wwll(Tfunc, Erase, 0L, 0L)
+#define Tinquir(a, b)	trap_10_wwll(Tfunc, Inquire, a, b)
+
+NOTE: When using any of the above commands which support the fourth parameter
+or Number of Blocks, as it is commonly known, DO NOT use a value greater than
+65535 unless you know exactly what you are doing. If this value is increased
+over this limit then the timeout code will fail within the driver. If you
+need to have more than 65535 blocks for your program to work then split the
+command over two new commands.
+
+For example, in 'C'.
+
+		status = Tspace(80000L);  - This will fail.
+
+Use this instead.
+
+		status = Tspace(40000L);  }  This will
+		status = Tspace(40000L);  }  work fine.
+
+If you don't like the above approach the 'swait:' timeout value can be increased
+if necessary, although this will lead to longer delays when something wrong
+occurs. I don't advise increasing the 'swait:' value and suggest you do use
+the above approach.
+
+
+Status Codes
+------------
+
+	A single byte of status information is returned to the initiator
+after the command is completed. The status code informs the initiator whether
+the command was executed, and whether errors occured in execution.
+
+	The status is not sent if the command is reset or aborted by a message
+passed from the initiator.
+
+	Status byte Code Values:
+
+		HEX		Status represented
+		---		------------------
+
+		00		GOOD
+		02		CHECK CONDITION
+		08		BUSY
+		10		INTERMEDIATE/GOOD
+		18		RESERVATION CONFLICT
+
+
+GOOD: This status indicates that the TAPE CONTROLLER has successfully 
+completed the command.
+
+CHECK CONDITION: This status is set when any error, or abnormal condition
+that causes sense data to be set occurs. The REQUEST SENSE command should
+be used to establish the precise nature of the condition.
+
+BUSY: This status is returned to the initiator when the TAPE CONTROLLER
+is already processing a command, and cannot accept the command supplied.
+
+INTERMEDIATE: This status is identical to the GOOD status except that it is
+sent in response to a Linked command. If this status is sent the TAPE
+CONTROLLER will send a LINK COMPLETE message (with or without FLAG) and
+then request the next command without first disconnecting. If a Linked 
+command does not end with an INTERMEDIATE status, the linked chain is broken.
+
+RESERVATION CONFLICT: This status indicates that the TAPE CONTROLLER has been
+reserved for another initiator, and cannot therefore accept the command.
+
+
+Test Unit Ready
+---------------
+
+	Assembler:	tapebios(0xACE, Ready, 0L, 0L)
+
+	'C'	 :	Tready();
+
+	The Test Unit Ready command provides a means to check if the Tape
+drive is ready. This is not a request for self test.
+
+	If the Drive is ready, the command is terminated with GOOD status.
+
+
+Read
+----
+
+	Assembler:	tapebios(0xACE, Read, (long)(BUFADR), (long)(blocks))
+
+	'C'	 :	Tread((long)(BUFADR), (long)(blocks));
+
+	The Read command transfers one or more blocks to the initiator
+beginning with the next block on the tape. The Fixed bit specifies both the
+meaning of the transfer length field and whether the fixed-length or variable-
+length block(s) are to be transferred. The TAPE CONTROLLER is operating in
+Variable Block Mode if the Block Length Bytes in the Mode Select Command are
+set to zero, otherwise the TAPE CONTROLLER is in Fixed mode. The Fixed bit
+must match the current transfer mode of the TAPE CONTROLLER. If the Fixed
+Bit does no match the current mode the TAPE CONTROLLER will reject the command
+by returning CHECK CONDITION status and by setting the Sense Key to ILLEGAL
+REQUEST.
+
+Variable Mode Operation.
+	If the Fixed bit is zero, a single block is transferred, with the
+Transfer Length specifying the maximum number of bytes the initiator has 
+allocated for the returned data. This form of the Read command is valid
+only when the TAPE CONTROLLER is in the variable block mode.
+
+Several possibilities exist:-
+	
+	- The data block read from the tape is exactly the same length as the
+transfer length. All the data in the block is transferred and the command
+completes with a GOOD status.
+
+	- The data block read from tape is shorter than the transfer length.
+All the data in the block is transferred and the command completes with CHECK
+CONDITION status. The ILI and VALID bits are set in the sense information.
+The information bytes will be set to the difference between the Transfer 
+Length and the data block length.
+
+	- The data block read from tape is longer than the transfer length. 
+The Transfer Length value is used to determine how many bytes should be 
+transferred to the initiator, the remaining bytes being discarded. The command
+completes with a CHECK CONDITION status. The ILI and VALID bits are set in
+the sense information. The Information bytes will be set to the difference
+between the Transfer Length and the data block length. This will be a 2's
+complement negative value.
+
+	- The data block read from tape is longer than the available buffer
+within the TAPE CONTROLLER. The Transfer Length value is used to determine
+how many bytes should be transferred to the initiator, the remaining bytes
+being discarded. The command completes with CHECK CONDITION status. Th ILI
+bit will be set in the sense information, the information bytes will be set
+to zero.
+
+
+Fixed Mode Operation.
+	If the Fixed bit is one, the Transfer Length specifies the number of
+blocks to be transferred to the initiator. This form of the Read Command is
+valid only if the TAPE CONTROLLER is currently operating in Fixed Bit mode.
+The Current Block Length is the Block Length defined in the Mode Select
+command.
+
+	A successful Read Command with the Fixed Bit set will transfer the
+number of blocks specified by the Transfer Length bytes to the initiator.
+Each block will be the same length as that specified by the MODE SET command.
+Upon termination of the Read Command, the tape will be positioned after the
+last block transferred (EOT side).
+
+	If the Fixed bit is one and if a block is read which is larger or 
+smaller than the Current Block Length, CHECK CONDITION status is returned
+to the initiator. The ILI bit and the Valid bit in Extended Sense will be
+set to one. The Information Bytes will be set to the difference (residue)
+between the requested Transfer Length and the actual number of blocks read
+(not including the incorrect length block). Upon termination, the tape will
+be positioned after the incorrect length block (EOT side).
+
+Filemark Detection.
+	If the TAPE CONTROLLER reads a filemark during a Read Command, it will
+send a CHECK CONDITION status to the initiator and will set the Filemark bit
+in the Extended Sense. Upon termination, the tape will be positioned after 
+the filemark (EOT side). If the Fixed bit is one, the TAPE CONTROLLER will set
+the Valid bit to one and the Information Bytes will be set to the difference
+(residue) between the requested Transfer Length and the actual number of blocks
+read (not including the filemark).
+
+End of Tape Detection.
+	If a Logical Unit encounters the EOT marker during a Read command, the
+TAPE CONTROLLER returns a CHECK CONDITION status to the initiator and sets
+the End of Medium (EOM) bit to one in the Sense bytes. If the Fixed bit is one,
+the TAPE CONTROLLER sets the Valid bit to one and the Information Bytes to
+the difference (residue) between the requested Transfer Length and the actual
+number of blocks successfully read. The tape will be positioned after the last
+block transferred.
+	It is possible to read data after the EOT marker, but in this case all
+transfers will terminate after a single block with the EOM bit set as above.
+Great care should be taken when commanding the TAPE CONTROLLER to read past
+EOT since it may then be possible to run the tape off the supply reel. In an
+attempt to avoid this situation the TAPE CONTROLLER always selects slow speed
+(where available) during post-EOT reads, and "no-data" detection occurs sooner
+than normal.
+	
+	Note that the TAPE CONTROLLER maintains a look-ahead buffer, which may
+contain upto 64 blocks, therefore the tape will not normally move for each
+block transferred to the initiator.
+
+	When the Transfer Length is zero, no data will be transferred and the
+tape position on the drive will not be changed. This condition is not 
+considered as an error.
+
+Write
+-----
+
+	Assembler:	tapebios(0xACE, Write, (long)(BUFADR), (long)(blocks))
+
+	'C'	 :	Twrite((long)(BUFADR), (long)(blocks));
+
+	The Write command transfers one or more blocks from the initiator to
+the current position on the Logical Unit. The Fixed bit specified both the 
+meaning of the Transfer Length field and whether fixed-length or variable-
+length block(s) are to be transferred. The TAPE CONTROLLER is operating in
+Variable Block Mode if the Block Length Bytes in the Mode Select Command are
+set to zero, otherwise the TAPE CONTROLLER is in Fixed Mode. The Fixed bit
+must match the current transfer mode of the TAPE CONTROLLER. If the Fixed bit
+does not match the current mode the TAPE CONTROLLER will reject the command
+by returning CHECK CONDITION status and by setting the Sense Key to ILLEGAL
+REQUEST.
+
+Variable Mode.
+	If the Fixed bit is zero, a single block will be transferred from the
+initiator and will be written to the tape beginning at the current tape
+position. The Transfer Length specifies the length of the block to be written
+(in bytes). The requested block length must be within the Minimum and Maximum
+Block Length range. If this condition is not met, a CHECK CONDITION status is
+returned with the Sense Key set to ILLEGAL REQUEST and no data is written. Upon
+successful termination, the tape is positioned after the block written by this
+command (End-of-Tape side).
+
+Fixed Mode.
+	If the Fixed bit is one, the Transfer Length field specifies the number
+of block(s) to be transferred to the tape beginning at the current tape
+position. This form of the Write command is valid only if the TAPE CONTROLLER
+is currently operating in Fixed Block Mode (see the Read command description).
+Upon termination, the tape will be positioned after the block(s) written by 
+this command (End-of-Tape side).
+
+End of Tape Detection.
+	If the early warning End-of-Tape marker is encountered while writing,
+an attempt to finish writing any buffered data is made (unless the PEOT bit is
+set - see MODE SELECT command). The command will terminate with CHECK CONDITION
+status and the EOM bit in Extended Sense will be set to one. If the Fixed bit 
+is one and the TAPE CONTROLLER is not buffered (Buffered Mode of the Mode Sense
+command is zero), then the valid bit in Extended Sense will be set to one and
+the Information Bytes will be set to the difference (residue) between the
+requested Transfer Length and the actual number of blocks written to the tape.
+If the Fixed bit is one and the TAPE CONTROLLER is buffered (Buffered Mode of
+the Mode Sense command is one), then the valid bit will be set to one and the
+Information Bytes will be set to the total number of blocks not written (the
+number of blocks not transferred from the initiator plus the number of blocks
+remaining in the Target's buffer). Note that in this case it is possible for
+the value in the Information Bytes to exceed the Transfer Length.
+
+	
+	Note that the TAPE CONTROLLER has a large buffer area, which is capable
+of holding up to 64 blocks. Therefore in buffered mode the tape position may
+not change with each write command. The TAPE CONTROLLER will write all data
+contained in the buffer on receipt of a write filemark, space, or rewind
+command.
+
+	When the Transfer Length is zero, no data will be transferred and the
+current tape position on the Tape Drive will not change. This condition is not
+considered an error.
+
+
+Rewind
+------
+
+	Assembler:	tapebios(0xACE, Rewind, 0L, 0L)
+
+	'C'	 :	Trewind();
+
+	The Rewind command requests that the Target rewind the Logical
+Unit to the Beginning-of-Medium or Load-Point.
+
+	The immediate bit, If set, indicates that the operation will complete
+by returning the status byte as soon as the rewind is started. The immed bit,
+If zero, indicates that the completion status will be returned only after the
+rewind is completed.
+
+	If a Rewind command is issued to the TAPE CONTROLLER when the tape is
+already at Beginning-Of-Tape, a Check Status will be returned, and sense
+information will have the EOM bit set.
+
+
+Load Tape
+---------
+
+	Assembler:	tapebios(0xACE, Load, 0L, (long)(retension))
+
+	'C'	 :	Tload((long)(retension));
+
+	The Load bit, if one, indicates the load function. The TAPE CONTROLLER
+checks that the drive has been OFF Line and is now On Line and the tape is 
+positioned at the BOT marker. If this is the case the TAPE CONTROLLER assumes
+that the operator has placed the correct tape in the drive, and returns a
+GOOD STATUS. If the Drive has not been through the OFF Line - ON Line cycle
+since the last tape movementm, or the tape is not at BOT, then the tape is
+unloaded to force operator intervention, and a CHECK CONDITION status is
+returned with the Sense Key set to Not Ready. Note that the TAPE CONTROLLER
+requires the operator to perform the actual tape load sequence.
+	
+Unload Tape
+-----------
+
+	Assembler:	tapebios(0xACE, Unload, 0L, (long)(retension))
+
+	'C'	 :	Tunload((long)(retension));
+
+	The Load bit, if zero, indicates the unload function, and requests
+that the tape be unloaded from the drive. The drive is set OFF Line to allow
+an operator to remove the tape. The Not Ready Sense Key is set.
+
+
+
+Write File Mark
+---------------
+
+	Assembler:	tapebios(0xACE, WrtFM, 0L, (long)(marks))
+
+	'C'	 :	Tfmark((long)(marks));
+
+	The Write Filemarks command causes the specified Number of Filemarks
+to be written beginning at the current tape position. A zero in this field
+indicates that no filemarks are to be written.
+
+	This command is also used to force any buffered data (see Buffered Mode
+in the Mode Sense command) to be written. This command will not return GOOD
+STATUS unless all buffered data blocks and the filemarks (if any) are correctly
+written on the medium.
+
+	If the End of Tape marker is encountered while writing, an attempt to
+finish writing any buffered data is made. The command will terminate with CHECK
+CONDITION status and with the EOM bit set in the Extended Sense set to one. If
+any filemarks remain to be written, then the Sense Key will be set to VOLUME
+OVERFLOW. If the TAPE CONTROLLER is not buffered (Buffered Mode of the Mode 
+Sense command is zero), then the valid bit in Extended Sense will be set to one
+and the Information Bytes will be set to the number of unwritten filemarks. If
+the TAPE CONTROLLER is buffered (Buffered Mode of the Mode Sense command is
+one), then the valid bit will be set to one and the Information Bytes will be
+set to the total number of blocks not written i.e. the number of unwritten
+filemarks plus the number of blocks remaining in the TAPE CONTROLLER's buffer.
+Note that in this case, it is possible for the value in the Information Bytes
+to exceed the Transfer Length.
+
+	If the Str bit in byte 5 of the command is set to one, the TAPE
+CONTROLLER will return a GOOD STATUS byte immediately after issuing the last
+write filemark command to the tape. This can be used to help maintain tape
+streaming over multiple files.
+
+
+Request Sense
+-------------
+
+	Assembler:	tapebios(0xACE, Reqsen, *(long)(buffer), 
+					(long)(bytecount))
+
+	'C'	 :	Trsense(*(long)(buffer), (long)(bytecount));
+*
+*	bios(0xACE, RSENSE, *(long)(buffer), (long)(bytecount));
+*		Supply buffer address pointer
+*		and bytecount of sense data (11)
+
+	The Request Sense command requests that the TAPE CONTROLLER transfer
+Sense Data to the initiator.
+
+	The Sense Data will be valid for a CHECK CONDITION status returned for
+the last command issued by the initiator. This Sense Data will be preserved
+by the TAPE CONTROLLER for the initiator until retrieved by the Request Sense
+command or until receipt of any other command from the initiator for the same
+Logical Unit.
+
+	The Allocation Length specifies the number of bytes that the initiator
+has allocated for the returned Sense Data. An Allocation Length of zero 
+Indicates that four bytes of Sense Data will be transferred. Any other value
+indicates the maximum number of bytes that will be transferred. The TAPE
+CONTROLLER will terminate the DATA IN phase when allocation length bytes have
+been transferred or when all available Sense Data has been transferred to the
+initiator.
+
+	The CHECK CONDITION status is only used to report fatal errors for this
+command. For example:-
+
+	- The Target receives a non-zero RESERVED bit in the Command
+	  Descriptor Block.
+
+	- An unrecovered parity error occurs on the DATA BUS.
+
+	- A SCSI Bus or TAPE CONTROLLER malfunction prevents return of the
+	  Sense Data.
+
+	Following a fatal error on a Request Sense command, Sense Data may be
+invalid.
+
+	Non-extended Sense
+	------------------
+
+	The format of the Sense Data is determined by the Error Class. Error
+Classes zero to six use the Nonextended Sense Data format, Error Class seven
+is described in the Extended Sense section.
+
+	All the Nonextended Sense Data format classes provide vendor unique
+information and, as such, have limited value due to potential incompatibility
+between SCSI devices. Since the Extended Sense is properly defined, and is 
+more suitable for sequential devices, It is used exclusively by the TAPE
+CONTROLLER.
+
+	Extended Sense
+	--------------
+
+Extended Sense Data Format
+--------------------------
+
+	================================================================
+	  BIT	|   7  |   6  |	 5  |	4  |   3	|   2  |   1	|	 0  |
+	BYTE	|      |      |	    |		 |	  |	 |	|	 |
+	================================================================
+	0	|Valid |   1	 1	1  |   0      0      0	    0  |
+	-------|-------------------------------------------------------|
+	1	|		 Segment Number 			    |
+	-------|-------------------------------------------------------|
+	2	|File- |      |	    |		 |				    |
+		|mark  | EOM  | ILI  |	0  |				     |
+	-------|-------------------------------------------------------|
+	3	|			Information Byte (MSB)	       |
+	-------|-------------------------------------------------------|
+	4	|			Information Byte			 |
+	-------|-------------------------------------------------------|
+	5	|			Information Byte			 |
+	-------|-------------------------------------------------------|
+	6	|			Information Byte (LSB)	       |
+	-------|-------------------------------------------------------|
+	7	|			Additional Sense Length	       |
+	-------|-------------------------------------------------------|
+	8	|			Additional Sense Bytes	       |
+	================================================================
+
+
+	Error Class seven specifies Extended Sense. Error Code zero specifies
+the Extended Sense Data format.
+
+	The valid bit indicates that the information bytes contain valid
+information as follows:
+
+	The information bytes normally specify the difference (residue)
+between the requested length and the actual length in either bytes or blocks,
+as determined by the command. (Negative values are indicated by two's
+complement notation.)
+
+	The information bytes are not defined if the valid bit is zero.
+
+	The Segment Number is always set to 0.
+
+	The Filemark bit indicates that the command moved the tape over a
+filemark.
+
+	The End of Medium (EOM) bit Indicates that an end of medium has been
+detected by the tape drive. This bit indicates end-of-tape if the direction
+was forward or beginning-of-tape if the direction was reverse.
+
+	The Incorrect Length Indicator (ILI) bit indicates that the requested
+logical block length did not match the logical block length of the data on
+the medium.
+
+	The Sense Keys are described in the tables that follow.
+
+	The Additional Sense Length specifies the number of Additional Sense
+Bytes to follow. If the Allocation Length of the Command Descriptor Block is
+too small to transfer all of the Additional Sense Bytes, the Additional Sense
+Length is not adjusted to reflect the truncation.
+
+	The TAPE CONTROLLER sets one additional (Vendor Unique) byte to 
+provide information about the current status of the tape. This information
+is generated at the time of the first Request Sense command. Subsequent
+REQUEST SENSE command will not update this information.
+
+Additional Sense Bytes
+----------------------
+
+	=================================================================
+	  BIT	|   7* |   6  |	 5  |	 4  |	3  |   2  |   1  |	 0	|
+	BYTE	|      |	    |	   |		 |	   |	  |	 |	|
+	=================================================================
+	8	| PROT |  EOT |  BOT |	   Soft Error Count		|
+	=================================================================
+
+Sense Key (0-7) Descriptions
+----------------------------
+
+	=================================================================
+	Sense Key     Description
+	---------     ---------------------------------------------------
+	0H		  NO SENSE. Indicates that there is no specific Sense
+			Key information to be reported. This would be the
+			case for a successful command or a command checked
+			because of Filemark, EOM or ILI bits being set to
+			one.
+
+	1H		  RECOVERED ERROR.	Indicates that the last command
+			completed successfully with some recovery action 
+			performed by the target.
+
+	2H		  NOT READY. Indicates that the Tape Drive addressed
+			cannot be accessed. Operator intervention may be
+			required to correct this condition.
+
+	3H		  MEDIUM ERROR. Indicates that the target detected a 
+			non-recovered error condition which was probably
+			caused by a flaw in the medium or an error in the
+			recorded data.
+
+	4H		  HARDWARE ERROR. Indicates that the target detected
+			a non-recoverable hardware failure (for example,
+			controller failure, device failure, parity error,
+			etc.) while performing the commandor during a self
+			test.
+	
+	5H		  ILLEGAL REQUEST. Indicates that there was an Illegal
+			parameter in the Command Descriptor Block or in the
+			additional parameters supplied as data for some
+			commands (Set Mode, etc.).
+
+	6H		  UNIT ATTENTION. Indicates that the Tape Drive may have
+			been taken off line or the TAPE CONTROLLER reset (by
+			BUS DEVICE RESET message or "Hard" Reset Condition or
+			by CLEAR DRIVE command) since the last command was 
+			issued to the Logical Unit. This Sense Key is reported
+			the first time that any command is issued after the
+			condition is detected and the requested command is not
+			performed. The UNIT ATTENTION Sense Key is reported to
+			all Initiators which subsequently issue a command to 
+			the TAPE CONTROLLER. This Sense Key is cleared for the
+			next command from the same initiator.
+
+	7H		  DATA PROTECT. Indicates that a command which writes to
+			the tape was prevented by the absense of a write enable
+			ring. The write operation is not performed.
+
+	8H		  BLANK CHECK. Indicates that a read operation timed out
+			without finding data.
+
+	9H		  VENDOR UNIQUE. Provided by SCSI to report vendor unique
+			conditions.
+
+	AH		  COPY ABORTED. Generally not used.
+
+	BH		  ABORTED COMMAND. Indicates that the target aborted the
+			command. The initiator may be able to recover by trying
+			the command again.
+
+	CH		  EQUAL. not used.
+
+	DH		  VOLUME OVERFLOW. Indicates that the tape drive has
+			reached the End of Tape and data remains in the buffer
+			which has not been written to the tape. A Recover
+			Buffered Data command may be issued to read the 
+			unwritten data from the buffer. ( set only when PEOT
+			is set in MODE SELECT command)
+
+	EH		  MISCOMPARE. not used.
+
+	FH		  This Sense Key is RESERVED.
+
+
+Mode Select
+-----------
+
+	Assembler:	tapebios(0xACE, Modsel, *(long)(parameter_list),
+					(long)(list_len))
+
+	'C'	 :	Tmselect(*(long)(parameter_list), (long)(list_len));
+
+	The Mode Select command provides a means for the initiator to specify
+device parameters to the TAPE CONTROLLER.
+
+	The Parameter List Length specifies the length in bytes of the 
+Parameter List which will be transferred during the DATA OUT phase. The Length
+of Parameter List, if zero, indicates no data will be transferred. This is
+not considered an error condition.
+
+	The Parameter List contains a four byte header, followed by zero or one
+eight byte Block Descriptors, followed by the VENDOR UNIQUE parameters.
+
+	The Buffered Mode is defined as follows:
+
+	0H	The TAPE CONTROLLER will not report GOOD STATUS on Write
+		commands until all data blocks are actually written
+		correctly onto the tape.
+
+	1H	The TAPE CONTROLLER will report GOOD STATUS on Write commands
+		as soon as the last (or only) data block has been received
+		by the TAPE CONTROLLER, therefore data may be resident in the
+		buffer until more data is sent, or a Write Filemark command
+		is issued.
+
+	2H-7H	Reserved.
+
+
+Mode Select Parameter List
+--------------------------
+
+	================================================================
+	  BIT	|   7  |   6  |	 5  |	4  |   3	|   2  |   1	|	 0  |
+	BYTE	|      |      |	    |		 |	  |	 |	|	 |
+	================================================================
+	0	|   0		0	 0	0	    0	   0	  0		0  |
+	-------|-------------------------------------------------------|
+	1	|   0		0	 0	0	    0	   0	  0		0  |
+	-------|-------------------------------------------------------|
+	2	|RE-   | 		   |				 |
+		|SERVED|    Buffered Mode   |		Speed 	       |
+	-------|-------------------------------------------------------|
+	3	|			Block Descriptor Length	       |
+	================================================================
+
+				Block Descriptor
+	================================================================
+	0	|			Density Code			     |
+	-------|-------------------------------------------------------|
+	1	|			Number of Blocks (MSB)	       |
+	-------|-------------------------------------------------------|
+	2	|			Number of Blocks			 |
+	-------|-------------------------------------------------------|
+	3	|			Number of Blocks (LSB)	       |
+	-------|-------------------------------------------------------|
+	4	|   0		0	 0	0	    0	   0	  0		0  |
+	-------|-------------------------------------------------------|
+	5	|			Block Length (MSB) 		   |
+	-------|-------------------------------------------------------|
+	6	|			Block Length			     |
+	-------|-------------------------------------------------------|
+	7	|			Block Length (LSB) 		   |
+	================================================================
+	
+	  Two Vendor Unique parameter bytes follow the Block Descriptor
+	 
+	================================================================
+	0	|	     Vendor Unique  Byte 0			     |
+	-------|-------------------------------------------------------|
+	1	|	     Vendor Unique  Byte 1			     |
+	================================================================
+
+	
+	The Speed is defined as follows:
+
+	0H	Default Speed (high speed)
+	1H	low speed
+	2H-FH	high speed
+
+	The Block Descriptor Length must be set to either 0 or 8 to specify
+0 or 1 Block Descriptors. It is equal to the number of Block Descriptors times
+eight. A Block Descriptor Length of zero indicates no Block Descriptors are 
+included in the Parameter List. This shall not be considered an error
+condition.
+	
+	The Block Descriptor specifies the medium characteristics for all or
+part of a Logical Unit. Each Block Descriptors contains a Number of Blocks and
+a Block Length.
+
+	The Density Code parameters are drive dependant. Consult the manual for
+your tape drive to obtain the definitions for this field.
+
+	The Number of Blocks field may or may not be ignored by your TAPE 
+CONTROLER. Again, consult the manual for your tape drive.
+
+	The Block Length specifies the length in bytes of the logical block.
+The Block Length, if zero, indicates the length is variable.
+
+	The next two bytes are Vendor Unique. Check the definition of these
+bytes in the manual for your tape drive.
+
+
+Mode Sense
+----------
+
+	Assembler:	tapebios(0xACE, Modsen, *(long)(parameter_list),
+					(long)(list_len))
+
+	'C'	 :	Tmsense(*(long)(parameter_list), (long)(list_len));
+
+	The Mode Sense command provides a means for the TAPE CONTROLLER to 
+report its current operational mode. It is a complementary command to the Mode
+Select command.
+
+	The Allocation Length specifies the number of bytes that the initiator
+has allocated for returned Mode Sense Data. An Allocation Length of zero
+indicates that no Mode Sense Data will be transferred. This is not considered
+an error condition. Any other value indicates that number of bytes or less
+will be transferred. The TAPE CONTROLLER will terminate the DATA IN phase when
+Allocation Length bytes have been transferred or when all the Mode Sense Data
+has been transferred to the initiator.
+
+NOTE: Check the manual for your tape drive. Some drives report back to the
+initiator with CHECK CONDITION if specific values for the Allocation Length
+are not specified.
+
+	The Mode Sense Data contains a four byte header, followed by one eight
+byte Block Descriptor followed by the VENDOR UNIQUE parameters.
+
+	The Sense Data Length specifies the length in bytes of the Mode Sense
+Data which is available to be transferred during the DATA IN phase.
+
+	The Medium Type is always set to zero indicating only one medium type
+is supported.
+	
+	The Write Protected (WP) bit, if zero, indicates the tape is write
+enabled. The Write Protected bit, if one, indicates the tape is write
+protected.
+
+
+Mode Sense Data
+---------------
+
+	================================================================
+	  BIT	|   7  |   6  |	 5  |	4  |   3	|   2  |   1	|	 0  |
+	BYTE	|      |      |	    |		 |	  |	 |	|	 |
+	================================================================
+	0	|		Sense Data Length			     |
+	-------|-------------------------------------------------------|
+	1	|			Medium Type			    |
+	-------|-------------------------------------------------------|
+	2	|  WP  |   Buffered Mode    |		 Speed	       |
+	-------|-------------------------------------------------------|
+	3	|			Block Descriptor Length	       |
+	================================================================
+
+				Block Descriptor
+	================================================================
+	0	|			Density Code			     |
+	-------|-------------------------------------------------------|
+	1	|			Number of Blocks (MSB)	       |
+	-------|-------------------------------------------------------|
+	2	|			Number of Blocks			 |
+	-------|-------------------------------------------------------|
+	3	|			Number of Blocks (LSB)	       |
+	-------|-------------------------------------------------------|
+	4	|   0		0	 0	0	    0	   0	  0		0  |
+	-------|-------------------------------------------------------|
+	5	|			Block Length (MSB) 		   |
+	-------|-------------------------------------------------------|
+	6	|			Block Length			     |
+	-------|-------------------------------------------------------|
+	7	|			Block Length (LSB) 		   |
+	================================================================
+
+	  Two Vendor Unique parameter bytes follow the Block Descriptor
+
+	================================================================
+	0	|		Vendor Unique  Byte 0			 |
+	-------|-------------------------------------------------------|
+	1	|		Vendor Unique  Byte 1			 |
+	================================================================
+
+	The Buffered Mode and Speed field are defined in the Mode Select
+Command.
+
+	The Block Descriptor Length bytes is set to 08H to indicate 1 Block
+Descriptor (of 8 bytes) is available.
+
+	The Density Code is defined in the Mode Select Command.
+
+	The Number of Blocks field is always set to zero, indicating all the
+remaining logical blocks of the Logical Unit
+
+	The Block Length specifies the length in bytes of the Tape block. This
+is initialised at power up to be zero, indicating the length is variable, but
+can be updated by the Mode Select Command to provide a fixed block size. This
+value is maintained solely by the Mode Select Command, and is not affected by
+the size of any data block read or written to tape.
+
+	The following two bytes are Vendor Unique.
+ 
+Space
+-----
+
+	Assembler:	tapebios(0xACE, Space, 0L, (long)(code/count))
+
+	'C'	 :	Tspace((long)(code/count));
+
+	The Space command provides a variety of tape positioning functions
+which are determined by the Code and Count. Both forward (toward EOT) and
+reverse (toward BOT) positioning are provided.
+
+	The Code is defined as follows:
+
+		DB(1)	DB(0)	Description
+		0	0	Blocks
+		0	1	Filemarks
+		1	0	Sequential Filemarks
+		1	1	Physical End-of-Data
+
+	When spacing over Blocks or Filemarks the Count field specifies the
+number of blocks or filemarks to be spaced over. A positive value N in the
+Count field causes forward tape movement over N blocks or filemarks ending on
+the EOT side of the last block or filemark. A zero vlaue in the Count field
+causes no tape movement. A negative value -N (2's complement notation) in the
+Count field causes reverse tape movement over N blocks or filemarks ending
+on the BOT side of the last block or filemark.
+
+NOTE: Not all streamers support the BACKSPACE function, experiment !!!!!
+
+	If a filemark is encountered while spacing over Blocks, tape movement
+is stopped. The tape will be positioned on the EOT side of the filemark if
+movement was in the forward direction and on the BOT side of the filemark if
+movement was in the reverse direction. CHECK CONDITION status will be sent
+to the initiator and the Filemark and Valid bits in Extended Sense will be 
+set to one. The Information Bytes will be set to the difference (residue) in
+the requested Count and the actual number of blocks spaced over (not including
+the filemark).
+
+	If the EOT marker is encountered while spacing forward over Blocks or
+Filemarks, the TAPE CONTROLLER will return CHECK CONDITION status to the
+initiator and will set the End-of-Medium (EOM) bit in Extended Sense to one.
+The Sense Key will be set to MEDIUM ERROR. The TAPE CONTROLLER will set the
+valid bit to one and the Information Bytes to the difference (residue) between
+the requested Count and the actual number of blocks or filemarks spaced over.
+
+	If the BOT marker is encountered while spacing over Blocks or Filemarks
+in the reverse direction, the TAPE CONTROLLER returns CHECK CONDITION status to
+the initiator and sets the End-of-Medium (EOM) bit in Extended Sense to one.
+The Sense Key will be set to NO SENSE. The TAPE CONTROLLER will set the valid
+bit to one and the Information Bytes to the difference (residue) between the
+requested Count and the actual number of blocks or filemarks spaced over.
+
+	When spacing over Sequential Filemarks, the Count field is interpreted
+as follows:
+
+	- A positive value N causes forward tape movement to the first 
+	  occurence of N or more consecutive filemarks stopping after the Nth
+	  filemark.
+
+	- A zero value shall cause no tape movement.
+
+	- A negative value -N (2's complement notation) causes reverse tape
+	  movement to the first occurence of N or more consecutive filemarks
+	  stopping on the BOT side of the Nth filemark.
+
+	When spacing to physical End-of-Data, the Count field is ignored.
+Forward tape movement occurs until the TAPE CONTROLLER has passed over blank
+tape for approximately 10 seconds. The tape is then repositioned to the point
+immediately after the last data block or filemark read. This leaves the tape
+positioned so that a subsequent write command would append data to the last
+recorded information on the tape.
+
+
+Erase
+-----
+
+	Assembler:	tapebios(0xACE, Erase, 0L, 0L)
+
+	'C'	 :	Tspace();
+
+	The Erase command causes part or all of the remaining tape to be erased
+beginning from the current tape position.
+
+	The distance to be erased is controlled by the Long bit. The Long bit,
+if one, indicates all remaining tape is erased. If zero, it indicates that a
+standard length of tape is erased. The length in this case is governed by the
+tape formatter, but is typically 4 inches of tape.
+
+	Some other tape controllers (especially those concerned with 1/4 inch
+cartridges) may only be able to erase a tape from BOT (i.e. before writing to
+the tape). Programmers should therefore only issue an erase command from BOT.
+
+
+
+
+Inquiry
+-------
+
+	Assembler:	tapebios(0xACE, Inquire, *(long)(buffer), 
+					(long)(bytecount))
+
+	'C'	 :	Tinquir(*(long)(buffer), (long)(bytecount));
+
+	The Inquiry command requests that information regarding parameters of
+the TAPE CONTROLLER be sent to the initiator.
+
+	The Allocation Length specifies the number of bytes that the initiator
+has allocated for returned Inquiry Data. An allocation Length of zero indicates
+no inquiry data shall be transferred. This is not considered an error
+condition. Any other value indicates the maximum number of bytes to be
+transferred. The TAPE CONTROLLER terminates the DATA IN phase when this number
+of bytes have been transferred or when all available Inquiry Data has been 
+transferred to the initiator.
+
+	The CHECK CONDITION status will only be reported when the TAPE
+CONTROLLER cannot return the Inquiry Data.
+
+	The Inquiry Data contains a five byte header, followed by the VENDOR
+UNIQUE parameters, if any.
+
+	The Peripheral Device Type is set to 01 to indicate a sequential 
+device, unless the Logical Unit Number set in the command is not valid (i.e.
+not 000) In which case this byte is set to 7FH to indicate the Logical Unit
+is not present.
+
+	The Removable Medium (RMB) bit is set to 1 to indicate the medium is
+removable.
+
+Inquiry Data
+------------
+
+	================================================================
+	  BIT	|   7  |   6  |	 5  |	4  |   3	|   2  |   1	|	 0  |
+	BYTE	|      |      |	    |		 |	  |	 |	|	 |
+	================================================================
+	0	|			Peripheral Device Type	       |
+	---------------------------------------------------------------|
+	1	| RMB  | 	     Device Type Qualifier		    |
+	---------------------------------------------------------------|
+	2	|			Version				 |
+	---------------------------------------------------------------|
+	3	|   0		0	 0	0	    0	   0	  0		0  |
+	---------------------------------------------------------------|
+	4	|			Additional Length			  |
+	===============================================================|
+	5	|	    Custom Version number (see text)	       |
+	---------------------------------------------------------------|
+	6	|   0		0	 0	0	    0	   0	  0		0  |
+	---------------------------------------------------------------|
+	7	|   0		0	 0	0	    0	   0	  0		0  |
+	---------------------------------------------------------------|
+	8 - 35 | (TAPE CONTROLLER's title and revision details, ASCII) |
+	---------------------------------------------------------------|
+	36 ->	| (Vendor Unique parameters (see text)		       |
+	================================================================
+
+	The Device Type Qualifier is a seven bit user specified code. This code
+is normally set to 0.
+
+	The Version if the implemented version of the SCSI standard and is 
+defined in the TAPE CONTROLLER as follows:
+
+	00H	Pre-release firmware
+	01H	Standard release firmware. This code is used by SCSI Devices
+		who claim to comply with SCSI rev 17B.
+
+	The Additional Length specifies the length in bytes of the extra and
+VENDOR UNIQUE parameters.
+
+	Byte 5 will normally be set to 00H unless customized firmware is
+supplied. Bytes 8 to 35 generate the TAPE CONTROLLER's title and revision 
+details in accordance with the SCSI Command Command Set Specification.
+
+	The remaining bytes are Vendor Unique.
+
+Alan Hourihane.
+email: alanh@logitek.co.uk
+17/3/92.
+
+

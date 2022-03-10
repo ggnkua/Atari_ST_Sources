@@ -1,0 +1,346 @@
+MAS-68K 68030 Macro Assembler  Release 19  (C) 88 - 90 SoftDesign Muenchen			Page   1
+$Id: hdw3.s,v 1.3 1991/09/18 14:35:10 mario Exp $
+
+   1                                    	TTL	"$Id: hdw3.s,v 1.3 1991/09/18 14:35:10 mario Exp $"
+   2                                    *
+   3                                    * Wait for hard disk to spin up
+   4                                    *
+   5                                    * $Log: hdw3.s,v $
+   6                                    * Revision 1.3  1991/09/18  14:35:10  mario
+   7                                    * Added return code at program exit.
+   8                                    *
+   9                                    * Revision 1.2  1991/09/17  15:12:12  mario
+  10                                    * Let the header be done by the assembler.
+  11                                    *
+  12                                    * Revision 1.1  1991/09/17  09:42:38  mario
+  13                                    * Initial revision
+  14                                    *
+  15                                    * Author: mario@tisu1.ti.informatik.uni-frankfurt.de Schulz
+  16                                    *		inspired by Jelske kloppenburg@gmd.de
+  17                                    *
+  18                                    * Send test_unit_ready SCSI command to every target at ACSI.
+  19                                    *
+  20                                    * timeout receiving command == target unavailable
+  21                                    * timeout receiving status == non-standard SCSI (i.e. MegafileXX)
+  22                                    *	wait for status to come with long timeout
+  23                                    * return status check -> rerun test_unit_ready until it succeeds or
+  24                                    *	maximum retry count it reached
+  25                                    *
+  26                                    * To be done:
+  27                                    * 	If the device returns the check flag, a request_sense should
+  28                                    *	be done to check what it really does.
+  29                                    *
+  30                                    * Turn on progress messages with debug not equal to 0
+  31                                    *
+  32 00000001                           debug		equ	1
+  33 00000000                           extended_debug	equ	0
+  34                                    *
+  35                                    * Tuneable parameters section
+  36                                    *
+  37 00000032                           IWait		equ	50	; Initial delay time 250ms
+  38 00000000                           HighTarg	equ	0	; Highest target to be tested (max. 7)
+  39                                    *
+  40 00000050                           ToCycle		equ	80	; Cycles for status timeout (for M60)
+  41 00000028                           ToWait		equ	40	; Cycle time for status timeout 200ms
+  42                                    *
+  43                                    * Do not tweak to often, this might delay the work done for spin-up
+  44 00000014                           BusyCycle	equ	20	; Cycles for busy indication
+  45 000000C8                           BusyWait	equ	200	; Cycle time for busy indication 1000ms
+  46                                    *
+  47                                    * Long command waits give delays for unavailable devices, but if some
+  48                                    * device is pretty busy, you might loose synchronisation for the
+  49                                    * command bytes, you had to issue the (unavailable) software reset
+  50                                    * for the SCSI bus. 100ms for an Atari device should be enough!
+  51                                    * Some SCSI device may need 500ms - if the tests for device
+  52                                    * presence take too long, simply turn them off via "HighTarg".
+  53 00000032                           CmdWait		equ	50	; Time for cmd ack 250ms
+  54 00000064                           StatWait	equ	100	; Time for status byte 500ms
+  55                                    *
+MAS-68K 68030 Macro Assembler  Release 19  (C) 88 - 90 SoftDesign Muenchen			Page   2
+$Id: hdw3.s,v 1.3 1991/09/18 14:35:10 mario Exp $
+
+  56 FFFFFA01                           gpip		equ	$FFFFFA01	; MFP[GPIP]
+  57 FFFF8604                           diskctrl	equ	$FFFF8604	; Controller access reg
+  58 FFFF8606                           dmamode		equ	$FFFF8606	; DMA Mode Reg
+  59 0000043E                           flock		equ	$43E		; DMA lock
+  60 000004BA                           _hz_200		equ	$4BA		; 200hz counter
+  61                                    *
+  62 00000000'                          	ORG	$0	; Start of bootsector
+  63 00000000' 601C                     	bra.b	entry
+  64 00000002' 686477616974             	dc.b	"hdwait"
+  65                                    *
+  66 00000008'                          	ORG	$1e	; Bootsector program strarts at 0x1e
+  67 0000001E' 48E77FFC                 entry:	movem.l	d1-a5,-(sp)
+  68 00000022' 4E56 FFFE                	link	a6,#-2
+  69 00000026' 487A 0160                	pea	WaitMes(PC)
+  70 0000002A' 3F3C 0009                	move.w	#9,-(a7)	; ConWS
+  71 0000002E' 4E41                     	trap	#1
+  72 00000030' 5C8F                     	addq.l	#6,a7
+  73                                    *
+  74                                    * Initial Delay
+  75                                    *
+  76 00000032' 7032!                    	move.l	#IWait,d0		; Initial delay
+  77 00000034' 6100 00CA                	bsr	Wait
+  78                                    *
+  79                                    * Start checks
+  80                                    *
+  81 00000038' 50F8 043E                	st	flock		; lock VBL interrupts
+  82 0000003C' 4245                     	clr.w	d5		; Start with target 0
+  83 0000003E' 426E FFFE                Chk:	clr.w	-2(a6)		; n = 0
+  84 00000042' 617E                     SamChk:	bsr	TstTarg		; expect status in d0
+  85                                    	IF	debug
+  86 00000044' 6100 00E2                	bsr	DispRes		; Show result on screen
+  87                                    	ENDIF
+  88 00000048' 0C40 FFFF                	cmpi.w	#-1,d0		; Target did not respond
+  89 0000004C' 660A                     	bne	Case2
+  90                                    *
+  91 0000004E' 5245!                    NxtChk:	addi.w	#1,d5		; next target
+  92 00000050' 4A45!                    	cmpi.w	#HighTarg,d5	; last one
+  93 00000052' 6200 0120                	bhi	Exit
+  94 00000056' 60E6                     	bt	Chk
+  95                                    *
+  96                                    * This might be a MEGAFILE spinning up, so wait for status to show up
+  97                                    *
+  98 00000058' 0C40 FFFE                Case2:	cmpi.w	#-2,d0		; Target timeout sending status
+  99 0000005C' 661A                     	bne	Case3
+ 100 0000005E' 6130                     Case2a:	bsr	IncPg
+ 101 00000060' 0C6E 0050FFFE            	cmpi.w	#ToCycle,-2(a6)	; status timeout cycles
+ 102 00000066' 67E6                     	beq	NxtChk
+ 103 00000068' 7028!                    	move.l	#ToWait,d0	; status timeout time
+ 104 0000006A' 6100 00A0                	bsr	IntW
+ 105 0000006E' 66EE                     	bne	Case2a		; still timeout
+ 106 00000070' 426E FFFE                	clr.w	-2(a6)
+ 107 00000074' 3038 8604                	move.w	diskctrl,d0	; fall to case3 with valid status
+ 108                                    *
+ 109                                    * Now we have got a valid status byte
+ 110                                    *
+MAS-68K 68030 Macro Assembler  Release 19  (C) 88 - 90 SoftDesign Muenchen			Page   3
+$Id: hdw3.s,v 1.3 1991/09/18 14:35:10 mario Exp $
+
+ 111 00000078' 4A00!                    Case3:	cmpi.b	#0,d0		; Target responded with ready
+ 112 0000007A' 67D2                     	beq 	NxtChk
+ 113 0000007C' 6112                     	bsr	IncPg		; Target not ready (usually check cond)
+ 114 0000007E' 0C6E 0014FFFE            	cmpi.w	#BusyCycle,-2(a6)
+ 115 00000084' 67C8                     	beq	NxtChk		; Number of busy cycles
+ 116 00000086' 203C 000000C8            	move.l	#BusyWait,d0	; Wait time
+ 117 0000008C' 6172                     	bsr	Wait
+ 118 0000008E' 60B2                     	bt	SamChk		; Check same target again
+ 119                                    *
+ 120                                    * Increment progress message on screen
+ 121                                    *
+ 122 00000090' 526E FFFE                IncPg:	addq.w	#1,-2(a6)	; n++
+ 123 00000094' 382E FFFE                	move.w	-2(a6),d4
+ 124 00000098' 48C4                     	ext.l	d4
+ 125 0000009A' 88FC 000A                	divu	#10,d4		; n /= 10
+ 126 0000009E' 163C 0030                	move.b	#'0',d3
+ 127 000000A2' D803                     	add.b	d3,d4		; high digit
+ 128 000000A4' 49FA 00ED                	lea	WaitMesZ(pc),a4
+ 129 000000A8' 1884                     	move.b	d4,(a4)		; to message
+ 130 000000AA' 4844                     	swap	d4		; n %= 10
+ 131 000000AC' D803                     	add.b	d3,d4		; low digit
+ 132 000000AE' 49FA 00E4                	lea	WaitMesE(pc),a4
+ 133 000000B2' 1884                     	move.b	d4,(a4)		; to message
+ 134 000000B4' 487A 00D2                	pea	WaitMes(pc)
+ 135 000000B8' 3F3C 0009                	move.w	#9,-(a7)	; ConWs
+ 136 000000BC' 4E41                     	trap	#1
+ 137 000000BE' 5C8F                     	addq.l	#6,a7
+ 138 000000C0' 4E75                     	rts
+ 139                                    *
+ 140                                    * Test target device
+ 141                                    *
+ 142 000000C2' 4244                     TstTarg:clr.w	d4		; cmd word counter
+ 143 000000C4' 3C05                     	move.w	d5,d6
+ 144 000000C6' EB46                     	asl.w	#5,d6		; First command byte Target,Test Unit Ready
+ 145 000000C8' 4846                     	swap	d6
+ 146 000000CA' 3C3C 008A                	move.w	#$8a,d6
+ 147 000000CE' 31FC 00888606            	move.w	#$88,dmamode	; Command to come
+ 148 000000D4' 5244!                    NxtWd:	addi.w	#1,d4
+ 149 000000D6' 21C6 8604                	move.l	d6,diskctrl
+ 150 000000DA' 0C44 0006                	cmpi.w	#6,d4
+ 151 000000DE' 670E                     	beq	CmdSucc
+ 152 000000E0' 48C6                     	ext.l	d6		; Clear for next word
+ 153 000000E2' 7032!                    	move.l	#CmdWait,d0	; wait time for command ack
+ 154 000000E4' 6126                     	bsr	IntW		; Expect result in zero flag
+ 155 000000E6' 67EC                     	beq	NxtWd
+ 156 000000E8' 303C FFFF                	move.w	#-1,d0		; Timeout sending command bytes
+ 157 000000EC' 4E75                     	rts
+ 158                                    * Status byte after last command takes more time
+ 159 000000EE' 7064!                    CmdSucc:move.l	#StatWait,d0	; wait time for status byte
+ 160 000000F0' 611A                     	bsr	IntW
+ 161 000000F2' 6706                     	beq	EndTst
+ 162 000000F4' 303C FFFE                	move.w	#-2,d0		; Timeout getting status byte
+ 163 000000F8' 4E75                     	rts
+ 164 000000FA' 3038 8604                EndTst:	move.w	diskctrl,d0	; return status byte
+ 165 000000FE' 4E75                     	rts
+MAS-68K 68030 Macro Assembler  Release 19  (C) 88 - 90 SoftDesign Muenchen			Page   4
+$Id: hdw3.s,v 1.3 1991/09/18 14:35:10 mario Exp $
+
+ 166                                    *
+ 167                                    * Wait short amount of time given in d0.l
+ 168                                    *
+ 169 00000100' D0B8 04BA                Wait:	add.l	_hz_200,d0
+ 170 00000104' B0B8 04BA                WLoop:	cmp.l	_hz_200,d0
+ 171 00000108' 62FA                     	bhi	WLoop
+ 172 0000010A' 4E75                     	rts
+ 173                                    *
+ 174                                    * Wait for interrupt or timeout
+ 175                                    * Supply timeout time in d0 (0.005secs)
+ 176                                    *
+ 177 0000010C' D0B8 04BA                IntW:	add.l	_hz_200,d0
+ 178 00000110' 0838 0005FA01            MFPTst:	btst	#$5,gpip
+ 179 00000116' 6604                     	bne	ctime
+ 180 00000118' 4240                     	clr.w	d0		; return true for interrupt
+ 181 0000011A' 4E75                     	rts
+ 182 0000011C' B0B8 04BA                ctime:	cmp.l	_hz_200,d0
+ 183 00000120' 62EE                     	bhi	MFPTst
+ 184 00000122' 303C FFFF                	move.w	#-1,d0		; return false for timeout
+ 185 00000126' 4E75                     	rts
+ 186                                    *
+ 187                                    * Display result message for debug purposes
+ 188                                    * Status to be displayed in d0
+ 189                                    *
+ 190                                    	IF	debug
+ 191 00000128' 48E7FFFE                 DispRes:movem.l	d0-a6,-(sp)
+ 192 0000012C' 183C 0030                	move.b	#'0',d4
+ 193 00000130' D805                     	add.b	d5,d4
+ 194 00000132' 49FA 006F                	lea	TNo(pc),a4
+ 195 00000136' 1884                     	move.b	d4,(a4)
+ 196 00000138' 49FA 0072                	lea	TSt(pc),a4
+ 197 0000013C' 0C40 FFFF                	cmpi.w	#-1,d0
+ 198 00000140' 6606                     	bne	DCase2
+ 199 00000142' 18BC 004E                	move.b	#'N',(a4)	; N: Not available
+ 200 00000146' 601A                     	bt	DoDisp
+ 201 00000148' 0C40 FFFE                DCase2:	cmpi.w	#-2,d0
+ 202 0000014C' 6606                     	bne	DCase3
+ 203 0000014E' 18BC 0054                	move.b	#'T',(a4)	; T: Status byte timeout
+ 204 00000152' 600E                     	bt	DoDisp
+ 205 00000154' 4A00!                    DCase3:	cmpi.b	#0,d0
+ 206 00000156' 6606                     	bne	DCase4
+ 207 00000158' 18BC 0030                	move.b	#'0',(a4)	; 0: Status OK
+ 208 0000015C' 6004                     	bt	DoDisp
+ 209 0000015E' 18BC 0042                DCase4:	move.b	#'B',(a4)	; B: Busy
+ 210                                    *
+ 211 00000162'                          DoDisp:
+ 212                                    	IF	extended_debug
+ 213                                    	lea	ExtSt(pc),a4
+ 214                                    	move.w	#7,d1
+ 215                                    zz:	btst	d1,d0
+ 216                                    	bne	z1
+ 217                                    	move.b	#'0',(a4)+
+ 218                                    	bt	z0
+ 219                                    z1:	move.b	#'1',(a4)+
+ 220                                    z0:	subq.w	#1,d1
+MAS-68K 68030 Macro Assembler  Release 19  (C) 88 - 90 SoftDesign Muenchen			Page   5
+$Id: hdw3.s,v 1.3 1991/09/18 14:35:10 mario Exp $
+
+ 221                                    	bcc	zz
+ 222                                    	ENDIF
+ 223 00000162' 487A 0034                	pea	Progr(pc)
+ 224 00000166' 3F3C 0009                	move.w	#9,-(a7)
+ 225 0000016A' 4E41                     	trap	#1
+ 226 0000016C' 5C8F                     	addq.l	#6,a7
+ 227 0000016E' 4CDF7FFF                 	movem.l	(sp)+,d0-a6
+ 228 00000172' 4E75                     	rts
+ 229                                    	ENDIF
+ 230                                    *
+ 231                                    * End program
+ 232                                    *
+ 233 00000174' 31FC 00808606            Exit:	move.w	#$80,dmamode	; Revert to FDC
+ 234 0000017A' 51F8 043E                	sf	flock		; enable VBL interrupts
+ 235 0000017E' 4E5E                     	unlk	a6
+ 236 00000180' 4CDF3FFE                 	movem.l	(sp)+,d1-a5
+ 237 00000184' 4240                     	clr.w	d0		; Return Zero
+ 238 00000186' 4E75                     	rts
+ 239                                    *
+ 240 00000188'                          	EVEN	;          Row  Column
+ 241 00000188'                          WaitMes:
+ 242                                    	IFF	extended_debug
+ 243 00000188' 1B592223                 	dc.b	$1B,'Y',32+2,32+3
+ 244                                    	ENDIF
+ 245 0000018C' 68647761697420           	dc.b	"hdwait "
+ 246 00000193' 20                       WaitMesZ:dc.b	' '
+ 247 00000194' 200D0A00                 WaitMesE:dc.b	' ',$0D,$0A,0
+ 248                                    	IF	debug
+ 249 00000198'                          	EVEN	;          Row  Column
+ 250 00000198'                          Progr:
+ 251                                    	IFF	extended_debug
+ 252 00000198' 1B592423                 	dc.b	$1b,'Y',32+4,32+3
+ 253                                    	ENDIF
+ 254 0000019C' 54617267657420           	dc.b	"Target "
+ 255 000001A3' 3F                       TNo:	dc.b	'?'
+ 256 000001A4' 2053746174757320         	dc.b	" Status "
+ 257 000001AC' 3F                       TSt:	dc.b	'?'
+ 258                                    	IF	extended_debug
+ 259                                    	dc.b	' '
+ 260                                    ExtSt:	dc.b	"LLLLLLLL"
+ 261                                    	ENDIF
+ 262 000001AD' 0D0A00                   	dc.b	$0d,$0a,0
+ 263                                    	ENDIF
+ 264                                    *
+ 265 000001B0'                          	END
+ 266                                    
+MAS-68K 68030 Macro Assembler  Release 19  (C) 88 - 90 SoftDesign Muenchen			Page   6
+$Id: hdw3.s,v 1.3 1991/09/18 14:35:10 mario Exp $
+
+
+S y m b o l   T a b l e
+
+Name	    Value	    Type	    Local to	    References
+
+BusyCycle   00000014        Absolute                           44*  114 
+BusyWait    000000C8        Absolute                           45*  116 
+Case2       00000058        Text                               89    98*
+Case2a      0000005E        Text                              100*  105 
+Case3       00000078        Text                               99   111*
+Chk         0000003E        Text                               83*   94 
+CmdSucc     000000EE        Text                              151   159*
+CmdWait     00000032        Absolute                           53*  153 
+DCase2      00000148        Text                              198   201*
+DCase3      00000154        Text                              202   205*
+DCase4      0000015E        Text                              206   209*
+DispRes     00000128        Text                               86   191*
+DoDisp      00000162        Text                              200   204   208 
+                                                              211*
+EndTst      000000FA        Text                              161   164*
+Exit        00000174        Text                               93   233*
+HighTarg    00000000        Absolute                           38*   92 
+IWait       00000032        Absolute                           37*   76 
+IncPg       00000090        Text                              100   113   122*
+IntW        0000010C        Text                              104   154   160 
+                                                              177*
+MFPTst      00000110        Text                              178*  183 
+NxtChk      0000004E        Text                               91*  102   112 
+                                                              115 
+NxtWd       000000D4        Text                              148*  155 
+Progr       00000198        Text                              223   250*
+SamChk      00000042        Text                               84*  118 
+StatWait    00000064        Absolute                           54*  159 
+TNo         000001A3        Text                              194   255*
+TSt         000001AC        Text                              196   257*
+ToCycle     00000050        Absolute                           40*  101 
+ToWait      00000028        Absolute                           41*  103 
+TstTarg     000000C2        Text                               84   142*
+WLoop       00000104        Text                              170*  171 
+Wait        00000100        Text                               77   117   169*
+WaitMes     00000188        Text                               69   134   241*
+WaitMesE    00000194        Text                              132   247*
+WaitMesZ    00000193        Text                              128   246*
+_hz_200     000004BA        Absolute                           60*  169   170 
+                                                              177   182 
+ctime       0000011C        Text                              179   182*
+debug       00000001        Absolute                           32*   85   190 
+                                                              248 
+diskctrl    FFFF8604        Absolute                           57*  107   149 
+                                                              164 
+dmamode     FFFF8606        Absolute                           58*  147   233 
+entry       0000001E        Text                               63    67*
+extended_debug
+	    00000000        Absolute                           33*  212   242 
+                                                              251   258 
+flock       0000043E        Absolute                           59*   81   234 
+MAS-68K 68030 Macro Assembler  Release 19  (C) 88 - 90 SoftDesign Muenchen			Page   7
+$Id: hdw3.s,v 1.3 1991/09/18 14:35:10 mario Exp $
+
+gpip        FFFFFA01        Absolute                           56*  178 
+
+

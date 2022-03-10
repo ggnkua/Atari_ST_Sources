@@ -1,0 +1,432 @@
+
+
+{IncludeFrom=sysdevs <p2c/sysdevs.h>}
+
+
+{*VarStrings=1} {*ExportSymbol=}
+
+
+MODULE SYSDEVS;
+
+$SEARCH 'INITLOAD'$ 
+
+ 
+IMPORT SYSGLOBALS;
+EXPORT
+ {* DUMMY DECLARATIONS **********************************}
+ TYPE
+   KBDHOOKTYPE  = PROCEDURE(VAR STATBYTE,DATABYTE: BYTE;
+                            VAR DOIT: BOOLEAN);
+   OUT2TYPE     = PROCEDURE(VALUE1,VALUE2: BYTE);
+   REQUEST1TYPE = PROCEDURE(CMD: BYTE; VAR VALUE: BYTE);
+   BOOLPROC     = PROCEDURE(B:BOOLEAN);
+   
+{* CRT *************************************************}
+{***** THIS SECTION HAS HARD OFFSET REFERENCES *********}
+{      IN MODULES CRTB (ASSY FILE GASSM)                }
+TYPE
+  CRTWORD = RECORD CASE INTEGER OF
+            1:(HIGHLIGHTBYTE,CHARACTER: CHAR);
+            2:(WHOLEWORD: SHORTINT);
+            END;
+  CRTLLOPS =(CLLPUT,CLLSHIFTL,CLLSHIFTR,CLLCLEAR,CLLDISPLAY,PUTSTATUS);
+  CRTLLTYPE=PROCEDURE(OP:CRTLLOPS; ANYVAR POSITION:INTEGER; C:CHAR);
+  DBCRTOPS =(DBINFO,DBEXCG,DBGOTOXY,DBPUT,DBINIT,DBCLEAR,DBCLINE,DBSCROLLUP,
+             DBSCROLLDN,DBSCROLLL,DBSCROLLR,DBHIGHL);
+  DBCINFO  = RECORD
+               SAVEAREA : WINDOWP;
+               SAVESIZE : INTEGER;
+               DCURSORADDR : INTEGER;
+               XMIN,XMAX,YMIN,YMAX : SHORTINT;
+               CURSX,CURSY         : SHORTINT;
+               C : CHAR;
+               AREAISDBCRT : BOOLEAN;
+               CHARISMAPPED: BOOLEAN; { 3/25/85 }
+               DEBUGHIGHLIGHT: SHORTINT;  { 3/25/85 }
+             END;
+  DBCRTTYPE=PROCEDURE(OP:DBCRTOPS; VAR DBCRT:DBCINFO);
+  
+  crtconsttype = packed array [0..11] of byte;
+  
+  crtfrec = packed record
+               nobreak,stupid,slowterm,hasxycrt,
+               haslccrt{built in crt},hasclock,
+               canupscroll,candownscroll      :    boolean;
+             end;
+                           
+  b9 = packed array[0..8] of boolean;
+  b14= packed array[0..13] of boolean;
+  crtcrec = packed record                               (* CRT CONTROL CHARS *)
+               rlf,ndfs,eraseeol,
+               eraseeos,home,
+               escape             : char;
+               backspace          : char;
+               fillcount          : 0..255;
+               clearscreen,
+               clearline          : char;
+               prefixed           : b9
+            end;
+                                  
+  crtirec = packed record                          (* CRT INFO & INPUT CHARS *)
+               width,height      : shortint;
+               crtmemaddr,crtcontroladdr,
+               keybufferaddr,progstateinfoaddr:integer;
+               keybuffersize: shortint;
+               crtcon            : crtconsttype;
+               right,left,down,up: char;
+               badch,chardel,stop,
+               break,flush,eof   : char;
+               altmode,linedel   : char;
+               backspace,
+               etx,prefix        : char;
+               prefixed          : b14 ;
+               cursormask        : integer;
+               spare             : integer;
+            end;
+
+  environ = record
+              miscinfo: crtfrec;
+              crttype: integer;
+              crtctrl: crtcrec;
+              crtinfo: crtirec;
+            end; 
+
+  environptr    = ^environ; 
+  
+  crtkinds = (NOCRT, ALPHATYPE, BITMAPTYPE, SPECIALCRT1, SPECIALCRT2);
+  
+VAR
+  SYSCOM: ENVIRONPTR;
+  ALPHASTATE['ALPHAFLAG']       : BOOLEAN;
+  GRAPHICSTATE['GRAPHICSFLAG']  : BOOLEAN;
+  CRTIOHOOK             : AMTYPE;
+  TOGGLEALPHAHOOK       : PROCEDURE;
+  TOGGLEGRAPHICSHOOK    : PROCEDURE;
+  DUMPALPHAHOOK         : PROCEDURE;
+  DUMPGRAPHICSHOOK      : PROCEDURE;
+  UPDATECURSORHOOK      : PROCEDURE;
+  CRTINITHOOK           : PROCEDURE;
+  CRTLLHOOK             : CRTLLTYPE;
+  DBCRTHOOK             : DBCRTTYPE;
+  XPOS                  : SHORTINT; { CURSOR X POSITION }
+  YPOS                  : SHORTINT; { CURSOR Y POSITION }
+  CURRENTCRT            : CRTKINDS; { ACTIVE ALPHA DRIVER TYPE }
+  BITMAPADDR            : INTEGER;  { ADDRESS OF BITMAP CONTROL SPACE }
+  FRAMEADDR             : INTEGER;  { ADDRESS OF BITMAP FRAME BUFFER }
+  REPLREGCOPY           : SHORTINT; { REGISTER COPIES FOR BITMAP DISPLAY }
+  WINDOWREGCOPY         : SHORTINT; { MUST BE IN GLOBALS BECAUSE REGISTERS }
+  WRITEREGCOPY          : SHORTINT; { ARE NOT READABLE -- MAY BE UNDEFINED }
+ 
+ {* KEYBOARD *******************************************}
+ CONST
+   KBD_ENABLE     = 0; KBD_DISABLE    = 1;
+   SET_AUTO_DELAY = 2; SET_AUTO_REPEAT= 3;
+   GET_AUTO_DELAY = 4; GET_AUTO_REPEAT= 5;
+   SET_KBDTYPE    = 6; SET_KBDLANG    = 7;
+ TYPE
+   STRING80PTR = ^STRING80;
+   KEYBOARDTYPE = (NOKBD,LARGEKBD,SMALLKBD,ITFKBD,SPECIALKBD1,SPECIALKBD2);
+   LANGTYPE = (NO_KBD,FINISH_KBD,BELGIAN_KBD,CDN_ENG_KBD,CDN_FR_KBD,
+               NORWEGIAN_KBD,DANISH_KBD,DUTCH_KBD,SWISS_GR_KBD,SWISS_FR_KBD,
+               SPANISH_EUR_KBD,SPANISH_LATIN_KBD,UK_KBD,ITALIAN_KBD,
+               FRENCH_KBD,GERMAN_KBD,SWEDISH_KBD,SPANISH_KBD,
+               KATAKANA_KBD,US_KBD,ROMAN8_KBD,NS1_KBD,NS2_KBD,NS3_KBD,
+               SWISS_GR_B_KBD,SWISS_FR_B_KBD {ADDED FOR 3.1--SFB-5/22/85} );
+   MENUTYPE = (M_NONE,M_SYSNORM,M_SYSSHIFT,M_U1,M_U2,M_U3,M_U4);
+ VAR
+   KBDREQHOOK   : REQUEST1TYPE;
+   KBDIOHOOK    : AMTYPE;
+   KBDISRHOOK   : KBDHOOKTYPE;
+   KBDPOLLHOOK  : BOOLPROC;
+   KBDTYPE      : KEYBOARDTYPE;
+   KBDCONFIG    : BYTE;         { KEYBOARD CONFIGURATION JUMPER }
+   KBDLANG      : LANGTYPE;
+   SYSMENU      : STRING80PTR;
+   SYSMENUSHIFT : STRING80PTR;
+   MENUSTATE    : MENUTYPE;
+
+{* ENABLE / DISABLE ************************************}
+ CONST
+   KBDMASK=1;RESETMASK=2;TIMERMASK=4;PSIMASK=8;FHIMASK=16;
+ VAR
+   MASKOPSHOOK : OUT2TYPE; { ENABLE, DISABLE }
+
+{* BEEPER **********************************************}
+ VAR
+   BEEPERHOOK: OUT2TYPE;
+   BFREQUENCY, BDURATION: BYTE;
+
+{* RPG *************************************************}
+ CONST
+   RPG_ENABLE   = 0; RPG_DISABLE = 1;
+   SET_RPG_RATE = 2; GET_RPG_RATE =3;
+ VAR
+   RPGREQHOOK: REQUEST1TYPE;
+   RPGISRHOOK: KBDHOOKTYPE;
+   
+{* BATTERY *********************************************}
+TYPE
+  BATCMDTYPE = PROCEDURE(CMD: BYTE; NUMDATA: INTEGER;
+                         B1, B2, B3, B4, B5: BYTE); 
+  BATREADTYPE= PROCEDURE(VAR DATA: BYTE);
+VAR
+  BATTERYPRESENT[-563]: BOOLEAN;
+  BATCMDHOOK : BATCMDTYPE;
+  BATREADHOOK: BATREADTYPE;
+
+{* CLOCK ***********************************************}
+TYPE
+  RTCTIME = PACKED RECORD 
+               PACKEDTIME,PACKEDDATE:INTEGER;
+            END;
+  CLOCKFUNC = (CGETDATE,CGETTIME,CSETDATE,CSETTIME);
+  CLOCKOP   = (CGET,CSET,CUPDATE);      {CUPDATE ADDED FOR BOBCAT 4/11/85 SFB}
+  CLOCKDATA = RECORD
+                CASE BOOLEAN OF
+                TRUE :(TIMETYPE:TIMEREC);
+                FALSE:(DATETYPE:DATEREC);
+              END;
+  CLOCKREQTYPE = PROCEDURE(CMD:CLOCKFUNC; ANYVAR DATA:CLOCKDATA);
+  CLOCKIOTYPE  = PROCEDURE(CMD:CLOCKOP  ; VAR DATA:RTCTIME);
+VAR
+  CLOCKREQHOOK : CLOCKREQTYPE;  { CLOCK MODULE INTERFACE }
+  CLOCKIOHOOK  : CLOCKIOTYPE;   { CARD DRIVER INTERFACE }
+
+{* TIMER ***********************************************}
+TYPE
+  TIMERTYPES = (CYCLICT,PERIODICT,DELAYT,DELAY7T,MATCHT);
+  TIMEROPTYPE = (SETT,READT,GETTINFO);
+  TIMERDATA = RECORD
+               CASE INTEGER OF
+               0: (COUNT: INTEGER);
+               1: (MATCH: TIMEREC);
+               2: (RESOLUTION,RANGE:INTEGER);
+               END;
+  TIMERIOTYPE = PROCEDURE(TIMER: TIMERTYPES;OP: TIMEROPTYPE;VAR TD: TIMERDATA);
+VAR 
+  TIMERIOHOOK  : TIMERIOTYPE; 
+  TIMERISRHOOK : KBDHOOKTYPE;
+
+
+{* KEYBUFFER *******************************************}
+CONST
+  KMAXBUFSIZE = 255;
+TYPE
+
+  KOPTYPE = (KGETCHAR,KAPPEND,KNONADVANCE,KCLEAR,KDISPLAY,
+             KGETLAST,KPUTFIRST);
+  KBUFTYPE= PACKED ARRAY[0..KMAXBUFSIZE] OF CHAR;
+  KBUFPTR = ^KBUFTYPE;
+  KBUFRECPTR = ^KBUFREC;
+  KBUFREC = RECORD
+              ECHO: BOOLEAN;
+              NON_CHAR: CHAR;
+              MAXSIZE,SIZE,INP,OUTP: INTEGER;
+              BUFFER: KBUFPTR;
+            END;
+  
+VAR
+  KEYBUFFER : KBUFRECPTR;
+  KBDWAITHOOK: PROCEDURE;
+  KBDRELEASEHOOK: PROCEDURE;
+  STATUSLINE: PACKED ARRAY[0..7] OF CHAR;
+  {0  s or f = STEP/FLASH IN PROGRESS (WAITING FOR TRAP #0)}
+  {1..5  last executed/current line number }
+  {6  S=SYSTEM  U=USER  DEFINITION FOR ITF SOFT KEYS}
+  {   BLANK FOR NON ITF KEYBOARDS }
+  {7  RUNLIGHT }
+
+{* KEY TRANSLATION SERVICES ********************************}
+TYPE
+  KEYTRANSTYPE =(KPASSTHRU,KSHIFT_EXTC,KPASS_EXTC);
+  KEYTYPE = (ALPHA_KEY,NONADV_KEY,SPECIAL_KEY,IGNORED_KEY,NONA_ALPHA_KEY);
+  { ADDED NONA_ALPHA_KEY 5/9/84 RQ/SFB }
+  
+  LANGCOMREC = RECORD
+                 STATUS : BYTE;
+                 DATA   : BYTE;
+                 KEY    : CHAR;
+                 RESULT : KEYTYPE;
+                 SHIFT,CONTROL,EXTENSION: BOOLEAN;
+               END;
+  LANGKEYREC = RECORD
+                 NO_CAPSLOCK: BOOLEAN;
+                 NO_SHIFT   : BOOLEAN;
+                 NO_CONTROL : BOOLEAN;
+                 NO_EXTENSION : BOOLEAN;
+                 KEYCLASS   : KEYTYPE;
+                 KEYS : ARRAY[BOOLEAN] OF CHAR;
+               END;
+  LANGRECORD= RECORD
+                CAN_NONADV: BOOLEAN;
+                LANGCODE  : LANGTYPE;
+                SEMANTICS : PROCEDURE;
+                KEYTABLE  : ARRAY[0..127] OF LANGKEYREC;
+              END;
+  LANGPTR   = ^LANGRECORD;
+VAR
+  LANGCOM   : LANGCOMREC;
+  LANGTABLE : ARRAY[0..1] OF LANGPTR;
+  LANGINDEX : 0..1;
+  KBDTRANSHOOK : KBDHOOKTYPE;
+  TRANSMODE : KEYTRANSTYPE;
+  KBDSYSMODE, KBDALTLOCK, KBDCAPSLOCK : BOOLEAN;
+  
+{* HPHIL ***********************************************}
+{MOVED INTO SYSDEVS 4/6/84 SFB}
+const
+  le_configured = hex('80');
+  le_error      = hex('81');
+  le_timeout    = hex('82');
+  le_loopdown   = hex('84');
+  
+  lmaxdevices   = 7;
+  
+type
+  loopdvrop   = (datastarting,dataended,resetdevice,uninitdevice);
+                 {UNINIT ADDED 4/8/85 SFB}
+  loopdvrproc = procedure(op:loopdvrop);
+  
+  {HPHILOP DEFINED AS NEW TYPE 4/6/84 SFB}
+  HPHILOP      = (RAWSHIFTOP,NORMSHIFTOP,CHECKLOOPOP,CONFIGUREOP,LCOMMANDOP);
+  {5 PROCEDURES HOOKED AS TYPE HPHILCMDPROC 4/6/84 SFB}
+  HPHILCMDPROC = PROCEDURE(OP : HPHILOP);
+  
+  
+  descriprec = packed record    { DEVICE DESCRIBE RECORD }
+                 case boolean of
+                 true :(id       : byte;
+                        twosets  : boolean;
+                        abscoords: boolean;
+                        size16   : boolean;
+                        hasprompts:boolean;
+                      { reserved : 0..3;        {DELETED 3/25/85 SFB}
+                        ext_desc : boolean;     {3/27/85 SFB}
+                        security : boolean;     {3/26/85 SFB}
+                        numaxes  : 0..3;
+                        counts   : shortint;
+                        maxcountx: shortint;
+                        maxcounty: shortint;
+                        maxcountz: shortint;
+                        promptack: boolean;     {ADDED 3/15/85 SFB}
+                        nprompts : 0..7;
+                        proximity: boolean;     {ADDED 3/15/85 SFB}
+                        nbuttons : 0..7);
+                 false:(darray : array[1..11] of char);
+               end;
+  
+  devicerec = record
+                devstate : integer;
+                descrip : descriprec;
+                opsproc  : loopdvrproc;
+                dataproc : kbdhooktype;
+              end;
+  
+  loopdvrptr = ^loopdriverrec;
+  loopdriverrec = record
+                    lowid,highid,daddr : byte;
+                    opsproc  : loopdvrproc;
+                    dataproc : kbdhooktype;
+                    next     : loopdvrptr;
+                  end;
+  
+  LOOPCONTROLREC = RECORD                   {REDEFINED AS RECORD - 4/6/84 SFB}
+        rawmode : boolean;
+        loopdevices : array[1..lmaxdevices] of devicerec;
+        loopdevice : 1..lmaxdevices;
+        loopcmd    : byte;    { last loop command sent }
+        loopdata   : byte;    { data bye in / out }
+        looperror  : boolean; { error occured on last operation }
+        loopinconfig:boolean; { now doing reconfigure }
+        loopcmddone: boolean; { last sent command is done }
+        loopisok   : boolean; { loop is configured }
+        loopdevreading: boolean; { reading poll data }  { 3.0 BUG #39 3/17/84 }
+  END;
+  
+  CONST                         {NEW TO END OF HPHIL_COMM_REC TYPE 3/26/85 SFB}
+  
+  
+  {DRIVER TYPES}
+  NODRIVER   =  0;
+  ABSLOCATOR =  1;        {range 1..15 reserved for DGL}
+  
+  {CODETYPES FROM POLLBLOCK (OR OTHER HPHIL OPCODE)}
+  NOCODES       = 0;
+  ASCIICODES    = 1;
+  SET1CODES     = 2;
+  SET2CODES     = 3;
+  
+  TYPE
+  
+  HPHIL_COMM_REC_PTR_TYPE = ^hphil_comm_rec_type;  {3/25/85 SFB}
+  
+  HPHIL_COMM_REC_TYPE = RECORD CASE BOOLEAN OF              {3/25/85 SFB}
+   TRUE :
+         (dvr_type        : shortint;
+          dev_addr        : 0..7;
+          latch,                  {stop updating data after button press/event}
+          active,                 {capture data in ISR}
+          reading         : boolean;  {dvr_comm_rec busy, delay update from ISR}
+          devices         : byte; {bit/loopaddress that driver should service
+                                   put 0 where driver should NOT service device
+                                   with this dvr_comm_rec !}
+          update          : procedure(recptr : hphil_comm_rec_ptr_type);
+                                  {call update to flush delayed poll data update}
+          link            : hphil_comm_rec_ptr_type;  {next comm record}
+          extend          : integer; {for extensibility use as pointer/datarec}
+          
+          xloc,                   {HPHIL intrinsic data types from poll/command}
+          yloc,
+          zloc            : shortint;
+          codetype        : shortint;     {describes content of codes}
+          ncodes          : shortint;
+          codes           : packed array [1..16] of char 
+                               {extensible for variant} );
+   FALSE:
+         (barray          : array[0..53] of char);
+  END;
+
+var
+   
+  loopdriverlist : loopdvrptr;
+  LOOPCONTROL    : ^LOOPCONTROLREC;     {4/6/84 SFB}
+  HPHILCMDHOOK   : HPHILCMDPROC;        {4/6/84 SFB}
+  
+  HPHIL_DATA_LINK : hphil_comm_rec_ptr_type;  {3/13/85 SFB}
+
+{-----------------------------------------------------------------------------}
+PROCEDURE SYSDEV_INIT;
+{* BEEPER **********************************************}
+PROCEDURE BEEP;
+PROCEDURE BEEPER(FREQUENCY,DURATION:BYTE);
+{* RPG *************************************************}
+PROCEDURE SETRPGRATE(RATE : BYTE);
+{* KEYBOARD ********************************************}
+PROCEDURE KBDSETUP(CMD,VALUE:BYTE);
+PROCEDURE KBDIO(FP: FIBP; REQUEST: AMREQUESTTYPE;
+                ANYVAR BUFFER: WINDOW; BUFSIZE,POSITION: INTEGER);
+procedure lockedaction(a: action); 
+{* CRT *************************************************}
+PROCEDURE CRTIO(FP: FIBP; REQUEST: AMREQUESTTYPE;
+                ANYVAR BUFFER: WINDOW; BUFSIZE,POSITION: INTEGER);
+PROCEDURE DUMMYCRTLL(OP:CRTLLOPS; ANYVAR POSITION:INTEGER; C:CHAR);
+{* BATTERY *********************************************}
+PROCEDURE BATCOMMAND(CMD:BYTE; NUMDATA:INTEGER; B1, B2, B3, B4, B5: BYTE); 
+FUNCTION  BATBYTERECEIVED:BYTE;
+{* CLOCK ***********************************************}
+function  sysclock: integer;   {centiseconds from midnight} 
+procedure sysdate (var thedate: daterec); 
+procedure systime (var thetime: timerec); 
+procedure setsysdate ( thedate: daterec); 
+procedure setsystime ( thetime: timerec); 
+{* KEYBUFFER *******************************************}
+PROCEDURE KEYBUFOPS(OP:KOPTYPE; VAR C: CHAR);
+{* STATUSLINE ******************************************}
+PROCEDURE SETSTATUS(N:INTEGER; C:CHAR);
+FUNCTION  RUNLIGHT:CHAR;
+PROCEDURE SETRUNLIGHT(C:CHAR);
+
+
+end.
+
+

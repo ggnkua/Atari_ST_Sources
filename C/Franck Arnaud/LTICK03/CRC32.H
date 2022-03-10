@@ -1,0 +1,1 @@
+int crc32file(char *, unsigned long *);

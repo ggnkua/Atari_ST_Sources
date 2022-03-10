@@ -1,0 +1,239 @@
+The following program, timecode, is mainly meant for the programmer crowd.
+It lets you time a series of 68000 instructions (entered as short hex numbers)
+which of course should constitute valid (and sensible) code; the result is
+displayed as a number of clock ticks.
+
+The corresponding uuencoded binary and a manual page have been sent to
+the moderator of comp.binaries.atari.st.
+Compiled with the Lattice C compiler; I used a different startup.bin to
+obtain a smaller program (not included).
+
+For correspondence conceirning this program (bugs, questions etc.) try
+
+      L. J. M. de Wit
+      Nachtegaallaan 7
+      5731XP Mierlo
+      Holland
+      e-mail: ..!mcvax!philmds!leo
+              (or perhaps  ..!hp4nl!philmds!leo)
+
+------------------------- S t a r t s  h e r e ------------------------------
+/******************************************************************************
+ *                                                                            *
+ *    timecode.c version 1.0 of 27 August 1988   (C) L.J.M. de Wit 1988       *
+ *                                                                            *
+ * This software may be used and distributed freely if not used commercially  *
+ * and the originator (me) is mentioned.                                      *
+ *                                                                            *
+ ******************************************************************************
+ *
+ * NAME
+ *    timecode - time execution of MC68000 code
+ *
+ * SYNTAX
+ *    timecode [-repeat] <shorthex1> <shorthex2> ...
+ *
+ * DESCRIPTION
+ *    Timecode times the time needed to execute a series of MC68K instructions.
+ *    The time taken is expressed in clock ticks.
+ *    The repeat flag is optional; it is a number indicating how many times
+ *    the series will be repeated (default 100000) so that timing can be
+ *    accurate; a lower repeat count will fasten the execution but leads to
+ *    less accuracy.
+ *
+ *    One of the advantages of timecode is that timings can be calculated
+ *    online.
+ *
+ * RESTRICTIONS
+ *    1) Up to 32 codes can be timed at once. This is generally no objection,
+ *       since most of the time one times only one instruction at a time.
+ *    2) When using opcodes that read from or write to memory the pointers
+ *       used will have to be prepared correctly. A convenient way is to
+ *       time the instruction to load the address register, then time both
+ *       the address register load and the instruction that references
+ *       memory via that pointer. Subtract the first from the second to
+ *       obtain the actual number of ticks for the 'mem-ref' instruction.
+ *       This whole story applies to whatever code needs proper
+ *       initialization. A safe place for memory references is the screen
+ *       memory.
+ *    3) Take care when using branches and stuff like jsr, rts etc.
+ *       Your code should handle that one way or another.
+ *    4) All registers may be used except the stack pointer. SP may be
+ *       used if it restored also. The items currently on the stack must
+ *       be left undisturbed; if you need to access (SP), first lower SP,
+ *       and increment it afterwards.
+ */
+ 
+/*
+ *    DERIVATION OF TIMING FORMULA.
+ *
+ *    The formula used for the calculation of the number of ticks is
+ *    (using integer division):
+ *       ticks = (7791*total + (repeat / 2))/repeat - 32;
+ *    where
+ *       ticks : # of ticks one execution of the series takes
+ *       total : # of milliseconds the complete test takes
+ *       repeat: # of repetitions of the series
+ *
+ *    This has been derived as follows:
+ *       total # of effective ticks for the test =
+ *       (total - call) * eff * 8000 =
+ *       repeat * (ticks + extra)
+ *    where
+ *       call  : # of milliseconds lost by calling the test function
+ *               and saving registers. This is negligable.
+ *       eff   : a coefficient (max. 1) that indicates how many ticks of
+ *               the processor are really used - the others are lost in
+ *               interrupt handling. Measuring gave 0.9739 as value; if the
+ *               vbl semaphore was set it increased to 0.9863. The former
+ *               value has been used.
+ *       extra : # of ticks needed to handle each repetition.
+ *               For this program its value is 32.
+ *    The 8000 is in fact due to the processor's clock frequency (8Mhz);
+ *    a factor 1000 can be found in the number total, which is expressed
+ *    in milliseconds instead of seconds.
+ *    Filling in eff and extra and adding (repeat / 2) to the nominator
+ *    to achieve rounding of the integer division rather than truncating
+ *    yields the formula used.
+ */
+
+/* Because stdio and memory allocation were not needed, the module was
+ * linked with a different startup.bin that does not load unnecessary code.
+ * In this way the program size has decreased from 12666 to 3391.
+ */
+
+#include <osbind.h>
+#include <portab.h>
+
+#define MAXARGC 32                     /* max # of codes */
+#define DEF_REPEATS 100000             /* default # of repetitions */
+#define HZ_200 (*(ulong *)0x4ba)       /* current 200 Hz clock value */
+
+typedef unsigned long ulong;
+
+static ulong do_run(), mtime();
+static short hexnum();
+static void prdec();
+static void err_exit();
+
+int main(argc,argv)
+int argc;
+char **argv;
+{
+   ulong total,                        /* total time for test in millisec. */
+         repeat = DEF_REPEATS,         /* # of repetitions */
+         ticks;                        /* ticks per repetition for code */
+   int i;
+
+   i = 1;
+   if ((argc > 1) && (argv[1][0] == '-')) {
+      i++; repeat = atol(argv[1] + 1);
+   }
+   total = do_run(argc - i, argv + i,repeat);
+   ticks = (7791*total + (repeat / 2))/repeat - 32;
+   prdec(ticks); Cconws(" ticks\r\n");
+   Pterm0();
+}
+
+static ulong do_run(argc,argv,repeat)  /* do the test */
+int argc;                              /* # of codes */
+char **argv;                           /* argv contains codes as strings */
+long repeat;                           /* # of repetitions */
+{
+   int i;
+   ulong millitime;                    /* both clock and delta-time */
+   short code[MAXARGC + 10],           /* will contain function to be timed */
+         *cptr;                        /* pointer into code */
+
+   if (argc > MAXARGC) {
+      err_exit("too many codes",(char *)0);
+   }
+   cptr = code;
+   *cptr++ = 0x48e7;                   /* movem.l  d0-d7/a0-a6,-(sp) */
+   *cptr++ = 0xfffe;                   /* ** save regs */
+   *cptr++ = 0x2f2f;                   /* move.l   64(sp),-(sp) */
+   *cptr++ = 0x0040;                   /* ** push copy of repeat count */
+   for (i = 0; i < argc; i++) {        /* ** now enter all codes supplied */
+      *cptr++ = hexnum(argv[i]);
+   }
+   *cptr++ = 0x5397;                   /* subq.l   #1,(sp)   ** decr repeat */
+   *cptr++ = 0x66fc - 2 * argc;        /* bne.s    again  ** jump back */
+   *cptr++ = 0x588f;                   /* addq.l   #4,sp  ** pop repeat */
+   *cptr++ = 0x4cdf;                   /* movem.l  (sp)+,d0-d7/a0-a6 */
+   *cptr++ = 0x7fff;                   /* ** restore regs */
+   *cptr++ = 0x4e75;                   /* rts   ** return; timing done */
+   millitime = mtime();                /* save current time */
+   (*(void (*)())code)(repeat);        /* execute the code just build */
+   return mtime() - millitime;         /* return clock difference in msec */
+}
+
+static short hexnum(str)               /* return the value of str as hex num */
+char *str;
+{
+   short retval = 0;
+   short c;
+   char *s;
+   int i;
+
+   for (s = str, i = 0 ; *s != '\0'; i++) {
+      if (i == 4) {                    /* max is 4 hex digits */
+         err_exit("invalid hex number",str);
+      }
+      c = *s++;
+      if ((c > '9') && (c < 'A')) {
+         err_exit("invalid hex number",str);
+      }
+      if ((c >= 'a') && (c <= 'z')) {
+         c += 'A' - 'a';
+      }
+      if (c >= 'A') {
+         c -= 7;
+      }
+      c -= '0';
+      if ((c < 0) || (c > 15)) {
+         err_exit("invalid hex number",str);
+      }
+      retval = (retval << 4) + c;
+   }
+   return retval;
+}
+
+static void prdec(num)                 /* print a ulong in decimal */
+ulong num;
+{
+   if (num >= 10) {                    /* recursion is nice! */
+      prdec(num/10);                   /* print all but the last digit */
+   }
+   Cconout('0'+ (num % 10));           /* and the last one */
+}
+
+static ulong mtime()                   /* current clock time in millisec */
+{
+   ulong retval;
+   long ssp;
+
+   ssp = Super(0);                     /* reading the clock needs S mode */
+   retval = 5 * HZ_200;                /* * 5 to yield milliseconds */
+   Super(ssp);
+
+   return retval;
+}
+
+static void err_exit(str1,str2)        /* Exit after error, printing message */
+char *str1, *str2;
+{
+   char prbuf[80];
+
+   strcpy(prbuf,"timecode: ");
+   strcat(prbuf,str1);
+   if (str2 != (char *)0) {
+      strcat(prbuf,": ");
+      strcat(prbuf,str2);
+   }
+   strcat(prbuf,"\r\n");
+   Cconws(prbuf);                      /* Now print it */
+   Pterm(1);                           /* and stop with error status */
+}
+------------------------- E n d s      h e r e ------------------------------
+
+
