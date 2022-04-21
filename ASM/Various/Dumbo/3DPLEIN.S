@@ -3,7 +3,7 @@
 ; By DUMBO - XXeme siecle
 ;
 
-	OPT	p=68030
+*	OPT	p=68030
 	FOPT	id=2
 	OPT	x+
 	OUTPUT	"3DPLEIN.PRG"
@@ -13,9 +13,11 @@
 
 ; Essai de la routine d'affichage
 ; d'un polygone
-
+	clr.l	-(sp)
 	move.w	#$20,-(sp)		; Bah on passe en superviseur
 	trap	#1		; màme si áa sert Ö rien pour l'instant
+	addq.l	#6,sp
+	
 	addq.l	#2,sp
 	move.w	#3,-(sp)		; RÇcupäre adresse Çcran logik
 	trap	#14
@@ -61,8 +63,8 @@ caltasico_b1:
 	fmove.w	d1,fp0
 	fmul	fp1,fp0
 	fsincos	fp0,fp2:fp3
-	fmove	fp2,(a0)+		; Sinus
-	fmove	fp3,(a0)+		; Cosinus
+	fmove.l	fp2,(a0)+		; Sinus
+	fmove.l	fp3,(a0)+		; Cosinus
 	addq.w	#1,d1
 	dbra	d0,caltasico_b1
 

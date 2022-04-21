@@ -1,0 +1,22 @@
+	CLR.L	-(SP)
+	MOVE.W	#$20,-(SP)
+	TRAP	#1
+	ADDQ.L	#6,SP
+	
+	BSR	PRG
+	
+WAIT	CMP.B	#$39,$FFFFFC02.W
+	BNE	WAIT
+
+	MOVE.W	#$FFF,$FFFF8240.W
+		
+	CLR.L	-(SP)
+	MOVE.W	#$20,-(SP)
+	TRAP	#1
+	ADDQ.L	#6,SP
+	
+	CLR.W	-(SP)
+	TRAP	#1
+	
+	
+PRG	INCLUDE	D:\TOTF\BOOT.S

@@ -1,0 +1,79 @@
+/* Indices du fichier ressource TEST */
+
+#define SETTINGS         0   /* Formulaire/Dialogue */
+#define CLOSE            5   /* BOXCHAR dans l'arbre SETTINGS */
+#define HEAD             6   /* BOXTEXT dans l'arbre SETTINGS */
+#define UP               7   /* BOXCHAR dans l'arbre SETTINGS */
+#define VSBOX            8   /* BOX dans l'arbre SETTINGS */
+#define VSLIDER          9   /* BOX dans l'arbre SETTINGS */
+#define DOWN             10  /* BOXCHAR dans l'arbre SETTINGS */
+#define LEFT             11  /* BOXCHAR dans l'arbre SETTINGS */
+#define HSBOX            12  /* BOXTEXT dans l'arbre SETTINGS */
+#define RIGHT            13  /* BOXCHAR dans l'arbre SETTINGS */
+#define SLEDGE           14  /* BOX dans l'arbre SETTINGS */
+#define C2               16  /* BOXCHAR dans l'arbre SETTINGS */
+#define H2               17  /* BOXTEXT dans l'arbre SETTINGS */
+#define U2               18  /* BOXCHAR dans l'arbre SETTINGS */
+#define VB2              19  /* BOX dans l'arbre SETTINGS */
+#define VS2              20  /* BOX dans l'arbre SETTINGS */
+#define D2               21  /* BOXCHAR dans l'arbre SETTINGS */
+#define L2               22  /* BOXCHAR dans l'arbre SETTINGS */
+#define HB2              23  /* BOX dans l'arbre SETTINGS */
+#define HS2              24  /* BOX dans l'arbre SETTINGS */
+#define R2               25  /* BOXCHAR dans l'arbre SETTINGS */
+#define E2               26  /* BOX dans l'arbre SETTINGS */
+#define U3               27  /* BOXCHAR dans l'arbre SETTINGS */
+#define VB3              28  /* BOX dans l'arbre SETTINGS */
+#define VS3              29  /* BOX dans l'arbre SETTINGS */
+#define D3               31  /* BOXCHAR dans l'arbre SETTINGS */
+#define SESPVALID        32  /* BUTTON dans l'arbre SETTINGS */
+#define L3               34  /* BOXCHAR dans l'arbre SETTINGS */
+#define HB3              35  /* BOX dans l'arbre SETTINGS */
+#define HS3              36  /* BOX dans l'arbre SETTINGS */
+#define R3               37  /* BOXCHAR dans l'arbre SETTINGS */
+#define NUP              39  /* BOXCHAR dans l'arbre SETTINGS */
+#define NUM              40  /* TEXT dans l'arbre SETTINGS */
+#define NDOWN            41  /* BOXCHAR dans l'arbre SETTINGS */
+#define SPRDOWN          43  /* BOXCHAR dans l'arbre SETTINGS */
+#define SPRNUM           44  /* TEXT dans l'arbre SETTINGS */
+#define SPRUP            45  /* BOXCHAR dans l'arbre SETTINGS */
+#define SCANCEL          46  /* BUTTON dans l'arbre SETTINGS */
+#define SOK              47  /* BUTTON dans l'arbre SETTINGS */
+
+#define BOX              1   /* Formulaire/Dialogue */
+#define BONAME           3   /* FTEXT dans l'arbre BOX */
+#define BOTYPE           5   /* BOXTEXT dans l'arbre BOX */
+#define BOEXTEND         6   /* FTEXT dans l'arbre BOX */
+#define BOEXTFL          23  /* BUTTON dans l'arbre BOX */
+#define BOCTEXT          27  /* BOXTEXT dans l'arbre BOX */
+#define BOCHAR           28  /* FBOXTEXT dans l'arbre BOX */
+#define BOCFILL          29  /* BOXTEXT dans l'arbre BOX */
+#define BOMODE           30  /* BOXTEXT dans l'arbre BOX */
+#define BOMOBUT          31  /* BOXCHAR dans l'arbre BOX */
+#define BOCRAND          32  /* BOXTEXT dans l'arbre BOX */
+#define BOFILL           35  /* BOXTEXT dans l'arbre BOX */
+#define BORAND           36  /* BOXTEXT dans l'arbre BOX */
+#define BORABUT          37  /* BOXCHAR dans l'arbre BOX */
+#define BOHELP           38  /* BOXTEXT dans l'arbre BOX */
+#define BOCANCEL         39  /* BUTTON dans l'arbre BOX */
+#define BONEXT           40  /* BUTTON dans l'arbre BOX */
+#define BOOK             41  /* BUTTON dans l'arbre BOX */
+
+#define ALERT            2   /* Formulaire/Dialogue */
+#define ALNAME           3   /* FTEXT dans l'arbre ALERT */
+#define ALNONE           6   /* BUTTON dans l'arbre ALERT */
+#define ALPOINT          7   /* BUTTON dans l'arbre ALERT */
+#define ALQUESTI         8   /* BUTTON dans l'arbre ALERT */
+#define ALSTOPP          9   /* BUTTON dans l'arbre ALERT */
+#define ALNUM            10  /* FBOXTEXT dans l'arbre ALERT */
+#define ALZ1             13  /* FTEXT dans l'arbre ALERT */
+#define ALZ2             14  /* FTEXT dans l'arbre ALERT */
+#define ALZ3             15  /* FTEXT dans l'arbre ALERT */
+#define ALZ4             16  /* FTEXT dans l'arbre ALERT */
+#define ALZ5             17  /* FTEXT dans l'arbre ALERT */
+#define ALB1             24  /* FTEXT dans l'arbre ALERT */
+#define ALB2             25  /* FTEXT dans l'arbre ALERT */
+#define ALB3             26  /* FTEXT dans l'arbre ALERT */
+#define ALCANCEL         29  /* BUTTON dans l'arbre ALERT */
+#define ALNEXT           30  /* BUTTON dans l'arbre ALERT */
+#define ALOK             31  /* BUTTON dans l'arbre ALERT */

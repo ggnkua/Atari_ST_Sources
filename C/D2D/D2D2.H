@@ -1,0 +1,41 @@
+/* Indice du ressource pour D2D4 */
+
+#define PRINCIPAL 0   /* Formulaire/Dialogue */
+#define TITRE    3   /* BOXTEXT dans l'arbre PRINCIPAL */
+#define CHEMIN   4   /* BOXTEXT dans l'arbre PRINCIPAL */
+#define EX_DAC   6   /* BUTTON dans l'arbre PRINCIPAL */
+#define SDSP_DAC 7   /* BUTTON dans l'arbre PRINCIPAL */
+#define DMAP_DAC 8   /* BUTTON dans l'arbre PRINCIPAL */
+#define ADC_DAC  9   /* BUTTON dans l'arbre PRINCIPAL */
+#define EX_EDSP  11  /* BUTTON dans l'arbre PRINCIPAL */
+#define SDSP_EDSP 12  /* BUTTON dans l'arbre PRINCIPAL */
+#define DMAP_EDSP 13  /* BUTTON dans l'arbre PRINCIPAL */
+#define ADC_EDSP 14  /* BUTTON dans l'arbre PRINCIPAL */
+#define EX_DMAR  16  /* BUTTON dans l'arbre PRINCIPAL */
+#define SDSP_DMAR 17  /* BUTTON dans l'arbre PRINCIPAL */
+#define DMAP_DMAR 18  /* BUTTON dans l'arbre PRINCIPAL */
+#define ADC_DMAR 19  /* BUTTON dans l'arbre PRINCIPAL */
+#define EX_SX    21  /* BUTTON dans l'arbre PRINCIPAL */
+#define SDSP_SX  22  /* BUTTON dans l'arbre PRINCIPAL */
+#define DMAP_SX  23  /* BUTTON dans l'arbre PRINCIPAL */
+#define ADC_SX   24  /* BUTTON dans l'arbre PRINCIPAL */
+#define GAIN_IN_MOINS 26  /* BUTTON dans l'arbre PRINCIPAL */
+#define GAIN_IN_PLUS 27  /* BUTTON dans l'arbre PRINCIPAL */
+#define VAL_GAIN_IN 28  /* BOXTEXT dans l'arbre PRINCIPAL */
+#define TXT_GAIN_IN 29  /* STRING dans l'arbre PRINCIPAL */
+#define TXT_GAIN_OUT 30  /* STRING dans l'arbre PRINCIPAL */
+#define GAIN_OUT_MOINS 31  /* BUTTON dans l'arbre PRINCIPAL */
+#define GAIN_OUT_PLUS 32  /* BUTTON dans l'arbre PRINCIPAL */
+#define VAL_GAIN_OUT 33  /* BOXTEXT dans l'arbre PRINCIPAL */
+#define KHZ12    35  /* BUTTON dans l'arbre PRINCIPAL */
+#define KHZ25    36  /* BUTTON dans l'arbre PRINCIPAL */
+#define KHZ33    37  /* BUTTON dans l'arbre PRINCIPAL */
+#define KHZ50    38  /* BUTTON dans l'arbre PRINCIPAL */
+#define ENREGISTRER 39  /* BUTTON dans l'arbre PRINCIPAL */
+#define REJOUER  40  /* BUTTON dans l'arbre PRINCIPAL */
+#define STOP     41  /* BUTTON dans l'arbre PRINCIPAL */
+#define FIN      42  /* BUTTON dans l'arbre PRINCIPAL */
+#define TEXT_CHEMIN 43  /* TEXT dans l'arbre PRINCIPAL */
+#define ENTREE_EXTERNE 44  /* TEXT dans l'arbre PRINCIPAL */
+#define SORTIE_MATRICE 58  /* BUTTON dans l'arbre PRINCIPAL */
+#define SORTIE_ADC 59  /* BUTTON dans l'arbre PRINCIPAL */

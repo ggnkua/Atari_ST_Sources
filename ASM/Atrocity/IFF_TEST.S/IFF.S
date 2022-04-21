@@ -1,0 +1,4184 @@
+ TEXT 
+Begin:
+L0000:LEA       L0000,A5
+      SUBA.L    #$100,A5
+      TST.L     36(A5)
+      BNE.S     L0002 
+      CLR.W     L0243 
+      LEA       L0263,A7
+      MOVE.L    L025C,-(A7) 
+      MOVE.W    #$48,-(A7) 	;MALLOC 
+      TRAP      #1
+      ADDQ.W    #6,A7 
+      TST.L     D0
+L0001:BEQ.S     L0001 
+      MOVEA.L   D0,A7 
+      ADDA.L    L025C,A7
+      BRA.S     L0003 
+L0002:MOVE.L    12(A5),D0 
+      ADD.L     20(A5),D0 
+      ADD.L     28(A5),D0 
+      ADD.L     L025C,D0
+      ADDI.L    #$100,D0
+      MOVE.L    D0,D1 
+      ADD.L     A5,D1 
+      AND.L     #-2,D1
+      MOVEA.L   D1,A7 
+      MOVE.L    D0,-(A7)
+      MOVE.L    A5,-(A7)
+      CLR.W     -(A7) 
+      MOVE.W    #$4A,-(A7) 	;MSHRINK
+      TRAP      #1
+      ADDA.L    #$C,A7
+L0003:MOVE.L    A5,L028A
+      MOVEA.L   L028A,A0
+      MOVE.L    44(A0),-(A7)
+      PEA       128(A0) 
+      JSR       L0188 
+      ADDQ.L    #8,A7 
+      MOVE.L    L0276,-(A7) 
+      MOVE.L    L026B,-(A7) 
+      MOVE.W    L02AA,-(A7) 
+      JSR       L0176 
+      ADDQ.L    #2,A7 
+      MOVE.W    #0,-(A7)
+      JSR       L01C6 
+L0004:MOVEM.L   A0-A2/D7/D0,-(A7) 
+      CMPI.W    #1,L0246
+      BEQ.S     L0006 
+      TST.W     L0245 
+      BNE.S     L0005 
+      MOVE.W    L0246,L0245 
+L0005:MOVE.W    L0244,-(A7) 
+      MOVE.W    L0245,-(A7) 
+      JSR       L0116 
+      ADDQ.W    #4,A7 
+      MOVE.W    D0,-(A7)
+      JSR       L010E 
+      ADDQ.W    #2,A7 
+      MOVEA.L   L026F,A1
+      LEA       12(A0),A0 
+      JSR       L0054 
+      SUBQ.W    #1,L0245
+      MOVE.L    L026F,-(A7) 
+      MOVE.L    L0299,-(A7) 
+      MOVE.W    #$C8,-(A7)
+      JSR       L0155 
+      LEA       10(A7),A7 
+L0006:MOVEM.L   (A7)+,A0-A2/D7/D0 
+      RTS 
+L0007:MOVEM.L   A0-A2/D7/D0,-(A7) 
+      CMPI.W    #1,L0246
+      BEQ.S     L0009 
+      MOVE.W    L0244,-(A7) 
+      MOVE.W    L0245,-(A7) 
+      ADDQ.W    #1,(A7) 
+      JSR       L0116 
+      ADDQ.W    #4,A7 
+      MOVE.W    D0,-(A7)
+      JSR       L010E 
+      ADDQ.W    #2,A7 
+      MOVEA.L   L026F,A1
+      LEA       12(A0),A0 
+      JSR       L0054 
+      ADDQ.W    #1,L0245
+      MOVE.W    L0245,D0
+      CMP.W     L0246,D0
+      BNE.S     L0008 
+      CLR.W     L0245 
+L0008:MOVE.L    L026F,-(A7) 
+      MOVE.L    L0299,-(A7) 
+      MOVE.W    #$C8,-(A7)
+      JSR       L0155 
+      LEA       10(A7),A7 
+L0009:MOVEM.L   (A7)+,A0-A2/D7/D0 
+      RTS 
+      BRA.S     L0009 
+L000A:MOVEM.L   A0-A1/D6-D7,-(A7) 
+      CMPI.W    #1,L0246
+      BEQ       L000D 
+      CMP.W     L0246,D0
+      BGT.S     L000C 
+      TST.W     D0
+      BLE.S     L000C 
+      MOVE.W    D0,D6 
+      CLR.W     L0245 
+      MOVE.W    L0244,-(A7) 
+      MOVE.W    L0245,-(A7) 
+      JSR       L0116 
+      ADDQ.W    #4,A7 
+      MOVE.W    D0,-(A7)
+      JSR       L010E 
+      ADDQ.W    #2,A7 
+      JSR       L0063 
+      SUBQ.W    #1,D6 
+      BEQ.S     L000C 
+      SUBQ.W    #1,D6 
+L000B:ADDQ.W    #1,L0245
+      MOVE.W    L0244,-(A7) 
+      MOVE.W    L0245,-(A7) 
+      JSR       L0116 
+      ADDQ.W    #4,A7 
+      MOVE.W    D0,-(A7)
+      JSR       L010E 
+      ADDQ.W    #2,A7 
+      MOVEA.L   L026F,A1
+      LEA       12(A0),A0 
+      JSR       L0054 
+      DBF       D6,L000B
+L000C:MOVE.L    L026F,-(A7) 
+      MOVE.L    L0299,-(A7) 
+      MOVE.W    #$C8,-(A7)
+      JSR       L0155 
+      LEA       10(A7),A7 
+L000D:MOVEM.L   (A7)+,A0-A1/D6-D7 
+      RTS 
+L000E:MOVEM.L   A0-A1/D6-D7/D0,-(A7)
+      CMPI.W    #1,L0246
+      BEQ       L0024 
+      JSR       L0032 
+      TST.B     D0
+      BEQ.S     L000F 
+      MOVE.W    L0246,D0
+      JSR       L000A 
+      MOVEQ     #-1,D6
+      MOVE.W    L0246,L0245 
+      BRA.S     L0010 
+L000F:CLR.W     L0245 
+      MOVE.W    L0244,-(A7) 
+      MOVE.W    L0245,-(A7) 
+      JSR       L0116 
+      ADDQ.W    #4,A7 
+      MOVE.W    D0,-(A7)
+      JSR       L010E 
+      ADDQ.W    #2,A7 
+      JSR       L0063 
+      MOVEQ     #1,D6 
+L0010:MOVE.L    L026F,-(A7) 
+      MOVE.L    L0299,-(A7) 
+      MOVE.W    #$C8,-(A7)
+      JSR       L0155 
+      LEA       10(A7),A7 
+      JSR       L0039 
+      JSR       L003A 
+      SF        L0293 
+L0011:TST.B     L0293 
+      BEQ.S     L0011 
+      MOVE.L    L0299,-(A7) 
+      MOVE.L    L026F,-(A7) 
+      MOVE.W    #$C8,-(A7)
+      JSR       L0155 
+      LEA       10(A7),A7 
+      MOVE.W    L0272,D7
+      SUBQ.W    #1,D7 
+      BEQ.S     L0015 
+      SUBQ.W    #1,D7 
+L0012:SF        L0293 
+L0013:MOVEM.L   A0-A2/D1-D3,-(A7) 
+      MOVE.W    #$FF,-(A7)
+      MOVE.W    #6,-(A7) 	;CRAWIO 
+      TRAP      #1
+      ADDQ.L    #4,A7 
+      MOVEM.L   (A7)+,A0-A2/D1-D3 
+      TST.L     D0
+      BEQ.S     L0014 
+      BSR       L001B 
+      TST.B     D0
+      BNE       L0021 
+L0014:TST.B     L0293 
+      BEQ.S     L0013 
+      DBF       D7,L0012
+L0015:MOVEM.L   A0-A2/D1-D3,-(A7) 
+      MOVE.W    #$FF,-(A7)
+      MOVE.W    #6,-(A7) 	;CRAWIO 
+      TRAP      #1
+      ADDQ.L    #4,A7 
+      MOVEM.L   (A7)+,A0-A2/D1-D3 
+      TST.L     D0
+      BEQ.S     L0016 
+      BSR       L001B 
+      TST.B     D0
+      BNE       L0021 
+L0016:ADD.W     D6,L0245
+      TST.W     D6
+      BPL.S     L0018 
+      TST.W     L0245 
+      BGT.S     L001A 
+      TST.B     L026C 
+      BNE.S     L0017 
+      ADDQ.W    #1,L0245
+      BRA       L0021 
+L0017:MOVE.W    L0246,L0245 
+L0018:MOVE.W    L0246,D0
+      CMP.W     L0245,D0
+      BGE.S     L001A 
+      TST.B     L026C 
+      BNE.S     L0019 
+      SUBQ.W    #1,L0245
+      BRA       L0021 
+L0019:MOVE.W    #1,L0245
+L001A:MOVE.W    L0244,-(A7) 
+      MOVE.W    L0245,-(A7) 
+      JSR       L0116 
+      ADDQ.W    #4,A7 
+      MOVE.W    D0,-(A7)
+      JSR       L010E 
+      ADDQ.W    #2,A7 
+      MOVEA.L   L026F,A1
+      LEA       12(A0),A0 
+      JSR       L0054 
+      JSR       L003A 
+      SF        L0293 
+      BRA       L0011 
+L001B:CMPI.B    #$72,D0 
+      BNE.S     L001D 
+      TST.W     D6
+      BMI.S     L001C 
+      MOVEQ     #-1,D6
+      ADDQ.W    #1,L0245
+      SF        D0
+      RTS 
+L001C:MOVEQ     #1,D6 
+      SUBQ.W    #1,L0245
+      SF        D0
+      RTS 
+L001D:SWAP      D0
+      CMPI.B    #$4D,D0 
+      BNE.S     L001F 
+      MOVE.W    L0272,D0
+      SUBQ.W    #1,D0 
+      BEQ.S     L001E 
+      MOVE.W    D0,L0272
+L001E:SF        D0
+      RTS 
+L001F:CMPI.B    #$4B,D0 
+      BNE.S     L0020 
+      ADDQ.W    #1,L0272
+      SF        D0
+      RTS 
+L0020:ST        D0
+      RTS 
+L0021:JSR       L003B 
+      TST.W     D6
+      BPL.S     L0022 
+      SUBQ.W    #1,L0245
+      BGT.S     L0022 
+      MOVE.W    L0246,L0245 
+L0022:MOVE.W    L0246,D0
+      CMP.W     L0245,D0
+      BNE.S     L0023 
+      CLR.W     L0245 
+      MOVE.W    L0244,-(A7) 
+      MOVE.W    L0245,-(A7) 
+      JSR       L0116 
+      ADDQ.W    #4,A7 
+L0023:JSR       L0036 
+L0024:MOVEM.L   (A7)+,A0-A1/D6-D7/D0
+      RTS 
+L0025:MOVEM.L   A0-A1/D6-D7/D0,-(A7)
+      CMPI.W    #1,L0246
+      BEQ       L0031 
+      JSR       L0032 
+      CLR.W     L0245 
+      MOVE.W    L0244,-(A7) 
+      MOVE.W    L0245,-(A7) 
+      JSR       L0116 
+      ADDQ.W    #4,A7 
+      MOVE.W    D0,-(A7)
+      JSR       L010E 
+      ADDQ.W    #2,A7 
+      JSR       L0063 
+      MOVE.L    L026F,-(A7) 
+      MOVE.L    L0299,-(A7) 
+      MOVE.W    #$C8,-(A7)
+      JSR       L0155 
+      LEA       10(A7),A7 
+      MOVEQ     #1,D6 
+      JSR       L0039 
+      JSR       L003A 
+      SF        L0293 
+L0026:TST.B     L0293 
+      BEQ.S     L0026 
+      MOVE.L    L0299,-(A7) 
+      MOVE.L    L026F,-(A7) 
+      MOVE.W    #$C8,-(A7)
+      JSR       L0155 
+      LEA       10(A7),A7 
+      MOVE.W    L0272,D7
+      SUBQ.W    #1,D7 
+      BEQ.S     L0029 
+      SUBQ.W    #1,D7 
+L0027:SF        L0293 
+L0028:MOVEM.L   A0-A2/D1-D3,-(A7) 
+      MOVE.W    #$FF,-(A7)
+      MOVE.W    #6,-(A7) 	;CRAWIO 
+      TRAP      #1
+      ADDQ.L    #4,A7 
+      MOVEM.L   (A7)+,A0-A2/D1-D3 
+      TST.L     D0
+      BNE       L002C 
+      TST.B     L0293 
+      BEQ.S     L0028 
+      DBF       D7,L0027
+L0029:MOVEM.L   A0-A2/D1-D3,-(A7) 
+      MOVE.W    #$FF,-(A7)
+      MOVE.W    #6,-(A7) 	;CRAWIO 
+      TRAP      #1
+      ADDQ.L    #4,A7 
+      MOVEM.L   (A7)+,A0-A2/D1-D3 
+      TST.L     D0
+      BNE       L002C 
+      ADD.W     D6,L0245
+      TST.W     D6
+      BMI.S     L002A 
+      MOVE.W    L0246,D0
+      SUBQ.W    #1,D0 
+      CMP.W     L0245,D0
+      BGE.S     L002B 
+      MOVEQ     #-1,D6
+      MOVE.W    L0246,L0245 
+      SUBQ.W    #1,L0245
+      BRA.S     L002B 
+L002A:CMPI.W    #1,L0245
+      BGE.S     L002B 
+      MOVE.W    #1,L0245
+      MOVEQ     #1,D6 
+L002B:MOVE.W    L0244,-(A7) 
+      MOVE.W    L0245,-(A7) 
+      JSR       L0116 
+      ADDQ.W    #4,A7 
+      MOVE.W    D0,-(A7)
+      JSR       L010E 
+      ADDQ.W    #2,A7 
+      MOVEA.L   L026F,A1
+      LEA       12(A0),A0 
+      JSR       L0054 
+      JSR       L003A 
+      SF        L0293 
+      BRA       L0026 
+L002C:SWAP      D0
+      CMPI.B    #$4D,D0 
+      BNE.S     L002D 
+      MOVE.W    L0272,D0
+      SUBQ.W    #1,D0 
+      BEQ       L0026 
+      MOVE.W    D0,L0272
+      BRA       L0029 
+L002D:CMPI.W    #$4B,D0 
+      BNE.S     L002E 
+      ADDQ.W    #1,L0272
+      BRA       L0029 
+L002E:TST.W     D6
+      BPL.S     L002F 
+      SUBQ.W    #1,L0245
+L002F:JSR       L003B 
+      MOVE.W    L0246,D0
+      CMP.W     L0245,D0
+      BNE.S     L0030 
+      CLR.W     L0245 
+      MOVE.W    L0244,-(A7) 
+      MOVE.W    L0245,-(A7) 
+      JSR       L0116 
+      ADDQ.W    #4,A7 
+L0030:JSR       L0036 
+L0031:MOVEM.L   (A7)+,A0-A1/D6-D7/D0
+      RTS 
+L0032:MOVEM.L   A0-A1/D0-D1,-(A7) 
+      MOVE      SR,-(A7)
+      ORI.W     #$2BC,SR
+      ST        L0266 
+      MOVEA.L   $456.W,A0 
+      MOVEQ     #7,D0 
+L0033:MOVE.L    (A0)+,D1
+      BEQ.S     L0034 
+      DBF       D0,L0033
+      BRA.S     L0035 
+L0034:SUBQ.L    #4,A0 
+      LEA       L0038,A1
+      MOVE.L    A1,(A0) 
+      MOVE.L    A0,L0285
+L0035:MOVE      (A7)+,SR
+      MOVEM.L   (A7)+,A0-A1/D0-D1 
+      RTS 
+L0036:MOVEM.L   A0-A1/D0,-(A7)
+      MOVE      SR,-(A7)
+      ORI.W     #$2BC,SR
+      TST.B     L0266 
+      BEQ.S     L0037 
+      MOVEA.L   L0285,A0
+      CLR.L     (A0)
+      SF        L0266 
+L0037:MOVE      (A7)+,SR
+      MOVEM.L   (A7)+,A0-A1/D0
+      RTS 
+L0038:ST        L0293 
+      RTS 
+L0039:MOVE.L    L0299,L0274 
+      RTS 
+L003A:MOVEM.L   A0-A2/D0-D2,-(A7) 
+      MOVE.L    L026F,D0
+      MOVE.L    L0299,L026F 
+      MOVE.L    D0,L0299
+      MOVE.L    D0,D1 
+      MOVE.L    D0,$44E.W 
+      LSR.L     #8,D0 
+      MOVEA.L   #-$7DFF,A0
+      LEA       2(A0),A1
+      SWAP      D1
+      MOVE.B    D1,(A0) 
+      MOVE.B    D0,(A1) 
+      MOVEM.L   (A7)+,A0-A2/D0-D2 
+      RTS 
+L003B:MOVE.L    D0,-(A7)
+      MOVE.L    L0299,D0
+      CMP.L     L0274,D0
+      BEQ.S     L003C 
+      JSR       L003A 
+L003C:MOVE.L    (A7)+,D0
+      RTS 
+L003D:MOVEM.L   A0-A3/D5-D7/D1-D3,-(A7) 
+      MOVE.W    D0,L0249
+      MOVE.W    L0244,-(A7) 
+      JSR       L0111 
+      ADDQ.L    #2,A7 
+      TST.W     D0
+      BPL.S     L003E 
+      MOVE.W    L0244,-(A7) 
+      MOVE.W    #1,-(A7)
+      MOVE.L    L027A,-(A7) 
+      JSR       L0132 
+      ADDQ.W    #8,A7 
+      NOP 
+L003E:MOVEA.L   L0283,A0
+      MOVE.L    A0,-(A7)
+      MOVE.L    #$20,-(A7)
+      MOVE.W    L0249,-(A7) 
+      MOVE.W    #$3F,-(A7) 	;FREAD
+      TRAP      #1
+      ADDA.W    #$C,A7
+      MOVEA.L   L0283,A0
+      MOVE.W    8(A0),L0272 
+      MOVE.W    10(A0),D5 
+      MOVE.W    12(A0),D0 
+      CMPI.W    #2,D0 
+      BNE.S     L003F 
+      MOVEQ     #-1,D0
+L003F:MOVE.B    D0,L026C
+      SF        L029A 
+      SF        L0296 
+      MOVEM.L   D5,-(A7)
+      JSR       L006E 
+      MOVEM.L   (A7)+,D5
+      TST.W     D0
+      BNE       L0046 
+      MOVEQ     #7,D1 
+      LEA       L0275,A0
+      LEA       L0282,A1
+L0040:MOVE.L    (A0)+,(A1)+ 
+      DBF       D1,L0040
+      MOVEM.L   D5,-(A7)
+      JSR       L00DB 
+      MOVEM.L   (A7)+,D5
+      MOVE.W    L0244,-(A7) 
+      CLR.W     -(A7) 
+      MOVEA.L   L0283,A1
+      MOVE.L    4(A1),-(A7) 
+      ADDQ.L    #8,(A7) 
+      JSR       L0119 
+      ADDQ.W    #8,A7 
+      MOVE.L    4(A1),D7
+      ADDQ.L    #8,D7 
+      LSR.L     #1,D7 
+      SUBQ.L    #1,D7 
+L0041:MOVE.W    (A1)+,(A0)+ 
+      DBF       D7,L0041
+      MOVEQ     #1,D6 
+L0042:JSR       L0047 
+      CMP.W     L0246,D6
+      BLT.S     L0043 
+      MOVE.W    L0244,-(A7) 
+      MOVE.W    D6,-(A7)
+      JSR       L0137 
+      LEA       4(A7),A7
+L0043:MOVE.W    L0244,-(A7) 
+      MOVE.W    D6,-(A7)
+      MOVEA.L   L0283,A1
+      MOVE.L    4(A1),-(A7) 
+      ADDQ.L    #8,(A7) 
+      JSR       L0119 
+      ADDQ.W    #8,A7 
+      MOVE.L    4(A1),D7
+      ADDQ.L    #8,D7 
+      LSR.L     #1,D7 
+      SUBQ.L    #1,D7 
+L0044:MOVE.W    (A1)+,(A0)+ 
+      DBF       D7,L0044
+      ADDQ.W    #1,D6 
+      CMP.W     D6,D5 
+      BGE.S     L0042 
+      CMP.W     L0246,D5
+      BLE.S     L0045 
+      MOVE.W    D5,L0246
+L0045:CLR.W     L0245 
+      MOVE.W    L0244,-(A7) 
+      MOVE.W    L0245,-(A7) 
+      JSR       L0116 
+      ADDQ.W    #4,A7 
+      MOVE.W    D0,-(A7)
+      JSR       L010E 
+      ADDQ.W    #2,A7 
+      JSR       L0063 
+      MOVE.L    L026F,-(A7) 
+      MOVE.L    L0299,-(A7) 
+      MOVE.W    #$C8,-(A7)
+      JSR       L0155 
+      LEA       10(A7),A7 
+L0046:MOVEM.L   (A7)+,A0-A3/D5-D7/D1-D3 
+      RTS 
+L0047:MOVEM.L   A0-A2/D0-D3,-(A7) 
+      MOVEA.L   L0283,A0
+      MOVE.L    A0,-(A7)
+      MOVE.L    #8,-(A7)
+      MOVE.W    L0249,-(A7) 
+      MOVE.W    #$3F,-(A7) 	;FREAD
+      TRAP      #1
+      ADDA.W    #$C,A7
+      MOVEA.L   L0283,A0
+      ADDQ.W    #8,A0 
+      MOVE.L    A0,-(A7)
+      MOVE.L    -4(A0),-(A7)
+      MOVE.W    L0249,-(A7) 
+      MOVE.W    #$3F,-(A7) 	;FREAD
+      TRAP      #1
+      ADDA.W    #$C,A7
+      MOVEM.L   (A7)+,A0-A2/D0-D3 
+      RTS 
+      MOVEM.L   A0-A1/D5-D7/D0,-(A7)
+      CMPI.W    #1,L0246
+      BEQ       L004D 
+      MOVE.L    L026F,-(A7) 
+      MOVE.L    L0299,-(A7) 
+      MOVE.W    #$C8,-(A7)
+      JSR       L0155 
+      LEA       10(A7),A7 
+      JSR       L0032 
+      JSR       L0039 
+      JSR       L003A 
+      SF        L0293 
+      MOVE.W    D0,D6 
+      BPL.S     L0048 
+      NEG.W     D6
+      BRA       L004E 
+L0048:TST.B     L0293 
+      BEQ.S     L0048 
+      MOVE.L    L0299,-(A7) 
+      MOVE.L    L026F,-(A7) 
+      MOVE.W    #$C8,-(A7)
+      JSR       L0155 
+      LEA       10(A7),A7 
+      DBF       D6,L0049
+      BRA.S     L004B 
+L0049:MOVE.W    #2,-(A7)
+      MOVE.W    #1,-(A7) 	;BCONSTAT 
+      TRAP      #$D 
+      ADDQ.L    #4,A7 
+      TST.W     D0
+      BNE.S     L004B 
+      ADDQ.W    #1,L0245
+      MOVE.W    L0246,D0
+      CMP.W     L0245,D0
+      BGE.S     L004A 
+      MOVE.W    #1,L0245
+L004A:MOVE.W    L0244,-(A7) 
+      MOVE.W    L0245,-(A7) 
+      JSR       L0116 
+      ADDQ.W    #4,A7 
+      MOVE.W    D0,-(A7)
+      JSR       L010E 
+      ADDQ.W    #2,A7 
+      MOVEA.L   L026F,A1
+      LEA       12(A0),A0 
+      JSR       L0054 
+      JSR       L003A 
+      SF        L0293 
+      BRA       L0048 
+L004B:JSR       L003B 
+      MOVE.W    L0246,D0
+      CMP.W     L0245,D0
+      BNE.S     L004C 
+      CLR.W     L0245 
+L004C:JSR       L0036 
+L004D:MOVEM.L   (A7)+,A0-A1/D5-D7/D0
+      RTS 
+L004E:TST.B     L0293 
+      BEQ.S     L004E 
+      MOVE.L    L0299,-(A7) 
+      MOVE.L    L026F,-(A7) 
+      MOVE.W    #$C8,-(A7)
+      JSR       L0155 
+      LEA       10(A7),A7 
+      MOVE.W    #2,-(A7)
+      MOVE.W    #1,-(A7) 	;BCONSTAT 
+      TRAP      #$D 
+      ADDQ.L    #4,A7 
+      TST.W     D0
+      BNE.S     L0051 
+      DBF       D6,L004F
+      BRA.S     L0051 
+L004F:TST.W     L0245 
+      BNE.S     L0050 
+      MOVE.W    L0246,L0245 
+L0050:MOVE.W    L0244,-(A7) 
+      MOVE.W    L0245,-(A7) 
+      JSR       L0116 
+      ADDQ.W    #4,A7 
+      MOVE.W    D0,-(A7)
+      JSR       L010E 
+      ADDQ.W    #2,A7 
+      MOVEA.L   L026F,A1
+      LEA       12(A0),A0 
+      JSR       L0054 
+      JSR       L003A 
+      SF        L0293 
+      SUBQ.W    #1,L0245
+      BRA       L004E 
+L0051:JSR       L003B 
+      MOVE.W    L0246,D0
+      CMP.W     L0245,D0
+      BNE.S     L0052 
+      CLR.W     L0245 
+L0052:BRA       L004C 
+L0053:MOVEM.L   A0-A6/D0-D7,-(A7) 
+      MOVE.W    L0244,-(A7) 
+      JSR       L0147 
+      ADDQ.W    #2,A7 
+      CLR.W     L0245 
+      MOVE.W    #1,L0246
+      MOVEM.L   (A7)+,A0-A6/D0-D7 
+      RTS 
+L0054:MOVEM.L   A0-A4/D7/D0-D1,-(A7)
+      MOVEQ     #3,D7 
+L0055:MOVEA.L   A1,A2 
+      ADDQ.W    #8,A0 
+      MOVE.L    -4(A0),D0 
+      BEQ.S     L005E 
+      ADD.L     A0,D0 
+      MOVEA.L   D0,A4 
+      MOVEA.L   A0,A3 
+      ADDA.W    (A0)+,A3
+L0056:CMPA.L    A3,A4 
+      BLE.S     L005D 
+      MOVEQ     #0,D0 
+      MOVE.B    (A0)+,D0
+      BEQ.S     L005C 
+      BMI.S     L0059 
+      SUBQ.W    #1,D0 
+      BNE.S     L0057 
+      MOVE.W    (A3)+,D0
+L0057:MOVE.W    (A3)+,D1
+L0058:EOR.W     D1,(A2) 
+      LEA       160(A2),A2
+      DBF       D0,L0058
+      BRA.S     L0056 
+L0059:NEG.B     D0
+      SUBQ.W    #1,D0 
+      BNE.S     L005A 
+      MOVE.W    (A3)+,D0
+L005A:SUBQ.W    #1,D0 
+L005B:MOVE.W    (A3)+,D1
+      EOR.W     D1,(A2) 
+      LEA       160(A2),A2
+      DBF       D0,L005B
+      BRA.S     L0056 
+L005C:MOVE.W    (A3)+,D0
+      LSL.W     #2,D0 
+      ADDA.W    D0,A2 
+      BRA.S     L0056 
+L005D:MOVEA.L   A3,A0 
+L005E:ADDQ.W    #2,A1 
+      DBF       D7,L0055
+      MOVEM.L   (A7)+,A0-A4/D7/D0-D1
+      RTS 
+      MOVEM.L   A0-A3/D1-D6,-(A7) 
+      MOVEA.L   44(A7),A3 
+      MOVE.W    48(A7),D6 
+      CLR.W     -(A7) 
+      MOVE.L    A3,-(A7)
+      MOVE.W    #$4E,-(A7) 	;FSFIRST
+      TRAP      #1
+      ADDQ.L    #8,A7 
+      TST.W     D0
+      BMI.S     L0062 
+      MOVEA.L   L028C,A0
+      MOVE.L    26(A0),D5 
+      TST.W     D6
+      BPL.S     L005F 
+      MOVE.L    D5,-(A7)
+      JSR       L00FA 
+      ADDQ.L    #4,A7 
+      MOVE.W    D0,D6 
+      BMI.S     L0061 
+L005F:CLR.W     -(A7) 
+      MOVE.L    A3,-(A7)
+      MOVE.W    #$3D,-(A7) 	;FOPEN
+      TRAP      #1
+      ADDQ.W    #8,A7 
+      MOVE.W    D0,D4 
+      BMI.S     L0062 
+      MOVE.W    D6,-(A7)
+      JSR       L010E 
+      ADDQ.L    #2,A7 
+      MOVE.L    A0,-(A7)
+      MOVE.L    D5,-(A7)
+      MOVE.W    D4,-(A7)
+      MOVE.W    #$3F,-(A7) 	;FREAD
+      TRAP      #1
+      ADDA.W    #$C,A7
+      TST.L     D0
+      BMI.S     L0062 
+      MOVE.W    D4,-(A7)
+      MOVE.W    #$3E,-(A7) 	;FCLOSE 
+      TRAP      #1
+      ADDQ.L    #4,A7 
+      MOVEQ     #0,D0 
+      MOVE.W    D6,D0 
+L0060:MOVEM.L   (A7)+,A0-A3/D1-D6 
+      RTS 
+L0061:MOVEQ     #-1,D0
+      BRA.S     L0060 
+L0062:MOVEQ     #-2,D0
+      BRA.S     L0060 
+L0063:MOVEM.L   A0-A1/D1,-(A7)
+      MOVE.W    #-1,L026A 
+      SF        L0296 
+      ST        L029A 
+      ST        L0248 
+      MOVE.L    A0,L029B
+      JSR       L006E 
+      TST.W     D0
+      BNE.S     L0065 
+      MOVEQ     #7,D1 
+      LEA       L0275,A0
+      LEA       L0282,A1
+L0064:MOVE.L    (A0)+,(A1)+ 
+      DBF       D1,L0064
+L0065:MOVEM.L   (A7)+,A0-A1/D1
+      RTS 
+L0066:MOVEM.L   A0-A2/D1-D3,-(A7) 
+      MOVE.W    #-1,L026A 
+      SF        L0248 
+      SF        L0296 
+      SF        L029A 
+      CLR.W     -(A7) 
+      MOVE.L    A0,-(A7)
+      MOVE.W    #$3D,-(A7) 	;FOPEN
+      TRAP      #1
+      ADDQ.W    #8,A7 
+      TST.W     D0
+      BPL.S     L0067 
+      MOVEQ     #1,D0 
+      BRA.S     L006A 
+L0067:MOVE.W    D0,L0249
+      MOVEQ     #7,D1 
+      LEA       L0275,A1
+      LEA       L0282,A0
+L0068:MOVE.L    (A0)+,(A1)+ 
+      DBF       D1,L0068
+      LEA       L027A,A0
+      MOVE.L    A0,-(A7)
+      JSR       L00C3 
+      ADDQ.L    #4,A7 
+      TST.W     D0
+      BNE.S     L0069 
+      MOVE.L    L0283,D0
+      MOVE.L    L026F,D1
+      CMP.L     D0,D1 
+      JSR       L006E 
+      BRA.S     L006A 
+L0069:MOVEQ     #3,D0 
+L006A:CMPI.W    #-1,L0249 
+      BEQ.S     L006B 
+      MOVEM.L   A0-A2/D0-D3,-(A7) 
+      MOVE.W    L0249,-(A7) 
+      MOVE.W    #$3E,-(A7) 	;FCLOSE 
+      TRAP      #1
+      ADDQ.W    #4,A7 
+      MOVEM.L   (A7)+,A0-A2/D0-D3 
+      MOVE.W    #-1,L0249 
+L006B:TST.W     D0
+      BNE.S     L006D 
+      MOVEQ     #7,D1 
+      LEA       L0275,A0
+      LEA       L0282,A1
+L006C:MOVE.L    (A0)+,(A1)+ 
+      DBF       D1,L006C
+L006D:MOVEM.L   (A7)+,A0-A2/D1-D3 
+      RTS 
+L006E:CLR.W     L027F 
+      SF        L024A 
+      SF        L0247 
+      MOVEQ     #0,D0 
+      MOVE.W    D0,L0280
+      MOVEQ     #8,D0 
+      MOVE.L    D0,L0271
+      MOVEA.L   L0283,A0
+      JSR       L0076 
+      JSR       L0073 
+      CMPI.B    #7,D0 
+      BEQ       L0093 
+      MOVEQ     #3,D0 
+      BRA.S     L006F 
+      MOVEQ     #0,D0 
+L006F:TST.W     D0
+      BNE.S     L0071 
+      JSR       L00C2 
+      TST.B     L024A 
+      BEQ.S     L0070 
+      JSR       L01A6 
+      BRA.S     L0071 
+L0070:JSR       L01AA 
+L0071:RTS 
+L0072:MOVEQ     #8,D0 
+      MOVE.L    D0,L0271
+      MOVEA.L   L0283,A0
+      JSR       L0076 
+      JSR       L0073 
+      TST.W     D0
+      BNE       L007A 
+      BRA       L0098 
+L0073:MOVEM.L   A0-A1/D1-D2,-(A7) 
+      MOVE.L    (A0)+,D2
+      MOVE.L    D2,L027B
+      LEA       L00CB,A1
+      MOVEQ     #8,D0 
+L0074:MOVE.L    (A1)+,D1
+      CMP.L     D2,D1 
+      BEQ.S     L0075 
+      DBF       D0,L0074
+L0075:ADDQ.W    #1,D0 
+      MOVE.L    (A0)+,L0271 
+      MOVEM.L   (A7)+,A0-A1/D1-D2 
+      RTS 
+L0076:MOVEM.L   A1-A3,-(A7) 
+      TST.B     L029A 
+      BNE.S     L0078 
+      MOVEA.L   A0,A3 
+      MOVE.L    A0,-(A7)
+      MOVE.L    L0271,-(A7) 
+      MOVE.W    L0249,-(A7) 
+      MOVE.W    #$3F,-(A7) 	;FREAD
+      TRAP      #1
+      ADDA.W    #$C,A7
+      TST.L     D0
+      BPL.S     L0077 
+      MOVEQ     #4,D0 
+      MOVEM.L   (A7)+,A1-A3 
+      BRA       L006F 
+L0077:MOVEA.L   A3,A0 
+      BRA.S     L0079 
+L0078:MOVEA.L   L029B,A1
+      MOVE.L    L0271,D0
+      MOVEA.L   A1,A0 
+      ADDA.L    D0,A1 
+      MOVE.L    A1,L029B
+L0079:MOVEM.L   (A7)+,A1-A3 
+      RTS 
+L007A:SUBQ.W    #1,D0 
+      BEQ.S     L007B 
+      SUBQ.W    #1,D0 
+      BEQ       L0080 
+      SUBQ.W    #1,D0 
+      BEQ       L0098 
+      SUBQ.W    #1,D0 
+      BEQ       L008A 
+      SUBQ.W    #1,D0 
+      BEQ       L0090 
+      SUBQ.W    #1,D0 
+      BEQ       L0098 
+      SUBQ.W    #1,D0 
+      BEQ       L0093 
+      SUBQ.W    #1,D0 
+      BEQ       L0098 
+      SUBQ.W    #1,D0 
+      BRA       L0098 
+L007B:MOVE.W    L0280,D0
+      EORI.W    #3,D0 
+      BNE       L0098 
+      MOVEA.L   L0283,A0
+      JSR       L0076 
+      MOVEQ     #0,D0 
+      MOVE.B    L00D8,D0
+      MOVE.W    D0,L02A5
+      TST.B     L0248 
+      BEQ.S     L007C 
+      JSR       L00BC 
+      BRA       L006F 
+L007C:TST.B     D0
+      BNE.S     L007D 
+      JSR       L00B2 
+      BRA       L006F 
+L007D:SUBQ.W    #1,D0 
+      BNE.S     L007E 
+      JSR       L0099 
+      BRA       L006F 
+L007E:SUBQ.W    #1,D0 
+      BNE.S     L007F 
+      JSR       L00BC 
+      BRA       L006F 
+L007F:MOVEQ     #5,D0 
+      BRA       L006F 
+L0080:MOVEM.L   A0-A1/D7/D0-D1,-(A7)
+      MOVEA.L   L0283,A0
+      JSR       L0076 
+      CMPI.W    #4,L027F
+      BGE       L0089 
+      TST.B     L0296 
+      BEQ.S     L0081 
+      LEA       L0294,A1
+      BRA.S     L0082 
+L0081:LEA       L0252,A1
+L0082:MOVE.W    L027F,D0
+      LSL.W     #3,D0 
+      ADDA.W    D0,A1 
+      ADDQ.W    #2,A0 
+      MOVE.W    (A0)+,D0
+      BEQ.S     L0083 
+      MOVE.L    #$4000,D1 
+      DIVU      D0,D1 
+      MOVE.W    D1,D0 
+L0083:MOVE.W    D0,4(A1)
+      MOVE.W    (A0)+,D0
+      TST.B     L0296 
+      BNE.S     L0085 
+      BTST      #0,D0 
+      BEQ.S     L0084 
+      ST        L024A 
+      BRA.S     L0085 
+L0084:SF        L024A 
+L0085:MOVEQ     #0,D7 
+      BTST      #1,D0 
+      BEQ.S     L0086 
+      ST        D7
+L0086:MOVEQ     #0,D0 
+      MOVEQ     #0,D1 
+      MOVE.B    (A0)+,D0
+      MOVE.B    (A0)+,D1
+      CMP.W     D0,D1 
+      BNE.S     L0087 
+      ADDQ.W    #1,D1 
+      CMPI.W    #$F,D1
+      BLE.S     L0087 
+      SUBQ.W    #1,D1 
+      SUBQ.W    #1,D0 
+L0087:MOVE.W    #2,6(A1)
+      TST.B     D7
+      BEQ.S     L0088 
+      MOVE.W    #-2,6(A1) 
+L0088:ANDI.W    #$F,D0
+      ANDI.W    #$F,D1
+      MOVE.W    D0,(A1) 
+      MOVE.W    D1,2(A1)
+      ADDQ.W    #1,L027F
+L0089:MOVEM.L   (A7)+,A0-A1/D7/D0-D1
+      BRA       L0072 
+L008A:MOVEM.L   A0-A1/D1-D2,-(A7) 
+      MOVE.W    L0280,D0
+      EORI.W    #3,D0 
+      BEQ.S     L008B 
+      MOVEQ     #4,D0 
+      MOVEM.L   (A7)+,A0-A1/D1-D2 
+      BRA       L006F 
+L008B:ST        L0247 
+      MOVEA.L   L0283,A0
+      JSR       L0076 
+      MOVEA.L   A0,A1 
+      TST.B     L0296 
+      BEQ.S     L008C 
+      LEA       L00D1,A0
+      BRA.S     L008D 
+L008C:LEA       L0275,A0
+L008D:MOVE.B    L00D6,D0
+      MOVEQ     #1,D1 
+      LSL.B     D0,D1 
+      CMPI.B    #$10,D1 
+      BLE.S     L008E 
+      MOVEQ     #$10,D1 
+L008E:SUBQ.W    #1,D1 
+L008F:MOVEQ     #0,D0 
+      MOVE.B    (A1)+,D0
+      LSL.W     #4,D0 
+      ANDI.W    #$F00,D0
+      MOVEQ     #0,D2 
+      MOVE.B    (A1)+,D2
+      ANDI.W    #$F0,D2 
+      OR.W      D2,D0 
+      MOVE.B    (A1)+,D2
+      LSR.W     #4,D2 
+      OR.W      D2,D0 
+      MOVE.W    D0,(A0)+
+      DBF       D1,L008F
+      MOVEM.L   (A7)+,A0-A1/D1-D2 
+      BRA       L0072 
+L0090:MOVEM.L   A0-A1/D1,-(A7)
+      MOVE.W    L0280,D0
+      EORI.B    #1,D0 
+      BNE       L0098 
+      LEA       L00D2,A0
+      JSR       L0076 
+      MOVEQ     #4,D0 
+      LEA       L00D2,A1
+L0091:MOVE.L    (A0)+,(A1)+ 
+      DBF       D0,L0091
+      ORI.W     #2,L0280
+      MOVEQ     #0,D0 
+      MOVE.B    L00D6,D0
+      CMPI.W    #4,D0 
+      BLE.S     L0092 
+      MOVEQ     #4,D0 
+L0092:MOVE.W    D0,L0289
+      MOVEM.L   (A7)+,A0-A1/D1
+      BRA       L0072 
+L0093:MOVEM.L   A0/D1,-(A7) 
+      MOVE.L    L0271,D1
+      SUBQ.L    #4,D1 
+      MOVEQ     #4,D0 
+      MOVE.L    D0,L0271
+      MOVEA.L   L0283,A0
+      JSR       L0076 
+      JSR       L0073 
+      CMPI.B    #6,D0 
+      BEQ.S     L0095 
+      CMPI.B    #8,D0 
+      BEQ.S     L0094 
+      MOVEQ     #8,D0 
+      MOVEM.L   (A7)+,A0/D1 
+      BRA       L006F 
+L0094:MOVE.W    L0249,D0
+      JSR       L003D 
+      MOVEM.L   (A7)+,A0/D1 
+      BRA       L006F 
+L0095:ORI.W     #1,L0280
+      TST.B     L029A 
+      BNE.S     L0097 
+      CMPI.L    #$9F90,D1 
+      BLT.S     L0096 
+      MOVEQ     #9,D0 
+      MOVEM.L   (A7)+,A0/D1 
+      BRA       L006F 
+L0096:MOVE.L    D1,L0271
+      MOVEA.L   L0283,A0
+      MOVE.L    A0,L029B
+      JSR       L0076 
+      ST        L029A 
+L0097:MOVEM.L   (A7)+,A0/D1 
+      BRA       L0072 
+L0098:MOVEA.L   L0283,A0
+      JSR       L0076 
+      BRA       L0072 
+L0099:MOVEM.L   A1-A6/D1-D7,-(A7) 
+      MOVEQ     #0,D0 
+      MOVE.W    L00D2,D0
+      ADD.W     #$F,D0
+      LSR.L     #3,D0 
+      ANDI.L    #-2,D0
+      MOVE.W    D0,D7 
+      MOVE.W    L00D3,D6
+      SUBQ.W    #1,D6 
+      MOVEA.L   A0,A3 
+      CMPI.B    #1,L00D7
+      BNE.S     L009A 
+      MOVEA.L   #-1,A5
+      BRA.S     L009B 
+L009A:MOVEA.L   #0,A5 
+L009B:MOVEA.L   A3,A0 
+      MOVEA.L   L026F,A1
+      MOVEA.L   A1,A2 
+      MOVEQ     #0,D3 
+      MOVE.B    L00D6,D3
+      NEG.W     D3
+      ADDQ.W    #4,D3 
+L009C:MOVEQ     #3,D5 
+L009D:MOVEA.L   A2,A1 
+      MOVE.W    D7,D0 
+      CMP.W     D3,D5 
+      BLT.S     L009E 
+      BSR.S     L00A6 
+      BLT.S     L00A5 
+L009E:ADDQ.W    #2,A2 
+      DBF       D5,L009D
+      ADDA.W    #$98,A2 
+      TST.W     D3
+      BPL.S     L00A0 
+      MOVE.W    D3,D5 
+      NEG.W     D5
+      SUBQ.W    #1,D5 
+L009F:MOVE.W    D7,D0 
+      BSR       L00AE 
+      BLT.S     L00A5 
+      DBF       D5,L009F
+L00A0:MOVE.L    A5,D0 
+      BEQ.S     L00A1 
+      MOVE.L    D7,D0 
+      BSR.S     L00AE 
+L00A1:DBF       D6,L009C
+      MOVEQ     #4,D7 
+      SUB.B     L00D6,D7
+      BLE.S     L00A3 
+      SUBQ.W    #1,D7 
+      MOVEQ     #3,D0 
+L00A2:JSR       L00C0 
+      SUBQ.W    #1,D0 
+      DBF       D7,L00A2
+L00A3:MOVEQ     #0,D0 
+L00A4:MOVEM.L   (A7)+,A1-A6/D1-D7 
+      RTS 
+L00A5:MOVEQ     #4,D0 
+      BRA.S     L00A4 
+L00A6:MOVEM.L   D2-D3,-(A7) 
+      MOVEQ     #0,D3 
+      TST.B     L0296 
+      BNE.S     L00A7 
+      MOVEQ     #6,D3 
+L00A7:SWAP      D3
+L00A8:MOVEQ     #0,D2 
+      MOVE.B    (A0)+,D2
+      BLT.S     L00AA 
+L00A9:MOVE.B    (A0)+,(A1)+ 
+      ADDA.W    D3,A1 
+      SWAP      D3
+      SUBQ.W    #1,D0 
+      DBF       D2,L00A9
+      BRA.S     L00AC 
+L00AA:CMPI.B    #-$80,D2
+      BEQ.S     L00AC 
+      NEG.B     D2
+      MOVE.B    (A0)+,D1
+L00AB:MOVE.B    D1,(A1)+
+      ADDA.W    D3,A1 
+      SWAP      D3
+      SUBQ.W    #1,D0 
+      DBF       D2,L00AB
+L00AC:TST.W     D0
+      BLT.S     L00AD 
+      BNE.S     L00A8 
+L00AD:MOVEM.L   (A7)+,D2-D3 
+      RTS 
+L00AE:MOVEM.L   D2,-(A7)
+L00AF:MOVEQ     #0,D2 
+      MOVE.B    (A0)+,D2
+      BLT.S     L00B0 
+      ADDQ.W    #1,D2 
+      ADDA.W    D2,A0 
+      SUB.W     D2,D0 
+      BLE.S     L00B1 
+      BRA.S     L00AF 
+L00B0:CMPI.B    #-$80,D2
+      BEQ.S     L00AF 
+      NEG.B     D2
+      ADDQ.W    #1,D2 
+      ADDQ.L    #1,A0 
+      SUB.W     D2,D0 
+      BLE.S     L00B1 
+      BRA.S     L00AF 
+L00B1:MOVEM.L   (A7)+,D2
+      RTS 
+L00B2:MOVEM.L   A1-A4/D1-D5,-(A7) 
+      MOVEA.L   A0,A3 
+      CMPI.B    #1,L00D7
+      BNE.S     L00B3 
+      MOVEQ     #-1,D5
+      BRA.S     L00B4 
+L00B3:MOVEQ     #0,D5 
+L00B4:MOVEA.L   A3,A0 
+      MOVEA.L   L026F,A2
+      MOVE.W    #$C7,D2 
+      MOVEA.L   A2,A3 
+L00B5:MOVEA.L   A3,A2 
+      MOVEQ     #0,D1 
+      MOVE.B    L00D6,D1
+      SUBQ.W    #1,D1 
+L00B6:MOVEA.L   A2,A1 
+      MOVE.W    #$13,D0 
+L00B7:MOVE.W    (A0)+,(A1)
+      ADDQ.W    #8,A1 
+      DBF       D0,L00B7
+      ADDQ.W    #2,A2 
+      DBF       D1,L00B6
+      LEA       160(A3),A3
+      TST.L     D5
+      BEQ.S     L00B9 
+      MOVEA.L   D5,A1 
+      MOVE.W    #$13,D0 
+L00B8:MOVE.W    (A0)+,D1
+      NOT.W     D1
+      DBF       D0,L00B8
+      MOVE.L    A1,D5 
+L00B9:DBF       D2,L00B5
+      MOVEQ     #4,D7 
+      SUB.B     L00D6,D7
+      BEQ.S     L00BB 
+      SUBQ.W    #1,D7 
+      MOVEQ     #3,D0 
+L00BA:JSR       L00C0 
+      SUBQ.W    #1,D0 
+      DBF       D7,L00BA
+L00BB:MOVEQ     #0,D0 
+      MOVEM.L   (A7)+,A1-A4/D1-D5 
+      RTS 
+L00BC:MOVEM.L   A0-A1/D6-D7,-(A7) 
+      MOVEA.L   A0,A1 
+      MOVEA.L   L026F,A0
+      MOVE.W    L00D3,D0
+      MULU      #$A0,D0 
+      MOVE.L    D0,L0279
+      MOVEQ     #0,D7 
+      MOVE.B    L00D6,D7
+      SUBQ.W    #1,D7 
+L00BD:ADDQ.W    #8,A1 
+      MOVE.L    -4(A1),D0 
+      JSR       L016A 
+      ADDQ.W    #2,A0 
+      ADDA.L    -4(A1),A1 
+      DBF       D7,L00BD
+      MOVEQ     #4,D7 
+      SUB.B     L00D6,D7
+      BEQ.S     L00BF 
+      SUBQ.W    #1,D7 
+      MOVEQ     #3,D0 
+L00BE:JSR       L00C0 
+      SUBQ.W    #1,D0 
+      DBF       D7,L00BE
+L00BF:MOVEQ     #0,D0 
+      MOVEM.L   (A7)+,A0-A1/D6-D7 
+      RTS 
+L00C0:MOVEM.L   A0/D0,-(A7) 
+      MOVEA.L   L026F,A0
+      LSL.W     #1,D0 
+      ADDA.W    D0,A0 
+      MOVE.W    #$18F,D0
+L00C1:CLR.W     (A0)
+      ADDQ.W    #8,A0 
+      CLR.W     (A0)
+      ADDQ.W    #8,A0 
+      CLR.W     (A0)
+      ADDQ.W    #8,A0 
+      CLR.W     (A0)
+      ADDQ.W    #8,A0 
+      CLR.W     (A0)
+      ADDQ.W    #8,A0 
+      CLR.W     (A0)
+      ADDQ.W    #8,A0 
+      CLR.W     (A0)
+      ADDQ.W    #8,A0 
+      CLR.W     (A0)
+      ADDQ.W    #8,A0 
+      CLR.W     (A0)
+      ADDQ.W    #8,A0 
+      CLR.W     (A0)
+      ADDQ.W    #8,A0 
+      DBF       D0,L00C1
+      MOVEM.L   (A7)+,A0/D0 
+      RTS 
+L00C2:RTS 
+L00C3:MOVEM.L   A0,-(A7)
+      MOVEA.L   8(A7),A0
+      JSR       L01BB 
+      CMPI.W    #4,D0 
+      BLE.S     L00CA 
+      ADDA.W    D0,A0 
+      SUBQ.L    #4,A0 
+      MOVE.B    (A0)+,D0
+      CMPI.B    #$2E,D0 
+      BNE.S     L00CA 
+      MOVE.B    (A0)+,D0
+      CMPI.B    #$4E,D0 
+      BEQ.S     L00C8 
+      CMPI.B    #$50,D0 
+      BNE.S     L00CA 
+      MOVE.B    (A0)+,D0
+      CMPI.B    #$43,D0 
+      BEQ.S     L00C4 
+      CMPI.B    #$49,D0 
+      BNE.S     L00CA 
+L00C4:MOVE.B    (A0),D0 
+      CMPI.B    #$31,D0 
+      BNE.S     L00C6 
+      MOVE.B    -1(A0),D0 
+      CMPI.B    #$43,D0 
+      BEQ.S     L00C5 
+      MOVEQ     #2,D0 
+      BRA.S     L00C9 
+L00C5:MOVEQ     #3,D0 
+      BRA.S     L00C9 
+L00C6:CMPI.B    #$32,D0 
+      BEQ.S     L00C7 
+      CMPI.B    #$33,D0 
+      BNE.S     L00CA 
+L00C7:MOVEQ     #4,D0 
+      BRA.S     L00C9 
+L00C8:MOVE.B    (A0)+,D0
+      CMPI.B    #$45,D0 
+      BNE.S     L00CA 
+      MOVE.B    (A0)+,D0
+      CMPI.B    #$4F,D0 
+      BNE.S     L00CA 
+      MOVEQ     #1,D0 
+L00C9:MOVEM.L   (A7)+,A0
+      RTS 
+L00CA:MOVEQ     #0,D0 
+      BRA.S     L00C9 
+L00CB:DC.B      'DVIDDPST'
+L00CC:DC.B      'FORM'
+L00CD:DC.B      'ILBM'
+L00CE:DC.B      'BMHD'
+L00CF:DC.B      'CMAPGRAB'
+L00D0:DC.B      'CRNGBODY'
+L00D1:DS.W      16  
+L00D2:DC.B      $00,$00 
+L00D3:DC.B      $00,$01 
+L00D4:DC.B      $00,$02 
+L00D5:DC.B      $00,$03 
+L00D6:DC.B      $04 
+L00D7:DC.B      $05 
+L00D8:DC.B      $06,$07,$00,$08,$09,$0A 
+L00D9:DC.B      $00,$0B 
+L00DA:DC.B      $00,$0C 
+L00DB:ST        L029A 
+      SF        L0296 
+      JSR       L00DC 
+      RTS 
+L00DC:MOVEA.L   L0283,A0
+      BSR.S     L00DD 
+      MOVEQ     #0,D0 
+      RTS 
+      MOVEQ     #$A,D0
+      RTS 
+L00DD:MOVE.L    L00CC,(A0)+ 
+      ADDQ.L    #4,A0 
+      MOVE.L    L00CD,(A0)+ 
+      MOVE.L    #4,L0271
+      JSR       L00DE 
+      JSR       L00E0 
+      JSR       L00E7 
+      JSR       L00E8 
+      JSR       L00EF 
+      RTS 
+L00DE:MOVEM.L   A1-A2,-(A7) 
+      MOVE.L    L00CE,(A0)+ 
+      MOVE.L    #$14,(A0)+
+      MOVE.W    #$140,L00D2 
+      MOVE.W    #$C8,L00D3
+      MOVE.W    #4,D0 
+      LEA       L00D6,A1
+      MOVE.B    D0,(A1) 
+      CLR.B     1(A1) 
+      MOVE.W    L02A5,D0
+      MOVE.B    D0,L00D8
+      CLR.W     L00D4 
+      CLR.W     L00D5 
+      MOVE.W    #$140,L00D9 
+      MOVE.W    #$C8,L00DA
+      LEA       L00D2,A1
+      MOVEQ     #4,D0 
+L00DF:MOVE.L    (A1)+,(A0)+ 
+      DBF       D0,L00DF
+      ADDI.L    #$1C,L0271
+      MOVEM.L   (A7)+,A1-A2 
+      RTS 
+L00E0:MOVEM.L   A1-A2/D1-D2,-(A7) 
+      MOVE.L    L00CF,(A0)+ 
+      MOVEQ     #0,D0 
+      MOVE.W    #4,D0 
+      MOVEQ     #1,D1 
+      LSL.W     D0,D1 
+      MOVE.W    D1,D0 
+      MULU      #3,D1 
+      MOVE.L    D1,(A0)+
+      ADDQ.L    #8,D1 
+      ADD.L     D1,L0271
+      TST.B     L024B 
+      BNE.S     L00E1 
+      LEA       L00F3,A2
+      BRA.S     L00E2 
+L00E1:LEA       L00F4,A2
+L00E2:LEA       L0282,A1
+      SUBQ.W    #1,D0 
+L00E3:MOVE.W    (A1)+,D1
+      MOVEQ     #0,D2 
+      MOVE.W    D1,D2 
+      ANDI.W    #$F00,D2
+      LSR.W     #8,D2 
+      TST.B     L024B 
+      BNE.S     L00E4 
+      LSR.W     #1,D2 
+L00E4:MOVE.B    0(A2,D2.W),D2 
+      MOVE.B    D2,(A0)+
+      MOVE.W    D1,D2 
+      ANDI.W    #$F0,D2 
+      LSR.W     #4,D2 
+      TST.B     L024B 
+      BNE.S     L00E5 
+      LSR.W     #1,D2 
+L00E5:MOVE.B    0(A2,D2.W),D2 
+      MOVE.B    D2,(A0)+
+      MOVE.W    D1,D2 
+      ANDI.W    #$F,D2
+      TST.B     L024B 
+      BNE.S     L00E6 
+      LSR.W     #1,D2 
+L00E6:MOVE.B    0(A2,D2.W),D2 
+      MOVE.B    D2,(A0)+
+      DBF       D0,L00E3
+      MOVEM.L   (A7)+,A1-A2/D1-D2 
+      RTS 
+L00E7:RTS 
+L00E8:MOVEM.L   A1/D7/D0-D1,-(A7) 
+      MOVEQ     #3,D7 
+      LEA       L0252,A1
+L00E9:MOVE.L    L00D0,(A0)+ 
+      MOVE.L    #8,(A0)+
+      ADDI.L    #$10,L0271
+      CLR.W     (A0)
+      MOVE.L    #$4000,D0 
+      TST.W     4(A1) 
+      BNE.S     L00EA 
+      MOVEQ     #0,D0 
+      BRA.S     L00EB 
+L00EA:DIVU      4(A1),D0
+L00EB:MOVE.W    D0,2(A0)
+      TST.B     L0254 
+      BEQ.S     L00EC 
+      MOVEQ     #1,D0 
+      BRA.S     L00ED 
+L00EC:MOVEQ     #0,D0 
+L00ED:TST.W     6(A1) 
+      BPL.S     L00EE 
+      ORI.W     #2,D0 
+L00EE:MOVE.W    D0,4(A0)
+      MOVE.W    (A1),D0 
+      MOVE.W    2(A1),D1
+      MOVE.B    D0,6(A0)
+      MOVE.B    D1,7(A0)
+      ADDQ.W    #8,A0 
+      ADDQ.W    #8,A1 
+      DBF       D7,L00E9
+      MOVEM.L   (A7)+,A1/D7/D0-D1 
+      RTS 
+L00EF:TST.B     L029A 
+      BEQ.S     L00F0 
+      MOVEM.L   D0,-(A7)
+      MOVE.L    L00CB,(A0)+ 
+      MOVE.L    #2,(A0)+
+      ADDI.L    #$A,L0271 
+      MOVE.W    D0,(A0)+
+      MOVEM.L   (A7)+,D0
+L00F0:NOP 
+      MOVEM.L   A0-A1/D7,-(A7)
+      JSR       L00F1 
+      MOVEA.L   L0283,A0
+      LEA       8(A0),A0
+      MOVE.L    A1,D7 
+      SUB.L     A0,D7 
+      MOVE.L    D7,-4(A0) 
+      MOVEM.L   (A7)+,A0-A1/D7
+      RTS 
+L00F1:MOVEM.L   A2-A3/A0/D6-D7,-(A7)
+      MOVE.L    #$424F4459,(A0)+
+      ADDQ.W    #4,A0 
+      MOVEA.L   A0,A3 
+      MOVEA.L   A0,A1 
+      MOVEA.L   L026F,A0
+      MOVEA.L   L02A4,A2
+      MOVEQ     #0,D7 
+      MOVE.B    L00D6,D7
+      SUBQ.W    #1,D7 
+L00F2:JSR       L0158 
+      LEA       4(A1),A1
+      ADDA.L    (A1)+,A1
+      ADDQ.W    #2,A0 
+      DBF       D7,L00F2
+      MOVE.L    A1,D7 
+      SUB.L     A3,D7 
+      MOVE.L    D7,-4(A3) 
+      MOVEM.L   (A7)+,A2-A3/A0/D6-D7
+      RTS 
+L00F3:DC.B      $00,'%In',$92,$B7,$DB,$FF 
+L00F4:DC.B      $00,$11,'"3DUfw'
+      DC.B      $88,$99,$AA,$BB,$CC,$DD,$EE,$FF 
+L00F5:MOVEM.L   A0-A2/D1-D2,-(A7) 
+      MOVE.L    #-1,-(A7) 
+      MOVE.W    #$48,-(A7) 	;MALLOC 
+      TRAP      #1
+      ADDQ.L    #6,A7 
+      SUBI.L    #$4000,D0 
+      BMI.S     L00F7 
+      BCLR      #0,D0 
+      MOVE.L    D0,L024F
+      MOVE.L    D0,-(A7)
+      MOVE.W    #$48,-(A7) 	;MALLOC 
+      TRAP      #1
+      ADDQ.L    #6,A7 
+      TST.L     D0
+      BMI.S     L00F7 
+      MOVE.L    D0,L0251
+      CLR.W     L0250 
+      MOVE.L    D0,L024D
+      ADD.L     L024F,D0
+      MOVE.L    D0,L024C
+      MOVEQ     #1,D0 
+L00F6:MOVEM.L   (A7)+,A0-A2/D1-D2 
+      RTS 
+L00F7:MOVEQ     #-1,D0
+      BRA.S     L00F6 
+L00F8:MOVEM.L   A0-A2/D0-D2,-(A7) 
+      TST.L     L0251 
+      BEQ.S     L00F9 
+      MOVE.L    L0251,-(A7) 
+      MOVE.W    #$49,-(A7) 	;MFREE
+      TRAP      #1
+      ADDQ.L    #6,A7 
+L00F9:MOVEM.L   (A7)+,A0-A2/D0-D2 
+      RTS 
+L00FA:MOVEM.L   A1/D1-D2,-(A7)
+      MOVE.L    16(A7),D0 
+      BMI.S     L0101 
+      BTST      #0,D0 
+      BEQ.S     L00FB 
+      ADDQ.L    #1,D0 
+L00FB:MOVEQ     #0,D1 
+      MOVEA.L   L024C,A1
+      MOVE.W    L0250,D2
+L00FC:CMP.W     D2,D1 
+      BEQ.S     L00FD 
+      TST.L     -(A1) 
+      BEQ.S     L00FE 
+      SUBQ.W    #4,A1 
+      ADDQ.W    #1,D1 
+      BRA.S     L00FC 
+L00FD:CMPI.W    #$7FFE,D1 
+      BGE.S     L0101 
+      ADDQ.L    #8,D0 
+      CMP.L     L024F,D0
+      BGT.S     L0101 
+      ADDQ.W    #1,L0250
+      SUB.L     D0,L024F
+      SUBQ.L    #8,D0 
+      BRA.S     L00FF 
+L00FE:CMP.L     L024F,D0
+      BGT.S     L0101 
+      ADDQ.L    #4,A1 
+      SUB.L     D0,L024F
+L00FF:MOVEA.L   L024D,A0
+      ADD.L     D0,L024D
+      MOVE.L    A0,-(A1)
+      MOVE.L    D0,-(A1)
+      MOVEQ     #0,D0 
+      MOVE.W    D1,D0 
+L0100:MOVEM.L   (A7)+,A1/D1-D2
+      RTS 
+L0101:MOVEQ     #-1,D0
+      BRA.S     L0100 
+L0102:MOVEM.L   A0-A1/D0-D4,-(A7) 
+      MOVEQ     #0,D0 
+      MOVE.W    32(A7),D0 
+      BMI       L010D 
+      ADDQ.L    #1,D0 
+      CMP.W     L0250,D0
+      BGT       L010D 
+      BNE.S     L0104 
+      SUBQ.W    #1,L0250
+      ADDQ.L    #8,L024F
+      SUBQ.L    #1,D0 
+      LSL.L     #3,D0 
+      MOVEA.L   L024C,A0
+      SUBA.L    D0,A0 
+      ADDQ.L    #8,A0 
+L0103:TST.W     L0250 
+      BEQ.S     L0105 
+      TST.L     -(A0) 
+      BNE.S     L0105 
+      ADDA.W    #$C,A0
+      SUBQ.W    #1,L0250
+      ADDQ.L    #8,L024F
+      BRA.S     L0103 
+L0104:SUBQ.L    #1,D0 
+      LSL.L     #3,D0 
+L0105:MOVEA.L   L024C,A0
+      SUBA.L    D0,A0 
+      MOVE.L    -(A0),D1
+      BEQ       L010D 
+      MOVE.L    -(A0),D2
+      CLR.L     4(A0) 
+      ADD.L     D2,L024F
+      MOVE.L    D1,D3 
+      ADD.L     D2,D3 
+      CMP.L     L024D,D3
+      BNE.S     L0106 
+      SUB.L     D2,L024D
+      BRA.S     L010D 
+L0106:MOVE.L    L024D,D3
+      SUB.L     D1,D3 
+      SUB.L     D2,D3 
+      MOVEA.L   D1,A0 
+      MOVE.L    D1,D0 
+      MOVEA.L   D1,A1 
+      ADDA.L    D2,A1 
+      MOVE.L    D3,D4 
+      DIVU      #$A0,D3 
+      BEQ.S     L0107 
+      MOVE.L    A1,-(A7)
+      MOVE.L    A0,-(A7)
+      MOVE.W    D3,-(A7)
+      JSR       L0155 
+      LEA       10(A7),A7 
+      SWAP      D3
+      EXT.L     D3
+      BEQ.S     L010A 
+      SUB.L     D3,D4 
+      ADDA.L    D4,A0 
+      ADDA.L    D4,A1 
+      BRA.S     L0108 
+L0107:SWAP      D3
+L0108:ADDQ.W    #2,D3 
+      LSR.W     #2,D3 
+      SUBQ.W    #1,D3 
+L0109:MOVE.L    (A1)+,(A0)+ 
+      DBF       D3,L0109
+L010A:MOVEA.L   L024C,A0
+      MOVE.W    L0250,D3
+      SUBQ.W    #1,D3 
+L010B:CMP.L     -(A0),D0
+      BGT.S     L010C 
+      SUB.L     D2,(A0) 
+L010C:SUBQ.L    #4,A0 
+      DBF       D3,L010B
+      SUB.L     D2,L024D
+L010D:MOVEM.L   (A7)+,A0-A1/D0-D4 
+      RTS 
+L010E:MOVEM.L   D0,-(A7)
+      MOVEQ     #0,D0 
+      MOVE.W    8(A7),D0
+      BMI.S     L0110 
+      CMP.W     L0250,D0
+      BGE.S     L0110 
+      MOVEA.L   L024C,A0
+      LSL.L     #3,D0 
+      SUBA.L    D0,A0 
+      MOVEA.L   -(A0),A0
+L010F:MOVEM.L   (A7)+,D0
+      RTS 
+L0110:MOVEQ     #0,D0 
+      MOVEA.L   D0,A0 
+      BRA.S     L010F 
+L0111:MOVEM.L   D1,-(A7)
+      MOVE.W    8(A7),D1
+      MOVE.W    L024E,-(A7) 
+      JSR       L010E 
+      ADDQ.L    #2,A7 
+      MOVE.W    (A0),D0 
+      ADDQ.L    #4,A0 
+      SUBQ.W    #1,D0 
+L0112:TST.W     2(A0) 
+      BMI.S     L0113 
+      CMP.W     (A0),D1 
+      BEQ.S     L0114 
+L0113:ADDA.W    #$10,A0 
+      DBF       D0,L0112
+      MOVEQ     #-1,D0
+      BRA.S     L0115 
+L0114:MOVEA.L   A0,A1 
+      ADDQ.L    #4,A1 
+      ADDQ.L    #2,A0 
+      MOVEQ     #0,D0 
+      MOVE.W    (A0),D0 
+      MOVE.W    D0,-(A7)
+      JSR       L010E 
+      ADDQ.L    #2,A7 
+L0115:MOVEM.L   (A7)+,D1
+      RTS 
+L0116:MOVEM.L   A0-A1/D1,-(A7)
+      MOVE.W    18(A7),-(A7)
+      JSR       L0111 
+      ADDQ.L    #2,A7 
+      TST.W     D0
+      BMI.S     L0118 
+      MOVE.W    16(A7),D1 
+      MOVE.W    (A0),D0 
+      CMP.W     D0,D1 
+      BGE.S     L0118 
+      LSL.W     #1,D1 
+      ADDQ.W    #2,D1 
+      MOVEQ     #0,D0 
+      MOVE.W    0(A0,D1.W),D0 
+      BMI.S     L0118 
+L0117:MOVEM.L   (A7)+,A0-A1/D1
+      RTS 
+L0118:MOVEQ     #-1,D0
+      BRA.S     L0117 
+L0119:MOVEM.L   A1-A2/D1-D2,-(A7) 
+      MOVE.L    20(A7),-(A7)
+      JSR       L00FA 
+      ADDQ.L    #4,A7 
+      MOVE.W    D0,D2 
+      BMI.S     L011C 
+      MOVEA.L   A0,A2 
+      MOVE.W    26(A7),-(A7)
+      JSR       L0111 
+      ADDQ.L    #2,A7 
+      TST.W     D0
+      BMI.S     L011D 
+      MOVE.W    24(A7),D1 
+      MOVE.W    (A0),D0 
+      CMP.W     D0,D1 
+      BGE.S     L011D 
+      LSL.W     #1,D1 
+      ADDQ.W    #2,D1 
+      MOVE.W    0(A0,D1.W),D0 
+      BMI.S     L011A 
+      MOVE.W    D0,-(A7)
+      JSR       L0102 
+      ADDQ.L    #2,A7 
+      MOVE.W    D2,-(A7)
+      JSR       L010E 
+      ADDQ.L    #2,A7 
+      MOVEA.L   A0,A2 
+      MOVE.W    26(A7),-(A7)
+      JSR       L0111 
+      ADDQ.L    #2,A7 
+L011A:MOVE.W    D2,0(A0,D1.W) 
+      MOVEA.L   A2,A0 
+      MOVEQ     #0,D0 
+      MOVE.W    D2,D0 
+L011B:MOVEM.L   (A7)+,A1-A2/D1-D2 
+      RTS 
+L011C:MOVEQ     #-1,D0
+      BRA.S     L011B 
+L011D:MOVE.W    D2,-(A7)
+      JSR       L0102 
+      ADDQ.L    #2,A7 
+      MOVEQ     #-2,D0
+      BRA.S     L011B 
+L011E:MOVEM.L   A0-A1/D0-D1,-(A7) 
+      MOVE.W    22(A7),-(A7)
+      JSR       L0111 
+      ADDQ.L    #2,A7 
+      TST.W     D0
+      BMI.S     L011F 
+      MOVE.W    20(A7),D1 
+      MOVE.W    (A0),D0 
+      CMP.W     D0,D1 
+      BGE.S     L011F 
+      LSL.W     #1,D1 
+      ADDQ.W    #2,D1 
+      MOVE.W    0(A0,D1.W),D0 
+      BMI.S     L011F 
+      MOVE.W    #-1,0(A0,D1.W)
+      MOVE.W    D0,-(A7)
+      JSR       L0102 
+      ADDQ.L    #2,A7 
+L011F:MOVEM.L   (A7)+,A0-A1/D0-D1 
+      RTS 
+      MOVEM.L   A0-A2/D0-D4,-(A7) 
+      MOVE.W    38(A7),D4 
+      MOVE.W    36(A7),D1 
+      MOVE.W    D4,-(A7)
+      MOVE.W    D1,-(A7)
+      JSR       L011E 
+      ADDQ.L    #4,A7 
+      MOVE.W    D4,-(A7)
+      JSR       L0111 
+      ADDQ.L    #2,A7 
+      TST.W     D0
+      BMI.S     L0125 
+      MOVEA.L   A0,A2 
+      MOVE.W    (A2)+,D2
+      SUBQ.W    #1,D2 
+      BMI.S     L0125 
+      MOVE.W    D2,D3 
+      LSL.W     #1,D3 
+      ADDQ.W    #2,D3 
+      EXT.L     D3
+      MOVE.L    D3,-(A7)
+      JSR       L00FA 
+      ADDQ.L    #4,A7 
+      MOVE.W    D0,D4 
+      BMI.S     L0125 
+      MOVE.W    D2,(A0)+
+      MOVE.W    D1,D3 
+      BEQ.S     L0121 
+      SUBQ.W    #1,D3 
+L0120:MOVE.W    (A2)+,(A0)+ 
+      DBF       D3,L0120
+L0121:ADDQ.W    #2,A2 
+      SUB.W     D1,D2 
+      BLE.S     L0123 
+      SUBQ.W    #1,D2 
+L0122:MOVE.W    (A2)+,(A0)+ 
+      DBF       D2,L0122
+L0123:MOVE.W    38(A7),D0 
+      MOVE.W    D4,-(A7)
+      MOVE.W    D0,-(A7)
+      MOVE.L    A1,-(A7)
+      JSR       L0127 
+      ADDQ.L    #8,A7 
+      TST.W     D0
+L0124:MOVEM.L   (A7)+,A0-A2/D0-D4 
+      RTS 
+L0125:MOVEQ     #-1,D0
+      BRA.S     L0124 
+L0126:DS.W      6   
+L0127:MOVEM.L   A0-A1/D1-D3,-(A7) 
+      MOVEA.L   24(A7),A0 
+      LEA       L0126,A1
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.W    28(A7),D1 
+      MOVE.W    L024E,-(A7) 
+      JSR       L010E 
+      ADDQ.L    #2,A7 
+      MOVEA.L   A0,A1 
+      MOVE.W    (A0),D0 
+      ADDQ.L    #4,A0 
+      SUBQ.W    #1,D0 
+L0128:TST.W     2(A0) 
+      BMI.S     L0129 
+      CMP.W     (A0),D1 
+      BNE.S     L0129 
+      MOVE.W    2(A0),D0
+      MOVE.W    #-1,2(A0) 
+      SUBQ.W    #1,2(A1)
+      MOVE.W    D0,-(A7)
+      JSR       L0102 
+      ADDQ.L    #2,A7 
+      MOVE.W    L024E,-(A7) 
+      JSR       L010E 
+      ADDQ.L    #2,A7 
+      MOVEA.L   A0,A1 
+      BRA.S     L012A 
+L0129:ADDA.W    #$10,A0 
+      DBF       D0,L0128
+L012A:MOVEA.L   A1,A0 
+      MOVE.W    (A0),D0 
+      CMP.W     2(A0),D0
+      BGT.S     L012D 
+      ADDI.W    #$14,D0 
+      LSL.W     #4,D0 
+      ADDQ.W    #4,D0 
+      EXT.L     D0
+      MOVE.L    D0,-(A7)
+      JSR       L00FA 
+      ADDQ.L    #4,A7 
+      MOVE.W    D0,D2 
+      BMI.S     L0131 
+      MOVE.W    (A1),D0 
+      MOVE.W    D0,(A0) 
+      ADDI.W    #$14,(A0)+
+      MOVE.W    D0,(A0)+
+      ADDQ.L    #4,A1 
+      SUBQ.W    #1,D0 
+L012B:MOVE.L    (A1)+,(A0)+ 
+      MOVE.L    (A1)+,(A0)+ 
+      MOVE.L    (A1)+,(A0)+ 
+      MOVE.L    (A1)+,(A0)+ 
+      DBF       D0,L012B
+      ADDQ.L    #2,A0 
+      MOVEQ     #$13,D0 
+L012C:MOVE.W    #-1,(A0)
+      ADDA.W    #$10,A0 
+      DBF       D0,L012C
+      MOVE.W    L024E,-(A7) 
+      JSR       L0102 
+      ADDQ.L    #2,A7 
+      MOVE.W    D2,L024E
+      MOVE.W    D2,-(A7)
+      JSR       L010E 
+      ADDQ.L    #2,A7 
+      MOVEA.L   A0,A1 
+L012D:ADDQ.L    #6,A1 
+L012E:TST.W     (A1)
+      BMI.S     L012F 
+      ADDA.W    #$10,A1 
+      BRA.S     L012E 
+L012F:ADDQ.W    #1,2(A0)
+      MOVE.W    30(A7),(A1)+
+      MOVE.W    D1,-4(A1) 
+      LEA       L0126,A0
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVEQ     #1,D0 
+L0130:MOVEM.L   (A7)+,A0-A1/D1-D3 
+      RTS 
+L0131:MOVEQ     #-1,D0
+      BRA.S     L0130 
+L0132:MOVEM.L   A1/D1-D2,-(A7)
+      MOVE.W    20(A7),D1 
+      MOVE.W    D1,D2 
+      LSL.W     #1,D1 
+      ADDQ.W    #2,D1 
+      EXT.L     D1
+      MOVE.L    D1,-(A7)
+      JSR       L00FA 
+      ADDQ.L    #4,A7 
+      TST.W     D0
+      BMI.S     L0136 
+      MOVEA.L   A0,A1 
+      MOVE.W    D2,(A1)+
+      MOVEQ     #-1,D1
+      SUBQ.W    #1,D2 
+L0133:MOVE.W    D1,(A1)+
+      DBF       D2,L0133
+      MOVE.W    D0,D1 
+      MOVE.W    22(A7),D0 
+      MOVEA.L   16(A7),A1 
+      MOVE.W    D1,-(A7)
+      MOVE.W    D0,-(A7)
+      MOVE.L    A1,-(A7)
+      JSR       L0127 
+      ADDQ.L    #8,A7 
+      TST.W     D0
+      BMI.S     L0135 
+      MOVE.W    D1,D0 
+L0134:MOVEM.L   (A7)+,A1/D1-D2
+      RTS 
+L0135:MOVE.W    D1,-(A7)
+      JSR       L0102 
+      ADDQ.L    #2,A7 
+L0136:MOVEQ     #-1,D0
+      BRA.S     L0134 
+L0137:MOVEM.L   A0-A2/D0-D4,-(A7) 
+      MOVE.W    38(A7),-(A7)
+      JSR       L0111 
+      ADDQ.L    #2,A7 
+      TST.W     D0
+      BMI.S     L013D 
+      MOVEA.L   A0,A2 
+      MOVE.W    36(A7),D1 
+      MOVE.W    (A2)+,D2
+      ADDQ.W    #1,D2 
+      CMP.W     D2,D1 
+      BGE.S     L013D 
+      MOVE.W    D2,D3 
+      LSL.W     #1,D3 
+      ADDQ.W    #2,D3 
+      EXT.L     D3
+      MOVE.L    D3,-(A7)
+      JSR       L00FA 
+      ADDQ.L    #4,A7 
+      MOVE.W    D0,D4 
+      BMI.S     L013D 
+      MOVE.W    D2,(A0)+
+      MOVE.W    D1,D3 
+      BEQ.S     L0139 
+      SUBQ.W    #1,D3 
+L0138:MOVE.W    (A2)+,(A0)+ 
+      DBF       D3,L0138
+L0139:MOVE.W    #-1,(A0)+ 
+      SUB.W     D1,D2 
+      SUBQ.W    #2,D2 
+      BMI.S     L013B 
+L013A:MOVE.W    (A2)+,(A0)+ 
+      DBF       D2,L013A
+L013B:MOVE.W    38(A7),D0 
+      MOVE.W    D4,-(A7)
+      MOVE.W    D0,-(A7)
+      MOVE.L    A1,-(A7)
+      JSR       L0127 
+      ADDQ.L    #8,A7 
+      TST.W     D0
+L013C:MOVEM.L   (A7)+,A0-A2/D0-D4 
+      RTS 
+L013D:MOVEQ     #-1,D0
+      BRA.S     L013C 
+      MOVEM.L   A0/D2-D5,-(A7)
+      MOVE.W    26(A7),D2 
+      MOVE.W    D2,D1 
+      LSR.W     #4,D1 
+      ADDQ.W    #1,D1 
+      MOVE.W    D2,D3 
+      ANDI.W    #$F,D3
+      CMPI.W    #2,D3 
+      BLT.S     L013E 
+      ADDQ.W    #1,D1 
+L013E:MOVE.W    24(A7),D3 
+      MOVE.W    D1,D4 
+      LSL.W     #1,D4 
+      MULU      D3,D4 
+      MOVE.L    D4,-(A7)
+      JSR       L00FA 
+      ADDQ.L    #4,A7 
+      MOVE.W    D0,D5 
+      BMI.S     L0142 
+      MOVE.L    D4,D0 
+      LSR.L     #1,D0 
+      SUBQ.W    #1,D0 
+L013F:MOVE.W    #-1,(A0)+ 
+      DBF       D0,L013F
+      ADDQ.L    #3,D4 
+      LSL.L     #2,D4 
+      MOVE.L    D4,-(A7)
+      JSR       L00FA 
+      ADDQ.L    #4,A7 
+      TST.W     D0
+      BMI.S     L0141 
+      CLR.W     (A0)+ 
+      MOVE.W    D1,(A0)+
+      MOVE.W    D3,(A0)+
+      MOVE.W    D2,(A0)+
+      CLR.L     (A0)+ 
+      MOVEQ     #0,D1 
+      MOVE.W    D5,D1 
+L0140:MOVEM.L   (A7)+,A0/D2-D5
+      RTS 
+L0141:MOVE.W    D5,-(A7)
+      JSR       L0102 
+      ADDQ.L    #2,A7 
+L0142:MOVEQ     #-1,D0
+      MOVEQ     #-1,D1
+      BRA.S     L0140 
+L0143:MOVEM.L   A0,-(A7)
+      MOVE.L    #$144,-(A7) 
+      JSR       L00FA 
+      ADDQ.L    #4,A7 
+      MOVE.W    D0,L024E
+      BMI.S     L0146 
+      MOVE.W    #$14,(A0)+
+      CLR.W     (A0)
+      ADDQ.L    #4,A0 
+      MOVEQ     #$13,D0 
+L0144:MOVE.W    #-1,(A0)
+      ADDA.W    #$10,A0 
+      DBF       D0,L0144
+      MOVEQ     #1,D0 
+L0145:MOVEM.L   (A7)+,A0
+      RTS 
+L0146:MOVEQ     #-1,D0
+      BRA.S     L0145 
+L0147:MOVEM.L   A0-A1/D0-D3,-(A7) 
+      MOVE.W    28(A7),D2 
+      MOVE.W    D2,-(A7)
+      JSR       L0111 
+      ADDQ.L    #2,A7 
+      TST.W     D0
+      BMI.S     L014A 
+      MOVE.W    (A0)+,D1
+      SUBQ.W    #1,D1 
+L0148:MOVE.W    D2,-(A7)
+      JSR       L0111 
+      ADDQ.L    #2,A7 
+      MOVE.W    D1,D0 
+      LSL.W     #1,D0 
+      MOVE.W    D0,D3 
+      MOVE.W    2(A0,D3.W),D0 
+      BMI.S     L0149 
+      MOVE.W    #-1,2(A0,D3.W)
+      MOVE.W    D0,-(A7)
+      JSR       L0102 
+      ADDQ.W    #2,A7 
+L0149:DBF       D1,L0148
+      MOVE.W    D2,-(A7)
+      JSR       L014B 
+      ADDQ.W    #2,A7 
+L014A:MOVEM.L   (A7)+,A0-A1/D0-D3 
+      RTS 
+L014B:MOVEM.L   A0-A1/D0-D2,-(A7) 
+      MOVE.W    24(A7),D0 
+      BMI       L0154 
+      CMPI.W    #$3E8,D0
+      BGE.S     L014C 
+      MOVE.W    D0,-(A7)
+      CLR.W     -(A7) 
+      JSR       L011E 
+      ADDQ.L    #4,A7 
+L014C:MOVE.W    L024E,-(A7) 
+      JSR       L010E 
+      ADDQ.L    #2,A7 
+      MOVE.W    (A0),D1 
+      ADDQ.L    #4,A0 
+      SUBQ.W    #1,D1 
+L014D:TST.W     2(A0) 
+      BMI.S     L014E 
+      CMP.W     (A0),D0 
+      BEQ.S     L014F 
+L014E:ADDA.W    #$10,A0 
+      DBF       D1,L014D
+      BRA       L0154 
+L014F:ADDQ.L    #2,A0 
+      MOVE.W    (A0),D0 
+      MOVE.W    #-1,(A0)
+      MOVE.W    D0,-(A7)
+      JSR       L0102 
+      ADDQ.L    #2,A7 
+      MOVE.W    L024E,-(A7) 
+      JSR       L010E 
+      ADDQ.L    #2,A7 
+      SUBQ.W    #1,2(A0)
+      MOVE.W    (A0),D0 
+      SUB.W     2(A0),D0
+      CMPI.W    #$28,D0 
+      BLT.S     L0154 
+      MOVEA.L   A0,A1 
+      MOVE.W    2(A1),D0
+      ADDI.W    #$14,D0 
+      LSL.W     #4,D0 
+      ADDQ.W    #4,D0 
+      EXT.L     D0
+      MOVE.L    D0,-(A7)
+      JSR       L00FA 
+      ADDQ.L    #4,A7 
+      TST.W     D0
+      BMI.S     L0154 
+      MOVE.W    (A1),D2 
+      MOVE.W    2(A1),D1
+      MOVE.W    D1,2(A0)
+      ADDI.W    #$14,D1 
+      MOVE.W    D1,(A0) 
+      ADDQ.L    #4,A1 
+      ADDQ.L    #4,A0 
+      SUBQ.W    #1,D2 
+L0150:TST.W     2(A1) 
+      BMI.S     L0151 
+      MOVE.L    (A1)+,(A0)+ 
+      MOVE.L    (A1)+,(A0)+ 
+      MOVE.L    (A1)+,(A0)+ 
+      MOVE.L    (A1)+,(A0)+ 
+      BRA.S     L0152 
+L0151:ADDA.W    #$10,A1 
+L0152:DBF       D2,L0150
+      MOVEQ     #$13,D2 
+      ADDQ.L    #2,A0 
+L0153:MOVE.W    #-1,(A0)
+      ADDA.W    #$10,A0 
+      DBF       D2,L0153
+      MOVE.W    L024E,-(A7) 
+      JSR       L0102 
+      ADDQ.L    #2,A7 
+      MOVE.W    D0,L024E
+L0154:MOVEM.L   (A7)+,A0-A1/D0-D2 
+      RTS 
+L0155:MOVEM.L   A0-A1/D0,-(A7)
+      MOVE.W    16(A7),D0 
+      MOVEA.L   18(A7),A1 
+      MOVEA.L   22(A7),A0 
+      SUBQ.W    #1,D0 
+L0156:MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      MOVE.L    (A0)+,(A1)+ 
+      DBF       D0,L0156
+      MOVEM.L   (A7)+,A0-A1/D0
+      RTS 
+      MOVEM.L   A0/D0,-(A7) 
+      MOVE.W    12(A7),D0 
+      SUBQ.W    #1,D0 
+      MOVEA.L   14(A7),A0 
+L0157:CLR.W     (A0)+ 
+      DBF       D0,L0157
+      MOVEM.L   (A7)+,A0/D0 
+      RTS 
+L0158:MOVE.W    #$14,L0277
+      MOVE.W    #$A0,L026E
+      MOVE.W    #$C8,L0269
+      MOVE.L    #$7CF8,L0268
+      JMP       L0159 
+      MOVE.L    D0,-(A7)
+      MOVE.W    L026E,D0
+      MULU      L0269,D0
+      SUBQ.L    #2,D0 
+      MOVE.L    D0,L0268
+      MOVE.L    (A7)+,D0
+      JMP       L0159 
+L0159:MOVEM.L   A0-A6/D0-D7,-(A7) 
+      MOVE.L    #$56444154,(A1) 
+      LEA       10(A1),A3 
+      MOVEA.L   A2,A4 
+      SF        D4
+      MOVE.W    (A0),D0 
+      ADDA.W    L026E,A0
+      MOVEA.L   A2,A5 
+      MOVEQ     #0,D3 
+      MOVE.W    L0277,D7
+      SUBQ.W    #1,D7 
+      MOVE.W    L0269,D6
+      SUBQ.W    #1,D6 
+      BRA.S     L015C 
+L015A:MOVE.W    (A0),D0 
+      ADDA.W    L026E,A0
+      TST.B     D4
+      BEQ.S     L015B 
+      CMP.W     D0,D1 
+      BEQ.S     L015D 
+      BSR.S     L0161 
+      BRA.S     L015D 
+L015B:CMP.W     D0,D1 
+      BNE.S     L015C 
+      BSR.S     L0164 
+      BRA.S     L015D 
+L015C:MOVE.W    D0,(A2)+
+L015D:ADDQ.W    #1,D3 
+      MOVE.W    D0,D1 
+      DBF       D6,L015A
+      MOVE.W    L0269,D6
+      SUBQ.W    #1,D6 
+      SUBA.L    L0268,A0
+      DBF       D7,L015A
+      TST.B     D4
+      BEQ.S     L015E 
+      BSR.S     L0161 
+      BRA.S     L015F 
+L015E:BSR.S     L0165 
+      ADDQ.W    #2,A2 
+L015F:ADDQ.W    #1,A3 
+      MOVE.L    A3,D2 
+      ANDI.L    #-2,D2
+      MOVEA.L   D2,A3 
+L0160:MOVE.W    (A4)+,(A3)+ 
+      CMPA.L    A4,A2 
+      BNE.S     L0160 
+      MOVE.L    A1,D0 
+      ADDQ.L    #8,D0 
+      MOVE.L    A3,D1 
+      SUBQ.L    #2,D1 
+      SUB.L     D0,D1 
+      MOVE.L    D1,4(A1)
+      SUB.L     D0,D2 
+      MOVE.W    D2,8(A1)
+      MOVEM.L   (A7)+,A0-A6/D0-D7 
+      RTS 
+L0161:CMPI.W    #$7F,D3 
+      BGT.S     L0162 
+      MOVE.B    D3,(A3)+
+      BRA.S     L0163 
+L0162:MOVE.B    #1,(A3)+
+      MOVE.W    (A5),(A2)+
+      MOVE.W    D3,(A5) 
+L0163:MOVEA.L   A2,A5 
+      MOVE.W    D0,(A2)+
+      SF        D4
+      MOVEQ     #0,D3 
+      RTS 
+L0164:SUBQ.W    #1,D3 
+      BEQ.S     L0169 
+L0165:CMPI.W    #$80,D3 
+      BGT.S     L0166 
+      NEG.W     D3
+      MOVE.B    D3,(A3)+
+      BRA.S     L0168 
+L0166:CLR.B     (A3)+ 
+      LEA       2(A2),A6
+L0167:MOVE.W    -2(A2),(A2) 
+      SUBQ.W    #2,A2 
+      CMPA.L    A2,A5 
+      BNE.S     L0167 
+      MOVEA.L   A6,A2 
+      MOVE.W    D3,(A5) 
+L0168:LEA       -2(A2),A5 
+L0169:ST        D4
+      MOVEQ     #1,D3 
+      RTS 
+L016A:MOVE.W    #$A0,L026E
+      MOVE.L    L0279,L0268 
+      SUBQ.L    #8,L0268
+      JMP       L016B 
+      MOVE.L    D0,-(A7)
+      MOVE.W    L026E,D0
+      MULU      L0269,D0
+      MOVE.L    D0,L0279
+      SUBQ.L    #2,D0 
+      MOVE.L    D0,L0268
+      MOVE.L    (A7)+,D0
+      JMP       L016B 
+L016B:MOVEM.L   A0-A2/D4-D7/D0-D1,-(A7) 
+      MOVE.W    L026E,D6
+      MOVE.L    L0279,D4
+      ADD.L     A0,D4 
+      MOVE.L    L0268,D5
+      MOVEA.L   A1,A2 
+      MOVE.L    A1,D7 
+      ADDA.W    (A1)+,A2
+      ADD.L     D0,D7 
+L016C:CMP.L     A2,D7 
+      BLE.S     L0175 
+      MOVEQ     #0,D0 
+      MOVE.B    (A1)+,D0
+      BEQ.S     L016F 
+      BPL.S     L0170 
+      NEG.B     D0
+      SUBQ.W    #1,D0 
+L016D:MOVE.W    (A2)+,(A0)
+      ADDA.W    D6,A0 
+      CMP.L     A0,D4 
+      BGT.S     L016E 
+      SUBA.L    D5,A0 
+L016E:DBF       D0,L016D
+      BRA.S     L016C 
+L016F:MOVE.W    (A2)+,D0
+      SUBQ.W    #1,D0 
+      BRA.S     L016D 
+L0170:SUBQ.W    #1,D0 
+      BEQ.S     L0174 
+L0171:MOVE.W    (A2)+,D1
+L0172:MOVE.W    D1,(A0) 
+      ADDA.W    D6,A0 
+      CMP.L     A0,D4 
+      BGT.S     L0173 
+      SUBA.L    D5,A0 
+L0173:DBF       D0,L0172
+      BRA.S     L016C 
+L0174:MOVE.W    (A2)+,D0
+      SUBQ.W    #1,D0 
+      BRA.S     L0171 
+L0175:MOVEM.L   (A7)+,A0-A2/D4-D7/D0-D1 
+      RTS 
+L0176:LINK      A6,#0 
+      JSR       L0189 
+      BNE.S     L0177 
+      JSR       L018F 
+L0177:BRA       L0187 
+L0178:MOVE.W    #7,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #2,A7 
+      MOVE.L    D0,L0273
+      MOVE.L    L0273,D0
+      EXT.W     D0
+      MOVE.W    D0,-(A7)
+      JSR       L0221 
+      ADDQ.L    #2,A7 
+      BRA       L0184 
+L0179:CLR.B     L026C 
+      SF        D0
+      JSR       L000E 
+      BRA       L0185 
+L017A:MOVE.B    #1,L026C
+      SF        D0
+      JSR       L000E 
+      BRA       L0185 
+L017B:JSR       L0025 
+      BRA       L0185 
+L017C:MOVE.B    L026C,D0
+      EXT.W     D0
+      CMP.W     #0,D0 
+      BLT.S     L017D 
+      SF        D0
+      JSR       L000E 
+      BRA.S     L017E 
+L017D:JSR       L0025 
+L017E:BRA       L0185 
+L017F:JSR       L0007 
+      BRA       L0185 
+L0180:JSR       L0004 
+      BRA       L0185 
+L0181:MOVE.B    L0254,D0
+      BEQ.S     L0182 
+      JSR       L01AA 
+      BRA.S     L0183 
+L0182:JSR       L01A6 
+L0183:BRA.S     L0185 
+      BRA.S     L0185 
+L0184:CMP.W     #9,D0 
+      BEQ.S     L0181 
+      CMP.W     #$2A,D0 
+      BEQ.S     L017C 
+      CMP.W     #$2B,D0 
+      BEQ.S     L017F 
+      CMP.W     #$2D,D0 
+      BEQ.S     L0180 
+      CMP.W     #$34,D0 
+      BEQ       L017A 
+      CMP.W     #$35,D0 
+      BEQ       L0179 
+      CMP.W     #$36,D0 
+      BEQ       L017B 
+L0185:CMPI.L    #$610000,L0273
+      BEQ.S     L0186 
+      MOVE.L    L0273,D0
+      EXT.W     D0
+      CMP.W     #$20,D0 
+      BEQ.S     L0186 
+      MOVE.L    L0273,D0
+      EXT.W     D0
+      CMP.W     #$1B,D0 
+      BEQ.S     L0186 
+      CMPI.L    #$740000,L0273
+      BEQ.S     L0186 
+      CMPI.L    #$750000,L0273
+      BNE       L0178 
+L0186:MOVEM.L   A1-A2/D0-D2,-(A7) 
+      LEA       L01A5,A0
+      PEA       L01A5 
+      MOVEA.L   L0288,A1
+      JSR       (A1)
+      ADDQ.W    #4,A7 
+      MOVEM.L   (A7)+,A1-A2/D0-D2 
+L0187:JSR       L0190 
+      BNE       L0178 
+      JSR       L018F 
+      UNLK      A6
+      RTS 
+L0188:RTS 
+L0189:LINK      A6,#0 
+      MOVEM.L   D6-D7,-(A7) 
+      MOVE.W    #2,-(A7)
+      JSR       L01C2 
+      ADDQ.L    #2,A7 
+      MOVE.L    D0,L0286
+      MOVE.W    #4,-(A7)
+      JSR       L01C2 
+      ADDQ.L    #2,A7 
+      MOVE.W    D0,L028B
+      CMPI.W    #1,L028B
+      BLE.S     L018A 
+      MOVE.W    #-1,-(A7) 
+      JSR       L01C6 
+      ADDQ.L    #2,A7 
+L018A:JSR       L01BF 
+      CLR.L     -(A7) 
+      MOVE.W    #$20,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #6,A7 
+      MOVE.L    D0,L027C
+      JSR       L00F5 
+      TST.W     D0
+      BMI.S     L018B 
+      MOVE.L    #$19E10,-(A7) 
+      JSR       L00FA 
+      ADDQ.L    #4,A7 
+      TST.W     D0
+      BMI.S     L018B 
+      MOVE.L    A0,D0 
+      CLR.B     D0
+      ADDI.L    #$100,D0
+      MOVE.L    D0,L0299
+      MOVEA.L   D0,A0 
+      ADDA.L    #$7D00,A0 
+      MOVE.L    A0,L026F
+      ADDA.L    #$8000,A0 
+      MOVE.L    A0,L0283
+      ADDA.L    #$8000,A0 
+      MOVE.L    A0,L02A4
+      ADDA.L    #$1F90,A0 
+      MOVE.L    A0,L027A
+      CLR.L     (A0)
+      JSR       L0143 
+      MOVEQ     #1,D0 
+      BRA.S     L018C 
+L018B:MOVEQ     #0,D0 
+L018C:MOVE.W    D0,D6 
+      CLR.W     D7
+      BRA.S     L018E 
+L018D:MOVE.W    #-1,-(A7) 
+      MOVE.W    D7,-(A7)
+      MOVE.W    #7,-(A7)
+      JSR       L01C2 
+      ADDQ.L    #6,A7 
+      MOVE.W    D7,D1 
+      ASL.W     #1,D1 
+      LEA       L0267,A0
+      MOVE.W    D0,0(A0,D1.W) 
+      ADDQ.W    #1,D7 
+L018E:CMPI.W    #$10,D7 
+      BLT.S     L018D 
+      MOVE.W    #$22,-(A7)
+      JSR       L01C2 
+      ADDQ.L    #2,A7 
+      MOVE.L    D0,L0278
+      MOVEA.L   L0278,A0
+      MOVE.L    16(A0),L0288
+      MOVE.W    D6,D0 
+      MOVEM.L   (A7)+,D6-D7 
+      UNLK      A6
+      RTS 
+L018F:LINK      A6,#-2
+      MOVE.W    #$80,-(A7)
+      MOVE.W    #4,-(A7)
+      MOVE.W    #3,-(A7)
+      JSR       L01C1 
+      ADDQ.L    #6,A7 
+      MOVE.W    #1,-(A7)
+      MOVE.W    #4,-(A7)
+      MOVE.W    #3,-(A7)
+      JSR       L01C1 
+      ADDQ.L    #6,A7 
+      JSR       L01AA 
+      JSR       L00F8 
+      PEA       L0267 
+      MOVE.W    #6,-(A7)
+      JSR       L01C2 
+      ADDQ.L    #6,A7 
+      MOVE.L    L027C,-(A7) 
+      MOVE.W    #$20,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #6,A7 
+      MOVE.W    L028B,-(A7) 
+      MOVE.L    L0286,-(A7) 
+      MOVE.L    L0286,-(A7) 
+      MOVE.W    #5,-(A7)
+      JSR       L01C2 
+      LEA       12(A7),A7 
+      JSR       L01BE 
+      CLR.W     -(A7) 
+      JSR       L01C6 
+      ADDQ.L    #2,A7 
+      UNLK      A6
+      RTS 
+L0190:LINK      A6,#-4
+L0191:JSR       L0053 
+      JSR       L01AA 
+      MOVEM.L   A1-A2/D0-D2,-(A7) 
+      LEA       L01A5,A0
+      PEA       L01A5 
+      MOVEA.L   L0288,A1
+      JSR       (A1)
+      ADDQ.W    #4,A7 
+      MOVEM.L   (A7)+,A1-A2/D0-D2 
+      MOVE.L    L027C,-(A7) 
+      MOVE.W    #$20,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #6,A7 
+L0192:MOVE.W    L028B,-(A7) 
+      MOVE.L    L0299,-(A7) 
+      MOVE.L    L0299,-(A7) 
+      MOVE.W    #5,-(A7)
+      JSR       L01C2 
+      LEA       12(A7),A7 
+      PEA       L0267 
+      MOVE.W    #6,-(A7)
+      JSR       L01C2 
+      ADDQ.L    #6,A7 
+      MOVE.W    #$1B,-(A7)
+      MOVE.W    #2,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+      MOVE.W    #$45,-(A7)
+      MOVE.W    #2,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+      MOVE.W    #$1B,-(A7)
+      MOVE.W    #2,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+      MOVE.W    #$59,-(A7)
+      MOVE.W    #2,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+      MOVE.W    #$20,-(A7)
+      MOVE.W    #2,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+      MOVE.W    L028B,D0
+      BEQ.S     L0193 
+      MOVE.W    #$38,-(A7)
+      MOVE.W    #2,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+      BRA.S     L0194 
+L0193:MOVE.W    #$24,-(A7)
+      MOVE.W    #2,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+L0194:PEA       L0255 
+      MOVE.W    #9,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #6,A7 
+      MOVE.W    #$1B,-(A7)
+      MOVE.W    #2,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+      MOVE.W    #$59,-(A7)
+      MOVE.W    #2,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+      MOVE.W    #$21,-(A7)
+      MOVE.W    #2,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+      MOVE.W    L028B,D0
+      BEQ.S     L0195 
+      MOVE.W    #$36,-(A7)
+      MOVE.W    #2,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+      BRA.S     L0196 
+L0195:MOVE.W    #$22,-(A7)
+      MOVE.W    #2,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+L0196:PEA       L0256 
+      MOVE.W    #9,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #6,A7 
+      MOVE.W    #$1B,-(A7)
+      MOVE.W    #2,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+      MOVE.W    #$59,-(A7)
+      MOVE.W    #2,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+      MOVE.W    #$22,-(A7)
+      MOVE.W    #2,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+      MOVE.W    L028B,D0
+      BEQ.S     L0197 
+      MOVE.W    #$40,-(A7)
+      MOVE.W    #2,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+      BRA.S     L0198 
+L0197:MOVE.W    #$2C,-(A7)
+      MOVE.W    #2,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+L0198:PEA       L0257 
+      MOVE.W    #9,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #6,A7 
+      MOVE.W    #$1B,-(A7)
+      MOVE.W    #2,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+      MOVE.W    #$59,-(A7)
+      MOVE.W    #2,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+      MOVE.W    #$37,-(A7)
+      MOVE.W    #2,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+      MOVE.W    L028B,D0
+      BEQ.S     L0199 
+      MOVE.W    #$3A,-(A7)
+      MOVE.W    #2,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+      BRA.S     L019A 
+L0199:MOVE.W    #$26,-(A7)
+      MOVE.W    #2,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+L019A:MOVE.W    #$BD,-(A7)
+      MOVE.W    #2,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+      PEA       L0258 
+      MOVE.W    #9,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #6,A7 
+      MOVE.W    #$1B,-(A7)
+      MOVE.W    #2,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+      MOVE.W    #$59,-(A7)
+      MOVE.W    #2,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+      MOVE.W    #$38,-(A7)
+      MOVE.W    #2,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+      MOVE.W    L028B,D0
+      BEQ.S     L019B 
+      MOVE.W    #$3C,-(A7)
+      MOVE.W    #2,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+      BRA.S     L019C 
+L019B:MOVE.W    #$28,-(A7)
+      MOVE.W    #2,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+L019C:PEA       L0259 
+      MOVE.W    #9,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #6,A7 
+      PEA       L025A 
+      PEA       L0297 
+      JSR       L021C 
+      ADDQ.L    #8,A7 
+      MOVE.W    #$19,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #2,A7 
+      ADD.B     D0,L0297
+      CLR.W     -(A7) 
+      LEA       L0297,A0
+      MOVE.L    A0,D0 
+      ADDQ.L    #2,D0 
+      MOVE.L    D0,-(A7)
+      MOVE.W    #$47,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #8,A7 
+      PEA       L025B 
+      PEA       L0297 
+      JSR       L0214 
+      ADDQ.L    #8,A7 
+      MOVE.W    #$80,-(A7)
+      MOVE.W    #4,-(A7)
+      MOVE.W    #3,-(A7)
+      JSR       L01C1 
+      ADDQ.L    #6,A7 
+      MOVE.W    #1,-(A7)
+      MOVE.W    #4,-(A7)
+      MOVE.W    #3,-(A7)
+      JSR       L01C1 
+      ADDQ.L    #6,A7 
+      PEA       L0287 
+      MOVE.L    L027A,-(A7) 
+      PEA       L0297 
+      JSR       L01C0 
+      LEA       12(A7),A7 
+      MOVE.W    #7,-(A7)
+      MOVE.W    #4,-(A7)
+      MOVE.W    #3,-(A7)
+      JSR       L01C1 
+      ADDQ.L    #6,A7 
+      MOVE.W    #4,-(A7)
+      MOVE.W    #4,-(A7)
+      MOVE.W    #3,-(A7)
+      JSR       L01C1 
+      ADDQ.L    #6,A7 
+      MOVE.W    #9,-(A7)
+      MOVE.W    #4,-(A7)
+      MOVE.W    #3,-(A7)
+      JSR       L01C1 
+      ADDQ.L    #6,A7 
+      CLR.W     -(A7) 
+      MOVE.W    #4,-(A7)
+      MOVE.W    #3,-(A7)
+      JSR       L01C1 
+      ADDQ.L    #6,A7 
+      CLR.W     -(A7) 
+      MOVE.W    #4,-(A7)
+      MOVE.W    #3,-(A7)
+      JSR       L01C1 
+      ADDQ.L    #6,A7 
+      CLR.W     -(A7) 
+      MOVE.W    #4,-(A7)
+      MOVE.W    #3,-(A7)
+      JSR       L01C1 
+      ADDQ.L    #6,A7 
+      CLR.W     -(A7) 
+      MOVE.W    #4,-(A7)
+      MOVE.W    #3,-(A7)
+      JSR       L01C1 
+      ADDQ.L    #6,A7 
+      MOVE.W    L0287,D0
+      BEQ.S     L019F 
+      PEA       L0297 
+      JSR       L021E 
+      ADDQ.L    #4,A7 
+      MOVE.W    D0,-2(A6) 
+      BRA.S     L019E 
+L019D:SUBQ.W    #1,-2(A6) 
+L019E:MOVE.W    -2(A6),D0 
+      LEA       L0297,A0
+      MOVE.B    0(A0,D0.W),D0 
+      EXT.W     D0
+      CMP.W     #$5C,D0 
+      BNE.S     L019D 
+      MOVE.W    -2(A6),D0 
+      LEA       L0298,A0
+      CLR.B     0(A0,D0.W)
+      MOVE.B    L0297,D0
+      EXT.W     D0
+      SUB.W     #$41,D0 
+      MOVE.W    D0,-(A7)
+      MOVE.W    #$E,-(A7) 
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+      BRA.S     L01A0 
+L019F:BRA.S     L01A1 
+L01A0:PEA       L0297 
+      MOVE.W    #$3B,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #6,A7 
+      TST.W     D0
+      BNE       L0192 
+      CLR.W     -(A7) 
+      MOVE.L    L027A,-(A7) 
+      MOVE.W    #$3D,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #8,A7 
+      MOVE.W    D0,-4(A6) 
+      TST.W     -4(A6)
+      BLT       L0192 
+      MOVE.W    -4(A6),-(A7)
+      MOVE.W    #$3E,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+L01A1:CLR.L     -(A7) 
+      MOVE.W    #$20,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #6,A7 
+      MOVE.L    D0,L027C
+      MOVE.W    L0287,D0
+      BNE.S     L01A2 
+      MOVE.W    #0,D0 
+      BRA       L01A4 
+L01A2:CLR.W     -(A7) 
+      MOVE.L    L0299,-(A7) 
+      MOVE.L    L0299,-(A7) 
+      MOVE.W    #5,-(A7)
+      JSR       L01C2 
+      LEA       12(A7),A7 
+      MOVE.W    #7,-(A7)
+      MOVE.W    #4,-(A7)
+      MOVE.W    #3,-(A7)
+      JSR       L01C1 
+      ADDQ.L    #6,A7 
+      MOVE.W    #4,-(A7)
+      MOVE.W    #4,-(A7)
+      MOVE.W    #3,-(A7)
+      JSR       L01C1 
+      ADDQ.L    #6,A7 
+      MOVE.W    #9,-(A7)
+      MOVE.W    #4,-(A7)
+      MOVE.W    #3,-(A7)
+      JSR       L01C1 
+      ADDQ.L    #6,A7 
+      CLR.W     -(A7) 
+      MOVE.W    #4,-(A7)
+      MOVE.W    #3,-(A7)
+      JSR       L01C1 
+      ADDQ.L    #6,A7 
+      CLR.W     -(A7) 
+      MOVE.W    #4,-(A7)
+      MOVE.W    #3,-(A7)
+      JSR       L01C1 
+      ADDQ.L    #6,A7 
+      CLR.W     -(A7) 
+      MOVE.W    #4,-(A7)
+      MOVE.W    #3,-(A7)
+      JSR       L01C1 
+      ADDQ.L    #6,A7 
+      CLR.W     -(A7) 
+      MOVE.W    #4,-(A7)
+      MOVE.W    #3,-(A7)
+      JSR       L01C1 
+      ADDQ.L    #6,A7 
+      MOVE.W    #$1B,-(A7)
+      MOVE.W    #2,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+      MOVE.W    #$45,-(A7)
+      MOVE.W    #2,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+      MOVEM.L   A1-A2/D0-D2,-(A7) 
+      LEA       L01A5,A0
+      PEA       L01A5 
+      MOVEA.L   L0288,A1
+      JSR       (A1)
+      ADDQ.W    #4,A7 
+      MOVEM.L   (A7)+,A1-A2/D0-D2 
+      MOVEA.L   L027A,A0
+      JSR       L0066 
+      MOVE.W    D0,L0253
+      JSR       L01B9 
+      MOVE.L    L026F,-(A7) 
+      MOVE.L    L0299,-(A7) 
+      MOVE.W    #$C8,-(A7)
+      JSR       L0155 
+      LEA       10(A7),A7 
+      MOVE.W    L0253,D0
+      BNE       L0191 
+      NOP 
+L01A3:MOVE.W    #$FF,-(A7)
+      MOVE.W    #6,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+      TST.L     D0
+      BNE.S     L01A3 
+      MOVE.W    #1,D0 
+L01A4:UNLK      A6
+      RTS 
+L01A5:DC.B      $F8,$00,$00,$00,$00,$00 
+L01A6:MOVEM.L   A0-A1/D0-D1,-(A7) 
+      MOVE      SR,-(A7)
+      TST.B     L0254 
+      BNE.S     L01A9 
+      ORI.W     #$700,SR
+      MOVEA.L   $456.W,A0 
+      MOVEQ     #7,D0 
+L01A7:TST.L     (A0)+ 
+      BEQ.S     L01A8 
+      DBF       D0,L01A7
+      BRA.S     L01A9 
+L01A8:SUBQ.L    #4,A0 
+      LEA       L01AC,A1
+      MOVE.L    A1,(A0) 
+      MOVE.L    A0,L0295
+      CLR.W     L0290 
+      CLR.W     L028F 
+      CLR.W     L028E 
+      CLR.W     L028D 
+L01A9:ST        L0254 
+      MOVE      (A7)+,SR
+      MOVEM.L   (A7)+,A0-A1/D0-D1 
+      RTS 
+L01AA:MOVEM.L   A0-A1/D0,-(A7)
+      MOVE      SR,-(A7)
+      ORI.W     #$700,SR
+      TST.B     L0254 
+      BEQ.S     L01AB 
+      MOVEA.L   L0295,A0
+      CLR.L     (A0)
+L01AB:MOVE      (A7)+,SR
+      SF        L0254 
+      JSR       L01B9 
+      MOVEM.L   (A7)+,A0-A1/D0
+      RTS 
+L01AC:MOVE      SR,-(A7)
+      ORI.W     #$700,SR
+      LEA       $FFFF8240.L,A3
+      LEA       L0252,A0
+      MOVE.W    (A0)+,D0
+      MOVE.W    (A0)+,D1
+      MOVE.W    (A0)+,D2
+      MOVE.W    (A0)+,D3
+      TST.W     D2
+      BEQ.S     L01AF 
+      TST.W     D3
+      BPL.S     L01AD 
+      EXG       D1,D0 
+L01AD:ADDQ.W    #1,L0290
+      CMP.W     L0290,D2
+      BNE.S     L01AF 
+      CLR.W     L0290 
+      LSL.L     #1,D0 
+      LSL.L     #1,D1 
+      MOVEA.L   A3,A1 
+      MOVEA.L   A1,A2 
+      ADDA.W    D1,A1 
+      ADDA.W    D0,A2 
+      MOVE.W    (A1),D7 
+      NEG.W     D3
+L01AE:MOVE.W    0(A1,D3.W),(A1) 
+      ADDA.W    D3,A1 
+      CMPA.L    A1,A2 
+      BNE.S     L01AE 
+      MOVE.W    D7,(A1) 
+L01AF:MOVE.W    (A0)+,D0
+      MOVE.W    (A0)+,D1
+      MOVE.W    (A0)+,D2
+      MOVE.W    (A0)+,D3
+      TST.W     D2
+      BEQ.S     L01B2 
+      TST.W     D3
+      BPL.S     L01B0 
+      EXG       D1,D0 
+L01B0:ADDQ.W    #1,L028F
+      CMP.W     L028F,D2
+      BNE.S     L01B2 
+      CLR.W     L028F 
+      LSL.L     #1,D0 
+      LSL.L     #1,D1 
+      MOVEA.L   A3,A1 
+      MOVEA.L   A1,A2 
+      ADDA.W    D1,A1 
+      ADDA.W    D0,A2 
+      MOVE.W    (A1),D7 
+      NEG.W     D3
+L01B1:MOVE.W    0(A1,D3.W),(A1) 
+      ADDA.W    D3,A1 
+      CMPA.L    A1,A2 
+      BNE.S     L01B1 
+      MOVE.W    D7,(A1) 
+L01B2:MOVE.W    (A0)+,D0
+      MOVE.W    (A0)+,D1
+      MOVE.W    (A0)+,D2
+      MOVE.W    (A0)+,D3
+      TST.W     D2
+      BEQ.S     L01B5 
+      TST.W     D3
+      BPL.S     L01B3 
+      EXG       D1,D0 
+L01B3:ADDQ.W    #1,L028E
+      CMP.W     L028E,D2
+      BNE.S     L01B5 
+      CLR.W     L028E 
+      LSL.L     #1,D0 
+      LSL.L     #1,D1 
+      MOVEA.L   A3,A1 
+      MOVEA.L   A1,A2 
+      ADDA.W    D1,A1 
+      ADDA.W    D0,A2 
+      MOVE.W    (A1),D7 
+      NEG.W     D3
+L01B4:MOVE.W    0(A1,D3.W),(A1) 
+      ADDA.W    D3,A1 
+      CMPA.L    A1,A2 
+      BNE.S     L01B4 
+      MOVE.W    D7,(A1) 
+L01B5:MOVE.W    (A0)+,D0
+      MOVE.W    (A0)+,D1
+      MOVE.W    (A0)+,D2
+      BEQ.S     L01B8 
+      MOVE.W    (A0)+,D3
+      BPL.S     L01B6 
+      EXG       D1,D0 
+L01B6:ADDQ.W    #1,L028D
+      CMP.W     L028D,D2
+      BNE.S     L01B8 
+      CLR.W     L028D 
+      LSL.L     #1,D0 
+      LSL.L     #1,D1 
+      MOVEA.L   A3,A1 
+      MOVEA.L   A1,A2 
+      ADDA.W    D1,A1 
+      ADDA.W    D0,A2 
+      MOVE.W    (A1),D7 
+      NEG.W     D3
+L01B7:MOVE.W    0(A1,D3.W),(A1) 
+      ADDA.W    D3,A1 
+      CMPA.L    A1,A2 
+      BNE.S     L01B7 
+      MOVE.W    D7,(A1) 
+L01B8:MOVE      (A7)+,SR
+      RTS 
+L01B9:MOVEM.L   A0-A1/D0-D2,-(A7) 
+      LEA       L0282,A0
+      MOVEA.L   #$FF8240,A1 
+      MOVEQ     #$F,D0
+L01BA:MOVE.W    (A0)+,D1
+      MOVE.W    D1,D2 
+      ANDI.W    #$111,D2
+      ANDI.W    #$EEE,D1
+      LSR.W     #1,D1 
+      LSL.W     #3,D2 
+      OR.W      D2,D1 
+      MOVE.W    D1,(A1)+
+      DBF       D0,L01BA
+      MOVEM.L   (A7)+,A0-A1/D0-D2 
+      RTS 
+L01BB:CLR.W     D0
+L01BC:TST.B     0(A0,D0.W)
+      BEQ.S     L01BD 
+      ADDQ.W    #1,D0 
+      BRA.S     L01BC 
+L01BD:RTS 
+L01BE:LINK      A6,#0 
+      MOVE.W    #$13,-(A7)
+      JSR       L022F 
+      ADDQ.L    #2,A7 
+      MOVE.W    #1,D0 
+      UNLK      A6
+      RTS 
+L01BF:LINK      A6,#-2
+      LEA       L0292,A0
+      MOVE.L    A0,L029C
+      LEA       L0291,A0
+      MOVE.L    A0,L029D
+      LEA       L026D,A0
+      MOVE.L    A0,L029E
+      LEA       L02A8,A0
+      MOVE.L    A0,L029F
+      LEA       L02A6,A0
+      MOVE.L    A0,L02A0
+      LEA       L0284,A0
+      MOVE.L    A0,L02A1
+      LEA       L029C,A0
+      MOVE.L    A0,L027E
+      MOVE.W    #$A,-(A7) 
+      JSR       L022F 
+      ADDQ.L    #2,A7 
+      MOVE.W    L02A8,L027D 
+      MOVE.W    L027D,D0
+      UNLK      A6
+      RTS 
+L01C0:LINK      A6,#0 
+      MOVE.L    8(A6),L02A6 
+      MOVE.L    12(A6),L02A7
+      MOVE.W    #$5A,-(A7) 	;#'Z' 
+      JSR       L022F 
+      ADDQ.L    #2,A7 
+      MOVEA.L   16(A6),A0 
+      MOVE.W    L02A9,(A0)
+      MOVE.W    L02A8,D0
+      UNLK      A6
+      RTS 
+L01C1:LEA       L02A3,A0
+      ADDA.W    L0281,A0
+      ADDQ.W    #4,L0281
+      MOVE.L    A1,(A0) 
+      MOVE.L    A2,16(A0) 
+      MOVE.L    (A7)+,32(A0)
+      TRAP      #$D 
+      SUBQ.W    #4,L0281
+      LEA       L02A3,A0
+      ADDA.W    L0281,A0
+      MOVEA.L   (A0),A1 
+      MOVEA.L   16(A0),A2 
+      MOVE.L    32(A0),-(A7)
+      TST.W     D0
+      RTS 
+L01C2:LEA       L02A3,A0
+      ADDA.W    L0281,A0
+      ADDQ.W    #4,L0281
+      MOVE.L    A1,(A0) 
+      MOVE.L    A2,16(A0) 
+      MOVE.L    (A7)+,32(A0)
+      TRAP      #$E 
+      SUBQ.W    #4,L0281
+      LEA       L02A3,A0
+      ADDA.W    L0281,A0
+      MOVEA.L   (A0),A1 
+      MOVEA.L   16(A0),A2 
+      MOVE.L    32(A0),-(A7)
+      TST.W     D0
+      RTS 
+L01C3:LEA       L02A3,A0
+      ADDA.W    L0281,A0
+      ADDQ.W    #4,L0281
+      MOVE.L    A1,(A0) 
+      MOVE.L    A2,16(A0) 
+      MOVE.L    (A7)+,32(A0)
+      TRAP      #1
+      SUBQ.W    #4,L0281
+      LEA       L02A3,A0
+      ADDA.W    L0281,A0
+      MOVEA.L   (A0),A1 
+      MOVEA.L   16(A0),A2 
+      MOVE.L    32(A0),-(A7)
+      TST.W     D0
+      RTS 
+      LINK      A6,#0 
+      MOVE.L    L025D,D0
+      LEA       L0263,A0
+      SUB.L     A0,D0 
+      ASR.L     #2,D0 
+      CMP.W     #8,D0 
+      BGE.S     L01C4 
+      MOVEA.L   L025D,A0
+      ADDQ.L    #4,L025D
+      MOVE.L    8(A6),(A0)
+      MOVE.W    #1,D0 
+      BRA.S     L01C5 
+L01C4:MOVE.W    #0,D0 
+L01C5:UNLK      A6
+      RTS 
+L01C6:LINK      A6,#-2
+      MOVEM.L   A5,-(A7)
+      BRA.S     L01C8 
+L01C7:SUBQ.L    #4,L025D
+      MOVEA.L   L025D,A0
+      MOVEA.L   (A0),A0 
+      JSR       (A0)
+L01C8:MOVE.L    L025D,D0
+      LEA       L0263,A0
+      SUB.L     A0,D0 
+      ASR.L     #2,D0 
+      BNE.S     L01C7 
+      LEA       L025E,A0
+      MOVEA.L   A0,A5 
+      BRA.S     L01CB 
+L01C9:MOVE.W    10(A5),D0 
+      AND.W     #$403,D0
+      BEQ.S     L01CA 
+      MOVE.L    A5,-(A7)
+      JSR       L01CC 
+      ADDQ.L    #4,A7 
+L01CA:ADDA.W    #$10,A5 
+L01CB:MOVE.L    A5,D0 
+      LEA       L025E,A0
+      MOVE.L    A0,D1 
+      ADD.L     #$140,D1
+      CMP.L     D1,D0 
+      BLT.S     L01C9 
+      MOVE.W    8(A6),-(A7) 
+      JSR       L023E 
+      ADDQ.L    #2,A7 
+      MOVEM.L   (A7)+,A5
+      UNLK      A6
+      RTS 
+L01CC:LINK      A6,#0 
+      MOVEM.L   A5,-(A7)
+      MOVEA.L   8(A6),A5
+      MOVE.W    10(A5),D0 
+      AND.W     #2,D0 
+      BEQ.S     L01CD 
+      MOVE.L    A5,-(A7)
+      JSR       L01D1 
+      ADDQ.L    #4,A7 
+      BEQ.S     L01CD 
+      MOVE.W    #-1,D0
+      BRA.S     L01D0 
+L01CD:MOVE.W    10(A5),D0 
+      AND.W     #$10,D0 
+      BEQ.S     L01CE 
+      MOVE.L    6(A5),-(A7) 
+      JSR       L01EE 
+      ADDQ.L    #4,A7 
+L01CE:CLR.W     10(A5)
+      MOVE.W    12(A5),-(A7)
+      JSR       L023F 
+      ADDQ.L    #2,A7 
+      BEQ.S     L01CF 
+      MOVE.W    #-1,D0
+      BRA.S     L01D0 
+L01CF:MOVE.W    #0,D0 
+L01D0:MOVEM.L   (A7)+,A5
+      UNLK      A6
+      RTS 
+L01D1:LINK      A6,#0 
+      MOVEM.L   A5/D7,-(A7) 
+      MOVEA.L   8(A6),A5
+      MOVE.W    10(A5),D0 
+      AND.W     #$403,D0
+      BNE.S     L01D2 
+      MOVE.W    #-1,D0
+      BRA.S     L01D7 
+L01D2:MOVE.L    (A5),D7 
+      SUB.L     6(A5),D7
+      MOVE.W    10(A5),D0 
+      AND.W     #$80,D0 
+      BEQ.S     L01D6 
+      MOVE.W    10(A5),D0 
+      AND.W     #2,D0 
+      BNE.S     L01D3 
+      MOVE.W    #-1,D0
+      BRA.S     L01D7 
+L01D3:MOVE.W    10(A5),D0 
+      AND.W     #4,D0 
+      BEQ.S     L01D4 
+      MOVE.W    #2,-(A7)
+      CLR.L     -(A7) 
+      MOVE.W    12(A5),-(A7)
+      JSR       L01D8 
+      ADDQ.L    #8,A7 
+L01D4:MOVE.W    D7,-(A7)
+      MOVE.L    6(A5),-(A7) 
+      MOVE.W    12(A5),-(A7)
+      JSR       L0224 
+      ADDQ.L    #8,A7 
+      CMPI.W    #-1,D0
+      BNE.S     L01D5 
+      ORI.W     #$40,10(A5) 
+      MOVE.W    #-1,D0
+      BRA.S     L01D7 
+L01D5:ANDI.W    #-$81,10(A5)
+L01D6:MOVE.L    6(A5),(A5)
+      CLR.W     4(A5) 
+      MOVE.W    #0,D0 
+L01D7:MOVEM.L   (A7)+,A5/D7 
+      UNLK      A6
+      RTS 
+L01D8:LINK      A6,#-$E 
+      TST.W     8(A6) 
+      BGE.S     L01D9 
+      MOVE.W    #-$25,L0270 
+      MOVE.L    #-1,D0
+      BRA       L01E2 
+L01D9:MOVE.W    14(A6),-(A7)
+      MOVE.W    8(A6),-(A7) 
+      MOVE.L    10(A6),-(A7)
+      MOVE.W    #$42,-(A7)
+      JSR       L01C3 
+      LEA       10(A7),A7 
+      MOVE.L    D0,-4(A6) 
+      TST.L     D0
+      BLT.S     L01DA 
+      MOVE.L    -4(A6),D0 
+      BRA       L01E2 
+L01DA:MOVE.W    #1,-(A7)
+      MOVE.W    8(A6),-(A7) 
+      CLR.L     -(A7) 
+      MOVE.W    #$42,-(A7)
+      JSR       L01C3 
+      LEA       10(A7),A7 
+      MOVE.L    D0,-8(A6) 
+      TST.L     D0
+      BGE.S     L01DB 
+      MOVE.L    -8(A6),D0 
+      MOVE.W    D0,L0270
+      MOVE.L    #-1,D0
+      BRA       L01E2 
+L01DB:MOVE.W    #2,-(A7)
+      MOVE.W    8(A6),-(A7) 
+      CLR.L     -(A7) 
+      MOVE.W    #$42,-(A7)
+      JSR       L01C3 
+      LEA       10(A7),A7 
+      MOVE.L    D0,-12(A6)
+      CMPI.W    #1,14(A6) 
+      BNE.S     L01DC 
+      MOVE.L    -8(A6),D0 
+      ADD.L     10(A6),D0 
+      MOVE.L    D0,10(A6) 
+      BRA.S     L01DE 
+L01DC:CMPI.W    #2,14(A6) 
+      BNE.S     L01DD 
+      MOVE.L    -12(A6),D0
+      ADD.L     10(A6),D0 
+      MOVE.L    D0,10(A6) 
+      BRA.S     L01DE 
+L01DD:MOVE.W    14(A6),D0 
+      BEQ.S     L01DE 
+      MOVE.L    #-1,D0
+      BRA       L01E2 
+L01DE:MOVE.L    10(A6),D0 
+      CMP.L     -12(A6),D0
+      BLE.S     L01E0 
+      MOVE.W    8(A6),-(A7) 
+      JSR       L0203 
+      ADDQ.L    #2,A7 
+      AND.W     #-$2001,D0
+      TST.W     D0
+      BNE.S     L01DF 
+      MOVE.L    -4(A6),D0 
+      MOVE.W    D0,L0270
+      MOVE.L    #-1,D0
+      BRA.S     L01E2 
+      BRA.S     L01E0 
+L01DF:PEA       -14(A6) 
+      MOVE.L    10(A6),D0 
+      SUB.L     -12(A6),D0
+      MOVE.L    D0,-(A7)
+      MOVE.W    8(A6),-(A7) 
+      MOVE.W    #$40,-(A7)
+      JSR       L01C3 
+      LEA       12(A7),A7 
+L01E0:CLR.W     -(A7) 
+      MOVE.W    8(A6),-(A7) 
+      MOVE.L    10(A6),-(A7)
+      MOVE.W    #$42,-(A7)
+      JSR       L01C3 
+      LEA       10(A7),A7 
+      TST.L     D0
+      SLT       D0
+      AND.W     #1,D0 
+      MOVE.W    D0,-14(A6)
+      BEQ.S     L01E1 
+      MOVE.W    -14(A6),L0270 
+      MOVE.L    #-1,D0
+      BRA.S     L01E2 
+      BRA.S     L01E2 
+L01E1:MOVE.L    10(A6),D0 
+      NOP 
+L01E2:UNLK      A6
+      RTS 
+L01E3:LINK      A6,#0 
+      MOVEM.L   A4-A5/D7,-(A7)
+      MOVE.L    #$418,D7
+      MOVE.L    8(A6),D1
+      ADD.L     #$418,D1
+      SUBQ.L    #1,D1 
+      MOVE.L    D1,-(A7)
+      MOVE.L    #$418,D1
+      MOVE.L    D1,-(A7)
+      JSR       L0234 
+      MOVE.L    (A7)+,D1
+      ADDQ.L    #4,A7 
+      MOVE.L    D7,-(A7)
+      MOVE.L    D1,D7 
+      MOVE.L    D7,-(A7)
+      JSR       L023B 
+      MOVE.L    (A7)+,D7
+      MOVE.L    D7,D0 
+      ASL.L     #3,D0 
+      MOVE.L    D0,-(A7)
+      JSR       L0212 
+      ADDQ.L    #4,A7 
+      MOVEA.L   D0,A5 
+      CMPA.L    #-1,A5
+      BNE.S     L01E4 
+      MOVE.L    #0,D0 
+      BRA.S     L01E5 
+L01E4:MOVEA.L   A5,A4 
+      MOVE.L    D7,4(A4)
+      MOVE.L    A4,D0 
+      ADDQ.L    #8,D0 
+      MOVE.L    D0,-(A7)
+      JSR       L01EE 
+      ADDQ.L    #4,A7 
+      MOVE.L    L025F,D0
+L01E5:MOVEM.L   (A7)+,A4-A5/D7
+      UNLK      A6
+      RTS 
+L01E6:LINK      A6,#0 
+      MOVEM.L   A4-A5/D7,-(A7)
+      MOVE.L    #1,D7 
+      MOVE.L    8(A6),D1
+      ADDQ.L    #8,D1 
+      SUBQ.L    #1,D1 
+      MOVE.L    D1,-(A7)
+      MOVE.L    #8,D1 
+      MOVE.L    D1,-(A7)
+      JSR       L0234 
+      MOVE.L    (A7)+,D1
+      ADDQ.L    #4,A7 
+      ADD.L     D1,D7 
+      MOVE.L    L025F,D0
+      MOVEA.L   D0,A4 
+      TST.L     D0
+      BNE.S     L01E7 
+      LEA       L0264,A0
+      MOVE.L    A0,D0 
+      MOVEA.L   D0,A4 
+      MOVE.L    D0,L025F
+      MOVE.L    D0,L0264
+      CLR.L     L0265 
+L01E7:MOVEA.L   (A4),A5 
+L01E8:MOVE.L    4(A5),D0
+      CMP.L     D7,D0 
+      BCS.S     L01EB 
+      MOVE.L    4(A5),D0
+      CMP.L     D7,D0 
+      BNE.S     L01E9 
+      MOVE.L    (A5),(A4) 
+      BRA.S     L01EA 
+L01E9:MOVE.L    D7,D0 
+      SUB.L     D0,4(A5)
+      MOVE.L    4(A5),D0
+      ASL.L     #3,D0 
+      ADDA.L    D0,A5 
+      MOVE.L    D7,4(A5)
+L01EA:MOVE.L    A4,L025F
+      MOVE.L    A5,D0 
+      ADDQ.L    #8,D0 
+      BRA.S     L01ED 
+L01EB:MOVE.L    A5,D0 
+      CMP.L     L025F,D0
+      BNE.S     L01EC 
+      MOVE.L    D7,-(A7)
+      JSR       L01E3 
+      ADDQ.L    #4,A7 
+      MOVEA.L   D0,A5 
+      TST.L     D0
+      BNE.S     L01EC 
+      MOVE.L    #0,D0 
+      BRA.S     L01ED 
+L01EC:MOVEA.L   A5,A4 
+      MOVEA.L   (A5),A5 
+      BRA.S     L01E8 
+L01ED:MOVEM.L   (A7)+,A4-A5/D7
+      UNLK      A6
+      RTS 
+      LINK      A6,#0 
+      MOVE.W    8(A6),D0
+      AND.L     #$FFFF,D0 
+      MOVE.L    D0,-(A7)
+      JSR       L01E6 
+      ADDQ.L    #4,A7 
+      UNLK      A6
+      RTS 
+L01EE:LINK      A6,#0 
+      MOVEM.L   A4-A5,-(A7) 
+      MOVE.L    8(A6),D0
+      BNE.S     L01EF 
+      BRA.S     L01F9 
+L01EF:MOVE.L    8(A6),D0
+      SUBQ.L    #8,D0 
+      MOVEA.L   D0,A5 
+      MOVEA.L   L025F,A4
+      BRA.S     L01F3 
+L01F0:MOVE.L    A4,D0 
+      CMP.L     (A4),D0 
+      BLT.S     L01F2 
+      MOVE.L    A5,D0 
+      CMP.L     A4,D0 
+      BGT.S     L01F1 
+      MOVE.L    A5,D0 
+      CMP.L     (A4),D0 
+      BGE.S     L01F2 
+L01F1:BRA.S     L01F4 
+L01F2:MOVEA.L   (A4),A4 
+L01F3:MOVE.L    A5,D0 
+      CMP.L     A4,D0 
+      BLE.S     L01F0 
+      MOVE.L    A5,D0 
+      CMP.L     (A4),D0 
+      BGE.S     L01F0 
+L01F4:MOVE.L    A5,D0 
+      MOVE.L    4(A5),D1
+      ASL.L     #3,D1 
+      ADD.L     D1,D0 
+      CMP.L     (A4),D0 
+      BNE.S     L01F5 
+      MOVEA.L   (A4),A0 
+      MOVE.L    4(A0),D0
+      ADD.L     D0,4(A5)
+      MOVEA.L   (A4),A0 
+      MOVE.L    (A0),(A5) 
+      BRA.S     L01F6 
+L01F5:MOVE.L    (A4),(A5) 
+L01F6:MOVE.L    A4,D0 
+      MOVE.L    4(A4),D1
+      ASL.L     #3,D1 
+      ADD.L     D1,D0 
+      CMP.L     A5,D0 
+      BNE.S     L01F7 
+      MOVE.L    4(A5),D0
+      ADD.L     D0,4(A4)
+      MOVE.L    (A5),(A4) 
+      BRA.S     L01F8 
+L01F7:MOVE.L    A5,(A4) 
+L01F8:MOVE.L    A4,L025F
+L01F9:MOVEM.L   (A7)+,A4-A5 
+      UNLK      A6
+      RTS 
+L01FA:LINK      A6,#-2
+      CLR.W     -2(A6)
+      BRA.S     L01FD 
+L01FB:MOVE.W    -2(A6),D0 
+      ASL.W     #2,D0 
+      LEA       L02A2,A0
+      MOVE.W    0(A0,D0.W),D0 
+      BNE.S     L01FC 
+      MOVE.W    -2(A6),D0 
+      ASL.W     #2,D0 
+      LEA       L02A2,A0
+      MOVE.W    8(A6),0(A0,D0.W)
+      MOVE.W    -2(A6),D0 
+      ASL.W     #2,D0 
+      LEA       L02A2,A0
+      MOVE.W    10(A6),2(A0,D0.W) 
+      BRA.S     L01FE 
+L01FC:ADDQ.W    #1,-2(A6) 
+L01FD:CMPI.W    #$17,-2(A6) 
+      BLT.S     L01FB 
+L01FE:UNLK      A6
+      RTS 
+L01FF:LINK      A6,#-2
+      CLR.W     -2(A6)
+      BRA.S     L0202 
+L0200:MOVE.W    -2(A6),D0 
+      ASL.W     #2,D0 
+      LEA       L02A2,A0
+      MOVE.W    0(A0,D0.W),D0 
+      CMP.W     8(A6),D0
+      BNE.S     L0201 
+      MOVE.W    -2(A6),D0 
+      ASL.W     #2,D0 
+      LEA       L02A2,A0
+      CLR.W     0(A0,D0.W)
+L0201:ADDQ.W    #1,-2(A6) 
+L0202:CMPI.W    #$17,-2(A6) 
+      BLT.S     L0200 
+      UNLK      A6
+      RTS 
+L0203:LINK      A6,#-2
+      MOVEM.L   D7,-(A7)
+      MOVE.W    8(A6),D7
+      MOVE.W    #$5C,-2(A6) 
+      LEA       L02A2,A0
+      MOVEA.L   A0,A1 
+      ADDA.W    -2(A6),A1 
+L0204:CMP.W     (A0),D7 
+      BEQ.S     L0205 
+      ADDQ.W    #4,A0 
+      CMPA.L    A0,A1 
+      BNE.S     L0204 
+L0205:MOVE.W    2(A0),D0
+      MOVEM.L   (A7)+,D7
+      UNLK      A6
+      RTS 
+      LINK      A6,#0 
+      MOVEM.L   D7,-(A7)
+      PEA       L0260 
+      MOVE.L    8(A6),-(A7) 
+      JSR       L0217 
+      ADDQ.L    #8,A7 
+      BNE.S     L0206 
+      CLR.W     D7
+      BRA       L020F 
+L0206:PEA       L0261 
+      MOVE.L    8(A6),-(A7) 
+      JSR       L0217 
+      ADDQ.L    #8,A7 
+      BNE.S     L0207 
+      MOVE.W    #2,D7 
+      BRA       L020F 
+L0207:PEA       L0262 
+      MOVE.L    8(A6),-(A7) 
+      JSR       L0217 
+      ADDQ.L    #8,A7 
+      BNE.S     L0208 
+      MOVE.W    #3,D7 
+      BRA       L020F 
+L0208:MOVE.W    12(A6),D0 
+      AND.W     #4,D0 
+      BEQ.S     L020C 
+      MOVE.W    12(A6),D0 
+      AND.W     #3,D0 
+      MOVE.W    D0,-(A7)
+      MOVE.L    8(A6),-(A7) 
+      MOVE.W    #$3D,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #8,A7 
+      MOVE.W    D0,D7 
+      TST.W     D0
+      BLT.S     L0209 
+      MOVE.W    12(A6),D0 
+      AND.W     #$10,D0 
+      BEQ.S     L020B 
+L0209:TST.W     D7
+      BLT.S     L020A 
+      MOVE.W    D7,-(A7)
+      MOVE.W    #$3E,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+L020A:CLR.W     -(A7) 
+      MOVE.L    8(A6),-(A7) 
+      MOVE.W    #$3C,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #8,A7 
+      MOVE.W    D0,D7 
+L020B:BRA.S     L020F 
+L020C:MOVE.W    12(A6),D0 
+      AND.W     #$10,D0 
+      BEQ.S     L020E 
+      MOVE.W    12(A6),D0 
+      AND.W     #3,D0 
+      MOVE.W    D0,-(A7)
+      MOVE.L    8(A6),-(A7) 
+      MOVE.W    #$3D,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #8,A7 
+      MOVE.W    D0,D7 
+      TST.W     D0
+      BLT.S     L020D 
+      MOVE.W    D7,-(A7)
+      MOVE.W    #$3E,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+      CLR.W     -(A7) 
+      MOVE.L    8(A6),-(A7) 
+      MOVE.W    #$3C,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #8,A7 
+      MOVE.W    D0,D7 
+L020D:BRA.S     L020F 
+L020E:MOVE.W    12(A6),D0 
+      AND.W     #3,D0 
+      MOVE.W    D0,-(A7)
+      MOVE.L    8(A6),-(A7) 
+      MOVE.W    #$3D,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #8,A7 
+      MOVE.W    D0,D7 
+L020F:TST.W     D7
+      BGE.S     L0210 
+      MOVE.W    D7,L0270
+      MOVE.W    #-1,D0
+      BRA.S     L0211 
+L0210:MOVE.W    12(A6),-(A7)
+      MOVE.W    D7,-(A7)
+      JSR       L01FA 
+      ADDQ.L    #4,A7 
+      MOVE.W    D7,D0 
+L0211:MOVEM.L   (A7)+,D7
+      UNLK      A6
+      RTS 
+L0212:LINK      A6,#-4
+      MOVE.L    8(A6),-(A7) 
+      MOVE.W    #$48,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #6,A7 
+      MOVE.L    D0,-4(A6) 
+      MOVE.L    -4(A6),D0 
+      BNE.S     L0213 
+      MOVE.L    #-1,-4(A6)
+      MOVE.W    #-$27,L0270 
+L0213:MOVE.L    -4(A6),D0 
+      UNLK      A6
+      RTS 
+      LINK      A6,#0 
+      MOVE.W    8(A6),D0
+      AND.L     #$FFFF,D0 
+      MOVE.L    D0,-(A7)
+      JSR       L0212 
+      ADDQ.L    #4,A7 
+      UNLK      A6
+      RTS 
+L0214:LINK      A6,#0 
+      MOVE.L    8(A6),D0
+      MOVEA.L   D0,A0 
+      MOVEA.L   12(A6),A1 
+      MOVEQ     #-1,D1
+L0215:TST.B     (A0)+ 
+      DBEQ      D1,L0215
+      BNE.S     L0215 
+      SUBQ.L    #1,A0 
+L0216:MOVE.B    (A1)+,(A0)+ 
+      DBEQ      D1,L0216
+      BNE.S     L0216 
+      UNLK      A6
+      RTS 
+L0217:MOVEM.L   4(A7),A0-A1 
+      CLR.W     D0
+L0218:MOVE.B    (A0)+,D0
+      BEQ.S     L0219 
+      CMP.B     (A1)+,D0
+      BEQ.S     L0218 
+      SUBQ.L    #1,A1 
+L0219:CLR.W     D1
+      MOVE.B    (A1),D1 
+      BEQ.S     L021A 
+      EXT.W     D0
+L021A:TST.W     D0
+      BEQ.S     L021B 
+      EXT.W     D1
+L021B:SUB.W     D1,D0 
+      RTS 
+L021C:MOVEM.L   4(A7),A0-A1 
+      MOVE.L    A0,D0 
+      MOVEQ     #-1,D1
+L021D:MOVE.B    (A1)+,(A0)+ 
+      DBEQ      D1,L021D
+      BNE.S     L021D 
+      RTS 
+L021E:MOVEA.L   4(A7),A0
+      MOVEQ     #-1,D0
+      BRA.S     L0220 
+L021F:ADDQ.W    #1,D0 
+      SUBQ.L    #1,D0 
+L0220:TST.B     (A0)+ 
+      DBEQ      D0,L0220
+      BNE.S     L021F 
+      NOT.L     D0
+      RTS 
+L0221:LINK      A6,#0 
+      CMPI.W    #$61,8(A6)
+      BLT.S     L0222 
+      CMPI.W    #$7A,8(A6)
+      BGT.S     L0222 
+      MOVE.W    8(A6),D0
+      SUB.W     #$61,D0 
+      ADD.W     #$41,D0 
+      BRA.S     L0223 
+      BRA.S     L0223 
+L0222:MOVE.W    8(A6),D0
+      NOP 
+L0223:UNLK      A6
+      RTS 
+L0224:LINK      A6,#-$206 
+      MOVEM.L   A3-A5/D6-D7,-(A7) 
+      MOVEA.L   10(A6),A5 
+      MOVEA.L   A5,A4 
+      CLR.W     -2(A6)
+      CMPI.W    #1,8(A6)
+      BEQ.S     L0225 
+      MOVE.W    8(A6),-(A7) 
+      JSR       L0203 
+      ADDQ.L    #2,A7 
+      AND.W     #$2000,D0 
+      BNE       L022B 
+L0225:LEA       -518(A6),A0 
+      MOVEA.L   A0,A3 
+      MOVE.L    A4,D7 
+      SUB.L     A5,D7 
+      CMP.W     14(A6),D7 
+      SCS       D7
+      AND.W     #1,D7 
+      BRA.S     L022A 
+L0226:MOVE.B    (A4)+,D0
+      MOVE.B    D0,(A3)+
+      EXT.W     D0
+      CMP.W     #$A,D0
+      BNE.S     L0227 
+      MOVE.L    A3,D0 
+      SUBQ.L    #1,D0 
+      MOVEA.L   D0,A0 
+      MOVE.B    #$D,(A0)
+      MOVE.B    #$A,(A3)+ 
+L0227:MOVE.L    A4,D7 
+      SUB.L     A5,D7 
+      CMP.W     14(A6),D7 
+      SCS       D7
+      AND.W     #1,D7 
+      MOVE.L    A3,D0 
+      LEA       -518(A6),A0 
+      SUB.L     A0,D0 
+      CMP.W     #$1FE,D0
+      BGE.S     L0228 
+      MOVE.W    D7,D0 
+      BNE.S     L022A 
+L0228:MOVE.L    A3,D0 
+      LEA       -518(A6),A0 
+      SUB.L     A0,D0 
+      EXT.L     D0
+      MOVE.L    D0,-6(A6) 
+      PEA       -518(A6)
+      MOVE.L    -6(A6),-(A7)
+      MOVE.W    8(A6),-(A7) 
+      MOVE.W    #$40,-(A7)
+      JSR       L01C3 
+      LEA       12(A7),A7 
+      MOVE.W    D0,D6 
+      CMP.L     -6(A6),D0 
+      BEQ.S     L0229 
+      MOVE.W    D6,L0270
+      MOVE.W    #-1,D0
+      BRA.S     L022E 
+L0229:LEA       -518(A6),A0 
+      MOVEA.L   A0,A3 
+L022A:MOVE.W    D7,D0 
+      BNE       L0226 
+      MOVE.L    A4,D0 
+      SUB.L     A5,D0 
+      MOVE.W    D0,-2(A6) 
+      BRA.S     L022D 
+L022B:MOVE.L    A5,-(A7)
+      MOVE.W    14(A6),D0 
+      AND.L     #$FFFF,D0 
+      MOVE.L    D0,-(A7)
+      MOVE.W    8(A6),-(A7) 
+      MOVE.W    #$40,-(A7)
+      JSR       L01C3 
+      LEA       12(A7),A7 
+      MOVE.L    D0,-6(A6) 
+      MOVE.W    14(A6),D1 
+      AND.L     #$FFFF,D1 
+      CMP.L     D1,D0 
+      BEQ.S     L022C 
+      MOVE.L    -6(A6),D0 
+      MOVE.W    D0,L0270
+      MOVE.W    #-1,D0
+      BRA.S     L022E 
+L022C:MOVE.L    -6(A6),D0 
+      ADD.W     D0,-2(A6) 
+L022D:MOVE.W    -2(A6),D0 
+L022E:MOVEM.L   (A7)+,A3-A5/D6-D7 
+      UNLK      A6
+      RTS 
+L022F:LINK      A6,#-6
+      MOVE.W    8(A6),L0292 
+      MOVE.W    8(A6),D0
+      SUB.W     #$A,D0
+      MULS      #3,D0 
+      LEA       L0233,A0
+      EXT.L     D0
+      ADD.L     A0,D0 
+      MOVE.L    D0,-6(A6) 
+      MOVE.W    #1,-2(A6) 
+      BRA.S     L0231 
+L0230:MOVEA.L   -6(A6),A0 
+      ADDQ.L    #1,-6(A6) 
+      MOVE.B    (A0),D0 
+      MOVE.W    -2(A6),D1 
+      ASL.W     #1,D1 
+      LEA       L0292,A0
+      EXT.W     D0
+      MOVE.W    D0,0(A0,D1.W) 
+      ADDQ.W    #1,-2(A6) 
+L0231:CMPI.W    #4,-2(A6) 
+      BLT.S     L0230 
+      MOVE.L    L027E,-(A7) 
+      JSR       L0232 
+      ADDQ.L    #4,A7 
+      MOVE.W    L02A8,D0
+      UNLK      A6
+      RTS 
+L0232:LEA       L02A3,A0
+      ADDA.W    L0281,A0
+      ADDQ.W    #4,L0281
+      MOVE.L    A1,(A0) 
+      MOVE.L    A2,16(A0) 
+      MOVE.L    4(A7),D1
+      MOVE.W    #$C8,D0 	;AES-AUFRUF
+      TRAP      #2
+      SUBQ.W    #4,L0281
+      LEA       L02A3,A0
+      ADDA.W    L0281,A0
+      MOVEA.L   (A0),A1 
+      MOVEA.L   16(A0),A2 
+      RTS 
+L0233:DC.B      $00,$01,$00,$02,$01,$01,$02,$01 
+      DC.B      $01,$00,$01,$01,$02,$01,$01,$01 
+      DC.B      $01,$01,$00,$00,$00,$00,$00,$00 
+      DS.W      2   
+      DC.B      $01,$00,$00,$01,$00,$03,$05,$00 
+      DC.B      $05,$05,$00,$00,$01,$01,$02,$01 
+      DC.B      $00,$10,$07,$01,$02,$01,$00,$00 
+      DS.W      4   
+      DC.B      $01,$01,$01,$02,$01,$01,$02,$01 
+      DC.B      $01,$02,$01,$01,$01,$01,$02,$01 
+      DC.B      $01,$01,$00,$00,$00,$00,$00,$00 
+      DS.W      3   
+      DC.B      $02,$01,$01,$01,$01,$01,$06,$01 
+      DC.B      $01,$04,$01,$01,$01,$03,$01,$02 
+      DC.B      $01,$01,$04,$02,$01,$08,$01,$01 
+      DS.W      3   
+      DC.B      $01,$01,$01,$09,$01,$01,$01,$01 
+      DC.B      $01,$01,$01,$00,$00,$05,$01,$03 
+      DC.B      $03,$01,$02,$02,$01,$00,$00,$00 
+      DS.W      18  
+      DC.B      $04,$03,$00,$08,$03,$00,$06,$01 
+      DC.B      $00,$08,$01,$00,$08,$01,$00,$04 
+      DC.B      $01,$01,$03,$01,$01,$00,$05,$00 
+      DC.B      $01,$01,$01,$00,$05,$00,$00,$01 
+      DC.B      $01,$00,$01,$01,$00,$00,$00,$00 
+      DS.W      10  
+      DC.B      $00,$02,$02,$00,$02,$03,$00,$00 
+      DS.W      11  
+      DC.B      $05,$01,$00,$05,$01,$00,$01,$01 
+      DC.B      $00,$01,$01,$00,$02,$05,$00,$06 
+      DC.B      $01,$00,$02,$01,$00,$01,$01,$00 
+      DC.B      $06,$05,$00,$00,$00,$00,$00,$01 
+      DC.B      $01,$00,$01,$00,$02,$01,$00,$02 
+      DC.B      $01,$01,$01,$01,$01,$00,$00,$00 
+      DS.W      6   
+      DC.B      $00,$01,$02,$03,$01,$02,$01,$01 
+      DC.B      $01,$01,$01,$01,$00,$01,$01,$00 
+      DC.B      $01,$02 
+L0234:LINK      A6,#0 
+      MOVEM.L   D0-D3,-(A7) 
+      MOVE.L    8(A6),D2
+      BNE.S     L0235 
+      DIVU      #0,D0 
+      CLR.L     D0
+      CLR.L     D1
+      BRA.S     L023A 
+L0235:MOVE.L    12(A6),D1 
+      CLR.L     D0
+      MOVEQ     #1,D3 
+L0236:CMP.L     D1,D2 
+      BCC.S     L0238 
+      ASL.L     #1,D2 
+      BCC.S     L0237 
+      ROXR.L    #1,D2 
+      BRA.S     L0238 
+L0237:ASL.L     #1,D3 
+      BRA.S     L0236 
+L0238:CMP.L     D1,D2 
+      BHI.S     L0239 
+      OR.L      D3,D0 
+      SUB.L     D2,D1 
+L0239:LSR.L     #1,D2 
+      LSR.L     #1,D3 
+      BCC.S     L0238 
+L023A:MOVE.L    D0,8(A6)
+      MOVE.L    D1,12(A6) 
+      MOVEM.L   (A7)+,D0-D3 
+      UNLK      A6
+      RTS 
+L023B:LINK      A6,#0 
+      MOVEM.L   D0-D3,-(A7) 
+      MOVEM.L   8(A6),D1-D2 
+      MOVE.L    D1,D3 
+      ANDI.L    #-$10000,D3 
+      BEQ.S     L023C 
+      SWAP      D3
+      MULU      D2,D3 
+L023C:MOVE.L    D2,D0 
+      SWAP      D0
+      TST.W     D0
+      BEQ.S     L023D 
+      MULU      D1,D0 
+      ADD.W     D0,D3 
+L023D:SWAP      D3
+      CLR.W     D3
+      MULU      D1,D2 
+      ADD.L     D2,D3 
+      MOVE.L    D3,12(A6) 
+      MOVEM.L   (A7)+,D0-D3 
+      UNLK      A6
+      MOVE.L    (A7)+,(A7)
+      TST.L     4(A7) 
+      RTS 
+L023E:LINK      A6,#0 
+      MOVE.W    8(A6),-(A7) 
+      MOVE.W    #$4C,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+      UNLK      A6
+      RTS 
+L023F:LINK      A6,#-2
+      MOVE.W    8(A6),-(A7) 
+      JSR       L01FF 
+      ADDQ.L    #2,A7 
+      TST.W     8(A6) 
+      BGT.S     L0240 
+      MOVE.W    #0,D0 
+      BRA.S     L0242 
+L0240:MOVE.W    8(A6),-(A7) 
+      MOVE.W    #$3E,-(A7)
+      JSR       L01C3 
+      ADDQ.L    #4,A7 
+      MOVE.W    D0,-2(A6) 
+      BEQ.S     L0241 
+      MOVE.W    -2(A6),L0270
+      MOVE.W    #-1,D0
+      BRA.S     L0242 
+      BRA.S     L0242 
+L0241:MOVE.W    #0,D0 
+      NOP 
+L0242:UNLK      A6
+      RTS 
+ DATA 
+L0243:DC.B      $00,$01 
+L0244:DC.B      $00,$00 
+L0245:DC.B      $00,$00 
+L0246:DC.B      $00,$01 
+L0247:DC.B      $00,$00 
+L0248:DC.B      $00,$00 
+L0249:DC.B      $FF,$FF 
+L024A:DC.B      $00,$00 
+L024B:DC.B      $01,$00 
+L024C:DS.W      2   
+L024D:DS.W      2   
+L024E:DC.B      $FF,$FF 
+L024F:DS.W      2   
+L0250:DC.B      $00,$00 
+L0251:DS.W      2   
+L0252:DC.B      $00,$00,$00,$0F,$00,$05,$00,$02 
+      DC.B      $00,$00,$00,$04,$00,$00,$00,$02 
+      DC.B      $00,$05,$00,$07,$00,$00,$00,$02 
+      DC.B      $00,$08,$00,$0F,$00,$00,$00,$02 
+L0253:DC.B      $00,$00 
+L0254:DC.B      $00,$00 
+L0255:DC.B      'Deluxe P'
+      DC.B      'aint ST '
+      DC.B      'Viewer v'
+      DC.B      'er. 1.0',$0A 
+      DC.B      $00,$00 
+L0256:DC.B      'Select p'
+      DC.B      'icture o'
+      DC.B      'r animat'
+      DC.B      'ion to l'
+      DC.B      'oad.',$0A,$00
+L0257:DC.B      'Cancel t'
+      DC.B      'o Quit.',$0A 
+      DC.B      $00,$00 
+L0258:DC.B      ' 1990 Ar'
+      DC.B      'tisTech '
+      DC.B      'Developm'
+      DC.B      'ent',$0A,$00,$00 
+L0259:DC.B      'for Elec'
+      DC.B      'tronic A'
+      DC.B      'rts Ltd.'
+      DC.B      $00,$00 
+L025A:DC.B      'A:',$00,$00
+L025B:DC.B      '\*.*',$00,$00
+L025C:DC.B      $00,$00,' ',$00 
+L025D:DC.L      L0263 
+L025E:DS.W      5   
+      DC.B      $02,$09,$00,$00,$00,$00,$00,$00 
+      DS.W      4   
+      DC.B      $01,$02,$00,$01,$02,$00,$00,$00 
+      DS.W      4   
+      DC.B      $01,$02,$00,$01,$02,$00,$00,$00 
+      DS.W      135   
+      DC.B      $02,$00 
+L025F:DS.W      2   
+L0260:DC.B      'CON:',$00,$00
+L0261:DC.B      'AUX:',$00,$00
+L0262:DC.B      'PRT:',$00,$00,$00,$00
+
+IFF	INCBIN	E:\PARTIE1.IFF
+	EVEN
+	
+*****************************
+ BSS
+      DS.B      100 
+L0263:DS.B      32
+L0264:DS.L      1 
+L0265:DS.B      8 
+L0266:DS.W      1 
+L0267:DS.B      32
+L0268:DS.L      1 
+L0269:DS.W      1 
+L026A:DS.W      1 
+L026B:DS.L      1 
+L026C:DS.W      1 
+L026D:DS.B      34
+L026E:DS.W      1 
+L026F:DS.L      1 
+L0270:DS.W      1 
+L0271:DS.L      1 
+L0272:DS.W      1 
+L0273:DS.L      1 
+L0274:DS.L      1 
+L0275:DS.B      32
+L0276:DS.L      1 
+L0277:DS.W      1 
+L0278:DS.L      1 
+L0279:DS.L      1 
+L027A:DS.L      1 
+L027B:DS.L      1 
+L027C:DS.L      1 
+L027D:DS.W      1 
+L027E:DS.B      6 
+L027F:DS.W      1 
+L0280:DS.W      1 
+L0281:DS.B      6 
+L0282:DS.B      32
+L0283:DS.B      14
+L0284:DS.B      8 
+L0285:DS.L      1 
+L0286:DS.L      1 
+L0287:DS.W      1 
+L0288:DS.L      1 
+L0289:DS.W      1 
+L028A:DS.L      1 
+L028B:DS.W      1 
+L028C:DS.L      1 
+L028D:DS.W      1 
+L028E:DS.W      1 
+L028F:DS.W      1 
+L0290:DS.L      1 
+L0291:DS.B      32
+L0292:DS.B      10
+L0293:DS.W      1 
+L0294:DS.B      32
+L0295:DS.L      1 
+L0296:DS.W      1 
+L0297:DS.B      1 
+L0298:DS.B      127 
+L0299:DS.L      1 
+L029A:DS.W      1 
+L029B:DS.L      1 
+L029C:DS.L      1 
+L029D:DS.L      1 
+L029E:DS.L      1 
+L029F:DS.L      1 
+L02A0:DS.L      1 
+L02A1:DS.L      1 
+L02A2:DS.B      92
+L02A3:DS.B      48
+L02A4:DS.L      1 
+L02A5:DS.W      1 
+L02A6:DS.L      1 
+L02A7:DS.B      8 
+L02A8:DS.W      1 
+L02A9:DS.B      14
+L02AA:DS.W      1 
+ZUEND: END
