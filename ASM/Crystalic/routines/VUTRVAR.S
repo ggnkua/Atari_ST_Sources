@@ -1,0 +1,10 @@
+VU1:	DS.W	1
+VU2:	DS.W	1
+VU3:	DS.W	1
+VU4:	DS.W	1
+VUDAT:	DC.W	%0111111111111111
+VOICE1:	DS.W	1
+VOICE2:	DS.W	1
+VOICE3:	DS.W	1
+VOICE4:	DS.W	1
+*****************************
