@@ -1,0 +1,202 @@
+;----------------------------------------------------------------------
+;----------------------------------------------------------------------
+; Phong dsp subroutine.(moire shaded :))
+; By Martin Griffiths, August 1993
+;----------------------------------------------------------------------
+;----------------------------------------------------------------------
+
+IPR		EQU	$ffff
+BCR		EQU	$fffe
+MYPBC		EQU	$ffe0
+PCC		EQU	$ffe1
+PCDDR		EQU	$ffe3
+PCD		EQU	$ffe5
+RX		EQU	$FFEF
+TX		EQU	$FFEF
+CRA		EQU	$FFEC
+CRB		EQU	$FFED
+HSR		EQU	$ffe9
+HRX		EQU	$ffeb
+
+	org	p:$0
+	jmp	start
+
+	org	p:$40
+start
+
+	movep	#0,x:BCR
+	movep	#1,x:MYPBC
+	andi	#$fc,mr
+
+loop	jclr	#0,x:HSR,loop		; wait for cpu...
+	movep	x:HRX,x1		; fetch dummy.
+
+	jsr	make_gradtab
+
+gradtab	equ 0		; 0..640 1/x table
+di	equ 1024	; x and y mem
+dj	equ 1025	; "
+dk	equ 1026	; "
+lm	equ 1027	; y
+ln	equ 1028	; y
+lo	equ 1029	; y
+i1	equ 1032	; "
+j1	equ 1033	; "
+k1	equ 1034	; "
+x1s	equ 1035	 ; x AND y
+x2s	equ 1035+(256*2) ; x AND y
+
+; Phong poly routine.
+; r0-r3/n0-n2 a,b,x,y trashed.
+
+gouraud_tc
+	move	#>gradtab,r2
+	move	#>i1,r3
+	movec	#>2,m3
+	move	#>lm,r4
+	movec	#>5,m4
+get_glm	jclr	#0,x:HSR,get_glm		
+	movep	x:HRX,a		
+	move	a,y:(r4)+
+get_gln	jclr	#0,x:HSR,get_gln		
+	movep	x:HRX,a		
+	move	a,y:(r4)+
+get_glo	jclr	#0,x:HSR,get_glo		
+	movep	x:HRX,a
+	move	a,y:(r4)+
+get_gdy	jclr	#0,x:HSR,get_gdy		
+	movep	x:HRX,n0		; DY for gouraud poly
+	move 	#>x1s,r0
+	jsr 	do_side			; scan convert left
+	move 	#>x2s,r0
+	jsr 	do_side			; scan convert right
+	move 	#>x1s,r0
+	move 	#>x2s,r1
+	move	x:(r0)+,x0		; x1
+	move	x:(r1)+,b		; x2
+
+	do	n0,gsen_draw
+sen_x1	jclr	#1,x:HSR,sen_x1
+	movep	x0,x:HRX		; send x1
+	sub	x0,b	#>1,x1		; dx
+	tle	x1,b			; x1>x2 then set dx=1
+gotdx	move	b,n2
+sen_dx	jclr	#1,x:HSR,sen_dx
+	movep	n2,x:HRX		; send dx
+	move	x:(r2+n2),y1		; get 1/dx
+	move	x:(r0)-,a		; i1 (24bit signed)
+	move	x:(r1)-,b		; i2 (24bit signed)
+	sub	a,b	 a,l:(r3)+	; Di, store i1
+	move	b,x1	 
+	mpy	y1,x1,b	 y:(r0)+,a	; j1 (24bit signed)
+	move	b,l:(r4)+		; Di/dx
+	move	y:(r1)+,b		; j2 (24bit signed)
+	sub	a,b	 a,l:(r3)+	; Dj, store j1
+	move	b,x1	 
+	mpy	y1,x1,b	 y:(r0)+,a	; k1 (24bit signed)
+	move	b,l:(r4)+		; Dj/dx
+	move	y:(r1)+,b		; k2 (24bit signed)
+	sub	a,b	 a,l:(r3)+	; Dk, store k1
+	move	b,x1	 
+	mpy	y1,x1,b	 #>31,y1
+	clr	b	b,l:(r4)+	; Dk/dx
+
+	do	n2,egourl_lp
+	clr	a		x:(r3)+,x1	y:(r4)+,y0
+	mac	x1,y0,a		x:(r3)+,x1	y:(r4)+,y0	
+	mac	x1,y0,a		x:(r3)+,x1	y:(r4)+,y0		
+	mac	x1,y0,a		#0,y0	
+	tmi	y0,a
+	add	a,b		l:(r3),a
+	cmp	y1,b		l:(r4)+,x
+	tge	y1,b
+sen_g	jclr	#1,x:HSR,sen_g
+	movep	b,x:HRX
+	add	x,a	l:(r4)+,x
+	move	a,l:(r3)+
+	move	l:(r3),a
+	add	x,a	l:(r4)+,x
+	move	a,l:(r3)+
+	move	l:(r3),a
+	add	x,a	#0,b1
+	move	a,l:(r3)+
+egourl_lp
+	move	#>di,r4
+	move	x:(r0)+,x0		; x1
+	move	x:(r1)+,b		; x2
+
+gsen_draw
+	jmp 	gouraud_tc
+
+; Scan convert a Phong poly side.
+; r0 -> space for scanconvert x/i/j/k list.
+
+do_side	move	n0,a			; poly DY
+gsidelp	move	a,n1			; save count in n1
+lgdy	jclr	#0,x:HSR,lgdy		
+	movep	x:HRX,n2		; dy
+	move	r0,r1			; 
+	move	x:(r2+n2),x1		; get 1/dy
+lgdx	jclr	#0,x:HSR,lgdx		
+	movep	x:HRX,x0		; dx
+	mpy	x1,x0,a			; dx/dy
+	move	a0,y0
+	move	a1,y1
+lgdi	jclr	#0,x:HSR,lgdi		
+	movep	x:HRX,x0		; di
+	mpy	x1,x0,b			; di/dy
+	move	b0,x0
+	move	b1,x1
+lgx1	jclr	#0,x:HSR,lgx1		
+	movep	x:HRX,a			; x1
+lgi1	jclr	#0,x:HSR,lgi1		
+	movep	x:HRX,b			; i1 
+	do	n2,gdo_x_i
+	add	y,a	a,x:(r0)+	; store x
+	add	x,b	b,x:(r0)+	; store i normal component
+gdo_x_i
+	move	x:(r2+n2),x1		; get 1/dy
+lgdj	jclr	#0,x:HSR,lgdj		
+	movep	x:HRX,x0		; dj
+	mpy	x1,x0,a			; dj/dy
+	move	a0,y0
+	move	a1,y1
+lgdk	jclr	#0,x:HSR,lgdk		
+	movep	x:HRX,x0		; dk
+	mpy	x1,x0,b			; dk/dy
+	move	b0,x0
+	move	b1,x1
+lgj1	jclr	#0,x:HSR,lgj1		
+	movep	x:HRX,a			; j1
+lgk1	jclr	#0,x:HSR,lgk1		
+	movep	x:HRX,b			; k1
+	do	n2,gdo_j_k
+	add	y,a	a,y:(r1)+	; store j normal component
+	add	x,b	b,y:(r1)+	; store k normal component
+gdo_j_k
+	move	n1,a			; restore DY count
+	move	n2,x0			
+	sub	x0,a			; DY = DY - dy
+	jgt	gsidelp	
+	rts
+
+; Make gradient table for 1/x calculations.
+
+make_gradtab
+	move	#>gradtab,r0
+	clr	a
+	move	a,x:(r0)+
+	move	#>1,r1
+	do	#640,make_tab_lp
+	move	#>1,a
+	move	r1,y0
+	and	#$fe,ccr
+	rep 	#24
+	div	y0,a
+	add	y0,a		(r1)+
+	move	a0,x:(r0)+	
+make_tab_lp
+	rts
+	
+
+	end	

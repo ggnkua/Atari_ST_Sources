@@ -1,0 +1,323 @@
+;----------------------------------------------------------------------
+; MPEG DSP 56001 CM-> RGB subroutine.
+;                IDCT routine by David Oldcorn.        
+; By Martin Griffiths, December 1993
+;----------------------------------------------------------------------
+
+IPR		EQU	$ffff
+BCR		EQU	$fffe
+MYPBC		EQU	$ffe0
+PCC		EQU	$ffe1
+PCDDR		EQU	$ffe3
+PCD		EQU	$ffe5
+RX		EQU	$FFEF
+TX		EQU	$FFEF
+CRA		EQU	$FFEC
+CRB		EQU	$FFED
+HSR		EQU	$ffe9
+HRX		EQU	$ffeb
+HTX		EQU	$ffeb
+
+const_bits 	equ 13
+pass1_bits 	equ 7
+const_scale 	equ 8192
+pass1_shift 	equ const_bits-pass1_bits+1	; +1 for multiply correction
+pass1_round 	equ $10			; = 2 ** (pass1_shift-1)
+pass2_shift 	equ 24-const_bits-pass1_bits-3 ; -3 for x8
+pass2_round 	equ $800000			; = 2 ** (pass2_shift-1)
+
+; FIX(x) = x * CONST_SCALE + 0.5
+
+FIX_0_298631336 equ 2446	; FIX(0.298631336)
+FIX_0_390180644 equ 3196	; FIX(0.390180644)
+FIX_0_541196100 equ 4433	; FIX(0.541196100)
+FIX_0_765366865 equ 6270	; FIX(0.765366865)
+FIX_0_899976223 equ 7373	; FIX(0.899976223)
+FIX_1_0		equ 8192	; FIX(1.0)
+FIX_1_175875602 equ 9633	; FIX(1.175875602)
+FIX_1_501321110 equ 12299	; FIX(1.501321110)
+FIX_1_847759065 equ 15137	; FIX(1.847759065)
+FIX_1_961570560 equ 16069	; FIX(1.961570560)
+FIX_2_053119869 equ 16819	; FIX(2.053119869)
+FIX_2_562915447 equ 20995	; FIX(2.562915447)
+FIX_3_072711026 equ 25172	; FIX(3.072711026)
+
+c1	equ  FIX_1_0
+c2	equ  FIX_0_541196100
+c3	equ -FIX_1_847759065
+c4	equ  FIX_0_765366865
+c10	equ  FIX_0_298631336
+c11	equ  FIX_2_053119869
+c12	equ  FIX_3_072711026
+c13	equ  FIX_1_501321110
+c20	equ -FIX_0_899976223
+c21	equ -FIX_2_562915447
+c22	equ -FIX_1_961570560
+c23	equ -FIX_0_390180644
+c24	equ  FIX_1_175875602
+
+
+
+waitcts		macro
+_wctswt		jclr #1,X:HSR,_wctswt
+		endm
+
+waitrts		macro
+_wrtswt		jclr #0,X:HSR,_wrtswt
+		endm
+
+	org	p:$0
+	jmp	start
+
+	org	p:$40
+start
+		movep	#$0c00,X:IPR
+		movep	#$1,X:MYPBC
+		movep	#$0,X:BCR
+		andi	#$f0,mr			
+		move #>-1,m0
+		move #>-1,m1
+		move m0,m2
+		move m0,m3
+		move m0,m4
+		move m0,m5
+		move m0,m6
+		move m0,m7
+
+
+getmoredata	
+		waitrts
+		movep	X:HRX,a		; no. of DCT's to do
+		tst	a
+		jeq	cnv
+
+; DSP Inverse DCT transform routine
+
+idct_only	move	#dctblocks,r0
+
+		do #64,in_loop
+		waitrts
+		movep	X:HRX,x:(r0)+
+		nop
+in_loop
+
+j_rev_dct	move	#dctblocks,r0
+		move	#dctblocks,r7
+
+; Pass 1: process rows.
+
+		move #temp_dest,r1
+		move #temp_dest+7,r2
+		move r7,r6
+		move #8,n6
+		move #4,n1
+		move #0,y1
+
+		do #8,endrowsloop
+		move #-1,n2
+		move #dct_const,r4
+		move r6,r0
+		do #4,next2loop
+		move x:(r0)+,x0	y:(r4)+,y0
+		mpy x0,y0,a	x:(r0)+,x0	y:(r4)+,y0
+		mpy x0,y0,b	x:(r0)+,x0	y:(r4)+,y0
+		mac x0,y0,a	x:(r0)+,x0	y:(r4)+,y0
+		mac x0,y0,b	x:(r0)+,x0	y:(r4)+,y0
+		mac x0,y0,a	x:(r0)+,x0	y:(r4)+,y0
+		mac x0,y0,b	x:(r0)+,x0	y:(r4)+,y0
+		mac x0,y0,a	x:(r0)+,x0	y:(r4)+,y0
+		mac x0,y0,b	a,x1		
+		sub b,a		a0,x0
+		add x,b		#>pass1_round,y0
+
+; Output stage:
+		add y,b		r6,r0
+		rep #pass1_shift
+		asr b
+		add y,a		b0,x:(r1)+
+		rep #pass1_shift
+		asr a
+		move a0,x:(r2)+n2
+next2loop
+
+; move on to next DCT row
+
+		move #$c,n2
+		move (r6)+n6
+		move (r1)+n1
+		move (r2)+n2
+
+endrowsloop
+
+; Pass 2: process columns.
+
+		move r7,r1
+		move r7,r2
+		move #56,n2
+		move #temp_dest,r6
+		move (r2)+n2
+		move #8,n0
+
+		move #>$0,y1
+
+		do #8,p2endrowsloop
+		move #8,n1
+		move #-8,n2
+		move #dct_const,r4
+		move r6,r0
+		do #4,p2next2loop
+		move x:(r0)+n0,x0	y:(r4)+,y0
+		mpy x0,y0,a	x:(r0)+n0,x0	y:(r4)+,y0
+		mpy x0,y0,b	x:(r0)+n0,x0	y:(r4)+,y0
+		mac x0,y0,a	x:(r0)+n0,x0	y:(r4)+,y0
+		mac x0,y0,b	x:(r0)+n0,x0	y:(r4)+,y0
+		mac x0,y0,a	x:(r0)+n0,x0	y:(r4)+,y0
+		mac x0,y0,b	x:(r0)+n0,x0	y:(r4)+,y0
+		mac x0,y0,a	x:(r0)+n0,x0	y:(r4)+,y0
+		mac x0,y0,b	a,x1		#pass2_round,y0
+		sub b,a		a0,x0
+		add x,b		#>$ff,x1
+
+; Output stage:
+		add y,b		#0,x0
+		tmi x0,b
+		cmp x1,b
+		tcc x1,b
+		add y,a		b1,x:(r1)+n1
+		tmi x0,a
+		cmp x1,a	r6,r0
+		tcc x1,a
+
+		;add y,b		r6,r0
+		;add y,a		b1,x:(r1)+n1
+
+		move a1,x:(r2)+n2
+
+p2next2loop
+
+; move on to next DCT row
+		move #-$1f,n1
+		move #$21,n2
+		move (r6)+
+		move (r1)+n1
+		move (r2)+n2
+
+p2endrowsloop
+
+		move #dctblocks,r0
+		do #64,out_loop
+		waitcts
+		movep x:(r0)+,X:HTX
+		nop
+out_loop	nop
+		jmp getmoredata
+
+
+cnv	move	#>L,r0
+	movec	#3,m0
+	waitrts
+	movep	X:HRX,n0	
+	waitrts
+	movep	X:HRX,n1	
+
+	do	n0,cr_y_lp
+	do	n1,cr_x_lp
+
+GET_Ls	
+	move	#>$ff00,x1
+	move	#>$80,y0
+	waitrts
+	movep	x:HRX,x0			; L/L (2 * 8 bits)
+	mpy	x0,y0,b		x0,a1
+	and	x1,a		b0,b1
+	and	x1,b		a1,x:(r0)+	; UP(L)
+	move	b1,x:(r0)+
+	waitrts
+	movep	x:HRX,x0			; L/L (2 * 8 bits)
+	mpy	x0,y0,b		x0,a1
+	and	x1,a		b0,b1	
+	and	x1,b		a1,x:(r0)+ 
+	move	b1,x:(r0)+
+	move  	#>$8000,y0
+
+	waitrts
+	movep	x:HRX,x0			; CR/CB
+	move	#>$ff,x1
+	mpy	x0,y0,a		x0,b	
+	and	x1,a		#>128,x0
+	sub	x0,a		#>89/2,y0
+	and	x1,b		a,y1
+	mpy	-y0,y1,a 	#>454/2,y0
+	mpy	y0,y1,a		a0,y:cr_g	; Cr_g_tab[i] = -FIX(0.34414) * CR;
+	move	a0,y:cr_b			; Cr_b_tab[i] = FIX(1.77200) * CR;
+
+	sub	x0,b		#>183/2,y0	
+	move	b,y1
+	mpy	-y0,y1,b	#>359/2,y0	
+	mpy	y0,y1,b		b0,y:cb_g	; Cb_g_tab[i] = -FIX(0.71414) * CB;   
+	move	b0,y:cb_r			; Cb_r_tab[i] = FIX(1.40200) * CB;
+
+	move	#>255*256,y1
+	move	#>$f800,x1
+
+	do	#4,loop
+d_R	move	x:(r0),b
+	tfr	b,a		y:cb_r,y0	
+	add	y0,b		#0,y0		; R = L + cb_r;
+	tle	y0,b
+	cmp	y1,b		
+	tge	y1,b
+	and	x1,b		y:cr_g,y0	
+d_G	add	y0,a		y:cb_g,y0
+	add	y0,a		#0,y0		; G = L + cr_g + cb_g;
+	tle	y0,a
+	cmp	y1,a
+	tge	y1,a
+	and	x1,a		#>($800000>>(5+1)),y0
+	move	a,x0
+	mac	x0,y0,b		x:(r0),a	
+	move	y:cr_b,y0	
+d_B	add	y0,a		#0,y0		; B = L + cr_b;
+	tle	y0,a
+	cmp	y1,a
+	tge	y1,a
+	and	x1,a		#>($800000>>(11+1)),y0
+	move	a,x0
+	mac	x0,y0,b
+	move	b1,x:(r0)+
+loop	
+	waitcts
+	movep	x:(r0)+,x:HRX			
+	waitcts
+	movep	x:(r0)+,x:HRX			
+	waitcts
+	movep	x:(r0)+,x:HRX			
+	waitcts
+	movep	x:(r0)+,x:HRX			
+
+cr_x_lp	nop
+cr_y_lp	
+	move #>-1,m0
+	jmp 	getmoredata
+
+
+		org x:$0
+
+; Workspace for DCT's and colour conversion overflow
+L		
+dctblocks	ds 64		; space for 240 DCT blocks max
+temp_dest	ds 256
+
+; Constant table for fast DCT conversion
+		org y:$0
+dct_const	dc c1,c13+c20+c23+c24,c2+c4,c24,c1,c23+c24,c2,c20+c24
+		dc c1,c24,c2,c12+c21+c22+c24,-c1,c21+c24,c2+c3,c22+c24
+		dc c1,c23+c24,-c2,c21+c24,-c1,c11+c21+c23+c24,-(c2+c3),c24
+		dc c1,c20+c24,-(c2+c4),c22+c24,c1,c24,-c2,c10+c20+c22+c24
+
+cr_g		dc	0
+cr_b		dc	0
+cb_g		dc	0
+cb_r		dc	0
+
+		end	

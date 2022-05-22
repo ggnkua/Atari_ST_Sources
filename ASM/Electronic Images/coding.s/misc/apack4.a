@@ -1,0 +1,385 @@
+;------------------------------------------------------------------------
+;   Guazzo Coding Implementation  
+;
+; 
+;     Copyright Feb. 1993
+;	       
+;     Gordon V. Cormack	 Feb. 1993
+;     University of Waterloo
+;     cormack@uwaterloo.ca
+;
+;     All rights reserved.
+; 
+;     The algorithms herein are the property of Gordon V. Cormack.
+; 
+;     68000 Code implementation by Martin Griffiths July 1993.
+;	Mac 64-bit (!) library version by Jose Commins January 1994.
+;------------------------------------------------------------------------
+;		MC68881
+		MACHINE MC68020
+
+		SEG	'Apack'
+
+inbytes		EQU	0
+outbytes	EQU	inbytes+4
+val		EQU	outbytes+4
+min		EQU	val+4
+mid		EQU	min+4
+max		EQU	mid+4
+zero		EQU	max+4
+one		EQU	zero+(256*4)
+index_tab	EQU	one+(256*4)
+a_size		EQU	index_tab+(2*8)		; Not really needed...
+
+
+
+Pucker		PROC	EXPORT
+
+StackFrame	RECORD	{A6Link},DECR		; build a stack frame record
+ParamBegin	EQU	*			; start listing parameters here
+Pack_dest	DS.L	1			; Where to stick it!
+Pack_size	DS.L	1			; Size of data to pack.
+Pack_source	DS.L	1			; Source pack address.
+Pack_workspace	DS.L	1			; Worspace addr - 2088 bytes.
+ParamSize	EQU	ParamBegin-*		; size of all the passed parameters
+RetAddr		DS.L	1			; place holder for return address
+A6Link		DS.L	1			; place holder for A6 link
+LocalSize	EQU	*			; size of all the local variables
+		ENDR
+
+		IMPORT	init_apk_vars
+		WITH	StackFrame		; cover our local stack frame
+
+;------------------------------------------------------------------------
+; Pack.
+; A0 -> data to pack.  A1 -> end of data
+; A2 -> destination space for packed data.
+;	(Jose, slightly chaged, adds pack size to pack source address)
+;	Returns with data in worspace, LONGWORD values,
+;	Offset 0: Bytes read
+;------------------------------------------------------------------------
+
+arith_pack
+		LINK	A6,#-24		; allocate our local stack frame
+		MOVEM.L D0-D7/A0-A6,-(SP)
+		move.l	Pack_workspace(a6),a0
+		BSR init_apk_vars
+		move.l	Pack_source(a6),a0
+		move.l	a0,a1
+		add.l	Pack_size(a6),a1
+		move.l	Pack_dest(a6),a2
+		move.l	Pack_workspace(a6),a6
+pack_lp		MOVEQ #0,D0
+		MOVE.B (A0)+,D0		; c
+		MOVE.B D0,D6		; duplicate c
+		LEA index_tab(A6),A5
+
+		MOVEQ #8,D7
+i_lp		MOVE.W (A5)+,D1		; index = (1<<i)-1
+		MOVE.W D0,D2
+		LSR.W D7,D2		; c >> (8-i)
+		ADD.W D2,D1		;	   + (c >> (8-i))
+
+		ADD.W D1,D1
+		ADD.W D1,D1		; *4 for index 
+
+		MOVEM.W D1/D6/D7,-(SP)
+		MOVE.L max(A6),D2	; max
+		MOVE.L min(A6),D3
+		SUB.L D3,D2		; max-min
+		SUBQ.L #1,D2		; (max-min-1)
+		MOVE.L (A4,D1.W),D3	;  one[index]
+		MOVE.L (A3,D1.W),D1	; zero[index]
+		ADD.L D1,D3		; zero[index] + one[index]
+		MULU.L D1,D1:D2
+		DIVU.L D3,D1:D2
+;		BSR mul32		; D1D2 = D1.L*D2.L
+;		BSR div64		; d1D2 / D3
+		ADD.L min(A6),D2
+		MOVEM.W (SP)+,D1/D6/D7
+
+		CMP.L min(A6),D2	; (min == mid) ?
+		BNE.S @noincmid
+		ADDQ.L #1,D2		; mid ++
+@noincmid	MOVE.L max(A6),D3	
+		SUBQ.L #1,D3		; max - 1
+		CMP.L D2,D3		; mid == (max-1)?
+		BNE.S @notdecmid
+		SUBQ.L #1,D2		; mid --
+@notdecmid	ADD.B D6,D6
+		BCC.S @cse2
+@cse1		MOVE.L D2,min(A6)	; min = mid
+		ADDQ.L #1,(A4,D1.W)	; one[index]++
+		BRA.S @cseend
+@cse2		MOVE.L D2,max(A6)	; max = mid
+		ADDQ.L #1,(A3,D1.W)	; zero[index]++
+@cseend		MOVE.L D2,mid(A6)
+
+@while		MOVE.L max(A6),D2
+		SUB.L min(A6),D2	; (max-min)
+		CMP.L #256,D2		
+		BHS.S @endwhile		;
+		SUBQ.L #1,max(A6)
+		MOVE.L min(A6),D2
+		SWAP D2
+		MOVE.B D2,(A2)+
+		SWAP D2
+		LSL.L #8,D2
+		AND.L #$FFFF00,D2
+		MOVE.L D2,min(A6)
+		MOVE.L max(A6),D3
+		LSL.L #8,D3
+		AND.L #$FFFF00,D3
+
+		CMP.L D3,D2
+		BLO.S @ok
+		MOVE.L #$1000000,D3
+@ok		
+		MOVE.L D3,max(A6)
+		BRA.S @while
+@endwhile
+		SUBQ #1,D7
+		BNE i_lp
+
+		CMP.L A1,A0
+		BLT pack_lp		; Changed from BNE to BLT, just in case!
+		MOVE.L max(A6),D0
+		SUBQ.L #1,D0
+		MOVE.L D0,min(A6)	; min = max-1
+		SWAP D0
+		MOVE.B D0,(A2)+
+		ROL.L #8,D0
+		MOVE.B D0,(A2)+
+		ROL.L #8,D0
+		MOVE.B D0,(A2)+
+;		SUB.L Pack_source(A6),A0
+;		SUB.L Pack_dest(A6),A2
+		MOVE.L A0,inbytes(A6)
+		MOVE.L A2,outbytes(A6)
+
+		MOVEM.L (sp)+,D0-D7/A0-A6
+		UNLK	A6
+		MOVEA.L (SP)+,A0		; save the caller's address
+		ADDA.L	#ParamSize,SP		; strip the caller's parameters
+		JMP	(A0)
+		
+;		RTS
+
+		ENDP
+
+		SEG	'ADpack'
+
+unpucker	PROC	EXPORT
+
+StackFrame	RECORD	{A6Link},DECR		; build a stack frame record
+ParamBegin	EQU	*			; start listing parameters here
+Unpck_workspace DS.L	1			; Worspace addr - 2088 bytes.
+Unpack_source	DS.L	1			; Source of packed data address.
+Unpack_dest	DS.L	1			; Where to stick it!
+ParamSize	EQU	ParamBegin-*		; size of all the passed parameters
+RetAddr		DS.L	1			; place holder for return address
+A6Link		DS.L	1			; place holder for A6 link
+LocalSize	EQU	*			; size of all the local variables
+		ENDR
+
+		IMPORT	init_apk_vars
+		WITH	StackFrame		; cover our local stack frame
+
+;------------------------------------------------------------------------
+; Depack
+; A0 -> data to depack
+; A1 -> destination for depacked data
+;------------------------------------------------------------------------
+
+arith_depack	
+		LINK	A6,#LocalSize		; allocate our local stack frame
+		MOVEM.L D0-D7/A0-A6,-(SP)
+		move.l	Unpck_workspace(a6),a0
+		BSR init_apk_vars
+		move.l	Unpack_source(a6),a0
+		move.l	Unpack_dest(a6),a1
+		move.l	Unpck_workspace(a6),a6
+		MOVEQ #0,D0
+		MOVE.B (A0)+,D0
+		LSL.L #8,D0
+		MOVE.B (A0)+,D0
+		LSL.L #8,D0
+		MOVE.B (A0)+,D0
+		MOVE.L D0,val(A6)
+		BRA cont_depack
+depack_lp	MOVEQ #0,D0		; c=0
+		LEA index_tab(A6),A5
+		MOVEQ #7,D7
+@i_lp		MOVE.W (A5)+,D1		; index = (1<<i)-1
+		ADD.W D0,D1		;	   + c 
+		ADD.W D1,D1
+		ADD.W D1,D1		; *4 for index 
+		MOVEM.W D1/D7,-(SP)
+		MOVE.L max(A6),D2	; max
+		MOVE.L min(A6),D3
+		SUB.L D3,D2		; max-min
+		SUBQ.L #1,D2		; (max-min-1)
+		MOVE.L (A4,D1.W),D3	;  one[index]
+		MOVE.L (A3,D1.W),D1	; zero[index]
+		ADD.L D1,D3		; zero[index] + one[index]
+		MULU.L D1,D1:D2
+		DIVU.L D3,D1:D2
+;		BSR mul32		; D1D2 = D1.L*D2.L
+;		BSR div64		; d1D2 / D3
+		ADD.L min(A6),D2
+		MOVEM.W (SP)+,D1/D7
+		CMP.L min(A6),D2	; (min == mid) ?
+		BNE.S @noincmid
+		ADDQ.L #1,D2		; mid ++
+@noincmid	MOVE.L max(A6),D3	
+		SUBQ.L #1,D3		; max - 1
+		CMP.L D2,D3		; mid == (max-1)?
+		BNE.S @notdecmid
+		SUBQ.L #1,D2		; mid --
+@notdecmid	CMP.L val(A6),D2
+		BHI.S @cse2
+@cse1		MOVEQ #1,D3		; bit =1
+		MOVE.L D2,min(A6)	; min = mid
+		ADDQ.L #1,(A4,D1.W)	; one[index]++
+		BRA.S @cseend
+@cse2		MOVEQ #0,D3		; bit =0
+		MOVE.L D2,max(A6)	; max = mid
+		ADDQ.L #1,(A3,D1.W)	; zero[index]++
+@cseend		MOVE.L D2,mid(A6)
+		ADD.B D0,D0		; c = c+c
+		ADD.B D3,D0		;	 +bit
+@while		MOVE.L max(A6),D2
+		SUB.L min(A6),D2	; (max-min)
+		CMP.L #256,D2		
+		BHS.S @endwhile		;
+		SUBQ.L #1,max(A6)
+		MOVE.L val(A6),D2
+		LSL.L #8,D2
+		AND.L #$FFFF00,D2
+		MOVE.B (A0)+,D2
+		MOVE.L D2,val(A6)
+		MOVE.L min(A6),D2
+		LSL.L #8,D2
+		AND.L #$FFFF00,D2
+		MOVE.L D2,min(A6)
+		MOVE.L max(A6),D3
+		LSL.L #8,D3
+		AND.L #$FFFF00,D3
+		CMP.L D3,D2
+		BLO.S @ok
+		MOVE.L #$1000000,D3
+@ok		MOVE.L D3,max(A6)
+		BRA.S @while
+@endwhile	DBF D7,@i_lp
+		MOVE.B D0,(A1)+
+cont_depack	MOVE.L max(A6),D3
+		SUBQ.L #1,D3		; (max-1)
+		CMP.L val(A6),D3	; val==(max-1)
+		BNE depack_lp
+;		SUB.L Unpack_source(A6),A0
+;		SUB.L Unpack_dest(A6),A1
+		MOVE.L A0,inbytes(A6)
+		MOVE.L A1,outbytes(A6)
+
+		MOVEM.L (sp)+,D0-D7/A0-A6
+		UNLK	A6
+		MOVEA.L (SP)+,A0		; save the caller's address
+		ADDA.L	#ParamSize,SP		; strip the caller's parameters
+		JMP	(A0)
+
+;		RTS
+
+		ENDP
+		
+		
+		SEG	'Wank'
+
+; Initialise variables/tables
+init_apk_vars	PROC	EXPORT			; Sigh...  Would MW import this without?
+		CLR.L min(A0)
+		CLR.L mid(A0)
+		lea	index_tab(a0),a3
+;		0,1,3,7,15,31,63,127 (W)
+		move.l	#$00000001,(a3)+
+		move.l	#$00030007,(a3)+
+		move.l	#$000F001F,(a3)+
+		move.l	#$003F007f,(a3)+
+		MOVE.L #$1000000,max(A0)
+		LEA zero(A0),A3
+		LEA one(A0),A4
+		MOVE.L A3,A0
+		MOVE.L A4,A1
+		MOVEQ #1,D1
+		MOVE.W #256-1,D0
+@lp		MOVE.L D1,(A0)+
+		MOVE.L D1,(A1)+
+		DBF D0,@lp
+		RTS
+
+		ENDP
+	
+; Unsigned 32 bit multiply.  <500 cycles MAX.  
+; Multiply D1 by D2; 64-bit result in D1 & D2.	D1 is MSL and D2 LSL.
+; Returns with most significant in D2 and least significant in D2.
+; By Ben Griffin 
+
+;mul32		move.l	d1,d5
+;		move.l	d2,d4
+;		swap d5
+;		swap d4
+;		mulu d2,d5
+;		mulu d1,d2
+;		move.w d4,d6
+;		mulu d1,d4
+;		move.w d5,d1
+;		mulu d6,d1
+;		add.l	d5,d4
+;		move.w	d4,d5
+;		swap	d5
+;		clr.w	d5
+;		clr.w	d4
+;		addx.w	d5,d4
+;		swap	d4
+;		add.l	d5,d2
+;		addx.l	d4,d1
+;		rts
+
+; 64 bit divide super quick divide. D2 = D1:D2 / D3
+; By Martin Griffiths (and proud of it)
+; 1000-2000 cycles.. 
+
+;Div64		MOVEQ #0,D6		; D6:D3 divisor
+;		MOVEQ #0,D5		; count
+;		MOVE.L D1,D4			
+;		MOVE.L D2,D7			
+;		BRA.S .div1b
+;.div1lp		ADD.L D3,D3		; divisor << 1
+;		ADDX.L D6,D6		; 
+;		ADDQ.W #1,D5		; count ++
+;.div1b		MOVE.L D4,D1		;; 64 bit compare
+;		MOVE.L D7,D2		;;
+;		SUB.L D3,D2		;; D1:D2 < D6:D3 ?
+;		SUBX.L D6,D1		;;
+;		BCC.S .div1lp		;;
+;		MOVEQ #0,D2
+;		BRA.S .div2c
+;.div2lp		SUB.L D3,D7
+;		SUBX.L D6,D4
+;		BCS.S .div2b
+;		BSET D5,D2
+;.div2c		LSR.L #1,D6		; divisor >> 1
+;		ROXR.L #1,D3		; 
+;		DBF D5,.div2lp
+;		RTS
+;.div2b		ADD.L D3,D7
+;		ADDX.L D6,D4
+;		LSR.L #1,D6		; divisor >> 1
+;		ROXR.L #1,D3		;
+;		DBF D5,.div2lp
+;		RTS;
+;
+;data		INCBIN C:\NEODESK3\NEOPIC_M.PI2
+;enddata
+;packed_data
+
+		END

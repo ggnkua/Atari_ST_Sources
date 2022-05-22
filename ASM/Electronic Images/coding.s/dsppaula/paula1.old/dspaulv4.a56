@@ -1,0 +1,154 @@
+;----------------------------------------------------------------------
+;----------------------------------------------------------------------
+; DSP 4 channel Player.
+; 56001 source. (interpolated)
+; By Martin Griffiths, August 1993
+;----------------------------------------------------------------------
+;----------------------------------------------------------------------
+
+IPR		EQU	$FFFF
+BCR		EQU	$FFFE
+MYPBC		EQU	$FFE0
+PCC		EQU	$FFE1
+PCDDR		EQU	$FFE3		; Port C data direction
+PCD		EQU	$FFE5		; Port C data register
+RX		EQU	$FFEF
+TX		EQU	$FFEF
+CRA		EQU	$FFEC
+CRB		EQU	$FFED
+HSR		EQU	$FFE9
+HRX		EQU	$FFEB
+
+; Voice Structure.
+
+curr_fraction   equ 0   ; current fraction part. 
+last_sample	equ 1	; last "sample" from previous frame(to interpolate)
+
+vc1_data	equ 0
+vc2_data	equ 2
+vc3_data	equ 4
+vc4_data	equ 6
+
+; Circular buffer for dac output in y: memory.
+
+circbuf 	EQU $0
+cbufsize	EQU $1800
+
+	org	p:$0
+	jmp	start			; -> start
+
+; DSP DAC xmit interrupt.
+
+	org	p:$10			; ssi transmit data
+xmit_int
+	nop
+	movep	y:(r7)+,x:RX		; output sample word
+
+	org	p:$40
+start	movep	#0,x:BCR
+	movep	#1,x:MYPBC
+
+	jsr	setup_player
+
+loop	jclr	#0,x:HSR,loop		; wait for cpu...
+	movep	x:HRX,x1		; fetch dummy.
+
+waite	move	r7,b			; current pos in circular buffer
+	jset	#0,b1,waite		;
+	move	r6,x0			; last position in buffer 
+	sub	x0,b			; difference 
+	jpl	ok
+	move	#cbufsize,x0
+	add 	x0,b
+ok	asr	b			; 2
+	move	b,n2			; store no of samples to do.
+	move	r6,r5			; r5=r6 (-> fill start)
+clrbuf	clr	a
+	do	n2,end_clearlp
+	move	a,y:(r6)+
+	move	a,y:(r6)+
+end_clearlp
+	move	#2,n6			; interleaved stereo voices 
+	move	#>vc1_data,r1			;
+	jsr	getchannel		; get channel 1
+	move	y:(r5)+,x0
+	move	#>vc2_data,r1			;
+	jsr	getchannel		; get channel 2
+	move	#>vc3_data,r1		;
+	jsr	getchannel		; get channel 3
+	move	y:(r5)-,x0
+	move	#>vc4_data,r1		;
+	jsr	getchannel		; get channel 4
+
+	jmp	loop			; next frame
+
+; Add a voice to the buffer
+; r0 -> sample buffer to apply volume and frequency shift too.
+; r1 -> voice structure for this voice
+; n2 -> no. of sample words to do.
+
+; Fetch a channel.
+; including volume,frequency data.
+
+
+getchannel
+waitvl	jclr	#0,x:HSR,waitvl		; wait...
+	movep	x:HRX,y1		; volume in $1c
+waitfr	jclr	#0,x:HSR,waitfr		; wait...
+	movep	x:HRX,x0		; frequency in x0 
+	move	r5,r6
+waitf   jclr    #0,X:HSR,waitf          ; - wait...
+	movep   x:HRX,x1    
+waits   jclr    #0,X:HSR,waits          ; wait till we have one ready
+	move	x:(r1)+,b		; current fraction
+	move	#>$8000,y0		 
+	mpy     y0,x1,a     
+	move	a0,x1	
+	mpy	y1,x1,a	    
+	move	a,x1	
+	move	x:(r1),a		; last sample from last time
+	move	#>$8000,y0		;
+	do	n2,end_gc		; - for x no. of samples
+	add	x0,b	    y:(r6),a
+	jec	nogetnext
+	bclr	#$17,b1			; clear bit 23
+	movep   x:HRX,x1    
+wait4   jclr    #0,X:HSR,wait4          ; wait till we have another
+	mpy     y0,x1,a     
+	move	a0,x1
+	mpy	y1,x1,a
+	move	a,x1	y:(r6),a   
+nogetnext
+	add	x1,a
+	move	a,y:(r6)+n6
+end_gc
+	movep	#1,x:HRX		; send... 
+	movep	x:HRX,x0
+
+	move	x1,x:(r1)-		; store the current(last) sample
+	move	b,x:(r1)		; store current fraction
+	rts
+
+setup_player
+	clr	a			; set all
+	move	#>vc1_data,r6		; voice
+	rep	#2*4			; variables
+	move	a,x:(r6)+		; to zero
+	move 	#cbufsize,n0		; setup the dac output 
+	move	#circbuf,r6		; circular buffer pointers 
+	movec	#cbufsize-1,m6		; and modulos.. 
+	move	r6,r7			; 
+	movec	m6,m7			; 
+	rep	n0			; and clear the buffer
+	move	a,y:(r6)+		;
+; Setup DAC output.	
+	movep	#$3000,x:IPR		; Set the IPR for ssi interrupts
+	movep	#$4100,x:CRA		; set wordlength to 16bits and 2 words per "frame".
+	movep	#$5800,x:CRB		; transmit int enable | transmitter enable | enable network mode(word request)
+	movep	#$1f8,x:PCC		; turn on SSI port(Port C control reg)
+	movep	#0,x:PCDDR		; 
+	andi	#$fc-4-8,mr		; unmask interrupts
+	nop
+	rts
+
+	end	

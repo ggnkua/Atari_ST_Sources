@@ -1,0 +1,327 @@
+;----------------------------------------------------------------------
+; DSP 4 channel Player.
+; 56001 source. (very fast)
+; By Martin Griffiths, August 1993
+; uses $6000-$8000 in both X and Y memory...
+;----------------------------------------------------------------------
+
+IPR		EQU	$FFFF
+BCR		EQU	$FFFE
+PBC		EQU	$FFE0
+PCC		EQU	$FFE1
+PCDDR		EQU	$FFE3		; Port C data direction
+PCD		EQU	$FFE5		; Port C data register
+RX		EQU	$FFEF
+TX		EQU	$FFEF
+CRA		EQU	$FFEC
+CRB		EQU	$FFED
+HCR		EQU	$FFE8		; host command register
+HSR		EQU	$FFE9		; host status register
+HRX		EQU	$FFEB
+HTX		EQU	$FFEB
+
+; Voice Structure.
+
+frequency       equ 0   ; frequency fraction for voice. (24bit fraction) 
+curr_fraction   equ 1   ; current fraction part. 
+last_sample	equ 2   ; 
+			; 
+
+; Sample buffer X: memory address for each voice.
+
+bufsize		EQU $800-16
+chn1buf		EQU $4000+(0*bufsize)
+chn2buf		EQU $4000+(1*bufsize)
+chn3buf		EQU $4000+(2*bufsize)
+chn4buf		EQU $4000+(3*bufsize)
+chn5buf		EQU $4000+(4*bufsize)
+chn6buf		EQU $4000+(5*bufsize)
+chn7buf		EQU $4000+(6*bufsize)
+chn8buf		EQU $4000+(7*bufsize)
+
+; Circular buffer for dac output in Y: memory.
+
+circbuf 	EQU $6000
+cbufsize	EQU $1FC0
+
+; Individual voice data structures in X: memory
+
+freq_const	equ $7FC0
+vces_8_flag	equ $7FC1
+vc1_data	equ $7FC2
+vc2_data	equ $7FC2+4
+vc3_data	equ $7FC2+8
+vc4_data	equ $7FC2+12
+vc5_data	equ $7FC2+16
+vc6_data	equ $7FC2+20
+vc7_data	equ $7FC2+24
+vc8_data	equ $7FC2+28
+
+save_x 		EQU $7FF1		;;
+save_y	 	EQU $7FF2		;
+save_a2		EQU $7FF3		; Area to
+save_a1		EQU $7FF4		; save registers
+save_a0		EQU $7FF5		;
+save_b2		EQU $7FF3		;
+save_b1		EQU $7FF4		;
+save_b0		EQU $7FF5		;
+save_r0		EQU $7FF6		;
+save_n0		EQU $7FF6		;
+save_r1		EQU $7FF7		;
+save_n1		EQU $7FF7		;
+save_r2		EQU $7FF8		;
+save_n2		EQU $7FF8		;
+save_r3		EQU $7FF9		;	
+save_n3		EQU $7FF9		;
+save_r4		EQU $7FFA		;
+save_n4		EQU $7FFA		;
+save_r5		EQU $7FFB		;
+save_n5		EQU $7FFB		;
+save_r6		EQU $7FFC		;
+save_n6		EQU $7FFC		;;
+
+	org	p:$0
+	jmp	start			; -> start
+
+; DAC xmit FAST interrupt.
+
+	org	p:$10			; ssi transmit data
+xmit_int
+	nop
+	movep	y:(r7)+,x:RX		; output sample word
+
+; Music routine, host command 2.
+
+	org	p:$26
+	jsr	musicplayer_int		; host command 2
+	
+	org	p:$40
+start	movep	#0,x:BCR
+	movep	#1,x:PBC
+	bset	#2,x:HCR		; enable host commands	
+	movep	#$0c00,x:IPR		; Set the IPR for HOST COMMANDS 
+	jsr	setup_player
+	andi	#$f0,mr			; unmask interrupts
+	nop
+forever	nop
+	jmp 	forever
+
+;
+; Music routines.  
+;
+
+; Add a voice to the buffer (NO interpolation)
+; r0 -> sample buffer to apply volume and frequency shift too.
+; r1 -> voice structure for this voice
+; n2 -> no. of sample words to do.
+
+add_voice_ni
+	clr	a	R4,R6		; r6 -> fill
+	clr	b	x:(r1)+,a0	; frequency word
+	asl	a	x:(r1)+,b0	;
+	move	r0,b1 	
+	move	a0,x0
+	move	a1,x1
+	do	n2,end_lni
+	add	x,b	x:(r0),a	y:(r6),y1	
+	add	y1,a	b1,r0
+	move	a,y:(r6)+n6	
+end_lni
+	move	x:(r0),a		
+	move	a,x:(r1)-		; store "last sample"
+	move	b0,x:(r1)		; store current fraction
+	rts
+
+; Add a voice to the buffer (interpolate)
+; r0 -> sample buffer to apply volume and frequency shift too.
+; r1 -> voice structure for this voice
+; n2 -> no. of sample words to do.
+
+add_voice_int
+	clr	a	R4,r6		; r6 -> fill
+	clr	b	x:(r1)+,a0	; frequency word
+	asl	a	x:(r1)+,b0	; current fraction
+	move	r0,b1 	
+	move	a0,x0
+	move	a1,x1
+	clr 	a
+	do	n2,end_li
+	add	x,b		b0,a1	
+	lsr	a		x:(r0),y1
+	move	x:(r0)+,a	a,y0		
+	mac	-y0,y1,a	x:(r0),y1
+	mac	y0,y1,a		y:(r6),y1
+	add	y1,a		b1,r0
+	clr	a		a,y:(r6)+n6	
+end_li
+	move	x:(r0),x0
+	move	x0,x:(r1)-
+	move	b0,x:(r1)	; store current fraction
+	rts
+
+; The music player interrupt
+
+musicplayer_int
+	andi	#$f0,mr		; unmask interrupts
+	move	x,l:save_x
+	move	y,l:save_y
+	move	a2,x:save_a2
+	move	b2,y:save_b2
+	move	a1,x:save_a1
+	move	b1,y:save_b1
+	move	a0,x:save_a0
+	move	b0,y:save_b0
+	move	r0,x:save_r0
+	move	n0,y:save_n0
+	move	r1,x:save_r1
+	move	n1,y:save_n1
+	move	r2,x:save_r2
+	move	n2,y:save_n2
+	move	r3,x:save_r3
+	move	n3,y:save_n3
+	move	r4,x:save_r4
+	move	n4,y:save_n4
+	move	r5,x:save_r5
+	move	n5,y:save_n5
+
+	move	#>add_voice_ni,r2	; r2 -> non-interpolated add voice
+	move	#>add_voice_int,r3	; r3 -> interpolated add voice
+waitcpu	jclr	#0,x:HSR,waitcpu	; wait for cpu...
+	movep	x:HRX,a			; fetch mix routine
+	tst	a			; 0  = no interpolation
+	tne	x1,a	r3,r2		; >0 = interpolation
+wait8fl	jclr	#0,x:HSR,wait8fl	; wait for 8 voice flag
+	movep	x:HRX,a			; fetch flag
+	move	a,y:vces_8_flag
+waite	move	r7,b			; current pos in circular buffer
+	jset	#0,b1,waite		;
+	move	r6,x0			; last position in buffer 
+	sub	x0,b			; difference 
+	jpl	ok
+	move	#cbufsize,x0
+	add 	x0,b
+ok	asr	b	r6,r4		; /2 , R4=r6 (-> fill start)
+	move	b1,n2			; store no of samples to do.
+	move	#chn1buf,r0		;
+	move	#>vc1_data,r1			;
+	jsr	getchannel		; get channel 1
+	move	#chn2buf,r0		;
+	move	#>vc2_data,r1			;
+	jsr	getchannel		; get channel 2
+	move	#chn3buf,r0		;
+	move	#>vc3_data,r1		;
+	jsr	getchannel		; get channel 3
+	move	#chn4buf,r0		;
+	move	#>vc4_data,r1		;
+	jsr	getchannel		; get channel 4
+
+	move	y:vces_8_flag,a
+	tst	a
+	jeq	not8_1
+
+	move	#chn5buf,r0		;
+	move	#>vc5_data,r1			;
+	jsr	getchannel		; get channel 1
+	move	#chn6buf,r0		;
+	move	#>vc6_data,r1			;
+	jsr	getchannel		; get channel 2
+	move	#chn7buf,r0		;
+	move	#>vc7_data,r1		;
+	jsr	getchannel		; get channel 3
+	move	#chn8buf,r0		;
+	move	#>vc8_data,r1		;
+	jsr	getchannel		; get channel 4
+not8_1
+
+clrbuf	
+	clr	a	r4,r6
+	move	#2,n6			; interleaved stereo voices 
+	do	n2,end_clearlp
+	move	a,y:(r6)+
+	move	a,y:(r6)+
+end_clearlp
+	move	#>chn1buf,r0		
+	move	#>vc1_data,r1
+	jsr	(r2)			; add voice 1
+	move	#>chn2buf,r0	
+	move	y:(R4)+,x0
+	move	#>vc2_data,r1
+	jsr	(r2)			; add voice 2
+	move	#>chn3buf,r0
+	move	#>vc3_data,r1
+	jsr	(r2)			; add voice 3
+	move	#>chn4buf,r0	
+	move	y:(R4)-,x0
+	move	#>vc4_data,r1
+	jsr	(r2)			; add voice 4
+
+	move	y:vces_8_flag,a
+	tst	a
+	jeq	not8_2
+
+	move	#>chn5buf,r0		
+	move	#>vc5_data,r1
+	jsr	(r2)			; add voice 5
+	move	#>chn6buf,r0	
+	move	y:(R4)+,x0
+	move	#>vc6_data,r1
+	jsr	(r2)			; add voice 6
+	move	#>chn7buf,r0
+	move	#>vc7_data,r1
+	jsr	(r2)			; add voice 7
+	move	#>chn8buf,r0	
+	move	y:(R4)-,x0
+	move	#>vc8_data,r1
+	jsr	(r2)			; add voice 8
+not8_2
+
+wait_E1	jclr	#0,x:HSR,wait_E1	; wait..
+	movep	x:HRX,a			; 
+	tst	a
+	jeq	nowait
+wait_E2	jclr	#1,x:HSR,wait_E2	; wait..
+	movep	b,x:HRX			; tell cpu "finished"!
+nowait	
+	move	l:save_x,x
+	move	l:save_y,y
+	move	x:save_a2,a2
+	move	y:save_b2,b2
+	move	x:save_a1,a1
+	move	y:save_b1,b1
+	move	x:save_a0,a0
+	move	y:save_b0,b0
+	move	x:save_r0,r0
+	move	y:save_n0,n0
+	move	x:save_r1,r1
+	move	y:save_n1,n1
+	move	x:save_r2,r2
+	move	y:save_n2,n2
+	move	x:save_r3,r3
+	move	y:save_n3,n3
+	move	x:save_r4,r4
+	move	y:save_n4,n4
+	move	x:save_r5,r5
+	move	y:save_n5,n5
+	rti
+
+
+; Fetch a channel, including volume,frequency data.
+
+getchannel
+	jclr	#0,x:HSR,getchannel	; wait...
+	movep	x:HRX,y1		; receive volume
+wait0	jclr	#0,x:HSR,wait0		; wait...
+	movep	x:HRX,x1		; receive period value (fraction) 
+	clr	a	x1,b
+	tst	b
+	jeq	zeroper
+
+; Setup SSI.	
+setup_player
+	movep	#$3c00,x:IPR		; Set the IPR for ssi interrupts, and ENABLE HOST COMMANDS HPL0,HPL1
+	movep	#$4100,x:CRA		; set wordlength to 16bits and 2 words per "frame".
+	movep	#$5800,x:CRB		; transmit int enable | transmitter enable | enable network mode(word request)
+	movep	#$1f8,x:PCC		; turn on SSI port(Port C control reg)
+	movep	#0,x:PCDDR		; 
+	rts
+

@@ -1,0 +1,196 @@
+;----------------------------------------------------------------------
+; Variable Voice Interpolated Sound Engine
+; Martin Griffiths 1994.
+;----------------------------------------------------------------------
+
+host_receive	macro dest
+_wait 		jclr    #0,X:HSR,_wait     
+		movep	x:HRX,dest
+		endm
+
+host_send	macro source
+_wait 		jclr    #1,X:HSR,_wait     
+		movep	source,x:HRX
+		endm
+
+no_channels	equ	32
+
+IPR		EQU	$FFFF
+BCR		EQU	$FFFE
+PBC		EQU	$FFE0
+PCC		EQU	$FFE1
+PCDDR		EQU	$FFE3		; Port C data direction
+PCD		EQU	$FFE5		; Port C data register
+RX		EQU	$FFEF
+TX		EQU	$FFEF
+CRA		EQU	$FFEC
+CRB		EQU	$FFED
+HCR		EQU	$FFE8		; host command register
+HSR		EQU	$FFE9		; host status register
+HRX		EQU	$FFEB
+HTX		EQU	$FFEB
+
+; Voice Structure.
+
+voice_on	equ 0
+stereo_offset	equ 1
+frequency       equ 2   ; frequency fraction for voice. (24bit fraction) 
+curr_fraction   equ 3   ; current fraction part. 
+struct_size	equ 4
+
+bufsize		EQU 256
+
+; Sample buffer X: memory address for each voice.
+
+		org x:$0
+mix_bufferX	ds bufsize
+
+		org x:$1000
+incoming_voice	ds bufsize
+
+		org y:$0
+mix_bufferY	ds bufsize
+
+		org y:$1000
+offset_buffer	ds 256
+vc1_data	ds 4*no_channels
+
+
+; Circular buffer for dac output in Y: memory.
+
+
+	org	p:$0
+	jmp	start			; -> start
+
+; Music routine, host command 2.
+
+	org	p:$26
+	jsr	musicplayer_int		; host command 2
+	
+	org	p:$40
+start	movep	#0,x:BCR
+	movep	#1,x:PBC
+	jmp	setup_player
+
+; The music player interrupt
+
+musicplayer_int
+	andi	#$f0,mr		; unmask interrupts
+	bset	#3,x:HCR
+	bset	#4,x:HCR
+
+	host_receive a1			; fetch no of voices.
+	move	a1,n1
+
+
+	move	#mix_bufferX,r0
+	clr	a
+	rep	n0
+	move	a,l:(r0)+
+
+; Fetch channels
+
+	move	#>vc1_data,r4
+	move	#>4,n4
+
+	do	n1,dochnlp
+	move	r4,r1
+	host_receive a
+	tst	a	a,y:(r1)+
+	jeq	nextvoice
+	clr	a	#incoming_voice,r0		;
+	host_receive y:(r1)+		; receive stereo offset
+	host_receive a1			; fractional frequency shifter 
+	host_receive y1			; receive volume
+	move	a1,y:(r1)+		; store fraction part
+	lsr	a	n0,x0		; 
+	clr	b	a1,x1
+	move	y:(r1)+,b0		; current fraction
+	mac	x1,x0,b	#>$80,x0	; frequency fraction * no. of samples to do.
+	host_send b1			; send amount of sample words to send.
+	do	b1,end_gc		; - for x no. of samples
+	host_receive x1
+	mpy     x0,x1,a  
+	move	a0,x1
+	mpyr	y1,x1,a	
+	move	a,x:(r0)+	
+end_gc	
+	host_receive x1
+	mpy     x0,x1,a  
+	move	a0,x1
+	mpyr	y1,x1,a	
+	move	a,x:(r0)+	
+
+	move	r4,r1
+	move	#>offset_buffer,r0
+	move	y:(r1)+,b		; voice flag
+	move	y:(r1)+,y0		; stereo offset.
+	move	#0,x1
+	clr	b	y:(r1)+,x0 	; frequency int/fraction
+	move	y:(r1),b0
+	move	#>incoming_voice,b1 	
+	add	x,b	
+	rep	#bufsize-1
+	add	x,b	b1,y:(r0)+
+	move	b1,y:(r0)+
+	move	b0,y:(r1)		; store current fraction
+
+	move	#>offset_buffer,r5
+	move	#mix_bufferX,r6
+	move	#>$7fffff,a		; 0.99998
+	sub	y0,a	
+	move	a,y1
+
+	move	y:(r5)+,r2
+	do	n0,end_lnl
+	move	l:(r6),ab
+	move	x:(r2),x0
+	macr	x0,y0,a		
+	macr	x0,y1,b		y:(r5)+,r2
+	move	ab,l:(r6)+
+end_lnl
+
+nextvoice
+	lua	(r4)+n4,r4
+	nop
+dochnlp
+	bclr	#3,x:HCR
+	bclr	#4,x:HCR
+
+	move	#>$8000,x0
+	move	#mix_bufferX,r0
+	do	n0,send_mix
+	move	x:(r0),y0
+	mpy	x0,y0,a
+	host_send a1
+	move	y:(r0)+,y0
+	mpy	x0,y0,a
+	host_send a1
+	nop
+send_mix
+	rti
+
+setup_player
+	bset	#2,x:HCR		; enable host commands	
+	bclr	#3,x:HCR
+	bclr	#4,x:HCR
+
+; Setup DAC output.	
+	movep	#$0c00,x:IPR		; Set the IPR for ssi interrupts, and ENABLE HOST COMMANDS HPL0,HPL1
+	;movep	#$1f8,x:PCC		; turn on SSI port(Port C control reg)
+	;movep	#0,x:PCDDR		; 
+	andi	#$f0,mr			; unmask interrupts
+	move	#>vc1_data,r5		; voice
+	clr	a	
+	rep	#(no_channels*struct_size)
+	move	a,y:(r5)+		
+	move	#>bufsize,n0
+	move	#$475249,b
+sendgo1	jclr	#1,x:HSR,sendgo1	;
+	movep	b1,x:HRX		; 
+	move	#$464621,b
+sendgo2	jclr	#1,x:HSR,sendgo2	;
+	movep	b1,x:HRX		; 
+forever	jmp 	forever
+
+	end	

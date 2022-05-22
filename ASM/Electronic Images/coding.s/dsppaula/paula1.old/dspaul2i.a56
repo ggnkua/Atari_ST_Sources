@@ -1,0 +1,215 @@
+;----------------------------------------------------------------------
+;----------------------------------------------------------------------
+; DSP 4 channel Player.
+; 56001 source. (interpolated)
+; By Martin Griffiths, August 1993
+;----------------------------------------------------------------------
+;----------------------------------------------------------------------
+
+IPR		EQU	$FFFF
+BCR		EQU	$FFFE
+MYPBC		EQU	$FFE0
+PCC		EQU	$FFE1
+PCDDR		EQU	$FFE3		; Port C data direction
+PCD		EQU	$FFE5		; Port C data register
+RX		EQU	$FFEF
+TX		EQU	$FFEF
+CRA		EQU	$FFEC
+CRB		EQU	$FFED
+HSR		EQU	$FFE9
+HRX		EQU	$FFEB
+
+; Voice Structure.
+
+voice_vol       equ 0   ; volume.
+frequency       equ 1   ; frequency fraction for voice. (24bit fraction) 
+curr_fraction   equ 2   ; current fraction part. 
+last_time	equ 3
+last_sample	equ 4
+
+vc1_data	equ 0
+vc2_data	equ 5
+vc3_data	equ 10
+vc4_data	equ 15
+
+; Sample buffer x: memory address for each voice.
+
+bufsize		EQU 1024
+chn1buf		EQU $100+(0*bufsize)
+chn2buf		EQU $100+(1*bufsize)
+chn3buf		EQU $100+(2*bufsize)
+chn4buf		EQU $100+(3*bufsize)
+
+; Circular buffer for dac output in y: memory.
+
+circbuf 	EQU $0
+cbufsize	EQU $1800
+
+	org	p:$0
+	jmp	start			; -> start
+
+; DSP DAC xmit interrupt.
+
+	org	p:$10			; ssi transmit data
+xmit_int
+	nop
+	movep	y:(r7)+,x:RX		; output sample word
+
+; Voice Structure.
+; 1  left volume multiplier.
+; 2  right volume multiplier.
+; 3  volume.
+; 4  frequency fraction for voice. (24bit fraction) 
+; 5  no. of samples stepped through(i.e no of samples*frequency fraction)
+; 6  current fraction part. (for accurracy between sucessive frames)
+
+
+	org	p:$40
+start	movep	#0,x:BCR
+	movep	#1,x:MYPBC
+	clr	a			; set all
+	move	#>vc1_data,r6		; voice
+	rep	#4*5			; variables
+	move	a,x:(r6)+		; to zero
+
+	move 	#cbufsize,n0		; setup the dac output 
+	move	#circbuf,r6		; circular buffer pointers 
+	movec	#cbufsize-1,m6		; and modulos.. 
+	move	r6,r7			; 
+	movec	m6,m7			; 
+	rep	n0			; and clear the buffer
+	move	a,y:(r6)+		;
+; Setup DAC output.	
+	movep	#$3000,x:IPR		; Set the IPR for ssi interrupts
+	movep	#$4100,x:CRA		; set wordlength to 16bits and 2 words per "frame".
+	movep	#$5800,x:CRB		; transmit int enable | transmitter enable | enable network mode(word request)
+	movep	#$1f8,x:PCC		; turn on SSI port(Port C control reg)
+	movep	#0,x:PCDDR		; 
+	andi	#$fc-4-8,mr		; unmask interrupts
+	nop
+
+loop	jclr	#0,x:HSR,loop		; wait for cpu...
+	movep	x:HRX,x1		; fetch dummy.
+
+waite	move	r7,b			; current pos in circular buffer
+	jset	#0,b1,waite		;
+	move	r6,x0			; last position in buffer 
+	sub	x0,b			; difference 
+	jpl	ok
+	move	#cbufsize,x0
+	add 	x0,b
+ok	asr	b			; 2
+	move	b,n2			; store no of samples to do.
+	move	r6,r5			; r5=r6 (-> fill start)
+	move	#chn1buf,r0		;
+	move	#>vc1_data,r1			;
+	jsr	getchannel		; get channel 1
+	move	#chn2buf,r0		;
+	move	#>vc2_data,r1			;
+	jsr	getchannel		; get channel 2
+	move	#chn3buf,r0		;
+	move	#>vc3_data,r1		;
+	jsr	getchannel		; get channel 3
+	move	#chn4buf,r0		;
+	move	#>vc4_data,r1		;
+	jsr	getchannel		; get channel 4
+	
+clrbuf	move	r5,r6
+	clr	a
+	do	n2,end_clearlp
+	move	a,y:(r6)+
+	move	a,y:(r6)+
+end_clearlp
+	move	#2,n6			; interleaved stereo voices 
+	move	#chn1buf,r0		
+	move	#>vc1_data,r1
+	jsr	add_voice		; add voice 1
+	move	#chn2buf,r0	
+	move	y:(r5)+,x0
+	move	#>vc2_data,r1
+	jsr	add_voice		; add voice 2
+	move	#chn3buf,r0
+	move	#>vc3_data,r1
+	jsr	add_voice		; add voice 3
+	move	#chn4buf,r0	
+	move	y:(r5)-,x0
+	move	#>vc4_data,r1
+	jsr	add_voice		; add voice 4
+
+;wait9	jclr	#1,x:HSR,wait9		; used for
+;	movep	b,x:HRX			; timing the dsp!
+
+	jmp	loop			; next frame
+
+; Add a voice to the buffer
+; r0 -> sample buffer to apply volume and frequency shift too.
+; r1 -> voice structure for this voice
+; n2 -> no. of sample words to do.
+
+add_voice
+	move	#>curr_fraction,n1
+	nop
+	move	x:(r1+n1),b	; current fraction
+	move	#>frequency,n1
+	move	r5,r6
+	move	x:(r1+n1),x0		; frequency word
+	move	#>last_sample,n1
+	move	r0,r4
+	move	x:(r1+n1),y1		; last sample from last time
+	do	n2,end_l2
+	move	x:(r0),a
+	sub	y1,a	b,y0		; difference
+	tfr	y1,a	a,x1		; x1 = a, a = y1
+	mac	y0,x1,a
+	add	x0,b		y:(r6),x1
+	jec	wrt_l2
+	bclr	#$17,b1			; fraction is 23bit(modulo 23 bit)
+	move	x:(r0)+,y1		; increment r0
+wrt_l2	
+	add	x1,a
+	move	a,y:(r6)+n6
+end_l2
+	move	#curr_fraction,n1
+	move	r0,a
+	move	b,x:(r1+n1)		; store current fraction
+	move	#last_time,n1
+	move	r4,x0
+	sub	x0,a
+	move	a,x:(r1+n1)		; store the new offset
+	move	#last_sample,n1
+	nop
+	move	y1,x:(r1+n1)		; store the current(last) sample
+	rts
+
+; Fetch a channel.
+; including volume,frequency data.
+
+getchannel
+	jclr	#0,x:HSR,getchannel	; wait...
+	movep	x:HRX,y1
+	move	y1,x:(r1)+		; receive volume
+wait0	jclr	#0,x:HSR,wait0		; wait...
+	movep	x:HRX,x1		; receive frequency (fraction) 
+	clr	b	x1,x:(r1)+	; store.
+	move	n2,x0			; no. of samples to do.
+	move	x:(r1)+,b0
+	asl	b
+	mac	x1,x0,b  		; frequency fraction * no. of samples to do.
+wait2a	jclr	#1,x:HSR,wait2a		; wait..
+	movep	x:(r1)+,x:HRX		; send how many we did last time  
+wait2	jclr	#1,x:HSR,wait2		; wait..
+	movep	b,x:HRX			; send frequency fraction * no. of samples to do. 
+wait3	jclr	#0,x:HSR,wait3		; wait...
+	movep	x:HRX,x0		; receive "no. of samples to get".
+	move	#>$8000,y0		; 
+	do	x0,end_gc		; - for x no. of samples
+wait4   jclr    #0,X:HSR,wait4          ; - wait...
+	movep   x:HRX,x1                ; - receive 3 samples
+	mpy     y0,x1,a        
+	move	a0,x1
+	mpy	y1,x1,b	
+	move	b1,x:(r0)+
+end_gc
+	rts
+
+	end	

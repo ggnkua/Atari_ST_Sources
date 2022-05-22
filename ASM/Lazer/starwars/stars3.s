@@ -1,0 +1,211 @@
+; Star wars scroller
+
+main	clr.l -(sp)
+	move #$20,-(sp)
+	trap #1
+	addq.l #6,sp
+	move #37,-(sp)
+	trap #14
+	addq.l #2,sp
+	clr.b $ffff8260.w
+	move #$2700,sr
+	bsr	initchardata
+	move.l	#$00000444,$ffff8240.w
+	lea oldmfp(pc),a0
+	move.b $fffffa07.w,(a0)+
+	move.b $fffffa09.w,(a0)+
+	move.b $fffffa13.w,(a0)+
+	move.b $fffffa15.w,(a0)+
+	move.l $70.w,(a0)+
+	move.l #vbl,$70.w
+	clr.b $fffffa07.w
+	clr.b $fffffa09.w
+	clr.b $fffffa13.w
+	clr.b $fffffa15.w
+	move #$2300,sr
+.1      move.b  $fffffc02.w,d0  ; Space ?
+        cmp.b   #$39,d0
+        bne     .1              ; Weiter gehts
+	move #$2700,sr
+	lea oldmfp(pc),a0
+	move.b (a0)+,$fffffa07.w
+	move.b (a0)+,$fffffa09.w
+	move.b (a0)+,$fffffa13.w
+	move.b (a0)+,$fffffa15.w
+	move.l (a0)+,$70.w
+	move.l #$07770000,$ffff8240.w
+	move.l #$00000000,$ffff8244.w
+	move #$2300,sr
+        clr -(sp)
+	trap #1
+oldmfp	ds.l 2
+
+vbl	movem.l d0-a6,-(sp)
+	lea scr1(pc),a0
+	movem.l (a0)+,d0-d1
+	move.l d0,-(a0)
+	move.l d1,-(a0)
+	lsr #8,d1
+	move.l d1,$ffff8200.w
+	bsr	scroll
+	movem.l (sp)+,d0-a6
+	rte
+
+scroll	lea	textbuf,a0
+	add.l	offset(pc),a0
+	lea	font(pc),a1
+	move.l	text_ptr(pc),a2
+	move.w	skip(pc),d0
+	addq.w	#2,d0
+	cmp.w	#12,d0
+	bne .1
+	clr.w d0
+	lea 20(a2),a2
+	tst.b	(a2)
+	bne	.1
+	lea text(pc),a2
+.1	move.l a2,text_ptr
+	move.w	d0,skip
+	add.w	d0,a1
+	rept 20
+	moveq.l	#0,d0
+	move.b	(a2)+,d0
+	sub.b	#32,d0
+	muls.w	#14,d0
+	move.w	(a1,d0),(a0)+
+	move.w	(a1,d0),12000-2(a0)
+	endr
+	add.l	#40,offset
+	cmp.l	#12000,offset
+	blt .5
+	clr.l offset
+.5	
+
+; This is, where the data is shown as a starwarsscroll
+
+lines=89
+showscroller
+	move.l	move(pc),a0
+	move.l	scr1(pc),a1
+	lea.l	100*160(a1),a1
+	lea	chardat,a2
+	lea	textbuf,a5
+	add.l	offset(pc),a5
+	lea	ycord,a4
+	moveq.w	#18,d4
+	move.w	#lines,d7
+.1	move.l	a5,a3
+	add.w	(a4)+,a3
+.2	move.w	(a3)+,d0
+	add.w	(a0)+,d0
+	move.l  a1,a6
+	adda.w  (a0)+,a6
+	move.l	(a2,d0.w),d3
+	move.w	d3,8(a6)
+	swap	d3
+	move.w	d3,(a6)
+	rept 19
+	move.w	(a3)+,d0       ; Base font size
+	add.w	(a0)+,d0       ; 
+	move.l a1,a6
+	adda.w (a0)+,a6        ; screen offset
+	move.l	(a2,d0.w),d3
+	move.w	d3,8(a6)
+	swap	d3
+	or.w	d3,(a6)
+	endr
+	subq.w	#1,d4
+	bne	.3
+	moveq.w	#19,d4
+	lea 2048(a2),a2
+.3	dbf	d7,.1
+	rts
+
+; Preshift 'em
+
+initchardata
+	lea	data,a0
+	lea	chardat,a1
+	move.w	#(32*11)-1,d0
+.1	moveq.l	#0,d1
+	move.w	(a0)+,d1
+	swap 	d1
+	rept 16
+	move.l	d1,(a1)+
+	lsr.l	#1,d1
+	endr
+	dbf	d0,.1
+	rts
+
+	section data
+scr1	dc.l	$e0000
+scr2	dc.l	$f0000
+
+skip	dc.w	0
+text_ptr
+	dc.l	text
+offset	dc.l	0
+
+text		dc.b	"                    "
+		dc.b	"                    "
+		dc.b	"  THIS IS THE LAST  "
+		dc.b	"                    "
+		dc.b	"   SCREEN OF THIS   "
+		dc.b	"                    "
+		dc.b	"                    "
+		dc.b	"     MICRO-DEMO     "
+		dc.b	"                    "
+		dc.b	"                    "
+		dc.b	"  NOW IT'S TIME FOR "
+		dc.b	"                    "
+		dc.b	"     THE CREDITS:   "
+		dc.b	"                    "
+		dc.b	"                    "
+		DC.B	"    ALL CODE BY:    "
+		dc.b	"                    "
+		DC.B	"     P H O T O N    "
+		dc.b	"                    "
+		dc.b	"                    "
+		dc.b	"                    "
+		DC.B	"  ALL GRAPHIXX BY:  "
+		dc.b	"                    "
+		DC.B	"   S T - N I N J A  "
+		dc.b	"                    "
+		dc.b	"                    "
+		dc.b	"                    "
+		dc.b	" SOUNDTRACKER-SOUND:"
+		dc.b	"                    "
+		dc.b	"       S T A X      "
+		dc.b	"                    "
+		dc.b	"                    "
+		dc.b	"                    "
+		dc.b	"  IMPOSSIBLE IDEAS: "
+		dc.b	"                    "
+		dc.b	"    C H A R L I E   "
+		dc.b	"                    "
+		dc.b	"                    "
+		dc.b	"                    "
+		dc.b	"                    "
+		dc.b	"                    "
+		dc.b	"                    "
+		dc.b	"                    "
+		dc.b	"                    "
+		dc.b	"                    "
+		dc.b	"                    "
+		dc.b	"                    "
+		dc.b	"                    "
+		dc.b	"                    "
+		dc.b	0
+		even
+
+move		dc.l	move0
+
+move0		incbin	"stars1.dat"
+data		incbin	"stars2.dat"
+font		incbin	"stars3.dat"
+ycord		incbin	"stars4.dat"
+
+		section bss
+
+chardat		ds.l	32*16*11
+textbuf		ds.w	600*20

@@ -1,0 +1,990 @@
+*
+*	Apple Macintosh Developer Technical Support
+*
+*	MultiFinder-Aware Simple Sample Application
+*
+*	Sample
+*
+*	Sample.a	-	Assembler Source
+*
+*	Copyright © Apple Computer, Inc. 1989-1990, 1993
+*	All rights reserved.
+*
+*	Versions:	
+*		1.00			08/88
+*		1.01			11/88
+*		1.02			04/89	MPW 3.1
+*		1.03			02/90	MPW 3.2
+*		1.04			11/93	MPW 3.3.1 (ETO 13)
+*
+*	Components:
+*		Sample.a		Feb. 1, 1990
+*		Sample.inc1.a	Feb. 1, 1990
+*		SampleMisc.a	Feb. 1, 1990
+*		Sample.r		Feb. 1, 1990
+*		Sample.h		Feb. 1, 1990
+*		Sample.make		Feb. 1, 1990
+*
+*	Sample is an example application that demonstrates how to
+*	initialize the commonly used toolbox managers, operate 
+*	successfully under MultiFinder, handle desk accessories, 
+*	and create, grow, and zoom windows.
+*
+*	It does not by any means demonstrate all the techniques 
+*	you need for a large application. In particular, Sample 
+*	does not cover exception handling, multiple windows/documents, 
+*	sophisticated memory management, printing, or undo. All of 
+*	these are vital parts of a normal full-sized application.
+*
+*	This application is an example of the form of a Macintosh 
+*	application; it is NOT a template. It is NOT intended to be 
+*	used as a foundation for the next world-class, best-selling, 
+*	600K application. A stick figure drawing of the human body may 
+*	be a good example of the form for a painting, but that does not 
+*	mean it should be used as the basis for the next Mona Lisa.
+*
+*	We recommend that you review this program or TESample before 
+*	beginning a new application.
+
+* This example program is to be considered an introduction to coding in the
+* MPW Assembly language.  This sample program demonstrates the use of RECORD,
+* PROC, WITH, MACROs, IMPORT, and other coding practices used by MPW.  Although
+* this code will not be compatible with other assemblers, there is enough code
+* contained within the procedures that demonstrate 68000 programming on the Mac.
+
+* The main purpose of this example is to have an easy to understand sample
+* assembly program that follows very closely the same sample program available
+* in Pascal and C.  Programmers not familiar with assembly code should refer to
+* these high level versions and follow the procedures while examining the assembly
+* code.  This is a great way to learn how to read assembly listings, and that is
+* the first step in using a debugger.
+
+* Stack frame strategy:
+* -----------------------------------------------
+* Here is an example of a typical stack frame.  An example of the stack frame
+* RECORD is shown.  Using this strategy for procedures makes life much easier
+* while writing assembly code.  The procedure outlined in Pascal here is
+* followed by the same outline in assembly.
+
+* PROCEDURE MyProcedure (Param1: type, Param2: type, ParamN: type) Result1: type;
+
+* VAR	Local1: type;
+*	Local2: type;
+*	LocalN: type;
+
+
+* MyProcedure	PROC	EXPORT			; any source file can use this routine
+
+* define registors that need to be saved as EQUATES (typically A3-A7 and D4-D7)
+
+* StackFrame	RECORD	{A6Link},DECR		; build a stack frame record
+* Result1	DS.{size}			; function's result returned to caller
+* ParamBegin	EQU	*			; start parameters after this point
+* Param1	DS.{size}			; the first parameter on the stack
+* Param2	DS.{size}			; rest of the parameters passed by caller
+* ParamN	DS.{size}			; the last parameter passed by caller
+* ParamSize	EQU	ParamBegin-*		; size of all the passed parameters
+* RetAddr 	DS.L	1			; place holder for return address
+* A6Link	DS.L	1			; place holder for A6 link
+* Local1	DS.{size}			; a local variable for this procedure only
+* Local2	DS.{size}			; other local variables for this procedure
+* LocalN	DS.{size}			; the last local variable
+* LocalSize	EQU 	*			; size of all the local variables
+* 		ENDR
+
+* 		WITH	StackFrame		; cover our local stack frame
+* 		LINK	A6,#LocalSize		; allocate our local stack frame
+
+*		save registors trashed by this routine
+
+* 		# # INSERT YOUR CODE HERE # #
+
+* Exit		restore registors trashed by this routine
+* 		UNLK	A6			; destroy the link
+* 		MOVEA.L	(SP)+,A0		; pull off the return address
+* 		ADDA.L	#ParamSize,SP		; strip all of the caller's parameters
+* 		JMP	(A0)			; return to the caller
+* 		DbgInfo	MyProcedure		; this name will appear in the debugger
+* 		ENDP
+
+* The Macro DbgInfo is optional.  I prefer to use it, since it aids in
+* debugging.  There are more macros in the "AStructMacs" folder of MPW.  Put on
+* a pot of coffee and take a look at them and the Sample program that uses these
+* macros.  There is one macro in particular that builds the entire stack frame
+* structure as outlined above, including the debug info.
+
+* Segmentation strategy:
+* -----------------------------------------------
+* This program consists of three segments. Main contains most of the code.
+* Initialize contains code that is only used once, during startup, and can be
+* unloaded after the program starts. %A5Init is automatically created by the
+* Linker to initialize globals and constants, and is unloaded right away.
+
+* SetPort strategy:
+* -----------------------------------------------
+* Tool box routines do not change the current port. In spite of this, in this
+* program we use a strategy of calling SetPort whenever we want to draw or
+* make calls which depend on the current port. This makes us less vulnerable
+* to bugs in other software which might alter the current port (such as the
+* bug (feature?) in many desk accessories which change the port on OpenDeskAcc).
+* Hopefully, this also makes the routines from this program more self-contained,
+* since they don't depend on the current port setting.
+
+* ================================================
+* -------------- INCLUDES SECTION ----------------
+* ================================================
+	
+	PRINT	PUSH,OFF			; don't print any of this stuff
+
+	INCLUDE 'Traps.a'
+	INCLUDE	'SysEqu.a'
+	INCLUDE	'Quickdraw.a'
+	INCLUDE 'Packages.a'
+	INCLUDE 'ToolUtils.a'
+
+	INCLUDE	'Sample.inc1.a'			; all our macros and data templates
+	
+
+	PRINT	POP				; restore the PRINT options
+	
+
+* ================================================
+* ---------  DATA STORAGE ALLOCATION  ------------
+* ================================================
+* Global data storage.  All global memory is allocated here.  The
+* Linker will load all global data offset from A5, and the Asm knows this.
+* Therefore, no reference to (A5) is required in the code. Hooray!
+* Here we declare two data structures using our templates defined previously.
+* They must be EXPORTed here for other files that need to IMPORT them.
+
+		EXPORT	(QD,G):DATA
+
+QD		DS	QDGlobals		; QuickDraw's globals
+G		DS	AppGlobals		; application's globals
+
+
+* ================================================
+* PROCEDURE Initialize;
+* ================================================
+* Set up the whole world, including global variables, Toolbox managers, and menus.
+* Check to see if a given trap is implemented. The recommended approach to see if
+* a trap is implemented is to see if the address of the trap routine is the same
+* as the address of the Unimplemented trap.  We also create our one application
+* window at this time.  Since window storage is non-relocateable, how and when to
+* allocate space for windows is very important so that heap fragmentation does not
+* occur.  Because Sample has only one window and it is only disposed when the
+* application quits, we will allocate its space here, before anything that might
+* be a locked relocatable object gets into the heap. This way, we can force its
+* storage to be in the lowest memory available in the heap. Window storage can
+* differ widely amongst applications depending on how many windows are created
+* and disposed.  If a failure occurs here, we will consider that the application
+* is in such bad shape that we should just exit. Your error handling may differ,
+* but the checks should still be made.
+
+* If an error is detected, instead of merely doing an ExitToShell, which leaves
+* the user without much to go on, we call AlertUser, which puts up a simple alert
+* that just says an error occurred and then calls ExitToShell.  In the interests
+* of keeping things simple, the alert does not state the specific cause of the error,
+* but a more informative alert would be appropriate for more sophisticated applications.
+* Since there is no other cleanup needed at this point if an error is detected, this
+* form of error- handling is acceptable. If more sophisticated error recovery is needed,
+* a signal mechanism, such as is provided by Signals, can be used.
+
+* Something worth noting here.  Since the AlertUser routine is in a different segment,
+* we have to use a Jump instruction to get there.  In other words, we must go through the
+* jump table.  This causes extra test and branch instructions to get over the JMP AlertUser.
+
+		SEG 'Initialize'		; case sensitive
+Initialize	PROC				; Initialize everything
+
+CountReg	EQU	D4			; temporary registor to count loops
+
+StackFrame	RECORD	{A6Link},DECR		; build a stack frame record
+ParamBegin	EQU	*			; start parameters after this point
+ParamSize	EQU	ParamBegin-*		; size of all the passed parameters
+RetAddr 	DS.L	1			; place holder for return address
+A6Link		DS.L	1			; place holder for A6 link
+CurMBar		DS.L	1			; local handle to our menubar
+TheEvent 	DS	EventRecord 		; local copy of the event record
+LocalSize	EQU 	*			; size of all the local variables
+		ENDR
+		
+		IMPORT	GoGetRect,AlertUser,SysEnvirons,	\
+			TrapAvailable		; linked in with Runtime.o
+
+		WITH	StackFrame		; cover our local stack frame
+		LINK	A6,#LocalSize		; allocate our local stack frame
+		
+		MOVEM.L	CountReg,-(SP) 		; save the current registor values
+		MOVE.W	#False,G.InBackground	; we start out in the foreground
+		MOVE.W	#True100,G.Stopped		; we'll start with the red light on
+
+* ------------- INITIALIZE MANAGERS -------------
+
+@1		PEA 	QD.thePort 		; initialize all of the Managers
+		_InitGraf			; please don't flush my events
+		_InitFonts
+		_InitWindows
+		_InitMenus
+		_TEInit
+		CLR.L	-(SP)	
+		_InitDialogs
+		_InitCursor
+		
+* Call MPPOpen and ATPLoad at this point to initialize AppleTalk, if you are using it.
+* NOTE -- It is no longer necessary, and actually unhealthy, to check PortBUse and
+* SPConfig before opening AppleTalk. The drivers are capable of checking for port
+* availability themselves.  This next bit of code is necessary to allow the default
+* button of our alert be outlined.
+	 
+* ------------- WASTE THREE EVENTS -------------
+
+		MOVE.W	#2,CountReg		; set register value to loop 3 times
+Loop		CLR.W	-(SP)			; space for result
+		MOVE.W	#EveryEvent,-(SP)	; the events we want
+		PEA	TheEvent(A6)		; pass a pointer to our event
+		_EventAvail
+		MOVE.W	(SP)+,D0		; result code
+		DBF	CountReg,Loop		; decrement count, if count < 0 then continue
+
+* ------------- GET THE ENVIRONMENT -------------
+
+		CLR.W	-(SP)			; create space for result
+		MOVE.W	#EnvironsVersion,-(SP)	; version of SysEnvirons we want
+		PEA	G.Mac			; the global environment record
+		JSR	SysEnvirons		; we can ignore any errors here,
+		MOVE.W	(SP)+,D0		; SysEnvirons will fill in regardless
+		MOVE.W	G.Mac.MachineType,D0 	; negitive value means old ROMs
+		BPL.S	@2			; 128k ROMs or better, continue on
+		JMP	AlertUser		; we don't want to run on 64k ROMs
+
+* ------------- TEST FOR WAITNEXTEVENT -------------
+* 1.02 - Move TrapAvailable call to after SysEnvirons so that
+* we can tell in TrapAvailable if a tool trap value is out of range.
+
+@2		CLR.W	-(SP)			; space for result of trap test
+		MOVE.W	#WaitNextEvent,-(SP)	; pass the trap number of WaitNextEvent trap
+		JSR	TrapAvailable		; test for this trap
+		MOVE.W	(SP)+,G.HasWNEvent	; put the result in our global flag
+			
+* ------------- CHECK FOR ENOUGH MEMORY -------------
+* It is better to first check the size of the application heap against a value
+* that you have determined is the smallest heap the application can reasonably
+* work in. This number should be derived by examining the size of the heap that
+* is actually provided by MultiFinder when the minimum size requested is used.
+* The derivation of the minimum size requested from MultiFinder is described
+* in ASample.r. The check should be made because the preferred size can end up
+* being set smaller than the minimum size by the user. This extra check acts to
+* insure that your application is starting from a solid memory foundation.
+ 
+*    IF applLimit - applZone < MinHeap THEN AlertUser
+
+* Next, make sure that enough memory is free for your application to run. It
+* is possible for a situation to arise where the heap may have been of required
+* size, but a large scrap was loaded which left too little memory. To check for
+* this, call PurgeSpace and compare the result with a value that you have determined
+* is the minimum amount of free memory your application needs at initialization.
+* This number can be derived several different ways. One way that is fairly
+* straightforward is to run the application in the minimum size configuration
+* as described previously. Call PurgeSpace at initialization and examine the value
+* returned. However, you should make sure that this result is not being modified
+* by the scrap's presence. You can do that by calling ZeroScrap before calling
+* PurgeSpace. Make sure to remove that call before shipping, though.
+ 
+* The extra benefit to waiting until after the Toolbox Managers have been initialized
+* before checking memory is that we can now give the user an alert to tell him what
+* happened. Although it is possible that the memory situation could be worsened by
+* displaying an alert, MultiFinder would gracefully exit the application with
+* an informative alert if memory became critical. Here we are acting more
+* in a preventative manner to avoid future disaster from low-memory problems.
+ 
+		MOVE.L	applLimit,D1		; get pointer to ApplLimit
+		MOVE.L	applZone,D0		; get pointer to ApplicZone
+		SUB.L	D0,D1			; subtract the ApplicZone from ApplLimit
+		CMPI.L	#MinHeap,D1		; do we have enough memory?
+		BPL.S	@3			; yes we do, continue on
+		JMP	AlertUser		; no, report the error
+		
+@3		_PurgeSpace			; results will be in A0 and D0
+		CMPI.L	#MinSpace,D0		; do we have enough purgeable space?
+		BPL.S	@4
+		JMP	AlertUser		; no, report the error
+
+* ------------- SET UP THE TRAFFIC LIGHT WINDOW -------------
+* We will allocate our own window storage instead of letting the Window Manager
+* for two reasons. One, GetNewWindow locks the 'WIND' resource handle before calling
+* NewWindow and this can lead to heap fragmentation.  Two, it takes just as much time
+* for NewWindow to get the memory as it does for us to get it.
+
+@4		MOVE.L	#WindowRecord.size,D0
+		_NewPtr ,Clear			; create a pointer in A0 and clear memory
+		CMPA.L	#NIL,A0			; check for NIL pointer (result in D0)
+		BNE.S	@5			; must have been a valid pointer
+		JMP	AlertUser		; couldn't get memory, report error
+		
+@5		CLR.L	-(SP)			; create space for result
+		MOVE.W	#rWindow,-(SP)		; out window resource definition
+		MOVE.L	A0,-(SP)		; our window record storage
+		MOVE.L	#-1,-(SP)		; make it on top
+		_GetNewWindow			; create the window
+		MOVE.L	(SP)+,D0		; we're not saving our window pointer
+		
+* ------------- SET UP THE MENUS -------------
+	
+		CLR.L	-(SP)			; space for MenuBar handle
+		MOVE.W	#rMenuBar,-(SP)		; our MenuBar resource
+		_GetNewMBar			; the modern way, get a MenuBar
+		MOVE.L	(SP),CurMBar(A6)
+		_SetMenuBar
+		MOVEA.L	CurMBar(A6),A0		; we're done with that handle
+		_DisposHandle			; there is a result in D0
+		CLR.L	-(SP)
+		MOVE.W	#AppleMenu,-(SP)
+		_GetMHandle			; put Apple menu handle on stack
+		MOVE.L	#'DRVR',-(SP)		; get all the DAs
+		_AddResMenu
+		_DrawMenuBar
+
+* ------------- SET UP RECTS FOR THE LIGHTS  -------------
+
+		CLR.W	-(SP)			; space for result of GoGetRect
+		MOVE.W	#rStopRect,-(SP)	; pass the stop light's rect
+		PEA	G.StopRect		; pass the stop light's rect pointer
+		BSR	GoGetRect		; go get the stop light rect
+		MOVE.W	(SP)+,D0		; get the result of GoGetRect
+		CMPI.W	#True100,D0		; did we get the RECT resource?
+		BEQ.S	@6			; yes, then continue
+		JMP	AlertUser		; otherwise, we're having some trouble
+		
+@6		CLR.W	-(SP)			; space for result of GoGetRect
+		MOVE.W	#rGoRect,-(SP)		; pass the go light's rect
+		PEA	G.GoRect		; pass the go light's rect pointer
+		BSR	GoGetRect		; go get the go light rect
+		MOVE.W	(SP)+,D0		; get the result of GoGetRect
+		CMPI.W	#True100,D0		; did we get the RECT resource?
+		BEQ.S	Exit			; yes, then continue
+		JMP	AlertUser		; otherwise, we're having some trouble
+				
+Exit		MOVEM.L	(SP)+,CountReg		; restore the registors
+		UNLK	A6			; destroy the link
+		MOVEA.L	(SP)+,A0		; pull off the return address
+		ADDA.L	#ParamSize,SP		; strip all of the caller's parameters
+		JMP	(A0)			; return to the caller
+
+		DbgInfo	Initialz		; this name will appear in the debugger
+		ENDP
+
+* ================================================
+* PROCEDURE DoContentClick(window: WindowPtr; event: EventRecord);
+* ================================================
+* This is called when a mouse-down event occurs in the content of a window.
+* Other applications might want to call FindControl, TEClick, etc., to
+* further process the click.
+ 
+		SEG	'Main'			; case sensitive
+DoContentClick	PROC
+
+StackFrame	RECORD	{A6Link},DECR		; build a stack frame record
+ParamBegin	EQU	*			; start parameters after this point
+WindowPtr	DS.L	1			; passed parameter of the window pointer
+EventPtr	DS.L	1			; pointer to the event record
+ParamSize	EQU	ParamBegin-*		; size of all the passed parameters
+RetAddr 	DS.L	1			; place holder for return address
+A6Link		DS.L	1			; place holder for A6 link
+LocalSize	EQU 	*			; size of all the local variables
+		ENDR
+		
+		IMPORT	SetLight
+
+		WITH	StackFrame		; cover our local stack frame
+		LINK	A6,#LocalSize		; allocate our local stack frame
+
+ 		MOVE.L	WindowPtr(A6),-(SP)	; pass the window pointer
+		MOVE.W	G.Stopped,D0		; get current state of the light
+		EORI.W	#True100,D0		; exclusive OR the current state
+		MOVE.W	D0,-(SP)		; pass new state to switch light
+		BSR	SetLight		; set the traffic light
+
+Exit		UNLK	A6			; destroy the link
+		MOVEA.L	(SP)+,A0		; pull off the return address
+		ADDA.L	#ParamSize,SP		; strip all of the caller's parameters
+		JMP	(A0)			; return to the caller
+
+		DbgInfo	DoContnt		; this name will appear in the debugger
+		ENDP
+
+* ================================================
+* PROCEDURE DoUpdate(window: WindowPtr);
+* ================================================
+* This is called when an update event is received for a window.
+* It calls DrawWindow to draw the contents of an application window.
+* As an efficiency measure that does not have to be followed, it
+* calls the drawing routine only if the visRgn is non-empty. This
+* will handle situations where calculations for drawing or drawing
+* itself is very time-consuming.
+
+		SEG	'Main'			; case sensitive
+DoUpdate	PROC
+
+StackFrame	RECORD	{A6Link},DECR		; build a stack frame record
+ParamBegin	EQU	*			; start parameters after this point
+WindowPtr	DS.L	1			; passed parameter of the window pointer
+ParamSize	EQU	ParamBegin-*		; size of all the passed parameters
+RetAddr 	DS.L	1			; place holder for return address
+A6Link		DS.L	1			; place holder for A6 link
+LocalSize	EQU 	*			; size of all the local variables
+		ENDR
+		
+		IMPORT	IsAppWindow,DrawWindow
+
+		WITH	StackFrame		; cover our local stack frame
+		LINK	A6,#LocalSize		; allocate our local stack frame
+
+		CLR.W	-(SP)			; space for result of IsAppWindow
+		MOVE.L	WindowPtr(A6),-(SP)	; pass the window pointer
+		BSR	IsAppWindow		; test if this window was ours
+		MOVE.W	(SP)+,D0		
+		CMPI.W	#True100,D0		; it must be our window
+		BNE.S	Exit			; it wasn't our window
+		
+		MOVE.L	WindowPtr(A6),-(SP)	; update only the visible region
+		_BeginUpDate			; region of the window
+		CLR.W	-(SP)			; space for result
+		MOVEA.L	WindowPtr(A6),A0	; the window pointer
+		MOVE.L	visRgn(A0),-(SP)	; the window's visRgn handle
+		_EmptyRgn
+		MOVE.W	(SP)+,D0		; result of EmptyRgn
+		CMPI.W	#True100,D0		; was the visRgn empty?
+		BEQ.S	@1			; yes, then no update is needed
+		
+		MOVE.L	WindowPtr(A6),-(SP)
+		BSR	DrawWindow		; draw the traffic lights
+		
+@1		MOVE.L	WindowPtr(A6),-(SP)	; get pointer to window
+		_EndUpdate
+
+Exit		UNLK	A6			; destroy the link
+		MOVEA.L	(SP)+,A0		; pull off the return address
+		ADDA.L	#ParamSize,SP		; strip all of the caller's parameters
+		JMP	(A0)			; return to the caller
+
+		DbgInfo	DoUpdate		; this name will appear in the debugger
+		ENDP
+
+* ================================================
+* PROCEDURE DoActivate(window: WindowPtr; becomingActive: BOOLEAN);
+* ================================================
+* In this sample there is no other processing necessary other than what
+* the Window Manager has already done for us.  This would be the place to
+* perform an activate on TextEdit records, controls, lists, update GrowIcon, etc.
+
+		SEG	'Main'			; case sensitive
+DoActivate	PROC
+
+StackFrame	RECORD	{A6Link},DECR		; build a stack frame record
+ParamBegin	EQU	*			; start parameters after this point
+WindowPtr	DS.L	1			; passed parameter of the window pointer
+Active		DS.W	1			; modifiers from the event record
+ParamSize	EQU	ParamBegin-*		; size of all the passed parameters
+RetAddr 	DS.L	1			; place holder for return address
+A6Link		DS.L	1			; place holder for A6 link
+LocalSize	EQU 	*			; size of all the local variables
+		ENDR
+		
+		IMPORT	IsAppWindow
+
+		WITH	StackFrame		; cover our local stack frame
+		LINK	A6,#LocalSize		; allocate our local stack frame
+
+		CLR.W	-(SP)			; space for result of IsAppWindow
+		MOVE.L	WindowPtr(A6),-(SP)	; pass the window pointer
+		BSR	IsAppWindow		; test if this window was ours
+		MOVE.W	(SP)+,D0		; get the result
+		CMPI.W	#True100,D0		; it must be our window
+		BNE.S	Exit			; it wasn't our window
+
+		CMPI.W	#True100,Active(A6)	; was it an Activate?
+		BNE.S	DeActivate		; no, perform a Deactivate
+		
+* do the activate event processing here, then "BRA.S   Exit"
+		
+DeActivate					; do the deactivate event
+
+* do the deactivate event processing here, then fall through to Exit
+		
+
+Exit		UNLK	A6			; destroy the link
+		MOVEA.L	(SP)+,A0		; pull off the return address
+		ADDA.L	#ParamSize,SP		; strip all of the caller's parameters
+		JMP	(A0)			; return to the caller
+
+		DbgInfo	Activate		; this name will appear in the debugger
+		ENDP
+					
+* ================================================
+* PROCEDURE DoMenuCommand(menuResult: LONGINT);
+* ================================================
+* This is called when an item is chosen from the menu bar (after calling
+* MenuSelect or MenuKey). It performs the right operation for each command.
+* It is good to have both the result of MenuSelect and MenuKey go to
+* one routine like this to keep everything organized.
+
+		SEG	'Main'			; case sensitive
+DoMenuCommand	PROC
+
+StackFrame	RECORD	{A6Link},DECR		; build a stack frame record
+ParamBegin	EQU	*			; start parameters after this point
+MenuItem	DS.W	1			; result from _MenuKey or _MenuSelect
+MenuID		DS.W	1			; caller passed a long word, ID + Item
+ParamSize	EQU	ParamBegin-*		; size of all the passed parameters
+RetAddr 	DS.L	1			; place holder for return address
+A6Link		DS.L	1			; place holder for A6 link
+Deskname	DS.B	256			; local storage for Desk Accs name
+TempPort	DS.L	1			; local storage for the current port
+LocalSize	EQU 	*			; size of all the local variables
+		ENDR
+		
+		IMPORT	SetLight,DoCloseWindow,Terminate
+
+		WITH	StackFrame		; cover our local stack frame
+		LINK	A6,#LocalSize		; allocate our local stack frame
+
+		MOVE.W	MenuID(A6),D0		; a nifty Pascal case-like macro
+		CASE#.W	(D0,IF),			\
+			(AppleMenu,	DoAppleMenu),	\
+			(FileMenu,	DoFileMenu),	\
+			(EditMenu,	DoEditMenu),	\
+			(LightMenu,	DoLightMenu)
+						; add additional Menus would go here
+		BRA.W	Exit			; otherwise we will exit this procedure
+
+* ------------- THE APPLE MENU ROUTINES -------------
+DoAppleMenu
+		CMPI.W	#AboutItem,MenuItem(A6)	; was it the about item?
+		BNE.S	@1			; no, must be a Desk Acc
+
+		CLR.W	-(SP)			; show the About dialog
+		MOVE.W	#rAboutAlert,-(SP)	; resource for alert dialog
+		CLR.L	-(SP)			; no filter procedure used here
+		_Alert				; read the resource and display it
+		MOVE.W	(SP)+,D0		; I don't care which item is was
+		BRA.W	Exit			; all done with with Apple menu
+
+@1		PEA	TempPort(A6)		; open a desk accessory
+		_GetPort			; save the current port
+		CLR.L	-(SP)			; space for result of GetMHandle
+		MOVE.W	#AppleMenu,-(SP)
+		_GetMHandle			; put Apple menu on stack
+		MOVE.W	MenuItem(A6),-(SP)	; and here's the MenuItem
+		PEA	DeskName(A6)		; now tell me the DA's name
+		_GetItem
+		CLR.W	-(SP)			; space for OpenDeskAcc result
+		PEA	DeskName(A6)
+		_OpenDeskAcc			; open that puppy
+		MOVE.W	(SP)+,D0		; result
+		MOVE.L	TempPort(A6),-(SP)	; restore the port
+		_SetPort
+		BRA.S	Exit
+		
+* ------------- THE FILE MENU ROUTINES -------------
+DoFileMenu	
+		MOVE.W	MenuItem(A6),D0 	; test the MenuItem
+		Case#.W	(D0,IF),			\
+			(CloseItem,	FileClose),	\
+			(QuitItem,	FileQuit)
+		BRA.S	Exit			; add additional menus here
+FileClose
+		CLR.L	-(SP)			; bug fix, didn't clear space for result -JDR 2/27/89
+		_FrontWindow
+		BSR	DoCloseWindow		; close the window 
+		BRA.S	Exit
+
+FileQuit	BSR	Terminate		; let's get out of here
+		BRA.S	Exit			; Terminate may return if user cancels
+
+* ------------- THE EDIT MENU ROUTINES -------------
+DoEditMenu	
+		CLR.W	-(SP)			; system will handle editing of desk accs.
+		MOVE.W	MenuItem(A6),-(SP)	; get the MenuItem
+		SUBQ.W	#1,(SP)			; SystemEdit is off by one
+		_SysEdit
+		MOVE.B	(SP)+,D0		; drop result from SystemEdit
+		BRA.S	Exit			; we don't have anything to edit
+
+* ------------- THE LIGHT MENU ROUTINES -------------
+DoLightMenu	
+		MOVE.W	MenuItem(A6),D0 	; test the MenuItem
+		Case#.W	(D0,IF),			\
+			(StopItem,	StopSelect),	\
+			(GoItem,	GoSelect)
+		BRA.S	Exit			; add additional menus here
+
+StopSelect	CLR.L	-(SP)			; bug fix, didn't clear space for result -JDR 2/27/89
+		_FrontWindow			; pass our window, we only have one
+		MOVE.W	#True100,-(SP)		; pass true to set stop light on
+		BSR	SetLight		; switch the traffic light
+		BRA.S	Exit
+
+GoSelect	CLR.L	-(SP)			; bug fix, didn't clear space for result -JDR 2/27/89
+		_FrontWindow			; pass our window, we only have one
+		MOVE.W	#FALSE,-(SP)		; pass false to set stop light off
+		BSR	SetLight		; switch the traffic light
+		
+Exit		CLR.W	-(SP)	
+		_HiLiteMenu			; unhilite all Menus
+		UNLK	A6			; destroy the link
+		MOVEA.L	(SP)+,A0		; pull off the return address
+		ADDA.L	#ParamSize,SP		; strip all of the caller's parameters
+		JMP	(A0)			; return to the caller
+
+		DbgInfo	DoMenuCm		; this name will appear in the debugger
+		ENDP
+		
+* ================================================
+* PROCEDURE DoMouseDown(Event: EventRecord);
+* ================================================
+* Handle all of the MouseDown events.
+
+		SEG	'Main'			; case sensitive
+DoMouseDown	PROC
+
+StackFrame	RECORD	{A6Link},DECR		; build a stack frame record
+ParamBegin	EQU	*			; start parameters after this point
+EventPtr 	DS.L	1	 		; pointer to current event
+ParamSize	EQU	ParamBegin-*		; size of all the passed parameters
+RetAddr 	DS.L	1			; place holder for return address
+A6Link		DS.L	1			; place holder for A6 link
+WindowPtr	DS.L	1			; local Window pointer variable
+Where		DS.L	1			; local variable where the click was
+NewGrowRect	DS	Rect			; local rect variable for SizeWindow
+LocalSize	EQU 	*			; size of all the local variables
+		ENDR
+
+		IMPORT	AdjustMenus,DoContentClick
+
+		WITH	StackFrame		; cover our local stack frame
+		LINK	A6,#LocalSize		; allocate our local stack frame
+		
+		MOVEA.L	EventPtr(A6),A0		; event record only needed by SystemClick
+		MOVE.L	evtMouse(A0),Where(A6)	; make a local copy of the mouse location
+
+		CLR.W	-(SP)			; space for FindWindow result
+		MOVE.L	Where(A6),-(SP)		; the mouse point
+		PEA	WindowPtr(A6)		; a local variable
+		_FindWindow			; put the result in a register
+		MOVE.W	(SP)+,D0		; a nifty Pascal case-like macro
+		Case#.W	(D0,IF),			\
+			(InMenuBar,	MenuEvent),	\
+			(InSysWindow,	SystemEvent),	\
+			(InContent,	Content),	\
+			(InDrag,	Drag)
+						; add additional routines here
+		BRA.S	Exit			; otherwise we will exit this procedure
+
+* ------------- THE DESK ACCS EVENT -------------
+MenuEvent	
+		BSR.W	AdjustMenus
+		CLR.L	-(SP)			; space for MenuSelect
+		MOVE.L	Where(A6),-(SP)		; Mouse coordinates
+		_MenuSelect			; pass MenuSelect's result
+		BSR	DoMenuCommand		; go do the menu and return
+		BRA.S	Exit
+
+* ------------- THE DESK ACCS EVENT -------------
+SystemEvent	
+		MOVE.L	EventPtr(A6),-(SP)	; get EventRecord and WindowPtr
+		MOVE.L	WindowPtr(A6),-(SP)	; pass the window pointer and...
+		_SystemClick			; let the system handle it
+		BRA.S	Exit
+
+* ------------- THE CONTENT EVENT -------------
+Content		
+		CLR.L	-(SP)			; was our window in front?
+		_FrontWindow			; get front window's pointer
+		MOVE.L	(SP)+,D0
+		CMP.L	WindowPtr(A6),D0	; was it in the front window?
+		BNE.S	@1			; no, then just select window
+		
+		MOVE.L	WindowPtr(A6),-(SP)	; pass the window pointer
+		MOVE.L	EventPtr(A6),-(SP)	; pass a pointer to the event
+		BSR	DoContentClick		; do a click in content region
+		BRA.S	Exit
+		
+@1		MOVE.L	WindowPtr(A6),-(SP)	; only select this window
+		_SelectWindow			; and take no further action
+		BRA.S	Exit
+
+* ------------- THE DRAG A WINDOW EVENT -------------
+Drag		
+		MOVE.L	WindowPtr(A6),-(SP)	; pass Window Pointer
+		MOVE.L	Where(A6),-(SP)		; Mouse coordinates and boundary
+		PEA	QD.screenBits+bounds	
+		_DragWindow			; drag it the screen's boundary
+
+Exit		
+		UNLK	A6			; destroy the link
+		MOVEA.L	(SP)+,A0		; pull off the return address
+		ADDA.L	#ParamSize,SP		; strip all of the caller's parameters
+		JMP	(A0)			; return to the caller
+
+		DbgInfo	MouseDwn		; this name will appear in the debugger
+		ENDP
+		
+		
+* ================================================
+* PROCEDURE DoEvent(event: EventRecord);
+* ================================================
+* Do the right thing for an event. Determine what kind of event it is,
+* and call the appropriate routines.
+
+		SEG	'Main'			; case sensitive
+DoEvent		PROC
+
+ModifyReg	EQU	D4			; we'll use this register locally
+
+StackFrame	RECORD	{A6Link},DECR		; build a stack frame record
+ParamBegin	EQU	*			; start listing parameters here
+EventPtr 	DS.L	1	 		; pointer to current event
+ParamSize	EQU	ParamBegin-*		; size of all the passed parameters
+RetAddr 	DS.L	1			; place holder for return address
+A6Link		DS.L	1			; place holder for A6 link
+TheEvent 	DS	EventRecord 		; local copy of the event record
+LocalSize	EQU 	*			; size of all the local variables
+		ENDR
+
+		IMPORT	DoMouseDown,DrawWindow,	\
+			AdjustMenus,IsAppWindow,\
+			DoUpdate,DoActivate
+		
+		WITH	StackFrame,TheEvent	; cover our local stack frame
+		LINK	A6,#LocalSize		; allocate our local stack frame
+		MOVEM.L	ModifyReg,-(SP)		; save this register before using it
+
+		MOVEA.L	EventPtr(A6),A0		; pointer of event passed by caller
+		LEA	TheEvent(A6),A1		; pointer to local variable TheEvent
+		MOVE.L	#evtBlkSize,D0		; size of an event record
+		_BlockMove			; we now have a local copy of the event
+
+		MOVE.W	modifiers(A6),ModifyReg	; a nifty Pascal case-like macro
+		MOVE.W	What(A6),D0		; get the event number
+		Case#	(D0,Exit),	\	; if not an event we support, then exit
+			,		\	;  0 Null (not used)
+			MouseDownEvt,	\	;  1 Mouse down
+			,		\	;  2 Mouse up (not used)
+			KeyDownEvt,	\	;  3 Key down
+			,		\	;  4 Key up (not used)
+			KeyDownEvt,	\	;  5 Auto key
+			Update, 	\	;  6 Update
+			Disk,		\	;  7 Disk inserted
+			Activate,	\	;  8 Activate/Deactivate
+			,		\	;  9 (not used)
+			,		\	; 10 Network (not used)
+			,		\	; 11 I/O Driver (not used)
+			,		\	; 12 App1 (not used)
+			,		\	; 13 App2 (not used)
+			,		\	; 14 App3 (not used)
+			OSEvent,		; 15 OS Event or Suspend/Resume
+
+
+* ------------- THE MOUSEDOWN EVENT -------------
+MouseDownEvt	
+		PEA	TheEvent(A6)		; pass Event pointer in case of SystemClick
+		BSR	DoMouseDown
+		BRA	Exit
+
+* ------------- THE KEYDOWN EVENT -------------
+KeyDownEvt		
+		BTST	#CmdKey,ModifyReg	; command key?
+		BEQ	Exit			; no, then we're done
+		BSR.W	AdjustMenus		; first, adjust the menus
+		CLR.L	-(SP)			; space for MenuKey
+		MOVE.W	2+Message(A6),-(SP)	; get the character
+		_MenuKey			; is it a command?
+		BSR	DoMenuCommand		; handle the command and return
+		BRA.S	Exit
+
+* ------------- THE UPDATE EVENT -------------
+Update	
+		MOVE.L	Message(A6),-(SP)	; pass the window pointer
+		BSR	DoUpdate		; do the update
+		BRA.S	Exit
+
+* ------------- THE DISK EVENT -------------
+Disk	
+		TST.W	Message(A6)		; check for error
+		BEQ.S	@1			; if none, skip
+		CLR.W	-(SP)
+		MOVE.L	#DITopLeft,-(SP)
+		MOVE.L	Message(A6),-(SP)
+		MOVE.W	#diBadMount,-(SP)
+		_Pack2				; go through disk init package
+		ADDQ	#2,SP			; throw away result
+@1		BRA.S	Exit
+
+* ------------- THE ACTIVATE/DEACTIVATE EVENT -------------
+Activate	
+		BTST	#ActiveFlag,ModifyReg	; was it an Activate?
+		BEQ.S	@1			; no, perform a Deactivate
+
+		MOVE.L	Message(A6),-(SP)	; pass the current window pointer
+		MOVE.W	#True100,-(SP)		; set up for an Activate event
+		BSR	DoActivate		; do the activate routine
+		BRA.S	Exit			; we're done
+
+@1		MOVE.L	Message(A6),-(SP)	; pass current window pointer
+		MOVE.W	#False,-(SP)		; set up for an Deactivate event
+		BSR	DoActivate		; go do the activate routine
+		BRA.S	Exit			; we're done
+
+* ------------- THE SUSPEND/RESUME EVENT -------------
+* OSEvent is the event number of the suspend/resume and mouse-moved events sent
+* by MultiFinder. Once we determine that an event is an osEvent, we look at the
+* high byte of the message sent to determine which kind it is. To differentiate
+* suspend and resume events we check the resumeMask bit.
+
+OSEvent		MOVE.B	Message(A6),D1		; get high byte of Message in reg
+		CMPI.B	#SuspendResume,D1	; test for message event type
+		BNE.S	Exit			; not a suspend/resume event
+
+		BTST	#0,3+Message(A6)	; test bit zero in low byte of Message
+		BNE.S	@1			; this is a resume event
+		
+		MOVE.W	#True100,G.InBackground	; a suspend event
+		CLR.L	-(SP)			; bug fix, was passing Message to DoActivate -JDR 2/27/89 
+		_FrontWindow			; pass the front window to DoActivate -JDR 2/27/89
+		MOVE.W	#False,-(SP)		; pass false to cause deactivate
+		BSR	DoActivate		; go do the activate routine
+		BRA.S	Exit
+
+@1		MOVE.W	#False,G.InBackground	; a resume event
+		CLR.L	-(SP)			; bug fix, was passing Message to DoActivate -JDR 2/27/89 
+		_FrontWindow			; pass the front window to DoActivate -JDR 2/27/89
+		MOVE.W	#True100,-(SP)		; pass false to cause activate
+		BSR	DoActivate		; go do the activate routine
+		
+Exit		
+		MOVEM.L	(SP)+,ModifyReg		; restore this register after use
+		UNLK	A6
+		MOVEA.L	(SP)+,A0		; save the caller's address
+		ADDA.L	#ParamSize,SP		; strip the caller's parameters
+		JMP	(A0)
+
+		DbgInfo	DoEvent			; this name will appear in the debugger
+		ENDP
+		
+* ================================================
+* PROCEDURE EventLoop;
+* ================================================
+* Get the events by calling WaitNextEvent, if it's available, otherwise
+* by calling GetNextEvent. Also call AdjustCursor before doing the event.
+* After returning from handling the event, we have to make sure the cursor
+* is still adjusted proper ONLY because this application can "sleep" forever.
+
+* An event record is allocated on the stack.  A pointer to this event is
+* passed to "DoEvent".  We loop until the user has selects "Quit" in the
+* file menu.  This program will exit through the DoMenuCommand routine.
+
+* 1.02 made adjustments to the event loop logic.  There was a bug in calling
+* AdjustCursor at the wrong time. (it crashed under _GetNextEvent too!)
+
+* If you are using modeless dialogs that have editText items,
+* you will want to call IsDialogEvent to give the caret a chance
+* to blink, even if WNE/GNE returned FALSE. However, check FrontWindow
+* for a non-NIL value before calling IsDialogEvent.
+
+		SEG	'Main'			; case sensitive
+EventLoop	PROC				; any source file can use this routine
+
+StackFrame	RECORD	{A6Link},DECR		; build a stack frame record
+ParamBegin	EQU	*			; start listing parameters here
+ParamSize	EQU	ParamBegin-*		; size of all the passed parameters
+RetAddr 	DS.L	1			; place holder for return address
+A6Link		DS.L	1			; place holder for A6 link
+TheEvent 	DS	EventRecord 		; local copy of the event record
+MouseMvdRgn	DS.L	1			; local region for MouseMoved events
+MousePos	DS.L	1			; local point for mouse position
+LocalSize	EQU 	*			; size of all the local variables
+		ENDR
+		
+		IMPORT	AdjustCursor,GetGlobalMouse
+
+		WITH	StackFrame		; cover our local stack frame
+		LINK	A6,#LocalSize		; allocate our local stack frame
+		
+		CLR.L	-(SP)
+		_NewRgn				; create region for AdjustCursor
+		MOVE.L	(SP)+,MouseMvdRgn(A6)	; save the handle to this region
+
+* ------------- GET NEXT EVENT LOOP -------------
+NextEvent	
+		CMPI.W	#True100,G.HasWNEvent 	; see if we can call WaitNextEvent
+		BNE.S	@1			; nope, old time events
+		
+		PEA	MousePos(A6)		; here's the mouse
+		BSR	GetGlobalMouse		; get global coordinate
+		MOVE.L	MousePos(A6),-(SP)	; here's the mouse
+		MOVE.L	MouseMvdRgn(A6),-(SP)	; the region to change
+		BSR	AdjustCursor		; adjust the cursor and region
+		CLR.W	-(SP)			; space for result
+		MOVE.W	#EveryEvent,-(SP)	; the events we want
+		PEA	TheEvent(A6)		; pointer to the event record
+		MOVE.L	#SleepValue,-(SP)	; the sleeping time value
+		MOVE.L	MouseMvdRgn(A6),-(SP)	; the current MouseRgn
+		_WaitNextEvent
+		BRA.S	@2			; got an event to handle?
+	
+						; no WaitNextEvent trap available
+@1		_SystemTask			; call SystemTask for drivers and DAs
+		CLR.W	-(SP)			; space for result
+		MOVE.W	#EveryEvent,-(SP)	; the events we want
+		PEA	TheEvent(A6)		; pass a pointer to our event
+		_GetNextEvent
+@2		MOVE.W	(SP)+,D0		; result code
+		BEQ.S	NextEvent		; no event, get another one
+		
+GotEvent	MOVE.L	TheEvent.where(A6),-(SP); the mouse location
+		MOVE.L	MouseMvdRgn(A6),-(SP)	; the region to change
+		BSR	AdjustCursor		; adjust cursor BEFORE doing event
+		PEA	TheEvent(A6)		; pass the pointer to our event
+		BSR	DoEvent			; do the event and return
+
+		BRA.S	NextEvent		; done with that event, get the next
+
+Exit		UNLK	A6			; destroy the link
+		MOVEA.L	(SP)+,A0		; pull off the return address
+		ADDA.L	#ParamSize,SP		; strip all of the caller's parameters
+		JMP	(A0)			; return to the caller
+
+		DbgInfo	EvntLoop		; this name will appear in the debugger
+		ENDP
+
+* ================================================
+* --------------- MAIN ENTRY POINT ---------------
+* ================================================
+* This is the entry point of the program.  We start with data initializing
+* and then to get the System environment (SysEnvirons).  We unload the
+* initialization code segment and finally get started with the EventLoop.
+
+		SEG	'Main'			; case sensitive
+StartUp        	MAIN				; entry point of the program
+		
+		IMPORT	_DataInit,Initialize,	\
+			ForceEnvirons,EventLoop
+
+		JSR	_DataInit		; initialize those constants	
+		PEA	_DataInit		; get rid of that segment
+		_UnloadSeg
+
+* If you have stack requirements that differ from the default, then you could
+* use SetApplLimit to increase StackSpace at this point, before calling MaxApplZone.
+
+		_MaxApplZone			; result in D0
+		JSR	Initialize		; get things the program set up
+		PEA	Initialize
+		_UnloadSeg			; we're done this that segment too
+		LEA	EventLoop,A0		; on your mark, get set,...
+		JMP	(A0)			; go into the event loop
+		ENDP
+
+		END				; end of this source file
+
