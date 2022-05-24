@@ -1,0 +1,270 @@
+From: Tom Barrett <barrett@pacific.mps.ohio-state.edu>
+Date: Wed, 18 Aug 93 09:35:58 -0400
+To: macgifts@mac.archive.umich.edu
+
+This is an updated version of /info-mac/sci/fft-in-asm-src.txt
+
+* now works for data sets > 64k points
+
+* other minor changes for speed improvements
+
+* better documentation
+
+Thomas Barrett
+Physics Dept, Ohio State University
+barrett@pacific.mps.ohio-state.edu
+
+18 Aug 93
+
+// ------------------------- cut here -------------------------
+
+This code is a hand-assembled version of the fft routine from Numerical
+Recipes.  See the book for information about how it works.  All variable
+names in comments refer to those in the book.
+
+To use this routine:
+
+* You must have a math coprocessor.
+
+* Use Think C (users of other compilers may be able to adapt it).
+
+* Set "Native floating-point format" under "Compiler Settings" in the
+	Options... dialog box.  This uses the 12-byte format which the math
+	coprocessor uses internally.
+
+void tb_four1(long double *data, long nn, long isign);
+
+* Store your data to be processed as an array of 12-byte long doubles.
+	Note that this will take more memory than the 8-byte doubles.  Also,
+	the array must be of 'nn' complex numbers, where each complex number
+	is a pair of long doubles.  'data' should therefore be a pointer to
+	an array of 24*nn bytes.
+
+* This routine is DESTRUCTIVE.  The output data is placed in the space
+	where the input data was.  If you still want the input, make a copy
+	and pass the copy to the routine.
+
+* In the book Numerical recipes in C, from which this routine is taken,
+	the first element of the array is accessed as data[1].  This is an
+	error!  C uses data[0] for the first element of an array.  In C, this
+	can be corrected by using data[i-1] and data[i] instead of data[i]
+	and data[i+1] (they always occur in pairs).  This routine expects
+	'data' to be a pointer to the first element of the array.  If you
+	are replacing the C version, and compensated for this in the routine
+	that called four1 (like the book suggest), then this is an issue.
+
+* 'nn' must be a power of 2 (like 8, 16, 32...).  Useable range is between
+	8 and 128M (2^27 complex numbers).
+
+* 'isign' must be 1 or -1, where -1 corresponds to an inverse fft.
+
+* See the book for input and output formats.
+
+I strongly recommend that, if you have an fft routine already working, you
+test this to make sure it gives the correct values when placed in your
+program (always a good idea).  It's been used successfully for a
+couple of months, and it is nearly twice as fast as the C version compiled
+by Think C 5 with optimizations.
+
+Thomas Barrett
+Physics Dept, Ohio State University
+barrett@pacific.mps.ohio-state.edu
+
+Thanks to:  Dan Flatin & Pascal Laubin.
+
+#define	PI	3.1415926535897932384626433
+
+/* ----------------------- tb_four1.c -----------------------------
+
+optimized version of Numerical Recipes' fft routine
+
+Thomas Barrett, 1993
+
+written for Think C
+this routine assumes that data contains 12-byte 6888x-native long doubles
+also, you must have a math coprocessor to run this routine
+
+-------------------------------------------------------------------
+register usage:
+
+d0	I				a0	data[I]			fp0	WPR
+d1	J				a1	data[J]			fp1	WPI
+d2	M				a2	data[0]			fp2	WR
+d3	loop, MMAX							fp3	WI
+d4	ISTEP								fp4	TEMPR	\
+d5	NN,N								fp5	TEMPI	 \	internal
+d6	internal							fp6			 /	calculations
+										fp7			/
+---------------------------------------------------------------- */
+
+void tb_four1(long double *data, long nn, long isign)
+{
+	long double twopi = 2.0 * PI * isign;
+	
+	asm 68020, 68881 {
+		movem.l	a2/d3-d6,-(sp)
+		fmovem.x	fp4-fp7,-(sp)
+		
+		move.l	nn,d5
+		clr.l	d3
+		move.l	d5,d3		; d3 = loop counter
+		move.l	#-1,d0		; i(d0) = -1
+		movea.l	data,a0
+		suba.l	#12,a0		; pointer to array indexed by 0
+		movea.l	a0,a2		; a2 = *(data[0])
+		suba.l	#12,a0
+		
+	; ------------ re-order values ---------------------------------
+		
+		move.l	#1,d1		; j(d1) = 1
+@bits	adda.l	#24,a0		; a0 = *(data[i])
+		addq.l	#2,d0		; i += 2
+		cmp.l	d1,d0		; cmp j,i
+		bge		@nosw		; branch if i(d0) >= j(d1)
+@swap	movea.l	a2,a1
+		move.l	d1,d6
+	;	mulu.l	#12,d6
+		lsl.l	#2,d6		; these four instructions are equivalent to
+		adda.l	d6,a1		; the mulu.l #12 and save a dozen cycles
+		lsl.l	#1,d6
+		adda.l	d6,a1		; a1 = *(data[j])
+
+		fmove.x	(a0),fp0	; swap
+		fmove.x	(a1),fp1
+		fmove.x	fp1,(a0)
+		fmove.x	fp0,(a1)
+		fmove.x	12(a0),fp0
+		fmove.x	12(a1),fp1
+		fmove.x	fp1,12(a0)
+		fmove.x	fp0,12(a1)
+
+@nosw	move.l	d5,d2		; m(d2) = nn(d5) = #points
+@jloop	cmp.l	#2,d2
+		blt		@jrdy		; branch if m(d2) < 2
+		cmp.l	d2,d1
+		ble		@jrdy		; branch if j(d1) <= m(d2)
+@fixj	sub.l	d2,d1		; j -= m
+		lsr.l	#1,d2		; m /= 2
+		bra		@jloop
+@jrdy	add.l	d2,d1		; j += m
+		subq.l	#1,d3
+		bne		@bits
+		
+	; --------------- order is now ready -------------------------
+		
+		lsl.l	#1,d5		; n(d5) = 2*nn(was d5) = #long doubles
+		move.l	#2,d3		; mmax(d3) = 2
+		
+	; -------------------- outer loop -----------------------------
+		
+@loop	cmp.l	d3,d5
+		ble		@done		; branch if n(d5) <= mmax(d3)
+		move.l	d3,d4
+		lsl.l	#1,d4		; istep(d4) = 2*mmax(d3)
+		fmove.x	twopi,fp1
+		fmove.l	d3,fp0
+		fdiv.x	fp0,fp1		; theta(fp1) = 2 pi / mmax(d3)
+		fmove.x	fp1,fp0
+		fmove.w	#2,fp2
+		fdiv.x	fp2,fp0		; fp0 = 1/2 theta
+		fsin.x	fp0
+		fmul.x	fp0,fp0
+		fmul.x	fp2,fp0
+		fneg.x	fp0			; wpr(fp0) = -2 sin^2(1/2 theta)
+		fsin.x	fp1			; wpi(fp1) = sin(theta)
+		fmove.w	#1,fp2		; wr(fp2) = 1
+		fmove.w	#0,fp3		; wi(fp3) = 0
+		
+	; ------------------ inner loops -------------------------
+		
+		move.l	#1,d2		; m(d2) = 1
+@mloop	move.l	d2,d0		; i(d0) = m(d2)
+
+		move.l	d0,d6		; i(d0)
+		movea.l	a2,a0
+	;	mulu.l	#12,d6
+		lsl.l	#2,d6
+		adda.l	d6,a0
+		lsl.l	#1,d6
+		adda.l	d6,a0		; a0 = pointer to 1st i
+		movea.l	a0,a1
+		move.l	d3,d6		; mmax(d3)
+	;	mulu.l	#12,d6
+		lsl.l	#2,d6
+		adda.l	d6,a1
+		lsl.l	#1,d6
+		adda.l	d6,a1		; a1 = pointer to 1st j
+		move.l	d4,d6		; istep(d4)
+		mulu.l	#12,d6		; 12 * istep. pointer increment
+
+@iloop	move.l	d0,d1
+		add.l	d3,d1		; j(d1) = i(d0) + mmax(d3)
+		
+	;	movea.l	a2,a1
+	;	move.l	d1,d6
+	;	mulu.l	#12,d6
+	;	adda.l	d6,a1		; a1 = *(data[j(d1)])
+	;	movea.l	a2,a0
+	;	move.l	d0,d6
+	;	mulu.l	#12,d6
+	;	adda.l	d6,a0		; a0 = *(data[i(d0)])
+
+		fmove.x	(a1),fp4	; fp4 = data[j]
+		fmove.x	fp4,fp7
+		fmul.x	fp2,fp4
+		fmove.x	12(a1),fp6	; fp6 = data[j+1]
+		fmove.x	fp6,fp5
+		fmul.x	fp3,fp6
+		fsub.x	fp6,fp4		; tempr(fp4) = wr(fp2)*data[j] - wi(fp3)*data[j+1]
+		fmul.x	fp2,fp5
+		fmul.x	fp3,fp7
+		fadd.x	fp7,fp5		; tempi(fp5) = wr*data[j+1] + wi*data[j]
+		
+		fmove.x	(a0),fp6	; fp6 = data[i]
+		fmove.x	fp6,fp7
+		fadd.x	fp4,fp6
+		fmove.x	fp6,(a0)	; data[i] = data[i] + tempr(fp4)
+		fsub.x	fp4,fp7
+		fmove.x	fp7,(a1)	; data[j] = data[i] - tempr(fp4)
+
+		fmove.x	12(a0),fp6	; fp6 = data[i+1]
+		fmove.x	fp6,fp7
+		fadd.x	fp5,fp6
+		fmove.x	fp6,12(a0)	; data[i+1] = data[i+1] + tempi(fp5)
+		fsub.x	fp5,fp7
+		fmove.x	fp7,12(a1)	; data[j+1] = data[i+1] - tempi(fp5)
+		
+		adda.l	d6,a0
+		adda.l	d6,a1
+
+		add.l	d4,d0		; i(d0) += istep(d4)
+		cmp.l	d5,d0
+		ble		@iloop		; branch if i(d0) <= n(d5)
+		
+	; ---------------update wr & wi ------------------------
+		
+		fmove.x	fp2,fp5		; wtemp(fp5) = wr(fp2)
+		fmove.x	fp2,fp6
+		fmul.x	fp0,fp6
+		fadd.x	fp6,fp2		; wr(fp2) += wr(fp2) * wpr(fp0)
+		fmove.x	fp3,fp6
+		fmul.x	fp1,fp6
+		fsub.x	fp6,fp2		; wr(fp2) -= wi(fp3) * wpi(fp1)
+		fmove.x	fp3,fp6
+		fmul.x	fp0,fp6
+		fadd.x	fp6,fp3		; wi(fp3) += wi(fp3) * wpr(fp0)
+		fmul.x	fp1,fp5
+		fadd.x	fp5,fp3		; wi(fp3) += wtemp(fp5) * wpi(fp1)
+		
+		addq.l	#2,d2		; m(d2) += 2
+		cmp.l	d3,d2
+		blt		@mloop		; branch if m(d2) < mmax(d3)
+		move.l	d4,d3		; mmax(d3) = istep(d4)
+		bra		@loop
+
+	; -------------------- done ----------------------------
+
+@done	fmovem.x	(sp)+,fp4-fp7
+		movem.l	(sp)+,a2/d3-d6
+	}
+}

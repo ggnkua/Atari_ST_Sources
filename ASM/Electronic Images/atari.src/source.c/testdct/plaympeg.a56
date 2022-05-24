@@ -1,0 +1,458 @@
+;----------------------------------------------------------------------
+; DSP 56001 MPEG decoder I-frame subroutines.
+; By Martin Griffiths, August 1994.
+;----------------------------------------------------------------------
+
+IPR		EQU	$ffff
+BCR		EQU	$fffe
+MYPBC		EQU	$ffe0
+PCC		EQU	$ffe1
+PCDDR		EQU	$ffe3
+PCD		EQU	$ffe5
+RX		EQU	$FFEF
+TX		EQU	$FFEF
+CRA		EQU	$FFEC
+CRB		EQU	$FFED
+HSR		EQU	$ffe9
+HRX		EQU	$ffeb
+HTX		EQU	$ffeb
+
+const_scale 	equ 1024
+
+; FIX(x) = x * CONST_SCALE + 0.5
+
+FIX_0_298631336 equ 2446/12	; FIX(0.298631336)
+FIX_0_390180644 equ 3196/12	; FIX(0.390180644)
+FIX_0_541196100 equ 4433/12	; FIX(0.541196100)
+FIX_0_765366865 equ 6270/12	; FIX(0.765366865)
+FIX_0_899976223 equ 7373/12	; FIX(0.899976223)
+FIX_1_0		equ 8192/12	; FIX(1.0)
+FIX_1_175875602 equ 9633/12	; FIX(1.175875602)
+FIX_1_501321110 equ 12299/12	; FIX(1.501321110)
+FIX_1_847759065 equ 15137/12	; FIX(1.847759065)
+FIX_1_961570560 equ 16069/12	; FIX(1.961570560)
+FIX_2_053119869 equ 16819/12	; FIX(2.053119869)
+FIX_2_562915447 equ 20995/12	; FIX(2.562915447)
+FIX_3_072711026 equ 25172/12	; FIX(3.072711026)
+
+c1		equ  FIX_1_0
+c2		equ  FIX_0_541196100
+c3		equ -FIX_1_847759065
+c4		equ  FIX_0_765366865
+c10		equ  FIX_0_298631336
+c11		equ  FIX_2_053119869
+c12		equ  FIX_3_072711026
+c13		equ  FIX_1_501321110
+c20		equ -FIX_0_899976223
+c21		equ -FIX_2_562915447
+c22		equ -FIX_1_961570560
+c23		equ -FIX_0_390180644
+c24		equ  FIX_1_175875602
+
+waitcts		macro
+_wctswt		jclr #1,X:HSR,_wctswt
+		endm
+
+waitrts		macro
+_wrtswt		jclr #0,X:HSR,_wrtswt
+		endm
+
+		org	p:$0
+		jmp	start
+
+		org	p:$40
+
+go		
+
+do_macro_block	
+		move	#dctblocks,r0
+		waitrts
+		movep	X:HRX,a
+		rep	#11
+		asl	a
+		move	a,x:quant
+
+		do	#6,do6_loop
+get_block	move	r0,x:saver7
+		clr	a	r0,r2
+		rep	#64
+		move	a,x:(r2)+		
+
+		waitrts
+		movep	X:HRX,x0	
+		move	#>$80,y0
+		mpy	x0,y0,a	#>$8000*8,x1
+		move	a0,x0
+		mpy	x0,x1,a	#intra_matrix,r2
+		move	a,x:(r0)	; store DC
+		waitrts
+		movep	X:HRX,x0	
+		mpy	x0,y0,a		#temp_block,r1
+		jeq	fast_idct
+g_loop		waitrts
+		movep	X:HRX,x0	
+		mpy	x0,y0,a		a,l:(r1)+
+		jne	g_loop
+		move	r1,n3
+		move	#temp_block,r1
+		move	x:quant,y1
+		do	n3,conv
+		move	x:(r1),n2
+		move	y:(r1)+,x0
+		move	y:(r2+n2),x1
+		mpy	y1,x1,a		n2,n0
+		move	a0,x1	
+		mpy	x0,x1,a		
+		move	a,x:(r0+n0)
+conv	
+		
+
+; Super fast inverse discrete cosine transform routine
+; r0-> dct block
+
+fast_idct:	move #dct_const,r4
+		movec #31,m4
+		move #8,n0
+		movec #7,m0
+		move #temp_block,r1
+		move #temp_block+7,r2
+		move #4+1,n1
+		move #$c-1,n2
+
+		move x:(r0)+,x0	y:(r4)+,y0
+		do #8,endrowsloop
+		mpy x0,y0,a	x:(r0)+,x0	y:(r4)+,y0
+		mpy x0,y0,b	x:(r0)+,x0	y:(r4)+,y0
+		mac x0,y0,a	x:(r0)+,x0	y:(r4)+,y0
+		mac x0,y0,b	x:(r0)+,x0	y:(r4)+,y0
+		mac x0,y0,a	x:(r0)+,x0	y:(r4)+,y0
+		mac x0,y0,b	x:(r0)+,x0	y:(r4)+,y0
+		mac x0,y0,a	x:(r0)+,x0	y:(r4)+,y0
+		mac x0,y0,b	x:(r0)+,x1	y:(r4)+,y1
+		add a,b		x:(r0)+,x0	y:(r4)+,y0
+		subl b,a	b0,x:(r1)+
+		mpy x1,y1,a	a0,x:(r2)-
+		mpy x0,y0,b	x:(r0)+,x0	y:(r4)+,y0
+		mac x0,y0,a	x:(r0)+,x0	y:(r4)+,y0
+		mac x0,y0,b	x:(r0)+,x0	y:(r4)+,y0
+		mac x0,y0,a	x:(r0)+,x0	y:(r4)+,y0
+		mac x0,y0,b	x:(r0)+,x0	y:(r4)+,y0
+		mac x0,y0,a	x:(r0)+,x0	y:(r4)+,y0
+		mac x0,y0,b	x:(r0)+,x1	y:(r4)+,y1
+		add a,b		x:(r0)+,x0	y:(r4)+,y0
+		subl b,a	b0,x:(r1)+
+		mpy x1,y1,a	a0,x:(r2)-
+		mpy x0,y0,b	x:(r0)+,x0	y:(r4)+,y0
+		mac x0,y0,a	x:(r0)+,x0	y:(r4)+,y0
+		mac x0,y0,b	x:(r0)+,x0	y:(r4)+,y0
+		mac x0,y0,a	x:(r0)+,x0	y:(r4)+,y0
+		mac x0,y0,b	x:(r0)+,x0	y:(r4)+,y0
+		mac x0,y0,a	x:(r0)+,x0	y:(r4)+,y0
+		mac x0,y0,b	x:(r0)+,x1	y:(r4)+,y1
+		add a,b		x:(r0)+,x0	y:(r4)+,y0
+		subl b,a	b0,x:(r1)+
+		mpy x1,y1,a	a0,x:(r2)-
+		mpy x0,y0,b	x:(r0)+,x0	y:(r4)+,y0
+		mac x0,y0,a	x:(r0)+,x0	y:(r4)+,y0
+		mac x0,y0,b	x:(r0)+,x0	y:(r4)+,y0
+		mac x0,y0,a	x:(r0)+,x0	y:(r4)+,y0
+		mac x0,y0,b	x:(r0)+,x0	y:(r4)+,y0
+		mac x0,y0,a	x:(r0)+,x0	y:(r4)+,y0
+		mac x0,y0,b	(r0)+n0
+		add a,b		x:(r0)+,x0	y:(r4)+,y0	; first for next row
+		subl b,a	b0,x:(r1)+n1	
+		move a0,x:(r2)+n2
+endrowsloop
+
+		move x:saver7,r1
+		move #temp_block,r0
+		move r1,r2
+		move #56,n2
+		movec #63,m0
+		move (r2)+n2
+		move #31,m1
+		move #31,m2
+		move #dct_const,r4
+		move #8,n1
+		move #-8,n2
+
+		move x:(r0)+n0,x0	y:(r4)+,y0
+		do #8,p2endrowsloop
+		mpy x0,y0,a	x:(r0)+n0,x0	y:(r4)+,y0
+		mpy x0,y0,b	x:(r0)+n0,x0	y:(r4)+,y0
+		mac x0,y0,a	x:(r0)+n0,x0	y:(r4)+,y0
+		mac x0,y0,b	x:(r0)+n0,x0	y:(r4)+,y0
+		mac x0,y0,a	x:(r0)+n0,x0	y:(r4)+,y0
+		mac x0,y0,b	x:(r0)+n0,x0	y:(r4)+,y0
+		mac x0,y0,a	x:(r0)+n0,x0	y:(r4)+,y0
+		mac x0,y0,b	x:(r0)+n0,x1	y:(r4)+,y1
+		add a,b		x:(r0)+n0,x0	y:(r4)+,y0
+		subl b,a	b,x:(r1)+n1
+		mpy x1,y1,a	a,x:(r2)+n2
+		mpy x0,y0,b	x:(r0)+n0,x0	y:(r4)+,y0
+		mac x0,y0,a	x:(r0)+n0,x0	y:(r4)+,y0
+		mac x0,y0,b	x:(r0)+n0,x0	y:(r4)+,y0
+		mac x0,y0,a	x:(r0)+n0,x0	y:(r4)+,y0
+		mac x0,y0,b	x:(r0)+n0,x0	y:(r4)+,y0
+		mac x0,y0,a	x:(r0)+n0,x0	y:(r4)+,y0
+		mac x0,y0,b	x:(r0)+n0,x1	y:(r4)+,y1
+		add a,b		x:(r0)+n0,x0	y:(r4)+,y0
+		subl b,a	b,x:(r1)+n1
+		mpy x1,y1,a	a,x:(r2)+n2
+		mpy x0,y0,b	x:(r0)+n0,x0	y:(r4)+,y0
+		mac x0,y0,a	x:(r0)+n0,x0	y:(r4)+,y0
+		mac x0,y0,b	x:(r0)+n0,x0	y:(r4)+,y0
+		mac x0,y0,a	x:(r0)+n0,x0	y:(r4)+,y0
+		mac x0,y0,b	x:(r0)+n0,x0	y:(r4)+,y0
+		mac x0,y0,a	x:(r0)+n0,x0	y:(r4)+,y0
+		mac x0,y0,b	x:(r0)+n0,x1	y:(r4)+,y1
+		add a,b		x:(r0)+n0,x0	y:(r4)+,y0
+		subl b,a	b,x:(r1)+n1
+		mpy x1,y1,a	a,x:(r2)+n2
+		mpy x0,y0,b	x:(r0)+n0,x0	y:(r4)+,y0
+		mac x0,y0,a	x:(r0)+n0,x0	y:(r4)+,y0
+		mac x0,y0,b	x:(r0)+n0,x0	y:(r4)+,y0
+		mac x0,y0,a	x:(r0)+n0,x0	y:(r4)+,y0
+		mac x0,y0,b	x:(r0)+n0,x0	y:(r4)+,y0
+		mac x0,y0,a	x:(r0)+n0,x0	y:(r4)+,y0
+		mac x0,y0,b	(r0)+ 
+		add a,b		x:(r0)+n0,x0	y:(r4)+,y0	; first for next col
+		subl b,a	b,x:(r1)+n1
+		move a,x:(r2)+n2 
+		move (r1)+
+		move (r2)+
+p2endrowsloop
+		move	x:saver7,r0
+		move	#64,n0
+		movec 	#-1,m4
+		move	(r0)+n0
+		movec #-1,m0
+		movec #-1,m1
+		movec #-1,m2
+
+do6_loop
+		move	#dctblocks,r1
+		move	#offset_table+1,r5
+		move	#2,n5
+		move	#conv_gray+128+128,r4
+		move	y:(r5)+n5,n1		; first offset
+		do	#16*16,gray_sendloop
+		move	x:(r1+n1),n4
+		move	y:(r5)+n5,n1		; next offset
+		waitcts
+		movep	y:(r4+n4),x:HRX
+gray_sendloop
+		jmp 	do_macro_block
+
+
+YCrCbtoRGB	move	#dctblocks,r0
+		move	#dctblocks+(4*64),r1
+		move	#dctblocks+(5*64),r2
+		move	#offset_table,r3
+		MOVE  #colour_output,R4
+		MOVE  #RGBMatrix,R5
+		MOVEC #<4,M5
+		DO    #16*8,rgb_conv_lp
+		move	y:(r3)+,n1
+		move	y:(r3)+,n0
+		move	n1,n2
+		move	x:(r0+n0),y0 				; Y
+		move	y:(R5)+,X0  	
+		MPY   Y0,X0,B	x:(r2+n2),y0			; Cr
+		TFR   B,A    	x:(r1+n1),y1 			; Cb
+		move	y:(R5)+,X0			
+		MAC  Y0,X0,A     y:(R5)+,X0  
+		TFR   B,A   A,X:(R4)+
+		MAC   -Y1,X0,A    y:(R5)+,X0  
+		MAC  -Y0,X0,A    y:(R5)+,X0  
+		MAC  Y1,X0,B     A,X:(R4)+
+		MOVE	B,X:(R4)+
+rgb_conv_lp
+		MOVEC #-1,M5
+
+		move	#colour_output,r0
+		move	#conv_red+384,r4
+		move	#conv_green+384,r5
+		move	#conv_blue+384,r6
+		move	x:(r0)+,n4
+		do	#16*16,loop
+		move	x:(r0)+,n5
+		move	x:(r0)+,n6	
+		move	y:(r4+n4),a
+		move	y:(r5+n5),y0
+		or	y0,a	y:(r6+n6),y0
+		or	y0,a	x:(r0)+,n4
+		waitcts
+		movep	a,x:HRX
+loop
+		
+start		movep	#$0c00,X:IPR
+		movep	#$1,X:MYPBC
+		movep	#$0,X:BCR
+		andi	#$f0,mr			
+		move 	#>-1,m0
+		move 	#>-1,m1
+		move 	#>-1,m2
+		move 	#>-1,m3
+		move 	#>-1,m4
+		move 	#>-1,m5
+		move 	#>-1,m6
+		move 	#>-1,m7
+
+make_yuv:	move	#conv_red,r4
+		move	#conv_green,r5
+		move	#conv_blue,r6
+		move	#conv_gray,r7
+		move	#>$0000,y0
+		do	#$80,first_lp
+		move	y0,y:(r4)+
+		move	y0,y:(r5)+
+		move	y0,y:(r6)+
+		move	y0,y:(r7)+
+first_lp
+		move	#0,r0
+		move	#$100,n0
+
+		move	#>$f800,x1
+		do	#256,make_conv_rgb
+		move	r0,b
+		and	x1,b	#>($800000>>5),x0
+		move	b,y0
+		move	b,y:(r4)+
+		mpy	x0,y0,a	#>($800000>>11),x0
+		add	a,b		a,y:(r5)+
+		mpy	x0,y0,a		(r0)+n0
+		add	a,b		a,y:(r6)+
+		move	b,y:(r7)+
+make_conv_rgb
+		move	#>$f800,y0
+		move	#>$07c0,y1
+		move	#>$001f,x0
+		move	#>$ffdf,x1
+		do	#$80,last_lp
+		move	y0,y:(r4)+
+		move	y1,y:(r5)+
+		move	x0,y:(r6)+
+		move	x1,y:(r7)+
+last_lp		
+do_get_intra	move	#intra_matrix,r0
+		do	#64,get_intra
+		waitrts
+		movep	x:HRX,y:(r0)+ 
+		nop
+get_intra
+		jmp	go
+
+		org	x:$0
+temp_block	ds	64
+dctblocks	ds	64*6
+quant		ds 1
+saver7		ds 1
+
+		org	x:$1000
+colour_output	ds	256*3
+
+; Y memory
+
+		org	y:$0
+		ds	64
+dct_const	dc c1,c13+c20+c23+c24,c2+c4,c24,c1,c23+c24,c2,c20+c24
+		dc c1,c24,c2,c12+c21+c22+c24,-c1,c21+c24,c2+c3,c22+c24
+		dc c1,c23+c24,-c2,c21+c24,-c1,c11+c21+c23+c24,-(c2+c3),c24
+		dc c1,c20+c24,-(c2+c4),c22+c24,c1,c24,-c2,c10+c20+c22+c24
+intra_matrix:	ds	64
+
+RGBMatrix	dc	65536*32
+		dc	104597*32  ; crv
+		dc	25675*32   ; cgu
+		dc	53279*32   ; cgv 
+		dc	132201*32  ; cbu
+
+		org y:$1000
+conv_red	ds 256*2
+conv_green	ds 256*2
+conv_blue	ds 256*2
+conv_gray	ds 256*2
+	
+
+offset_table	
+count   set     0
+count2  set     0
+        dup     4
+        dc      count+0,count2+(0*64)+0
+        dc      count+0,count2+(0*64)+1
+        dc      count+1,count2+(0*64)+2
+        dc      count+1,count2+(0*64)+3
+        dc      count+2,count2+(0*64)+4
+        dc      count+2,count2+(0*64)+5
+        dc      count+3,count2+(0*64)+6
+        dc      count+3,count2+(0*64)+7
+        dc      count+0,count2+(1*64)+0
+        dc      count+0,count2+(1*64)+1
+        dc      count+1,count2+(1*64)+2
+        dc      count+1,count2+(1*64)+3
+        dc      count+2,count2+(1*64)+4
+        dc      count+2,count2+(1*64)+5
+        dc      count+3,count2+(1*64)+6
+        dc      count+3,count2+(1*64)+7
+count2  set     count2+8
+	dc	count+0,count2+(0*64)+0
+	dc	count+0,count2+(0*64)+1
+	dc	count+1,count2+(0*64)+2
+	dc	count+1,count2+(0*64)+3
+	dc	count+2,count2+(0*64)+4
+	dc	count+2,count2+(0*64)+5
+	dc	count+3,count2+(0*64)+6
+	dc	count+3,count2+(0*64)+7
+	dc	count+0,count2+(1*64)+0
+	dc	count+0,count2+(1*64)+1
+	dc	count+1,count2+(1*64)+2
+	dc	count+1,count2+(1*64)+3
+	dc	count+2,count2+(1*64)+4
+	dc	count+2,count2+(1*64)+5
+	dc	count+3,count2+(1*64)+6
+	dc	count+3,count2+(1*64)+7
+count2  set     count2+8
+count  	set     count+8
+        endm
+
+count2  set     0
+        dup     4
+        dc      count+0,count2+(2*64)+0
+        dc      count+0,count2+(2*64)+1
+        dc      count+1,count2+(2*64)+2
+        dc      count+1,count2+(2*64)+3
+        dc      count+2,count2+(2*64)+4
+        dc      count+2,count2+(2*64)+5
+        dc      count+3,count2+(2*64)+6
+        dc      count+3,count2+(2*64)+7
+        dc      count+0,count2+(3*64)+0
+        dc      count+0,count2+(3*64)+1
+        dc      count+1,count2+(3*64)+2
+        dc      count+1,count2+(3*64)+3
+        dc      count+2,count2+(3*64)+4
+        dc      count+2,count2+(3*64)+5
+        dc      count+3,count2+(3*64)+6
+        dc      count+3,count2+(3*64)+7
+count2  set     count2+8
+	dc	count+0,count2+(2*64)+0
+	dc	count+0,count2+(2*64)+1
+	dc	count+1,count2+(2*64)+2
+	dc	count+1,count2+(2*64)+3
+	dc	count+2,count2+(2*64)+4
+	dc	count+2,count2+(2*64)+5
+	dc	count+3,count2+(2*64)+6
+	dc	count+3,count2+(2*64)+7
+	dc	count+0,count2+(3*64)+0
+	dc	count+0,count2+(3*64)+1
+	dc	count+1,count2+(3*64)+2
+	dc	count+1,count2+(3*64)+3
+	dc	count+2,count2+(3*64)+4
+	dc	count+2,count2+(3*64)+5
+	dc	count+3,count2+(3*64)+6
+	dc	count+3,count2+(3*64)+7
+count2  set     count2+8
+count  	set     count+8
+        endm
+
+	end	
