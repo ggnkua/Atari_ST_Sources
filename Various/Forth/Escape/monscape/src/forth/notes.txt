@@ -1,0 +1,1052 @@
+Basic utilities
+===============
+
+: u>=   swap u< not ;
+: nip   swap drop ;
+
+\ ( addr n xt )  apply word 'xt' to n cells at addr
+: map
+  swap         ( addr xt n )
+  FOR AFT      ( addr xt )
+    >r         ( addr )
+    dup @      ( addr value )
+    r@ execute ( addr result )
+    over !     ( addr )
+    cell+      ( nextaddr )
+    r>         ( addr xt )
+  THEN NEXT 2drop
+;
+
+\ allot cells, not bytes
+: callot  cells allot ;
+
+\ ( addr n xt )  apply word 'xt' to n bytes at addr
+: cmap  swap FOR AFT >r dup c@ r@ execute over c!  1 + r> THEN NEXT 2drop ;
+
+
+Bit-wise access to memory-mapped I/O registers
+==============================================
+
+( nbits -- bitmask )
+: bitmask  1 swap lshift 1 - ;
+
+( value addr shift bits -- )
+: bf!
+	bitmask
+	rot >r       ( value shift bitmask | addr )
+	over lshift  ( value shift shifted_bitmask | addr )
+	>r lshift    ( shifted_value | addr shifted_bitmask )
+	r@ and r>    ( masked_shifted_value shifted_bitmask | addr )
+	invert       ( masked_shifted_value shifted_inv_bitmask | addr )
+	r@ @ and or
+	r> !
+;
+
+( addr shift bits -- value )
+: bf@
+	bitmask      ( addr shift bitmask )
+	over lshift  ( addr shift shifted_bitmask )
+	rot @        ( shift shifted_bitmask value )
+	and          ( shift masked_value )
+	swap rshift  ( value )
+;
+
+: bmask  1 swap lshift ;
+
+\ ( v n -- v ) set bit n in value
+: bset   bmask or ;
+
+\ ( v n -- v ) clear bit n in value
+: bclr   bmask not and ;
+
+\ ( addr n )  map table values to bit masks
+: map2bmask  xtalit bmask map ;
+
+
+Text tools
+==========
+
+: esc 1b emit ;
+
+\ enable line wrapping at end of line
+esc 76 emit
+
+\ move cursor to top-left corner
+: home  esc 48 emit ;
+
+\ inverted output
+: inv   esc 70 emit ;
+
+\ enable cursor
+: curson  esc 65 emit ;
+
+\ ( addr n -- ) print n table values at addr
+: .table  FOR AFT dup . dup @ . cr cell+ THEN NEXT drop ;
+
+\ ( n -- ) pretty-print binary number
+: #8bit  base @ >r 2 base ! # # # # # # # # r> base ! ;
+: #.     2e hold ;
+: .b  <# #8bit #. #8bit #. #8bit #. #8bit #> type ;
+
+
+Ouput to Atari TT high
+======================
+
+\ ( -- addr ) physical screen base address
+: vbase@  ffff8201 c@ 100 * ffff8203 c@ + 100 * ffff820d c@ + ;
+
+\ clear screen, cls clears white, bls clears black
+: cls   vbase@ 9600 FOR AFT 0        over !  cell+ THEN NEXT drop ;
+: bls   vbase@ 9600 FOR AFT ffffffff over !  cell+ THEN NEXT drop ;
+
+\ fill screen with random values
+: noise vbase@ 9600 FOR AFT random   over !  cell+ THEN NEXT drop ;
+
+
+Duplicate table of values
+=========================
+
+\ ( addr n )  duplicate n values of table starting at position n
+: dupcells  cells 2dup + swap cmove ;
+
+
+Create permutation
+==================
+
+\ ( addr n ) create sequence of n values
+: seq  FOR AFT r@ over ! cell+ THEN NEXT drop ;
+
+\ ( a b -- ) exchange content of two cells
+: exg   2dup @ swap @ rot ! swap ! ;
+
+\ ( mask addr -- addr+rnd ) add masked random cell offset to addr
+: +random   swap random and cells + ;
+
+\ ( addr n -- ) shuffle n values at addr
+: shuffle
+  dup 1 -  ( addr n mask )
+  rot rot  ( mask addr n )
+  FOR AFT
+    2dup +random    ( mask addr addr+rnd )
+    over r@ cells + ( mask addr addr+rnd addr+i )
+    exg             ( mask addr )
+  THEN NEXT 2drop ;
+
+: randombytes  FOR AFT random over c! 1 + THEN NEXT drop ;
+
+
+Square root
+===========
+
+: bmask  1 swap lshift ;
+: sqrt   0 f FOR 2dup r@ bmask dup rot or dup * rot u>= and or NEXT nip ;
+
+
+Table plotter
+=============
+
+\ just a test for caching the vbase@ result
+: vbase@ dolit [ vbase@ ] , ;
+
+\ draw dots without clipping
+\ bdot ( x y ) draws black, wdot ( x y ) draws white
+: vcell  a0 * vbase@ +  over 5 rshift 2 lshift + ;
+: mask   not 1f and 1 swap lshift ;
+: bdot   vcell  swap  mask      over @ or   swap ! ;
+: wdot   vcell  swap  mask not  over @ and  swap ! ;
+
+\ add clipping
+: bdot  2dup 3c0 u< swap 500 u< and IF bdot exit THEN 2drop ;
+: wdot  2dup 3c0 u< swap 500 u< and IF wdot exit THEN 2drop ;
+
+\ center y coordinate
+: ycenter 1e0 swap - ;
+
+\ configure vertical scale
+variable plotscale
+8 plotscale !
+
+\ ( x y -- x ) draw scaled and vertically centered dot, keep x
+: svdot   plotscale @ arshift  ycenter over swap bdot ;
+
+\ ( addr n -- ) plot values vertically centered on screen
+: plot
+  0 swap            ( addr x n )
+  FOR AFT           ( addr x )
+    2dup cells + @  ( addr x y )
+    svdot           ( addr x )
+    1+
+  THEN NEXT
+  2drop ;
+
+\ ( addr n -- ) plot byte values
+: cplot    0 swap FOR AFT 2dup + c@ svdot 1+ THEN NEXT 2drop ;
+
+
+Sine table generator
+====================
+
+variable x variable y
+: >xy  y ! x ! ;
+: xy>  x @ y @ ;
+
+\ Calculate points for 0 to 45 degrees rotating a point (4000,0) to
+\ a small angle and using the result for the next iteration.
+\ Note that computational error accumulates over time. So the
+\ number of accurate values and precision is limited.
+\ Use y values for sin values 0 to 45 degrees.
+\ Use x values for sin values of 90-45 to 45 degrees.
+\ Create the remaining parts of the curve by mirroring the computed part.
+
+: cosa     3fffb ;
+: sina     649 ;
+: xysincos cosa * swap sina * ;
+: int      12 rshift ;
+: rotate   2dup swap xysincos - int rot rot xysincos + int ;
+
+variable sintab 400 cells allot
+
+: gensin90
+  4000 0 >xy
+  7f FOR
+    y @ over 7f r@ - cells + !
+    x @ over 80 r@ + cells + !
+    xy>  rotate  >xy
+  NEXT drop
+;
+
+: scale90    ff FOR dup @ 2 lshift over ! cell+ NEXT drop ;
+: gensin180  ff FOR dup r@ cells + @         over 1ff r@ - cells + !  NEXT drop ;
+: gensin360 1ff FOR dup r@ cells + @ negate  over 200 r@ + cells + !  NEXT drop ;
+: gensintab  sintab dup gensin90 dup scale90 dup gensin180 gensin360 ;
+: .sintab  sintab 100 .table ;
+: plotsintab  home cls 8 plotscale !  sintab 400 plot ;
+
+
+VBL bench
+=========
+
+variable startcnt variable endcnt
+: vbclock 462 ;
+: .vblstats home cls decimal startcnt @ . cr endcnt @ . cr endcnt @ startcnt @ - . cr hex ;
+: vblbench vbclock @ startcnt !  execute vbclock @ endcnt !  .vblstats ;
+
+' linetest vblbench
+
+
+Performance optimizations
+=========================
+
+\ VBL count measurements for compile test
+\
+\ compile test (forth version of ask_string_match)
+\  4277 on Hatari
+\  3532 on TT
+\
+\ assembly version of ask_string_match (with both long-wise and byte-wise compare)
+\  2305  on Hatari
+\  1925  on TT
+\
+\ assembly version of ask_string_match (only byte-wise compare)
+\  2301  on Hatari
+\  1879  on TT (only byte compare)
+\
+\ assembly version of cmove -> not much effect
+\  2297  on Hatari
+\  1869  on TT
+\
+\ assembly version of dentry_by_name
+\  623   on Hatari
+\  468   on TT
+\
+\ switch to 32-bit XTAs
+\  622   on Hatari
+\  417   on TT
+\
+\ assembly versions of not and negate (after execution counting)
+\  522   on Hatari
+\  349   on TT
+
+
+\ VBL count measurements for linetest
+\
+\  1816 on Hatari
+\  755  on TT
+\
+\ using dblt instead of dbf
+\  1813 on Hatari
+\  684  on TT
+\
+\ replace conditional branch by scc/and -> is not worth it
+\  2177 on Hatari
+\  682  on TT
+\
+\ switch to 32-bit XTAs, optimized not and negate
+\  1800 on Hatari
+\  669  on TT
+
+: blacklines
+  13f FOR vbase@  r@ 2 lshift  0  13f r@ - 2 lshift  3bf  blackline NEXT
+  f0  FOR vbase@  0  r@ 2 lshift  4ff  f0 r@ - 2 lshift   blackline NEXT ;
+: whitelines
+  13f FOR vbase@  r@ 2 lshift  0  13f r@ - 2 lshift  3bf  whiteline NEXT
+  f0  FOR vbase@  0  r@ 2 lshift  4ff  f0 r@ - 2 lshift   whiteline NEXT ;
+: linetest  4 FOR blacklines whitelines NEXT ;
+
+
+Dithering table
+===============
+
+\ noisetab has 8 entries, the resulting bitmask has eight corresponding bits
+: newnoisetab  create here 100  dup cells allot  2dup seq shuffle ;
+
+\ ( threshold noisetab -- bitmask )
+: bitpattern
+  0                ( threshold noiseptr result )
+  7 FOR
+    >r             ( threshold noiseptr                     r: result )
+    2dup @         ( threshold noiseptr threshold noiseval  r: result )
+    < 1 and        ( threshold noiseptr bit                 r: result )
+    r> 1 lshift or ( threshold noiseptr result )
+    >r cell+ r>    ( threshold next-noiseptr result )
+  NEXT
+  nip nip          ( result )
+;
+
+\ ( noisetab dstbase ) generate table of bitmask bytes for each gray value
+: genshades
+  ff FOR
+    over r@ swap ( noisetab dstbase i noisetab )
+    bitpattern   ( noisetab dstbase pattern )
+    over r@ + c! ( noisetab dstbase pattern dst )
+  NEXT 2drop
+;
+
+\ ( noisetab dst ) generate 8 shade tables
+: gen8shades
+  7 FOR
+    over                 ( noisetab dst noisetab )
+    r@ 3 lshift cells +  ( noisetab dst noisetab+lineoffset )
+    over                 ( noisetab dst noisetab+lineoffset dst )
+    r@ 8 lshift +        ( noisetab dst noisetab+lineoffset dst+lineoffset
+    genshades
+  NEXT 2drop
+;
+
+: new8shades   create here 8 100 * cells allot gen8shades ;
+
+newnoisetab noise
+noise new8shades 8shades
+create chunkybuf 4b00 allot
+
+\ ( dst -- ) fill 160x120 chunky buffer with x+y pattern
+variable y
+: chunkypattern
+  0 y !
+  77 FOR
+    9f FOR r@ y @ + over c!  1 + NEXT
+    y @ 1 + y !
+  NEXT drop
+;
+
+
+c2m8x8
+======
+
+Simple byte-wise loop -> 17.1 VBLs on Hatari, 12.7 VBLs on TT
+
+  .REP 16
+  move.b   (a4)+,d0
+  move.b   (a3,d0.w),(a1)+
+  .ENDR
+
+Use of ror.l -> 22.7 VBLs on Hatari, 8.8 VBLs on TT
+24.1  9.3
+
+  .REP 4
+  move.l   (a4)+,d0        | d0: c3.c2.c1.c0
+  move.l   d0,d1
+  ror.l    #8,d0           | d0: c0.c3.c2.c1
+  and.l    d2,d1           | d1: __.c2.__.c0
+  and.l    d2,d0           | d0: __.c3.__.c1
+  move.b   (a3,d1.w),d3    | d3: __.__.__.m0
+  ror.l    #8,d3           | d3: m0.__.__.__
+  move.b   (a3,d0.w),d3    | d3: m0.__.__.m1
+  ror.l    #8,d3           | d3: m1.m0.__.__
+  swap     d1              | d1: __.c0.__.c2
+  move.b   (a3,d1.w),d3    | d3: m1.m0.__.m2
+  swap     d0              | d0: __.c1.__.c3
+  ror.l    #8,d3           | d3: m2.m1.m0.__
+  move.b   (a3,d1.w),d3    | d3: m2.m1.m0.m3
+  ror.l    #8,d3           | d3: m3.m2.m1.m0
+  move.l   d3,(a1)+
+  .ENDR
+
+
+Throughput TT fast RAM vs ST RAM
+================================
+
+: scrsize 25800 ;
+variable ttscr scrsize allot
+
+: ttfilltest  63 FOR ttscr 9600 0 fillcells NEXT ;
+: ttfillbench xtalit ttfilltest vblbench ;
+
+: stfilltest  63 FOR vbase@ 9600 0 fillcells NEXT ;
+: stfillbench xtalit stfilltest vblbench ;
+
+\ Fill screen with one 32-bit pattern
+\
+\  Atari TT   Fast RAM: 0.7 VBLs
+\             ST   RAM: 1.4 VBLs
+\  Hatari     Fast RAM: 1.6 VBLs
+\             ST   RAM: 1.6 VBLs
+
+\ c2m8x8 routine on TT
+\
+\ To screen in ST RAM: 9.6 VBLs VBLs
+\              TT RAN: 8.2 VBLs
+
+
+Cache control register
+======================
+
+default: write allocate (WA), data burst enable (DBE)
+
+    CACR     | c2mbench
+ -----------------------
+    WA DBE   | 150
+    -  DBE   | 148 (disabling WA makes c2m slightly faster)
+    -  -     | 161
+
+
+Interlaced c2m8x8 with four phases
+==================================
+
+Four interlacing phases
+
+  0 -> 2
+  1 -> 3
+  2 -> 1
+  3 -> 0
+
+6.78 VBLs on Hatari   (with REP 5)
+6.88 VBLs on Hatari   (with REP 2)
+3.16 VBLs on Atari TT (with REP 5)
+2.69 VBSs on Atari TT (with REP 2) cache effect!
+
+create phasetab  2 , 3 , 1 , 0 ,
+variable phase
+: nextphase  phasetab phase @ cells + @ phase ! ;
+: c2m phase @ sychunkybuf vbase@ 8shades c2m8x8i4 ;
+: c2mtest 63 FOR c2m nextsy nextphase NEXT ;
+: c2mbench xtalit c2mtest vblbench ;
+
+
+Dithered fadeout
+================
+
+\ 3,29 VBLs on Hatari
+\ 3.04 VBLs on Atari TT
+\
+\ With horizontal and vertical interlacing (128 fade phases until black)
+\
+\ 1.46 VBLs on Hatari
+\ 0.83 VBLs on Atari TT
+
+\ The fade table has 32 unique entries, each with a different bit
+\ The second 32 entries are a copy of the first part.
+
+: map2bmask  xtalit bmask map ;
+: newfadetab  create here  20 dup 2 * callot  2dup seq 2dup shuffle 2dup map2bmask dupcells ;
+newtadetab fadetab
+
+variable phase  0 phase !
+: nextphase  phase dup @ 1 + 7f and swap ! ;
+: onephase   home phase @ vbase@ fadetab fade2black nextphase ;
+: test       7f FOR onephase NEXT ;
+: bench      xtalit test vblbench ;
+
+
+Voxel
+=====
+
+\ convert upper-left part of 256x256 texture 'hmap' into 160x120 chunky buffer
+: c2m  chunkybuf vbase@ 8shades c2m8x8 ;
+: tex2cln     a0 cmove ;
+: tex2chunky  77 FOR  2dup tex2cln  a0 + swap 100 + swap NEXT 2drop ;
+: tex2chunkybuf  hmap chunkybuf tex2chunky ;
+
+\ tweaked version to display the chunky buffer at half resolution
+: tex2cln     7f FOR over c@ over c! 1 + swap 2 + swap NEXT 2drop ;
+: smalltex2chunky  77 FOR 2dup tex2cln  a0 + swap 200 + swap NEXT 2drop ;
+
+\
+\ walking the coordinate system, wrap at boundaries
+\
+
+\ xy+ ( pos(x,y) dir(dx,dy)) -- pos(x+dx,y+dy) ), consider negative dx,dy, wrap
+\ each value is a 8.8 fixpoint value
+\ the upper parts can by used for indexing into a 256x256 texture
+\ x uses bits 0..15, y uses bits 16..31
+
+: #(     28 hold ;
+: #)     29 hold ;
+: #,     2c hold ;
+: #x,y   # # #. # # 20 hold #, # # #. # # ;
+: #xy    #) #x,y #( ;
+: .xy    space <# #xy #> type ;
+: xmask  ffff ;
+: ymask  ffff0000 ;
+: onlyx  xmask and ;
+: onlyy  ymask and ;
+: fp     swap 8 lshift or ;
+: xy     10 lshift or ;
+: x<->y  dup onlyx swap onlyy 10 rshift ;
+: xy+    2dup onlyx + onlyx >r onlyy + onlyy r> or ;
+: xy-    2dup onlyx - onlyx >r onlyy - onlyy r> or ;
+: xy/    >r dup onlyx r@ / onlyx swap onlyy r> / onlyy or ;
+
+: .8steps  swap 7 FOR  over xy+  dup .xy  NEXT 2drop ;
+: .:  space 3a emit ;
+
+01 00 fp 02 00 fp xy dup .xy  00 80 fp 00 80 fp xy dup .xy .: .8steps cr
+01 00 fp 02 00 fp xy dup .xy  ff 80 fp 00 00 fp xy dup .xy .: .8steps cr
+01 00 fp 02 00 fp xy dup .xy  00 00 fp ff 40 fp xy dup .xy .: .8steps cr
+
+\
+\ sample texture/height-map values
+\
+\ texture is 256x256 bytes
+\ a xy-point is represented as 32-bit value yy.vv.xx.uu
+\
+
+\ test texture with the 2x2 upper-left pixels set to 0, 40, 40, c0
+create tex  10000 allot  tex dup 1 + 40 swap c! dup 100 + 40 swap c! dup 101 + c0 swap c! drop
+
+\ convert xy-point to index into texture
+: xy2idx        ( yy.vv.xx.uu )
+  8 rshift      ( __.yy.vv.xx )
+  dup ff and    ( __.yy.vv.xx __.__.__.xx )
+  swap 8 rshift ( __.__.__.xx __.__.yy.vv )
+  ff00 and or   ( __.__.yy.xx )
+;
+
+\
+\ sample texture via nearest neighbor
+\
+: tex@xy  swap xy2idx + c@ ;
+
+\
+\ sample texture via bi-linear interpolation based on 4 sampled texture values
+\
+\   tex00 tex10
+\   tex01 tex11
+\
+\ (1-v) * ((1-u)*tex00 + u*tex10) +
+\    v  * ((1-u)*tex01 + u*tex11)
+\
+
+\ access fractional u, (1-u), v, (1-v) parts of xy value
+: xy2u    ff and ;
+: xy2!u   not ff and ;
+: xy2v    10 rshift ff and ;
+: xy2!v   10 rshift not ff and ;
+
+\ ( pos texture -- value )
+: u*tex@xy      over xy2idx + c@ swap xy2u  * ;
+: (1-u)*tex@xy  over xy2idx + c@ swap xy2!u * ;
+
+\ ( pos texture -- value pos texture ) fetch u-weighted texture value
+: (1-u)*tex00   over             over (1-u)*tex@xy rot rot ;
+: u*tex10       over 100     xy+ over     u*tex@xy rot rot ;
+: (1-u)*tex01   over 1000000 xy+ over (1-u)*tex@xy rot rot ;
+: u*tex11       over 1000100 xy+ over     u*tex@xy rot rot ;
+
+\ ( a b pos texture -- value pos texture ) apply v weighting
+: v*(a+b)       >r >r + r@ xy2v  * 10 rshift r> r> ;
+: (1-v)*(a+b)   >r >r + r@ xy2!v * 10 rshift r> r> ;
+
+\ ( pos texture -- value )
+: tex@xy  (1-u)*tex00 u*tex10 (1-v)*(a+b) (1-u)*tex01 u*tex11 v*(a+b) 2drop + ;
+
+: unittest
+  00 00 fp 00 00 fp xy dup .xy  tex  tex@xy  . cr
+  01 00 fp 00 00 fp xy dup .xy  tex  tex@xy  . cr
+  00 00 fp 01 00 fp xy dup .xy  tex  tex@xy  . cr
+  01 00 fp 01 00 fp xy dup .xy  tex  tex@xy  . cr
+  aa aa fp ee ee fp xy dup .xy  tex  tex@xy  . cr
+  00 40 fp 00 00 fp xy dup .xy  tex  tex@xy  . cr
+  00 80 fp 00 00 fp xy dup .xy  tex  tex@xy  . cr
+;
+
+
+\ gather xy paths of left and right boundaries of the view port
+
+\ ( dir pos buffer -- dir pos' buffer' )
+: step
+    >r             \ ( dir pos )
+    over xy+       \ ( dir pos' )
+    r>             \ ( dir pos' buffer )
+    2dup !         \ store to buffer
+    cell+          \ ( dir pos' buffer' )
+;
+
+\ ( direction pos buffer -- )
+: walk
+  zsteps FOR AFT step THEN NEXT
+  2drop drop
+;
+
+\ ( n -- ) fill zdirs buffer based on the information from lsight and rsight
+: calczdir   cells dup  rsight + @  over lsight + @  xy- a0 xy/  swap zdirs + ! ;
+: calczdirs  zsteps FOR AFT r@ calczdir THEN NEXT ;
+
+\ ( chunkybuf pos dir )
+: texpixel
+  >r                ( chunkybuf pos )
+  2dup              ( chunkybuf pos chunkybuf pos )
+  tmap tex@xy       ( chunkybuf pos chunkybuf value )
+  dup .xy
+  swap !            ( chunkybuf pos )
+  r@ xy+            ( chunkybuf pos' )
+  swap 1 + swap     ( chunkybuf' pos' )
+  r>                ( chunkybuf' pos' dir )
+;
+
+\ ( chunkybuf n )
+: texline
+  cells
+  dup lsight + @  ( chunkybuf n pos )
+  swap zdirs + @  ( chunkybuf pos dir )
+  a0 FOR AFT texpixel THEN NEXT 2drop
+  cr
+;
+
+( y z -- y' )
+: zproj
+  10 + swap   ( z+100 y )
+  7f - 10 * swap / ;
+
+\ ( p1 p2 -- average-x )
+: x_x_/2  onlyxs swap onlyxs + 1 rshift onlyx ;
+
+\ ( p1 p2 -- average-y )
+: _y_y/2  onlyy 1 arshift swap onlyy 1 arshift + onlyy ;
+
+\ ( p1 p2 -- midpoint )
+: xyxy/2  2dup x_x_/2 >r _y_y/2 r> or ;
+
+\ criterion for subdivision
+: subdivide?  fff0fff0 and ;
+
+\ ( texture buffer p1 p2 )
+: left-a0  2dup xyxy/2 swap drop scanline-50 ;
+
+: div-a0  r> r@ swap r> r@ swap left-a0 r> r> right-a0 ;
+
+: fill-a0 ;
+
+\ ( texture buffer p1 p2 )
+: scan-a0
+  2dup subdivide? IF div-a0 THEN fill-a0 ;
+
+
+( y x )
+: visible?
+  yclip + c@   \ ( y ymax )
+  u< ;
+
+
+\
+\ Test sampling a texture into chunkybuf
+\
+create tex  10000 allot  tex dup 1 + 40 swap c! dup 100 + 40 swap c! dup 101 + c0 swap c! drop
+: bltextestline
+  a0 FOR AFT
+    dup 12 lshift
+    r@  2  lshift  +
+    tex  bltex@xy
+    over  a0 *
+    r@  +
+    chunkybuf + c!
+  THEN NEXT
+  drop
+;
+: bltextest
+  0
+  78 FOR AFT
+    dup home . cr
+    dup bltextestline
+    1 +
+  THEN NEXT
+  drop
+  c2m
+;
+
+
+\
+\ forth version of voxeltest             736 VBLs
+\ forth version using nearest neighbor   230 VBLs
+\ assembly version of bi-linear tex@xy   216 VBLs
+\ assembly version of nearest neighbor   205 VBLs
+\
+\ costs:
+\  c2m           23 VBLs
+\  renderzlevel  75 VBLs
+\  fetchzline    97 VBLs
+\    filltline     54 VBLs
+\    fillhline     43 VBLs
+\  print counter  9 VBLs
+\
+\ assember version of fetchzline/samplemaps takes 14 VBLs (based on sub division)
+\
+\ assembler version of renderzlevel takes 2 VBLs
+\
+\ h2yline  43 VBLs
+\
+
+\ ( z -- ) fills tline and hline buffer with values sampled from tmap and hmap
+: fetchzline
+  cells dup lsight + @   \ ( off leftpos )
+  swap rsight + @        \ ( leftpos rightpos )
+  a0                     \ ( leftpos rightpos nvalues )
+  tmap hmap tline hline  \ ( leftpos rightpos nvalues tmap hmap tline hline )
+  samplemaps
+;
+
+
+\ ( z height -- y ) project height to y value, depending on z
+: h2y
+    1 rshift 77 +   \ ( z z height/2+128 )
+    swap            \ ( z height/2+128 z )
+    2 lshift        \ ( z height/2+128 z*4 )
+    zproj           \ ( z y' )
+;
+
+
+\ ( z -- ) apply perspective projection of hline values into yline values
+: h2yline
+  a0 FOR AFT        \ ( y )
+    dup             \ ( z z )
+    hline r@ + c@   \ ( z z height )
+    h2y
+    yline r@ + c!
+  THEN NEXT
+;
+
+
+\ ( z buffer -- ) generate 256 h2y table entries for the given z value
+: genh2yline
+  ff FOR
+    over r@       \ ( z buffer z height )
+    h2y           \ ( z buffer y )
+    over r@ + c!
+  NEXT
+;
+
+\ ( buffer ) generate zsteps number of h2yline tables
+: genh2table
+  zsteps FOR AFT
+    r@  over r@ 8 lshift + genh2yline THEN NEXT ;
+
+: newh2ytable    create here zsteps 8 lshift dup . allot genh2table ;
+
+\ ( h2ytable ) plot all h2yline tables
+: ploth2ytables  zsteps FOR AFT h2ytable r@ 8 lshift + 100 cplot THEN NEXT ;
+
+\ ( lut v -- v' )
+: lut@ + c@ ;
+
+\ ( to lut from n )  map n byte values using a 256-byte look-up-table
+: mapb2b
+  FOR AFT      \ ( to lut from )
+    2dup       \ ( to lut from lut from )
+    c@ lut@    \ ( to lut from v' )
+    >r 1 +     \ ( to lut from'  R: v' )
+    rot        \ ( lut from' to  R: v' )
+    r> over c! \ ( lut from' to )
+    1 +        \ ( lut from' to' )
+    rot rot    \ ( to' lut from' )
+  THEN NEXT drop 2drop
+;
+
+: h2yline  8 lshift h2ytable +  yline swap  hline  a0  mapb2b ;
+
+\ ( z -- ) render z line of chunkybuf
+: renderzlevel
+  a0 FOR AFT
+    yline r@ + c@
+    dup r@ visible? IF
+      dup yclip r@ + c!
+      a0 * chunkybuf + r@ +
+      tline r@ + c@
+      swap
+      c!
+      0
+    THEN
+    drop
+  THEN NEXT drop
+;
+
+\ version that uses the assembly routine renderline
+: renderzlevel  drop  yline tline yclip chunkybuf renderline ;
+
+\
+\ Column dithering
+\
+\ Create table of 256 8-bit masks out of a 8x8 noise pattern (64
+\ distinct shuffled values).
+\ Make table 8 entries larger to allow the access of up to eight
+\ consecutive bytes at any table position.
+\
+: newnoisetab  create here 40  dup cells allot  2dup seq shuffle ;
+newnoisetab noise
+create dithertab 108 allot
+: gendithertab
+  108 FOR AFT
+    r@ 2 rshift
+    noise r@  7 and  3 lshift cells +
+    bitpattern
+    dithertab r@ + c!
+  THEN NEXT ;
+: showdithertab
+  ff FOR
+    dithertab r@ + c@
+    vbase@ r@ a0 * + 80 + c!
+  NEXT ;
+gendithertab
+showdithertab
+
+
+Multiplication and division tables
+==================================
+
+: newmul8x8tab create here 100 100 * 2 * allot genmul8x8tab ;
+newmul8x8tab mul8x8tab
+: b* mul8x8tab @8x8 ;
+
+: newdiv8x8tab  create div8x8tab here 100 100 * 2 * allot gendiv8x8tab ;
+newdiv8x8tab div8x8tab
+: b/  div8x8tab @8x8 ;
+
+
+Interpolated columns
+====================
+
+The gradient values g0..g3 are successively added to the color value.
+To compute the ascent, the y values and texture values of the previous line are kept in
+pyline and ptline buffers.
+The gradient values are stored in the gline buffer with 32 bit per entry.
+Each entry contains g0..g3.
+
+\ ( yline pyline tline ptline gline )
+: calcgradients
+
+
+Voxel context data structure
+============================
+
+before the change: bench 157 VBLs on Hatari / 56 VBLs on TT
+
+Certain maps or tables (tmap, hmap, mul8x8tab, div8x8tab) are
+adjusted for signed index access.
+
+create voxelctx
+  80 0 fp 80 0 fp xy ,    \ view position
+  4 0 fp 0 0 fp xy ,      \ direction of left sight line
+  0 0 fp 4 0 fp xy ,      \ direction of right sight line
+  tmap 8000 + ,
+  hmap 8000 + ,
+  lsight ,
+  rsight ,
+  0 ,                     \ current zline
+  tline ,
+  ptline ,
+  hline ,
+  yclip ,
+  yline ,
+  pyline ,
+  gline ,
+  h2ytable ,
+  mul8x8tab 10000 + ,
+  div8x8tab 10000 + ,
+  chunkybuf ,
+  zsteps ,
+  2 ,                     \ level of detail
+  1f ,                    \ max column height mask
+
+Introduction of oddline, swapped tlines and ylines (to avoid copying).
+-> 159 VBLs on Hatari / 60 VBLs on TT
+The indirection of forth words is expensive.
+
+Move Forth code into assembler voxelzline
+
+Replace fetchzline    -> 153 VBLs
+Replace h2yline       -> 152 VBLs
+Replace calcgradients -> 151 VBLs
+Replace renderzlevel  -> 146 VBLs
+Replace walk by walksightlines -> 145 VBLs
+
+
+Nice variation of voxel effect
+==============================
+
+* draw only lines (disable gradients and column interpolation)
+* set vdir to ff80ff80
+* set ldir to 1000
+* set rdir to 10000000
+
+: randombytes  FOR AFT random over c! 1 + THEN NEXT drop ;
+
+: clinear2xtimes FOR AFT 2dup clinear2x dup + THEN NEXT 2drop ;
+: csmooth2xtimes FOR AFT 2dup csmooth2x dup + THEN NEXT 2drop ;
+
+: scale4to100    4 2dup clinear2x dup + 5 csmooth2xtimes ;
+: scale8to100    8 2dup clinear2x dup + 4 csmooth2xtimes ;
+: scale10to100  10 2dup clinear2x dup + 3 csmooth2xtimes ;
+: scale20to100  20 2dup clinear2x dup + 2 csmooth2xtimes ;
+: scale40to100  dup 40 2dup clinear2x dup + csmooth2x 80 csmooth csmooth ;
+
+create tex 10000 allot
+tex 400 randombytes
+tex 20 100 csplice
+: lines20to100  FOR AFT dup scale20to100 100 + THEN NEXT drop ;
+tex 20 lines20to100
+tex 100 100 cimagerotl
+tex 100 lines20to100
+
+tmptex 10000 ff cexpose
+tmptex tex 10000 cimage+
+
+
+Timing effects to mod replay
+============================
+
+* Use song position and pattern position as time base of
+  an music-frame counter (mf)
+  * The lowest 6 bits contain the pattern position
+  * The upper bits are used as song-position counter,
+    which is incremented each time, the song position
+    changes
+
+variable mf  variable osongpos
+
+\ update the low 6 bit with current pattern position
+: upd_mf_patternpos  mf dup @ ffc0 and patternpos or swap !  ;
+
+\ increment bits 6 and above if the song position changed
+: upd_mf_songpos
+  osongpos          \ ( varaddr )
+  dup @ songpos     \ ( varaddr oldval currval )
+  dup rot           \ ( varaddr currval curval oldval )
+  = not IF          \ ( varaddr currval )
+    2dup swap !     \ update osongpos
+    40 mf +!        \ advance music frame
+  THEN 2drop ;
+
+: mf  upd_mf_songpos upd_mf_patternpos mf @ ;
+
+
+Mechanism for running and switching effects
+===========================================
+
+variable 'efx  variable efxstartmf
+: do_efx   'efx @ ?dup IF execute THEN ;
+: efx      'efx ! mf efxstartmf ! ;
+: efxmf    mf efxstartmf @ - ;
+: efxspos  efxmf 6 rshift ;
+: .efx     mf . efxmf . efxspos . ;
+: main     do_efx do_console ;
+' main 'mainloop !
+
+: osci    xtalit do_osci efx ;
+: voxel   xtalit do_voxel efx ;
+: voxosci xtalit do_voxel_osci efx ;
+
+variable 'do_voxflash
+: voxflash  cls 'do_voxflash @ efx ;
+: do_voxflash  efxspos 0 = not IF voxflash THEN do_voxel ;
+' do_voxflash 'do_voxflash !
+
+: stop 0 'efx ! ;
+
+
+Title screen
+============
+
+\ ( texbufidx msgidx )
+: drawmsg
+  msg swap           \ ( msg dst )
+  textbuf            \ ( msg dst )
+  over msgxpos +     \ ( msg adjusted-dst )
+  swap a0 swap ff    \ ( dst a0 msg color )
+  cdrawtext
+;
+
+\ Use various portions for the chunkybuf for hosting several
+\ consecutive other buffers. The 'textbufs' and 'maskbufs'
+\ tables reference the individual portions. The corresponding
+\ words 'textbuf' and 'maskedbuf' return a buffer's address
+\ for a given index.
+
+: xyoscibuf chunkybuf ;
+xyoscibuf a00 +
+  create textbufs    dup , a00 +  dup , a00 +  dup , a00 +
+  create maskedbufs  dup , a00 +  dup , a00 +  dup , a00 +
+drop
+
+\ ( n -- textbuf<n> )
+: textbuf    cells textbufs   swap + @ ;
+
+\ ( n -- maskedbuf<n> )
+: maskedbuf  cells maskedbufs swap + @ ;
+
+\ ( textbuf dst -- )
+: maskedxyosci
+  xyoscibuf rot rot   \ ( xyoscibuf textbuf dst )
+  a00 cbufmask ;
+
+\ ( chunkybuf ypos -- ) convert 10-lines chunky buffer to screen as ypos
+: c2m10aty
+  phase @ rot rot     \ ( phase chunkybuf ypos )
+  a0 * vbase@ +       \ ( phase chunkybuf scraddr )
+  10 8shades c2m8x8i4
+;
+
+\ ( idx -- ) render line with given index (0..2)
+: titleline
+  dup textbuf over maskedbuf maskedxyosci
+  dup maskedbuf over scroffset c2m10aty
+  drop
+;
+
+
+Effect sequencing
+------------------
+
+: s1     0 0 drawmsg ;
+: s2     1 1 drawmsg ;
+: s3     2 3 drawmsg ;
+: s4 cls 0 4 drawmsg ;
+: s5     1 5 drawmsg ;
+: s6     2 6 drawmsg ;
+
+create script ] s1 s2 s3 s4 s5 s6 [ 0 ,
+variable scriptpos
+: scriptstep
+  script scriptpos @ cells + @ ?dup IF
+    execute
+    1 scriptpos +!
+  THEN
+;
+
+: beatpos mf 4 rshift ;
+variable obeatpos
+
+: handle_beat
+  beatpos obeatpos @ = not IF
+    beatpos obeatpos !
+    scriptstep
+  THEN
+;
