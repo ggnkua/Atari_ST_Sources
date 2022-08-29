@@ -1,0 +1,390 @@
+'
+' *****************************************************************
+' * lz77 packer v1.4                                              *
+' *****************************************************************
+' * Source adapted and optimized to/for Atari 16/32bit machines   *
+' * by ray//.tSCc. 2003. Final bugfixes 01.04.05                  *
+' *                                                               *
+' * Base framework: Haruhiko Okumura                              *
+' * GFA port/mods: Lonny Pursell  12/23/2017                      *
+' *****************************************************************
+' * eml:  ray@tscc.de                                             *
+' * http://ray.tscc.de                                            *
+' *****************************************************************
+'
+' History:
+' Added file ID 'LZ77' for use with GFABASIC v3.7 [LP]
+'
+$M128000,F<,S&,S>,RC&
+REM #lib new lib
+' REM #sym !debug use only
+REM #DC*
+REM #LG@ inittree
+REM #LG@ insertnode%
+REM #LG@ deletenode%
+REM #LG@ progress
+REM #LG@ encode%
+REM #LG@ decode%
+'
+DEFNUM 4     ! percent readout
+'
+REM #DC+
+n&=4096      ! Size of dictionary
+f&=17        ! Upper limit for match length
+threshold&=2 ! Encode strings longer than this
+nil&=4096    ! n&  ! Index for root of binary search trees
+infile&=1    ! channel numbers
+outfile&=2   !   ...
+REM #DC-
+'
+textsize%=0  ! Text size counter
+codesize%=0  ! Code size counter
+'
+DIM text_buf|(n&+f&-1)  ! Ring buffer for string comparison
+'
+CLR match_position&,match_length&        ! Set by the InsertNode() procedure.
+DIM lson&(n&+1),rson&(n&+257),dad&(n&+1) ! Left & right children & parents (binary search trees)
+a&=0
+CLR infile$,outfile$
+'
+DIM code_buf|(17)                        ! used by the encoder
+'
+@main
+EDIT
+'
+> PROCEDURE inittree
+  LOCAL i&
+  '
+  FOR i&=n&+1 TO n&+256
+    rson&(i&)=nil&
+  NEXT i&
+  FOR i&=0 TO n&-1
+    dad&(i&)=nil&
+  NEXT i&
+RETURN
+FUNCTION insertnode(r&)
+  $F%
+  LOCAL i&,p&,cmp&
+  LOCAL key%
+  '
+  IF r&>LOC(#infile&)
+    RETURN FALSE
+  ENDIF
+  '
+  cmp&=1
+  key%=V:text_buf|(r&)
+  p&=n&+1+BYTE{key%+0}
+  '
+  rson&(r&)=nil&
+  lson&(r&)=nil&
+  match_length&=0
+  DO
+    IF cmp&>=0
+      IF rson&(p&)<>nil&
+        p&=rson&(p&)
+      ELSE
+        rson&(p&)=r&
+        dad&(r&)=p&
+        RETURN FALSE
+      ENDIF
+    ELSE
+      IF lson&(p&)<>nil&
+        p&=lson&(p&)
+      ELSE
+        lson&(p&)=r&
+        dad&(r&)=p&
+        RETURN FALSE
+      ENDIF
+    ENDIF
+    FOR i&=1 TO f&-1
+      cmp&=BYTE{key%+i&}-text_buf|(p&+i&)
+      EXIT IF cmp&<>0
+    NEXT i&
+    IF i&>match_length&
+      match_position&=r&-p&
+      match_length&=i&
+      EXIT IF match_length&>=f&
+    ENDIF
+  LOOP
+  dad&(r&)=dad&(p&)
+  lson&(r&)=lson&(p&)
+  rson&(r&)=rson&(p&)
+  '
+  dad&(lson&(p&))=r&
+  dad&(rson&(p&))=r&
+  IF rson&(dad&(p&))=p&
+    rson&(dad&(p&))=r&
+  ELSE
+    lson&(dad&(p&))=r&
+  ENDIF
+  dad&(p&)=nil& ! remove p
+  RETURN FALSE
+ENDFUNC
+FUNCTION deletenode(p&)
+  $F%
+  LOCAL q&
+  '
+  IF dad&(p&)=nil&
+    RETURN FALSE   ! not in tree
+  ENDIF
+  IF rson&(p&)=nil&
+    q&=lson&(p&)
+  ELSE IF lson&(p&)=nil&
+    q&=rson&(p&)
+  ELSE
+    q&=lson&(p&)
+    IF rson&(q&)<>nil&
+      DO
+        q&=rson&(q&)
+      LOOP WHILE rson&(q&)<>nil&
+      rson&(dad&(q&))=lson&(q&)
+      dad&(lson&(q&))=dad&(q&)
+      lson&(q&)=lson&(p&)
+      dad&(lson&(p&))=q&
+    ENDIF
+    rson&(q&)=rson&(p&)
+    dad&(rson&(p&))=q&
+  ENDIF
+  dad&(q&)=dad&(p&)
+  IF rson&(dad&(p&))=p&
+    rson&(dad&(p&))=q&
+  ELSE
+    lson&(dad&(p&))=q&
+  ENDIF
+  '
+  dad&(p&)=nil&
+  RETURN FALSE
+ENDFUNC
+> PROCEDURE progress
+  LOCAL progress$
+  progress$="|/-\"
+  '
+  PRINT CHR$(27);"k";MID$(progress$,a&+1,1);CHR$(27);"k";
+  INC a&
+  a&=AND(a&,3)
+  '
+RETURN
+> FUNCTION encode
+  $F%
+  LOCAL i&,c&,len&,r&,s&,last_match_length&,code_buf_ptr&
+  LOCAL mask|
+  LOCAL fl%
+  '
+  ' Determine inputfile length, there must me more elegant ways, though
+  fl%=LOF(#infile&)
+  OUT% #outfile&,CVL("LZ77"),fl%
+  '
+  @inittree  ! Initialize trees
+  code_buf|(0)=&HFF ! Initialise header flags for the first time
+  '
+  code_buf_ptr&=1
+  mask|=&H80 ! Headerbit to be masked out in case of a literal string
+  '
+  s&=0
+  r&=n&-f&
+  FOR i&=s& TO r&-1
+    EXIT IF EOF(#infile&)=TRUE
+    c&=INP(#infile&)
+    text_buf|(i&)=XOR(c&,&HFF) ! Clear the buffer
+  NEXT i&
+  '
+  ' Read F bytes into the last F bytes of the buffer
+  SEEK #infile&,0
+  FOR len&=0 TO f&-1
+    EXIT IF EOF(#infile&)=TRUE
+    c&=INP(#infile&)
+    text_buf|(r&+len&)=c&
+  NEXT len&
+  '
+  textsize%=len&
+  IF textsize%=0
+    RETURN FALSE
+  ENDIF
+  '
+  FOR i&=1 TO f&
+    ~@insertnode(r&-i&) ! Insert the F strings into the tree
+  NEXT i&
+  ~@insertnode(r&)  ! Finally, insert the whole string.
+  '
+  ' Encoding loop
+  DO
+    IF match_length&>len&
+      match_length&=len&
+    ENDIF
+    '
+    ' match is too short or exceeds file entry
+    ' not binary match!
+    ' if ((match_length <= THRESHOLD) ||((ftell(outfile)&0xfff) <= match_position)) {
+    ' gives a warning
+    ' if ((match_length <= THRESHOLD) || (ftell(outfile)&4095 < match_position)) {
+    IF match_length&<=threshold& OR AND(LOC(#outfile&),4095<match_position&) ! works
+      match_length&=1
+      SUB code_buf|(0),mask|     ! Mask out headerbit
+      code_buf|(code_buf_ptr&)=text_buf|(r&) ! Send literally
+      INC code_buf_ptr&
+      '
+      ' otherwise we found a match, so encode it
+    ELSE
+      '
+      code_buf|(code_buf_ptr&)=BYTE(OR(AND(SHR&(match_position&,4),&HF0),match_length&-threshold&)) ! Send index/length pair
+      INC code_buf_ptr&
+      code_buf|(code_buf_ptr&)=BYTE(match_position&)
+      INC code_buf_ptr&
+    ENDIF
+    '
+    mask|=SHR|(mask|,1)
+    IF mask|=0  ! Shift mask right one bit.
+      '
+      FOR i&=0 TO code_buf_ptr&-1 ! Send at most 8 units
+        OUT #outfile&,code_buf|(i&)
+      NEXT i&
+      '
+      ADD codesize%,code_buf_ptr&  ! Reset encoding variables
+      code_buf|(0)=&HFF
+      code_buf_ptr&=1
+      mask|=&H80
+    ENDIF
+    '
+    last_match_length&=match_length&
+    '
+    FOR i&=0 TO last_match_length&-1
+      EXIT IF EOF(#infile&)=TRUE
+      c&=INP(#infile&)
+      '
+      ~@deletenode(s&)    ! Delete old strings and
+      text_buf|(s&)=c&  ! read on
+      '
+      IF s&<f&-1
+        text_buf|(s&+n&)=c& ! Speedup for strings near the end of the input
+      ENDIF
+      '
+      '
+      s&=AND(s&+1,n&-1) ! Keep the ringbuffer's range
+      r&=AND(r&+1,n&-1)
+      '
+      ~@insertnode(r&)  ! Register the string in text_buf[r..r+F-1]
+    NEXT i&
+    '
+    ADD textsize%,i&
+    @progress
+    '
+    WHILE i&<last_match_length&  ! Handle segments after the end of
+      INC i&
+      ~@deletenode(s&)   ! the input
+      s&=AND(s&+1,n&-1)
+      r&=AND(r&+1,n&-1)
+      DEC len&
+      IF len&
+        ~@insertnode(r&)
+      ENDIF
+    WEND
+    '
+  LOOP WHILE len&>0
+  '
+  IF code_buf_ptr&>1  ! Send remaining code.
+    FOR i&=0 TO code_buf_ptr&-1
+      OUT #outfile&,code_buf|(i&)
+    NEXT i&
+    ADD codesize%,code_buf_ptr&
+  ENDIF
+  '
+  IF mask|=&H80   ! Write the EOF flag *bugfix 2004*
+    OUT #outfile&,&H80
+  ENDIF
+  OUT #outfile&,&H0
+  '
+  PRINT "ok."
+  PRINT "Achieved ratio: ";STR$(codesize%*100/textsize%);"%"
+  '
+  RETURN FALSE
+ENDFUNC
+FUNCTION decode
+  $F%
+  LOCAL i&,j&,r&,c&,loop1&
+  LOCAL tag%
+  '
+  SEEK #infile&,4+4 ! Skip original size
+  '
+  r&=n&-f&
+  '
+  DO
+    tag%=INP(#infile&)  ! Load command header
+    '
+    FOR loop1&=0 TO 8-1
+      '
+      ' Decode packed string segment
+      IF AND(tag%,&H80)
+        '
+        ' End of input stream?
+        j&=INP(#infile&)
+        IF EOF(#infile&)=TRUE
+          PRINT "ok."
+          RETURN FALSE
+        ENDIF
+        '
+        i&=INP(#infile&)
+        '
+        i&=OR(i&,AND(SHL&(j&,4),&HF00)) ! Compute position & length of string
+        j&=AND(j&,&HF)
+        '
+        i&=AND(r&-i&,n&-1)
+        '
+        WHILE j&<>-2
+          c&=text_buf|(AND(i&,n&-1)) ! Copy from dictonary
+          INC i&
+          OUT #outfile&,c&
+          text_buf|(r&)=c&
+          INC r&
+          r&=AND(r&,n&-1)
+          DEC j&
+          @progress
+        WEND
+        '
+        ' Restore literal units
+      ELSE
+        c&=INP(#infile&)
+        OUT #outfile&,c&
+        text_buf|(r&)=c&
+        INC r&
+        r&=AND(r&,n&-1)
+        @progress
+      ENDIF
+      '
+      tag%=SHL(tag%,1) ! Next entry
+    NEXT loop1&
+  LOOP
+  RETURN FALSE
+ENDFUNC
+PROCEDURE main
+  ' this proc was totally recoded to use the mouse
+  LOCAL a&,p$
+  '
+  DEFMOUSE 0
+  PRINT
+  PRINT "p LZ77 packer v1.4 ½ by ray//.tSCc. 2003-2005 q"
+  PRINT "p Modified/ported by Lonny Pursell q"
+  PRINT
+  '
+  ALERT 2," |Selection?",3,"Pack|Unpack| Cancel ",a&
+  IF a&<>3
+    p$=CHR$(65+DGETDRV())+":"+DIR$(0)+"\*.*"
+    FILESELECT #"Input file...",p$,"",infile$
+    IF LEN(infile$)
+      FILESELECT #"Output file...",p$,"",outfile$
+      IF LEN(outfile$)
+        OPEN "i",#infile&,infile$
+        OPEN "o",#outfile&,outfile$
+        IF a&=1
+          PRINT "Deflating ";infile$;" ";CHR$(27);"j";
+          ~@encode
+        ELSE IF a&=2
+          PRINT "Inflating ";infile$;" ";CHR$(27);"j";
+          ~@decode
+        ENDIF
+        CLOSE
+      ENDIF
+    ENDIF
+  ENDIF
+  '
+RETURN
+' eof

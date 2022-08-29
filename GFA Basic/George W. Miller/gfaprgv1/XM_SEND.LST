@@ -1,0 +1,214 @@
+'
+Procedure Xmodem_send
+  '
+  Void Xbios(&H15,0)
+  Sget Screen$
+  Fileselect Chr$(Drive+65)+":\*.*",B$,Filename$
+  If Filename$=""
+    Goto Skip_xmodem_send
+  Endif
+  @Have_file
+  If Is_it=-33
+    Alrt$="File doesn't exist!"
+    Alert 1,Alrt$,1,"OK",B
+    Filename$=""
+    Goto Skip_xmodem_send
+  Endif
+  @Do_send
+  Skip_xmodem_send:
+  Cls
+  Sput Screen$
+  Void Xbios(&H15,2)
+  Out 1,Xon
+Return
+'
+Procedure Do_send
+  Ctr=0
+  Tucr=Ucr
+  Ucr=&X10010000          !8 bits, no parity, 1 stop
+  @Rsconf
+  Open "I",#2,Filename$
+  File_length=Lof(#2)
+  Close #2
+  Xblock=Int(File_length/128)+1
+  Cls
+  Ptr%=Varptr(Buf)
+  Y1=180
+  Y2=185
+  If Rez=2
+    Y1=Y1*2
+    Y2=Y2*2
+  Endif
+  Box 45,50,595,Y1
+  Box 40,45,600,Y2
+  Print At(27,10);"XMODEM Protocol (Transmit)"
+  Place=(80-(Len(Filename$)+7))/2
+  Print At(Place,13);"Sending:  ";Upper$(Filename$)
+  Print At(28,15);Xblock;" Xmodem blocks in file."
+  '
+  E_flag=0
+  Block%=0
+  Block_no%=0
+  Void Bios(3,1,17)       !send XON
+  Time_out=Timer
+  Open "I",#3,Filename$
+  '
+  Print At(30,22);"Waiting for response";
+  '
+  Wait_nak:
+  '
+  If Int((Timer-Time_out)/100)=100
+    Goto Cancel
+  Endif
+  '
+  Stat=Inp?(1)
+  If Stat=0
+    Goto Wait_nak
+  Endif
+  Byte%=Bios(2,1)
+  If Byte%<>21
+    Goto Wait_nak
+  Endif
+  Send:
+  Check%=0
+  Try%=0
+  '
+  Do
+    '
+    Inc Block%
+    Exit If Eof(#3)
+    '
+    If Block%=256
+      Block%=0
+      Ctr=1
+    Endif
+    Block%=Block% And 255
+    Block_comp%=255-Block%
+    Check%=0
+    I%=0
+    '
+    ' ************************************************************************
+    Repeat                             !This block slows down the program
+      Poke Ptr%+I%,Inp(#3)             !tried input$ here
+      If Eof(#3)                       !couldn't detect EOF and avoid error.
+        Poke Ptr%+I%,Eot
+        E_flag=1
+        I%=127
+      Endif
+      Inc I%
+    Until I%=128
+    ' ************************************************************************
+    '
+    R_send:
+    '
+    If Ctr=1
+      Dblock%=256+Block%
+    Else
+      Dblock%=Block%
+    Endif
+    Print At(21,22);"Sending Block: ";Dblock%;"  Comp: ";Block_comp%;" Try: ";Try%
+    Void Bios(3,1,1)       !send SOH
+    Void Bios(3,1,Block%)
+    Void Bios(3,1,Block_comp%)
+    I=0
+    Repeat
+      Void Bios(3,1,Buf(I))
+      Check%=(Check%+Buf(I)) And 255
+      Inc I
+    Until I=128
+    Void Bios(3,1,Check%)
+    Time_out=Timer
+    '
+    Wait_ack:
+    If Int((Timer-Time_out)/100)=100
+      Goto Cancel
+    Endif
+    '
+    Stat=Inp?(1)
+    If Stat=0
+      Goto Wait_ack
+    Endif
+    Byte%=Bios(2,1)
+    If Byte%=Ack
+      Try%=0
+      Goto N_loop
+    Endif
+    If Byte%=Nak
+      Inc Try%
+      If Try%=10
+        Goto Cancel
+      Endif
+      Goto R_send
+    Endif
+    If Byte%=Can
+      Goto Cancel
+    Endif
+    '
+    N_loop:
+    If E_flag=1
+      Goto Dne_it
+    Endif
+  Loop
+  '
+  Cancel:
+  Out 1,Can
+  Out 1,Can
+  Out 1,Can
+  Print
+  Print At(10,20);"           Excessive Errors -- Procedure Aborted!!"
+  Print
+  Dne_it:
+  Print At(10,22);"                    Transmission complete!                  "
+  '
+  Count=0
+  Send_eot:
+  If Count=10
+    Goto Enough
+  Endif
+  Void Bios(3,1,Eot)            !send End Of Transmission
+  Stat=Inp?(1)
+  If Stat=0
+    Goto Send_eot
+  Endif
+  Byte%=Bios(2,1)
+  If Byte%<>Ack
+    Goto Send_eot
+    Inc Count
+  Endif
+  '
+  Enough:
+  Close #3
+  I=0
+  Repeat
+    Print Chr$(7);               ! Ring bell
+    Pause 50
+    Inc I
+  Until I=3
+  Pause 100
+  @Rt_bttn
+  @Clear_modem
+  Void Xbios(21,1)
+  '
+  Ucr=Tucr
+  @Rsconf
+  '
+Return
+'
+Procedure Have_file
+  '
+  ' Returns -33 if file does not exist, otherwise expect a 0
+  '
+  Is_it=Gemdos(&H4E,L:Varptr(Filename$))
+  '
+Return
+'
+Procedure Clear_modem
+  '
+  Do
+    Test!=Bios(1,1)
+    Exit If Test!=0
+    Void Inp(1)
+  Loop
+  '
+Return
+'

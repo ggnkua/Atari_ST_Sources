@@ -1,0 +1,171 @@
+' $C+  !not needed for this example, but might be needed for other library calls
+$M65536
+REM #lib new lib !requires GBE Lib!
+'
+CLS
+'
+IF @ldg_libpath("cookies.ldg",t$)=FALSE
+  PRINT "Library cookies.ldg not found"
+  EDIT
+ENDIF
+'
+' open the library
+@open_cookies.ldg
+'
+' dump the address of the cookie jar using the lib
+PRINT "cookie jar address=";@getcookiejar,LPEEK(&H5A0)
+'
+' dump a cookie using the lib
+PRINT "cookie found=";@getcookie(CVL("_CPU"),v%)
+PRINT "cpu=";v%
+'
+' install a cookie
+' PRINT "newcookie=";@newcookie(CVL("_GBE"),32)
+'
+' remove a cookie
+' PRINT "removecookie=";@removecookie(CVL("_GBE"))
+'
+' dump library specific info
+' @ldg_debug(cookies_lib%)
+'
+' done with lib, so close it
+@close_cookies.ldg
+'
+PRINT
+PRINT "done"
+EDIT
+'
+' -- cookies.ldg bindings for test purposes (see cook_ldg.h)
+> PROCEDURE open_cookies.ldg
+  cookies_lib%=@ldg_open("cookies.ldg")
+  IF cookies_lib%>FALSE
+    ' get the addresses for all 4 library calls
+    cookie_getcookiejar%=@ldg_find("Cookie_GetCookieJar",cookies_lib%)
+    cookie_getcookie%=@ldg_find("Cookie_GetCookie",cookies_lib%)
+    cookie_newcookie%=@ldg_find("Cookie_NewCookie",cookies_lib%)
+    cookie_removecookie%=@ldg_find("Cookie_RemoveCookie",cookies_lib%)
+  ELSE
+    PRINT "Error at open_cookies.ldg"
+    EDIT
+  ENDIF
+RETURN
+> PROCEDURE close_cookies.ldg
+  IF @ldg_close(cookies_lib%)<>FALSE
+    PRINT "Error at close_cookies.ldg"
+    EDIT
+  ENDIF
+RETURN
+> FUNCTION getcookiejar
+  $F%
+  RETURN C:cookie_getcookiejar%()
+ENDFUNC
+> FUNCTION getcookie(id%,VAR val%)
+  $F%
+  RETURN C:cookie_getcookie%(L:id%,L:V:val%)=1 !convert to boolean
+ENDFUNC
+> FUNCTION newcookie(id%,val%)
+  $F%
+  RETURN C:cookie_newcookie%(L:id%,L:val%)=1
+ENDFUNC
+> FUNCTION removecookie(id%)
+  $F%
+  RETURN C:cookie_removecookie%(L:id%)=1
+ENDFUNC
+'
+' ---------------------------------------------------------------------------------------
+> PROCEDURE flush_cache !v1.00
+  LOCAL asm%
+  asm%=LONG{HIMEM+28}
+  ~C:asm%()
+RETURN
+' -- LDG bindings by Lonny Pursell v1.00 --
+> FUNCTION ldg_open(lib$)
+  $F%
+  LOCAL bp%,desc%,path$,offsetxt$
+  CLR desc%
+  path$=@ldg_getpath$+lib$+CHR$(0)
+  offsetxt$="OFFSETLDG="+STR$(V:desc%)+CHR$(0)+CHR$(0) !env
+  bp%=GEMDOS(75,W:3,L:V:path$,L:FALSE,L:V:offsetxt$) !pexec()
+  @flush_cache
+  IF bp%>FALSE
+    ~GEMDOS(75,W:4,L:FALSE,L:bp%,L:FALSE) !pexec()
+    @flush_cache
+    ~GEMDOS(265) !pwait()
+    WORD{desc%+6}=WORD{LONG{GB+4}+4} !save appl id
+    LONG{desc%+18}=bp%               !save basepage
+    CHAR{desc%+30}=@ldg_getpath$     !save path
+  ELSE
+    desc%=bp%
+  ENDIF
+  RETURN desc% !lib descriptor, or negative error code
+ENDFUNC
+> FUNCTION ldg_close(desc%)
+  $F%
+  LOCAL bp%,err%
+  bp%=LONG{desc%+18}
+  ~MFREE(LONG{bp%+44}) !env
+  RETURN MFREE(bp%) !0=ok, or negative error code
+ENDFUNC
+> FUNCTION ldg_find(func$,desc%)
+  $F%
+  LOCAL i&,num&,list%,func%
+  CLR func%
+  num&=WORD{desc%+8}
+  LET list%=LONG{desc%+10}
+  FOR i&=0 TO num&-1
+    IF CHAR{LONG{list%}}=func$
+      func%=LONG{list%+8}
+      EXIT IF TRUE
+    ENDIF
+    ADD list%,12
+  NEXT i&
+  RETURN func% !function entry address, 0=not found
+ENDFUNC
+> FUNCTION ldg_libpath(lib$,VAR path$)
+  $F%
+  ' return: true=found, false=not found
+  path$=@ldg_getpath$+lib$
+  RETURN EXIST(path$)
+ENDFUNC
+> FUNCTION ldg_getpath$
+  LOCAL adr%,ret$
+  ~SHEL_ENVRN(adr%,"LDGPATH=")
+  IF adr%
+    ret$=CHAR{adr%}
+  ELSE
+    ' ret$="c:\gemsys\ldg\"
+    ret$=CHR$(65+GEMDOS(25))+":"+DIR$(0)+"\"
+  ENDIF
+  IF RIGHT$(ret$)<>"\"
+    ret$=ret$+"\"
+  ENDIF
+  RETURN ret$ !ldg env library path, or default dir if not found
+ENDFUNC
+> PROCEDURE ldg_debug(desc%)
+  LOCAL i&,num&,list%,info%,func%,name%
+  PRINT "     magic: ";MKL$(LONG{desc%})
+  PRINT "   lib ver: $";HEX$(WORD{desc%+4},4)
+  PRINT "+       id: ";WORD{desc%+6}
+  PRINT "       num: ";WORD{desc%+8}
+  PRINT "      list: ";LONG{desc%+10}
+  PRINT "     infos: ";CHAR{LONG{desc%+14}}
+  PRINT "+ basepage: ";LONG{desc%+18}
+  PRINT "     flags: %";BIN$(WORD{desc%+22},16)
+  PRINT "     close: ";LONG{desc%+24}
+  PRINT " proto ver: $";HEX$(WORD{desc%+28},4)
+  PRINT "+     path: ";CHAR{desc%+30}
+  PRINT "  user_ext: ";LONG{desc%+158}
+  PRINT "- addr_ext: ";LONG{desc%+162}
+  num&=WORD{desc%+8}
+  LET list%=LONG{desc%+10}
+  FOR i&=0 TO num&-1
+    LET name%=LONG{list%}
+    info%=LONG{list%+4}
+    func%=LONG{list%+8}
+    ADD list%,12
+    PRINT "name: ";CHAR{name%}
+    PRINT "info: ";CHAR{info%}
+    PRINT "func: ";func%
+  NEXT i&
+RETURN
+' eof

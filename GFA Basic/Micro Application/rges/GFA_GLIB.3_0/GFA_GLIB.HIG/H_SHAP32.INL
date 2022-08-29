@@ -1,0 +1,15 @@
+effect|=1                            ! commen‡ons par l'effet 1
+'
+GOSUB gfa_poppal__
+palette$=lib_rv__$
+GOSUB gfa_pload__("\EXAMPLES\STUFF\DEMO.PIC",XBIOS(2),2)
+SGET image$                          ! enregistrer dans un string
+'
+REPEAT
+  ALERT 2,"              |              |  Masquer  ",1," OUI ",button|
+  '
+  HIDEM
+  GOSUB gfa_h_fadeof__(XBIOS(2),400,0,10000,effect|,&X1111000011110000)
+  SHOWM
+  '
+  INC effect|                        ! passons … l'effet s
