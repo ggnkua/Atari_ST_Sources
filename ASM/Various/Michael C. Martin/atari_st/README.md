@@ -1,0 +1,5 @@
+# Special Notes for Atari ST Programs
+
+These programs are generally written for use with the [vbcc](http://sun.hasenbraten.de/vbcc/) and [vasm](http://sun.hasenbraten.de/vasm/) toolchains. See [my post at Bumbershoot Software](https://bumbershootsoft.wordpress.com/2021/02/28/a-cross-development-toolchain-for-the-atari-st/) for instructions on getting this toolchain up and running on Windows and Linux.
+
+The source code provided in this directory is, unless otherwise specified, all available under the same MIT license that I use for the rest of the code I distribute here, however, be aware that _binaries created using the vbcc and vasm toolkits add an additional restriction to those binaries,_ forbidding any commercial use of those resulting binaries. An exception is carved out for the tools when they create Amiga binaries, but it does not appear to extend to the Atari ST. This restriction does not propage backwards into the source code, but may propagate forwards if you use the same toolchain.
