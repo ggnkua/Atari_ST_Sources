@@ -1,0 +1,6 @@
+const uint8_t gs_bullet[] = {
+	0x3c,
+	0xff,
+	0xff,
+	0x3c,
+};

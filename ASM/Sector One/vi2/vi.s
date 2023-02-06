@@ -1,0 +1,1376 @@
+*************************************************************************
+*	Videl Inside par Zerkman/Trisomic Development
+* L'ultime utilitaire pour obtenir les r‚solutions les plus grandes sur
+* tous les moniteurs possibles et imaginables sur Falcon030.
+*************************************************************************
+
+* Les infos de num‚ro de version sont situ‚s:
+* - Dans le panneau de config du ressource
+* - Dans le texte de pr‚sentation au boot
+* Ne pas oublier les *! avant l'assemblage de la version finale
+
+*************************************************************************
+* Version 2.04
+*************************************************************************
+
+* Version 2.00á:
+* - Option DX-3 ou non (ce qui ‚vite de perdre trop de temps dans les mises … jour)
+* - Suppression des modes de config
+* - Donn‚es sauvegard‚es dans un fichier externe et non dans le prog principal
+* - La config se fait par un programme ext‚rieur (mˆme au boot)
+* - Suppression de l'ancien cookie et mise en place d'un autre
+*   (qui ne sera pas le mˆme selon l'option DX-3)
+* - Meilleure gestion des erreurs m‚moire en cas de saturation (passage en mode normal)
+
+* Version 2.00:
+* - Diverses corrections d'erreurs "humaines"
+* - PremiŠre version 2.0 diffus‚e
+
+* Version 2.01:
+* - Accompagne le s‚lecteur 1.01. PremiŠre version diffus‚e … grande ‚chelle.
+
+* Version 2.011:
+* - Des conneries de d‚bugguage … Coze de SpeedoGDOS (Volcanic Party 3)
+
+* Version 2.012:
+* - Beu, y'avait un problŠme sans NVDI du coup … cause de la 2.011 ...
+*   Argh c'est pas vrai, moi et mes optimisations … deux francs... Chui
+*   qu'un gros naze, tiens.
+* - Routine d'install d'‚cran physique (install_vdi_n_hardware_vectors) correcte
+*   (avant, l'adresse devait ˆtre … un multiple de 256 (le $ffff820d ‚tait acc‚d‚
+*   en premier, grossiŠre erreur !))
+* - Modif de la routine de sauvegarde dans le NEWDESK.INF, de maniŠre … ce
+*   qu'elle sauve les r‚sos Xbios sur 16 bits et non 12.
+
+* Version 2.03:
+* - Officialisation des versions de test 2.01*.
+* - Refonte de la structure accessible au cookie.
+* - La routine de conversion de modes vid‚o est d‚sormais int‚gr‚e au
+*   noyau. Incompatibilit‚ avec les versions 2.02 et pr‚c‚dentes.
+
+* Version 2.04:
+* - Correction du Xbios 88 pour le TOS 4.02
+* - Pleine gestion des fr‚quences internes et externes.
+
+* A faire:
+* - Modif Xbios 88 (Gestion de l'‚cran virtuel, mais je n'y touche pas tant
+*   que personne ne m'en parle (g otre chose a foutre))
+* - Voir bug TOS 4.04 sans aucun soft en auto.
+* - Refaire la routine de modes vid‚o
+* - D‚dicace … Centek
+* - Bug d'affichage de texte (juste un HOME)
+*************************************************************************
+
+; Constantes:
+;DEBUG				;On met les options de d‚bugguage.
+;DX3				;version pour DX3
+
+; Valeurs des flags d'‚tat et de config
+
+ST_ACTIVE	equ	0	; Mode actuel actif (1 oui, 0 non)
+ST_VIRTUAL	equ	1	; cran virtuel actif
+ST_RQREDRAW	equ	2	; Demande de r‚affichage de l'‚cran au bon endroit
+
+FL_VIRTUAL	equ	0	; Le mode comprend un mode d'‚cran virtuel
+FL_SMOOTH	equ	1	; Scroll au pixel prŠs en mode ‚cran virtuel
+				; (seulement 16/256/65536 couleurs)
+FL_TCORRECT	equ	2	; Correction du seuil de scroll
+FL_INF_UPDATE	equ	3	; Mise-…-jour du NEWDESK.INF
+
+; Options d'assemblage:
+	IFD	DX3
+	output	c:\auto\vi2_dx3.prg
+	ELSE
+	output	c:\auto\vi2.prg
+	ENDC
+
+
+	opt	p=68030,bdw,brw
+	IFD	DEBUG
+	opt	o+,w+,x+
+	ELSE
+	opt	o+,w-,x-
+	ENDC
+
+; Macros:
+	include	tos_030.s
+	include	gemmacro.i
+psh	macro
+	movem.l	\1,-(sp)
+	endm
+pul	macro
+	movem.l	(sp)+,\1
+	endm
+
+	IFD	DX3
+id	equ	'VIDX'		;id de VI 2 pour DX3
+	ELSE
+id	equ	'VI-2'		;id de VI 2 normal
+	ENDC
+
+	section	text
+debut
+	bra.w	start
+; Ici, c'est le buffer qui est point‚ par notre cookie.
+cook
+ck_ver		dc.w	$204	; Num‚ro de version du prog
+ck_size		dc.w	fin_cook-cook	; Taille de la structure du cookie
+ck_state	dc.w	0	; tat actuel du programme
+ck_flags	dc.w	0	; Flags de config du mode
+ck_vmmask	dc.w	$19f	; Masque … appliquer pour comparer les modes vid‚o
+ck_vmode	dc.w	0	; Mode Xbios correspondant au mode ‚tendu
+ck_vwidth	dc.w	0	; largeur virtuelle en pixels
+ck_vheight	dc.w	0	; hauteur virtuelle en lignes
+ck_xthres	dc.w	0	; seuil horizontal de scroll en pixels
+ck_ythres	dc.w	0	; seuil vertical de scroll en lignes
+
+; A partir de l…, structure d'un mode dans VI2.DAT
+ck_mod_flags	dc.w	0	; Les flags du mode (bits 0-3:VCO, 4-6:Couleurs, 7-8:Fr‚quence)
+ck_mod_npix	dc.w	0	; Suivent les mˆmes valeurs que dans ed_mode
+ck_mod_xres	dc.w	0
+ck_mod_xoff	dc.w	0
+ck_mod_nlin	dc.w	0
+ck_mod_yres	dc.w	0
+ck_mod_yoff	dc.w	0
+ck_mod_nom	dcb.b	36,0	; Le commentaire sur le mode vid‚o
+fin_cook
+	dc.l	genere_mode	; C'est pour l'‚diteur de modes.
+
+
+
+; Variables initialis‚es … l'installation de VI :
+type_ecran	dc.w	0	;type d'‚cran sur lequel on a lanc‚ le prog (0-1-2)
+mode_demarrage	dc.w	0	;valeur de xbios(88,-1) au boot
+
+; Variables … initialiser au moment de l'ouverture d'une station de travail
+largeur_logique	dc.w	0	;largeur virtuelle en octets
+largeur_physique
+		dc.w	0	;largeur de l'‚cran en octets
+taille_ecran	dc.l	0
+n_bits_pixel	dc.w	0	; Nombre de bits par pixel
+
+; Le reste :
+coords_vect	dc.l	0	;adresse des coordonn‚es x et y de la souris
+anc_x		dc.w	0	;coordonn‚e x souris sauvegard‚e
+anc_y		dc.w	0	;coordonn‚e y souris sauvegard‚e
+x_ecr		dc.w	0	;coordonn‚e x (virtuelle) du coin superieur gauche de l'‚cran (r‚el)
+y_ecr		dc.w	0	;coordonn‚e y (virtuelle) du coin superieur gauche de l'‚cran (r‚el)
+vdipb		dc.l	0
+adresse_logique	dc.l	0
+adresse_physique
+		dc.l	0
+fuck_res	dc.w	0	;r‚so Xbios en fermant l'‚cran (pour tester … la r‚ouverture)
+				;‚galement mise en place au boot (mˆmes raisons)
+
+;sc_vect	dc.w	$8282,$8284,$8286,$8288,$828a,$828c,$82a2,$82a4,$82a6,$82a8,$82aa,$82ac,$8210,$82c2,$82c0
+;		==>	 HHT   HBB   HBE   HDB   HDE   HSS   VFT   VBB   VBE   VDB   VDE   VSS  Width  VCO   RCO
+
+sauve_hdb	dc.w	0	;On sauve la valeur de hdb
+
+	dc.b	'XBRA'
+	dc.l	id
+anc_gem	dc.l	0
+my_gem
+	cmp	#115,d0		;appel VDI ?
+	bne.s	mgde		;non : hasta la vista, baby
+
+	move.l	d1,a0		;tableau global
+	move.l	(a0),a0		;tableau control
+	cmp	#1,(a0)		;appel v_opnwk() (control[0]==1) ?
+	beq.s	v_openwk	;oui : on y go
+	cmp	#2,(a0)		;appel v_clswk() ?
+	beq.s	v_clswk		;oui : on y go
+
+mgde	jmp	([anc_gem.w,pc])
+
+v_clswk
+	move.l	d1,a0		; tableau global
+	move.l	4(a0),a0	; tableau intin
+	cmp	#11,(a0)	; Si no de p‚riph‚rique trop grand
+	bpl	mgde		; alors c'est pas un ‚cran.
+	tst	(a0)		; si trop petit
+	ble	mgde		; c'est pas un ‚cran non plus.
+	psh	d0-d2/a0-a2
+	move	#-1,-(sp)
+	Xbios	Vsetmode
+	move	d0,fuck_res
+	bsr	init_variables
+	pul	d0-d2/a0-a2
+	bra	mgde
+
+v_openwk
+	move.l	d1,a0		; tableau global
+	move.l	4(a0),a0	; tableau intin
+	cmp	#11,(a0)	; Si no de p‚riph‚rique trop grand
+	bpl	mgde		; alors c'est pas un ‚cran.
+	tst	(a0)		; si trop petit
+	ble	mgde		; c'est pas un ‚cran non plus.
+
+	move.l	d1,vdipb
+	clr	-(sp)		; D‚tournement sauvage de la fin de l'appel
+	pea	install(pc)	; VDI... On empile un stack frame fictif, et
+	move	sr,-(sp)	; on y place le PC et le SR qu'on veut...
+	bra	mgde
+
+install
+	psh	d0-d4/a0-a2
+	pea	$58ffff
+	trap	#14
+	addq.l	#4,sp			;r‚cup‚ration du mode vid‚o actuel dans d0
+
+	move	ck_vmode(pc),d1
+	eor	d0,d1			; Comparaison brutale et violente
+	and	ck_vmmask(pc),d1	; On vire les bits qui font chier
+	bne	v_openwk_pul		; Eskeu c'est notre r‚so ? non ? donc mode normal.
+
+	move	fuck_res(pc),d1		; Comparaison brutale et violente
+	eor	d0,d1			; Pourquoi tant de haine ?
+	and	ck_vmmask(pc),d1	; La r‚so aktuelle est la mˆme k'avant ?
+	bne.s	pas_meme_reso_k_avant
+
+	move	d0,-(sp)	; Ici on passe dans la mˆme r‚so que celle o— on est d‚ja,
+	move	#3,-(sp)	; car en fait le mode a ‚t‚ modifi‚, mais le systŠme ne
+	pea	-1.w		; le sait pas. Il croit qu'on est toujours dans le mˆme,
+	pea	-1.w		; alors il juge inutile de changer de mode vid‚o. Il est con,
+				; non ? Dans les autres cas (modes xbios diff‚rents), le
+	Xbios	Setscreen030	; systŠme change de mode tout seul, donc y'a rien … faire.
+
+pas_meme_reso_k_avant
+	dc.w	$a000			; Code pas propre pour avoir la table Line-A.
+	move	ck_mod_flags(pc),d1	; VCO avec des flags en plus
+	move	type_ecran(pc),d0
+	cmp	#1,d0
+	beq.s	.rgb
+	btst	#1,d1		;mode entrelac‚ en mono ou VGA ?
+	beq.s	.la
+	move	-692+8(a0),d0	;Hauteur d'1 pixel
+	asr	#1,d0
+	move	d0,-692+8(a0)
+	bra.s	.la
+.rgb	btst	#3,d1		;mode super Hi-res (1280c) en rgb ?
+	beq.s	.la
+	move	-692+6(a0),d0	;Largeur d'1 pixel
+	asr	d0
+	move	d0,-692+6(a0)
+.la
+	movem.w	ck_xthres(pc),d0-d1
+	movem.w	ck_mod_xres(pc),d2-d3
+	btst	#FL_TCORRECT,ck_flags+1
+	beq.s	.no_correct
+	move	d0,d1
+	mulu	-692+6(a0),d1
+	divu	-692+8(a0),d1
+.no_correct
+	move	d0,d4
+	add	d4,d4
+	cmp	d2,d4
+	bmi.s	.ok1
+	move	d2,d0
+	lsr	d0
+	subq	#1,d0
+.ok1	move	d0,ck_xthres
+
+	move	d1,d4
+	add	d4,d4
+	cmp	d3,d4
+	bmi.s	.ok2
+	move	d3,d1
+	lsr	d1
+	subq	#1,d1
+.ok2	move	d1,ck_ythres
+
+	move.l	([vdipb.w,pc],12.w),a1	;tableau int_out
+
+	move.w	ck_vwidth(pc),d0
+	subq.w	#1,d0
+	move.w	d0,(a1)		;modifie la largeur
+	move.w	ck_vheight(pc),d0
+	subq.w	#1,d0
+	move.w	d0,2(a1)	;modifie la hauteur
+
+	move	n_bits_pixel(pc),d0	; Nombre de bits/pixel
+
+	cmpi.w	#8,d0
+	bmi.s	.suite
+	moveq	#8,d0		;on ne dispose que de 256 couleurs VDI en true color
+.suite	moveq	#1,d1
+	lsl.w	d0,d1
+	move.w	d1,26(a1)	;nombre de couleurs VDI
+
+	bsr.s	install_vdi_n_hardware_vectors
+
+v_openwk_pul
+	pul	d0-d4/a0-a2
+	rte
+
+
+install_vdi_n_hardware_vectors
+	bsr	install_hard_vectors	;videl
+	move.l	adresse_logique(pc),d0	;‚cran logique (grand ‚cran)
+	move.l	d0,d1
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w		;‚cran physique
+	bsr.s	inst_linea		;les variables line_a
+	move.l	([coords_vect.w,pc]),anc_x
+	clr.l	x_ecr
+
+	rts
+
+inst_linea
+	dc.w	$a000
+	lea	-602(a0),a1
+	move.l	a1,coords_vect
+	move	ck_mod_xres(pc),d0
+	lsr	d0
+	swap	d0
+	move	ck_mod_yres(pc),d0
+	lsr	d0
+	move.l	d0,(a1)
+	move	largeur_logique(pc),d1
+
+	move	d1,2(a0)	;octets par ligne
+	move	d1,-2(a0)	;Largeur MFBD de l'‚cran
+	move	ck_vheight(pc),-4(a0)	;R‚solution verticale en points ‚cran
+	move	ck_vwidth(pc),-12(a0)	;R‚solution horizontale en points ‚cran
+	moveq	#0,d0
+	move	d1,d0
+	divu	n_bits_pixel(pc),d0
+	subq	#1,d0
+	move	d0,-44(a0)	;Nombre	de caractŠres de texte par ligne -1
+
+	move	-46(a0),d0
+
+	mulu	d0,d1
+	move	d1,-40(a0)	;Offset en octets par rapport … la ligne suivante
+	moveq	#0,d1
+	move	ck_vheight(pc),d1
+	divu	d0,d1
+	subq	#1,d1
+	move	d1,-42(a0)	;Nombre de lignes de texte -1
+	move	ck_vwidth(pc),d1
+	subq	#1,d1
+	move	d1,-692(a0)
+	move	ck_vheight(pc),d0
+	subq	#1,d0
+	move	d0,-690(a0)
+
+.rts	rts
+
+; Nouvelle routine pour un nouveau contrat-confiance
+install_hard_vectors
+	IFND	DX3
+	clr.b	$ffff820a.w
+	ENDC
+
+	lea	ck_mod_flags(pc),a0
+	bsr	genere_mode
+
+	move	largeur_logique(pc),d0
+	sub	largeur_physique(pc),d0
+	lsr	d0
+	move	d0,$ffff820e.w
+	clr.b	$ffff8265.w
+
+	move	$ffff8288.w,sauve_hdb	; On sauve hdb
+
+	rts
+
+	dc.b	'XBRA'
+	dc.l	id
+anc_vbl	dc.l	0
+my_vbl	psh	d0-d7/a0
+
+	move	anc_x(pc),d0		;ancienne position x de la souris
+	move	anc_y(pc),d1		;ancienne position y de la souris
+
+;	move.l	coords_vect(pc),a0
+;	move	(a0)+,d2		;x souris
+;	move	(a0)+,d3		;y souris
+	movem.w	([coords_vect.w,pc]),d2-d3	;‚quivalent 68030 des 3 lignes comment‚es
+
+	cmp	d0,d2
+	bne.s	new_coords
+	cmp	d1,d3
+	beq	vbl3
+
+new_coords
+	move	d2,anc_x
+	move	d3,anc_y
+	moveq	#0,d3
+	move	n_bits_pixel(pc),d4
+	btst	#ST_RQREDRAW,ck_state+1
+	sne	d3
+	bne	vbl_endtest
+
+	move	x_ecr(pc),d0
+	add.w	ck_xthres(pc),d0	;x_ecr + dist
+	cmp	d0,d2			;mouse_x >= (x_ecr + dist) ?
+	bpl.s	ct1
+
+	sub	ck_xthres(pc),d2
+	bpl.s	.la
+	moveq	#0,d2
+.la	move	d2,x_ecr
+	moveq	#1,d3
+	bra.s	y_test
+
+ct1
+	move	x_ecr(pc),d0
+	cmp	#1,d4
+	beq.s	ct_mono
+	cmp	#2,d4
+	beq.s	ct_4col
+
+	add	ck_mod_xres(pc),d0
+	sub	ck_xthres(pc),d0
+	cmp	d0,d2
+	bmi.s	y_test
+
+	add	ck_xthres(pc),d2
+	sub	ck_mod_xres(pc),d2
+	addq	#1,d2
+ct1b	move	ck_vwidth(pc),d0
+	sub	ck_mod_xres(pc),d0
+	cmp	d0,d2
+	bmi.s	.la
+	move	d0,d2
+.la	move	d2,x_ecr
+	moveq	#1,d3
+	bra.s	y_test
+
+ct_mono
+	sub	ck_mod_xres(pc),d2
+	add	#32,d2
+	add	ck_xthres(pc),d2
+
+	cmp	d0,d2
+	bmi.s	y_test
+	bra.s	ct1b
+ct_4col
+	sub	ck_mod_xres(pc),d2
+	add	#16,d2
+	add	ck_xthres(pc),d2
+
+	cmp	d0,d2
+	bmi.s	y_test
+	bra.s	ct1b
+
+y_test
+	move	anc_y(pc),d2
+	move	y_ecr(pc),d0
+	add.w	ck_ythres(pc),d0
+	cmp	d0,d2			;si la souris n'est pas trop en haut
+	bpl.s	ct2
+
+	sub	ck_ythres(pc),d2
+	bpl.s	.la
+	moveq	#0,d2
+.la	move	d2,y_ecr
+	moveq	#1,d3
+	bra.s	vbl_endtest
+
+ct2	move	y_ecr(pc),d0
+	add	ck_mod_yres(pc),d0
+	sub	ck_ythres(pc),d0
+	cmp	d0,d2
+	bmi.s	vbl_endtest
+
+	add	ck_ythres(pc),d2
+	sub	ck_mod_yres(pc),d2
+	addq	#1,d2
+	move	ck_vheight(pc),d0
+	sub	ck_mod_yres(pc),d0
+	cmp	d0,d2
+	bmi.s	.la
+	move	d0,d2
+.la	move	d2,y_ecr
+	moveq	#1,d3
+
+vbl_endtest
+	tst	d3
+	beq	vbl3
+	bclr	#ST_RQREDRAW,ck_state+1
+
+	move.l	adresse_logique(pc),d0
+	move	largeur_logique(pc),d1
+	mulu	y_ecr(pc),d1
+	add.l	d1,d0
+
+	move	largeur_physique(pc),d5
+	moveq	#0,d1
+	move	x_ecr(pc),d1
+	move	d1,d2
+	move	largeur_logique(pc),d3
+	sub	d5,d3
+	lsr	d3
+	cmp	#16,d4
+	beq.s	.tc
+	cmp	#1,d4
+	beq.s	.mono
+	cmp	#2,d4
+	beq.s	.4c
+
+	and	#$fff0,d1
+	mulu	d4,d1
+	lsr.l	#3,d1
+	add.l	d1,d0
+	and	#$f,d2
+	beq.s	.ici
+	sub	d4,d3
+	bra.s	.ici
+
+.mono
+	and	#$ffe0,d1
+	lsr.l	#3,d1
+	add.l	d1,d0
+	moveq	#0,d2
+	bra.s	.ici
+.4c
+	and	#$fff0,d1
+	lsr.l	#2,d1
+	add.l	d1,d0
+	moveq	#0,d2
+	bra.s	.ici
+
+.tc
+	lsr	d5
+	move	sauve_hdb(pc),d6	;hdb
+	btst	#0,d2
+	beq.s	.tc_no_decal
+; Ici on d‚cale l'‚cran d'un pixel
+	addq	#2,d5		; Largeur ‚cran + 2 mots
+	subq	#2,d3		; du coup on en saute 2 en moins
+	subq	#1,d6		; on enlŠve 1 … hdb
+.tc_no_decal
+	move	d6,$ffff8288.w	; nouveau hdb
+	move	d5,$ffff8210.w	; nouvelle largeur
+
+	and	#$fffe,d1
+	lsl.l	#1,d1
+	add.l	d1,d0
+	moveq	#0,d2
+
+.ici
+	cmp.l	adresse_physique(pc),d0
+	sne	d4
+	move.l	d0,adresse_physique
+
+	move	d0,d1
+	lsr.w	#8,d0
+	move.b	d2,$ffff8265.w
+	move	d3,$ffff820e.w
+	tst	d4
+	beq.s	.la
+
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+
+	move.l	d0,$ffff8204.w
+	move.b	d1,$ffff8209.w
+.la
+vbl3	pul	d0-d7/a0
+	jmp	([anc_vbl.w,pc])
+
+
+	dc.b	'XBRA'
+	dc.l	id
+anc_xbios
+	dc.l	0
+
+my_xbios
+	lea	8(sp),a0	;Pointeur de pile+6 dans a0
+	btst.b	#5,(sp)		;Mode superviseur ?
+	bne.s	supfnd
+	move.l	usp,a0		;User => usp dans a0
+
+supfnd	cmp	#5,(a0)		;xbios(5) appel‚ ?
+	beq.s	xbios5		;oui : on va voir
+	cmp	#88,(a0)	;xbios(88) appel‚ ?
+	beq	xbios88
+	cmp	#91,(a0)
+	beq	xbios91
+
+le_xbios
+	jmp	([anc_xbios.w,pc])
+
+xbios5
+	move.l	6(a0),d0	;adresse physique
+	bmi.s	.ici		;si n‚gatif on ne touche pas … l'adresse vid‚o
+	move.l	d0,adresse_logique	;nouvelle adresse ‚cran virtuel
+	bset	#ST_RQREDRAW,ck_state+1	;on force un nouveau redraw par la VBL
+.ici
+	move	10(a0),d0	;on veut changer la r‚so ???
+	bmi	le_xbios	;non: alors on ex‚cute le xbios standard
+	IFND	DX3
+	clr.b	$ffff820a.w
+	ENDC
+	btst	#ST_VIRTUAL,ck_state+1	;l'‚cran virtuel est actuellement install‚ ?
+	beq.s	.la		;non : on passe … la suite
+
+	lea	$70.w,a1	;adresse o— l'on va sauver l'ancienne routine
+.bcl
+	move.l	(a1),a2		;la routine qui s'y trouve
+	cmp.l	#"XBRA",-12(a2)	;cette routine est une XBRA ?
+	bne.s	.okxbra		;non, ben tant pis pour elle
+	cmp.l	#id,-8(a2)	;c'est notre routine ?
+	beq.s	.okxbra		;oui : on sort
+	lea	-4(a2),a1	;sinon la nouvelle adresse c'est son pointeur XBRA
+	bra.s	.bcl
+.okxbra
+	move.l	anc_vbl(pc),(a1)	;remet l'ancienne VBL … sa place
+
+	clr.b	$ffff8265.w	;fixe Hscroll … z‚ro (sinon d‚calage 15 fois sur 16)
+	bclr	#ST_VIRTUAL,ck_state+1	;fixe le flag … z‚ro
+.la
+	tst	type_ecran(pc)	;on est sur moniteur monochrome?
+	beq.s	xb5_mono
+
+	cmp	#3,d0		;r‚so compatible ST ?
+	beq.s	xb5_reso_falcon
+	IFD	DX3
+le_xbios_25
+	move.b	#%10010101,$fffffc04.w	; On passe la fr‚q 25 MHz … 25 MHz
+	ENDC
+	bra	le_xbios	;oui: on laisse le boulot au xbios
+xb5_reso_falcon
+	move	12(a0),d0	;r‚so demand‚e
+	and	ck_vmmask(pc),d0
+	cmp	ck_vmode(pc),d0	;r‚so de config ???
+	IFD	DX3
+	bne	le_xbios_25	;non: goto xbios
+	ELSE
+	bne	le_xbios	;non: goto xbios
+	ENDC
+
+xb5_mono
+	tst.l	2(a0)		; Test de l'adresse logique
+	sle	d0
+	tst.l	6(a0)		; Test de l'adresse physique
+	ble.s	.x
+	moveq	#0,d0
+.x	move	d0,-(sp)
+
+	lea	14(a0),a0
+	move.l	-(a0),-(sp)	;rez.w,mode.w
+	move.l	-(a0),-(sp)	;‚cran physique
+	move.l	-(a0),-(sp)	;‚cran logique
+	move	-(a0),-(sp)	;5
+	clr	-(sp)		;pour le stack frame (68030 rulz !!!)
+	pea	xbios5_return(pc)	;l'adresse de retour
+	move	sr,-(sp)	;le sr (non ? si !)
+	bra	le_xbios
+xbios5_return
+	lea	14(sp),sp
+
+	move	(sp)+,d0
+	beq.s	xbios5_pas_alloc
+xbios5_alloc
+	move.l	taille_ecran(pc),-(sp)
+	Gemdos	Srealloc
+	move.l	d0,$44e.w	;nouvelle adresse ‚cran
+	move.l	d0,adresse_logique
+xbios5_pas_alloc
+	bsr	install_vdi_n_hardware_vectors
+
+	btst	#FL_VIRTUAL,ck_flags+1
+	beq.s	.suite
+	bset	#ST_VIRTUAL,ck_state+1
+	move.l	$70.w,anc_vbl
+	move.l	#my_vbl,$70.w
+.suite
+	moveq	#0,d0
+	rte
+
+xbios88
+	move	2(a0),d0
+	bmi	le_xbios
+	IFND	DX3
+	clr.b	$ffff820a.w
+	ENDC
+	and	ck_vmmask(pc),d0
+	cmp	ck_vmode(pc),d0
+	IFD	DX3
+	bne	le_xbios_25
+	ELSE
+	bne	le_xbios
+	ENDC
+	move.l	(a0),-(sp)	;88.w,mode.w
+	clr	-(sp)		;pour le stack frame
+	pea	xbios88_return(pc)	;l'adresse de retour
+	move	sr,-(sp)	;le sr (non ? si !)
+	bra	le_xbios
+xbios88_return
+	addq.l	#4,sp
+	move.l	d0,-(sp)
+	move.w	(2.w,[$4f2.w]),d0	; Version du TOS
+	cmp.w	#$404,d0	; TOS 4.04 ou plus ?
+	bpl.s	xb88_404	; Oui, on ne change que les vecteurs hard
+	bsr	install_vdi_n_hardware_vectors
+	bra.s	xb88_402
+xb88_404
+	bsr	install_hard_vectors
+xb88_402
+	move.l	(sp)+,d0
+	rte
+
+xbios91
+	move	2(a0),d0
+	and	ck_vmmask(pc),d0
+	cmp	ck_vmode(pc),d0
+	bne	le_xbios
+
+	move.l	taille_ecran(pc),d0
+
+	rte
+
+; Mise … jour des variables internes au programme (non accessibles
+; l‚galement par le premier venu)
+init_variables
+	psh	d0-d1/a1
+	lea	cook(pc),a1
+
+	move	ck_vmode(pc),d0	; Mode vid‚o
+	and	#7,d0		; On isole le mode de couleur
+	moveq	#1,d1
+	lsl	d0,d1		; Nombre de bits par pixel
+	move	d1,n_bits_pixel-cook(a1)
+
+	moveq	#0,d1
+	move	ck_mod_xres(pc),d1	; Largeur de l'‚cran en pixels
+	lsl.l	d0,d1		; * nombre de bits/pixel
+	lsr.l	#3,d1		; / 8 = largeur d'une ligne en octets
+	move	d1,largeur_physique-cook(a1)
+
+	moveq	#0,d1
+	move	ck_vwidth(pc),d1	; Largeur de l'‚cran virtuel en pixels
+	lsl.l	d0,d1
+	lsr.l	#3,d1
+	move	d1,largeur_logique-cook(a1)
+
+	mulu	ck_vheight(pc),d1
+	move.l	d1,taille_ecran-cook(a1)
+
+	pul	d0-d1/a1
+	rts
+
+
+****************************************************************************
+* Nouveaut‚ 2.03
+****************************************************************************
+
+; Routine de g‚n‚ration de modes vid‚o capable de g‚n‚rer tout mode graphique autre
+; que les modes compatibles ST basse et moyenne r‚solution (modes 4096 couleurs)
+; ½ 1995-96 Zerkman / Trisomic Development
+
+;ParamŠtres … fournir en entr‚e:
+; a0 = adresse du tableau de mots d'entr‚e (structure VIDEO_MODE)
+; a1 = adresse du tableau de mots de sortie (structure VIDEO_REGS je crois)
+
+; entr‚e:
+flags	equ	0
+npix	equ	2
+xres	equ	4
+xdec	equ	6
+nlin	equ	8
+yres	equ	10
+ydec	equ	12
+
+; Declaration des variables locales
+	RSRESET
+sg_hht		rs.w	1
+sg_hbb		rs.w	1
+sg_hbe		rs.w	1
+sg_hss		rs.w	1
+sg_width	rs.w	1
+sg_SIZE		rs.w	1
+
+*** D‚but de la routine de g‚n‚ration de modes vid‚o ***
+	section	text
+
+genere_mode:
+	movem.l	d1-d7/a2,-(sp)
+	sub.w	#sg_SIZE,sp
+	movem.w	npix(a0),d0-d2	;d0 = npix
+				;d1 = xres
+				;d2 = xdec
+
+	moveq	#1,d7		;pour diviser la nb de pixels par 2
+	btst.b	#3,flags+1(a0)
+	beq.s	pashaut
+	moveq	#2,d7		;div par 4 parce qu'en haute rez les pixels sont doubl‚s
+pashaut:
+	lsr	d7,d0		;conversion pixels -> double pixels
+	lsr	d7,d1
+	lsr	d7,d2
+
+	moveq	#$2f,d5
+	move	flags(a0),d6
+	and	#3<<2,d6
+	bne.s	pas_basse
+	moveq	#$17,d5		;on divise par 2 (basse r‚s.)
+pas_basse:
+	move	d0,d7
+	subq	#1,d7
+	move	d7,sg_hht(sp)	;hht = npix/2 - 1
+	sub	d5,d7
+	move	d7,sg_hss(sp)	;hss = npix/2 - $30
+
+	move	d2,sg_hbe(sp)	;hbe = xdec/2
+	move	d2,d7
+	sub	d0,d7
+	move	d1,d6
+	add	d6,d6
+	add	d6,d7
+	subq	#1,d7
+	move	d7,sg_hbb(sp)	;hbb = xdec/2 - npix/2 + xres - 1
+
+	move	d2,d6
+	add	d0,d6		;hbe + npix -> "a", hbb -> "b"
+
+	move	flags(a0),d5
+	lsr	#4,d5
+	and	#7,d5		;log2 (Nombre de vits/pixel)
+
+	move	xres(a0),d4
+	lsl	d5,d4		;* nombre de bitplans
+	lsr	#4,d4		;taille en mots et non en bits
+	move	d4,sg_width(sp)
+
+	lea	decalages_tbl(pc,d5.w*8),a2
+	bra.s	decal_fin
+
+decalages_tbl:
+	dc.b	$0,$0,$0,$0,$69,$41,$0,$0	;2 couleurs 32 MHz
+
+	dc.b	$42,$22,$52,$22,$39,$9,0,0	;4 couleurs (faux)
+	dc.b	$42,$22,$52,$22,$39,$9,0,0	;16 couleurs
+	dc.b	$32,$12,$42,$12,$31,$9,0,0	;256 couleurs
+	dc.b	$20,$0,$30,$0,0,0		;True Color
+coul_tbl:
+	dc.w	$400,$0,$0,$10,$100
+
+decal_fin:
+	move	flags(a0),d3
+	lsr	#2,d3
+	and	#3,d3
+	lea	(a2,d3.w*2),a2
+	moveq	#0,d3
+	moveq	#0,d4
+	move.b	(a2)+,d3
+	move.b	(a2),d4
+	move	d4,d5
+	or	d3,d5
+	beq	sv_error	;si les 2 octets sont nuls
+	sub.w	d3,d6
+	sub.w	d4,d7
+
+	bfextu	flags(a0){9:3},d4
+	move	coul_tbl(pc,d4.w*2),$ffff8266.w
+	move	(sp)+,$ffff8282.w
+	move	(sp)+,$ffff8284.w
+	move	(sp)+,$ffff8286.w
+	move	(sp)+,$ffff828c.w
+	move	(sp)+,$ffff8210.w
+
+	cmp	d6,d0		;a < npix/2 [/4] ?
+	bpl.s	sup_eg
+	sub	d0,d6
+	subq	#1,d6
+	bra.s	inf
+sup_eg:	add.w	#$200,d6
+inf:	move	d6,$ffff8288.w
+
+	bftst	flags(a0){9:3}
+	bne.s	pas_mono
+
+	move	d1,d6
+*	lsr	d6
+*	btst	#3,vmode+1(a0)
+*	beq.s	pas_quadr
+*	lsr	d6
+*pas_quadr
+	neg	d6
+	and	#$1f,d6
+	add	d6,d6
+	add	d6,d7
+
+pas_mono:
+	move	d7,$ffff828a.w
+
+	movem.w	nlin(a0),d0-d2
+
+	add	d0,d0		;on compte ici en double lignes
+	add	d1,d1
+	add	d2,d2
+
+	move	flags(a0),d4
+	btst	#1,d4
+	beq.s	non_entrelace
+	lsr	d1		;yres / 2
+non_entrelace:
+	btst	#0,d4
+	beq.s	simple_ligne
+	add	d1,d1		;yres * 2
+simple_ligne:
+
+	moveq	#0,d5
+	btst	#1,d4		;mode entrelac‚ ?
+	beq.s	pas_entrelace
+	moveq	#1,d5
+pas_entrelace:
+	move	d0,d3
+	subq	#7,d3
+	move	d3,$ffff82ac.w
+
+	addq	#6,d3
+	sub	d5,d3
+	move	d3,$ffff82a2.w
+
+	move	d2,d3		;ydec * 2
+	sub	d5,d3
+	addq	#1,d3
+	move	d3,$ffff82a6.w
+	move	d3,$ffff82a8.w
+	add	d1,d3		;yres * 2
+	move	d3,$ffff82aa.w
+
+*! 0, 1, ou 2 fois la ligne suivante ???
+	add	d5,d3
+	add	d5,d3
+	move	d3,$ffff82a4.w
+
+	move	#$186,d5
+	bfextu	flags(a0){7:2},d0	;mode 25 MHz ?
+	beq.s	mhz_25
+	move	#$182,d5
+
+	IFD	DX3
+	cmp	#2,d0		; Mode 40 MHz ?
+	beq.s	mhz_25
+	move	#$186,d5	; Sinon c'est le mode 32 ou 50 MHz
+	move.b	#%11010101,$fffffc04.w	; Passe le 25 MHz en 32 ou 50
+	bra.s	mhz_50
+mhz_25:
+	move.b	#%10010101,$fffffc04.w	; Passe le 25 MHz en 25
+mhz_50:
+	ELSE
+mhz_25:
+	cmp	#2,d0		; Fr‚quence externe ?
+	bne.s	pas_externe
+	move.b	#1,$ffff820a.w	; On passe en fr‚quence externe
+pas_externe
+	ENDC
+
+	btst	#1,d4		;si entrelac‚
+	beq.s	no_int
+	bset	#3,d5		;le bit zarb de RCO
+no_int:	move	d5,$ffff82c0.w	;hop, on change la fr‚quence interne
+
+	move	d4,$ffff82c2.w	; VCO
+
+	moveq	#1,d0
+fin_set_vid:
+	movem.l	(sp)+,d1-d7/a2
+	rts
+sv_error:
+	moveq	#0,d0
+	add	#sg_SIZE,sp
+	bra.s	fin_set_vid
+
+end_resident
+
+********* section d'initialisation du soft ***************
+start
+	StartUp	$400
+
+	clr.l	-(sp)
+	Gemdos	Super
+	move.l	d0,-(sp)
+
+	moveq	#0,d7
+	move.l	$5a0.w,a0
+cherche_akp_bcl
+	tst.l	(a0)
+	beq.s	akp_pas_trouve
+	cmp.l	#'_AKP',(a0)+	; C'est le cookie d'identification de la langue ?
+	beq.s	akp_trouve
+	addq.l	#4,a0
+	bra	cherche_akp_bcl
+akp_trouve
+	move.l	(a0),d7
+	lsr	#8,d7
+	and	#255,d7
+akp_pas_trouve
+	Gemdos	Super
+	move	d7,langue
+
+	Xbios	mon_type
+
+	cmp	#3,d0
+	bne.s	.suite
+	moveq	#1,d0
+.suite	move	d0,type_ecran
+
+	clr	global		;on positionne global(0) … 0
+	appl_init
+	tst	global(pc)	;si global(0) est toujours … 0 apr‚s le appl_init()
+	beq	boot_executed	;c'est que l'aes n'est pas install‚, donc on est en AUTO
+
+;	move	d0,ap_id
+
+	lea	gem_alert_fr(pc),a0
+	cmp	#2,d7		;on cause fran‡ais ici ?
+	beq.s	appel_boite
+	lea	gem_alert_uk(pc),a0
+appel_boite
+	form_alert #1,a0
+
+*** Sortie du programme ***
+	appl_exit
+	Gemdos	Pterm0
+
+boot_executed
+	move	#-1,-(sp)
+	Bios	Kbshift
+
+	move	d0,d7
+
+	lea	hello(pc),a0
+	bsr	print
+
+	btst	#1,d7		;test Shift gauche
+	beq.s	authorized
+
+requete_abandon
+	lea	abandon_uk(pc),a0
+	cmp	#2,langue
+	bne.s	.la
+	lea	abandon_fr(pc),a0
+.la
+	bsr	print
+
+	Gemdos	Crawcin
+	cmp.b	#'o',d0
+	beq.s	authorized
+	cmp.b	#'O',d0
+	beq.s	authorized
+	cmp.b	#'y',d0
+	beq.s	authorized
+	cmp.b	#'Y',d0
+	beq.s	authorized
+
+abort_exit
+	lea	aborted_uk(pc),a0
+	cmp	#2,langue
+	bne.s	.la
+	lea	aborted_fr(pc),a0
+.la
+	bsr	print
+	clr	-(sp)
+	trap	#1
+
+authorized
+	move	#-1,-(sp)
+	Xbios	Vsetmode
+	move	d0,fuck_res
+
+	clr.l	-(sp)
+	Gemdos	Super
+	move.l	d0,-(sp)
+
+	move.l	$5a0.w,a0	;adresse du cookie jar
+.tst	cmp.l	#id,(a0)
+	beq	already_installed
+	tst.l	(a0)
+	beq.s	.fintst
+	addq.l	#8,a0
+	bra.s	.tst
+.fintst
+	move.l	a0,cookie_vide
+	Gemdos	Super
+
+	move	#-1,-(sp)
+	Xbios	Vsetmode
+
+	and	ck_vmmask(pc),d0
+	move	d0,mode_demarrage
+
+	bsr	charge_inf		; Chargement du VI2.INF
+;	tst	d0
+;	beq.s	chargement_ok
+;	nop
+;chargement_ok
+	tst	ck_vmode(pc)
+	beq	end_newdesk_update
+
+	bsr	init_variables
+	btst	#FL_INF_UPDATE,ck_flags+1
+	beq	end_newdesk_update
+
+; Conception de la donn‚e … ins‚rer dans le fichier NEWDESK.INF
+	move	ck_vmode(pc),d0
+	moveq	#3,d1		; Compteur de boucle
+sauve_ndkinf_bcl
+	rol.w	#4,d0
+	lsl.l	#8,d6
+	move	d0,d2
+	and	#$f,d2
+	move.b	hex_tbl(pc,d2),d6
+	dbra	d1,sauve_ndkinf_bcl
+	move.l	d6,asc_buf
+
+	move	#2,-(sp)	;lecture & ‚criture
+	pea	newdesk_inf(pc)
+	Gemdos	Fopen
+	move	d0,d7
+	bpl.s	no_file_error2
+
+	lea	newdesk_not_found_uk(pc),a0
+	cmp	#2,langue
+	bne.s	.hop
+	lea	newdesk_not_found_fr(pc),a0
+.hop
+	bsr	print
+	bra	abort_exit
+
+hex_tbl	dc.b	"0123456789ABCDEF"
+
+no_file_error2
+	move.l	#load_buf,a6
+	move.l	a6,-(sp)
+	move.l	#65536,-(sp)
+	move	d7,-(sp)
+	Gemdos	Fread
+
+;	move.l	d0,d6		;longueur du fichier
+	move.l	a6,d5		;adresse du bloc fichier
+
+.srch	cmp.b	#'#',(a6)+
+	bne.s	.srch
+	cmp.b	#'E',(a6)+
+	bne.s	.srch
+	lea	13(a6),a6
+	sub.l	d5,a6		;offset r‚solution
+
+	clr	-(sp)		;… partir du d‚but du fichier
+	move	d7,-(sp)
+	move.l	a6,-(sp)
+	Gemdos	Fseek
+
+	pea	asc_buf(pc)
+	move.l	#2,-(sp)
+	move	d7,-(sp)
+	Gemdos	Fwrite
+
+	move	#1,-(sp)	;… partir de la position actuelle
+	move	d7,-(sp)
+	pea	1.w
+	Gemdos	Fseek
+
+	pea	asc_buf+2(pc)
+	move.l	#2,-(sp)
+	move	d7,-(sp)
+	Gemdos	Fwrite
+
+	move	d7,-(sp)
+	Gemdos	Fclose
+
+end_newdesk_update
+	clr.l	-(sp)
+	Gemdos	Super
+	move.l	d0,-(sp)
+
+	move.l	cookie_vide(pc),a0
+	move.l	(a0),8(a0)
+	move.l	#id,(a0)+
+	move.l	(a0),8(a0)
+	move.l	#cook,(a0)
+
+	move.l	$88.w,anc_gem
+	move.l	#my_gem,$88.w
+	move.l	$b8.w,anc_xbios
+	move.l	#my_xbios,$b8.w
+
+	Gemdos	Super
+
+	lea	installed_uk(pc),a0
+	cmp	#2,langue
+	bne.s	.la
+	lea	installed_fr(pc),a0
+.la
+	bsr.s	print
+
+	clr	-(sp)
+	move.l	#end_resident-debut+256,-(sp)
+	move	#$31,-(sp)
+	trap	#1
+
+already_installed
+	move	#32,-(sp)
+	trap	#1
+	addq.l	#6,sp
+
+	lea	ai_uk(pc),a0
+	cmp	#2,langue
+	bne.s	.la
+	lea	ai_fr(pc),a0
+.la
+	bsr	print
+	bsr	crawcin
+
+	clr	-(sp)
+	trap	#1
+
+print
+	move.l	a0,-(sp)
+	Gemdos	Cconws
+	rts
+crawcin
+	move	#7,-(sp)
+	trap	#1
+	addq.l	#2,sp
+	rts
+
+*** Routine d'affichage ***
+* a0=adresse variable
+* d0=valeur … afficher
+dec_output
+	move.l	d1,-(sp)
+	moveq	#-1,d1
+.bcl	divu	#10,d0
+	swap	d0
+	add	#'0',d0
+	move	d0,-(sp)
+	addq	#1,d1
+	clr	d0
+	swap	d0
+	bne.s	.bcl
+.bcl2	move	(sp)+,d0
+	move.b	d0,(a0)+
+	dbra	d1,.bcl2
+	move.l	(sp)+,d1
+	rts
+
+dec_input
+	move.l	d1,-(sp)
+	moveq	#0,d0
+	moveq	#0,d1
+.bcl	tst.b	(a0)
+	bne.s	.suite
+	move.l	(sp)+,d1
+	rts
+.suite	mulu	#10,d0
+	move.b	(a0)+,d1
+	sub.b	#'0',d1
+	add	d1,d0
+	bra.s	.bcl
+
+*******************************************************
+*** Routine de chargement des donn‚es du fichier VI2.INF
+*******************************************************
+charge_inf
+	moveq	#1,d6			; Nombre de possibilit‚s de position du fichier
+	lea	nom_fich1(pc),a0
+ouvre_inf_bcl
+	clr	-(sp)			; Ouverture en lecture
+	move.l	a0,-(sp)
+	Gemdos	Fopen
+	move	d0,d7
+	bpl.s	ok_ouverture
+	lea	nom_fich2(pc),a0
+	dbra	d6,ouvre_inf_bcl
+
+	rts
+
+ok_ouverture
+	lea	load_buf(pc),a6
+	move.l	a6,-(sp)
+	pea	10.w			; On charge juste le header
+	move	d7,-(sp)
+	Gemdos	Fread
+
+	cmp.l	#'VI2.',(a6)+
+	bne.s	erreur_inf
+	cmp.l	#'INF'<<8,(a6)+
+	bne.s	erreur_inf
+	move	(a6)+,d6		; Flags par d‚faut
+
+	move	type_ecran(pc),d0
+	mulu	#fin_cook-cook-6,d0
+	beq.s	lecture_inf
+
+	move	#1,-(sp)		; Seek relatif
+	move	d7,-(sp)
+	move.l	d0,-(sp)
+	Gemdos	Fseek
+
+lecture_inf
+	pea	cook+6(pc)		; on charge directement l… o— il faut
+	pea	fin_cook-cook-6.w
+	move	d7,-(sp)
+	Gemdos	Fread			; On lit les valeurs
+
+	move	d7,-(sp)
+	Gemdos	Fclose
+
+	or	ck_flags(pc),d6
+	move	d6,ck_flags
+	moveq	#0,d0
+	rts
+
+erreur_inf
+	moveq	#1,d0
+	rts
+
+	section	data
+gem_alert_fr	dc.b	"[1][Ce programme ne peut ˆtre ex‚cut‚|qu'… partir du dossier AUTO !][Argh !]",0
+gem_alert_uk	dc.b	"[1][This program can only be executed|from the AUTO folder !][Argh !]",0
+newdesk_not_found_fr
+		dc.b	"Le fichier NEWDESK.INF est introuvable !",13,10,0
+newdesk_not_found_uk
+		dc.b	"The NEWDESK.INF file hasn't been found !",13,10,0
+installed_uk	dc.b	"Videl Inside installed.",13,10,0
+installed_fr	dc.b	"Videl Inside install‚.",13,10,0
+abandon_uk	dc.b	"Do you want to run VI ? (Y/N)",13,10,0
+abandon_fr	dc.b	"Voulez-vous lancer VI ? (O/N)",13,10,0
+aborted_uk	dc.b	"Aborted ...",13,10,0
+aborted_fr	dc.b	"Annul‚ ...",13,10,0
+ai_uk		dc.b	13,"VIDEL INSIDE is already installed !",13,10,0
+ai_fr		dc.b	13,"VIDEL INSIDE est d‚j… install‚ !",13,10,0
+		IFD	DX3
+introuvable_uk	dc.b	"The 'VI2_DX3.INF' file hasn't been found !",13,10,0
+introuvable_fr	dc.b	"Le fichier 'VI2_DX3.INF' est introuvable !",13,10,0
+		ELSE
+introuvable_uk	dc.b	"The 'VI2.INF' file hasn't been found !",13,10,0
+introuvable_fr	dc.b	"Le fichier 'VI2.INF' est introuvable !",13,10,0
+		ENDC
+
+hello		dc.b	13,10
+title		dc.b	27,"p- VIDEL INSIDE v2.04 -",27,"q",13,10
+		IFD	DX3
+		dc.b	"version sp‚ciale DX-3 (½ OXO Concept)",13,10
+		ENDC
+		dc.b	"by Zerkman/Trisomic Development",13,10,0
+nom_fich1	dc.b	"\"	;AUTO\"
+		IFD	DX3
+nom_fich2	dc.b	"VI2_DX3.INF",0
+		ELSE
+nom_fich2	dc.b	"VI2.INF",0
+		ENDC
+newdesk_inf	dc.b	"\NEWDESK.INF",0
+
+	section	bss
+cookie_vide	ds.l	1	; adresse du premier cookie vide
+langue		ds.w	1	; Langue de l'utilisateur
+
+asc_buf		ds.b	4
+
+load_buf	ds.b	20000	; Buffer pour les chargements de fichier
+
+	include	aeslib.s
+
+fin
+	end
+
+
