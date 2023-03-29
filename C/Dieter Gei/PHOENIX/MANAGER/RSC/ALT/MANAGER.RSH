@@ -1,0 +1,5580 @@
+/* GEM Resource C Source */
+
+#include <portab.h>
+#include <aes.h>
+#include "MANAGER.H"
+
+#if !defined(WHITEBAK)
+#define WHITEBAK    0x0040
+#endif
+#if !defined(DRAW3D)
+#define DRAW3D      0x0080
+#endif
+
+#define FLAGS9  0x0200
+#define FLAGS10 0x0400
+#define FLAGS11 0x0800
+#define FLAGS12 0x1000
+#define FLAGS13 0x2000
+#define FLAGS14 0x4000
+#define FLAGS15 0x8000
+#define STATE8  0x0100
+#define STATE9  0x0200
+#define STATE10 0x0400
+#define STATE11 0x0800
+#define STATE12 0x1000
+#define STATE13 0x2000
+#define STATE14 0x4000
+#define STATE15 0x8000
+
+TEDINFO rs_tedinfo[] =
+{ "VERSION 5.0 VOM 22.03.1998",
+  "\0",
+  "\0",
+  SMALL, 0, TE_CNTR , 0x1100, 0, -1, 27, 1,
+  "Seriennummer:",
+  "\0",
+  "\0",
+  SMALL, 0, TE_LEFT , 0x1100, 0, -1, 14, 1,
+  "ssssssssss",
+  "\0",
+  "\0",
+  SMALL, 0, TE_LEFT , 0x1100, 0, -1, 11, 1,
+  "Lizenznehmer",
+  "\0",
+  "\0",
+  SMALL, 0, TE_LEFT , 0x1100, 0, -1, 13, 1,
+  "       Firma:",
+  "\0",
+  "\0",
+  SMALL, 0, TE_LEFT , 0x1100, 0, -1, 14, 1,
+  "ffffffffffffffffffffffffffffff",
+  "\0",
+  "\0",
+  SMALL, 0, TE_LEFT , 0x1100, 0, -1, 31, 1,
+  "        Name:",
+  "\0",
+  "\0",
+  SMALL, 0, TE_LEFT , 0x1100, 0, -1, 14, 1,
+  "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnn",
+  "\0",
+  "\0",
+  SMALL, 0, TE_LEFT , 0x1100, 0, -1, 31, 1,
+  "____________",
+  "____________",
+  "XXXXXXXXXXXX",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 13, 13,
+  "________________________________",
+  "________________________________",
+  "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 33, 33,
+  "____",
+  "____",
+  "9999",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 5, 5,
+  "1",
+  "_",
+  "9",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 2, 2,
+  "Sortierung",
+  "\0",
+  "\0",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 11, 1,
+  "VON",
+  "\0",
+  "\0",
+  SMALL, 0, TE_CNTR , 0x1100, 0, -1, 4, 1,
+  "DIETER GEISS & J\232RGEN GEISS",
+  "\0",
+  "\0",
+  SMALL, 0, TE_CNTR , 0x1100, 0, -1, 28, 1,
+  "ISBN: 3-7785-1792-9",
+  "\0",
+  "\0",
+  SMALL, 0, TE_LEFT , 0x1100, 0, -1, 20, 1,
+  "(C) 1990-1993",
+  "\0",
+  "\0",
+  SMALL, 0, TE_LEFT , 0x1100, 0, -1, 14, 1,
+  "H\232THIG BUCH VERLAG",
+  "\0",
+  "\0",
+  SMALL, 0, TE_LEFT , 0x1100, 0, -1, 19, 1,
+  "IM WEIHER 10",
+  "\0",
+  "\0",
+  SMALL, 0, TE_LEFT , 0x1100, 0, -1, 13, 1,
+  "69121 HEIDELBERG",
+  "\0",
+  "\0",
+  SMALL, 0, TE_LEFT , 0x1100, 0, -1, 17, 1,
+  "GERMANY",
+  "\0",
+  "\0",
+  SMALL, 0, TE_LEFT , 0x1100, 0, -1, 8, 1,
+  "_________________________________",
+  "_________________________________",
+  "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 34, 34,
+  "_____________________________________________",
+  "_____________________________________________",
+  "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 46, 46,
+  "3",
+  "_",
+  "9",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 2, 2,
+  "_____",
+  "_____",
+  "99999",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 6, 6,
+  "_____",
+  "_____",
+  "99999",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 6, 6,
+  "13,10______________________________",
+  "___________________________________",
+  "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 36, 36,
+  "13,10______________________________",
+  "___________________________________",
+  "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 36, 36,
+  "________",
+  "________",
+  "XXXXXXXX",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 9, 9,
+  ".",
+  "_",
+  "X",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 2, 2,
+  "______________________________________",
+  "______________________________________",
+  "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 39, 39,
+  "______________________________________",
+  "______________________________________",
+  "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 39, 39,
+  "2   ",
+  "____",
+  "9999",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 5, 5,
+  "160 ",
+  "____",
+  "9999",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 5, 5,
+  "____________________",
+  "____________________",
+  "XXXXXXXXXXXXXXXXXXXX",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 21, 21,
+  "____________________",
+  "____________________",
+  "XXXXXXXXXXXXXXXXXXXX",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 21, 21,
+  "____________________",
+  "____________________",
+  "XXXXXXXXXXXXXXXXXXXX",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 21, 21,
+  "____________________",
+  "____________________",
+  "XXXXXXXXXXXXXXXXXXXX",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 21, 21,
+  "____________________",
+  "____________________",
+  "XXXXXXXXXXXXXXXXXXXX",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 21, 21,
+  "____________________",
+  "____________________",
+  "XXXXXXXXXXXXXXXXXXXX",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 21, 21,
+  "80 ",
+  "___",
+  "999",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 4, 4,
+  "66 ",
+  "___",
+  "999",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 4, 4,
+  "00",
+  "__",
+  "99",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 3, 3,
+  "00",
+  "__",
+  "99",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 3, 3,
+  "00",
+  "__",
+  "99",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 3, 3,
+  "00",
+  "__",
+  "99",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 3, 3,
+  "0 ",
+  "__",
+  "99",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 3, 3,
+  "0 ",
+  "__",
+  "99",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 3, 3,
+  "        ",
+  "\0",
+  "\0",
+  IBM  , 0, TE_LEFT , 0x1180, 0, -1, 9, 1,
+  "        ",
+  "\0",
+  "\0",
+  IBM  , 0, TE_LEFT , 0x1180, 0, -1, 9, 1,
+  "          ",
+  "\0",
+  "\0",
+  IBM  , 0, TE_LEFT , 0x1180, 0, -1, 11, 1,
+  "_________________________________",
+  "_________________________________",
+  "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 34, 34,
+  "_________________________________",
+  "_________________________________",
+  "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 34, 34,
+  "64___",
+  "_____",
+  "99999",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 6, 6,
+  "64___",
+  "_____",
+  "99999",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 6, 6,
+  "____________________________________________________________",
+  "____________________________________________________________",
+  "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 61, 61,
+  "____________________________________________________________",
+  "____________________________________________________________",
+  "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 61, 61,
+  "_________________________________",
+  "_________________________________",
+  "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 34, 34,
+  "_________________________________",
+  "_________________________________",
+  "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 34, 34,
+  "_________________________________",
+  "_________________________________",
+  "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 34, 34,
+  "_________________________________",
+  "_________________________________",
+  "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 34, 34,
+  "___________",
+  "___________",
+  "99999999999",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 12, 12,
+  "___________",
+  "___________",
+  "99999999999",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 12, 12,
+  "____1",
+  "_____",
+  "99999",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 6, 6,
+  "____________",
+  "____________",
+  "XXXXXXXXXXXX",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 13, 13,
+  "______________________________________",
+  "______________________________________",
+  "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 39, 39,
+  "___",
+  "___",
+  "999",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 4, 4,
+  "128",
+  "___",
+  "999",
+  IBM  , 0, TE_CNTR , 0x1180, 0, -1, 4, 4,
+  "VON",
+  "\0",
+  "\0",
+  SMALL, 0, TE_CNTR , 0x1100, 0, -1, 4, 1,
+  "DIPL.-INFORM.",
+  "\0",
+  "\0",
+  SMALL, 0, TE_CNTR , 0x1100, 0, -1, 14, 1,
+  "DIPL.-INFORM.",
+  "\0",
+  "\0",
+  SMALL, 0, TE_CNTR , 0x1100, 0, -1, 14, 1,
+  "DIETER GEISS",
+  "\0",
+  "\0",
+  SMALL, 0, TE_CNTR , 0x1100, 0, -1, 13, 1,
+  "&",
+  "\0",
+  "\0",
+  SMALL, 0, TE_CNTR , 0x1100, 0, -1, 2, 1,
+  "J\232RGEN GEISS",
+  "\0",
+  "\0",
+  SMALL, 0, TE_CNTR , 0x1100, 0, -1, 13, 1,
+  "(c) 1994",
+  "\0",
+  "\0",
+  SMALL, 0, TE_LEFT , 0x1100, 0, -1, 9, 1,
+  "APPLICATION SYSTEMS /// HEIDELBERG",
+  "\0",
+  "\0",
+  SMALL, 0, TE_LEFT , 0x1100, 0, -1, 35, 1,
+  "POSTFACH 102646",
+  "\0",
+  "\0",
+  SMALL, 0, TE_LEFT , 0x1100, 0, -1, 16, 1,
+  "69126 HEIDELBERG",
+  "\0",
+  "\0",
+  SMALL, 0, TE_LEFT , 0x1100, 0, -1, 17, 1,
+  "GERMANY",
+  "\0",
+  "\0",
+  SMALL, 0, TE_LEFT , 0x1100, 0, -1, 8, 1
+};
+
+RSIB0MASK[] =
+{ 0x0000, 0x0000
+};
+
+RSIB0DATA[] =
+{ 0x0000, 0x0000
+};
+
+RSIB1MASK[] =
+{ 0x0000, 0x0000
+};
+
+RSIB1DATA[] =
+{ 0x0000, 0x0000
+};
+
+RSIB2MASK[] =
+{ 0x0000, 0x0000
+};
+
+RSIB2DATA[] =
+{ 0x0000, 0x0000
+};
+
+RSIB3MASK[] =
+{ 0x0000, 0x0000
+};
+
+RSIB3DATA[] =
+{ 0x0000, 0x0000
+};
+
+RSIB4MASK[] =
+{ 0x0000, 0x0000
+};
+
+RSIB4DATA[] =
+{ 0x0000, 0x0000
+};
+
+RSIB5MASK[] =
+{ 0x0000, 0x0000
+};
+
+RSIB5DATA[] =
+{ 0x0000, 0x0000
+};
+
+RSIB6MASK[] =
+{ 0x0000, 0x0000
+};
+
+RSIB6DATA[] =
+{ 0x0000, 0x0000
+};
+
+RSIB7MASK[] =
+{ 0x0000, 0x0000
+};
+
+RSIB7DATA[] =
+{ 0x0000, 0x0000
+};
+
+RSIB8MASK[] =
+{ 0x0000, 0x0000
+};
+
+RSIB8DATA[] =
+{ 0x0000, 0x0000
+};
+
+RSIB9MASK[] =
+{ 0x0000, 0x0000
+};
+
+RSIB9DATA[] =
+{ 0x0000, 0x0000
+};
+
+RSIB10MASK[] =
+{ 0x0000, 0x0000
+};
+
+RSIB10DATA[] =
+{ 0x0000, 0x0000
+};
+
+RSIB11MASK[] =
+{ 0x0000, 0x0000
+};
+
+RSIB11DATA[] =
+{ 0x0000, 0x0000
+};
+
+RSIB12MASK[] =
+{ 0x0000, 0x0000
+};
+
+RSIB12DATA[] =
+{ 0x0000, 0x0000
+};
+
+RSIB13MASK[] =
+{ 0x0000, 0x0000
+};
+
+RSIB13DATA[] =
+{ 0x0000, 0x0000
+};
+
+RSIB14MASK[] =
+{ 0x0000, 0x0000
+};
+
+RSIB14DATA[] =
+{ 0x0000, 0x0000
+};
+
+RSIB15MASK[] =
+{ 0x0000, 0x0000
+};
+
+RSIB15DATA[] =
+{ 0x0000, 0x0000
+};
+
+RSIB16MASK[] =
+{ 0x0000, 0x0000
+};
+
+RSIB16DATA[] =
+{ 0x0000, 0x0000
+};
+
+RSIB17MASK[] =
+{ 0x0000, 0x0000
+};
+
+RSIB17DATA[] =
+{ 0x0000, 0x0000
+};
+
+RSIB18MASK[] =
+{ 0x0000, 0x0000, 0x0007, 0xF000, 
+  0x0007, 0xF000, 0x0007, 0xF000, 
+  0x0007, 0xF000, 0x0007, 0xF000, 
+  0x0007, 0xF000, 0x0007, 0xF000, 
+  0x000F, 0xF800, 0x001F, 0xFC00, 
+  0x003F, 0xFE00, 0x007F, 0xFF00, 
+  0x007F, 0xFF00, 0x007F, 0xFF00, 
+  0x007F, 0xFF80, 0x007F, 0xFF80, 
+  0x007F, 0xFF80, 0x007F, 0xFF00, 
+  0x007F, 0xFF00, 0x007F, 0xFF00, 
+  0x003F, 0xFE00, 0x001F, 0xFC00, 
+  0x000F, 0xF800, 0x0007, 0xF000, 
+  0x0007, 0xF000, 0x0007, 0xF000, 
+  0x0007, 0xF000, 0x0007, 0xF000, 
+  0x0007, 0xF000, 0x0007, 0xF000
+};
+
+RSIB18DATA[] =
+{ 0x0000, 0x0000, 0x0007, 0xF000, 
+  0x0007, 0x7000, 0x0007, 0xF000, 
+  0x0007, 0x7000, 0x0007, 0xF000, 
+  0x0007, 0x7000, 0x0007, 0xF000, 
+  0x000F, 0xF800, 0x0018, 0x8C00, 
+  0x0030, 0x8600, 0x0060, 0x0300, 
+  0x0044, 0x0100, 0x0042, 0x2100, 
+  0x0041, 0x4180, 0x0070, 0x8780, 
+  0x0040, 0x0180, 0x0040, 0x0100, 
+  0x0040, 0x0100, 0x0060, 0x0300, 
+  0x0030, 0x8600, 0x0018, 0x8C00, 
+  0x000F, 0xF800, 0x0007, 0xF000, 
+  0x0007, 0x7000, 0x0007, 0xF000, 
+  0x0007, 0x7000, 0x0007, 0xF000, 
+  0x0007, 0x7000, 0x0007, 0xF000
+};
+
+RSIB19MASK[] =
+{ 0x0000, 0x0000
+};
+
+RSIB19DATA[] =
+{ 0x0000, 0x0000
+};
+
+RSIB20MASK[] =
+{ 0x0000, 0x0000
+};
+
+RSIB20DATA[] =
+{ 0x0000, 0x0000
+};
+
+RSIB21MASK[] =
+{ 0x0000, 0x0000
+};
+
+RSIB21DATA[] =
+{ 0x0000, 0x0000
+};
+
+RSIB22MASK[] =
+{ 0x0000, 0x0000
+};
+
+RSIB22DATA[] =
+{ 0x0000, 0x0000
+};
+
+RSIB23MASK[] =
+{ 0x0000, 0x0000
+};
+
+RSIB23DATA[] =
+{ 0x0000, 0x0000
+};
+
+RSIB24MASK[] =
+{ 0x0000, 0x0000, 0x7FFF, 0xFFFE, 
+  0x7FFF, 0xFFFE, 0x7FFF, 0xFFFE, 
+  0x7FFF, 0xFFFE, 0x7FFF, 0xFFFE, 
+  0x7FFF, 0xFFFE, 0x7FFF, 0xFFFE, 
+  0x7FFF, 0xFFFE, 0x7FFF, 0xFFFE, 
+  0x7FFF, 0xFFFE, 0x7FFF, 0xFFFE, 
+  0x7FFF, 0xFFFE, 0x7FFF, 0xFFFE, 
+  0x7FFF, 0xFFFE, 0x7FFF, 0xFFFE, 
+  0x7FFF, 0xFFFE, 0x7FFF, 0xFFFE, 
+  0x7FFF, 0xFFFE, 0x7FFF, 0xFFFE, 
+  0x7FFF, 0xFFFE, 0x7FFF, 0xFFFE, 
+  0x7FFF, 0xFFFE, 0x7FFF, 0xFFFE, 
+  0x7FFF, 0xFFFE, 0x7FFF, 0xFFFE, 
+  0x7FFF, 0xFFFE, 0x7FFF, 0xFFFE, 
+  0x7FFF, 0xFFFE, 0x7FFF, 0xFFFE
+};
+
+RSIB24DATA[] =
+{ 0x0000, 0x0000, 0x7FFF, 0xFFFE, 
+  0x4200, 0x8202, 0x5AFE, 0xBAFA, 
+  0x4200, 0x8202, 0x7FFF, 0xFFFE, 
+  0x4200, 0x8202, 0x4200, 0x8202, 
+  0x4200, 0x8202, 0x6AAA, 0xAAAA, 
+  0x4200, 0x8202, 0x4200, 0x8202, 
+  0x4200, 0x8202, 0x6AAA, 0xAAAA, 
+  0x4200, 0x8202, 0x4200, 0x8202, 
+  0x4200, 0x8202, 0x6AAA, 0xAAAA, 
+  0x4200, 0x8202, 0x4200, 0x8202, 
+  0x4200, 0x8202, 0x6AAA, 0xAAAA, 
+  0x4200, 0x8202, 0x4200, 0x8202, 
+  0x4200, 0x8202, 0x6AAA, 0xAAAA, 
+  0x4200, 0x8202, 0x4200, 0x8202, 
+  0x4200, 0x8202, 0x7FFF, 0xFFFE
+};
+
+RSIB25MASK[] =
+{ 0x0007, 0xE000, 0x000F, 0xF000, 
+  0x03FF, 0xFFC0, 0xFFFF, 0xFFFF, 
+  0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 
+  0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 
+  0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 
+  0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 
+  0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 
+  0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 
+  0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 
+  0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 
+  0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 
+  0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 
+  0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 
+  0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 
+  0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF
+};
+
+RSIB25DATA[] =
+{ 0x0007, 0xE000, 0x000C, 0x3000, 
+  0x03F9, 0x9FC0, 0xFE00, 0x007F, 
+  0x8600, 0x0061, 0x8C00, 0x0031, 
+  0x8FFF, 0xFFF1, 0x8000, 0x0001, 
+  0x8000, 0x0001, 0x9FFF, 0xFFF9, 
+  0x9080, 0x8809, 0x96BE, 0xABE9, 
+  0x9080, 0x8809, 0x9FFF, 0xFFF9, 
+  0x9080, 0x8809, 0x9080, 0x8809, 
+  0x9080, 0x8809, 0x9AAA, 0xAAA9, 
+  0x9080, 0x8809, 0x9080, 0x8809, 
+  0x9080, 0x8809, 0x9AAA, 0xAAA9, 
+  0x9080, 0x8809, 0x9080, 0x8809, 
+  0x9080, 0x8809, 0x9080, 0x8809, 
+  0x9FFF, 0xFFF9, 0x8000, 0x0001, 
+  0x8000, 0x0001, 0xFFFF, 0xFFFF
+};
+
+RSIB26MASK[] =
+{ 0x0000, 0x0000, 0x7FFF, 0xFFFE, 
+  0x7FFF, 0xFFFE, 0x7FFF, 0xFFFE, 
+  0x7FFF, 0xFFFE, 0x7FFF, 0xFFFE, 
+  0x7FFF, 0xFFFE, 0x7FFF, 0xFFFE, 
+  0x7FFF, 0xFFFE, 0x7FFF, 0xFFFE, 
+  0x7FFF, 0xFFFE, 0x7FFF, 0xFFFE, 
+  0x7FFF, 0xFFFE, 0x7FFF, 0xFFFE, 
+  0x7FFF, 0xFFFE, 0x7FFF, 0xFFFE, 
+  0x7FFF, 0xFFFE, 0x7FFF, 0xFFFE, 
+  0x7FFF, 0xFFFE, 0x7FFF, 0xFFFE, 
+  0x7FFF, 0xFFFE, 0x7FFF, 0xFFFE, 
+  0x7FFF, 0xFFFE, 0x7FFF, 0xFFFE, 
+  0x7FFF, 0xFFFE, 0x7FFF, 0xFFFE, 
+  0x7FFF, 0xFFFE, 0x7FFF, 0xFFFE, 
+  0x7FFF, 0xFFFE, 0x7FFF, 0xFFFE
+};
+
+RSIB26DATA[] =
+{ 0x0000, 0x0000, 0x7FFF, 0xFFFE, 
+  0x4200, 0x8202, 0x5AFE, 0xBAFA, 
+  0x4200, 0x8202, 0x7FFF, 0xFFFE, 
+  0x4200, 0x8202, 0x4200, 0x8202, 
+  0x4200, 0x8202, 0x6AAA, 0xAAAA, 
+  0x4200, 0x8202, 0x4200, 0x8202, 
+  0x4200, 0x8202, 0x6AAA, 0xAAAA, 
+  0x4200, 0x8202, 0x4200, 0x8202, 
+  0x4200, 0x8202, 0x6AAA, 0xAAAA, 
+  0x4200, 0x8202, 0x4200, 0x8202, 
+  0x4200, 0x8202, 0x6AAA, 0xAAAA, 
+  0x4200, 0x8202, 0x4200, 0x8202, 
+  0x4200, 0x8202, 0x6AAA, 0xAAAA, 
+  0x4200, 0x8202, 0x4200, 0x8202, 
+  0x4200, 0x8202, 0x7FFF, 0xFFFE
+};
+
+ICONBLK rs_iconblk[] =
+{ RSIB0MASK, RSIB0DATA, "123456789012", 0x1000|'\0',
+    0,   0,  20,   0,  32,   1,   0,  32,  72,   8,
+  RSIB1MASK, RSIB1DATA, "123456789012", 0x1000|'\0',
+    0,   0,  20,   0,  32,   1,   0,  32,  72,   8,
+  RSIB2MASK, RSIB2DATA, "123456789012", 0x1000|'\0',
+    0,   0,  20,   0,  32,   1,   0,  32,  72,   8,
+  RSIB3MASK, RSIB3DATA, "123456789012", 0x1000|'\0',
+    0,   0,  20,   0,  32,   1,   0,  32,  72,   8,
+  RSIB4MASK, RSIB4DATA, "123456789012", 0x1000|'\0',
+    0,   0,  20,   0,  32,   1,   0,  32,  72,   8,
+  RSIB5MASK, RSIB5DATA, "123456789012", 0x1000|'\0',
+    0,   0,  20,   0,  32,   1,   0,  32,  72,   8,
+  RSIB6MASK, RSIB6DATA, "123456789012", 0x1000|'\0',
+    0,   0,  20,   0,  32,   1,   0,  32,  72,   8,
+  RSIB7MASK, RSIB7DATA, "123456789012", 0x1000|'\0',
+    0,   0,  20,   0,  32,   1,   0,  32,  72,   8,
+  RSIB8MASK, RSIB8DATA, "123456789012", 0x1000|'\0',
+    0,   0,  20,   0,  32,   1,   0,  32,  72,   8,
+  RSIB9MASK, RSIB9DATA, "123456789012", 0x1000|'\0',
+    0,   0,  20,   0,  32,   1,   0,  32,  72,   8,
+  RSIB10MASK, RSIB10DATA, "123456789012", 0x1000|'\0',
+    0,   0,  20,   0,  32,   1,   0,  32,  72,   8,
+  RSIB11MASK, RSIB11DATA, "123456789012", 0x1000|'\0',
+    0,   0,  20,   0,  32,   1,   0,  32,  72,   8,
+  RSIB12MASK, RSIB12DATA, "123456789012", 0x1000|'\0',
+    0,   0,  20,   0,  32,   1,   0,  32,  72,   8,
+  RSIB13MASK, RSIB13DATA, "123456789012", 0x1000|'\0',
+    0,   0,  20,   0,  32,   1,   0,  32,  72,   8,
+  RSIB14MASK, RSIB14DATA, "123456789012", 0x1000|'\0',
+    0,   0,  20,   0,  32,   1,   0,  32,  72,   8,
+  RSIB15MASK, RSIB15DATA, "123456789012", 0x1000|'\0',
+    0,   0,  20,   0,  32,   1,   0,  32,  72,   8,
+  RSIB16MASK, RSIB16DATA, "123456789012", 0x1000|'\0',
+    0,   0,  20,   0,  32,   1,   0,  32,  72,   8,
+  RSIB17MASK, RSIB17DATA, "123456789012", 0x1000|'\0',
+    0,   0,  20,   0,  32,   1,   0,  32,  72,   8,
+  RSIB18MASK, RSIB18DATA, "123456789012", 0x1000|'\0',
+    0,   0,  20,   0,  32,  30,   0,  32,  72,   8,
+  RSIB19MASK, RSIB19DATA, "123456789012", 0x1000|'\0',
+    0,   0,  20,   0,  32,   1,   0,  32,  72,   8,
+  RSIB20MASK, RSIB20DATA, "123456789012", 0x1000|'\0',
+    0,   0,  20,   0,  32,   1,   0,  32,  72,   8,
+  RSIB21MASK, RSIB21DATA, "123456789012", 0x1000|'\0',
+    0,   0,  20,   0,  32,   1,   0,  32,  72,   8,
+  RSIB22MASK, RSIB22DATA, "123456789012", 0x1000|'\0',
+    0,   0,  20,   0,  32,   1,   0,  32,  72,   8,
+  RSIB23MASK, RSIB23DATA, "123456789012", 0x1000|'\0',
+    0,   0,  20,   0,  32,   1,   0,  32,  72,   8,
+  RSIB24MASK, RSIB24DATA, "123456789012", 0x1000|'\0',
+    0,   0,  20,   0,  32,  30,   0,  32,  72,   8,
+  RSIB25MASK, RSIB25DATA, "123456789012", 0x1000|'\0',
+    0,   0,  20,   0,  32,  30,   0,  32,  72,   8,
+  RSIB26MASK, RSIB26DATA, "123456789012", 0x1000|'\0',
+    0,   0,  20,   0,  32,  30,   0,  32,  72,   8
+};
+
+WORD RSBB0DATA[] =
+{ 0x03C0, 0x0C30, 0x1008, 0x1008, 
+  0x2004, 0x2004, 0x2004, 0x2004, 
+  0x1008, 0x1008, 0x0C30, 0x03C0
+};
+
+WORD RSBB1DATA[] =
+{ 0x03C0, 0x0C30, 0x1008, 0x13C8, 
+  0x27E4, 0x27E4, 0x27E4, 0x27E4, 
+  0x13C8, 0x1008, 0x0C30, 0x03C0
+};
+
+WORD RSBB2DATA[] =
+{ 0x3FFC, 0x2004, 0x2004, 0x2004, 
+  0x2004, 0x2004, 0x2004, 0x2004, 
+  0x2004, 0x2004, 0x2004, 0x3FFC
+};
+
+WORD RSBB3DATA[] =
+{ 0x3FFC, 0x300C, 0x2814, 0x2424, 
+  0x2244, 0x2184, 0x2184, 0x2244, 
+  0x2424, 0x2814, 0x300C, 0x3FFC
+};
+
+WORD RSBB4DATA[] =
+{ 0x0FF0, 0x781E, 0xE007, 0xC003, 
+  0xC003, 0xE007, 0x781E, 0x0FF0
+};
+
+WORD RSBB5DATA[] =
+{ 0x0FF0, 0x781E, 0xE3C7, 0xCFF3, 
+  0xCFF3, 0xE3C7, 0x781E, 0x0FF0
+};
+
+WORD RSBB6DATA[] =
+{ 0x3FFC, 0x2004, 0x2004, 0x2004, 
+  0x2004, 0x2004, 0x3FFC, 0x0000
+};
+
+WORD RSBB7DATA[] =
+{ 0x3FFC, 0x381C, 0x2664, 0x2184, 
+  0x2664, 0x381C, 0x3FFC, 0x0000
+};
+
+WORD RSBB8DATA[] =
+{ 0x0380, 0x0440, 0x0820, 0x0820, 
+  0x0820, 0x0440, 0x0380
+};
+
+WORD RSBB9DATA[] =
+{ 0x0380, 0x0440, 0x0920, 0x0BA0, 
+  0x0920, 0x0440, 0x0380
+};
+
+WORD RSBB10DATA[] =
+{ 0x07F0, 0x0410, 0x0410, 0x0410, 
+  0x0410, 0x0410, 0x07F0
+};
+
+WORD RSBB11DATA[] =
+{ 0x07F0, 0x0630, 0x0550, 0x0490, 
+  0x0550, 0x0630, 0x07F0
+};
+
+WORD RSBB12DATA[] =
+{ 0x0380, 0x0440, 0x0440, 0x0440, 
+  0x0380
+};
+
+WORD RSBB13DATA[] =
+{ 0x0380, 0x0440, 0x0540, 0x0440, 
+  0x0380
+};
+
+WORD RSBB14DATA[] =
+{ 0x03E0, 0x0220, 0x0220, 0x0220, 
+  0x03E0
+};
+
+WORD RSBB15DATA[] =
+{ 0x03E0, 0x0360, 0x02A0, 0x0360, 
+  0x03E0
+};
+
+WORD RSBB16DATA[] =
+{ 0x1000, 0x1000, 0x7C00, 0x3800, 
+  0x1000, 0x7C00
+};
+
+WORD RSBB17DATA[] =
+{ 0x1C00, 0x1C00, 0x1C00, 0x7F00, 
+  0x3E00, 0x1C00, 0x0800, 0x7F00
+};
+
+WORD RSBB18DATA[] =
+{ 0x0E00, 0x0E00, 0x0E00, 0x0E00, 
+  0x3F80, 0x1F00, 0x0E00, 0x0400, 
+  0x0000, 0x3F80
+};
+
+WORD RSBB19DATA[] =
+{ 0x0700, 0x0700, 0x0700, 0x0700, 
+  0x0700, 0x3FE0, 0x1FC0, 0x0F80, 
+  0x0700, 0x0200, 0x0000, 0x3FE0
+};
+
+WORD RSBB20DATA[] =
+{ 0x07C0, 0x07C0, 0x07C0, 0x07C0, 
+  0x07C0, 0x07C0, 0x3FF8, 0x1FF0, 
+  0x0FE0, 0x07C0, 0x0380, 0x0100, 
+  0x0000, 0x3FF8
+};
+
+WORD RSBB21DATA[] =
+{ 0x03E0, 0x03E0, 0x03E0, 0x03E0, 
+  0x03E0, 0x03E0, 0x03E0, 0x3FFE, 
+  0x1FFC, 0x0FF8, 0x07F0, 0x03E0, 
+  0x01C0, 0x0080, 0x0000, 0x3FFE
+};
+
+WORD RSBB22DATA[] =
+{ 0x000F, 0xF800, 0x000F, 0xF800, 
+  0x000F, 0xF800, 0x000F, 0xF800, 
+  0x000F, 0xF800, 0x000F, 0xF800, 
+  0x000F, 0xF800, 0x000F, 0xF800, 
+  0x000F, 0xF800, 0x000F, 0xF800, 
+  0x000F, 0xF800, 0x000F, 0xF800, 
+  0x000F, 0xF800, 0x3FFF, 0xFFFE, 
+  0x1FFF, 0xFFFC, 0x0FFF, 0xFFF8, 
+  0x07FF, 0xFFF0, 0x03FF, 0xFFE0, 
+  0x01FF, 0xFFC0, 0x00FF, 0xFF80, 
+  0x007F, 0xFF00, 0x003F, 0xFE00, 
+  0x001F, 0xFC00, 0x000F, 0xF800, 
+  0x0007, 0xF000, 0x0003, 0xE000, 
+  0x0001, 0xC000, 0x0000, 0x8000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x3FFF, 0xFFFE, 0x3FFF, 0xFFFE
+};
+
+WORD RSBB23DATA[] =
+{ 0x3FFF, 0xFFFC, 0x7FFF, 0xFFFE, 
+  0x7FFC, 0x3FFE, 0x7FF8, 0x1FFE, 
+  0x7FF0, 0x0FFE, 0x7FF0, 0x0FFE, 
+  0x7FF0, 0x0FFE, 0x7FF8, 0x1FFE, 
+  0x7FFC, 0x3FFE, 0x7FFF, 0xFFFE, 
+  0x7FFF, 0xFFFE, 0x7F80, 0x0FFE, 
+  0x7F80, 0x0FFE, 0x7FF0, 0x0FFE, 
+  0x7FF0, 0x0FFE, 0x7FF0, 0x0FFE, 
+  0x7FF0, 0x0FFE, 0x7FF0, 0x0FFE, 
+  0x7FF0, 0x0FFE, 0x7FF0, 0x0FFE, 
+  0x7FF0, 0x0FFE, 0x7FF0, 0x0FFE, 
+  0x7FF0, 0x0FFE, 0x7FF0, 0x0FFE, 
+  0x7FF0, 0x0FFE, 0x7FF0, 0x0FFE, 
+  0x7FF0, 0x0FFE, 0x7F80, 0x01FE, 
+  0x7F80, 0x01FE, 0x7FFF, 0xFFFE, 
+  0x3FFF, 0xFFFC, 0x0000, 0x0000
+};
+
+WORD RSBB24DATA[] =
+{ 0x0003, 0xC000, 0x0006, 0x6000, 
+  0x000D, 0xB000, 0x001B, 0xD800, 
+  0x0037, 0xEC00, 0x006F, 0xF600, 
+  0x00DC, 0x3B00, 0x01BC, 0x3D80, 
+  0x037C, 0x3EC0, 0x06FC, 0x3F60, 
+  0x0DFC, 0x3FB0, 0x1BFC, 0x3FD8, 
+  0x37FC, 0x3FEC, 0x6FFC, 0x3FF6, 
+  0xDFFC, 0x3FFB, 0xBFFC, 0x3FFD, 
+  0xBFFC, 0x3FFD, 0xDFFC, 0x3FFB, 
+  0x6FFC, 0x3FF6, 0x37FC, 0x3FEC, 
+  0x1BFF, 0xFFD8, 0x0DFF, 0xFFB0, 
+  0x06FC, 0x3F60, 0x037C, 0x3EC0, 
+  0x01BC, 0x3D80, 0x00DC, 0x3B00, 
+  0x006F, 0xF600, 0x0037, 0xEC00, 
+  0x001B, 0xD800, 0x000D, 0xB000, 
+  0x0006, 0x6000, 0x0003, 0xC000
+};
+
+WORD RSBB25DATA[] =
+{ 0x3FFF, 0xFFFC, 0xC000, 0x0003, 
+  0x9FFF, 0xFFF9, 0xBFFF, 0xFFFD, 
+  0xDFF8, 0x3FFB, 0x5FE0, 0x0FFA, 
+  0x6FC0, 0x07F6, 0x2F83, 0x83F4, 
+  0x3787, 0xC3EC, 0x1787, 0xC3E8, 
+  0x1BFF, 0x83D8, 0x0BFF, 0x07D0, 
+  0x0DFE, 0x0FB0, 0x05FC, 0x1FA0, 
+  0x06FC, 0x3F60, 0x02FC, 0x3F40, 
+  0x037C, 0x3EC0, 0x017C, 0x3E80, 
+  0x01BF, 0xFD80, 0x00BF, 0xFD00, 
+  0x00DC, 0x3B00, 0x005C, 0x3A00, 
+  0x006C, 0x3600, 0x002F, 0xF400, 
+  0x0037, 0xEC00, 0x0017, 0xE800, 
+  0x001B, 0xD800, 0x000B, 0xD000, 
+  0x000D, 0xB000, 0x0005, 0xA000, 
+  0x0006, 0x6000, 0x0003, 0xC000
+};
+
+WORD RSBB26DATA[] =
+{ 0x007F, 0xFE00, 0x00C0, 0x0300, 
+  0x01BF, 0xFD80, 0x037F, 0xFEC0, 
+  0x06FF, 0xFF60, 0x0DFF, 0xFFB0, 
+  0x1BFF, 0xFFD8, 0x37FF, 0xFFEC, 
+  0x6FFF, 0xFFF6, 0xDFFF, 0xFFFB, 
+  0xB181, 0x860D, 0xA081, 0x0205, 
+  0xA4E7, 0x3265, 0xA7E7, 0x3265, 
+  0xA3E7, 0x3265, 0xB1E7, 0x3205, 
+  0xB8E7, 0x320D, 0xBCE7, 0x327D, 
+  0xA4E7, 0x327D, 0xA0E7, 0x027D, 
+  0xB1E7, 0x867D, 0xBFFF, 0xFFFD, 
+  0xDFFF, 0xFFFB, 0x6FFF, 0xFFF6, 
+  0x37FF, 0xFFEC, 0x1BFF, 0xFFD8, 
+  0x0DFF, 0xFFB0, 0x06FF, 0xFF60, 
+  0x037F, 0xFEC0, 0x01BF, 0xFD80, 
+  0x00C0, 0x0300, 0x007F, 0xFE00
+};
+
+WORD RSBB27DATA[] =
+{ 0x3FFF, 0xFFFC, 0xC000, 0x0003, 
+  0x9FFF, 0xFFF9, 0xBFFF, 0xFFFD, 
+  0xDFF8, 0x3FFB, 0x5FE0, 0x0FFA, 
+  0x6FC0, 0x07F6, 0x2F83, 0x83F4, 
+  0x3787, 0xC3EC, 0x1787, 0xC3E8, 
+  0x1BFF, 0x83D8, 0x0BFF, 0x07D0, 
+  0x0DFE, 0x0FB0, 0x05FC, 0x1FA0, 
+  0x06FC, 0x3F60, 0x02FC, 0x3F40, 
+  0x037C, 0x3EC0, 0x017C, 0x3E80, 
+  0x01BF, 0xFD80, 0x00BF, 0xFD00, 
+  0x00DC, 0x3B00, 0x005C, 0x3A00, 
+  0x006C, 0x3600, 0x002F, 0xF400, 
+  0x0037, 0xEC00, 0x0017, 0xE800, 
+  0x001B, 0xD800, 0x000B, 0xD000, 
+  0x000D, 0xB000, 0x0005, 0xA000, 
+  0x0006, 0x6000, 0x0003, 0xC000
+};
+
+BITBLK rs_bitblk[] =
+{ RSBB0DATA,   2,  12,   0,   0, 0x0001,
+  RSBB1DATA,   2,  12,   0,   0, 0x0001,
+  RSBB2DATA,   2,  12,   0,   0, 0x0001,
+  RSBB3DATA,   2,  12,   0,   0, 0x0001,
+  RSBB4DATA,   2,   8,   0,   0, 0x0001,
+  RSBB5DATA,   2,   8,   0,   0, 0x0001,
+  RSBB6DATA,   2,   8,   0,   0, 0x0001,
+  RSBB7DATA,   2,   8,   0,   0, 0x0001,
+  RSBB8DATA,   2,   7,   0,   0, 0x0001,
+  RSBB9DATA,   2,   7,   0,   0, 0x0001,
+  RSBB10DATA,   2,   7,   0,   0, 0x0001,
+  RSBB11DATA,   2,   7,   0,   0, 0x0001,
+  RSBB12DATA,   2,   5,   0,   0, 0x0001,
+  RSBB13DATA,   2,   5,   0,   0, 0x0001,
+  RSBB14DATA,   2,   5,   0,   0, 0x0001,
+  RSBB15DATA,   2,   5,   0,   0, 0x0001,
+  RSBB16DATA,   2,   6,   0,   0, 0x0001,
+  RSBB17DATA,   2,   8,   0,   0, 0x0001,
+  RSBB18DATA,   2,  10,   0,   0, 0x0001,
+  RSBB19DATA,   2,  12,   0,   0, 0x0001,
+  RSBB20DATA,   2,  14,   0,   0, 0x0001,
+  RSBB21DATA,   2,  16,   0,   0, 0x0001,
+  RSBB22DATA,   4,  32,   0,   0, 0x0001,
+  RSBB23DATA,   4,  32,   0,   0, 0x0004,
+  RSBB24DATA,   4,  32,   0,   0, 0x000B,
+  RSBB25DATA,   4,  32,   0,   0, 0x000F,
+  RSBB26DATA,   4,  32,   0,   0, 0x0002,
+  RSBB27DATA,   4,  32,   0,   0, 0x000F
+};
+
+WORD RS0_MMASK[] =
+{ 0x0038, 0x0000, 0x01FE, 0x0000, 
+  0x0FFF, 0x8000, 0x3FFF, 0xE000, 
+  0x7FFF, 0xF800, 0x7FFF, 0xFE00, 
+  0x7FFF, 0xFF80, 0x7FFF, 0xFFE0, 
+  0x7FFF, 0xFFF8, 0x3FFF, 0xFFFC, 
+  0x3FFF, 0xFFFC, 0x3FFF, 0xFFFC, 
+  0x3FFF, 0xFFFC, 0x1FFF, 0xFFF8, 
+  0x1FFF, 0xFFF8, 0x1FFF, 0xFFF8, 
+  0x1FFF, 0xFFF8, 0x0FFF, 0xFFF0, 
+  0x0FFF, 0xFFF0, 0x0FFF, 0xFFF0, 
+  0x0FFF, 0xFFF0, 0x07FF, 0xFFE0, 
+  0x07FF, 0xFFE0, 0x07FF, 0xFFE0, 
+  0x07FF, 0xFFE0, 0x03FF, 0xFFC0, 
+  0x00FF, 0xFFC0, 0x003F, 0xFFC0, 
+  0x000F, 0xFFC0, 0x0003, 0xFF80, 
+  0x0000, 0xFE00, 0x0000, 0x3800
+};
+
+WORD RS0_MDATA[] =
+{ 0x0038, 0x0000, 0x01D6, 0x0000, 
+  0x0E39, 0x8000, 0x31F8, 0x6000, 
+  0x4FFC, 0x1800, 0x5FFC, 0x0600, 
+  0x4FFE, 0x0180, 0x43FE, 0x0060, 
+  0x40FF, 0x0018, 0x203F, 0x0004, 
+  0x200F, 0x8004, 0x2003, 0xC01C, 
+  0x2000, 0xC0FC, 0x101C, 0x07F8, 
+  0x103E, 0x9FF8, 0x13C7, 0x9FF8, 
+  0x11C3, 0x9FF8, 0x0BC7, 0x9FF0, 
+  0x0B40, 0x1FF0, 0x0B00, 0x9FF0, 
+  0x0B08, 0x9FF0, 0x0599, 0x9FE0, 
+  0x04BF, 0x9FE0, 0x043F, 0x1FE0, 
+  0x0718, 0x1FE0, 0x03C8, 0x1FC0, 
+  0x00F0, 0x1FC0, 0x003C, 0x1FC0, 
+  0x000F, 0x1FC0, 0x0003, 0xDF80, 
+  0x0000, 0xFE00, 0x0000, 0x3800
+};
+
+WORD RS0_4CMASK[] =
+{ 0x0038, 0x0000, 0x01FE, 0x0000, 
+  0x0FFF, 0x8000, 0x3FFF, 0xE000, 
+  0x7FFF, 0xF800, 0x7FFF, 0xFE00, 
+  0x7FFF, 0xFF80, 0x7FFF, 0xFFE0, 
+  0x7FFF, 0xFFF8, 0x3FFF, 0xFFFC, 
+  0x3FFF, 0xFFFC, 0x3FFF, 0xFFFC, 
+  0x3FFF, 0xFFFC, 0x1FFF, 0xFFF8, 
+  0x1FFF, 0xFFF8, 0x1FFF, 0xFFF8, 
+  0x1FFF, 0xFFF8, 0x0FFF, 0xFFF0, 
+  0x0FFF, 0xFFF0, 0x0FFF, 0xFFF0, 
+  0x0FFF, 0xFFF0, 0x07FF, 0xFFE0, 
+  0x07FF, 0xFFE0, 0x07FF, 0xFFE0, 
+  0x07FF, 0xFFE0, 0x03FF, 0xFFC0, 
+  0x00FF, 0xFFC0, 0x003F, 0xFFC0, 
+  0x000F, 0xFFC0, 0x0003, 0xFF80, 
+  0x0000, 0xFE00, 0x0000, 0x3800
+};
+
+WORD RS0_4CDATA[] =
+{ 0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0010, 0x0000, 0x0016, 0x0000, 
+  0x0013, 0x8000, 0x0013, 0xE000, 
+  0x0011, 0xF800, 0x3011, 0xFE00, 
+  0x3C10, 0xFF80, 0x1F10, 0xFFE4, 
+  0x1FC0, 0x7FE4, 0x1FF0, 0x3F04, 
+  0x1FFC, 0x3804, 0x0FE3, 0x0008, 
+  0x0FC1, 0x6008, 0x0C38, 0x6008, 
+  0x0E3C, 0x6008, 0x0438, 0x6010, 
+  0x04BF, 0xE010, 0x04FF, 0x6010, 
+  0x04F7, 0x6010, 0x0266, 0x6020, 
+  0x0340, 0x6020, 0x03C0, 0xE020, 
+  0x00E7, 0xE020, 0x0337, 0xE040, 
+  0x00CF, 0xE040, 0x0033, 0xE040, 
+  0x000C, 0xE040, 0x0003, 0x2180, 
+  0x0000, 0xC600, 0x0000, 0x3800, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0010, 0x0000, 0x0016, 0x0000, 
+  0x0013, 0x8000, 0x0013, 0xE000, 
+  0x0011, 0xF800, 0x3011, 0xFE00, 
+  0x3C10, 0xFF80, 0x1F10, 0xFFE4, 
+  0x1FC0, 0x7FE4, 0x1FF0, 0x3F04, 
+  0x1FFC, 0x3804, 0x0FEF, 0x0008, 
+  0x0FFF, 0xE008, 0x0FFF, 0xE008, 
+  0x0FFF, 0xE008, 0x07FF, 0xE010, 
+  0x07FF, 0xE010, 0x07FF, 0xE010, 
+  0x07FF, 0xE010, 0x037E, 0xE020, 
+  0x03FF, 0xE020, 0x03DF, 0xE020, 
+  0x00EF, 0xE020, 0x0337, 0xE040, 
+  0x00CF, 0xE040, 0x0033, 0xE040, 
+  0x000C, 0xE040, 0x0003, 0x2180, 
+  0x0000, 0xC600, 0x0000, 0x3800, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0010, 0x0000, 0x0016, 0x0000, 
+  0x0013, 0x8000, 0x0013, 0xE000, 
+  0x0011, 0xF800, 0x3011, 0xFE00, 
+  0x3C10, 0xFF80, 0x1F10, 0xFFE4, 
+  0x1FC0, 0x7FE4, 0x1FF0, 0x3F04, 
+  0x1FFC, 0x3804, 0x0FE3, 0x0008, 
+  0x0FC1, 0x6008, 0x0C38, 0x6008, 
+  0x0E3C, 0x6008, 0x0438, 0x6010, 
+  0x04BF, 0xE010, 0x04FF, 0x6010, 
+  0x04F7, 0x6010, 0x0266, 0x6020, 
+  0x0340, 0x6020, 0x03C0, 0xE020, 
+  0x00E7, 0xE020, 0x0337, 0xE040, 
+  0x00CF, 0xE040, 0x0033, 0xE040, 
+  0x000C, 0xE040, 0x0003, 0x2180, 
+  0x0000, 0xC600, 0x0000, 0x3800, 
+  0x0038, 0x0000, 0x01D6, 0x0000, 
+  0x0E39, 0x8000, 0x31F8, 0x6000, 
+  0x4FFC, 0x1800, 0x5FFC, 0x0600, 
+  0x4FFE, 0x0180, 0x43FE, 0x0060, 
+  0x40FF, 0x0018, 0x203F, 0x0004, 
+  0x200F, 0x8004, 0x2003, 0xC01C, 
+  0x2000, 0xC0FC, 0x101C, 0x07F8, 
+  0x103E, 0x9FF8, 0x13C7, 0x9FF8, 
+  0x11C3, 0x9FF8, 0x0BC7, 0x9FF0, 
+  0x0B40, 0x1FF0, 0x0B00, 0x9FF0, 
+  0x0B08, 0x9FF0, 0x0599, 0x9FE0, 
+  0x04BF, 0x9FE0, 0x043F, 0x1FE0, 
+  0x0718, 0x1FE0, 0x03C8, 0x1FC0, 
+  0x00F0, 0x1FC0, 0x003C, 0x1FC0, 
+  0x000F, 0x1FC0, 0x0003, 0xDF80, 
+  0x0000, 0xFE00, 0x0000, 0x3800
+};
+
+WORD RS1_MMASK[] =
+{ 0x0000, 0x0000, 0x0000, 0x1C00, 
+  0x0000, 0x3F00, 0x0000, 0x7FC0, 
+  0x0000, 0xFFF0, 0x0001, 0xFFF0, 
+  0x0003, 0xFFC0, 0x000F, 0xFF80, 
+  0x003F, 0xFF00, 0x00FF, 0xFE00, 
+  0x03FF, 0xFF80, 0x0FFF, 0xFFE0, 
+  0x3FFF, 0xFFF8, 0xFFFF, 0xFFF8, 
+  0xFFFF, 0xFFFC, 0xFFFF, 0xFFFF, 
+  0xFFFF, 0xFFFF, 0xFFFF, 0xFFFE, 
+  0xFFFF, 0xFFFC, 0xFFFF, 0xFFF8, 
+  0xFFFF, 0xFFF0, 0x7FFF, 0xFFF0, 
+  0x7FFF, 0xFFF0, 0x7FFF, 0xFFE0, 
+  0x3FFF, 0xFF80, 0x0FFF, 0xFE00, 
+  0x03FF, 0xF800, 0x00FF, 0xE000, 
+  0x003F, 0x8000, 0x000E, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000
+};
+
+WORD RS1_MDATA[] =
+{ 0x0000, 0x0000, 0x0000, 0x1C00, 
+  0x0000, 0x2300, 0x0000, 0x40C0, 
+  0x0000, 0x9830, 0x0001, 0x0630, 
+  0x0002, 0x6040, 0x000E, 0x1880, 
+  0x0034, 0xC100, 0x00C4, 0x3200, 
+  0x0319, 0x8780, 0x0C7C, 0x6660, 
+  0x31E3, 0x0998, 0xC660, 0xCE78, 
+  0x9998, 0x39FC, 0x9C66, 0x67FB, 
+  0x9301, 0x9FFB, 0x90C6, 0x7FFE, 
+  0x9039, 0xFFFC, 0x9017, 0xFFF8, 
+  0xD017, 0xFFF0, 0x7017, 0xFFF0, 
+  0x4C17, 0xFFF0, 0x4317, 0xFFE0, 
+  0x30D7, 0xFF80, 0x0C37, 0xFE00, 
+  0x030F, 0xF800, 0x00C7, 0xE000, 
+  0x0037, 0x8000, 0x000E, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000
+};
+
+WORD RS1_4CMASK[] =
+{ 0x0000, 0x0000, 0x0000, 0x1C00, 
+  0x0000, 0x3F00, 0x0000, 0x7FC0, 
+  0x0000, 0xFFF0, 0x0001, 0xFFF0, 
+  0x0003, 0xFFC0, 0x000F, 0xFF80, 
+  0x003F, 0xFF00, 0x00FF, 0xFE00, 
+  0x03FF, 0xFF80, 0x0FFF, 0xFFE0, 
+  0x3FFF, 0xFFF8, 0xFFFF, 0xFFF8, 
+  0xFFFF, 0xFFFC, 0xFFFF, 0xFFFF, 
+  0xFFFF, 0xFFFF, 0xFFFF, 0xFFFE, 
+  0xFFFF, 0xFFFC, 0xFFFF, 0xFFF8, 
+  0xFFFF, 0xFFF0, 0x7FFF, 0xFFF0, 
+  0x7FFF, 0xFFF0, 0x7FFF, 0xFFE0, 
+  0x3FFF, 0xFF80, 0x0FFF, 0xFE00, 
+  0x03FF, 0xF800, 0x00FF, 0xE000, 
+  0x003F, 0x8000, 0x000E, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000
+};
+
+WORD RS1_4CDATA[] =
+{ 0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0070, 
+  0x0000, 0x00C0, 0x0000, 0x0180, 
+  0x0000, 0x0300, 0x0018, 0x0600, 
+  0x0060, 0x0400, 0x018C, 0x0D80, 
+  0x061F, 0x0E68, 0x199F, 0xD988, 
+  0x0667, 0xE608, 0x23F9, 0x980C, 
+  0x2CFE, 0x600D, 0x2F39, 0x800A, 
+  0x2FC6, 0x000C, 0x2FE0, 0x0018, 
+  0x2FE8, 0x0070, 0x0FE8, 0x0190, 
+  0x33E8, 0x0610, 0x7CE8, 0x1860, 
+  0x3F28, 0x6180, 0x0FC9, 0x8600, 
+  0x03F6, 0x1800, 0x00F8, 0x6000, 
+  0x0039, 0x8000, 0x000E, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0070, 
+  0x0000, 0x00C0, 0x0000, 0x0180, 
+  0x0000, 0x0300, 0x0018, 0x0600, 
+  0x0060, 0x0400, 0x018C, 0x0D80, 
+  0x061F, 0x0E68, 0x199F, 0xD988, 
+  0x07E7, 0xE608, 0x2399, 0x980C, 
+  0x2CFE, 0x600D, 0x2F39, 0x800A, 
+  0x2FC6, 0x000C, 0x2FE0, 0x0018, 
+  0x2FE8, 0x0070, 0x0FE8, 0x0190, 
+  0x33E8, 0x0610, 0x7CE8, 0x1860, 
+  0x3F28, 0x6180, 0x0FC9, 0x8600, 
+  0x03F6, 0x1800, 0x00F8, 0x6000, 
+  0x0039, 0x8000, 0x000E, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x1800, 0x0000, 0x0670, 
+  0x0000, 0x60C0, 0x0000, 0x1980, 
+  0x0000, 0xC300, 0x0018, 0x3600, 
+  0x0061, 0x8400, 0x018C, 0x6D80, 
+  0x061F, 0x0E68, 0x199F, 0xD988, 
+  0x0667, 0xE608, 0x2399, 0x980C, 
+  0x2CFE, 0x600D, 0x2F39, 0x800A, 
+  0x2FC6, 0x000C, 0x2FE0, 0x0018, 
+  0x2FE8, 0x0070, 0x0FE8, 0x0190, 
+  0x33E8, 0x0610, 0x7CE8, 0x1860, 
+  0x3F28, 0x6180, 0x0FC9, 0x8600, 
+  0x03F6, 0x1800, 0x00F8, 0x6000, 
+  0x0039, 0x8000, 0x000E, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x1C00, 
+  0x0000, 0x2300, 0x0000, 0x40C0, 
+  0x0000, 0x8030, 0x0001, 0x0030, 
+  0x0002, 0x0040, 0x000E, 0x0080, 
+  0x0034, 0x0100, 0x00C4, 0x0200, 
+  0x0318, 0x0780, 0x0C7C, 0x0660, 
+  0x31E3, 0x0998, 0xC660, 0xCE78, 
+  0x9818, 0x39FC, 0x9006, 0x67FB, 
+  0x9001, 0x9FFB, 0x9006, 0x7FFE, 
+  0x9019, 0xFFFC, 0x9017, 0xFFF8, 
+  0xD017, 0xFFF0, 0x7017, 0xFFF0, 
+  0x4C17, 0xFFF0, 0x4317, 0xFFE0, 
+  0x30D7, 0xFF80, 0x0C37, 0xFE00, 
+  0x030F, 0xF800, 0x00C7, 0xE000, 
+  0x0037, 0x8000, 0x000E, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000
+};
+
+WORD RS2_MMASK[] =
+{ 0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0E00, 0x0000, 0x0000, 0x1F80, 
+  0x0000, 0x0000, 0x3FE0, 0x0000, 
+  0x0000, 0x7FF8, 0x0000, 0x0000, 
+  0xFFFE, 0x0000, 0x0001, 0xFFFF, 
+  0x8000, 0x0003, 0xFFFF, 0xE000, 
+  0x0007, 0xFFFF, 0xF800, 0x000F, 
+  0xFFFF, 0xFE00, 0x001F, 0xFFFF, 
+  0xFF80, 0x003F, 0xFFFF, 0xFFC0, 
+  0x007F, 0xFFFF, 0xFFC0, 0x00FF, 
+  0xFFFF, 0xFFC0, 0x01FF, 0xFFFF, 
+  0xFF80, 0x03FF, 0xFFFF, 0xFF80, 
+  0x07FF, 0xFFFF, 0xFF00, 0x07FF, 
+  0xFFFF, 0xFE00, 0x07FF, 0xFFFF, 
+  0xFC00, 0x07FF, 0xFFFF, 0xF800, 
+  0x07FF, 0xFFFF, 0xF000, 0x01FF, 
+  0xFFFF, 0xE000, 0x00FF, 0xFFFF, 
+  0xC000, 0x003F, 0xFFFF, 0x8000, 
+  0x001F, 0xFFFF, 0x0000, 0x0007, 
+  0xFFFE, 0x0000, 0x0001, 0xFFFC, 
+  0x0000, 0x0000, 0x7FF8, 0x0000, 
+  0x0000, 0x1FF0, 0x0000, 0x0000, 
+  0x07E0, 0x0000, 0x0000, 0x03C0, 
+  0x0000, 0x0000, 0x0000, 0x0000
+};
+
+WORD RS2_MDATA[] =
+{ 0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0E00, 0x0000, 0x0000, 0x1780, 
+  0x0000, 0x0000, 0x2C60, 0x0000, 
+  0x0000, 0x5818, 0x0000, 0x0000, 
+  0xB006, 0x0000, 0x0001, 0x6001, 
+  0x8000, 0x0002, 0xC000, 0x6000, 
+  0x0005, 0x8000, 0x1800, 0x000B, 
+  0x0000, 0x0600, 0x0015, 0x0000, 
+  0x0580, 0x002A, 0xC000, 0x0AC0, 
+  0x0055, 0x7000, 0x11C0, 0x00AA, 
+  0xAC00, 0x2BC0, 0x0155, 0xD700, 
+  0x5680, 0x02AA, 0x6AC0, 0xAD80, 
+  0x0554, 0x9D71, 0x5B00, 0x06A9, 
+  0xE6AE, 0xB600, 0x0553, 0xE1D5, 
+  0x6C00, 0x06A7, 0xC0EA, 0xD800, 
+  0x07CF, 0x81B5, 0xB000, 0x0163, 
+  0x036B, 0x6000, 0x00D8, 0x06D6, 
+  0xC000, 0x0036, 0x0DAD, 0x8000, 
+  0x001D, 0x9B5B, 0x0000, 0x0007, 
+  0x76B6, 0x0000, 0x0001, 0xDD6C, 
+  0x0000, 0x0000, 0x76D8, 0x0000, 
+  0x0000, 0x1DB0, 0x0000, 0x0000, 
+  0x06E0, 0x0000, 0x0000, 0x03C0, 
+  0x0000, 0x0000, 0x0000, 0x0000
+};
+
+WORD RS2_4CMASK[] =
+{ 0x0000, 0x0300, 0x0000, 0x0000, 
+  0x07C0, 0x0000, 0x0000, 0x0FF0, 
+  0x0000, 0x0000, 0x1FFC, 0x0000, 
+  0x0000, 0x3FFF, 0x0000, 0x0000, 
+  0x7FFF, 0xC000, 0x0000, 0xFFFF, 
+  0xF000, 0x0001, 0xFFFF, 0xFC00, 
+  0x0003, 0xFFFF, 0xFF00, 0x0007, 
+  0xFFFF, 0xFFC0, 0x000F, 0xFFFF, 
+  0xFFE0, 0x001F, 0xFFFF, 0xFFE0, 
+  0x003F, 0xFFFF, 0xFFE0, 0x007F, 
+  0xFFFF, 0xFFE0, 0x00FF, 0xFFFF, 
+  0xFFC0, 0x01FF, 0xFFFF, 0xFF80, 
+  0x03FF, 0xFFFF, 0xFF00, 0x07FF, 
+  0xFFFF, 0xFE00, 0x07FF, 0xFFFF, 
+  0xFC00, 0x07FF, 0xFFFF, 0xF800, 
+  0x07FF, 0xFFFF, 0xF000, 0x03FF, 
+  0xFFFF, 0xE000, 0x03FF, 0xFFFF, 
+  0xC000, 0x00FF, 0xFFFF, 0x8000, 
+  0x003F, 0xFFFF, 0x0000, 0x000F, 
+  0xFFFE, 0x0000, 0x0003, 0xFFFC, 
+  0x0000, 0x0000, 0xFFF8, 0x0000, 
+  0x0000, 0x3FF0, 0x0000, 0x0000, 
+  0x1FE0, 0x0000, 0x0000, 0x07C0, 
+  0x0000, 0x0000, 0x0180, 0x0000
+};
+
+WORD RS2_4CDATA[] =
+{ 0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x00C0, 0x0000, 
+  0x0000, 0x01F0, 0x0000, 0x0000, 
+  0x03FC, 0x0000, 0x0000, 0x07FF, 
+  0x0000, 0x0000, 0x0FFF, 0xC000, 
+  0x0000, 0x1FFF, 0xF000, 0x0000, 
+  0x3FFF, 0xFC00, 0x0000, 0x7FFF, 
+  0xF800, 0x0000, 0x3FFF, 0xF000, 
+  0x0000, 0x0FFF, 0xE000, 0x0000, 
+  0x03FF, 0xC000, 0x0000, 0x00FF, 
+  0x8000, 0x0002, 0x003F, 0x0000, 
+  0x0004, 0x000E, 0x0000, 0x000A, 
+  0x8000, 0x0000, 0x0017, 0x6000, 
+  0x0000, 0x0022, 0x0800, 0x0000, 
+  0x0044, 0x3200, 0x0000, 0x0008, 
+  0x6C00, 0x0000, 0x0000, 0x1800, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x00C0, 0x0000, 
+  0x0000, 0x01F0, 0x0000, 0x0000, 
+  0x03FC, 0x0000, 0x0000, 0x07FF, 
+  0x0000, 0x0000, 0x0FFF, 0xC000, 
+  0x0000, 0x1FFF, 0xF000, 0x0000, 
+  0x3FFF, 0xFC00, 0x0000, 0x7FFF, 
+  0xF800, 0x0000, 0x3FFF, 0xF000, 
+  0x0000, 0x0FFF, 0xE000, 0x0000, 
+  0x03FF, 0xC000, 0x0000, 0x80FF, 
+  0x8000, 0x0002, 0x603F, 0x0000, 
+  0x0004, 0x180E, 0x0000, 0x000A, 
+  0x8600, 0x0000, 0x0017, 0x6180, 
+  0x0000, 0x0022, 0x0860, 0x0000, 
+  0x00C4, 0x3218, 0x0000, 0x0008, 
+  0x6C08, 0x0000, 0x0000, 0x1810, 
+  0x0000, 0x0000, 0x0020, 0x0000, 
+  0x0000, 0x0040, 0x0000, 0x0000, 
+  0x0080, 0x0000, 0x0000, 0x0100, 
+  0x0000, 0x0000, 0x0600, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0300, 0x0000, 0x0000, 
+  0x07C0, 0x0000, 0x0000, 0x0F30, 
+  0x0000, 0x0000, 0x1ECC, 0x0000, 
+  0x0000, 0x3DF3, 0x0000, 0x0000, 
+  0x7BFC, 0xC000, 0x0000, 0xF7FF, 
+  0x3000, 0x0001, 0xEFFF, 0xCC00, 
+  0x0003, 0xDFFF, 0xF300, 0x0007, 
+  0xBFFF, 0xFDC0, 0x000F, 0x7FFF, 
+  0xFBE0, 0x001F, 0x3FFF, 0xF6E0, 
+  0x003F, 0xCFFF, 0xEFE0, 0x007F, 
+  0xF3FF, 0xDFE0, 0x00FF, 0xFCFF, 
+  0xBFC0, 0x01FF, 0xFF3F, 0x7F80, 
+  0x03FE, 0x7FCE, 0xFF00, 0x07FE, 
+  0x9FF1, 0xFE00, 0x07FF, 0xE7FF, 
+  0xFC00, 0x07F3, 0xE9FF, 0xF800, 
+  0x07E7, 0xF2FF, 0xF000, 0x03CF, 
+  0xEDFF, 0xE000, 0x03E3, 0x1BFF, 
+  0xC000, 0x0098, 0x07FF, 0x8000, 
+  0x0026, 0x0FFF, 0x0000, 0x0009, 
+  0x9FFE, 0x0000, 0x0002, 0x7FFC, 
+  0x0000, 0x0000, 0xBFF8, 0x0000, 
+  0x0000, 0x3FF0, 0x0000, 0x0000, 
+  0x1FE0, 0x0000, 0x0000, 0x07C0, 
+  0x0000, 0x0000, 0x0180, 0x0000, 
+  0x0000, 0x0300, 0x0000, 0x0000, 
+  0x04C0, 0x0000, 0x0000, 0x09F0, 
+  0x0000, 0x0000, 0x133C, 0x0000, 
+  0x0000, 0x260F, 0x0000, 0x0000, 
+  0x4C03, 0xC000, 0x0000, 0x9800, 
+  0xF000, 0x0001, 0x3000, 0x3C00, 
+  0x0002, 0x6000, 0x0F00, 0x0004, 
+  0xC000, 0x01C0, 0x0009, 0x8000, 
+  0x0260, 0x0011, 0x0000, 0x0460, 
+  0x0020, 0xC000, 0x08A0, 0x0040, 
+  0x3000, 0x1120, 0x0081, 0x8C00, 
+  0x2240, 0x0103, 0xE700, 0x4480, 
+  0x0206, 0x78C0, 0x8900, 0x060C, 
+  0x9E71, 0x1200, 0x0419, 0x678E, 
+  0x2400, 0x0436, 0x01E0, 0x4800, 
+  0x0764, 0x00D8, 0x9000, 0x03C8, 
+  0x1181, 0x2000, 0x0360, 0x2712, 
+  0x4000, 0x0098, 0x0E24, 0x8000, 
+  0x0026, 0x0C49, 0x0000, 0x0009, 
+  0x9892, 0x0000, 0x0002, 0x7124, 
+  0x0000, 0x0000, 0x9A48, 0x0000, 
+  0x0000, 0x3690, 0x0000, 0x0000, 
+  0x1DA0, 0x0000, 0x0000, 0x06C0, 
+  0x0000, 0x0000, 0x0180, 0x0000
+};
+
+WORD RS3_MMASK[] =
+{ 0x0000, 0x0000, 0x00FF, 0xFC00, 
+  0x01FF, 0xFE00, 0x03FF, 0xFF00, 
+  0x7FFF, 0xFFF8, 0x7FFF, 0xFFFC, 
+  0x7FFF, 0xFFFC, 0x7FFF, 0xFFFC, 
+  0x7FFF, 0xFFFC, 0x7FFF, 0xFFFC, 
+  0x7FFF, 0xFFFC, 0x7FFF, 0xFFFC, 
+  0x7FFF, 0xFFFC, 0x7FFF, 0xFFFC, 
+  0x7FFF, 0xFFFC, 0x7FFF, 0xFFFC, 
+  0x7FFF, 0xFFFC, 0x7FFF, 0xFFFC, 
+  0x7FFF, 0xFFFC, 0x7FFF, 0xFFFC, 
+  0x7FFF, 0xFFFC, 0x7FFF, 0xFFFC, 
+  0x7FFF, 0xFFFC, 0x7FFF, 0xFFFC, 
+  0x7FFF, 0xFFFC, 0x7FFF, 0xFFFC, 
+  0x7FFF, 0xFFFC, 0x7FFF, 0xFFFC, 
+  0x7FFF, 0xFFFC, 0x3FFF, 0xFFFC, 
+  0x0000, 0x0000, 0x0000, 0x0000
+};
+
+WORD RS3_MDATA[] =
+{ 0x0000, 0x0000, 0x00FF, 0xFC00, 
+  0x0180, 0x0600, 0x0300, 0x0300, 
+  0x7E00, 0x01F8, 0x4200, 0x018C, 
+  0x43FF, 0xFF8C, 0x41FF, 0xFF8C, 
+  0x4000, 0x000C, 0x4000, 0x000C, 
+  0x4000, 0x000C, 0x4000, 0x000C, 
+  0x4000, 0x000C, 0x4000, 0x000C, 
+  0x4000, 0x000C, 0x4000, 0x000C, 
+  0x4000, 0x000C, 0x4000, 0x000C, 
+  0x4000, 0x000C, 0x4000, 0x000C, 
+  0x4000, 0x000C, 0x4000, 0x000C, 
+  0x4000, 0x000C, 0x4000, 0x000C, 
+  0x4000, 0x000C, 0x4000, 0x000C, 
+  0x4000, 0x000C, 0x4000, 0x000C, 
+  0x7FFF, 0xFFFC, 0x3FFF, 0xFFFC, 
+  0x0000, 0x0000, 0x0000, 0x0000
+};
+
+WORD RS3_4CMASK[] =
+{ 0x0000, 0x0000, 0x00FF, 0xFC00, 
+  0x01FF, 0xFE00, 0x03FF, 0xFF00, 
+  0x7FFF, 0xFFF8, 0x7FFF, 0xFFFC, 
+  0x7FFF, 0xFFFC, 0x7FFF, 0xFFFC, 
+  0x7FFF, 0xFFFC, 0x7FFF, 0xFFFC, 
+  0x7FFF, 0xFFFC, 0x7FFF, 0xFFFC, 
+  0x7FFF, 0xFFFC, 0x7FFF, 0xFFFC, 
+  0x7FFF, 0xFFFC, 0x7FFF, 0xFFFC, 
+  0x7FFF, 0xFFFC, 0x7FFF, 0xFFFC, 
+  0x7FFF, 0xFFFC, 0x7FFF, 0xFFFC, 
+  0x7FFF, 0xFFFC, 0x7FFF, 0xFFFC, 
+  0x7FFF, 0xFFFC, 0x7FFF, 0xFFFC, 
+  0x7FFF, 0xFFFC, 0x7FFF, 0xFFFC, 
+  0x7FFF, 0xFFFC, 0x7FFF, 0xFFFC, 
+  0x7FFF, 0xFFFC, 0x3FFF, 0xFFFC, 
+  0x0000, 0x0000, 0x0000, 0x0000
+};
+
+WORD RS3_4CDATA[] =
+{ 0x0000, 0x0000, 0x00FF, 0xFC00, 
+  0x01FF, 0xFE00, 0x0300, 0x0700, 
+  0x7FFF, 0xFFF8, 0x57FF, 0xFF5C, 
+  0x6BFF, 0xFF2C, 0x5400, 0x005C, 
+  0x6AAA, 0xAAAC, 0x5555, 0x555C, 
+  0x6AAA, 0xAAAC, 0x5555, 0x555C, 
+  0x6AAA, 0xAAAC, 0x5555, 0x555C, 
+  0x6AAA, 0xAAAC, 0x5555, 0x555C, 
+  0x6AAA, 0xAAAC, 0x5555, 0x555C, 
+  0x6AAA, 0xAAAC, 0x5555, 0x555C, 
+  0x6AAA, 0xAAAC, 0x5555, 0x555C, 
+  0x6AAA, 0xAAAC, 0x5555, 0x555C, 
+  0x6AAA, 0xAAAC, 0x5555, 0x555C, 
+  0x6AAA, 0xAAAC, 0x5555, 0x555C, 
+  0x7FFF, 0xFFFC, 0x3FFF, 0xFFFC, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x00FF, 0xFC00, 
+  0x01FF, 0xFE00, 0x0300, 0x0700, 
+  0x7FFF, 0xFFF8, 0x57FF, 0xFF5C, 
+  0x6BFF, 0xFF2C, 0x5400, 0x005C, 
+  0x6AAA, 0xAAAC, 0x5555, 0x555C, 
+  0x6AAA, 0xAAAC, 0x5555, 0x555C, 
+  0x6AAA, 0xAAAC, 0x5555, 0x555C, 
+  0x6AAA, 0xAAAC, 0x5555, 0x555C, 
+  0x6AAA, 0xAAAC, 0x5555, 0x555C, 
+  0x6AAA, 0xAAAC, 0x5555, 0x555C, 
+  0x6AAA, 0xAAAC, 0x5555, 0x555C, 
+  0x6AAA, 0xAAAC, 0x5555, 0x555C, 
+  0x6AAA, 0xAAAC, 0x5555, 0x555C, 
+  0x6AAA, 0xAAAC, 0x5555, 0x555C, 
+  0x7FFF, 0xFFFC, 0x3FFF, 0xFFFC, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x00FF, 0xFC00, 
+  0x01FF, 0xFE00, 0x0300, 0x0700, 
+  0x7FFF, 0xFFF8, 0x57FF, 0xFF5C, 
+  0x6BFF, 0xFF2C, 0x5400, 0x005C, 
+  0x6AAA, 0xAAAC, 0x5555, 0x555C, 
+  0x6AAA, 0xAAAC, 0x5555, 0x555C, 
+  0x6AAA, 0xAAAC, 0x5555, 0x555C, 
+  0x6AAA, 0xAAAC, 0x5555, 0x555C, 
+  0x6AAA, 0xAAAC, 0x5555, 0x555C, 
+  0x6AAA, 0xAAAC, 0x5555, 0x555C, 
+  0x6AAA, 0xAAAC, 0x5555, 0x555C, 
+  0x6AAA, 0xAAAC, 0x5555, 0x555C, 
+  0x6AAA, 0xAAAC, 0x5555, 0x555C, 
+  0x6AAA, 0xAAAC, 0x5555, 0x555C, 
+  0x7FFF, 0xFFFC, 0x3FFF, 0xFFFC, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x00FF, 0xFC00, 
+  0x0180, 0x0600, 0x0300, 0x0300, 
+  0x7E00, 0x01F8, 0x4200, 0x018C, 
+  0x43FF, 0xFF8C, 0x41FF, 0xFF8C, 
+  0x4000, 0x000C, 0x4000, 0x000C, 
+  0x4000, 0x000C, 0x4000, 0x000C, 
+  0x4000, 0x000C, 0x4000, 0x000C, 
+  0x4000, 0x000C, 0x4000, 0x000C, 
+  0x4000, 0x000C, 0x4000, 0x000C, 
+  0x4000, 0x000C, 0x4000, 0x000C, 
+  0x4000, 0x000C, 0x4000, 0x000C, 
+  0x4000, 0x000C, 0x4000, 0x000C, 
+  0x4000, 0x000C, 0x4000, 0x000C, 
+  0x4000, 0x000C, 0x4000, 0x000C, 
+  0x7FFF, 0xFFFC, 0x3FFF, 0xFFFC, 
+  0x0000, 0x0000, 0x0000, 0x0000
+};
+
+WORD RS4_MMASK[] =
+{ 0x0000, 0x0000, 0x0000, 0x1C00, 
+  0x0000, 0x3F00, 0x0000, 0x7FC0, 
+  0x0000, 0xFFF0, 0x0001, 0xFFF0, 
+  0x0003, 0xFFC0, 0x000F, 0xFF80, 
+  0x003F, 0xFF00, 0x00FF, 0xFE00, 
+  0x03FF, 0xFF80, 0x0FFF, 0xFFE0, 
+  0x3FFF, 0xFFF8, 0xFFFF, 0xFFF8, 
+  0xFFFF, 0xFFFC, 0xFFFF, 0xFFFF, 
+  0xFFFF, 0xFFFF, 0xFFFF, 0xFFFE, 
+  0xFFFF, 0xFFFC, 0xFFFF, 0xFFF8, 
+  0xFFFF, 0xFFF0, 0x7FFF, 0xFFF0, 
+  0x7FFF, 0xFFF0, 0x7FFF, 0xFFE0, 
+  0x3FFF, 0xFF80, 0x0FFF, 0xFE00, 
+  0x03FF, 0xF800, 0x00FF, 0xE000, 
+  0x003F, 0x8000, 0x000E, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000
+};
+
+WORD RS4_MDATA[] =
+{ 0x0000, 0x0000, 0x0000, 0x1C00, 
+  0x0000, 0x2300, 0x0000, 0x40C0, 
+  0x0000, 0x9830, 0x0001, 0x0630, 
+  0x0002, 0x6040, 0x000E, 0x1880, 
+  0x0034, 0xC100, 0x00C4, 0x3200, 
+  0x0319, 0x8780, 0x0C7C, 0x6660, 
+  0x31E3, 0x0998, 0xC660, 0xCE78, 
+  0x9998, 0x39FC, 0x9C66, 0x67FB, 
+  0x9301, 0x9FFB, 0x90C6, 0x7FFE, 
+  0x9039, 0xFFFC, 0x9017, 0xFFF8, 
+  0xD017, 0xFFF0, 0x7017, 0xFFF0, 
+  0x4C17, 0xFFF0, 0x4317, 0xFFE0, 
+  0x30D7, 0xFF80, 0x0C37, 0xFE00, 
+  0x030F, 0xF800, 0x00C7, 0xE000, 
+  0x0037, 0x8000, 0x000E, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000
+};
+
+WORD RS4_4CMASK[] =
+{ 0x0000, 0x0000, 0x0000, 0x1C00, 
+  0x0000, 0x3F00, 0x0000, 0x7FC0, 
+  0x0000, 0xFFF0, 0x0001, 0xFFF0, 
+  0x0003, 0xFFC0, 0x000F, 0xFF80, 
+  0x003F, 0xFF00, 0x00FF, 0xFE00, 
+  0x03FF, 0xFF80, 0x0FFF, 0xFFE0, 
+  0x3FFF, 0xFFF8, 0xFFFF, 0xFFF8, 
+  0xFFFF, 0xFFFC, 0xFFFF, 0xFFFF, 
+  0xFFFF, 0xFFFF, 0xFFFF, 0xFFFE, 
+  0xFFFF, 0xFFFC, 0xFFFF, 0xFFF8, 
+  0xFFFF, 0xFFF0, 0x7FFF, 0xFFF0, 
+  0x7FFF, 0xFFF0, 0x7FFF, 0xFFE0, 
+  0x3FFF, 0xFF80, 0x0FFF, 0xFE00, 
+  0x03FF, 0xF800, 0x00FF, 0xE000, 
+  0x003F, 0x8000, 0x000E, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000
+};
+
+WORD RS4_4CDATA[] =
+{ 0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0070, 
+  0x0000, 0x00C0, 0x0000, 0x0180, 
+  0x0000, 0x0300, 0x0018, 0x0600, 
+  0x0060, 0x0400, 0x018C, 0x0D80, 
+  0x061F, 0x0E68, 0x199F, 0xD988, 
+  0x0667, 0xE608, 0x23F9, 0x980C, 
+  0x2CFE, 0x600D, 0x2F39, 0x800A, 
+  0x2FC6, 0x000C, 0x2FE0, 0x0018, 
+  0x2FE8, 0x0070, 0x0FE8, 0x0190, 
+  0x33E8, 0x0610, 0x7CE8, 0x1860, 
+  0x3F28, 0x6180, 0x0FC9, 0x8600, 
+  0x03F6, 0x1800, 0x00F8, 0x6000, 
+  0x0039, 0x8000, 0x000E, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0070, 
+  0x0000, 0x00C0, 0x0000, 0x0180, 
+  0x0000, 0x0300, 0x0018, 0x0600, 
+  0x0060, 0x0400, 0x018C, 0x0D80, 
+  0x061F, 0x0E68, 0x199F, 0xD988, 
+  0x07E7, 0xE608, 0x2399, 0x980C, 
+  0x2CFE, 0x600D, 0x2F39, 0x800A, 
+  0x2FC6, 0x000C, 0x2FE0, 0x0018, 
+  0x2FE8, 0x0070, 0x0FE8, 0x0190, 
+  0x33E8, 0x0610, 0x7CE8, 0x1860, 
+  0x3F28, 0x6180, 0x0FC9, 0x8600, 
+  0x03F6, 0x1800, 0x00F8, 0x6000, 
+  0x0039, 0x8000, 0x000E, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x1800, 0x0000, 0x0670, 
+  0x0000, 0x60C0, 0x0000, 0x1980, 
+  0x0000, 0xC300, 0x0018, 0x3600, 
+  0x0061, 0x8400, 0x018C, 0x6D80, 
+  0x061F, 0x0E68, 0x199F, 0xD988, 
+  0x0667, 0xE608, 0x2399, 0x980C, 
+  0x2CFE, 0x600D, 0x2F39, 0x800A, 
+  0x2FC6, 0x000C, 0x2FE0, 0x0018, 
+  0x2FE8, 0x0070, 0x0FE8, 0x0190, 
+  0x33E8, 0x0610, 0x7CE8, 0x1860, 
+  0x3F28, 0x6180, 0x0FC9, 0x8600, 
+  0x03F6, 0x1800, 0x00F8, 0x6000, 
+  0x0039, 0x8000, 0x000E, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x1C00, 
+  0x0000, 0x2300, 0x0000, 0x40C0, 
+  0x0000, 0x8030, 0x0001, 0x0030, 
+  0x0002, 0x0040, 0x000E, 0x0080, 
+  0x0034, 0x0100, 0x00C4, 0x0200, 
+  0x0318, 0x0780, 0x0C7C, 0x0660, 
+  0x31E3, 0x0998, 0xC660, 0xCE78, 
+  0x9818, 0x39FC, 0x9006, 0x67FB, 
+  0x9001, 0x9FFB, 0x9006, 0x7FFE, 
+  0x9019, 0xFFFC, 0x9017, 0xFFF8, 
+  0xD017, 0xFFF0, 0x7017, 0xFFF0, 
+  0x4C17, 0xFFF0, 0x4317, 0xFFE0, 
+  0x30D7, 0xFF80, 0x0C37, 0xFE00, 
+  0x030F, 0xF800, 0x00C7, 0xE000, 
+  0x0037, 0x8000, 0x000E, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000
+};
+
+CICON rs_cicon[] =
+{ 4, RS0_4CDATA, RS0_4CMASK, NULL, NULL, NULL,
+  4, RS1_4CDATA, RS1_4CMASK, NULL, NULL, NULL,
+  4, RS2_4CDATA, RS2_4CMASK, NULL, NULL, NULL,
+  4, RS3_4CDATA, RS3_4CMASK, NULL, NULL, NULL,
+  4, RS4_4CDATA, RS4_4CMASK, NULL, NULL, NULL
+};
+
+CICONBLK rs_ciconblk[] =
+{ RS0_MMASK, RS0_MDATA, "PAPIERKORB\000\000", 0x1000|'\0',
+   14,  21,  20,   0,  32,  32,   0,  32,  72,   8, &rs_cicon[0],
+  RS1_MMASK, RS1_MDATA, "DRUCKER\000\000\000\000\000", 0x1000|'\0',
+   14,  21,  20,   0,  32,  32,   0,  32,  72,   8, &rs_cicon[1],
+  RS2_MMASK, RS2_MDATA, "LAUFWERK\000\000\000\000", 0x1000|'\0',
+   14,  21,  20,   0,  48,  32,   0,  32,  72,   8, &rs_cicon[2],
+  RS3_MMASK, RS3_MDATA, "KLEMMBRETT\000\000", 0x1000|'\0',
+   12,  14,  20,   0,  32,  32,   0,  32,  72,   8, &rs_cicon[3],
+  RS4_MMASK, RS4_MDATA, "123456789012", 0x1000|'\0',
+   14,  21,  20,   0,  32,  32,   0,  32,  72,   8, &rs_cicon[4]
+};
+
+WORD rgb_palette[][4] =
+{ 0x03E8, 0x03E8, 0x03E8, 0x0000, 
+  0x03E8, 0x0000, 0x0000, 0x0002, 
+  0x0000, 0x03E8, 0x0000, 0x0003, 
+  0x03E8, 0x03E8, 0x0000, 0x0006, 
+  0x0000, 0x0000, 0x03E8, 0x0004, 
+  0x03E8, 0x0000, 0x03E8, 0x0007, 
+  0x0000, 0x03E8, 0x03E8, 0x0005, 
+  0x0320, 0x0320, 0x0320, 0x0008, 
+  0x01F5, 0x01F5, 0x01F5, 0x0009, 
+  0x029A, 0x0000, 0x0000, 0x000A, 
+  0x0000, 0x029A, 0x0000, 0x000B, 
+  0x029A, 0x029A, 0x0000, 0x000E, 
+  0x0000, 0x0000, 0x029A, 0x000C, 
+  0x029A, 0x0000, 0x029A, 0x000F, 
+  0x0000, 0x029A, 0x029A, 0x000D, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0000, 
+  0x0000, 0x0000, 0x0000, 0x0001
+};
+
+BYTE *rs_frstr[] =
+{ "[3][Es stehen keine weiteren|Fenster mehr zur Verf\201gung!][ Abbruch ]",
+  "[3][Nicht gen\201gend Speicher|vorhanden, um Funktion|auszuf\201hren!][ Abbruch ]",
+  "[3][Fehler beim Lesen des|Hilfe-Datensatzes f\201r Index|\042%s\042!][ Abbruch ]"
+};
+
+OBJECT rs_object[] =
+{ 
+  /******** Tree 0 MENU ****************************************************/
+        -1,        1,       11, G_IBOX    ,   /* Object 0  */
+  NONE, NORMAL, (LONG)0x00000000L,
+  0x0000, 0x0000, 0x0080, 0x0019,
+        11,        2,        2, G_BOX     ,   /* Object 1  */
+  NONE, NORMAL, (LONG)0x00001100L,
+  0x0000, 0x0000, 0x0080, 0x0201,
+         1, MDESK   , MHELP   , G_IBOX    ,   /* Object 2  */
+  NONE, NORMAL, (LONG)0x00000000L,
+  0x0002, 0x0000, 0x0049, 0x0301,
+  MFILE   ,       -1,       -1, G_TITLE   ,   /* Object 3 MDESK */
+  NONE, NORMAL, (LONG)" MANAGER",
+  0x0000, 0x0000, 0x0009, 0x0301,
+  MEDIT   ,       -1,       -1, G_TITLE   ,   /* Object 4 MFILE */
+  NONE, NORMAL, (LONG)" Datei",
+  0x0009, 0x0000, 0x0007, 0x0301,
+  MPROCESS,       -1,       -1, G_TITLE   ,   /* Object 5 MEDIT */
+  NONE, NORMAL, (LONG)" Bearbeiten",
+  0x0010, 0x0000, 0x000C, 0x0301,
+  MACCOUNT,       -1,       -1, G_TITLE   ,   /* Object 6 MPROCESS */
+  NONE, NORMAL, (LONG)" Proze\236",
+  0x001C, 0x0000, 0x0008, 0x0301,
+  MPARAMS ,       -1,       -1, G_TITLE   ,   /* Object 7 MACCOUNT */
+  NONE, NORMAL, (LONG)" Bericht",
+  0x0024, 0x0000, 0x0009, 0x0301,
+  MOPTIONS,       -1,       -1, G_TITLE   ,   /* Object 8 MPARAMS */
+  NONE, NORMAL, (LONG)" Parameter",
+  0x002D, 0x0000, 0x000B, 0x0301,
+  MHELP   ,       -1,       -1, G_TITLE   ,   /* Object 9 MOPTIONS */
+  NONE, NORMAL, (LONG)" Optionen",
+  0x0038, 0x0000, 0x000A, 0x0301,
+         2,       -1,       -1, G_TITLE   ,   /* Object 10 MHELP */
+  NONE, NORMAL, (LONG)" Hilfe",
+  0x0042, 0x0000, 0x0007, 0x0301,
+         0,       12,      100, G_IBOX    ,   /* Object 11  */
+  NONE, NORMAL, (LONG)0x00000000L,
+  0x0000, 0x0301, 0x0050, 0x0017,
+        21, MABOUT  ,       20, G_BOX     ,   /* Object 12  */
+  NONE, NORMAL, (LONG)0x00FF1100L,
+  0x0002, 0x0000, 0x0014, 0x0008,
+        14,       -1,       -1, G_STRING  ,   /* Object 13 MABOUT */
+  NONE, NORMAL, (LONG)"  \232ber Manager...",
+  0x0000, 0x0000, 0x0014, 0x0001,
+        15,       -1,       -1, G_STRING  ,   /* Object 14  */
+  NONE, DISABLED, (LONG)"--------------------",
+  0x0000, 0x0001, 0x0014, 0x0001,
+        16,       -1,       -1, G_STRING  ,   /* Object 15  */
+  NONE, NORMAL, (LONG)"  Desk Accessory 1",
+  0x0000, 0x0002, 0x0014, 0x0001,
+        17,       -1,       -1, G_STRING  ,   /* Object 16  */
+  NONE, NORMAL, (LONG)"  Desk Accessory 2",
+  0x0000, 0x0003, 0x0014, 0x0001,
+        18,       -1,       -1, G_STRING  ,   /* Object 17  */
+  NONE, NORMAL, (LONG)"  Desk Accessory 3",
+  0x0000, 0x0004, 0x0014, 0x0001,
+        19,       -1,       -1, G_STRING  ,   /* Object 18  */
+  NONE, NORMAL, (LONG)"  Desk Accessory 4",
+  0x0000, 0x0005, 0x0014, 0x0001,
+        20,       -1,       -1, G_STRING  ,   /* Object 19  */
+  NONE, NORMAL, (LONG)"  Desk Accessory 5",
+  0x0000, 0x0006, 0x0014, 0x0001,
+        12,       -1,       -1, G_STRING  ,   /* Object 20  */
+  NONE, NORMAL, (LONG)"  Desk Accessory 6",
+  0x0000, 0x0007, 0x0014, 0x0001,
+        36, MOPEN   , MQUIT   , G_BOX     ,   /* Object 21  */
+  NONE, NORMAL, (LONG)0x00FF1100L,
+  0x000B, 0x0000, 0x0016, 0x000E,
+  MCLOSE  ,       -1,       -1, G_STRING  ,   /* Object 22 MOPEN */
+  NONE, NORMAL, (LONG)"  \231ffnen...       ^O",
+  0x0000, 0x0000, 0x0016, 0x0001,
+  MCLOSEDB,       -1,       -1, G_STRING  ,   /* Object 23 MCLOSE */
+  NONE, NORMAL, (LONG)"  Schlie\236en       ^U",
+  0x0000, 0x0001, 0x0016, 0x0001,
+        25,       -1,       -1, G_STRING  ,   /* Object 24 MCLOSEDB */
+  NONE, NORMAL, (LONG)"  Db schlie\236en    ^B",
+  0x0000, 0x0002, 0x0016, 0x0001,
+  MSAVE   ,       -1,       -1, G_STRING  ,   /* Object 25  */
+  NONE, DISABLED, (LONG)"----------------------",
+  0x0000, 0x0003, 0x0016, 0x0001,
+  MSAVEAS ,       -1,       -1, G_STRING  ,   /* Object 26 MSAVE */
+  NONE, NORMAL, (LONG)"  Sichern         ^S",
+  0x0000, 0x0004, 0x0016, 0x0001,
+        28,       -1,       -1, G_STRING  ,   /* Object 27 MSAVEAS */
+  NONE, NORMAL, (LONG)"  Sichern als...  ^M",
+  0x0000, 0x0005, 0x0016, 0x0001,
+  MEXPORT ,       -1,       -1, G_STRING  ,   /* Object 28  */
+  NONE, DISABLED, (LONG)"----------------------",
+  0x0000, 0x0006, 0x0016, 0x0001,
+  MIMPORT ,       -1,       -1, G_STRING  ,   /* Object 29 MEXPORT */
+  NONE, NORMAL, (LONG)"  Exportieren...  ^E",
+  0x0000, 0x0007, 0x0016, 0x0001,
+  MDISK   ,       -1,       -1, G_STRING  ,   /* Object 30 MIMPORT */
+  NONE, NORMAL, (LONG)"  Importieren...  ^I",
+  0x0000, 0x0008, 0x0016, 0x0001,
+        32,       -1,       -1, G_STRING  ,   /* Object 31 MDISK */
+  NONE, NORMAL, (LONG)"  Diskausgabe...  ^K",
+  0x0000, 0x0009, 0x0016, 0x0001,
+  MPRINT  ,       -1,       -1, G_STRING  ,   /* Object 32  */
+  NONE, DISABLED, (LONG)"----------------------",
+  0x0000, 0x000A, 0x0016, 0x0001,
+        34,       -1,       -1, G_STRING  ,   /* Object 33 MPRINT */
+  NONE, NORMAL, (LONG)"  Drucken         ^P",
+  0x0000, 0x000B, 0x0016, 0x0001,
+  MQUIT   ,       -1,       -1, G_STRING  ,   /* Object 34  */
+  NONE, DISABLED, (LONG)"----------------------",
+  0x0000, 0x000C, 0x0016, 0x0001,
+        21,       -1,       -1, G_STRING  ,   /* Object 35 MQUIT */
+  NONE, NORMAL, (LONG)"  Beenden         ^Q",
+  0x0000, 0x000D, 0x0016, 0x0001,
+        58, MUNDO   , MTOCLIP , G_BOX     ,   /* Object 36  */
+  NONE, NORMAL, (LONG)0x00FF1000L,
+  0x0012, 0x0000, 0x0019, 0x0015,
+        38,       -1,       -1, G_STRING  ,   /* Object 37 MUNDO */
+  NONE, NORMAL, (LONG)"  Undo               ^Z",
+  0x0000, 0x0000, 0x0019, 0x0001,
+  MCUT    ,       -1,       -1, G_STRING  ,   /* Object 38  */
+  NONE, DISABLED, (LONG)"-------------------------",
+  0x0000, 0x0001, 0x0019, 0x0001,
+  MCOPY   ,       -1,       -1, G_STRING  ,   /* Object 39 MCUT */
+  NONE, NORMAL, (LONG)"  Ausschneiden       ^X",
+  0x0000, 0x0002, 0x0019, 0x0001,
+  MPASTE  ,       -1,       -1, G_STRING  ,   /* Object 40 MCOPY */
+  NONE, NORMAL, (LONG)"  Kopieren           ^C",
+  0x0000, 0x0003, 0x0019, 0x0001,
+  MCLEAR  ,       -1,       -1, G_STRING  ,   /* Object 41 MPASTE */
+  NONE, NORMAL, (LONG)"  Einf\201gen           ^V",
+  0x0000, 0x0004, 0x0019, 0x0001,
+  MSELALL ,       -1,       -1, G_STRING  ,   /* Object 42 MCLEAR */
+  NONE, NORMAL, (LONG)"  L\224schen            ^D",
+  0x0000, 0x0005, 0x0019, 0x0001,
+        44,       -1,       -1, G_STRING  ,   /* Object 43 MSELALL */
+  NONE, NORMAL, (LONG)"  Alles ausw\204hlen    ^A",
+  0x0000, 0x0006, 0x0019, 0x0001,
+  MSEARCH ,       -1,       -1, G_STRING  ,   /* Object 44  */
+  NONE, DISABLED, (LONG)"-------------------------",
+  0x0000, 0x0007, 0x0019, 0x0001,
+  MCONT   ,       -1,       -1, G_STRING  ,   /* Object 45 MSEARCH */
+  NONE, NORMAL, (LONG)"  Suchen...          ^F",
+  0x0000, 0x0008, 0x0019, 0x0001,
+        47,       -1,       -1, G_STRING  ,   /* Object 46 MCONT */
+  NONE, NORMAL, (LONG)"  Weitersuchen       ^G",
+  0x0000, 0x0009, 0x0019, 0x0001,
+  MICONIFY,       -1,       -1, G_STRING  ,   /* Object 47  */
+  NONE, DISABLED, (LONG)"-------------------------",
+  0x0000, 0x000A, 0x0019, 0x0001,
+  MCYCLEWI,       -1,       -1, G_STRING  ,   /* Object 48 MICONIFY */
+  NONE, NORMAL, (LONG)"  Sinnbild           F5",
+  0x0000, 0x000B, 0x0019, 0x0001,
+        50,       -1,       -1, G_STRING  ,   /* Object 49 MCYCLEWI */
+  NONE, NORMAL, (LONG)"  Fenster wechseln   ^W",
+  0x0000, 0x000C, 0x0019, 0x0001,
+  MOPENTBL,       -1,       -1, G_STRING  ,   /* Object 50  */
+  NONE, DISABLED, (LONG)"-------------------------",
+  0x0000, 0x000D, 0x0019, 0x0001,
+  MEDITDAT,       -1,       -1, G_STRING  ,   /* Object 51 MOPENTBL */
+  NONE, NORMAL, (LONG)"  Tabelle \224ffnen...  ^T",
+  0x0000, 0x000E, 0x0019, 0x0001,
+  MREMOVE ,       -1,       -1, G_STRING  ,   /* Object 52 MEDITDAT */
+  NONE, NORMAL, (LONG)"  Daten bearbeiten  F10",
+  0x0000, 0x000F, 0x0019, 0x0001,
+  MREMSEL ,       -1,       -1, G_STRING  ,   /* Object 53 MREMOVE */
+  NONE, NORMAL, (LONG)"  Entfernen          ^R",
+  0x0000, 0x0010, 0x0019, 0x0001,
+  MEMPTYTR,       -1,       -1, G_STRING  ,   /* Object 54 MREMSEL */
+  NONE, NORMAL, (LONG)"  Bereich entfernen  ^L",
+  0x0000, 0x0011, 0x0019, 0x0001,
+        56,       -1,       -1, G_STRING  ,   /* Object 55 MEMPTYTR */
+  NONE, NORMAL, (LONG)"  Papierkorb leeren  ^H",
+  0x0000, 0x0012, 0x0019, 0x0001,
+  MTOCLIP ,       -1,       -1, G_STRING  ,   /* Object 56  */
+  NONE, DISABLED, (LONG)"-------------------------",
+  0x0000, 0x0013, 0x0019, 0x0001,
+        36,       -1,       -1, G_STRING  ,   /* Object 57 MTOCLIP */
+  NONE, NORMAL, (LONG)"  Auf GEM-Klemmbrett ^K",
+  0x0000, 0x0014, 0x0019, 0x0001,
+        65, MPNEW   , MPREMOVE, G_BOX     ,   /* Object 58  */
+  NONE, NORMAL, (LONG)0x00FF1000L,
+  0x001E, 0x0000, 0x001B, 0x0006,
+  MPLIST  ,       -1,       -1, G_STRING  ,   /* Object 59 MPNEW */
+  NONE, NORMAL, (LONG)"  Neu...               \007N",
+  0x0000, 0x0000, 0x001B, 0x0001,
+  MPEXEC  ,       -1,       -1, G_STRING  ,   /* Object 60 MPLIST */
+  NONE, NORMAL, (LONG)"  Liste...             \007Q",
+  0x0000, 0x0001, 0x001B, 0x0001,
+        62,       -1,       -1, G_STRING  ,   /* Object 61 MPEXEC */
+  NONE, NORMAL, (LONG)"  Ausf\201hren            \007X",
+  0x0000, 0x0002, 0x001B, 0x0001,
+  MPASSIGN,       -1,       -1, G_STRING  ,   /* Object 62  */
+  NONE, DISABLED, (LONG)"---------------------------",
+  0x0000, 0x0003, 0x001B, 0x0001,
+  MPREMOVE,       -1,       -1, G_STRING  ,   /* Object 63 MPASSIGN */
+  NONE, NORMAL, (LONG)"  Rechnung zuweisen    \007E",
+  0x0000, 0x0004, 0x001B, 0x0001,
+        58,       -1,       -1, G_STRING  ,   /* Object 64 MPREMOVE */
+  NONE, NORMAL, (LONG)"  Rechnung entfernen   \007R",
+  0x0000, 0x0005, 0x001B, 0x0001,
+        76, MPAGEHDR, MGROUP  , G_BOX     ,   /* Object 65  */
+  NONE, NORMAL, (LONG)0x00FF1100L,
+  0x0026, 0x0000, 0x0019, 0x000A,
+  MACCHDR ,       -1,       -1, G_STRING  ,   /* Object 66 MPAGEHDR */
+  NONE, NORMAL, (LONG)"  Seitenkopf/-fu\236",
+  0x0000, 0x0000, 0x0019, 0x0001,
+        68,       -1,       -1, G_STRING  ,   /* Object 67 MACCHDR */
+  NONE, NORMAL, (LONG)"  Berichtskopf/-fu\236",
+  0x0000, 0x0001, 0x0019, 0x0001,
+  MSHOWRST,       -1,       -1, G_STRING  ,   /* Object 68  */
+  NONE, DISABLED, (LONG)"-------------------------",
+  0x0000, 0x0002, 0x0019, 0x0001,
+  MRASTER ,       -1,       -1, G_STRING  ,   /* Object 69 MSHOWRST */
+  NONE, NORMAL, (LONG)"  Raster anzeigen",
+  0x0000, 0x0003, 0x0019, 0x0001,
+        71,       -1,       -1, G_STRING  ,   /* Object 70 MRASTER */
+  NONE, NORMAL, (LONG)"  Am Raster ausrichten",
+  0x0000, 0x0004, 0x0019, 0x0001,
+  MFOREGND,       -1,       -1, G_STRING  ,   /* Object 71  */
+  NONE, DISABLED, (LONG)"-------------------------",
+  0x0000, 0x0005, 0x0019, 0x0001,
+  MBACKGND,       -1,       -1, G_STRING  ,   /* Object 72 MFOREGND */
+  NONE, NORMAL, (LONG)"  In den Vordergrund",
+  0x0000, 0x0006, 0x0019, 0x0001,
+        74,       -1,       -1, G_STRING  ,   /* Object 73 MBACKGND */
+  NONE, NORMAL, (LONG)"  In den Hintergrund",
+  0x0000, 0x0007, 0x0019, 0x0001,
+  MGROUP  ,       -1,       -1, G_STRING  ,   /* Object 74  */
+  NONE, DISABLED, (LONG)"-------------------------",
+  0x0000, 0x0008, 0x0019, 0x0001,
+        65,       -1,       -1, G_STRING  ,   /* Object 75 MGROUP */
+  NONE, NORMAL, (LONG)"  Gruppieren...",
+  0x0000, 0x0009, 0x0019, 0x0001,
+        89, MCONFIG , MUSERINT, G_BOX     ,   /* Object 76  */
+  NONE, NORMAL, (LONG)0x00FF1000L,
+  0x002F, 0x0000, 0x001F, 0x000C,
+  MLOADCNF,       -1,       -1, G_STRING  ,   /* Object 77 MCONFIG */
+  NONE, NORMAL, (LONG)"  Konfiguration...         \007C",
+  0x0000, 0x0000, 0x001F, 0x0001,
+  MSAVECNF,       -1,       -1, G_STRING  ,   /* Object 78 MLOADCNF */
+  NONE, NORMAL, (LONG)"  Konfiguration laden...   \007L",
+  0x0000, 0x0001, 0x001F, 0x0001,
+        80,       -1,       -1, G_STRING  ,   /* Object 79 MSAVECNF */
+  NONE, NORMAL, (LONG)"  Konfiguration sichern... \007S",
+  0x0000, 0x0002, 0x001F, 0x0001,
+  MMCONFIG,       -1,       -1, G_STRING  ,   /* Object 80  */
+  NONE, DISABLED, (LONG)"-------------------------------",
+  0x0000, 0x0003, 0x001F, 0x0001,
+  MIMPEXP ,       -1,       -1, G_STRING  ,   /* Object 81 MMCONFIG */
+  FLAGS11, NORMAL, (LONG)"  Masken-Konfiguration...  \007M",
+  0x0000, 0x0004, 0x001F, 0x0001,
+  MSETPRN ,       -1,       -1, G_STRING  ,   /* Object 82 MIMPEXP */
+  FLAGS11, NORMAL, (LONG)"  Im/Export-Parameter...   \007I",
+  0x0000, 0x0005, 0x001F, 0x0001,
+  MQUEUE  ,       -1,       -1, G_STRING  ,   /* Object 83 MSETPRN */
+  NONE, NORMAL, (LONG)"  Drucker-Parameter...     \007P",
+  0x0000, 0x0006, 0x001F, 0x0001,
+  MPAGEFOR,       -1,       -1, G_STRING  ,   /* Object 84 MQUEUE */
+  NONE, NORMAL, (LONG)"  Druckerwarteschlange...  \007G",
+  0x0000, 0x0007, 0x001F, 0x0001,
+  MFONT   ,       -1,       -1, G_STRING  ,   /* Object 85 MPAGEFOR */
+  NONE, NORMAL, (LONG)"  Seitenformat...          \007T",
+  0x0000, 0x0008, 0x001F, 0x0001,
+        87,       -1,       -1, G_STRING  ,   /* Object 86 MFONT */
+  NONE, NORMAL, (LONG)"  Schriftart...            \007F",
+  0x0000, 0x0009, 0x001F, 0x0001,
+  MUSERINT,       -1,       -1, G_STRING  ,   /* Object 87  */
+  NONE, DISABLED, (LONG)"-------------------------------",
+  0x0000, 0x000A, 0x001F, 0x0001,
+        76,       -1,       -1, G_STRING  ,   /* Object 88 MUSERINT */
+  NONE, NORMAL, (LONG)"  Benutzer-Oberfl\204che...   \007B",
+  0x0000, 0x000B, 0x001F, 0x0001,
+       100, MDESIGNE, MORDERDE, G_BOX     ,   /* Object 89  */
+  NONE, NORMAL, (LONG)0x00FF1000L,
+  0x003A, 0x0000, 0x001D, 0x000A,
+  MREORG  ,       -1,       -1, G_STRING  ,   /* Object 90 MDESIGNE */
+  NONE, NORMAL, (LONG)"  Designer...           ^F2",
+  0x0000, 0x0000, 0x001D, 0x0001,
+  MPROGRAM,       -1,       -1, G_STRING  ,   /* Object 91 MREORG */
+  NONE, NORMAL, (LONG)"  Reorganisieren...     ^F3",
+  0x0000, 0x0001, 0x001D, 0x0001,
+        93,       -1,       -1, G_STRING  ,   /* Object 92 MPROGRAM */
+  NONE, NORMAL, (LONG)"  Programm...           ^F4",
+  0x0000, 0x0002, 0x001D, 0x0001,
+  MFLUSH  ,       -1,       -1, G_STRING  ,   /* Object 93  */
+  NONE, DISABLED, (LONG)"-----------------------------",
+  0x0000, 0x0003, 0x001D, 0x0001,
+  MLOCKSCR,       -1,       -1, G_STRING  ,   /* Object 94 MFLUSH */
+  NONE, NORMAL, (LONG)"  Cache schreiben        \007K",
+  0x0000, 0x0004, 0x001D, 0x0001,
+  MCHNGPSS,       -1,       -1, G_STRING  ,   /* Object 95 MLOCKSCR */
+  NONE, NORMAL, (LONG)"  Anzeige sch\201tzen...    \007V",
+  0x0000, 0x0005, 0x001D, 0x0001,
+        97,       -1,       -1, G_STRING  ,   /* Object 96 MCHNGPSS */
+  NONE, NORMAL, (LONG)"  Pa\236wort \204ndern...      \007W",
+  0x0000, 0x0006, 0x001D, 0x0001,
+  MREVERSE,       -1,       -1, G_STRING  ,   /* Object 97  */
+  NONE, DISABLED, (LONG)"-----------------------------",
+  0x0000, 0x0007, 0x001D, 0x0001,
+  MORDERDE,       -1,       -1, G_STRING  ,   /* Object 98 MREVERSE */
+  NONE, NORMAL, (LONG)"  Sortierung umdrehen    \007O",
+  0x0000, 0x0008, 0x001D, 0x0001,
+        89,       -1,       -1, G_STRING  ,   /* Object 99 MORDERDE */
+  NONE, NORMAL, (LONG)"  Schreibtisch aufr\204umen \007D",
+  0x0000, 0x0009, 0x001D, 0x0001,
+        11, MHELPCXT, MINXINFO, G_BOX     ,   /* Object 100  */
+  NONE, NORMAL, (LONG)0x00FF1000L,
+  0x0044, 0x0000, 0x0019, 0x000A,
+  MHELPINX,       -1,       -1, G_STRING  ,   /* Object 101 MHELPCXT */
+  NONE, NORMAL, (LONG)"  Kontext-Hilfe      F1",
+  0x0000, 0x0000, 0x0019, 0x0001,
+  MHELPCON,       -1,       -1, G_STRING  ,   /* Object 102 MHELPINX */
+  NONE, NORMAL, (LONG)"  Index             \007F1",
+  0x0000, 0x0001, 0x0019, 0x0001,
+  MHELPOBJ,       -1,       -1, G_STRING  ,   /* Object 103 MHELPCON */
+  NONE, NORMAL, (LONG)"  Inhalt            ^F1",
+  0x0000, 0x0002, 0x0019, 0x0001,
+       105,       -1,       -1, G_STRING  ,   /* Object 104 MHELPOBJ */
+  NONE, NORMAL, (LONG)"  Objekt/Men\201       \001F1",
+  0x0000, 0x0003, 0x0019, 0x0001,
+  MINFO   ,       -1,       -1, G_STRING  ,   /* Object 105  */
+  NONE, DISABLED, (LONG)"-------------------------",
+  0x0000, 0x0004, 0x0019, 0x0001,
+       107,       -1,       -1, G_STRING  ,   /* Object 106 MINFO */
+  NONE, NORMAL, (LONG)"  Eigenschaften...  \001F2",
+  0x0000, 0x0005, 0x0019, 0x0001,
+  MDBINFO ,       -1,       -1, G_STRING  ,   /* Object 107  */
+  NONE, DISABLED, (LONG)"-------------------------",
+  0x0000, 0x0006, 0x0019, 0x0001,
+  MTBLINFO,       -1,       -1, G_STRING  ,   /* Object 108 MDBINFO */
+  NONE, NORMAL, (LONG)"  Datenbank-Info... ^F7",
+  0x0000, 0x0007, 0x0019, 0x0001,
+  MINXINFO,       -1,       -1, G_STRING  ,   /* Object 109 MTBLINFO */
+  NONE, NORMAL, (LONG)"  Tabellen-Info...  ^F8",
+  0x0000, 0x0008, 0x0019, 0x0001,
+       100,       -1,       -1, G_STRING  ,   /* Object 110 MINXINFO */
+  LASTOB, NORMAL, (LONG)"  Index-Info...     ^F9",
+  0x0000, 0x0009, 0x0019, 0x0001,
+  
+  /******** Tree 1 ABOUT ****************************************************/
+        -1, ALOGO   , AINFO   , G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|WHITEBAK|STATE15, (LONG)0x00001100L,
+  0x0000, 0x0000, 0x0029, 0x0017,
+         2,       -1,       -1, G_BOX     ,   /* Object 1 ALOGO */
+  NONE, DRAW3D, (LONG)0x00FF1101L,
+  0x0001, 0x0001, 0x0027, 0x000D,
+         3,       -1,       -1, G_TEXT    ,   /* Object 2  */
+  NONE, NORMAL, (LONG)&rs_tedinfo[0],
+  0x0000, 0x000E, 0x0029, 0x0600,
+  ASERIAL ,       -1,       -1, G_TEXT    ,   /* Object 3  */
+  NONE, NORMAL, (LONG)&rs_tedinfo[1],
+  0x0001, 0x000F, 0x0609, 0x0600,
+         5,       -1,       -1, G_TEXT    ,   /* Object 4 ASERIAL */
+  NONE, NORMAL, (LONG)&rs_tedinfo[2],
+  0x000C, 0x000F, 0x0407, 0x0600,
+         6,       -1,       -1, G_TEXT    ,   /* Object 5  */
+  NONE, NORMAL, (LONG)&rs_tedinfo[3],
+  0x0001, 0x0010, 0x0009, 0x0600,
+  ACOMPANY,       -1,       -1, G_TEXT    ,   /* Object 6  */
+  NONE, NORMAL, (LONG)&rs_tedinfo[4],
+  0x0001, 0x0011, 0x0609, 0x0600,
+         8,       -1,       -1, G_TEXT    ,   /* Object 7 ACOMPANY */
+  NONE, NORMAL, (LONG)&rs_tedinfo[5],
+  0x000C, 0x0011, 0x0416, 0x0600,
+  ANAME   ,       -1,       -1, G_TEXT    ,   /* Object 8  */
+  NONE, NORMAL, (LONG)&rs_tedinfo[6],
+  0x0001, 0x0012, 0x0609, 0x0600,
+  AOK     ,       -1,       -1, G_TEXT    ,   /* Object 9 ANAME */
+  NONE, NORMAL, (LONG)&rs_tedinfo[7],
+  0x000C, 0x0012, 0x0416, 0x0600,
+  AINFO   ,       -1,       -1, G_BUTTON  ,   /* Object 10 AOK */
+  SELECTABLE|DEFAULT|EXIT, WHITEBAK, (LONG)"~OK",
+  0x0008, 0x0014, 0x000A, 0x0002,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 11 AINFO */
+  SELECTABLE|LASTOB, WHITEBAK, (LONG)"~Info...",
+  0x0016, 0x0014, 0x000A, 0x0002,
+  
+  /******** Tree 2 DESKTOP ****************************************************/
+        -1, DTABLES , FKEYS   , G_BOX     ,   /* Object 0  */
+  NONE, NORMAL, (LONG)0x00000141L,
+  0x0000, 0x0000, 0x0050, 0x0019,
+  ICONBAR , DTBLBOX , DTBLBOX , G_BOX     ,   /* Object 1 DTABLES */
+  NONE, STATE14, (LONG)0x00FF1180L,
+  0x0001, 0x0000, 0x0012, 0x0014,
+  DTABLES , DBASE   , DDESCEND, G_IBOX    ,   /* Object 2 DTBLBOX */
+  NONE, STATE13|STATE15, (LONG)0x00021100L,
+  0x0000, 0x0000, 0x0012, 0x0014,
+  DTBLLIST,       -1,       -1, G_BUTTON  ,   /* Object 3 DBASE */
+  SELECTABLE|TOUCHEXIT, STATE11, (LONG)"123456789012",
+  0x0002, 0x0001, 0x000E, 0x0001,
+  DINXLIST,       -1,       -1, G_BOX     ,   /* Object 4 DTBLLIST */
+  SELECTABLE, STATE13, (LONG)0x00FF1101L,
+  0x0002, 0x0003, 0x000E, 0x0006,
+  DASCEND ,       -1,       -1, G_BOX     ,   /* Object 5 DINXLIST */
+  SELECTABLE, STATE13, (LONG)0x00FF1101L,
+  0x0002, 0x000A, 0x000E, 0x0006,
+  DDESCEND,       -1,       -1, G_BUTTON  ,   /* Object 6 DASCEND */
+  SELECTABLE|RBUTTON, SELECTED|STATE13, (LONG)"Aufsteigend",
+  0x0002, 0x0011, 0x000B, 0x0001,
+  DTBLBOX ,       -1,       -1, G_BUTTON  ,   /* Object 7 DDESCEND */
+  SELECTABLE|RBUTTON, STATE13, (LONG)"Absteigend",
+  0x0002, 0x0012, 0x000A, 0x0001,
+  ITABLE  ,        9,        9, G_BOX     ,   /* Object 8 ICONBAR */
+  NONE, STATE14, (LONG)0x00FF1100L,
+  0x0014, 0x0000, 0x0034, 0x0003,
+  ICONBAR , ICNEW   , ICMASK  , G_IBOX    ,   /* Object 9  */
+  NONE, STATE11|STATE15, (LONG)0x00011100L,
+  0x0000, 0x0000, 0x0034, 0x0003,
+  ICOPEN  ,       -1,       -1, G_BUTTON  ,   /* Object 10 ICNEW */
+  SELECTABLE, DRAW3D|STATE15, (LONG)"new",
+  0x0001, 0x0001, 0x0004, 0x0002,
+  ICSAVE  ,       -1,       -1, G_BUTTON  ,   /* Object 11 ICOPEN */
+  SELECTABLE, DRAW3D|STATE15, (LONG)"open",
+  0x0005, 0x0001, 0x0004, 0x0002,
+  ICPRINT ,       -1,       -1, G_BUTTON  ,   /* Object 12 ICSAVE */
+  SELECTABLE, DRAW3D|STATE15, (LONG)"save",
+  0x0009, 0x0001, 0x0004, 0x0002,
+  ICEXEC  ,       -1,       -1, G_BUTTON  ,   /* Object 13 ICPRINT */
+  SELECTABLE, DRAW3D|STATE15, (LONG)"print",
+  0x000D, 0x0001, 0x0005, 0x0002,
+  ICQBE   ,       -1,       -1, G_BUTTON  ,   /* Object 14 ICEXEC */
+  SELECTABLE, DRAW3D|STATE15, (LONG)"exec",
+  0x0013, 0x0001, 0x0004, 0x0002,
+  ICREPDEF,       -1,       -1, G_BUTTON  ,   /* Object 15 ICQBE */
+  SELECTABLE, DRAW3D|STATE15, (LONG)"qbe",
+  0x0019, 0x0001, 0x0004, 0x0002,
+  ICCALDEF,       -1,       -1, G_BUTTON  ,   /* Object 16 ICREPDEF */
+  SELECTABLE, DRAW3D|STATE15, (LONG)"repdef",
+  0x001D, 0x0001, 0x0006, 0x0002,
+  ICBATDEF,       -1,       -1, G_BUTTON  ,   /* Object 17 ICCALDEF */
+  SELECTABLE, DRAW3D|STATE15, (LONG)"caldef",
+  0x0021, 0x0001, 0x0006, 0x0002,
+  ICTABLE ,       -1,       -1, G_BUTTON  ,   /* Object 18 ICBATDEF */
+  SELECTABLE, DRAW3D|STATE15, (LONG)"batdef",
+  0x0025, 0x0001, 0x0006, 0x0002,
+  ICMASK  ,       -1,       -1, G_BUTTON  ,   /* Object 19 ICTABLE */
+  SELECTABLE, DRAW3D|STATE15, (LONG)"table",
+  0x002B, 0x0001, 0x0005, 0x0002,
+         9,       -1,       -1, G_BUTTON  ,   /* Object 20 ICMASK */
+  SELECTABLE, DRAW3D|STATE15, (LONG)"mask",
+  0x002F, 0x0001, 0x0004, 0x0002,
+        22,       -1,       -1, G_ICON    ,   /* Object 21 ITABLE */
+  NONE, NORMAL, (LONG)&rs_iconblk[0],
+  0x0014, 0x0004, 0x0009, 0x0802,
+        23,       -1,       -1, G_ICON    ,   /* Object 22  */
+  NONE, NORMAL, (LONG)&rs_iconblk[1],
+  0x001E, 0x0004, 0x0009, 0x0802,
+        24,       -1,       -1, G_ICON    ,   /* Object 23  */
+  NONE, NORMAL, (LONG)&rs_iconblk[2],
+  0x0028, 0x0004, 0x0009, 0x0802,
+        25,       -1,       -1, G_ICON    ,   /* Object 24  */
+  NONE, NORMAL, (LONG)&rs_iconblk[3],
+  0x0032, 0x0004, 0x0009, 0x0802,
+        26,       -1,       -1, G_ICON    ,   /* Object 25  */
+  NONE, NORMAL, (LONG)&rs_iconblk[4],
+  0x003C, 0x0004, 0x0009, 0x0802,
+        27,       -1,       -1, G_ICON    ,   /* Object 26  */
+  NONE, NORMAL, (LONG)&rs_iconblk[5],
+  0x0046, 0x0004, 0x0009, 0x0802,
+        28,       -1,       -1, G_ICON    ,   /* Object 27  */
+  NONE, NORMAL, (LONG)&rs_iconblk[6],
+  0x0014, 0x0007, 0x0009, 0x0802,
+        29,       -1,       -1, G_ICON    ,   /* Object 28  */
+  NONE, NORMAL, (LONG)&rs_iconblk[7],
+  0x001E, 0x0007, 0x0009, 0x0802,
+        30,       -1,       -1, G_ICON    ,   /* Object 29  */
+  NONE, NORMAL, (LONG)&rs_iconblk[8],
+  0x0028, 0x0007, 0x0009, 0x0802,
+        31,       -1,       -1, G_ICON    ,   /* Object 30  */
+  NONE, NORMAL, (LONG)&rs_iconblk[9],
+  0x0032, 0x0007, 0x0009, 0x0802,
+        32,       -1,       -1, G_ICON    ,   /* Object 31  */
+  NONE, NORMAL, (LONG)&rs_iconblk[10],
+  0x003C, 0x0007, 0x0009, 0x0802,
+        33,       -1,       -1, G_ICON    ,   /* Object 32  */
+  NONE, NORMAL, (LONG)&rs_iconblk[11],
+  0x0046, 0x0007, 0x0009, 0x0802,
+        34,       -1,       -1, G_ICON    ,   /* Object 33  */
+  NONE, NORMAL, (LONG)&rs_iconblk[12],
+  0x0014, 0x000A, 0x0009, 0x0802,
+        35,       -1,       -1, G_ICON    ,   /* Object 34  */
+  NONE, NORMAL, (LONG)&rs_iconblk[13],
+  0x001E, 0x000A, 0x0009, 0x0802,
+        36,       -1,       -1, G_ICON    ,   /* Object 35  */
+  NONE, NORMAL, (LONG)&rs_iconblk[14],
+  0x0028, 0x000A, 0x0009, 0x0802,
+        37,       -1,       -1, G_ICON    ,   /* Object 36  */
+  NONE, NORMAL, (LONG)&rs_iconblk[15],
+  0x0032, 0x000A, 0x0009, 0x0802,
+        38,       -1,       -1, G_ICON    ,   /* Object 37  */
+  NONE, NORMAL, (LONG)&rs_iconblk[16],
+  0x003C, 0x000A, 0x0009, 0x0802,
+  IPROCESS,       -1,       -1, G_ICON    ,   /* Object 38  */
+  NONE, NORMAL, (LONG)&rs_iconblk[17],
+  0x0046, 0x000A, 0x0009, 0x0802,
+        40,       -1,       -1, G_ICON    ,   /* Object 39 IPROCESS */
+  NONE, NORMAL, (LONG)&rs_iconblk[18],
+  0x0014, 0x000D, 0x0009, 0x0802,
+        41,       -1,       -1, G_ICON    ,   /* Object 40  */
+  NONE, NORMAL, (LONG)&rs_iconblk[19],
+  0x001E, 0x000D, 0x0009, 0x0802,
+        42,       -1,       -1, G_ICON    ,   /* Object 41  */
+  NONE, NORMAL, (LONG)&rs_iconblk[20],
+  0x0028, 0x000D, 0x0009, 0x0802,
+        43,       -1,       -1, G_ICON    ,   /* Object 42  */
+  NONE, NORMAL, (LONG)&rs_iconblk[21],
+  0x0032, 0x000D, 0x0009, 0x0802,
+        44,       -1,       -1, G_ICON    ,   /* Object 43  */
+  NONE, NORMAL, (LONG)&rs_iconblk[22],
+  0x003C, 0x000D, 0x0009, 0x0802,
+  ITRASH  ,       -1,       -1, G_ICON    ,   /* Object 44  */
+  NONE, NORMAL, (LONG)&rs_iconblk[23],
+  0x0046, 0x000D, 0x0009, 0x0802,
+  IPRINTER,       -1,       -1, G_CICON   ,   /* Object 45 ITRASH */
+  NONE, NORMAL, (LONG)&rs_ciconblk[0],
+  0x0029, 0x0014, 0x0009, 0x0802,
+  IDISK   ,       -1,       -1, G_CICON   ,   /* Object 46 IPRINTER */
+  NONE, NORMAL, (LONG)&rs_ciconblk[1],
+  0x0033, 0x0014, 0x0009, 0x0802,
+  ICLIPBRD,       -1,       -1, G_CICON   ,   /* Object 47 IDISK */
+  NONE, NORMAL, (LONG)&rs_ciconblk[2],
+  0x003D, 0x0014, 0x0009, 0x0802,
+  FKEYS   ,       -1,       -1, G_CICON   ,   /* Object 48 ICLIPBRD */
+  NONE, NORMAL, (LONG)&rs_ciconblk[3],
+  0x0047, 0x0014, 0x0009, 0x0802,
+         0,       50, INFOBOX , G_IBOX    ,   /* Object 49 FKEYS */
+  NONE, NORMAL, (LONG)0x00001100L,
+  0x0400, 0x0017, 0x004F, 0x0B01,
+        51,       -1,       -1, G_BUTTON  ,   /* Object 50  */
+  SELECTABLE, STATE12, (LONG)"F1",
+  0x0000, 0x0000, 0x0007, 0x0B01,
+        52,       -1,       -1, G_BUTTON  ,   /* Object 51  */
+  SELECTABLE, STATE12, (LONG)"F2",
+  0x0706, 0x0000, 0x0007, 0x0B01,
+        53,       -1,       -1, G_BUTTON  ,   /* Object 52  */
+  SELECTABLE, STATE12, (LONG)"F3",
+  0x060D, 0x0000, 0x0007, 0x0B01,
+        54,       -1,       -1, G_BUTTON  ,   /* Object 53  */
+  SELECTABLE, STATE12, (LONG)"F4",
+  0x0514, 0x0000, 0x0007, 0x0B01,
+        55,       -1,       -1, G_BUTTON  ,   /* Object 54  */
+  SELECTABLE, STATE12, (LONG)"F5",
+  0x041B, 0x0000, 0x0007, 0x0B01,
+        56,       -1,       -1, G_BUTTON  ,   /* Object 55  */
+  SELECTABLE, STATE12, (LONG)"F6",
+  0x0322, 0x0000, 0x0007, 0x0B01,
+        57,       -1,       -1, G_BUTTON  ,   /* Object 56  */
+  SELECTABLE, STATE12, (LONG)"F7",
+  0x0229, 0x0000, 0x0007, 0x0B01,
+        58,       -1,       -1, G_BUTTON  ,   /* Object 57  */
+  SELECTABLE, STATE12, (LONG)"F8",
+  0x0130, 0x0000, 0x0007, 0x0B01,
+        59,       -1,       -1, G_BUTTON  ,   /* Object 58  */
+  SELECTABLE, STATE12, (LONG)"F9",
+  0x0037, 0x0000, 0x0007, 0x0B01,
+  INFOBOX ,       -1,       -1, G_BUTTON  ,   /* Object 59  */
+  SELECTABLE, STATE12, (LONG)"F10",
+  0x073D, 0x0000, 0x0007, 0x0B01,
+  FKEYS   ,       -1,       -1, G_BUTTON  ,   /* Object 60 INFOBOX */
+  LASTOB, STATE12, (LONG)"MEM",
+  0x0145, 0x0000, 0x0709, 0x0B01,
+  
+  /******** Tree 3 USERIMG ****************************************************/
+        -1, RBHNORM , ARROW32 , G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED, (LONG)0x00021100L,
+  0x0000, 0x0000, 0x0013, 0x000C,
+  RBHSEL  ,       -1,       -1, G_IMAGE   ,   /* Object 1 RBHNORM */
+  NONE, NORMAL, (LONG)&rs_bitblk[0],
+  0x0002, 0x0001, 0x0002, 0x0C00,
+  CBHNORM ,       -1,       -1, G_IMAGE   ,   /* Object 2 RBHSEL */
+  NONE, NORMAL, (LONG)&rs_bitblk[1],
+  0x0005, 0x0001, 0x0002, 0x0C00,
+  CBHSEL  ,       -1,       -1, G_IMAGE   ,   /* Object 3 CBHNORM */
+  NONE, NORMAL, (LONG)&rs_bitblk[2],
+  0x0009, 0x0001, 0x0002, 0x0C00,
+  RBLNORM ,       -1,       -1, G_IMAGE   ,   /* Object 4 CBHSEL */
+  NONE, NORMAL, (LONG)&rs_bitblk[3],
+  0x000C, 0x0001, 0x0002, 0x0C00,
+  RBLSEL  ,       -1,       -1, G_IMAGE   ,   /* Object 5 RBLNORM */
+  NONE, NORMAL, (LONG)&rs_bitblk[4],
+  0x0002, 0x0003, 0x0002, 0x0800,
+  CBLNORM ,       -1,       -1, G_IMAGE   ,   /* Object 6 RBLSEL */
+  NONE, NORMAL, (LONG)&rs_bitblk[5],
+  0x0005, 0x0003, 0x0002, 0x0800,
+  CBLSEL  ,       -1,       -1, G_IMAGE   ,   /* Object 7 CBLNORM */
+  NONE, NORMAL, (LONG)&rs_bitblk[6],
+  0x0009, 0x0003, 0x0002, 0x0800,
+  RB7NORM ,       -1,       -1, G_IMAGE   ,   /* Object 8 CBLSEL */
+  NONE, NORMAL, (LONG)&rs_bitblk[7],
+  0x000C, 0x0003, 0x0002, 0x0800,
+  RB7SEL  ,       -1,       -1, G_IMAGE   ,   /* Object 9 RB7NORM */
+  NONE, NORMAL, (LONG)&rs_bitblk[8],
+  0x0002, 0x0004, 0x0002, 0x0700,
+  CB7NORM ,       -1,       -1, G_IMAGE   ,   /* Object 10 RB7SEL */
+  NONE, NORMAL, (LONG)&rs_bitblk[9],
+  0x0005, 0x0004, 0x0002, 0x0700,
+  CB7SEL  ,       -1,       -1, G_IMAGE   ,   /* Object 11 CB7NORM */
+  NONE, NORMAL, (LONG)&rs_bitblk[10],
+  0x0009, 0x0004, 0x0002, 0x0700,
+  RB5NORM ,       -1,       -1, G_IMAGE   ,   /* Object 12 CB7SEL */
+  NONE, NORMAL, (LONG)&rs_bitblk[11],
+  0x000C, 0x0004, 0x0002, 0x0700,
+  RB5SEL  ,       -1,       -1, G_IMAGE   ,   /* Object 13 RB5NORM */
+  NONE, NORMAL, (LONG)&rs_bitblk[12],
+  0x0002, 0x0005, 0x0002, 0x0500,
+  CB5NORM ,       -1,       -1, G_IMAGE   ,   /* Object 14 RB5SEL */
+  NONE, NORMAL, (LONG)&rs_bitblk[13],
+  0x0005, 0x0005, 0x0002, 0x0500,
+  CB5SEL  ,       -1,       -1, G_IMAGE   ,   /* Object 15 CB5NORM */
+  NONE, NORMAL, (LONG)&rs_bitblk[14],
+  0x0009, 0x0005, 0x0002, 0x0500,
+  ARROW6  ,       -1,       -1, G_IMAGE   ,   /* Object 16 CB5SEL */
+  NONE, NORMAL, (LONG)&rs_bitblk[15],
+  0x000C, 0x0005, 0x0002, 0x0500,
+  ARROW8  ,       -1,       -1, G_IMAGE   ,   /* Object 17 ARROW6 */
+  NONE, NORMAL, (LONG)&rs_bitblk[16],
+  0x0002, 0x0007, 0x0002, 0x0600,
+  ARROW10 ,       -1,       -1, G_IMAGE   ,   /* Object 18 ARROW8 */
+  NONE, NORMAL, (LONG)&rs_bitblk[17],
+  0x0004, 0x0007, 0x0002, 0x0800,
+  ARROW12 ,       -1,       -1, G_IMAGE   ,   /* Object 19 ARROW10 */
+  NONE, NORMAL, (LONG)&rs_bitblk[18],
+  0x0006, 0x0007, 0x0002, 0x0A00,
+  ARROW14 ,       -1,       -1, G_IMAGE   ,   /* Object 20 ARROW12 */
+  NONE, NORMAL, (LONG)&rs_bitblk[19],
+  0x0008, 0x0007, 0x0002, 0x0C00,
+  ARROW16 ,       -1,       -1, G_IMAGE   ,   /* Object 21 ARROW14 */
+  NONE, NORMAL, (LONG)&rs_bitblk[20],
+  0x000A, 0x0007, 0x0002, 0x0E00,
+  ARROW32 ,       -1,       -1, G_IMAGE   ,   /* Object 22 ARROW16 */
+  NONE, NORMAL, (LONG)&rs_bitblk[21],
+  0x000C, 0x0007, 0x0002, 0x0001,
+         0,       -1,       -1, G_IMAGE   ,   /* Object 23 ARROW32 */
+  LASTOB, NORMAL, (LONG)&rs_bitblk[22],
+  0x000E, 0x0007, 0x0004, 0x0002,
+  
+  /******** Tree 4 ALERT ****************************************************/
+        -1,        1,       14, G_BOX     ,   /* Object 0  */
+  NONE, STATE15, (LONG)0x00FF1100L,
+  0x0000, 0x0000, 0x0047, 0x000D,
+         2,       -1,       -1, G_IMAGE   ,   /* Object 1  */
+  NONE, NORMAL, (LONG)&rs_bitblk[23],
+  0x0002, 0x0001, 0x0004, 0x0002,
+         3,       -1,       -1, G_IMAGE   ,   /* Object 2  */
+  NONE, NORMAL, (LONG)&rs_bitblk[24],
+  0x0002, 0x0003, 0x0004, 0x0002,
+         4,       -1,       -1, G_IMAGE   ,   /* Object 3  */
+  NONE, NORMAL, (LONG)&rs_bitblk[25],
+  0x0002, 0x0005, 0x0004, 0x0002,
+         5,       -1,       -1, G_IMAGE   ,   /* Object 4  */
+  NONE, NORMAL, (LONG)&rs_bitblk[26],
+  0x0002, 0x0007, 0x0004, 0x0002,
+         6,       -1,       -1, G_STRING  ,   /* Object 5  */
+  NONE, STATE15, (LONG)"1234567890123456789012345678901234567890",
+  0x0008, 0x0001, 0x0028, 0x0001,
+         7,       -1,       -1, G_STRING  ,   /* Object 6  */
+  NONE, STATE15, (LONG)"1234567890123456789012345678901234567890",
+  0x0008, 0x0002, 0x0028, 0x0001,
+         8,       -1,       -1, G_STRING  ,   /* Object 7  */
+  NONE, STATE15, (LONG)"1234567890123456789012345678901234567890",
+  0x0008, 0x0003, 0x0028, 0x0001,
+         9,       -1,       -1, G_STRING  ,   /* Object 8  */
+  NONE, STATE15, (LONG)"1234567890123456789012345678901234567890",
+  0x0008, 0x0004, 0x0028, 0x0001,
+        10,       -1,       -1, G_STRING  ,   /* Object 9  */
+  NONE, STATE15, (LONG)"1234567890123456789012345678901234567890",
+  0x0008, 0x0005, 0x0028, 0x0001,
+        11,       -1,       -1, G_BUTTON  ,   /* Object 10  */
+  SELECTABLE|EXIT, WHITEBAK, (LONG)"123456789012",
+  0x0001, 0x000A, 0x000D, 0x0002,
+        12,       -1,       -1, G_BUTTON  ,   /* Object 11  */
+  SELECTABLE|EXIT, WHITEBAK, (LONG)"123456789012",
+  0x000F, 0x000A, 0x000D, 0x0002,
+        13,       -1,       -1, G_BUTTON  ,   /* Object 12  */
+  SELECTABLE|EXIT, WHITEBAK, (LONG)"123456789012",
+  0x001D, 0x000A, 0x000D, 0x0002,
+        14,       -1,       -1, G_BUTTON  ,   /* Object 13  */
+  SELECTABLE|EXIT, WHITEBAK, (LONG)"123456789012",
+  0x002B, 0x000A, 0x000D, 0x0002,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 14  */
+  SELECTABLE|EXIT|LASTOB, WHITEBAK, (LONG)"123456789012",
+  0x0039, 0x000A, 0x000D, 0x0002,
+  
+  /******** Tree 5 SELFILE ****************************************************/
+        -1,        1, FLHELP  , G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|STATE15, (LONG)0x00001100L,
+  0x0000, 0x0000, 0x004B, 0x0011,
+  FLNAME  ,       -1,       -1, G_STRING  ,   /* Object 1  */
+  NONE, DRAW3D|STATE15, (LONG)"Datei~name:",
+  0x0002, 0x0001, 0x000B, 0x0001,
+         3,       -1,       -1, G_FBOXTEXT,   /* Object 2 FLNAME */
+  EDITABLE|FLAGS12, NORMAL, (LONG)&rs_tedinfo[8],
+  0x0002, 0x0002, 0x000E, 0x0001,
+  FLDIR   ,       -1,       -1, G_STRING  ,   /* Object 3  */
+  NONE, DRAW3D|STATE15, (LONG)"Verzeichnisse:",
+  0x001F, 0x0001, 0x000E, 0x0001,
+  FLNAMES ,       -1,       -1, G_STRING  ,   /* Object 4 FLDIR */
+  NONE, STATE12|STATE15, (LONG)"123456789012345678901234567",
+  0x001F, 0x0002, 0x001B, 0x0001,
+  FLDIRS  ,       -1,       -1, G_BOX     ,   /* Object 5 FLNAMES */
+  SELECTABLE, STATE13, (LONG)0x00FF1101L,
+  0x0002, 0x0004, 0x001B, 0x0009,
+         7,       -1,       -1, G_BOX     ,   /* Object 6 FLDIRS */
+  SELECTABLE, STATE13, (LONG)0x00FF1101L,
+  0x001F, 0x0004, 0x001B, 0x0009,
+  FLTYPES ,       -1,       -1, G_STRING  ,   /* Object 7  */
+  NONE, DRAW3D|STATE15, (LONG)"Datei~formate:",
+  0x0002, 0x000E, 0x000E, 0x0001,
+         9,       -1,       -1, G_BUTTON  ,   /* Object 8 FLTYPES */
+  SELECTABLE|TOUCHEXIT, STATE11, (LONG)"\0",
+  0x0002, 0x000F, 0x001B, 0x0001,
+  FLDRIVES,       -1,       -1, G_STRING  ,   /* Object 9  */
+  NONE, DRAW3D|STATE15, (LONG)"~Laufwerke:",
+  0x001F, 0x000E, 0x000B, 0x0001,
+        11,       -1,       -1, G_BUTTON  ,   /* Object 10 FLDRIVES */
+  SELECTABLE|TOUCHEXIT, STATE11, (LONG)"\0",
+  0x001F, 0x000F, 0x001B, 0x0001,
+  FLORDER ,       -1,       -1, G_STRING  ,   /* Object 11  */
+  NONE, DRAW3D|STATE15, (LONG)"~Sortierung:",
+  0x003C, 0x000E, 0x000C, 0x0001,
+  FLOK    ,       -1,       -1, G_BUTTON  ,   /* Object 12 FLORDER */
+  SELECTABLE|TOUCHEXIT, STATE11, (LONG)"\0",
+  0x003C, 0x000F, 0x000D, 0x0001,
+  FLCANCEL,       -1,       -1, G_BUTTON  ,   /* Object 13 FLOK */
+  SELECTABLE|DEFAULT|EXIT, WHITEBAK, (LONG)"~OK",
+  0x003F, 0x0004, 0x000A, 0x0002,
+  FLHELP  ,       -1,       -1, G_BUTTON  ,   /* Object 14 FLCANCEL */
+  SELECTABLE|EXIT|FLAGS13, DRAW3D|WHITEBAK, (LONG)"~Abbruch",
+  0x003F, 0x0007, 0x000A, 0x0002,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 15 FLHELP */
+  SELECTABLE|LASTOB|FLAGS14, WHITEBAK, (LONG)"~Hilfe",
+  0x003F, 0x0009, 0x000A, 0x0002,
+  
+  /******** Tree 6 SELPATH ****************************************************/
+        -1,        1, PTHELP  , G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|STATE15, (LONG)0x00001100L,
+  0x0000, 0x0000, 0x002E, 0x0011,
+  PTDIR   ,       -1,       -1, G_STRING  ,   /* Object 1  */
+  NONE, DRAW3D|STATE15, (LONG)"Verzeichnisse:",
+  0x0002, 0x0001, 0x000E, 0x0001,
+  PTDIRS  ,       -1,       -1, G_STRING  ,   /* Object 2 PTDIR */
+  NONE, STATE12|STATE15, (LONG)"123456789012345678901234567890123456789012",
+  0x0002, 0x0002, 0x002A, 0x0001,
+         4,       -1,       -1, G_BOX     ,   /* Object 3 PTDIRS */
+  SELECTABLE, STATE13, (LONG)0x00FF1101L,
+  0x0002, 0x0004, 0x001B, 0x0009,
+  PTDRIVES,       -1,       -1, G_STRING  ,   /* Object 4  */
+  NONE, DRAW3D|STATE15, (LONG)"~Laufwerke:",
+  0x0002, 0x000E, 0x000B, 0x0001,
+         6,       -1,       -1, G_BUTTON  ,   /* Object 5 PTDRIVES */
+  SELECTABLE|TOUCHEXIT, STATE11, (LONG)"\0",
+  0x0002, 0x000F, 0x001B, 0x0001,
+  PTORDER ,       -1,       -1, G_STRING  ,   /* Object 6  */
+  NONE, DRAW3D|STATE15, (LONG)"~Sortierung:",
+  0x001F, 0x000E, 0x000C, 0x0001,
+  PTOK    ,       -1,       -1, G_BUTTON  ,   /* Object 7 PTORDER */
+  SELECTABLE|TOUCHEXIT, STATE11, (LONG)"\0",
+  0x001F, 0x000F, 0x000D, 0x0001,
+  PTCANCEL,       -1,       -1, G_BUTTON  ,   /* Object 8 PTOK */
+  SELECTABLE|DEFAULT|EXIT, WHITEBAK, (LONG)"~OK",
+  0x0022, 0x0004, 0x000A, 0x0002,
+  PTHELP  ,       -1,       -1, G_BUTTON  ,   /* Object 9 PTCANCEL */
+  SELECTABLE|EXIT|FLAGS13, DRAW3D|WHITEBAK, (LONG)"~Abbruch",
+  0x0022, 0x0007, 0x000A, 0x0002,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 10 PTHELP */
+  SELECTABLE|LASTOB|FLAGS14, WHITEBAK, (LONG)"~Hilfe",
+  0x0022, 0x0009, 0x000A, 0x0002,
+  
+  /******** Tree 7 SELFONT ****************************************************/
+        -1,        1, FNHELP  , G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|STATE15, (LONG)0x00001100L,
+  0x0000, 0x0000, 0x003E, 0x0014,
+  FNNAME  ,       -1,       -1, G_STRING  ,   /* Object 1  */
+  NONE, DRAW3D|STATE15, (LONG)"~Schriftart:",
+  0x0002, 0x0001, 0x000C, 0x0001,
+         3,       -1,       -1, G_FBOXTEXT,   /* Object 2 FNNAME */
+  EDITABLE|FLAGS12, NORMAL, (LONG)&rs_tedinfo[9],
+  0x0002, 0x0002, 0x0022, 0x0001,
+  FNPOINT ,       -1,       -1, G_STRING  ,   /* Object 3  */
+  NONE, DRAW3D|STATE15, (LONG)"~Gr\224\236e:",
+  0x0026, 0x0001, 0x0007, 0x0001,
+  FNNAMES ,       -1,       -1, G_FBOXTEXT,   /* Object 4 FNPOINT */
+  EDITABLE|FLAGS12, STATE15, (LONG)&rs_tedinfo[10],
+  0x0026, 0x0002, 0x0008, 0x0001,
+  FNPOINTS,       -1,       -1, G_BOX     ,   /* Object 5 FNNAMES */
+  SELECTABLE, STATE13, (LONG)0x00FF1101L,
+  0x0002, 0x0004, 0x0022, 0x0006,
+  FNEFFECT,       -1,       -1, G_BOX     ,   /* Object 6 FNPOINTS */
+  SELECTABLE, STATE13, (LONG)0x00FF1101L,
+  0x0026, 0x0004, 0x0008, 0x0006,
+  FNCLABEL, FNTHICK , FNOUTLN , G_BUTTON  ,   /* Object 7 FNEFFECT */
+  NONE, STATE14, (LONG)"Effekte",
+  0x0002, 0x000C, 0x0012, 0x0007,
+  FNLIGHT ,       -1,       -1, G_BUTTON  ,   /* Object 8 FNTHICK */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"Fe~tt",
+  0x0001, 0x0002, 0x0005, 0x0001,
+  FNSKEWED,       -1,       -1, G_BUTTON  ,   /* Object 9 FNLIGHT */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"He~ll",
+  0x0001, 0x0003, 0x0005, 0x0001,
+  FNUNDER ,       -1,       -1, G_BUTTON  ,   /* Object 10 FNSKEWED */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"~Kursiv",
+  0x0001, 0x0004, 0x0007, 0x0001,
+  FNOUTLN ,       -1,       -1, G_BUTTON  ,   /* Object 11 FNUNDER */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"~Unterstrichen",
+  0x0001, 0x0005, 0x000E, 0x0001,
+  FNEFFECT,       -1,       -1, G_BUTTON  ,   /* Object 12 FNOUTLN */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"Um~rahmt",
+  0x0001, 0x0006, 0x0008, 0x0001,
+  FNCOLOR ,       -1,       -1, G_STRING  ,   /* Object 13 FNCLABEL */
+  NONE, DRAW3D|STATE15, (LONG)"~Farbe:",
+  0x0016, 0x000B, 0x0007, 0x0001,
+        15,       -1,       -1, G_BUTTON  ,   /* Object 14 FNCOLOR */
+  SELECTABLE|TOUCHEXIT, STATE11, (LONG)"\0",
+  0x0016, 0x000C, 0x0010, 0x0001,
+  FNORDER ,       -1,       -1, G_STRING  ,   /* Object 15  */
+  NONE, DRAW3D|STATE15, (LONG)"Sort~ierung:",
+  0x0028, 0x000B, 0x000C, 0x0001,
+        17,       -1,       -1, G_BUTTON  ,   /* Object 16 FNORDER */
+  SELECTABLE|TOUCHEXIT, STATE11, (LONG)"\0",
+  0x0028, 0x000C, 0x000D, 0x0001,
+  FNSAMPLE,       -1,       -1, G_STRING  ,   /* Object 17  */
+  NONE, DRAW3D|STATE15, (LONG)"Beispiel:",
+  0x0016, 0x000E, 0x0009, 0x0001,
+  FNOK    ,       -1,       -1, G_IBOX    ,   /* Object 18 FNSAMPLE */
+  NONE, STATE12|STATE15, (LONG)0x00FF1100L,
+  0x0016, 0x000F, 0x0026, 0x0004,
+  FNCANCEL,       -1,       -1, G_BUTTON  ,   /* Object 19 FNOK */
+  SELECTABLE|DEFAULT|EXIT, WHITEBAK, (LONG)"~OK",
+  0x0032, 0x0002, 0x000A, 0x0002,
+  FNHELP  ,       -1,       -1, G_BUTTON  ,   /* Object 20 FNCANCEL */
+  SELECTABLE|EXIT|FLAGS13, DRAW3D|WHITEBAK, (LONG)"~Abbruch",
+  0x0032, 0x0005, 0x000A, 0x0002,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 21 FNHELP */
+  SELECTABLE|LASTOB|FLAGS14, WHITEBAK, (LONG)"~Hilfe",
+  0x0032, 0x0007, 0x000A, 0x0002,
+  
+  /******** Tree 8 USERINTR ****************************************************/
+        -1,        1, UIHELP  , G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|STATE15, (LONG)0x00001100L,
+  0x0000, 0x0000, 0x0048, 0x0016,
+         6,        2, UISYSCOL, G_BUTTON  ,   /* Object 1  */
+  NONE, WHITEBAK|STATE14, (LONG)"Farben",
+  0x0002, 0x0001, 0x0044, 0x0004,
+  UISYSINX,       -1,       -1, G_STRING  ,   /* Object 2  */
+  NONE, DRAW3D|STATE15, (LONG)"~Element:",
+  0x0001, 0x0002, 0x0009, 0x0001,
+         4,       -1,       -1, G_BUTTON  ,   /* Object 3 UISYSINX */
+  SELECTABLE|TOUCHEXIT, DRAW3D|STATE11, (LONG)"1234567890123456789012345678",
+  0x000B, 0x0002, 0x001C, 0x0001,
+  UISYSCOL,       -1,       -1, G_STRING  ,   /* Object 4  */
+  NONE, DRAW3D|STATE15, (LONG)"Far~be:",
+  0x002B, 0x0002, 0x0007, 0x0001,
+         1,       -1,       -1, G_BUTTON  ,   /* Object 5 UISYSCOL */
+  SELECTABLE|TOUCHEXIT, DRAW3D|STATE11, (LONG)"\0",
+  0x0033, 0x0002, 0x0010, 0x0001,
+        10, UIUSE3D , UISTDFS , G_BUTTON  ,   /* Object 6  */
+  NONE, STATE14, (LONG)"Darstellung",
+  0x0002, 0x0005, 0x0023, 0x0005,
+  UIROUND ,       -1,       -1, G_BUTTON  ,   /* Object 7 UIUSE3D */
+  SELECTABLE, SELECTED|DRAW3D|STATE13, (LONG)"Oberfl\204che im ~3D-Look",
+  0x0001, 0x0002, 0x0016, 0x0001,
+  UISTDFS ,       -1,       -1, G_BUTTON  ,   /* Object 8 UIROUND */
+  SELECTABLE, SELECTED|DRAW3D|STATE13, (LONG)"~Dialoge mit Bildrahmen",
+  0x0001, 0x0003, 0x0017, 0x0001,
+         6,       -1,       -1, G_BUTTON  ,   /* Object 9 UISTDFS */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"S~tandard-Dateiauswahl benutzen",
+  0x0001, 0x0004, 0x001F, 0x0001,
+        18,       11, UISB    , G_BUTTON  ,   /* Object 10  */
+  NONE, STATE14, (LONG)"Desktop",
+  0x0027, 0x0005, 0x001F, 0x0009,
+  UICOLOR ,       -1,       -1, G_STRING  ,   /* Object 11  */
+  NONE, DRAW3D|STATE15, (LONG)"~Farbe:",
+  0x0001, 0x0002, 0x0007, 0x0001,
+        13,       -1,       -1, G_BUTTON  ,   /* Object 12 UICOLOR */
+  SELECTABLE|TOUCHEXIT, DRAW3D|STATE11, (LONG)"\0",
+  0x000A, 0x0002, 0x0010, 0x0001,
+  UIPAT   ,       -1,       -1, G_STRING  ,   /* Object 13  */
+  NONE, DRAW3D|STATE15, (LONG)"~Muster:",
+  0x0001, 0x0004, 0x0008, 0x0001,
+  UIUSEWND,       -1,       -1, G_BUTTON  ,   /* Object 14 UIPAT */
+  SELECTABLE|TOUCHEXIT, DRAW3D|STATE11, (LONG)"\0",
+  0x000A, 0x0004, 0x0010, 0x0001,
+  UITOP   ,       -1,       -1, G_BUTTON  ,   /* Object 15 UIUSEWND */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"~In Fenster darstellen",
+  0x0001, 0x0006, 0x0016, 0x0001,
+  UISB    ,       -1,       -1, G_BUTTON  ,   /* Object 16 UITOP */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"Bei K~lick aktivieren",
+  0x0001, 0x0007, 0x0015, 0x0001,
+        10,       -1,       -1, G_BUTTON  ,   /* Object 17 UISB */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"Bildlaufleisten ~zeigen",
+  0x0001, 0x0008, 0x0017, 0x0001,
+        25,       19, UIARROW , G_BUTTON  ,   /* Object 18  */
+  NONE, WHITEBAK|STATE14, (LONG)"Kontrollelemente",
+  0x0002, 0x000B, 0x0023, 0x0008,
+  UICHECK ,       -1,       -1, G_STRING  ,   /* Object 19  */
+  NONE, DRAW3D|STATE15, (LONG)"~Checkbox:",
+  0x0001, 0x0002, 0x000A, 0x0001,
+        21,       -1,       -1, G_BUTTON  ,   /* Object 20 UICHECK */
+  SELECTABLE|TOUCHEXIT, DRAW3D|STATE11, (LONG)"\0",
+  0x000F, 0x0002, 0x000E, 0x0001,
+  UIRADIO ,       -1,       -1, G_STRING  ,   /* Object 21  */
+  NONE, DRAW3D|STATE15, (LONG)"~Radio-Knopf:",
+  0x0001, 0x0004, 0x000D, 0x0001,
+        23,       -1,       -1, G_BUTTON  ,   /* Object 22 UIRADIO */
+  SELECTABLE|TOUCHEXIT, DRAW3D|STATE11, (LONG)"\0",
+  0x000F, 0x0004, 0x000E, 0x0001,
+  UIARROW ,       -1,       -1, G_STRING  ,   /* Object 23  */
+  NONE, DRAW3D|STATE15, (LONG)"~Pfeile:",
+  0x0001, 0x0006, 0x0008, 0x0001,
+        18,       -1,       -1, G_BUTTON  ,   /* Object 24 UIARROW */
+  SELECTABLE|TOUCHEXIT, DRAW3D|STATE11, (LONG)"\0",
+  0x000F, 0x0006, 0x000E, 0x0001,
+  UIOK    , UIROUNDB, UISHADOW, G_BUTTON  ,   /* Object 25  */
+  NONE, WHITEBAK|STATE14, (LONG)"Schaltfl\204chen",
+  0x0027, 0x000E, 0x001F, 0x0005,
+        27,       -1,       -1, G_BUTTON  ,   /* Object 26 UIROUNDB */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"Abgerundete Ec~ken",
+  0x0001, 0x0002, 0x0012, 0x0001,
+  UISHADOW,       -1,       -1, G_STRING  ,   /* Object 27  */
+  NONE, STATE15, (LONG)"Schatte~nbreite:",
+  0x0001, 0x0003, 0x0010, 0x0001,
+        25,       -1,       -1, G_FBOXTEXT,   /* Object 28 UISHADOW */
+  EDITABLE, NORMAL, (LONG)&rs_tedinfo[11],
+  0x0011, 0x0003, 0x0002, 0x0001,
+  UICANCEL,       -1,       -1, G_BUTTON  ,   /* Object 29 UIOK */
+  SELECTABLE|DEFAULT|EXIT, DRAW3D|WHITEBAK, (LONG)"~OK",
+  0x0015, 0x0014, 0x000A, 0x0002,
+  UIRESET ,       -1,       -1, G_BUTTON  ,   /* Object 30 UICANCEL */
+  SELECTABLE|EXIT|FLAGS13, DRAW3D|WHITEBAK, (LONG)"~Abbruch",
+  0x0022, 0x0014, 0x000A, 0x0002,
+  UIHELP  ,       -1,       -1, G_BUTTON  ,   /* Object 31 UIRESET */
+  SELECTABLE, DRAW3D|WHITEBAK, (LONG)"~Standard",
+  0x002F, 0x0014, 0x000A, 0x0002,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 32 UIHELP */
+  SELECTABLE|LASTOB|FLAGS14, DRAW3D|WHITEBAK, (LONG)"~Hilfe",
+  0x003C, 0x0014, 0x000A, 0x0002,
+  
+  /******** Tree 9 HELPINX ****************************************************/
+        -1, HINDEX  , HGETPARM, G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED, (LONG)0x00021100L,
+  0x0000, 0x0000, 0x0041, 0x0026,
+  HCONTENT,       -1,       -1, G_STRING  ,   /* Object 1 HINDEX */
+  NONE, NORMAL, (LONG)"Index",
+  0x0001, 0x0001, 0x0005, 0x0001,
+  HHELP   ,       -1,       -1, G_STRING  ,   /* Object 2 HCONTENT */
+  NONE, NORMAL, (LONG)"Inhalt",
+  0x0001, 0x0002, 0x0006, 0x0001,
+  HDESKTOP,       -1,       -1, G_STRING  ,   /* Object 3 HHELP */
+  NONE, NORMAL, (LONG)"Hilfe verwenden",
+  0x0001, 0x0003, 0x000F, 0x0001,
+  HEDIT   ,       -1,       -1, G_STRING  ,   /* Object 4 HDESKTOP */
+  NONE, NORMAL, (LONG)"Schreibtisch des Managers",
+  0x0001, 0x0004, 0x0019, 0x0001,
+  HIMAGE  ,       -1,       -1, G_STRING  ,   /* Object 5 HEDIT */
+  NONE, NORMAL, (LONG)"Editor-Fenster",
+  0x0001, 0x0005, 0x000E, 0x0001,
+  HMETA   ,       -1,       -1, G_STRING  ,   /* Object 6 HIMAGE */
+  NONE, NORMAL, (LONG)"Pixelgrafik-Fenster",
+  0x0001, 0x0006, 0x0013, 0x0001,
+  HTRASH  ,       -1,       -1, G_STRING  ,   /* Object 7 HMETA */
+  NONE, NORMAL, (LONG)"Vektorgrafik-Fenster",
+  0x0001, 0x0007, 0x0014, 0x0001,
+  HCLIPBRD,       -1,       -1, G_STRING  ,   /* Object 8 HTRASH */
+  NONE, NORMAL, (LONG)"Papierkorb-Fenster",
+  0x0001, 0x0008, 0x0012, 0x0001,
+  HLIST   ,       -1,       -1, G_STRING  ,   /* Object 9 HCLIPBRD */
+  NONE, NORMAL, (LONG)"Klemmbrett-Fenster",
+  0x0001, 0x0009, 0x0012, 0x0001,
+  HMASK   ,       -1,       -1, G_STRING  ,   /* Object 10 HLIST */
+  NONE, NORMAL, (LONG)"Tabellen-Fenster",
+  0x0001, 0x000A, 0x0010, 0x0001,
+  HQLIST  ,       -1,       -1, G_STRING  ,   /* Object 11 HMASK */
+  NONE, NORMAL, (LONG)"Masken-Fenster",
+  0x0001, 0x000B, 0x000E, 0x0001,
+  HQBE    ,       -1,       -1, G_STRING  ,   /* Object 12 HQLIST */
+  NONE, NORMAL, (LONG)"Abfrageliste-Fenster",
+  0x0001, 0x000C, 0x0014, 0x0001,
+  HRLIST  ,       -1,       -1, G_STRING  ,   /* Object 13 HQBE */
+  NONE, NORMAL, (LONG)"Abfrage-Fenster",
+  0x0001, 0x000D, 0x000F, 0x0001,
+  HREPORT ,       -1,       -1, G_STRING  ,   /* Object 14 HRLIST */
+  NONE, NORMAL, (LONG)"Reportliste-Fenster",
+  0x0001, 0x000E, 0x0013, 0x0001,
+  HCLIST  ,       -1,       -1, G_STRING  ,   /* Object 15 HREPORT */
+  NONE, NORMAL, (LONG)"Report-Fenster",
+  0x0001, 0x000F, 0x000E, 0x0001,
+  HCALC   ,       -1,       -1, G_STRING  ,   /* Object 16 HCLIST */
+  NONE, NORMAL, (LONG)"Rechnenliste-Fenster",
+  0x0001, 0x0010, 0x0014, 0x0001,
+  HBLIST  ,       -1,       -1, G_STRING  ,   /* Object 17 HCALC */
+  NONE, NORMAL, (LONG)"Rechnen-Fenster",
+  0x0001, 0x0011, 0x000F, 0x0001,
+  HBATCH  ,       -1,       -1, G_STRING  ,   /* Object 18 HBLIST */
+  NONE, NORMAL, (LONG)"Batchliste-Fenster",
+  0x0001, 0x0012, 0x0012, 0x0001,
+  HPROCESS,       -1,       -1, G_STRING  ,   /* Object 19 HBATCH */
+  NONE, NORMAL, (LONG)"Batch-Fenster",
+  0x0001, 0x0013, 0x000D, 0x0001,
+  HITRASH ,       -1,       -1, G_STRING  ,   /* Object 20 HPROCESS */
+  NONE, NORMAL, (LONG)"Proze\236-Fenster",
+  0x0001, 0x0014, 0x000E, 0x0001,
+  HIPRINTE,       -1,       -1, G_STRING  ,   /* Object 21 HITRASH */
+  NONE, NORMAL, (LONG)"Papierkorb-Sinnbild",
+  0x0001, 0x0015, 0x0013, 0x0001,
+  HIDISK  ,       -1,       -1, G_STRING  ,   /* Object 22 HIPRINTE */
+  NONE, NORMAL, (LONG)"Drucker-Sinnbild",
+  0x0001, 0x0016, 0x0010, 0x0001,
+  HICLIP  ,       -1,       -1, G_STRING  ,   /* Object 23 HIDISK */
+  NONE, NORMAL, (LONG)"Laufwerk-Sinnbild",
+  0x0001, 0x0017, 0x0011, 0x0001,
+  HIPROCES,       -1,       -1, G_STRING  ,   /* Object 24 HICLIP */
+  NONE, NORMAL, (LONG)"Klemmbrett-Sinnbild",
+  0x0001, 0x0018, 0x0013, 0x0001,
+  HITABLE ,       -1,       -1, G_STRING  ,   /* Object 25 HIPROCES */
+  NONE, NORMAL, (LONG)"Proze\236-Sinnbild",
+  0x0001, 0x0019, 0x000F, 0x0001,
+  HITBLCLP,       -1,       -1, G_STRING  ,   /* Object 26 HITABLE */
+  NONE, NORMAL, (LONG)"Tabellen-Sinnbild",
+  0x0001, 0x001A, 0x0011, 0x0001,
+  HALIST  ,       -1,       -1, G_STRING  ,   /* Object 27 HITBLCLP */
+  NONE, NORMAL, (LONG)"Tabellenklemmbrett-Sinnbild",
+  0x0001, 0x001B, 0x001B, 0x0001,
+  HACCOUNT,       -1,       -1, G_STRING  ,   /* Object 28 HALIST */
+  NONE, NORMAL, (LONG)"Berichtliste-Fenster",
+  0x0001, 0x001C, 0x0014, 0x0001,
+  HPROPERT,       -1,       -1, G_STRING  ,   /* Object 29 HACCOUNT */
+  NONE, NORMAL, (LONG)"Bericht-Fenster",
+  0x0001, 0x001D, 0x000F, 0x0001,
+  HPREVIEW,       -1,       -1, G_STRING  ,   /* Object 30 HPROPERT */
+  NONE, NORMAL, (LONG)"Eigenschaften-Fenster",
+  0x0001, 0x001E, 0x0015, 0x0001,
+  HOPENDB ,       -1,       -1, G_STRING  ,   /* Object 31 HPREVIEW */
+  NONE, NORMAL, (LONG)"Vorschau-Fenster",
+  0x0001, 0x001F, 0x0010, 0x0001,
+  HCONFIG ,       -1,       -1, G_STRING  ,   /* Object 32 HOPENDB */
+  NONE, NORMAL, (LONG)"Dialogbox Datenbank \224ffnen",
+  0x001D, 0x0001, 0x001A, 0x0001,
+  HIMEXPAR,       -1,       -1, G_STRING  ,   /* Object 33 HCONFIG */
+  NONE, NORMAL, (LONG)"Dialogbox Konfiguration",
+  0x001D, 0x0002, 0x0017, 0x0001,
+  HPRINTER,       -1,       -1, G_STRING  ,   /* Object 34 HIMEXPAR */
+  NONE, NORMAL, (LONG)"Dialogbox Im/Export-Parameter",
+  0x001D, 0x0003, 0x001D, 0x0001,
+  HPAGEFOR,       -1,       -1, G_STRING  ,   /* Object 35 HPRINTER */
+  NONE, NORMAL, (LONG)"Dialogbox Drucker-Parameter",
+  0x001D, 0x0004, 0x001B, 0x0001,
+  HFONT   ,       -1,       -1, G_STRING  ,   /* Object 36 HPAGEFOR */
+  NONE, NORMAL, (LONG)"Dialogbox Seitenformat",
+  0x001D, 0x0005, 0x0016, 0x0001,
+  HCHNGPSS,       -1,       -1, G_STRING  ,   /* Object 37 HFONT */
+  NONE, NORMAL, (LONG)"Dialogbox Schriftart",
+  0x001D, 0x0006, 0x0014, 0x0001,
+  HLOCKSCR,       -1,       -1, G_STRING  ,   /* Object 38 HCHNGPSS */
+  NONE, NORMAL, (LONG)"Dialogbox Pa\236wort \204ndern",
+  0x001D, 0x0007, 0x0018, 0x0001,
+  HDBINFO ,       -1,       -1, G_STRING  ,   /* Object 39 HLOCKSCR */
+  NONE, NORMAL, (LONG)"Dialogbox Anzeige sch\201tzen",
+  0x001D, 0x0008, 0x001A, 0x0001,
+  HTBLINFO,       -1,       -1, G_STRING  ,   /* Object 40 HDBINFO */
+  NONE, NORMAL, (LONG)"Dialogbox Datenbank-Info",
+  0x001D, 0x0009, 0x0018, 0x0001,
+  HINXINFO,       -1,       -1, G_STRING  ,   /* Object 41 HTBLINFO */
+  NONE, NORMAL, (LONG)"Dialogbox Tabellen-Info",
+  0x001D, 0x000A, 0x0017, 0x0001,
+  HQUEUE  ,       -1,       -1, G_STRING  ,   /* Object 42 HINXINFO */
+  NONE, NORMAL, (LONG)"Dialogbox Index-Info",
+  0x001D, 0x000B, 0x0014, 0x0001,
+  HPROGPAR,       -1,       -1, G_STRING  ,   /* Object 43 HQUEUE */
+  NONE, NORMAL, (LONG)"Dialogbox Druckerwarteschlange",
+  0x001D, 0x000C, 0x001E, 0x0001,
+  HDELRECS,       -1,       -1, G_STRING  ,   /* Object 44 HPROGPAR */
+  NONE, NORMAL, (LONG)"Dialogbox Programm-Parameter",
+  0x001D, 0x000D, 0x001C, 0x0001,
+  HCSAVEAS,       -1,       -1, G_STRING  ,   /* Object 45 HDELRECS */
+  NONE, NORMAL, (LONG)"Dialogbox Datens\204tze l\224schen",
+  0x001D, 0x000E, 0x001C, 0x0001,
+  HQSAVEAS,       -1,       -1, G_STRING  ,   /* Object 46 HCSAVEAS */
+  NONE, NORMAL, (LONG)"Dialogbox Rechnen sichern als",
+  0x001D, 0x000F, 0x001D, 0x0001,
+  HRSAVEAS,       -1,       -1, G_STRING  ,   /* Object 47 HQSAVEAS */
+  NONE, NORMAL, (LONG)"Dialogbox Abfrage sichern als",
+  0x001D, 0x0010, 0x001D, 0x0001,
+  HBSAVEAS,       -1,       -1, G_STRING  ,   /* Object 48 HRSAVEAS */
+  NONE, NORMAL, (LONG)"Dialogbox Report sichern als",
+  0x001D, 0x0011, 0x001C, 0x0001,
+  HASAVEAS,       -1,       -1, G_STRING  ,   /* Object 49 HBSAVEAS */
+  NONE, NORMAL, (LONG)"Dialogbox Batch sichern als",
+  0x001D, 0x0012, 0x001B, 0x0001,
+  HORDER  ,       -1,       -1, G_STRING  ,   /* Object 50 HASAVEAS */
+  NONE, NORMAL, (LONG)"Dialogbox Bericht sichern als",
+  0x001D, 0x0013, 0x001D, 0x0001,
+  HNEWWIDT,       -1,       -1, G_STRING  ,   /* Object 51 HORDER */
+  NONE, NORMAL, (LONG)"Dialogbox Sortierung",
+  0x001D, 0x0014, 0x0014, 0x0001,
+  HCLIPNAM,       -1,       -1, G_STRING  ,   /* Object 52 HNEWWIDT */
+  NONE, NORMAL, (LONG)"Dialogbox Spaltenbreite",
+  0x001D, 0x0015, 0x0017, 0x0001,
+  HLSTSRCH,       -1,       -1, G_STRING  ,   /* Object 53 HCLIPNAM */
+  NONE, NORMAL, (LONG)"Dialogbox Klemmbrett-Name",
+  0x001D, 0x0016, 0x0019, 0x0001,
+  HMCHANGE,       -1,       -1, G_STRING  ,   /* Object 54 HLSTSRCH */
+  NONE, NORMAL, (LONG)"Dialogbox Suchen",
+  0x001D, 0x0017, 0x001B, 0x0001,
+  HJOIN   ,       -1,       -1, G_STRING  ,   /* Object 55 HMCHANGE */
+  NONE, NORMAL, (LONG)"Dialogbox Maske wechseln",
+  0x001D, 0x0018, 0x0018, 0x0001,
+  HMCONFIG,       -1,       -1, G_STRING  ,   /* Object 56 HJOIN */
+  NONE, NORMAL, (LONG)"Dialogbox Verzweigen",
+  0x001D, 0x0019, 0x0014, 0x0001,
+  HREORGDB,       -1,       -1, G_STRING  ,   /* Object 57 HMCONFIG */
+  NONE, NORMAL, (LONG)"Dialogbox Masken-Konfiguration",
+  0x001D, 0x001A, 0x001E, 0x0001,
+  HREORGPA,       -1,       -1, G_STRING  ,   /* Object 58 HREORGDB */
+  NONE, NORMAL, (LONG)"Dialogbox Datenbank reorganisieren",
+  0x001D, 0x001B, 0x0022, 0x0001,
+  HREMSEL ,       -1,       -1, G_STRING  ,   /* Object 59 HREORGPA */
+  NONE, NORMAL, (LONG)"Dialogbox Reorganisations-Parameter",
+  0x001D, 0x001C, 0x0023, 0x0001,
+  HNEWPROC,       -1,       -1, G_STRING  ,   /* Object 60 HREMSEL */
+  NONE, NORMAL, (LONG)"Dialogbox Bereich entfernen",
+  0x001D, 0x001D, 0x001B, 0x0001,
+  HLSTPROC,       -1,       -1, G_STRING  ,   /* Object 61 HNEWPROC */
+  NONE, NORMAL, (LONG)"Dialogbox Neuer Proze\236",
+  0x001D, 0x001E, 0x0016, 0x0001,
+  HUSERINT,       -1,       -1, G_STRING  ,   /* Object 62 HLSTPROC */
+  NONE, NORMAL, (LONG)"Dialogbox Proze\236liste",
+  0x001D, 0x001F, 0x0015, 0x0001,
+  HSELFILE,       -1,       -1, G_STRING  ,   /* Object 63 HUSERINT */
+  NONE, NORMAL, (LONG)"Dialogbox Benutzer-Oberfl\204che",
+  0x001D, 0x0020, 0x001D, 0x0001,
+  HSELPATH,       -1,       -1, G_STRING  ,   /* Object 64 HSELFILE */
+  NONE, NORMAL, (LONG)"Dialogbox Dateiauswahl",
+  0x001D, 0x0021, 0x0016, 0x0001,
+  HCOPIES ,       -1,       -1, G_STRING  ,   /* Object 65 HSELPATH */
+  NONE, NORMAL, (LONG)"Dialogbox Verzeichnisauswahl",
+  0x001D, 0x0022, 0x001C, 0x0001,
+  HGETPARM,       -1,       -1, G_STRING  ,   /* Object 66 HCOPIES */
+  NONE, NORMAL, (LONG)"Dialogbox Report erstellen",
+  0x001D, 0x0023, 0x001A, 0x0001,
+         0,       -1,       -1, G_STRING  ,   /* Object 67 HGETPARM */
+  LASTOB, NORMAL, (LONG)"Dialogbox Abfrage-Parameter",
+  0x001D, 0x0024, 0x001B, 0x0001,
+  
+  /******** Tree 10 POPUP ****************************************************/
+        -1,        1,        1, G_BOX     ,   /* Object 0  */
+  NONE, SHADOWED, (LONG)0x00FF1100L,
+  0x0000, 0x0000, 0x0015, 0x0006,
+         0,        2,        5, G_BOX     ,   /* Object 1  */
+  NONE, NORMAL, (LONG)0x00FF1101L,
+  0x0013, 0x0000, 0x0002, 0x0006,
+         4,        3,        3, G_BOX     ,   /* Object 2  */
+  NONE, NORMAL, (LONG)0x00001111L,
+  0x0000, 0x0001, 0x0002, 0x0004,
+         2,       -1,       -1, G_BOX     ,   /* Object 3  */
+  NONE, NORMAL, (LONG)0x00FF1101L,
+  0x0000, 0x0000, 0x0002, 0x0001,
+         5,       -1,       -1, G_BOXCHAR ,   /* Object 4  */
+  NONE, NORMAL, (LONG) ((LONG)'\001' << 24)|0x00FF1100L,
+  0x0000, 0x0000, 0x0002, 0x0001,
+         1,       -1,       -1, G_BOXCHAR ,   /* Object 5  */
+  LASTOB, NORMAL, (LONG) ((LONG)'\002' << 24)|0x00FF1100L,
+  0x0000, 0x0005, 0x0002, 0x0001,
+  
+  /******** Tree 11 POPUPS ****************************************************/
+        -1, METAINFO, MSORTBAS, G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED, (LONG)0x00021100L,
+  0x0000, 0x0000, 0x0022, 0x000B,
+  MICON   , MINF    , MBESTFIT, G_BOX     ,   /* Object 1 METAINFO */
+  NONE, SHADOWED, (LONG)0x00FF1100L,
+  0x0002, 0x0001, 0x000D, 0x0004,
+         3,       -1,       -1, G_STRING  ,   /* Object 2 MINF */
+  SELECTABLE, NORMAL, (LONG)"  Info...    ",
+  0x0000, 0x0000, 0x000D, 0x0001,
+  MFULL   ,       -1,       -1, G_STRING  ,   /* Object 3  */
+  NONE, DISABLED, (LONG)"-------------",
+  0x0000, 0x0001, 0x000D, 0x0001,
+  MBESTFIT,       -1,       -1, G_STRING  ,   /* Object 4 MFULL */
+  SELECTABLE, NORMAL, (LONG)"  Original   ",
+  0x0000, 0x0002, 0x000D, 0x0001,
+  METAINFO,       -1,       -1, G_STRING  ,   /* Object 5 MBESTFIT */
+  SELECTABLE, NORMAL, (LONG)"  Einpassen  ",
+  0x0000, 0x0003, 0x000D, 0x0001,
+  MSORTBAS, MINFOICO, MDELICON, G_BOX     ,   /* Object 6 MICON */
+  NONE, SHADOWED, (LONG)0x00FF1100L,
+  0x0002, 0x0006, 0x000D, 0x0004,
+  MOPENICO,       -1,       -1, G_STRING  ,   /* Object 7 MINFOICO */
+  SELECTABLE, NORMAL, (LONG)"  Info...",
+  0x0000, 0x0000, 0x000D, 0x0001,
+         9,       -1,       -1, G_STRING  ,   /* Object 8 MOPENICO */
+  SELECTABLE, NORMAL, (LONG)"  \231ffnen",
+  0x0000, 0x0001, 0x000D, 0x0001,
+  MDELICON,       -1,       -1, G_STRING  ,   /* Object 9  */
+  NONE, DISABLED, (LONG)"-------------",
+  0x0000, 0x0002, 0x000D, 0x0001,
+  MICON   ,       -1,       -1, G_STRING  ,   /* Object 10 MDELICON */
+  SELECTABLE, NORMAL, (LONG)"  Entfernen",
+  0x0000, 0x0003, 0x000D, 0x0001,
+         0,       12, MSORTNUM, G_BOX     ,   /* Object 11 MSORTBAS */
+  NONE, SHADOWED, (LONG)0x00FF1100L,
+  0x0011, 0x0001, 0x000F, 0x0003,
+  MSORTNAM,       -1,       -1, G_BOXTEXT ,   /* Object 12  */
+  NONE, NORMAL, (LONG)&rs_tedinfo[12],
+  0x0000, 0x0000, 0x000F, 0x0001,
+  MSORTNUM,       -1,       -1, G_STRING  ,   /* Object 13 MSORTNAM */
+  SELECTABLE, CHECKED, (LONG)"  nach Name",
+  0x0000, 0x0001, 0x000F, 0x0001,
+  MSORTBAS,       -1,       -1, G_STRING  ,   /* Object 14 MSORTNUM */
+  SELECTABLE|LASTOB, NORMAL, (LONG)"  nach Nummer",
+  0x0000, 0x0002, 0x000F, 0x0001,
+  
+  /******** Tree 12 ICONS ****************************************************/
+        -1, ITBL    , ISCRATCH, G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED, (LONG)0x00021141L,
+  0x0000, 0x0000, 0x001F, 0x0804,
+  ICLIP   ,       -1,       -1, G_ICON    ,   /* Object 1 ITBL */
+  NONE, NORMAL, (LONG)&rs_iconblk[24],
+  0x0001, 0x0001, 0x0009, 0x0802,
+  ISCRATCH,       -1,       -1, G_ICON    ,   /* Object 2 ICLIP */
+  NONE, NORMAL, (LONG)&rs_iconblk[25],
+  0x000B, 0x0001, 0x0009, 0x0802,
+         0,       -1,       -1, G_ICON    ,   /* Object 3 ISCRATCH */
+  LASTOB, NORMAL, (LONG)&rs_iconblk[26],
+  0x0015, 0x0001, 0x0009, 0x0802,
+  
+  /******** Tree 13 LISTWIDT ****************************************************/
+        -1,        1,        1, G_BOX     ,   /* Object 0  */
+  NONE, WHITEBAK|STATE15, (LONG)0x00FF1101L,
+  0x0000, 0x0000, 0x0011, 0x0005,
+         0,        2, LIRESULT, G_IBOX    ,   /* Object 1  */
+  NONE, WHITEBAK|STATE13|STATE14|STATE15, (LONG)0x00001100L,
+  0x0000, 0x0000, 0x0011, 0x0005,
+  LIWIDTH ,       -1,       -1, G_STRING  ,   /* Object 2  */
+  NONE, STATE15, (LONG)"Breite:",
+  0x0002, 0x0001, 0x0007, 0x0001,
+         4,       -1,       -1, G_STRING  ,   /* Object 3 LIWIDTH */
+  NONE, STATE12|STATE14|STATE15, (LONG)"99999",
+  0x000A, 0x0001, 0x0005, 0x0001,
+  LIRESULT,       -1,       -1, G_STRING  ,   /* Object 4  */
+  NONE, DRAW3D|STATE15, (LONG)"Gesamt:",
+  0x0002, 0x0003, 0x0007, 0x0001,
+         1,       -1,       -1, G_STRING  ,   /* Object 5 LIRESULT */
+  LASTOB, DRAW3D|STATE12|STATE14|STATE15, (LONG)"99999",
+  0x000A, 0x0003, 0x0005, 0x0001,
+  
+  /******** Tree 14 MONTHS ****************************************************/
+        -1, MOLONG  , MOSHORT , G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED, (LONG)0x00021100L,
+  0x0000, 0x0000, 0x000F, 0x000E,
+  MOSHORT ,        2,       13, G_BOX     ,   /* Object 1 MOLONG */
+  NONE, NORMAL, (LONG)0x00FF1101L,
+  0x0001, 0x0001, 0x0009, 0x000C,
+         3,       -1,       -1, G_STRING  ,   /* Object 2  */
+  NONE, NORMAL, (LONG)"Januar",
+  0x0000, 0x0000, 0x0006, 0x0001,
+         4,       -1,       -1, G_STRING  ,   /* Object 3  */
+  NONE, NORMAL, (LONG)"Februar",
+  0x0000, 0x0001, 0x0007, 0x0001,
+         5,       -1,       -1, G_STRING  ,   /* Object 4  */
+  NONE, NORMAL, (LONG)"M\204rz",
+  0x0000, 0x0002, 0x0004, 0x0001,
+         6,       -1,       -1, G_STRING  ,   /* Object 5  */
+  NONE, NORMAL, (LONG)"April",
+  0x0000, 0x0003, 0x0005, 0x0001,
+         7,       -1,       -1, G_STRING  ,   /* Object 6  */
+  NONE, NORMAL, (LONG)"Mai",
+  0x0000, 0x0004, 0x0003, 0x0001,
+         8,       -1,       -1, G_STRING  ,   /* Object 7  */
+  NONE, NORMAL, (LONG)"Juni",
+  0x0000, 0x0005, 0x0004, 0x0001,
+         9,       -1,       -1, G_STRING  ,   /* Object 8  */
+  NONE, NORMAL, (LONG)"Juli",
+  0x0000, 0x0006, 0x0004, 0x0001,
+        10,       -1,       -1, G_STRING  ,   /* Object 9  */
+  NONE, NORMAL, (LONG)"August",
+  0x0000, 0x0007, 0x0006, 0x0001,
+        11,       -1,       -1, G_STRING  ,   /* Object 10  */
+  NONE, NORMAL, (LONG)"September",
+  0x0000, 0x0008, 0x0009, 0x0001,
+        12,       -1,       -1, G_STRING  ,   /* Object 11  */
+  NONE, NORMAL, (LONG)"Oktober",
+  0x0000, 0x0009, 0x0007, 0x0001,
+        13,       -1,       -1, G_STRING  ,   /* Object 12  */
+  NONE, NORMAL, (LONG)"November",
+  0x0000, 0x000A, 0x0008, 0x0001,
+  MOLONG  ,       -1,       -1, G_STRING  ,   /* Object 13  */
+  NONE, NORMAL, (LONG)"Dezember",
+  0x0000, 0x000B, 0x0008, 0x0001,
+         0,       15,       26, G_BOX     ,   /* Object 14 MOSHORT */
+  NONE, NORMAL, (LONG)0x00FF1101L,
+  0x000B, 0x0001, 0x0003, 0x000C,
+        16,       -1,       -1, G_STRING  ,   /* Object 15  */
+  NONE, NORMAL, (LONG)"Jan",
+  0x0000, 0x0000, 0x0003, 0x0001,
+        17,       -1,       -1, G_STRING  ,   /* Object 16  */
+  NONE, NORMAL, (LONG)"Feb",
+  0x0000, 0x0001, 0x0003, 0x0001,
+        18,       -1,       -1, G_STRING  ,   /* Object 17  */
+  NONE, NORMAL, (LONG)"M\204r",
+  0x0000, 0x0002, 0x0003, 0x0001,
+        19,       -1,       -1, G_STRING  ,   /* Object 18  */
+  NONE, NORMAL, (LONG)"Apr",
+  0x0000, 0x0003, 0x0003, 0x0001,
+        20,       -1,       -1, G_STRING  ,   /* Object 19  */
+  NONE, NORMAL, (LONG)"Mai",
+  0x0000, 0x0004, 0x0003, 0x0001,
+        21,       -1,       -1, G_STRING  ,   /* Object 20  */
+  NONE, NORMAL, (LONG)"Jun",
+  0x0000, 0x0005, 0x0003, 0x0001,
+        22,       -1,       -1, G_STRING  ,   /* Object 21  */
+  NONE, NORMAL, (LONG)"Jul",
+  0x0000, 0x0006, 0x0003, 0x0001,
+        23,       -1,       -1, G_STRING  ,   /* Object 22  */
+  NONE, NORMAL, (LONG)"Aug",
+  0x0000, 0x0007, 0x0003, 0x0001,
+        24,       -1,       -1, G_STRING  ,   /* Object 23  */
+  NONE, NORMAL, (LONG)"Sep",
+  0x0000, 0x0008, 0x0003, 0x0001,
+        25,       -1,       -1, G_STRING  ,   /* Object 24  */
+  NONE, NORMAL, (LONG)"Okt",
+  0x0000, 0x0009, 0x0003, 0x0001,
+        26,       -1,       -1, G_STRING  ,   /* Object 25  */
+  NONE, NORMAL, (LONG)"Nov",
+  0x0000, 0x000A, 0x0003, 0x0001,
+  MOSHORT ,       -1,       -1, G_STRING  ,   /* Object 26  */
+  LASTOB, NORMAL, (LONG)"Dez",
+  0x0000, 0x000B, 0x0003, 0x0001,
+  
+  /******** Tree 15 LOADDB ****************************************************/
+        -1,        1,        1, G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|STATE15, (LONG)0x00021100L,
+  0x0000, 0x0000, 0x0040, 0x0005,
+         0,        2, LOADNAME, G_IBOX    ,   /* Object 1  */
+  NONE, STATE13|STATE14|STATE15, (LONG)0x00001100L,
+  0x0000, 0x0000, 0x0040, 0x0005,
+  LOADNAME,       -1,       -1, G_STRING  ,   /* Object 2  */
+  NONE, STATE12|STATE15, (LONG)"\231ffne Datenbank...",
+  0x0002, 0x0001, 0x003C, 0x0001,
+         1,       -1,       -1, G_STRING  ,   /* Object 3 LOADNAME */
+  LASTOB, STATE12|STATE15, (LONG)"____________________________________________________________",
+  0x0002, 0x0003, 0x003C, 0x0001,
+  
+  /******** Tree 16 FLUSHKEY ****************************************************/
+        -1,        1,        1, G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|STATE15, (LONG)0x00021100L,
+  0x0000, 0x0000, 0x0040, 0x0005,
+         0,        2, FLUSHNAM, G_IBOX    ,   /* Object 1  */
+  NONE, STATE13|STATE14|STATE15, (LONG)0x00001100L,
+  0x0000, 0x0000, 0x0040, 0x0005,
+  FLUSHNAM,       -1,       -1, G_STRING  ,   /* Object 2  */
+  NONE, STATE12|STATE15, (LONG)"Schreibe Cache...",
+  0x0002, 0x0001, 0x003C, 0x0001,
+         1,       -1,       -1, G_STRING  ,   /* Object 3 FLUSHNAM */
+  LASTOB, STATE12|STATE15, (LONG)"____________________________________________________________",
+  0x0002, 0x0003, 0x003C, 0x0001,
+  
+  /******** Tree 17 INFMETA ****************************************************/
+        -1,        1,       32, G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|WHITEBAK|STATE15, (LONG)0x00001100L,
+  0x0000, 0x0000, 0x001D, 0x0016,
+        14,        2,       13, G_BUTTON  ,   /* Object 1  */
+  NONE, DRAW3D|STATE14, (LONG)"Bildgr\224\236e",
+  0x0002, 0x0001, 0x0019, 0x0006,
+  MPAGEW  ,       -1,       -1, G_STRING  ,   /* Object 2  */
+  NONE, STATE14|STATE15, (LONG)"Breite:",
+  0x0001, 0x0001, 0x0007, 0x0001,
+         4,       -1,       -1, G_STRING  ,   /* Object 3 MPAGEW */
+  NONE, STATE14|STATE15, (LONG)"00.00",
+  0x0009, 0x0001, 0x0005, 0x0001,
+         5,       -1,       -1, G_STRING  ,   /* Object 4  */
+  NONE, STATE15, (LONG)"cm",
+  0x000F, 0x0001, 0x0003, 0x0001,
+  MPAGEH  ,       -1,       -1, G_STRING  ,   /* Object 5  */
+  NONE, STATE14|STATE15, (LONG)"H\224he:",
+  0x0003, 0x0002, 0x0005, 0x0001,
+         7,       -1,       -1, G_STRING  ,   /* Object 6 MPAGEH */
+  NONE, STATE14|STATE15, (LONG)"00.00",
+  0x0009, 0x0002, 0x0005, 0x0001,
+         8,       -1,       -1, G_STRING  ,   /* Object 7  */
+  NONE, STATE15, (LONG)"cm",
+  0x000F, 0x0002, 0x0003, 0x0001,
+  MPICW   ,       -1,       -1, G_STRING  ,   /* Object 8  */
+  NONE, STATE14|STATE15, (LONG)"Breite:",
+  0x0001, 0x0003, 0x0007, 0x0001,
+        10,       -1,       -1, G_STRING  ,   /* Object 9 MPICW */
+  NONE, STATE14|STATE15, (LONG)"00000",
+  0x0009, 0x0003, 0x0005, 0x0001,
+        11,       -1,       -1, G_STRING  ,   /* Object 10  */
+  NONE, STATE15, (LONG)"Pixel",
+  0x000F, 0x0003, 0x0005, 0x0001,
+  MPICH   ,       -1,       -1, G_STRING  ,   /* Object 11  */
+  NONE, STATE14|STATE15, (LONG)"H\224he:",
+  0x0003, 0x0004, 0x0005, 0x0001,
+        13,       -1,       -1, G_STRING  ,   /* Object 12 MPICH */
+  NONE, STATE14|STATE15, (LONG)"00000",
+  0x0009, 0x0004, 0x0005, 0x0001,
+         1,       -1,       -1, G_STRING  ,   /* Object 13  */
+  NONE, STATE15, (LONG)"Pixel",
+  0x000F, 0x0004, 0x0005, 0x0001,
+        21,       15,       20, G_BUTTON  ,   /* Object 14  */
+  NONE, STATE14, (LONG)"Pixelgr\224\236e",
+  0x0002, 0x0007, 0x0019, 0x0004,
+  MPIXW   ,       -1,       -1, G_STRING  ,   /* Object 15  */
+  NONE, STATE14|STATE15, (LONG)"Breite:",
+  0x0001, 0x0001, 0x0007, 0x0001,
+        17,       -1,       -1, G_STRING  ,   /* Object 16 MPIXW */
+  NONE, STATE14|STATE15, (LONG)"000000",
+  0x0009, 0x0001, 0x0006, 0x0001,
+        18,       -1,       -1, G_STRING  ,   /* Object 17  */
+  NONE, STATE15, (LONG)"/1000 mm",
+  0x000F, 0x0001, 0x0009, 0x0001,
+  MPIXH   ,       -1,       -1, G_STRING  ,   /* Object 18  */
+  NONE, STATE14|STATE15, (LONG)"H\224he:",
+  0x0003, 0x0002, 0x0005, 0x0001,
+        20,       -1,       -1, G_STRING  ,   /* Object 19 MPIXH */
+  NONE, STATE14|STATE15, (LONG)"000000",
+  0x0009, 0x0002, 0x0006, 0x0001,
+        14,       -1,       -1, G_STRING  ,   /* Object 20  */
+  NONE, STATE15, (LONG)"/1000 mm",
+  0x000F, 0x0002, 0x0009, 0x0001,
+        32,       22, MVDICALL, G_BUTTON  ,   /* Object 21  */
+  NONE, DRAW3D|STATE14, (LONG)"Sonstiges",
+  0x0002, 0x000C, 0x0019, 0x0007,
+        23,       -1,       -1, G_STRING  ,   /* Object 22  */
+  NONE, STATE14|STATE15, (LONG)"Ursprung x:",
+  0x0001, 0x0001, 0x000B, 0x0001,
+  MORIGOY ,       -1,       -1, G_STRING  ,   /* Object 23  */
+  NONE, STATE14|STATE15, (LONG)"Ursprung y:",
+  0x0001, 0x0002, 0x000B, 0x0001,
+        25,       -1,       -1, G_STRING  ,   /* Object 24 MORIGOY */
+  NONE, STATE14|STATE15, (LONG)"000000",
+  0x000F, 0x0002, 0x0006, 0x0001,
+  MFACTORX,       -1,       -1, G_STRING  ,   /* Object 25  */
+  NONE, STATE14|STATE15, (LONG)"Faktor x:",
+  0x0003, 0x0003, 0x0009, 0x0001,
+        27,       -1,       -1, G_STRING  ,   /* Object 26 MFACTORX */
+  NONE, STATE14|STATE15, (LONG)"0.000000",
+  0x000D, 0x0003, 0x0008, 0x0001,
+  MFACTORY,       -1,       -1, G_STRING  ,   /* Object 27  */
+  NONE, STATE14|STATE15, (LONG)"Faktor y:",
+  0x0003, 0x0004, 0x0009, 0x0001,
+  MORIGOX ,       -1,       -1, G_STRING  ,   /* Object 28 MFACTORY */
+  NONE, STATE14|STATE15, (LONG)"0.000000",
+  0x000D, 0x0004, 0x0008, 0x0001,
+        30,       -1,       -1, G_STRING  ,   /* Object 29 MORIGOX */
+  NONE, STATE14|STATE15, (LONG)"000000",
+  0x000F, 0x0001, 0x0006, 0x0001,
+  MVDICALL,       -1,       -1, G_STRING  ,   /* Object 30  */
+  NONE, STATE14|STATE15, (LONG)"VDI Calls:",
+  0x0002, 0x0005, 0x000A, 0x0001,
+        21,       -1,       -1, G_STRING  ,   /* Object 31 MVDICALL */
+  NONE, STATE14|STATE15, (LONG)"00000000",
+  0x000D, 0x0005, 0x0008, 0x0001,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 32  */
+  SELECTABLE|DEFAULT|EXIT|LASTOB, WHITEBAK, (LONG)"~OK",
+  0x000A, 0x0013, 0x0009, 0x0002,
+  
+  /******** Tree 18 MOREINFO ****************************************************/
+        -1,        1,       13, G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|WHITEBAK|STATE15, (LONG)0x00001100L,
+  0x0000, 0x0000, 0x0028, 0x0015,
+         2,       -1,       -1, G_STRING  ,   /* Object 1  */
+  NONE, STATE11|STATE13|STATE15, (LONG)"PHOENIX",
+  0x000F, 0x0001, 0x0009, 0x0002,
+         3,       -1,       -1, G_STRING  ,   /* Object 2  */
+  NONE, STATE13|STATE15, (LONG)"Entwickelt mit Hilfe des Toolkits",
+  0x0004, 0x0004, 0x0021, 0x0001,
+         4,       -1,       -1, G_STRING  ,   /* Object 3  */
+  NONE, STATE13|STATE15, (LONG)"aus dem Buch",
+  0x000E, 0x0005, 0x000C, 0x0001,
+         5,       -1,       -1, G_STRING  ,   /* Object 4  */
+  NONE, STATE11|STATE13|STATE15, (LONG)"Vom Anf\204nger zum GEM-Profi",
+  0x0005, 0x0007, 0x001C, 0x0001,
+         6,       -1,       -1, G_TEXT    ,   /* Object 5  */
+  NONE, NORMAL, (LONG)&rs_tedinfo[13],
+  0x0012, 0x0009, 0x0202, 0x0600,
+         7,       -1,       -1, G_TEXT    ,   /* Object 6  */
+  NONE, NORMAL, (LONG)&rs_tedinfo[14],
+  0x0009, 0x000A, 0x0214, 0x0600,
+         8,       -1,       -1, G_TEXT    ,   /* Object 7  */
+  NONE, NORMAL, (LONG)&rs_tedinfo[15],
+  0x000C, 0x000B, 0x020E, 0x0600,
+         9,       -1,       -1, G_TEXT    ,   /* Object 8  */
+  NONE, NORMAL, (LONG)&rs_tedinfo[16],
+  0x000E, 0x000C, 0x0609, 0x0600,
+        10,       -1,       -1, G_TEXT    ,   /* Object 9  */
+  NONE, NORMAL, (LONG)&rs_tedinfo[17],
+  0x000C, 0x000D, 0x040D, 0x0800,
+        11,       -1,       -1, G_TEXT    ,   /* Object 10  */
+  NONE, NORMAL, (LONG)&rs_tedinfo[18],
+  0x000F, 0x000E, 0x0009, 0x0600,
+        12,       -1,       -1, G_TEXT    ,   /* Object 11  */
+  NONE, NORMAL, (LONG)&rs_tedinfo[19],
+  0x000D, 0x000F, 0x000C, 0x0600,
+        13,       -1,       -1, G_TEXT    ,   /* Object 12  */
+  NONE, NORMAL, (LONG)&rs_tedinfo[20],
+  0x0011, 0x0010, 0x0205, 0x0600,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 13  */
+  SELECTABLE|DEFAULT|EXIT|LASTOB, WHITEBAK, (LONG)"~OK",
+  0x000F, 0x0012, 0x000A, 0x0002,
+  
+  /******** Tree 19 SELBOX ****************************************************/
+        -1,        1, SELHELP , G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|WHITEBAK|STATE15, (LONG)0x00001100L,
+  0x0000, 0x0000, 0x0030, 0x000F,
+  SELSTR  ,       -1,       -1, G_STRING  ,   /* Object 1  */
+  NONE, STATE15, (LONG)"Aus~wahl:",
+  0x0002, 0x0001, 0x0009, 0x0001,
+  SELTITLE,       -1,       -1, G_FBOXTEXT,   /* Object 2 SELSTR */
+  EDITABLE, NORMAL, (LONG)&rs_tedinfo[21],
+  0x000B, 0x0001, 0x0023, 0x0001,
+  SELLIST ,       -1,       -1, G_STRING  ,   /* Object 3 SELTITLE */
+  NONE, DRAW3D|STATE15, (LONG)"1234567890123456789012345678901234",
+  0x0007, 0x0003, 0x0022, 0x0001,
+  SELOK   ,       -1,       -1, G_BOX     ,   /* Object 4 SELLIST */
+  NONE, STATE13, (LONG)0x00FF1101L,
+  0x0006, 0x0004, 0x0024, 0x0006,
+  SELCANCE,       -1,       -1, G_BUTTON  ,   /* Object 5 SELOK */
+  SELECTABLE|DEFAULT|EXIT, WHITEBAK, (LONG)"~OK",
+  0x0006, 0x000C, 0x000A, 0x0002,
+  SELHELP ,       -1,       -1, G_BUTTON  ,   /* Object 6 SELCANCE */
+  SELECTABLE|EXIT|FLAGS13, WHITEBAK, (LONG)"~Abbruch",
+  0x0013, 0x000C, 0x000A, 0x0002,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 7 SELHELP */
+  SELECTABLE|LASTOB|FLAGS14, WHITEBAK, (LONG)"~Hilfe",
+  0x0020, 0x000C, 0x000A, 0x0002,
+  
+  /******** Tree 20 CONFIG ****************************************************/
+        -1, CTMPLABE, CHELP   , G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|WHITEBAK|STATE15, (LONG)0x00001100L,
+  0x0000, 0x0000, 0x0044, 0x0016,
+  CTMPDIR ,       -1,       -1, G_STRING  ,   /* Object 1 CTMPLABE */
+  NONE, STATE15, (LONG)"~Temp-Verzeichnis:",
+  0x0002, 0x0001, 0x0012, 0x0001,
+         3,       -1,       -1, G_FBOXTEXT,   /* Object 2 CTMPDIR */
+  EDITABLE, NORMAL, (LONG)&rs_tedinfo[22],
+  0x0014, 0x0001, 0x002E, 0x0001,
+  CBLINK  ,       -1,       -1, G_STRING  ,   /* Object 3  */
+  NONE, DRAW3D|STATE15, (LONG)"B~linkrate:",
+  0x0009, 0x0003, 0x000B, 0x0001,
+         5,       -1,       -1, G_FBOXTEXT,   /* Object 4 CBLINK */
+  EDITABLE, DRAW3D, (LONG)&rs_tedinfo[23],
+  0x0014, 0x0003, 0x0002, 0x0001,
+        17, CBEEP   , CWARNTAB, G_BUTTON  ,   /* Object 5  */
+  NONE, STATE14, (LONG)"System-Parameter",
+  0x0002, 0x0004, 0x0023, 0x000E,
+  CPRBEEP ,       -1,       -1, G_BUTTON  ,   /* Object 6 CBEEP */
+  SELECTABLE, SELECTED|DRAW3D|STATE13, (LONG)"Ton bei Fehler~meldungen",
+  0x0002, 0x0002, 0x0018, 0x0001,
+  CGROW   ,       -1,       -1, G_BUTTON  ,   /* Object 7 CPRBEEP */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"Ton bei ~Proze\236ende",
+  0x0002, 0x0003, 0x0013, 0x0001,
+  CAUTO   ,       -1,       -1, G_BUTTON  ,   /* Object 8 CGROW */
+  SELECTABLE, SELECTED|DRAW3D|STATE13, (LONG)"~Grow/Shrinkbox zeichnen",
+  0x0002, 0x0004, 0x0018, 0x0001,
+  CUSEFONT,       -1,       -1, G_BUTTON  ,   /* Object 9 CAUTO */
+  SELECTABLE, SELECTED|DRAW3D|STATE13, (LONG)"Automatisches ~Speichern",
+  0x0002, 0x0005, 0x0018, 0x0001,
+  CHIDEFNC,       -1,       -1, G_BUTTON  ,   /* Object 10 CUSEFONT */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"~Externe Schriften benutzen",
+  0x0002, 0x0006, 0x001B, 0x0001,
+  CHIDEICO,       -1,       -1, G_BUTTON  ,   /* Object 11 CHIDEFNC */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"~Funktionstasten verstecken",
+  0x0002, 0x0007, 0x001B, 0x0001,
+  CQUERY  ,       -1,       -1, G_BUTTON  ,   /* Object 12 CHIDEICO */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"Symbolleiste verste~cken",
+  0x0002, 0x0008, 0x001B, 0x0001,
+  CUSECALC,       -1,       -1, G_BUTTON  ,   /* Object 13 CQUERY */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"Anzahl ~Datens\204tze bei Abfrage",
+  0x0002, 0x0009, 0x001E, 0x0001,
+  CMINIMIZ,       -1,       -1, G_BUTTON  ,   /* Object 14 CUSECALC */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"Rechnen ~verwenden",
+  0x0002, 0x000A, 0x0012, 0x0001,
+  CWARNTAB,       -1,       -1, G_BUTTON  ,   /* Object 15 CMINIMIZ */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"Prozesse als Sym~bol starten",
+  0x0002, 0x000B, 0x001C, 0x0001,
+         5,       -1,       -1, G_BUTTON  ,   /* Object 16 CWARNTAB */
+  SELECTABLE, SELECTED|DRAW3D|STATE13, (LONG)"~Warnung bei leerer Tabelle",
+  0x0002, 0x000C, 0x001C, 0x0001,
+        23, CGRID   , CPATTERN, G_BUTTON  ,   /* Object 17  */
+  NONE, STATE14, (LONG)"Tabellen-Parameter",
+  0x0026, 0x0004, 0x001C, 0x0007,
+  CINFO   ,       -1,       -1, G_BUTTON  ,   /* Object 18 CGRID */
+  SELECTABLE, SELECTED|DRAW3D|STATE13, (LONG)"Gitter~netzlinien",
+  0x0002, 0x0002, 0x0011, 0x0001,
+  CTOP    ,       -1,       -1, G_BUTTON  ,   /* Object 19 CINFO */
+  SELECTABLE, SELECTED|DRAW3D|STATE13, (LONG)"Info~zeile sichtbar",
+  0x0002, 0x0003, 0x0013, 0x0001,
+  CLEFT   ,       -1,       -1, G_BUTTON  ,   /* Object 20 CTOP */
+  SELECTABLE, SELECTED|DRAW3D|STATE13, (LONG)"Obe~re Zeile sichtbar",
+  0x0002, 0x0004, 0x0015, 0x0001,
+  CPATTERN,       -1,       -1, G_BUTTON  ,   /* Object 21 CLEFT */
+  SELECTABLE, SELECTED|DRAW3D|STATE13, (LONG)"Lin~ke Spalte sichtbar",
+  0x0002, 0x0005, 0x0016, 0x0001,
+        17,       -1,       -1, G_BUTTON  ,   /* Object 22 CPATTERN */
+  SELECTABLE, SELECTED|DRAW3D|STATE13, (LONG)"M~uster in Kopfzeile",
+  0x0002, 0x0006, 0x0014, 0x0001,
+  COK     ,       24, CMAXDAT , G_BUTTON  ,   /* Object 23  */
+  NONE, STATE14, (LONG)"Cache-Parameter",
+  0x0026, 0x000D, 0x001C, 0x0005,
+  CMAXIND ,       -1,       -1, G_STRING  ,   /* Object 24  */
+  NONE, DRAW3D|STATE15, (LONG)"Max. ~Index-Cache:",
+  0x0002, 0x0002, 0x0012, 0x0001,
+        26,       -1,       -1, G_FBOXTEXT,   /* Object 25 CMAXIND */
+  EDITABLE, DRAW3D, (LONG)&rs_tedinfo[24],
+  0x0014, 0x0002, 0x0006, 0x0001,
+  CMAXDAT ,       -1,       -1, G_STRING  ,   /* Object 26  */
+  NONE, DRAW3D|STATE15, (LONG)"Ma~x. Daten-Cache:",
+  0x0002, 0x0004, 0x0012, 0x0001,
+        23,       -1,       -1, G_FBOXTEXT,   /* Object 27 CMAXDAT */
+  EDITABLE, DRAW3D, (LONG)&rs_tedinfo[25],
+  0x0014, 0x0004, 0x0006, 0x0001,
+  CCANCEL ,       -1,       -1, G_BUTTON  ,   /* Object 28 COK */
+  SELECTABLE|DEFAULT|EXIT, WHITEBAK, (LONG)"~OK",
+  0x0010, 0x0013, 0x000A, 0x0002,
+  CHELP   ,       -1,       -1, G_BUTTON  ,   /* Object 29 CCANCEL */
+  SELECTABLE|EXIT|FLAGS13, WHITEBAK, (LONG)"~Abbruch",
+  0x001D, 0x0013, 0x000A, 0x0002,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 30 CHELP */
+  SELECTABLE|LASTOB|FLAGS14, WHITEBAK, (LONG)"~Hilfe",
+  0x002A, 0x0013, 0x000A, 0x0002,
+  
+  /******** Tree 21 IMEXPARM ****************************************************/
+        -1,        1, EXSAVE  , G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|WHITEBAK|STATE15, (LONG)0x00001101L,
+  0x0000, 0x0000, 0x0046, 0x0014,
+         8,        2, EXTXTSEP, G_BUTTON  ,   /* Object 1  */
+  NONE, STATE14, (LONG)"Trennzeichen",
+  0x0002, 0x0001, 0x0034, 0x0006,
+  EXRECSEP,       -1,       -1, G_STRING  ,   /* Object 2  */
+  NONE, DRAW3D|STATE15, (LONG)"Datensat~z:",
+  0x0002, 0x0002, 0x000B, 0x0001,
+         4,       -1,       -1, G_FBOXTEXT,   /* Object 3 EXRECSEP */
+  EDITABLE, DRAW3D, (LONG)&rs_tedinfo[26],
+  0x000D, 0x0002, 0x0025, 0x0001,
+  EXCOLSEP,       -1,       -1, G_STRING  ,   /* Object 4  */
+  NONE, STATE15, (LONG)"~Feld:",
+  0x0002, 0x0003, 0x0006, 0x0001,
+         6,       -1,       -1, G_FBOXTEXT,   /* Object 5 EXCOLSEP */
+  EDITABLE, NORMAL, (LONG)&rs_tedinfo[27],
+  0x000D, 0x0003, 0x0025, 0x0001,
+  EXTXTSEP,       -1,       -1, G_STRING  ,   /* Object 6  */
+  NONE, DRAW3D|STATE15, (LONG)"Te~xt:",
+  0x0002, 0x0005, 0x0006, 0x0001,
+         1,       -1,       -1, G_FBOXTEXT,   /* Object 7 EXTXTSEP */
+  EDITABLE, DRAW3D, (LONG)&rs_tedinfo[28],
+  0x000D, 0x0005, 0x000A, 0x0001,
+        14, EXBINARY, EXDECIMA, G_BUTTON  ,   /* Object 8  */
+  NONE, STATE14, (LONG)"Format",
+  0x0002, 0x0008, 0x0015, 0x0008,
+  EXASCII ,       -1,       -1, G_BUTTON  ,   /* Object 9 EXBINARY */
+  SELECTABLE|RBUTTON, DRAW3D|STATE13, (LONG)"~Bin\204r",
+  0x0002, 0x0002, 0x0006, 0x0001,
+  EXCOLNAM,       -1,       -1, G_BUTTON  ,   /* Object 10 EXASCII */
+  SELECTABLE|RBUTTON, SELECTED|DRAW3D|STATE13, (LONG)"AS~CII",
+  0x0002, 0x0003, 0x0006, 0x0001,
+        12,       -1,       -1, G_BUTTON  ,   /* Object 11 EXCOLNAM */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"S~paltennamen",
+  0x0002, 0x0005, 0x000D, 0x0001,
+  EXDECIMA,       -1,       -1, G_STRING  ,   /* Object 12  */
+  NONE, DRAW3D|STATE15, (LONG)"Dezimalpun~kt:",
+  0x0002, 0x0007, 0x000E, 0x0001,
+         8,       -1,       -1, G_FBOXTEXT,   /* Object 13 EXDECIMA */
+  EDITABLE, DRAW3D, (LONG)&rs_tedinfo[29],
+  0x0010, 0x0007, 0x0003, 0x0001,
+        19, EXDDMMYY, EXNUMBER, G_BUTTON  ,   /* Object 14  */
+  NONE, STATE14, (LONG)"Datum",
+  0x0018, 0x0008, 0x001B, 0x0006,
+  EXMMDDYY,       -1,       -1, G_BUTTON  ,   /* Object 15 EXDDMMYY */
+  SELECTABLE|RBUTTON, SELECTED|DRAW3D|STATE13, (LONG)"~DD.MM.YYYY",
+  0x0002, 0x0002, 0x000B, 0x0001,
+  EXYYMMDD,       -1,       -1, G_BUTTON  ,   /* Object 16 EXMMDDYY */
+  SELECTABLE|RBUTTON, DRAW3D|STATE13, (LONG)"~MM.DD.YYYY",
+  0x0002, 0x0003, 0x000B, 0x0001,
+  EXNUMBER,       -1,       -1, G_BUTTON  ,   /* Object 17 EXYYMMDD */
+  SELECTABLE|RBUTTON, DRAW3D|STATE13, (LONG)"~YYYY.MM.DD",
+  0x0002, 0x0004, 0x000B, 0x0001,
+        14,       -1,       -1, G_BUTTON  ,   /* Object 18 EXNUMBER */
+  SELECTABLE|RBUTTON, DRAW3D|STATE13, (LONG)"~Tage seit 01.01.1900",
+  0x0002, 0x0005, 0x0015, 0x0001,
+  EXOK    , EXINSERT, EXUPDATE, G_BUTTON  ,   /* Object 19  */
+  NONE, STATE14, (LONG)"Import-Modus",
+  0x0034, 0x0008, 0x0010, 0x0004,
+  EXUPDATE,       -1,       -1, G_BUTTON  ,   /* Object 20 EXINSERT */
+  SELECTABLE|RBUTTON, SELECTED|DRAW3D|STATE13, (LONG)"~Einf\201gen",
+  0x0002, 0x0002, 0x0009, 0x0001,
+        19,       -1,       -1, G_BUTTON  ,   /* Object 21 EXUPDATE */
+  SELECTABLE|RBUTTON, DRAW3D|STATE13, (LONG)"\216~ndern",
+  0x0002, 0x0003, 0x0007, 0x0001,
+  EXCANCEL,       -1,       -1, G_BUTTON  ,   /* Object 22 EXOK */
+  SELECTABLE|DEFAULT|EXIT, WHITEBAK, (LONG)"~OK",
+  0x0002, 0x0011, 0x000A, 0x0002,
+  EXHELP  ,       -1,       -1, G_BUTTON  ,   /* Object 23 EXCANCEL */
+  SELECTABLE|EXIT|FLAGS13, WHITEBAK, (LONG)"~Abbruch",
+  0x000F, 0x0011, 0x000A, 0x0002,
+  EXLOAD  ,       -1,       -1, G_BUTTON  ,   /* Object 24 EXHELP */
+  SELECTABLE|FLAGS14, WHITEBAK, (LONG)"~Hilfe",
+  0x001C, 0x0011, 0x000A, 0x0002,
+  EXSAVE  ,       -1,       -1, G_BUTTON  ,   /* Object 25 EXLOAD */
+  SELECTABLE, WHITEBAK, (LONG)"~Laden...",
+  0x002B, 0x0011, 0x000B, 0x0002,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 26 EXSAVE */
+  SELECTABLE|LASTOB, WHITEBAK, (LONG)"~Sichern...",
+  0x0039, 0x0011, 0x000B, 0x0002,
+  
+  /******** Tree 22 CFGPRN ****************************************************/
+        -1, PPRINTER, PSAVE   , G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|WHITEBAK|STATE15, (LONG)0x00001101L,
+  0x0000, 0x0000, 0x0045, 0x0013,
+         2,       -1,       -1, G_CICON   ,   /* Object 1 PPRINTER */
+  NONE, NORMAL, (LONG)&rs_ciconblk[4],
+  0x0002, 0x0001, 0x0009, 0x0802,
+  PCONTROL,       -1,       -1, G_STRING  ,   /* Object 2  */
+  NONE, STATE15, (LONG)"Steuer~zeichen:",
+  0x000C, 0x0001, 0x000F, 0x0001,
+  PFILELAB,       -1,       -1, G_FBOXTEXT,   /* Object 3 PCONTROL */
+  EDITABLE, NORMAL, (LONG)&rs_tedinfo[30],
+  0x001B, 0x0001, 0x0028, 0x0001,
+  PFILENAM,       -1,       -1, G_STRING  ,   /* Object 4 PFILELAB */
+  NONE, STATE15, (LONG)"Aus~gabedatei:",
+  0x000C, 0x0003, 0x000E, 0x0001,
+         6,       -1,       -1, G_FBOXTEXT,   /* Object 5 PFILENAM */
+  EDITABLE, NORMAL, (LONG)&rs_tedinfo[31],
+  0x001B, 0x0003, 0x0028, 0x0001,
+  PPORTS  , PPICA   , PNLQ    , G_BUTTON  ,   /* Object 6  */
+  NONE, STATE14, (LONG)"Schriftart",
+  0x0002, 0x0005, 0x000F, 0x000A,
+  PELITE  ,       -1,       -1, G_BUTTON  ,   /* Object 7 PPICA */
+  SELECTABLE|RBUTTON, SELECTED|DRAW3D|STATE13, (LONG)"~Pica",
+  0x0002, 0x0002, 0x0005, 0x0001,
+  PCONDENS,       -1,       -1, G_BUTTON  ,   /* Object 8 PELITE */
+  SELECTABLE|RBUTTON, DRAW3D|STATE13, (LONG)"~Elite",
+  0x0002, 0x0003, 0x0006, 0x0001,
+  PMICRO  ,       -1,       -1, G_BUTTON  ,   /* Object 9 PCONDENS */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"S~chmal",
+  0x0002, 0x0004, 0x0007, 0x0001,
+  PEXPANDE,       -1,       -1, G_BUTTON  ,   /* Object 10 PMICRO */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"~Klein",
+  0x0002, 0x0005, 0x0006, 0x0001,
+  PITALIC ,       -1,       -1, G_BUTTON  ,   /* Object 11 PEXPANDE */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"~Breit",
+  0x0002, 0x0006, 0x0006, 0x0001,
+  PEMPHASI,       -1,       -1, G_BUTTON  ,   /* Object 12 PITALIC */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"K~ursiv",
+  0x0002, 0x0007, 0x0007, 0x0001,
+  PNLQ    ,       -1,       -1, G_BUTTON  ,   /* Object 13 PEMPHASI */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"~Fett",
+  0x0002, 0x0008, 0x0005, 0x0001,
+         6,       -1,       -1, G_BUTTON  ,   /* Object 14 PNLQ */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"NL~Q",
+  0x0002, 0x0009, 0x0004, 0x0001,
+        23, PSPOOL  , PPORT5  , G_BUTTON  ,   /* Object 15 PPORTS */
+  NONE, STATE14, (LONG)"Ausgabeger\204t",
+  0x0013, 0x0005, 0x0010, 0x000A,
+  PFILE   ,       -1,       -1, G_BUTTON  ,   /* Object 16 PSPOOL */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"Spoole~r",
+  0x0002, 0x0002, 0x0008, 0x0001,
+  PPORT1  ,       -1,       -1, G_BUTTON  ,   /* Object 17 PFILE */
+  SELECTABLE|RBUTTON, DRAW3D|STATE13, (LONG)"~Datei",
+  0x0002, 0x0004, 0x0006, 0x0001,
+  PPORT2  ,       -1,       -1, G_BUTTON  ,   /* Object 18 PPORT1 */
+  SELECTABLE|RBUTTON, SELECTED|DRAW3D|STATE13, (LONG)"PO~RT1",
+  0x0002, 0x0005, 0x0006, 0x0001,
+  PPORT3  ,       -1,       -1, G_BUTTON  ,   /* Object 19 PPORT2 */
+  SELECTABLE|RBUTTON, DRAW3D|STATE13, (LONG)"PO~RT2",
+  0x0002, 0x0006, 0x0006, 0x0001,
+  PPORT4  ,       -1,       -1, G_BUTTON  ,   /* Object 20 PPORT3 */
+  SELECTABLE|RBUTTON, DRAW3D|STATE13, (LONG)"PORT3",
+  0x0002, 0x0007, 0x0005, 0x0001,
+  PPORT5  ,       -1,       -1, G_BUTTON  ,   /* Object 21 PPORT4 */
+  SELECTABLE|RBUTTON, DRAW3D|STATE13, (LONG)"PORT4",
+  0x0002, 0x0008, 0x0005, 0x0001,
+  PPORTS  ,       -1,       -1, G_BUTTON  ,   /* Object 22 PPORT5 */
+  SELECTABLE|RBUTTON, DRAW3D|STATE13, (LONG)"PORT5",
+  0x0002, 0x0009, 0x0005, 0x0001,
+        28,       24, PBYTES  , G_BUTTON  ,   /* Object 23  */
+  NONE, STATE14, (LONG)"Spooler-Parameter",
+  0x0025, 0x0005, 0x0019, 0x0005,
+  PEVENTS ,       -1,       -1, G_STRING  ,   /* Object 24  */
+  NONE, DRAW3D|STATE15, (LONG)"Ereign~isse/s:",
+  0x0002, 0x0002, 0x000E, 0x0001,
+        26,       -1,       -1, G_FBOXTEXT,   /* Object 25 PEVENTS */
+  EDITABLE, DRAW3D, (LONG)&rs_tedinfo[32],
+  0x0012, 0x0002, 0x0005, 0x0001,
+  PBYTES  ,       -1,       -1, G_STRING  ,   /* Object 26  */
+  NONE, STATE15, (LONG)"B~ytes/Ereignis:",
+  0x0002, 0x0003, 0x0010, 0x0001,
+        23,       -1,       -1, G_FBOXTEXT,   /* Object 27 PBYTES */
+  EDITABLE, NORMAL, (LONG)&rs_tedinfo[33],
+  0x0012, 0x0003, 0x0005, 0x0001,
+  PDRIVER , PLSPACE6, PLSPACE8, G_BUTTON  ,   /* Object 28  */
+  NONE, STATE14, (LONG)"Zeilenabstand",
+  0x0025, 0x000B, 0x0011, 0x0004,
+  PLSPACE8,       -1,       -1, G_BUTTON  ,   /* Object 29 PLSPACE6 */
+  SELECTABLE|RBUTTON, SELECTED|DRAW3D|STATE13, (LONG)"1/~6",
+  0x0002, 0x0002, 0x0004, 0x0001,
+        28,       -1,       -1, G_BUTTON  ,   /* Object 30 PLSPACE8 */
+  SELECTABLE|RBUTTON, DRAW3D|STATE13, (LONG)"1/~8",
+  0x0002, 0x0003, 0x0004, 0x0001,
+  POK     ,       -1,       -1, G_BUTTON  ,   /* Object 31 PDRIVER */
+  SELECTABLE, DRAW3D|WHITEBAK, (LONG)"~Treiber...",
+  0x0038, 0x000E, 0x000B, 0x0002,
+  PCANCEL ,       -1,       -1, G_BUTTON  ,   /* Object 32 POK */
+  SELECTABLE|DEFAULT|EXIT, WHITEBAK, (LONG)"~OK",
+  0x0002, 0x0010, 0x000A, 0x0002,
+  PHELP   ,       -1,       -1, G_BUTTON  ,   /* Object 33 PCANCEL */
+  SELECTABLE|EXIT|FLAGS13, WHITEBAK, (LONG)"~Abbruch",
+  0x000F, 0x0010, 0x000A, 0x0002,
+  PLOAD   ,       -1,       -1, G_BUTTON  ,   /* Object 34 PHELP */
+  SELECTABLE|FLAGS14, WHITEBAK, (LONG)"~Hilfe",
+  0x001C, 0x0010, 0x000A, 0x0002,
+  PSAVE   ,       -1,       -1, G_BUTTON  ,   /* Object 35 PLOAD */
+  SELECTABLE, WHITEBAK, (LONG)"~Laden...",
+  0x002A, 0x0010, 0x000B, 0x0002,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 36 PSAVE */
+  SELECTABLE|LASTOB, WHITEBAK, (LONG)"~Sichern...",
+  0x0038, 0x0010, 0x000B, 0x0002,
+  
+  /******** Tree 23 QUEUE ****************************************************/
+        -1,        1, QHELP   , G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|WHITEBAK|STATE15, (LONG)0x00001100L,
+  0x0000, 0x0000, 0x0027, 0x000C,
+         2,       -1,       -1, G_STRING  ,   /* Object 1  */
+  NONE, DRAW3D|STATE15, (LONG)"Dateiname",
+  0x0003, 0x0001, 0x0009, 0x0001,
+         3,       -1,       -1, G_STRING  ,   /* Object 2  */
+  NONE, DRAW3D|STATE15, (LONG)"Port",
+  0x0011, 0x0001, 0x0004, 0x0001,
+         4,       -1,       -1, G_STRING  ,   /* Object 3  */
+  NONE, DRAW3D|STATE15, (LONG)"Typ",
+  0x0017, 0x0001, 0x0003, 0x0001,
+  QLIST   ,       -1,       -1, G_STRING  ,   /* Object 4  */
+  NONE, DRAW3D|STATE15, (LONG)"Temp",
+  0x001E, 0x0001, 0x0005, 0x0001,
+  QOK     ,       -1,       -1, G_BOX     ,   /* Object 5 QLIST */
+  NONE, STATE13, (LONG)0x00FF1101L,
+  0x0002, 0x0002, 0x0023, 0x0006,
+  QHELP   ,       -1,       -1, G_BUTTON  ,   /* Object 6 QOK */
+  SELECTABLE|DEFAULT|EXIT, WHITEBAK, (LONG)"~OK",
+  0x0008, 0x0009, 0x000A, 0x0002,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 7 QHELP */
+  SELECTABLE|LASTOB|FLAGS14, WHITEBAK, (LONG)"~Hilfe",
+  0x0015, 0x0009, 0x000A, 0x0002,
+  
+  /******** Tree 24 PAGEFORM ****************************************************/
+        -1,        1, PGSAVE  , G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|WHITEBAK|STATE15, (LONG)0x00001101L,
+  0x0000, 0x0000, 0x004E, 0x0014,
+        15,        2, PGTIME  , G_BUTTON  ,   /* Object 1  */
+  NONE, STATE14, (LONG)"Kopf/Fu\236zeile",
+  0x0002, 0x0001, 0x004A, 0x0007,
+  PGHEADL ,       -1,       -1, G_STRING  ,   /* Object 2  */
+  NONE, DRAW3D|STATE15, (LONG)"~Kopf:",
+  0x0002, 0x0002, 0x0006, 0x0001,
+  PGHEADC ,       -1,       -1, G_FBOXTEXT,   /* Object 3 PGHEADL */
+  EDITABLE, DRAW3D, (LONG)&rs_tedinfo[34],
+  0x0008, 0x0002, 0x0015, 0x0001,
+  PGHEADR ,       -1,       -1, G_FBOXTEXT,   /* Object 4 PGHEADC */
+  EDITABLE, DRAW3D, (LONG)&rs_tedinfo[35],
+  0x001E, 0x0002, 0x0015, 0x0001,
+         6,       -1,       -1, G_FBOXTEXT,   /* Object 5 PGHEADR */
+  EDITABLE, DRAW3D, (LONG)&rs_tedinfo[36],
+  0x0034, 0x0002, 0x0015, 0x0001,
+  PGFOOTL ,       -1,       -1, G_STRING  ,   /* Object 6  */
+  NONE, STATE15, (LONG)"~Fu\236:",
+  0x0002, 0x0003, 0x0005, 0x0001,
+  PGFOOTC ,       -1,       -1, G_FBOXTEXT,   /* Object 7 PGFOOTL */
+  EDITABLE, NORMAL, (LONG)&rs_tedinfo[37],
+  0x0008, 0x0003, 0x0015, 0x0001,
+  PGFOOTR ,       -1,       -1, G_FBOXTEXT,   /* Object 8 PGFOOTC */
+  EDITABLE, NORMAL, (LONG)&rs_tedinfo[38],
+  0x001E, 0x0003, 0x0015, 0x0001,
+  PGBASE  ,       -1,       -1, G_FBOXTEXT,   /* Object 9 PGFOOTR */
+  EDITABLE, NORMAL, (LONG)&rs_tedinfo[39],
+  0x0034, 0x0003, 0x0015, 0x0001,
+  PGSORT  ,       -1,       -1, G_BUTTON  ,   /* Object 10 PGBASE */
+  SELECTABLE, DRAW3D|STATE15, (LONG)"base",
+  0x0008, 0x0005, 0x0004, 0x0002,
+  PGPAGE  ,       -1,       -1, G_BUTTON  ,   /* Object 11 PGSORT */
+  SELECTABLE, DRAW3D|STATE15, (LONG)"sort",
+  0x000D, 0x0005, 0x0004, 0x0002,
+  PGDATE  ,       -1,       -1, G_BUTTON  ,   /* Object 12 PGPAGE */
+  SELECTABLE, DRAW3D|STATE15, (LONG)"page",
+  0x0012, 0x0005, 0x0004, 0x0002,
+  PGTIME  ,       -1,       -1, G_BUTTON  ,   /* Object 13 PGDATE */
+  SELECTABLE, DRAW3D|STATE15, (LONG)"date",
+  0x0017, 0x0005, 0x0004, 0x0002,
+         1,       -1,       -1, G_BUTTON  ,   /* Object 14 PGTIME */
+  SELECTABLE, DRAW3D|STATE15, (LONG)"time",
+  0x001C, 0x0005, 0x0004, 0x0002,
+        32,       16, PGLINES , G_BUTTON  ,   /* Object 15  */
+  NONE, STATE14, (LONG)"Papier",
+  0x0002, 0x0009, 0x0032, 0x0007,
+  PGWIDTH ,       -1,       -1, G_STRING  ,   /* Object 16  */
+  NONE, DRAW3D|STATE15, (LONG)"~Breite:",
+  0x0002, 0x0002, 0x0008, 0x0001,
+        18,       -1,       -1, G_FBOXTEXT,   /* Object 17 PGWIDTH */
+  EDITABLE, DRAW3D, (LONG)&rs_tedinfo[40],
+  0x000A, 0x0002, 0x0004, 0x0001,
+  PGLENGTH,       -1,       -1, G_STRING  ,   /* Object 18  */
+  NONE, DRAW3D|STATE15, (LONG)"L\204~nge:",
+  0x0002, 0x0004, 0x0007, 0x0001,
+        20,       -1,       -1, G_FBOXTEXT,   /* Object 19 PGLENGTH */
+  EDITABLE, DRAW3D, (LONG)&rs_tedinfo[41],
+  0x000A, 0x0004, 0x0004, 0x0001,
+  PGMARTOP,       -1,       -1, G_STRING  ,   /* Object 20  */
+  NONE, DRAW3D|STATE15, (LONG)"Rand ~oben:",
+  0x0010, 0x0002, 0x000B, 0x0001,
+        22,       -1,       -1, G_FBOXTEXT,   /* Object 21 PGMARTOP */
+  EDITABLE, DRAW3D, (LONG)&rs_tedinfo[42],
+  0x001C, 0x0002, 0x0003, 0x0001,
+  PGMARBOT,       -1,       -1, G_STRING  ,   /* Object 22  */
+  NONE, DRAW3D|STATE15, (LONG)"Rand ~unten:",
+  0x0010, 0x0004, 0x000C, 0x0001,
+        24,       -1,       -1, G_FBOXTEXT,   /* Object 23 PGMARBOT */
+  EDITABLE, DRAW3D, (LONG)&rs_tedinfo[43],
+  0x001C, 0x0004, 0x0003, 0x0001,
+  PGMARHEA,       -1,       -1, G_STRING  ,   /* Object 24  */
+  NONE, DRAW3D|STATE15, (LONG)"~Rand Kopf:",
+  0x0021, 0x0002, 0x000B, 0x0001,
+        26,       -1,       -1, G_FBOXTEXT,   /* Object 25 PGMARHEA */
+  EDITABLE, DRAW3D, (LONG)&rs_tedinfo[44],
+  0x002D, 0x0002, 0x0003, 0x0001,
+  PGMARFOO,       -1,       -1, G_STRING  ,   /* Object 26  */
+  NONE, DRAW3D|STATE15, (LONG)"Ran~d Fu\236:",
+  0x0021, 0x0004, 0x000A, 0x0001,
+        28,       -1,       -1, G_FBOXTEXT,   /* Object 27 PGMARFOO */
+  EDITABLE, DRAW3D, (LONG)&rs_tedinfo[45],
+  0x002D, 0x0004, 0x0003, 0x0001,
+  PGMARLEF,       -1,       -1, G_STRING  ,   /* Object 28  */
+  NONE, DRAW3D|STATE15, (LONG)"Rand l~inks:",
+  0x0021, 0x0006, 0x000C, 0x0001,
+        30,       -1,       -1, G_FBOXTEXT,   /* Object 29 PGMARLEF */
+  EDITABLE, DRAW3D, (LONG)&rs_tedinfo[46],
+  0x002D, 0x0006, 0x0003, 0x0001,
+  PGLINES ,       -1,       -1, G_STRING  ,   /* Object 30  */
+  NONE, DRAW3D|STATE15, (LONG)"Zeilen/Seite:",
+  0x0002, 0x0006, 0x000D, 0x0001,
+        15,       -1,       -1, G_STRING  ,   /* Object 31 PGLINES */
+  NONE, DRAW3D|STATE12|STATE13|STATE15, (LONG)"66 ",
+  0x0010, 0x0006, 0x0004, 0x0001,
+  PGOK    , PGFORMAD, PGGROUP , G_BUTTON  ,   /* Object 32  */
+  NONE, STATE14, (LONG)"Schalter",
+  0x0037, 0x0009, 0x0015, 0x0007,
+  PGCOLHEA,       -1,       -1, G_BUTTON  ,   /* Object 33 PGFORMAD */
+  SELECTABLE, SELECTED|DRAW3D|STATE13, (LONG)"Seiten~vorschub",
+  0x0002, 0x0002, 0x000F, 0x0001,
+  PGSUM   ,       -1,       -1, G_BUTTON  ,   /* Object 34 PGCOLHEA */
+  SELECTABLE, SELECTED|DRAW3D|STATE13, (LONG)"Spaltenko~pf",
+  0x0002, 0x0003, 0x000C, 0x0001,
+        36,       -1,       -1, G_BUTTON  ,   /* Object 35 PGSUM */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"Su~mmierung",
+  0x0002, 0x0004, 0x000B, 0x0001,
+  PGGROUP ,       -1,       -1, G_STRING  ,   /* Object 36  */
+  NONE, DRAW3D|STATE15, (LONG)"~Gruppe:",
+  0x0002, 0x0006, 0x0008, 0x0001,
+        32,       -1,       -1, G_FBOXTEXT,   /* Object 37 PGGROUP */
+  EDITABLE, DRAW3D, (LONG)&rs_tedinfo[47],
+  0x000A, 0x0006, 0x0003, 0x0001,
+  PGCANCEL,       -1,       -1, G_BUTTON  ,   /* Object 38 PGOK */
+  SELECTABLE|DEFAULT|EXIT, WHITEBAK, (LONG)"~OK",
+  0x0002, 0x0011, 0x000A, 0x0002,
+  PGHELP  ,       -1,       -1, G_BUTTON  ,   /* Object 39 PGCANCEL */
+  SELECTABLE|EXIT|FLAGS13, WHITEBAK, (LONG)"~Abbruch",
+  0x000F, 0x0011, 0x000A, 0x0002,
+  PGLOAD  ,       -1,       -1, G_BUTTON  ,   /* Object 40 PGHELP */
+  SELECTABLE|FLAGS14, WHITEBAK, (LONG)"~Hilfe",
+  0x001C, 0x0011, 0x000A, 0x0002,
+  PGSAVE  ,       -1,       -1, G_BUTTON  ,   /* Object 41 PGLOAD */
+  SELECTABLE, WHITEBAK, (LONG)"~Laden...",
+  0x0033, 0x0011, 0x000B, 0x0002,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 42 PGSAVE */
+  SELECTABLE|LASTOB, WHITEBAK, (LONG)"~Sichern...",
+  0x0041, 0x0011, 0x000B, 0x0002,
+  
+  /******** Tree 25 PROCBOX ****************************************************/
+        -1, PRFILE  , PRHELP  , G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|WHITEBAK|STATE15, (LONG)0x00001100L,
+  0x0000, 0x0000, 0x0022, 0x0013,
+  PRDBNAME,       -1,       -1, G_STRING  ,   /* Object 1 PRFILE */
+  NONE, DRAW3D|STATE15, (LONG)"123456789012345678901234567890",
+  0x0002, 0x0001, 0x001E, 0x0001,
+  PRINDEX ,       -1,       -1, G_STRING  ,   /* Object 2 PRDBNAME */
+  NONE, STATE15, (LONG)"123456789012345678901234567890",
+  0x0002, 0x0002, 0x001E, 0x0001,
+         4,       -1,       -1, G_STRING  ,   /* Object 3 PRINDEX */
+  NONE, DRAW3D|STATE15, (LONG)"123456789012345678901234567890",
+  0x0002, 0x0004, 0x001E, 0x0001,
+  PRRECLBL,        5, PREXCLUS, G_BUTTON  ,   /* Object 4  */
+  NONE, DRAW3D|STATE14, (LONG)"Zeit-Information",
+  0x0003, 0x0005, 0x001C, 0x0006,
+  PRRUNNIN,       -1,       -1, G_STRING  ,   /* Object 5  */
+  NONE, DRAW3D|STATE15, (LONG)"Laufzeit:",
+  0x0002, 0x0002, 0x0009, 0x0001,
+         7,       -1,       -1, G_TEXT    ,   /* Object 6 PRRUNNIN */
+  NONE, DRAW3D, (LONG)&rs_tedinfo[48],
+  0x000C, 0x0002, 0x0008, 0x0001,
+  PRREMAIN,       -1,       -1, G_STRING  ,   /* Object 7  */
+  NONE, STATE15, (LONG)"Restzeit:",
+  0x0002, 0x0003, 0x0009, 0x0001,
+  PRPAUSE ,       -1,       -1, G_TEXT    ,   /* Object 8 PRREMAIN */
+  NONE, NORMAL, (LONG)&rs_tedinfo[49],
+  0x000C, 0x0003, 0x0008, 0x0001,
+  PREXCLUS,       -1,       -1, G_BUTTON  ,   /* Object 9 PRPAUSE */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"~Pause",
+  0x0002, 0x0005, 0x0006, 0x0001,
+         4,       -1,       -1, G_BUTTON  ,   /* Object 10 PREXCLUS */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"~Exclusiv",
+  0x000F, 0x0005, 0x0009, 0x0001,
+  PRRECORD,       -1,       -1, G_STRING  ,   /* Object 11 PRRECLBL */
+  NONE, DRAW3D|STATE15, (LONG)"Datensatz:",
+  0x0002, 0x000C, 0x000A, 0x0001,
+        13,       -1,       -1, G_TEXT    ,   /* Object 12 PRRECORD */
+  NONE, DRAW3D, (LONG)&rs_tedinfo[50],
+  0x000E, 0x000C, 0x000A, 0x0001,
+  PRUPPER ,       -1,       -1, G_STRING  ,   /* Object 13  */
+  NONE, STATE15, (LONG)"0",
+  0x0002, 0x000D, 0x0001, 0x0001,
+  PRSLIDER,       -1,       -1, G_STRING  ,   /* Object 14 PRUPPER */
+  NONE, STATE14|STATE15, (LONG)"1234567890",
+  0x0016, 0x000D, 0x000A, 0x0001,
+  PRICON  ,       -1,       -1, G_BOX     ,   /* Object 15 PRSLIDER */
+  NONE, NORMAL, (LONG)0x00FF1101L,
+  0x0002, 0x000E, 0x001E, 0x0001,
+  PRHELP  ,       -1,       -1, G_BUTTON  ,   /* Object 16 PRICON */
+  SELECTABLE|DEFAULT|EXIT, WHITEBAK, (LONG)"~Sinnbild",
+  0x0004, 0x0010, 0x000B, 0x0002,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 17 PRHELP */
+  SELECTABLE|LASTOB|FLAGS14, WHITEBAK, (LONG)"~Hilfe",
+  0x0012, 0x0010, 0x000B, 0x0002,
+  
+  /******** Tree 26 OPENDB ****************************************************/
+        -1,        1, BHELP   , G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|WHITEBAK|STATE15, (LONG)0x00001101L,
+  0x0000, 0x0000, 0x003C, 0x0013,
+  BBASE   ,       -1,       -1, G_STRING  ,   /* Object 1  */
+  NONE, STATE15, (LONG)"Datenbank:",
+  0x0002, 0x0001, 0x000A, 0x0001,
+         3,       -1,       -1, G_STRING  ,   /* Object 2 BBASE */
+  NONE, STATE12|STATE15, (LONG)"_____________________________________________",
+  0x000D, 0x0001, 0x002D, 0x0001,
+  BUSER   ,       -1,       -1, G_STRING  ,   /* Object 3  */
+  NONE, STATE15, (LONG)"~Benutzer:",
+  0x0002, 0x0003, 0x000A, 0x0001,
+         5,       -1,       -1, G_FBOXTEXT,   /* Object 4 BUSER */
+  EDITABLE, NORMAL, (LONG)&rs_tedinfo[51],
+  0x000D, 0x0003, 0x0023, 0x0001,
+  BPASS   ,       -1,       -1, G_STRING  ,   /* Object 5  */
+  NONE, STATE15, (LONG)"~Pa\236wort:",
+  0x0002, 0x0005, 0x0009, 0x0001,
+         7,       -1,       -1, G_FBOXTEXT,   /* Object 6 BPASS */
+  EDITABLE|FLAGS15, NORMAL, (LONG)&rs_tedinfo[52],
+  0x000D, 0x0005, 0x0023, 0x0001,
+        16,        8, BDATFLSH, G_BUTTON  ,   /* Object 7  */
+  NONE, STATE14, (LONG)"Cache",
+  0x0002, 0x0007, 0x001A, 0x0008,
+  BINDCACH,       -1,       -1, G_STRING  ,   /* Object 8  */
+  NONE, DRAW3D|STATE15, (LONG)"Inde~x-Cache:",
+  0x0002, 0x0002, 0x000D, 0x0001,
+        10,       -1,       -1, G_FBOXTEXT,   /* Object 9 BINDCACH */
+  EDITABLE, DRAW3D, (LONG)&rs_tedinfo[53],
+  0x000F, 0x0002, 0x0006, 0x0001,
+        11,       -1,       -1, G_STRING  ,   /* Object 10  */
+  NONE, DRAW3D|STATE15, (LONG)"KB",
+  0x0016, 0x0002, 0x0002, 0x0001,
+  BDATCACH,       -1,       -1, G_STRING  ,   /* Object 11  */
+  NONE, DRAW3D|STATE15, (LONG)"Date~n-Cache:",
+  0x0002, 0x0004, 0x000D, 0x0001,
+        13,       -1,       -1, G_FBOXTEXT,   /* Object 12 BDATCACH */
+  EDITABLE, DRAW3D, (LONG)&rs_tedinfo[54],
+  0x000F, 0x0004, 0x0006, 0x0001,
+  BINDFLSH,       -1,       -1, G_STRING  ,   /* Object 13  */
+  NONE, DRAW3D|STATE15, (LONG)"KB",
+  0x0016, 0x0004, 0x0002, 0x0001,
+  BDATFLSH,       -1,       -1, G_BUTTON  ,   /* Object 14 BINDFLSH */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"~Index schreiben",
+  0x0002, 0x0006, 0x0010, 0x0001,
+         7,       -1,       -1, G_BUTTON  ,   /* Object 15 BDATFLSH */
+  SELECTABLE, SELECTED|DRAW3D|STATE13, (LONG)"~Daten schreiben",
+  0x0002, 0x0007, 0x0010, 0x0001,
+  BOK     , BSINGLE , BRDONLY , G_BUTTON  ,   /* Object 16  */
+  NONE, STATE14, (LONG)"Modus",
+  0x001D, 0x0007, 0x001D, 0x0008,
+  BMULTASK,       -1,       -1, G_BUTTON  ,   /* Object 17 BSINGLE */
+  SELECTABLE|RBUTTON, SELECTED|DRAW3D|STATE13, (LONG)"~Single-User (Exklusiv)",
+  0x0002, 0x0002, 0x0017, 0x0001,
+  BMULUSER,       -1,       -1, G_BUTTON  ,   /* Object 18 BMULTASK */
+  SELECTABLE|RBUTTON, DRAW3D|STATE13, (LONG)"Multi-~Tasking",
+  0x0002, 0x0003, 0x000E, 0x0001,
+  BRDONLY ,       -1,       -1, G_BUTTON  ,   /* Object 19 BMULUSER */
+  SELECTABLE|RBUTTON, DRAW3D|STATE13, (LONG)"Multi-~User",
+  0x0002, 0x0004, 0x000B, 0x0001,
+        16,       -1,       -1, G_BUTTON  ,   /* Object 20 BRDONLY */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"Nur ~Lesen",
+  0x0002, 0x0006, 0x000A, 0x0001,
+  BCANCEL ,       -1,       -1, G_BUTTON  ,   /* Object 21 BOK */
+  SELECTABLE|DEFAULT|EXIT, WHITEBAK, (LONG)"~OK",
+  0x000C, 0x0010, 0x000A, 0x0002,
+  BHELP   ,       -1,       -1, G_BUTTON  ,   /* Object 22 BCANCEL */
+  SELECTABLE|EXIT|FLAGS13, WHITEBAK, (LONG)"~Abbruch",
+  0x0019, 0x0010, 0x000A, 0x0002,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 23 BHELP */
+  SELECTABLE|LASTOB|FLAGS14, WHITEBAK, (LONG)"~Hilfe",
+  0x0026, 0x0010, 0x000A, 0x0002,
+  
+  /******** Tree 27 DBINFO ****************************************************/
+        -1,        1, DIHELP  , G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|WHITEBAK|STATE15, (LONG)0x00001100L,
+  0x0000, 0x0000, 0x003D, 0x0016,
+  DIDBNAME,       -1,       -1, G_STRING  ,   /* Object 1  */
+  NONE, STATE15, (LONG)"Datenbank:",
+  0x0002, 0x0001, 0x000A, 0x0001,
+         3,       -1,       -1, G_STRING  ,   /* Object 2 DIDBNAME */
+  NONE, STATE12|STATE15, (LONG)"_____________________________________________",
+  0x000D, 0x0001, 0x002D, 0x0001,
+  DIUSER  ,       -1,       -1, G_STRING  ,   /* Object 3  */
+  NONE, STATE15, (LONG)"Benutzer:",
+  0x0002, 0x0003, 0x0009, 0x0001,
+         5,       -1,       -1, G_STRING  ,   /* Object 4 DIUSER */
+  NONE, STATE12|STATE15, (LONG)"_________________________________",
+  0x000D, 0x0003, 0x0021, 0x0001,
+  DICREAT ,       -1,       -1, G_STRING  ,   /* Object 5  */
+  NONE, STATE15, (LONG)"Erzeugt:",
+  0x0002, 0x0005, 0x0008, 0x0001,
+         7,       -1,       -1, G_STRING  ,   /* Object 6 DICREAT */
+  NONE, STATE12|STATE13|STATE15, (LONG)"__.__.____   __:__:__",
+  0x0013, 0x0005, 0x0015, 0x0001,
+  DILASTUS,       -1,       -1, G_STRING  ,   /* Object 7  */
+  NONE, DRAW3D|STATE15, (LONG)"Zuletzt benutzt:",
+  0x0002, 0x0007, 0x0010, 0x0001,
+         9,       -1,       -1, G_STRING  ,   /* Object 8 DILASTUS */
+  NONE, DRAW3D|STATE12|STATE13|STATE15, (LONG)"__.__.____   __:__:__",
+  0x0013, 0x0007, 0x0015, 0x0001,
+        31,       10, DIRDWR  , G_BUTTON  ,   /* Object 9  */
+  NONE, STATE14, (LONG)"Datendatei",
+  0x0002, 0x0008, 0x001C, 0x000D,
+  DIDATSIZ,       -1,       -1, G_STRING  ,   /* Object 10  */
+  NONE, DRAW3D|STATE15, (LONG)"Gr\224\236e:",
+  0x0001, 0x0002, 0x0006, 0x0001,
+        12,       -1,       -1, G_STRING  ,   /* Object 11 DIDATSIZ */
+  NONE, DRAW3D|STATE14|STATE15, (LONG)"99999 KB",
+  0x000C, 0x0002, 0x0008, 0x0001,
+  DIDATUSE,       -1,       -1, G_STRING  ,   /* Object 12  */
+  NONE, DRAW3D|STATE15, (LONG)"Belegt:",
+  0x0001, 0x0003, 0x0007, 0x0001,
+  DIDATUSP,       -1,       -1, G_STRING  ,   /* Object 13 DIDATUSE */
+  NONE, DRAW3D|STATE14|STATE15, (LONG)"99999 KB",
+  0x000C, 0x0003, 0x0008, 0x0001,
+        15,       -1,       -1, G_STRING  ,   /* Object 14 DIDATUSP */
+  NONE, DRAW3D|STATE14|STATE15, (LONG)"(100%)",
+  0x0015, 0x0003, 0x0006, 0x0001,
+  DIDATFRE,       -1,       -1, G_STRING  ,   /* Object 15  */
+  NONE, DRAW3D|STATE15, (LONG)"Frei:",
+  0x0001, 0x0004, 0x0005, 0x0001,
+  DIDATFRP,       -1,       -1, G_STRING  ,   /* Object 16 DIDATFRE */
+  NONE, DRAW3D|STATE14|STATE15, (LONG)"99999 KB",
+  0x000C, 0x0004, 0x0008, 0x0001,
+        18,       -1,       -1, G_STRING  ,   /* Object 17 DIDATFRP */
+  NONE, DRAW3D|STATE14|STATE15, (LONG)"(100%)",
+  0x0015, 0x0004, 0x0006, 0x0001,
+  DIDATCAC,       -1,       -1, G_STRING  ,   /* Object 18  */
+  NONE, DRAW3D|STATE15, (LONG)"Cache:",
+  0x0001, 0x0006, 0x0006, 0x0001,
+        20,       -1,       -1, G_STRING  ,   /* Object 19 DIDATCAC */
+  NONE, DRAW3D|STATE15, (LONG)"99999 KB",
+  0x000C, 0x0006, 0x0008, 0x0001,
+  DIDATHIT,       -1,       -1, G_STRING  ,   /* Object 20  */
+  NONE, DRAW3D|STATE15, (LONG)"Treffer:",
+  0x0001, 0x0007, 0x0008, 0x0001,
+        22,       -1,       -1, G_STRING  ,   /* Object 21 DIDATHIT */
+  NONE, DRAW3D|STATE14|STATE15, (LONG)"100%",
+  0x000C, 0x0007, 0x0005, 0x0001,
+  DIDATFLU,       -1,       -1, G_STRING  ,   /* Object 22  */
+  NONE, DRAW3D|STATE15, (LONG)"Autoflush:",
+  0x0001, 0x0008, 0x000A, 0x0001,
+        24,       -1,       -1, G_STRING  ,   /* Object 23 DIDATFLU */
+  NONE, DRAW3D|STATE15, (LONG)"nein",
+  0x000C, 0x0008, 0x0004, 0x0001,
+  DIHOLES ,       -1,       -1, G_STRING  ,   /* Object 24  */
+  NONE, DRAW3D|STATE15, (LONG)"L\224cher:",
+  0x0001, 0x000A, 0x0007, 0x0001,
+  DIHOLESP,       -1,       -1, G_STRING  ,   /* Object 25 DIHOLES */
+  NONE, DRAW3D|STATE14|STATE15, (LONG)"99999 KB",
+  0x000C, 0x000A, 0x0008, 0x0001,
+        27,       -1,       -1, G_STRING  ,   /* Object 26 DIHOLESP */
+  NONE, DRAW3D|STATE14|STATE15, (LONG)"(100%)",
+  0x0015, 0x000A, 0x0006, 0x0001,
+  DIDATMOD,       -1,       -1, G_STRING  ,   /* Object 27  */
+  NONE, DRAW3D|STATE15, (LONG)"Modus:",
+  0x0001, 0x000B, 0x0006, 0x0001,
+        29,       -1,       -1, G_STRING  ,   /* Object 28 DIDATMOD */
+  NONE, DRAW3D|STATE15, (LONG)"Multi-Tasking",
+  0x000C, 0x000B, 0x000D, 0x0001,
+  DIRDWR  ,       -1,       -1, G_STRING  ,   /* Object 29  */
+  NONE, DRAW3D|STATE15, (LONG)"R/W:",
+  0x0001, 0x000C, 0x0004, 0x0001,
+         9,       -1,       -1, G_STRING  ,   /* Object 30 DIRDWR */
+  NONE, DRAW3D|STATE15, (LONG)"Lesen+Schreiben",
+  0x000C, 0x000C, 0x000F, 0x0001,
+  DIOK    ,       32, DIINDFLU, G_BUTTON  ,   /* Object 31  */
+  NONE, STATE14, (LONG)"Indexdatei",
+  0x001F, 0x0008, 0x001C, 0x0009,
+  DIINDSIZ,       -1,       -1, G_STRING  ,   /* Object 32  */
+  NONE, DRAW3D|STATE15, (LONG)"Gr\224\236e:",
+  0x0001, 0x0002, 0x0006, 0x0001,
+        34,       -1,       -1, G_STRING  ,   /* Object 33 DIINDSIZ */
+  NONE, DRAW3D|STATE14|STATE15, (LONG)"99999 KB",
+  0x000C, 0x0002, 0x0008, 0x0001,
+  DIINDUSE,       -1,       -1, G_STRING  ,   /* Object 34  */
+  NONE, DRAW3D|STATE15, (LONG)"Belegt:",
+  0x0001, 0x0003, 0x0007, 0x0001,
+  DIINDUSP,       -1,       -1, G_STRING  ,   /* Object 35 DIINDUSE */
+  NONE, DRAW3D|STATE14|STATE15, (LONG)"99999 KB",
+  0x000C, 0x0003, 0x0008, 0x0001,
+        37,       -1,       -1, G_STRING  ,   /* Object 36 DIINDUSP */
+  NONE, DRAW3D|STATE14|STATE15, (LONG)"(100%)",
+  0x0015, 0x0003, 0x0006, 0x0001,
+  DIINDFRE,       -1,       -1, G_STRING  ,   /* Object 37  */
+  NONE, DRAW3D|STATE15, (LONG)"Frei:",
+  0x0001, 0x0004, 0x0005, 0x0001,
+  DIINDFRP,       -1,       -1, G_STRING  ,   /* Object 38 DIINDFRE */
+  NONE, DRAW3D|STATE14|STATE15, (LONG)"99999 KB",
+  0x000C, 0x0004, 0x0008, 0x0001,
+        40,       -1,       -1, G_STRING  ,   /* Object 39 DIINDFRP */
+  NONE, DRAW3D|STATE14|STATE15, (LONG)"(100%)",
+  0x0015, 0x0004, 0x0006, 0x0001,
+  DIINDCAC,       -1,       -1, G_STRING  ,   /* Object 40  */
+  NONE, DRAW3D|STATE15, (LONG)"Cache:",
+  0x0001, 0x0006, 0x0006, 0x0001,
+        42,       -1,       -1, G_STRING  ,   /* Object 41 DIINDCAC */
+  NONE, DRAW3D|STATE15, (LONG)"99999 KB",
+  0x000C, 0x0006, 0x0008, 0x0001,
+  DIINDHIT,       -1,       -1, G_STRING  ,   /* Object 42  */
+  NONE, DRAW3D|STATE15, (LONG)"Treffer:",
+  0x0001, 0x0007, 0x0008, 0x0001,
+        44,       -1,       -1, G_STRING  ,   /* Object 43 DIINDHIT */
+  NONE, DRAW3D|STATE14|STATE15, (LONG)"100%",
+  0x000C, 0x0007, 0x0005, 0x0001,
+  DIINDFLU,       -1,       -1, G_STRING  ,   /* Object 44  */
+  NONE, DRAW3D|STATE15, (LONG)"Autoflush:",
+  0x0001, 0x0008, 0x000A, 0x0001,
+        31,       -1,       -1, G_STRING  ,   /* Object 45 DIINDFLU */
+  NONE, DRAW3D|STATE15, (LONG)"nein",
+  0x000C, 0x0008, 0x0004, 0x0001,
+  DIHELP  ,       -1,       -1, G_BUTTON  ,   /* Object 46 DIOK */
+  SELECTABLE|DEFAULT|EXIT, WHITEBAK, (LONG)"~OK",
+  0x0022, 0x0013, 0x000A, 0x0002,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 47 DIHELP */
+  SELECTABLE|LASTOB|FLAGS14, WHITEBAK, (LONG)"~Hilfe",
+  0x002F, 0x0013, 0x000A, 0x0002,
+  
+  /******** Tree 28 TBLINFO ****************************************************/
+        -1,        1, TIHELP  , G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|WHITEBAK|STATE15, (LONG)0x00001100L,
+  0x0000, 0x0000, 0x0038, 0x0016,
+  TIDBNAME,       -1,       -1, G_STRING  ,   /* Object 1  */
+  NONE, STATE15, (LONG)"Datenbank:",
+  0x0002, 0x0001, 0x000A, 0x0001,
+         3,       -1,       -1, G_STRING  ,   /* Object 2 TIDBNAME */
+  NONE, STATE12|STATE15, (LONG)"________________________________________",
+  0x000E, 0x0001, 0x0028, 0x0001,
+  TITABLE ,       -1,       -1, G_STRING  ,   /* Object 3  */
+  NONE, STATE15, (LONG)"Tabelle:",
+  0x0002, 0x0003, 0x0008, 0x0001,
+         5,       -1,       -1, G_STRING  ,   /* Object 4 TITABLE */
+  NONE, STATE12|STATE15, (LONG)"_________________________________",
+  0x000E, 0x0003, 0x0021, 0x0001,
+  TIRECS  ,       -1,       -1, G_STRING  ,   /* Object 5  */
+  NONE, STATE15, (LONG)"Datens\204tze:",
+  0x0002, 0x0005, 0x000B, 0x0001,
+         7,       -1,       -1, G_STRING  ,   /* Object 6 TIRECS */
+  NONE, STATE15, (LONG)"__________",
+  0x000E, 0x0005, 0x000A, 0x0001,
+  TICOLS  ,       -1,       -1, G_STRING  ,   /* Object 7  */
+  NONE, STATE15, (LONG)"Felder:",
+  0x0002, 0x0006, 0x0007, 0x0001,
+         9,       -1,       -1, G_STRING  ,   /* Object 8 TICOLS */
+  NONE, STATE15, (LONG)"_____",
+  0x000E, 0x0006, 0x0005, 0x0001,
+  TIINXS  ,       -1,       -1, G_STRING  ,   /* Object 9  */
+  NONE, STATE15, (LONG)"Indizes:",
+  0x0002, 0x0007, 0x0008, 0x0001,
+        11,       -1,       -1, G_STRING  ,   /* Object 10 TIINXS */
+  NONE, STATE15, (LONG)"_____",
+  0x000E, 0x0007, 0x0005, 0x0001,
+  TISIZE  ,       -1,       -1, G_STRING  ,   /* Object 11  */
+  NONE, STATE15, (LONG)"Satzgr\224\236e:",
+  0x0002, 0x0008, 0x000A, 0x0001,
+        13,       -1,       -1, G_STRING  ,   /* Object 12 TISIZE */
+  NONE, STATE15, (LONG)"__________",
+  0x000E, 0x0008, 0x000A, 0x0001,
+  TICALC  ,       -1,       -1, G_STRING  ,   /* Object 13  */
+  NONE, STATE15, (LONG)"Rechnung:",
+  0x0002, 0x0009, 0x0009, 0x0001,
+        15,       -1,       -1, G_STRING  ,   /* Object 14 TICALC */
+  NONE, STATE15, (LONG)"_________________________________",
+  0x000E, 0x0009, 0x0021, 0x0001,
+        16,       -1,       -1, G_STRING  ,   /* Object 15  */
+  NONE, DRAW3D|STATE15, (LONG)"Spaltenname",
+  0x0003, 0x000B, 0x000B, 0x0001,
+        17,       -1,       -1, G_STRING  ,   /* Object 16  */
+  NONE, DRAW3D|STATE15, (LONG)"Typ",
+  0x001C, 0x000B, 0x0003, 0x0001,
+        18,       -1,       -1, G_STRING  ,   /* Object 17  */
+  NONE, DRAW3D|STATE14|STATE15, (LONG)"Adresse",
+  0x0023, 0x000B, 0x0007, 0x0001,
+  TILIST  ,       -1,       -1, G_STRING  ,   /* Object 18  */
+  NONE, DRAW3D|STATE14|STATE15, (LONG)"Gr\224\236e",
+  0x002E, 0x000B, 0x0005, 0x0001,
+  TIOK    ,       -1,       -1, G_BOX     ,   /* Object 19 TILIST */
+  NONE, STATE13, (LONG)0x00FF1101L,
+  0x0002, 0x000C, 0x0034, 0x0006,
+  TIHELP  ,       -1,       -1, G_BUTTON  ,   /* Object 20 TIOK */
+  SELECTABLE|DEFAULT|EXIT, WHITEBAK, (LONG)"~OK",
+  0x0011, 0x0013, 0x000A, 0x0002,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 21 TIHELP */
+  SELECTABLE|LASTOB|FLAGS14, WHITEBAK, (LONG)"~Hilfe",
+  0x001E, 0x0013, 0x000A, 0x0002,
+  
+  /******** Tree 29 INXINFO ****************************************************/
+        -1,        1, IIHELP  , G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|WHITEBAK|STATE15, (LONG)0x00001100L,
+  0x0000, 0x0000, 0x0037, 0x000E,
+  IIDBNAME,       -1,       -1, G_STRING  ,   /* Object 1  */
+  NONE, STATE15, (LONG)"Datenbank:",
+  0x0002, 0x0001, 0x000A, 0x0001,
+         3,       -1,       -1, G_STRING  ,   /* Object 2 IIDBNAME */
+  NONE, STATE12|STATE15, (LONG)"________________________________________",
+  0x000D, 0x0001, 0x0028, 0x0001,
+  IITABLE ,       -1,       -1, G_STRING  ,   /* Object 3  */
+  NONE, STATE15, (LONG)"Tabelle:",
+  0x0002, 0x0003, 0x0008, 0x0001,
+         5,       -1,       -1, G_STRING  ,   /* Object 4 IITABLE */
+  NONE, STATE15, (LONG)"_________________________________",
+  0x000D, 0x0003, 0x0021, 0x0001,
+  IINAME  ,       -1,       -1, G_STRING  ,   /* Object 5  */
+  NONE, STATE15, (LONG)"Name:",
+  0x0002, 0x0004, 0x0005, 0x0001,
+         7,       -1,       -1, G_STRING  ,   /* Object 6 IINAME */
+  NONE, STATE15, (LONG)"_________________________________",
+  0x000D, 0x0004, 0x0021, 0x0001,
+  IIINDEX ,       -1,       -1, G_STRING  ,   /* Object 7  */
+  NONE, STATE15, (LONG)"Index:",
+  0x0002, 0x0005, 0x0006, 0x0001,
+         9,       -1,       -1, G_STRING  ,   /* Object 8 IIINDEX */
+  NONE, STATE15, (LONG)"________________________________________",
+  0x000D, 0x0005, 0x0028, 0x0001,
+  IITYPE  ,       -1,       -1, G_STRING  ,   /* Object 9  */
+  NONE, STATE15, (LONG)"Typ:",
+  0x0002, 0x0007, 0x0004, 0x0001,
+        11,       -1,       -1, G_STRING  ,   /* Object 10 IITYPE */
+  NONE, STATE15, (LONG)"_____",
+  0x000D, 0x0007, 0x0005, 0x0001,
+        18,       12, IIFOREIG, G_BUTTON  ,   /* Object 11  */
+  NONE, STATE14, (LONG)"Attribute",
+  0x001C, 0x0007, 0x0019, 0x0005,
+  IIPRIMAR,       -1,       -1, G_STRING  ,   /* Object 12  */
+  NONE, DRAW3D|STATE15, (LONG)"Prim\204rschl\201ssel:",
+  0x0002, 0x0002, 0x0010, 0x0001,
+        14,       -1,       -1, G_STRING  ,   /* Object 13 IIPRIMAR */
+  NONE, DRAW3D|STATE15, (LONG)"nein",
+  0x0013, 0x0002, 0x0004, 0x0001,
+  IIUNIQUE,       -1,       -1, G_STRING  ,   /* Object 14  */
+  NONE, DRAW3D|STATE15, (LONG)"Eindeutig:",
+  0x0002, 0x0003, 0x000A, 0x0001,
+        16,       -1,       -1, G_STRING  ,   /* Object 15 IIUNIQUE */
+  NONE, DRAW3D|STATE15, (LONG)"nein",
+  0x0013, 0x0003, 0x0004, 0x0001,
+  IIFOREIG,       -1,       -1, G_STRING  ,   /* Object 16  */
+  NONE, DRAW3D|STATE15, (LONG)"Fremdschl\201ssel:",
+  0x0002, 0x0004, 0x000F, 0x0001,
+        11,       -1,       -1, G_STRING  ,   /* Object 17 IIFOREIG */
+  NONE, DRAW3D|STATE15, (LONG)"nein",
+  0x0013, 0x0004, 0x0004, 0x0001,
+  IIROOT  ,       -1,       -1, G_STRING  ,   /* Object 18  */
+  NONE, STATE15, (LONG)"Wurzel:",
+  0x0002, 0x0008, 0x0007, 0x0001,
+        20,       -1,       -1, G_STRING  ,   /* Object 19 IIROOT */
+  NONE, STATE15, (LONG)"__________",
+  0x000D, 0x0008, 0x000A, 0x0001,
+  IINUMKEY,       -1,       -1, G_STRING  ,   /* Object 20  */
+  NONE, STATE15, (LONG)"Schl\201ssel:",
+  0x0002, 0x0009, 0x000A, 0x0001,
+  IIOK    ,       -1,       -1, G_STRING  ,   /* Object 21 IINUMKEY */
+  NONE, STATE15, (LONG)"__________",
+  0x000D, 0x0009, 0x000A, 0x0001,
+  IIHELP  ,       -1,       -1, G_BUTTON  ,   /* Object 22 IIOK */
+  SELECTABLE|DEFAULT|EXIT, WHITEBAK, (LONG)"~OK",
+  0x0003, 0x000B, 0x000A, 0x0002,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 23 IIHELP */
+  SELECTABLE|LASTOB|FLAGS14, WHITEBAK, (LONG)"~Hilfe",
+  0x0010, 0x000B, 0x000A, 0x0002,
+  
+  /******** Tree 30 PARAMS ****************************************************/
+        -1,        1, PARHELP , G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|WHITEBAK|STATE15, (LONG)0x00001101L,
+  0x0000, 0x0000, 0x004D, 0x0009,
+  PARPROG ,       -1,       -1, G_STRING  ,   /* Object 1  */
+  NONE, STATE15, (LONG)"Programm:",
+  0x0002, 0x0001, 0x000A, 0x0001,
+         3,       -1,       -1, G_STRING  ,   /* Object 2 PARPROG */
+  NONE, STATE12|STATE15, (LONG)"______________________________________________________________",
+  0x000D, 0x0001, 0x003E, 0x0001,
+  PARPARAM,       -1,       -1, G_STRING  ,   /* Object 3  */
+  NONE, STATE15, (LONG)"~Parameter:",
+  0x0002, 0x0003, 0x000B, 0x0001,
+  PAROK   ,       -1,       -1, G_FBOXTEXT,   /* Object 4 PARPARAM */
+  EDITABLE, NORMAL, (LONG)&rs_tedinfo[55],
+  0x000D, 0x0003, 0x003E, 0x0001,
+  PARCANCE,       -1,       -1, G_BUTTON  ,   /* Object 5 PAROK */
+  SELECTABLE|DEFAULT|EXIT, WHITEBAK, (LONG)"~OK",
+  0x0014, 0x0006, 0x000A, 0x0002,
+  PARHELP ,       -1,       -1, G_BUTTON  ,   /* Object 6 PARCANCE */
+  SELECTABLE|EXIT|FLAGS13, WHITEBAK, (LONG)"~Abbruch",
+  0x0021, 0x0006, 0x000A, 0x0002,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 7 PARHELP */
+  SELECTABLE|LASTOB|FLAGS14, WHITEBAK, (LONG)"~Hilfe",
+  0x002E, 0x0006, 0x000A, 0x0002,
+  
+  /******** Tree 31 GETPARM ****************************************************/
+        -1,        1, GPHELP  , G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|WHITEBAK|STATE15, (LONG)0x00001101L,
+  0x0000, 0x0000, 0x004D, 0x0009,
+  GPPARM  ,       -1,       -1, G_STRING  ,   /* Object 1  */
+  NONE, STATE15, (LONG)"Parameter:",
+  0x0002, 0x0001, 0x000A, 0x0001,
+         3,       -1,       -1, G_STRING  ,   /* Object 2 GPPARM */
+  NONE, STATE12|STATE15, (LONG)"______________________________________________________________",
+  0x000D, 0x0001, 0x003E, 0x0001,
+  GPVALUE ,       -1,       -1, G_STRING  ,   /* Object 3  */
+  NONE, STATE15, (LONG)"~Wert:",
+  0x0002, 0x0003, 0x0006, 0x0001,
+  GPOK    ,       -1,       -1, G_FBOXTEXT,   /* Object 4 GPVALUE */
+  EDITABLE, NORMAL, (LONG)&rs_tedinfo[56],
+  0x000D, 0x0003, 0x003E, 0x0001,
+  GPCANCEL,       -1,       -1, G_BUTTON  ,   /* Object 5 GPOK */
+  SELECTABLE|DEFAULT|EXIT, WHITEBAK, (LONG)"~OK",
+  0x0014, 0x0006, 0x000A, 0x0002,
+  GPHELP  ,       -1,       -1, G_BUTTON  ,   /* Object 6 GPCANCEL */
+  SELECTABLE|EXIT|FLAGS13, WHITEBAK, (LONG)"~Abbruch",
+  0x0021, 0x0006, 0x000A, 0x0002,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 7 GPHELP */
+  SELECTABLE|LASTOB|FLAGS14, WHITEBAK, (LONG)"~Hilfe",
+  0x002E, 0x0006, 0x000A, 0x0002,
+  
+  /******** Tree 32 LOCKSCRN ****************************************************/
+        -1, LOCKBOX , LOCKBOX , G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|WHITEBAK, (LONG)0x00001101L,
+  0x0000, 0x0000, 0x0037, 0x0009,
+         0,        2, LOCKHELP, G_BOX     ,   /* Object 1 LOCKBOX */
+  NONE, OUTLINED|WHITEBAK|STATE15, (LONG)0x00021101L,
+  0x0000, 0x0000, 0x0037, 0x0009,
+  LOCKNAME,       -1,       -1, G_STRING  ,   /* Object 2  */
+  NONE, STATE15, (LONG)"Datenbank:",
+  0x0002, 0x0001, 0x000A, 0x0001,
+         4,       -1,       -1, G_STRING  ,   /* Object 3 LOCKNAME */
+  NONE, STATE12|STATE15, (LONG)"________________________________________",
+  0x000D, 0x0001, 0x0028, 0x0001,
+  LOCKPASS,       -1,       -1, G_STRING  ,   /* Object 4  */
+  NONE, STATE15, (LONG)"~Pa\236wort:",
+  0x0002, 0x0003, 0x0009, 0x0001,
+  LOCKOK  ,       -1,       -1, G_FBOXTEXT,   /* Object 5 LOCKPASS */
+  EDITABLE|FLAGS15, NORMAL, (LONG)&rs_tedinfo[57],
+  0x000D, 0x0003, 0x0023, 0x0001,
+  LOCKHELP,       -1,       -1, G_BUTTON  ,   /* Object 6 LOCKOK */
+  SELECTABLE|DEFAULT|EXIT, WHITEBAK, (LONG)"~OK",
+  0x0010, 0x0006, 0x000A, 0x0002,
+  LOCKBOX ,       -1,       -1, G_BUTTON  ,   /* Object 7 LOCKHELP */
+  SELECTABLE|LASTOB|FLAGS14, WHITEBAK, (LONG)"~Hilfe",
+  0x001D, 0x0006, 0x000A, 0x0002,
+  
+  /******** Tree 33 CHNGPASS ****************************************************/
+        -1,        1, CHHELP  , G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|WHITEBAK|STATE15, (LONG)0x00001101L,
+  0x0000, 0x0000, 0x0037, 0x000F,
+  CHNAME  ,       -1,       -1, G_STRING  ,   /* Object 1  */
+  NONE, STATE15, (LONG)"Datenbank:",
+  0x0002, 0x0001, 0x000A, 0x0001,
+         3,       -1,       -1, G_STRING  ,   /* Object 2 CHNAME */
+  NONE, STATE12|STATE15, (LONG)"________________________________________",
+  0x000D, 0x0001, 0x0028, 0x0001,
+  CHUSER  ,       -1,       -1, G_STRING  ,   /* Object 3  */
+  NONE, STATE15, (LONG)"Benutzer:",
+  0x0002, 0x0003, 0x0009, 0x0001,
+         5,       -1,       -1, G_STRING  ,   /* Object 4 CHUSER */
+  NONE, STATE12|STATE15, (LONG)"_________________________________",
+  0x000D, 0x0003, 0x0021, 0x0001,
+  CHOLDPSS,       -1,       -1, G_STRING  ,   /* Object 5  */
+  NONE, STATE15, (LONG)"Altes ~Pa\236wort:",
+  0x0002, 0x0005, 0x000F, 0x0001,
+         7,       -1,       -1, G_FBOXTEXT,   /* Object 6 CHOLDPSS */
+  EDITABLE|FLAGS15, NORMAL, (LONG)&rs_tedinfo[58],
+  0x0011, 0x0005, 0x0023, 0x0001,
+  CHNEWPSS,       -1,       -1, G_STRING  ,   /* Object 7  */
+  NONE, STATE15, (LONG)"~Neues Pa\236wort:",
+  0x0002, 0x0007, 0x000F, 0x0001,
+         9,       -1,       -1, G_FBOXTEXT,   /* Object 8 CHNEWPSS */
+  EDITABLE|FLAGS15, NORMAL, (LONG)&rs_tedinfo[59],
+  0x0011, 0x0007, 0x0023, 0x0001,
+  CHVERIFY,       -1,       -1, G_STRING  ,   /* Object 9  */
+  NONE, STATE15, (LONG)"~Verifizieren:",
+  0x0002, 0x0009, 0x000E, 0x0001,
+  CHOK    ,       -1,       -1, G_FBOXTEXT,   /* Object 10 CHVERIFY */
+  EDITABLE|FLAGS15, NORMAL, (LONG)&rs_tedinfo[60],
+  0x0011, 0x0009, 0x0023, 0x0001,
+  CHCANCEL,       -1,       -1, G_BUTTON  ,   /* Object 11 CHOK */
+  SELECTABLE|DEFAULT|EXIT, WHITEBAK, (LONG)"~OK",
+  0x0009, 0x000C, 0x000A, 0x0002,
+  CHHELP  ,       -1,       -1, G_BUTTON  ,   /* Object 12 CHCANCEL */
+  SELECTABLE|EXIT|FLAGS13, WHITEBAK, (LONG)"~Abbruch",
+  0x0016, 0x000C, 0x000A, 0x0002,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 13 CHHELP */
+  SELECTABLE|LASTOB|FLAGS14, WHITEBAK, (LONG)"~Hilfe",
+  0x0023, 0x000C, 0x000A, 0x0002,
+  
+  /******** Tree 34 DELRECS ****************************************************/
+        -1,        1, DELCANCE, G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|WHITEBAK|STATE15, (LONG)0x00001100L,
+  0x0000, 0x0000, 0x0038, 0x000B,
+  DELDBNAM,       -1,       -1, G_STRING  ,   /* Object 1  */
+  NONE, STATE15, (LONG)"Datenbank:",
+  0x0002, 0x0001, 0x000A, 0x0001,
+         3,       -1,       -1, G_STRING  ,   /* Object 2 DELDBNAM */
+  NONE, STATE12|STATE15, (LONG)"________________________________________",
+  0x000E, 0x0001, 0x0028, 0x0001,
+  DELTABLE,       -1,       -1, G_STRING  ,   /* Object 3  */
+  NONE, STATE15, (LONG)"Tabelle:",
+  0x0002, 0x0003, 0x0008, 0x0001,
+         5,       -1,       -1, G_STRING  ,   /* Object 4 DELTABLE */
+  NONE, STATE12|STATE15, (LONG)"_________________________________",
+  0x000E, 0x0003, 0x0021, 0x0001,
+  DELNUMRE,       -1,       -1, G_STRING  ,   /* Object 5  */
+  NONE, STATE15, (LONG)"Datens\204tze:",
+  0x0002, 0x0005, 0x000B, 0x0001,
+  DELOK   ,       -1,       -1, G_STRING  ,   /* Object 6 DELNUMRE */
+  NONE, STATE12|STATE15, (LONG)"__________",
+  0x000E, 0x0005, 0x000A, 0x0001,
+  DELHELP ,       -1,       -1, G_BUTTON  ,   /* Object 7 DELOK */
+  SELECTABLE|DEFAULT|EXIT, WHITEBAK, (LONG)"~OK",
+  0x000A, 0x0008, 0x000A, 0x0002,
+  DELCANCE,       -1,       -1, G_BUTTON  ,   /* Object 8 DELHELP */
+  SELECTABLE|FLAGS14, WHITEBAK, (LONG)"~Hilfe",
+  0x0024, 0x0008, 0x000A, 0x0002,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 9 DELCANCE */
+  SELECTABLE|EXIT|LASTOB|FLAGS13, WHITEBAK, (LONG)"~Abbruch",
+  0x0017, 0x0008, 0x000A, 0x0002,
+  
+  /******** Tree 35 REMSEL ****************************************************/
+        -1,        1, RMHELP  , G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|WHITEBAK|STATE15, (LONG)0x00001100L,
+  0x0000, 0x0000, 0x0037, 0x000D,
+  RMDBNAME,       -1,       -1, G_STRING  ,   /* Object 1  */
+  NONE, STATE15, (LONG)"Datenbank:",
+  0x0002, 0x0001, 0x000A, 0x0001,
+         3,       -1,       -1, G_STRING  ,   /* Object 2 RMDBNAME */
+  NONE, STATE12|STATE15, (LONG)"________________________________________",
+  0x000D, 0x0001, 0x0028, 0x0001,
+  RMTABLE ,       -1,       -1, G_STRING  ,   /* Object 3  */
+  NONE, STATE15, (LONG)"Tabelle:",
+  0x0002, 0x0003, 0x0008, 0x0001,
+         5,       -1,       -1, G_STRING  ,   /* Object 4 RMTABLE */
+  NONE, STATE12|STATE15, (LONG)"_________________________________",
+  0x000D, 0x0003, 0x0021, 0x0001,
+  RMFROM  ,       -1,       -1, G_STRING  ,   /* Object 5  */
+  NONE, STATE15, (LONG)"~Von:",
+  0x0002, 0x0005, 0x0005, 0x0001,
+         7,       -1,       -1, G_FBOXTEXT,   /* Object 6 RMFROM */
+  EDITABLE, NORMAL, (LONG)&rs_tedinfo[61],
+  0x000D, 0x0005, 0x000D, 0x0001,
+  RMTO    ,       -1,       -1, G_STRING  ,   /* Object 7  */
+  NONE, STATE15, (LONG)"~Bis:",
+  0x0002, 0x0007, 0x0005, 0x0001,
+  RMOK    ,       -1,       -1, G_FBOXTEXT,   /* Object 8 RMTO */
+  EDITABLE, NORMAL, (LONG)&rs_tedinfo[62],
+  0x000D, 0x0007, 0x000D, 0x0001,
+  RMCANCEL,       -1,       -1, G_BUTTON  ,   /* Object 9 RMOK */
+  SELECTABLE|DEFAULT|EXIT, WHITEBAK, (LONG)"~OK",
+  0x0009, 0x000A, 0x000A, 0x0002,
+  RMHELP  ,       -1,       -1, G_BUTTON  ,   /* Object 10 RMCANCEL */
+  SELECTABLE|EXIT|FLAGS10, WHITEBAK, (LONG)"~Abbruch",
+  0x0016, 0x000A, 0x000A, 0x0002,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 11 RMHELP */
+  SELECTABLE|LASTOB|FLAGS9, WHITEBAK, (LONG)"~Hilfe",
+  0x0023, 0x000A, 0x000A, 0x0002,
+  
+  /******** Tree 36 COPIES ****************************************************/
+        -1,        1, CPHELP  , G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|WHITEBAK|STATE15, (LONG)0x00FF1100L,
+  0x0000, 0x0000, 0x0048, 0x0009,
+         2,       -1,       -1, G_IMAGE   ,   /* Object 1  */
+  NONE, NORMAL, (LONG)&rs_bitblk[27],
+  0x0002, 0x0001, 0x0004, 0x0002,
+         3,       -1,       -1, G_STRING  ,   /* Object 2  */
+  NONE, STATE15, (LONG)"Wohin soll der Report ausgegeben werden?",
+  0x0008, 0x0001, 0x0028, 0x0001,
+  CPNUM   ,       -1,       -1, G_STRING  ,   /* Object 3  */
+  NONE, STATE15, (LONG)"Anzahl der ~Kopien:",
+  0x0008, 0x0003, 0x0013, 0x0001,
+  CPSCREEN,       -1,       -1, G_FBOXTEXT,   /* Object 4 CPNUM */
+  EDITABLE, NORMAL, (LONG)&rs_tedinfo[63],
+  0x001B, 0x0003, 0x0006, 0x0001,
+  CPDISK  ,       -1,       -1, G_BUTTON  ,   /* Object 5 CPSCREEN */
+  SELECTABLE|DEFAULT|EXIT, WHITEBAK, (LONG)"~Bildschirm",
+  0x0002, 0x0006, 0x000C, 0x0002,
+  CPPRINT ,       -1,       -1, G_BUTTON  ,   /* Object 6 CPDISK */
+  SELECTABLE|EXIT, WHITEBAK, (LONG)"~Datei",
+  0x0010, 0x0006, 0x000C, 0x0002,
+  CPCANCEL,       -1,       -1, G_BUTTON  ,   /* Object 7 CPPRINT */
+  SELECTABLE|EXIT, WHITEBAK, (LONG)"D~rucker",
+  0x001E, 0x0006, 0x000C, 0x0002,
+  CPHELP  ,       -1,       -1, G_BUTTON  ,   /* Object 8 CPCANCEL */
+  SELECTABLE|EXIT|FLAGS13, WHITEBAK, (LONG)"~Abbruch",
+  0x002C, 0x0006, 0x000C, 0x0002,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 9 CPHELP */
+  SELECTABLE|LASTOB|FLAGS14, WHITEBAK, (LONG)"~Hilfe",
+  0x003A, 0x0006, 0x000C, 0x0002,
+  
+  /******** Tree 37 CLIPNAME ****************************************************/
+        -1,        1, CLHELP  , G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|WHITEBAK|STATE15, (LONG)0x00001101L,
+  0x0000, 0x0000, 0x0028, 0x0007,
+  CLNAME  ,       -1,       -1, G_STRING  ,   /* Object 1  */
+  NONE, STATE15, (LONG)"~Klemmbrett-Name:",
+  0x0002, 0x0001, 0x0011, 0x0001,
+  CLOK    ,       -1,       -1, G_FBOXTEXT,   /* Object 2 CLNAME */
+  EDITABLE, NORMAL, (LONG)&rs_tedinfo[64],
+  0x0013, 0x0001, 0x000E, 0x0001,
+  CLCANCEL,       -1,       -1, G_BUTTON  ,   /* Object 3 CLOK */
+  SELECTABLE|DEFAULT|EXIT, WHITEBAK, (LONG)"~OK",
+  0x0002, 0x0004, 0x000A, 0x0002,
+  CLHELP  ,       -1,       -1, G_BUTTON  ,   /* Object 4 CLCANCEL */
+  SELECTABLE|EXIT|FLAGS13, WHITEBAK, (LONG)"~Abbruch",
+  0x000F, 0x0004, 0x000A, 0x0002,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 5 CLHELP */
+  SELECTABLE|LASTOB|FLAGS14, WHITEBAK, (LONG)"~Hilfe",
+  0x001C, 0x0004, 0x000A, 0x0002,
+  
+  /******** Tree 38 LISTSRCH ****************************************************/
+        -1,        1,       12, G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|WHITEBAK|STATE15, (LONG)0x00001100L,
+  0x0000, 0x0000, 0x0037, 0x0010,
+  LIDBNAME,       -1,       -1, G_STRING  ,   /* Object 1  */
+  NONE, STATE15, (LONG)"Datenbank:",
+  0x0002, 0x0001, 0x000A, 0x0001,
+         3,       -1,       -1, G_STRING  ,   /* Object 2 LIDBNAME */
+  NONE, STATE12|STATE15, (LONG)"________________________________________",
+  0x000D, 0x0001, 0x0028, 0x0001,
+  LITABLE ,       -1,       -1, G_STRING  ,   /* Object 3  */
+  NONE, DRAW3D|STATE15, (LONG)"Tabelle:",
+  0x0002, 0x0003, 0x0008, 0x0001,
+  LIINDEXL,       -1,       -1, G_STRING  ,   /* Object 4 LITABLE */
+  NONE, DRAW3D|STATE12|STATE15, (LONG)"_________________________________",
+  0x000D, 0x0003, 0x0021, 0x0001,
+  LIINDEX ,       -1,       -1, G_STRING  ,   /* Object 5 LIINDEXL */
+  NONE, STATE15, (LONG)"Index:",
+  0x0002, 0x0004, 0x0006, 0x0001,
+         7,       -1,       -1, G_STRING  ,   /* Object 6 LIINDEX */
+  NONE, STATE12|STATE15, (LONG)"________________________________________",
+  0x000D, 0x0004, 0x0028, 0x0001,
+  LISEARCH,       -1,       -1, G_STRING  ,   /* Object 7  */
+  NONE, STATE15, (LONG)"~Begriff:",
+  0x0002, 0x0006, 0x0009, 0x0001,
+  LIOK    ,       -1,       -1, G_FBOXTEXT,   /* Object 8 LISEARCH */
+  EDITABLE, NORMAL, (LONG)&rs_tedinfo[65],
+  0x000D, 0x0006, 0x0028, 0x0001,
+  LICANCEL,       -1,       -1, G_BUTTON  ,   /* Object 9 LIOK */
+  SELECTABLE|DEFAULT|EXIT, WHITEBAK, (LONG)"~OK",
+  0x0009, 0x000D, 0x000A, 0x0002,
+  LIHELP  ,       -1,       -1, G_BUTTON  ,   /* Object 10 LICANCEL */
+  SELECTABLE|EXIT|FLAGS13, WHITEBAK, (LONG)"~Abbruch",
+  0x0016, 0x000D, 0x000A, 0x0002,
+        12,       -1,       -1, G_BUTTON  ,   /* Object 11 LIHELP */
+  SELECTABLE|FLAGS14, WHITEBAK, (LONG)"~Hilfe",
+  0x0023, 0x000D, 0x000A, 0x0002,
+         0, LIDIR   , LICASE  , G_IBOX    ,   /* Object 12  */
+  NONE, STATE12|STATE15, (LONG)0x00FF1100L,
+  0x0002, 0x0008, 0x0033, 0x0004,
+  LITEXT  , LIASC   , LIDESC  , G_BUTTON  ,   /* Object 13 LIDIR */
+  NONE, WHITEBAK|STATE14, (LONG)"Richtung",
+  0x001D, 0x0000, 0x000E, 0x0004,
+  LIDESC  ,       -1,       -1, G_BUTTON  ,   /* Object 14 LIASC */
+  SELECTABLE|RBUTTON, SELECTED|STATE13, (LONG)"Vo~rw\204rts",
+  0x0001, 0x0001, 0x0009, 0x0001,
+  LIDIR   ,       -1,       -1, G_BUTTON  ,   /* Object 15 LIDESC */
+  SELECTABLE|RBUTTON, STATE13, (LONG)"R\201c~kw\204rts",
+  0x0001, 0x0002, 0x000A, 0x0001,
+  LICASE  ,       -1,       -1, G_BUTTON  ,   /* Object 16 LITEXT */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"~Volltextsuche",
+  0x0001, 0x0001, 0x000E, 0x0001,
+        12,       -1,       -1, G_BUTTON  ,   /* Object 17 LICASE */
+  SELECTABLE|LASTOB, DRAW3D|STATE13, (LONG)"~Gro\236/Klein unterscheiden",
+  0x0001, 0x0003, 0x0019, 0x0001,
+  
+  /******** Tree 39 NEWWIDTH ****************************************************/
+        -1,        1, NWHELP  , G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|WHITEBAK|STATE15, (LONG)0x00001101L,
+  0x0000, 0x0000, 0x002D, 0x000B,
+  NWCOLUMN,       -1,       -1, G_STRING  ,   /* Object 1  */
+  NONE, STATE15, (LONG)"Spalte:",
+  0x0002, 0x0001, 0x0007, 0x0001,
+         3,       -1,       -1, G_STRING  ,   /* Object 2 NWCOLUMN */
+  NONE, STATE15, (LONG)"_________________________________",
+  0x000A, 0x0001, 0x0021, 0x0001,
+  NWWIDTH ,       -1,       -1, G_STRING  ,   /* Object 3  */
+  NONE, STATE15, (LONG)"~Breite:",
+  0x0002, 0x0003, 0x0008, 0x0001,
+         5,       -1,       -1, G_FBOXTEXT,   /* Object 4 NWWIDTH */
+  EDITABLE, NORMAL, (LONG)&rs_tedinfo[66],
+  0x000A, 0x0003, 0x0004, 0x0001,
+  NWMIN   ,       -1,       -1, G_STRING  ,   /* Object 5  */
+  NONE, STATE15, (LONG)"Min:",
+  0x0011, 0x0003, 0x0004, 0x0001,
+         7,       -1,       -1, G_STRING  ,   /* Object 6 NWMIN */
+  NONE, STATE12|STATE14|STATE15, (LONG)"999",
+  0x0016, 0x0003, 0x0003, 0x0001,
+  NWMAX   ,       -1,       -1, G_STRING  ,   /* Object 7  */
+  NONE, STATE15, (LONG)"Max:",
+  0x001B, 0x0003, 0x0004, 0x0001,
+         9,       -1,       -1, G_STRING  ,   /* Object 8 NWMAX */
+  NONE, STATE12|STATE14|STATE15, (LONG)"999",
+  0x0020, 0x0003, 0x0003, 0x0001,
+  NWRESULT,       -1,       -1, G_STRING  ,   /* Object 9  */
+  NONE, STATE15, (LONG)"Gesamt:",
+  0x0002, 0x0005, 0x0007, 0x0001,
+  NWOK    ,       -1,       -1, G_STRING  ,   /* Object 10 NWRESULT */
+  NONE, STATE12|STATE14|STATE15, (LONG)"99999",
+  0x000A, 0x0005, 0x0005, 0x0001,
+  NWCANCEL,       -1,       -1, G_BUTTON  ,   /* Object 11 NWOK */
+  SELECTABLE|DEFAULT|EXIT, WHITEBAK, (LONG)"~OK",
+  0x0004, 0x0008, 0x000A, 0x0002,
+  NWHELP  ,       -1,       -1, G_BUTTON  ,   /* Object 12 NWCANCEL */
+  SELECTABLE|EXIT|FLAGS13, WHITEBAK, (LONG)"~Abbruch",
+  0x0011, 0x0008, 0x000A, 0x0002,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 13 NWHELP */
+  SELECTABLE|LASTOB|FLAGS14, WHITEBAK, (LONG)"~Hilfe",
+  0x001E, 0x0008, 0x000A, 0x0002,
+  
+  /******** Tree 40 ORDER ****************************************************/
+        -1,        1, ORHELP  , G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|WHITEBAK|STATE15, (LONG)0x00001100L,
+  0x0000, 0x0000, 0x003D, 0x0012,
+  ORDBNAME,       -1,       -1, G_STRING  ,   /* Object 1  */
+  NONE, STATE15, (LONG)"Datenbank:",
+  0x0002, 0x0001, 0x000A, 0x0001,
+         3,       -1,       -1, G_STRING  ,   /* Object 2 ORDBNAME */
+  NONE, STATE12|STATE15, (LONG)"_____________________________________________",
+  0x000D, 0x0001, 0x002D, 0x0001,
+  ORTABLE ,       -1,       -1, G_STRING  ,   /* Object 3  */
+  NONE, STATE15, (LONG)"Tabelle:",
+  0x0002, 0x0003, 0x0008, 0x0001,
+         5,       -1,       -1, G_STRING  ,   /* Object 4 ORTABLE */
+  NONE, STATE12|STATE15, (LONG)"_________________________________",
+  0x000D, 0x0003, 0x0021, 0x0001,
+         6,       -1,       -1, G_STRING  ,   /* Object 5  */
+  NONE, DRAW3D|STATE15, (LONG)"Felder:",
+  0x0002, 0x0005, 0x0007, 0x0001,
+         7,       -1,       -1, G_STRING  ,   /* Object 6  */
+  NONE, DRAW3D|STATE15, (LONG)"Sortiert nach:",
+  0x0022, 0x0005, 0x000E, 0x0001,
+  ORCOLS  ,       -1,       -1, G_STRING  ,   /* Object 7  */
+  NONE, DRAW3D|STATE13|STATE15, (LONG)"+/-",
+  0x0036, 0x0005, 0x0003, 0x0001,
+  ORINXS  ,       -1,       -1, G_BOX     ,   /* Object 8 ORCOLS */
+  NONE, STATE13, (LONG)0x00FF1101L,
+  0x0002, 0x0006, 0x0013, 0x0006,
+  ORCOPY  ,       -1,       -1, G_BOX     ,   /* Object 9 ORINXS */
+  NONE, STATE13, (LONG)0x00FF1101L,
+  0x0021, 0x0006, 0x001A, 0x0006,
+  ORDELETE,       -1,       -1, G_BUTTON  ,   /* Object 10 ORCOPY */
+  SELECTABLE, DRAW3D|WHITEBAK, (LONG)">>>>>",
+  0x0017, 0x0007, 0x0008, 0x0002,
+        12,       -1,       -1, G_BUTTON  ,   /* Object 11 ORDELETE */
+  SELECTABLE, WHITEBAK, (LONG)"<<<<<",
+  0x0017, 0x0009, 0x0008, 0x0002,
+  OROK    , ORASC   , ORDESC  , G_BUTTON  ,   /* Object 12  */
+  NONE, DRAW3D|STATE14, (LONG)"Sortierung",
+  0x0002, 0x000D, 0x0011, 0x0004,
+  ORDESC  ,       -1,       -1, G_BUTTON  ,   /* Object 13 ORASC */
+  SELECTABLE|RBUTTON, SELECTED|DRAW3D|STATE13, (LONG)"A~ufsteigend",
+  0x0001, 0x0002, 0x000C, 0x0001,
+        12,       -1,       -1, G_BUTTON  ,   /* Object 14 ORDESC */
+  SELECTABLE|RBUTTON, DRAW3D|STATE13, (LONG)"A~bsteigend",
+  0x0001, 0x0003, 0x000B, 0x0001,
+  ORCANCEL,       -1,       -1, G_BUTTON  ,   /* Object 15 OROK */
+  SELECTABLE|DEFAULT|EXIT, WHITEBAK, (LONG)"~OK",
+  0x0015, 0x000F, 0x0008, 0x0002,
+  ORNEW   ,       -1,       -1, G_BUTTON  ,   /* Object 16 ORCANCEL */
+  SELECTABLE|EXIT|FLAGS13, WHITEBAK, (LONG)"~Abbruch",
+  0x001F, 0x000F, 0x0008, 0x0002,
+  ORHELP  ,       -1,       -1, G_BUTTON  ,   /* Object 17 ORNEW */
+  SELECTABLE, WHITEBAK, (LONG)"~Neu",
+  0x0029, 0x000F, 0x0008, 0x0002,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 18 ORHELP */
+  SELECTABLE|LASTOB|FLAGS14, WHITEBAK, (LONG)"~Hilfe",
+  0x0033, 0x000F, 0x0008, 0x0002,
+  
+  /******** Tree 41 REORGPAR ****************************************************/
+        -1,        1, REORGHLP, G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|WHITEBAK|STATE15, (LONG)0x00001101L,
+  0x0000, 0x0000, 0x0026, 0x000D,
+  REORGDB ,       -1,       -1, G_STRING  ,   /* Object 1  */
+  NONE, STATE15, (LONG)"Datenbank:",
+  0x0002, 0x0001, 0x000A, 0x0001,
+         3,       -1,       -1, G_STRING  ,   /* Object 2 REORGDB */
+  NONE, STATE12|STATE15, (LONG)"_______________________",
+  0x000D, 0x0001, 0x0017, 0x0001,
+  REORGOK , REORGFLG, REORGCRY, G_BUTTON  ,   /* Object 3  */
+  NONE, STATE14, (LONG)"Reorg-Modus",
+  0x0002, 0x0003, 0x0022, 0x0006,
+  REORGIND,       -1,       -1, G_BUTTON  ,   /* Object 4 REORGFLG */
+  SELECTABLE|RBUTTON, DRAW3D|STATE13, (LONG)"~Flags zur\201cksetzen",
+  0x0002, 0x0002, 0x0013, 0x0001,
+  REORGDAT,       -1,       -1, G_BUTTON  ,   /* Object 5 REORGIND */
+  SELECTABLE|RBUTTON, DRAW3D|STATE13, (LONG)"~Index-Datei aufbauen",
+  0x0002, 0x0003, 0x0015, 0x0001,
+  REORGCRY,       -1,       -1, G_BUTTON  ,   /* Object 6 REORGDAT */
+  SELECTABLE|RBUTTON, DRAW3D|STATE13, (LONG)"~Daten-Datei packen",
+  0x0002, 0x0004, 0x0013, 0x0001,
+         3,       -1,       -1, G_BUTTON  ,   /* Object 7 REORGCRY */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"~Verschl\201sseln",
+  0x0002, 0x0005, 0x000E, 0x0001,
+  REORGCAN,       -1,       -1, G_BUTTON  ,   /* Object 8 REORGOK */
+  SELECTABLE|DEFAULT|EXIT, WHITEBAK, (LONG)"~OK",
+  0x0002, 0x000A, 0x000A, 0x0002,
+  REORGHLP,       -1,       -1, G_BUTTON  ,   /* Object 9 REORGCAN */
+  SELECTABLE|EXIT|FLAGS13, WHITEBAK, (LONG)"~Abbruch",
+  0x000E, 0x000A, 0x000A, 0x0002,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 10 REORGHLP */
+  SELECTABLE|LASTOB|FLAGS14, WHITEBAK, (LONG)"~Hilfe",
+  0x001A, 0x000A, 0x000A, 0x0002,
+  
+  /******** Tree 42 SORTING ****************************************************/
+        -1,        1,        1, G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|STATE15, (LONG)0x00021100L,
+  0x0000, 0x0000, 0x0030, 0x0009,
+         0, REORGNAM, SORTRECS, G_IBOX    ,   /* Object 1  */
+  NONE, STATE13|STATE14|STATE15, (LONG)0x00001100L,
+  0x0000, 0x0000, 0x0030, 0x0009,
+  SORTNAME,       -1,       -1, G_STRING  ,   /* Object 2 REORGNAM */
+  NONE, STATE12|STATE13|STATE15, (LONG)"Reorganisiere...",
+  0x0002, 0x0001, 0x0012, 0x0001,
+         4,       -1,       -1, G_STRING  ,   /* Object 3 SORTNAME */
+  NONE, STATE12|STATE13|STATE15, (LONG)"Sortiere...",
+  0x0002, 0x0001, 0x000D, 0x0001,
+  SORTPASS,       -1,       -1, G_STRING  ,   /* Object 4  */
+  NONE, STATE15, (LONG)"Durchlauf:",
+  0x0020, 0x0001, 0x000A, 0x0001,
+         6,       -1,       -1, G_STRING  ,   /* Object 5 SORTPASS */
+  NONE, STATE12|STATE13|STATE15, (LONG)"0",
+  0x002B, 0x0001, 0x0002, 0x0001,
+  SORTDB  ,       -1,       -1, G_STRING  ,   /* Object 6  */
+  NONE, STATE15, (LONG)"Datenbank:",
+  0x0002, 0x0003, 0x000A, 0x0001,
+         8,       -1,       -1, G_STRING  ,   /* Object 7 SORTDB */
+  NONE, STATE12|STATE15, (LONG)"_________________________________",
+  0x000D, 0x0003, 0x0021, 0x0001,
+  SORTTBL ,       -1,       -1, G_STRING  ,   /* Object 8  */
+  NONE, STATE15, (LONG)"Tabelle:",
+  0x0002, 0x0005, 0x0008, 0x0001,
+        10,       -1,       -1, G_STRING  ,   /* Object 9 SORTTBL */
+  NONE, STATE12|STATE15, (LONG)"_________________________________",
+  0x000D, 0x0005, 0x0021, 0x0001,
+  SORTREC ,       -1,       -1, G_STRING  ,   /* Object 10  */
+  NONE, STATE15, (LONG)"Datensatz:",
+  0x0002, 0x0007, 0x000A, 0x0001,
+        12,       -1,       -1, G_STRING  ,   /* Object 11 SORTREC */
+  NONE, STATE12|STATE14|STATE15, (LONG)"         0",
+  0x000D, 0x0007, 0x000A, 0x0001,
+  SORTRECS,       -1,       -1, G_STRING  ,   /* Object 12  */
+  NONE, STATE14|STATE15, (LONG)"von:",
+  0x0018, 0x0007, 0x0004, 0x0001,
+         1,       -1,       -1, G_STRING  ,   /* Object 13 SORTRECS */
+  LASTOB, STATE12|STATE14|STATE15, (LONG)"__________",
+  0x001D, 0x0007, 0x000A, 0x0001,
+  
+  /******** Tree 43 STATIST ****************************************************/
+        -1,        1, STATOK  , G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|WHITEBAK|STATE15, (LONG)0x00001100L,
+  0x0000, 0x0000, 0x0025, 0x0014,
+  STATNAME,       -1,       -1, G_STRING  ,   /* Object 1  */
+  NONE, STATE15, (LONG)"Datenbank:",
+  0x0002, 0x0001, 0x000A, 0x0001,
+         3,       -1,       -1, G_STRING  ,   /* Object 2 STATNAME */
+  NONE, STATE12|STATE15, (LONG)"______________________",
+  0x000D, 0x0001, 0x0016, 0x0001,
+        10,        4, STATDEL , G_BUTTON  ,   /* Object 3  */
+  NONE, STATE14, (LONG)"Datens\204tze",
+  0x0002, 0x0003, 0x0021, 0x0006,
+  STATALL ,       -1,       -1, G_STRING  ,   /* Object 4  */
+  NONE, STATE15, (LONG)"Reorganisiert:",
+  0x0002, 0x0002, 0x000E, 0x0001,
+         6,       -1,       -1, G_STRING  ,   /* Object 5 STATALL */
+  NONE, STATE14|STATE15, (LONG)"___________",
+  0x0014, 0x0002, 0x000B, 0x0001,
+  STATLOST,       -1,       -1, G_STRING  ,   /* Object 6  */
+  NONE, STATE15, (LONG)"Verlorengegangen:",
+  0x0002, 0x0003, 0x0011, 0x0001,
+         8,       -1,       -1, G_STRING  ,   /* Object 7 STATLOST */
+  NONE, STATE14|STATE15, (LONG)"___________",
+  0x0014, 0x0003, 0x000B, 0x0001,
+  STATDEL ,       -1,       -1, G_STRING  ,   /* Object 8  */
+  NONE, STATE15, (LONG)"Eliminiert:",
+  0x0002, 0x0004, 0x000B, 0x0001,
+         3,       -1,       -1, G_STRING  ,   /* Object 9 STATDEL */
+  NONE, STATE14|STATE15, (LONG)"___________",
+  0x0014, 0x0004, 0x000B, 0x0001,
+  STATOK  ,       11, STATPERC, G_BUTTON  ,   /* Object 10  */
+  NONE, STATE14, (LONG)"Datendatei",
+  0x0002, 0x000A, 0x0021, 0x0006,
+  STATBEFO,       -1,       -1, G_STRING  ,   /* Object 11  */
+  NONE, STATE15, (LONG)"Gr\224\236e vorher:",
+  0x0002, 0x0002, 0x000D, 0x0001,
+        13,       -1,       -1, G_STRING  ,   /* Object 12 STATBEFO */
+  NONE, STATE14|STATE15, (LONG)"_____ KB",
+  0x0011, 0x0002, 0x0008, 0x0001,
+  STATAFTE,       -1,       -1, G_STRING  ,   /* Object 13  */
+  NONE, STATE15, (LONG)"Gr\224\236e nachher:",
+  0x0002, 0x0003, 0x000E, 0x0001,
+        15,       -1,       -1, G_STRING  ,   /* Object 14 STATAFTE */
+  NONE, STATE14|STATE15, (LONG)"_____ KB",
+  0x0011, 0x0003, 0x0008, 0x0001,
+  STATGAIN,       -1,       -1, G_STRING  ,   /* Object 15  */
+  NONE, STATE15, (LONG)"Gewinn:",
+  0x0002, 0x0004, 0x0007, 0x0001,
+  STATPERC,       -1,       -1, G_STRING  ,   /* Object 16 STATGAIN */
+  NONE, STATE14|STATE15, (LONG)"_____ KB",
+  0x0011, 0x0004, 0x0008, 0x0001,
+        10,       -1,       -1, G_STRING  ,   /* Object 17 STATPERC */
+  NONE, STATE14|STATE15, (LONG)"(100%)",
+  0x001A, 0x0004, 0x0006, 0x0001,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 18 STATOK */
+  SELECTABLE|DEFAULT|EXIT|LASTOB, WHITEBAK, (LONG)"~OK",
+  0x000D, 0x0011, 0x000A, 0x0002,
+  
+  /******** Tree 44 NEWPROC ****************************************************/
+        -1,        1, NPHELP  , G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|WHITEBAK|STATE15, (LONG)0x00001101L,
+  0x0000, 0x0000, 0x0026, 0x000C,
+  NPOK    , NPQUERY , NPREPORT, G_BUTTON  ,   /* Object 1  */
+  NONE, STATE14, (LONG)"Proze\236",
+  0x0002, 0x0001, 0x0022, 0x0007,
+  NPACC   ,       -1,       -1, G_BUTTON  ,   /* Object 2 NPQUERY */
+  SELECTABLE|RBUTTON, DRAW3D|STATE13, (LONG)"Ab~frage",
+  0x0002, 0x0002, 0x0008, 0x0001,
+  NPCALC  ,       -1,       -1, G_BUTTON  ,   /* Object 3 NPACC */
+  SELECTABLE|RBUTTON, DRAW3D|STATE13, (LONG)"~Bericht",
+  0x0002, 0x0003, 0x0008, 0x0001,
+  NPBATCH ,       -1,       -1, G_BUTTON  ,   /* Object 4 NPCALC */
+  SELECTABLE|RBUTTON, DRAW3D|STATE13, (LONG)"R~echnen",
+  0x0002, 0x0004, 0x0008, 0x0001,
+  NPREPORT,       -1,       -1, G_BUTTON  ,   /* Object 5 NPBATCH */
+  SELECTABLE|RBUTTON, DRAW3D|STATE13, (LONG)"Ba~tch",
+  0x0002, 0x0005, 0x0006, 0x0001,
+         1,       -1,       -1, G_BUTTON  ,   /* Object 6 NPREPORT */
+  SELECTABLE|RBUTTON, DRAW3D|STATE13, (LONG)"~Report",
+  0x0002, 0x0006, 0x0007, 0x0001,
+  NPCANCEL,       -1,       -1, G_BUTTON  ,   /* Object 7 NPOK */
+  SELECTABLE|DEFAULT|EXIT, WHITEBAK, (LONG)"~OK",
+  0x0002, 0x0009, 0x000A, 0x0002,
+  NPHELP  ,       -1,       -1, G_BUTTON  ,   /* Object 8 NPCANCEL */
+  SELECTABLE|EXIT|FLAGS13, WHITEBAK, (LONG)"~Abbruch",
+  0x000E, 0x0009, 0x000A, 0x0002,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 9 NPHELP */
+  SELECTABLE|LASTOB|FLAGS14, WHITEBAK, (LONG)"~Hilfe",
+  0x001A, 0x0009, 0x000A, 0x0002,
+  
+  /******** Tree 45 LISTICON ****************************************************/
+        -1, LCINFO  , LCBOX   , G_BOX     ,   /* Object 0  */
+  NONE, STATE14, (LONG)0x00FF1100L,
+  0x0000, 0x0000, 0x0052, 0x0005,
+  LCBOX   , LCORDER , LCORDER , G_IBOX    ,   /* Object 1 LCINFO */
+  NONE, WHITEBAK|STATE10|STATE14|STATE15, (LONG)0x00FF1100L,
+  0x0000, 0x0000, 0x0052, 0x0002,
+  LCINFO  ,       -1,       -1, G_STRING  ,   /* Object 2 LCORDER */
+  NONE, DRAW3D|STATE12|STATE15, (LONG)"12345678901234567890123456789012345678901234567890123456789012345678901234567890",
+  0x0001, 0x0001, 0x0050, 0x0001,
+         0, LCINDEX , LCMASK  , G_IBOX    ,   /* Object 3 LCBOX */
+  NONE, STATE10|STATE15, (LONG)0x00011100L,
+  0x0000, 0x0002, 0x0052, 0x0003,
+  LCASC   ,       -1,       -1, G_BUTTON  ,   /* Object 4 LCINDEX */
+  SELECTABLE|TOUCHEXIT, STATE11, (LONG)"12345678901234567890",
+  0x0001, 0x0001, 0x0014, 0x0001,
+  LCDESC  ,       -1,       -1, G_BUTTON  ,   /* Object 5 LCASC */
+  SELECTABLE|RBUTTON, SELECTED|DRAW3D|STATE15, (LONG)"asc",
+  0x0018, 0x0001, 0x0004, 0x0002,
+  LCSEARCH,       -1,       -1, G_BUTTON  ,   /* Object 6 LCDESC */
+  SELECTABLE|RBUTTON, DRAW3D|STATE15, (LONG)"desc",
+  0x001C, 0x0001, 0x0004, 0x0002,
+  LCMASK  ,       -1,       -1, G_BUTTON  ,   /* Object 7 LCSEARCH */
+  SELECTABLE, DRAW3D|STATE15, (LONG)"search",
+  0x0022, 0x0001, 0x0006, 0x0002,
+  LCBOX   ,       -1,       -1, G_BUTTON  ,   /* Object 8 LCMASK */
+  SELECTABLE|LASTOB, DRAW3D|STATE15, (LONG)"mask",
+  0x0028, 0x0001, 0x0004, 0x0002,
+  
+  /******** Tree 46 QBEICON ****************************************************/
+        -1,        1,        1, G_BOX     ,   /* Object 0  */
+  NONE, STATE14, (LONG)0x00FF1100L,
+  0x0000, 0x0000, 0x000C, 0x0003,
+         0, QISORT  , QICOMP  , G_IBOX    ,   /* Object 1  */
+  NONE, STATE10|STATE15, (LONG)0x00011100L,
+  0x0000, 0x0000, 0x000C, 0x0003,
+  QICOMP  ,       -1,       -1, G_BUTTON  ,   /* Object 2 QISORT */
+  SELECTABLE, DRAW3D|STATE15, (LONG)"sort",
+  0x0001, 0x0001, 0x0004, 0x0002,
+         1,       -1,       -1, G_BUTTON  ,   /* Object 3 QICOMP */
+  SELECTABLE|LASTOB, DRAW3D|STATE15, (LONG)"comp",
+  0x0007, 0x0001, 0x0004, 0x0002,
+  
+  /******** Tree 47 RPRTICON ****************************************************/
+        -1,        1,        1, G_BOX     ,   /* Object 0  */
+  NONE, STATE14, (LONG)0x00FF1100L,
+  0x0000, 0x0000, 0x0047, 0x0004,
+         0,        2, RIADD   , G_IBOX    ,   /* Object 1  */
+  NONE, STATE10|STATE15, (LONG)0x00011100L,
+  0x0000, 0x0000, 0x0047, 0x0004,
+  REPTBL  ,       -1,       -1, G_STRING  ,   /* Object 2  */
+  NONE, DRAW3D|STATE15, (LONG)"Tab:",
+  0x0001, 0x0001, 0x0004, 0x0001,
+         4,       -1,       -1, G_BUTTON  ,   /* Object 3 REPTBL */
+  SELECTABLE|TOUCHEXIT, DRAW3D|STATE11, (LONG)"1234567890123456",
+  0x0006, 0x0001, 0x0010, 0x0001,
+  REPCOL  ,       -1,       -1, G_STRING  ,   /* Object 4  */
+  NONE, DRAW3D|STATE15, (LONG)"Feld:",
+  0x0018, 0x0001, 0x0005, 0x0001,
+         6,       -1,       -1, G_BUTTON  ,   /* Object 5 REPCOL */
+  SELECTABLE|TOUCHEXIT, DRAW3D|STATE11, (LONG)"1234567890123456",
+  0x001E, 0x0001, 0x0010, 0x0001,
+  REPINX  ,       -1,       -1, G_STRING  ,   /* Object 6  */
+  NONE, DRAW3D|STATE15, (LONG)"Inx:",
+  0x0030, 0x0001, 0x0004, 0x0001,
+  RIDATE  ,       -1,       -1, G_BUTTON  ,   /* Object 7 REPINX */
+  SELECTABLE|TOUCHEXIT, DRAW3D|STATE11, (LONG)"1234567890123456",
+  0x0035, 0x0001, 0x0010, 0x0001,
+  RITIME  ,       -1,       -1, G_BUTTON  ,   /* Object 8 RIDATE */
+  SELECTABLE, STATE15, (LONG)"date",
+  0x0001, 0x0002, 0x0004, 0x0002,
+  RITSTAMP,       -1,       -1, G_BUTTON  ,   /* Object 9 RITIME */
+  SELECTABLE, STATE15, (LONG)"time",
+  0x0005, 0x0002, 0x0004, 0x0002,
+  RICOUNT ,       -1,       -1, G_BUTTON  ,   /* Object 10 RITSTAMP */
+  SELECTABLE, STATE15, (LONG)"tstamp",
+  0x0009, 0x0002, 0x0006, 0x0002,
+  RIBRANCH,       -1,       -1, G_BUTTON  ,   /* Object 11 RICOUNT */
+  SELECTABLE, STATE15, (LONG)"count",
+  0x000D, 0x0002, 0x0005, 0x0002,
+  RIRETURN,       -1,       -1, G_BUTTON  ,   /* Object 12 RIBRANCH */
+  SELECTABLE, STATE15, (LONG)"branch",
+  0x0012, 0x0002, 0x0006, 0x0002,
+  RIADD   ,       -1,       -1, G_BUTTON  ,   /* Object 13 RIRETURN */
+  SELECTABLE, STATE15, (LONG)"return",
+  0x0016, 0x0002, 0x0006, 0x0002,
+         1,       -1,       -1, G_BUTTON  ,   /* Object 14 RIADD */
+  SELECTABLE|LASTOB, STATE15, (LONG)"add",
+  0x001A, 0x0002, 0x0004, 0x0002,
+  
+  /******** Tree 48 CALCICON ****************************************************/
+        -1,        1,        1, G_BOX     ,   /* Object 0  */
+  NONE, STATE14, (LONG)0x00FF1100L,
+  0x0000, 0x0000, 0x0047, 0x0004,
+         0,        2, CALOP   , G_IBOX    ,   /* Object 1  */
+  NONE, STATE10|STATE15, (LONG)0x00011100L,
+  0x0000, 0x0000, 0x0047, 0x0004,
+  CALTBL  ,       -1,       -1, G_STRING  ,   /* Object 2  */
+  NONE, DRAW3D|STATE15, (LONG)"Tab:",
+  0x0001, 0x0001, 0x0004, 0x0001,
+         4,       -1,       -1, G_BUTTON  ,   /* Object 3 CALTBL */
+  SELECTABLE|TOUCHEXIT, DRAW3D|STATE11, (LONG)"1234567890123456",
+  0x0006, 0x0001, 0x0010, 0x0001,
+  CALCOL  ,       -1,       -1, G_STRING  ,   /* Object 4  */
+  NONE, DRAW3D|STATE15, (LONG)"Feld:",
+  0x0018, 0x0001, 0x0005, 0x0001,
+         6,       -1,       -1, G_BUTTON  ,   /* Object 5 CALCOL */
+  SELECTABLE|TOUCHEXIT, DRAW3D|STATE11, (LONG)"1234567890123456",
+  0x001E, 0x0001, 0x0010, 0x0001,
+  CALINX  ,       -1,       -1, G_STRING  ,   /* Object 6  */
+  NONE, DRAW3D|STATE15, (LONG)"Inx:",
+  0x0030, 0x0001, 0x0004, 0x0001,
+         8,       -1,       -1, G_BUTTON  ,   /* Object 7 CALINX */
+  SELECTABLE|TOUCHEXIT, DRAW3D|STATE11, (LONG)"1234567890123456",
+  0x0035, 0x0001, 0x0010, 0x0001,
+  CALOP   ,       -1,       -1, G_STRING  ,   /* Object 8  */
+  NONE, DRAW3D|STATE15, (LONG)"Op:",
+  0x0001, 0x0003, 0x0003, 0x0001,
+         1,       -1,       -1, G_BUTTON  ,   /* Object 9 CALOP */
+  SELECTABLE|LASTOB|TOUCHEXIT, DRAW3D|STATE11, (LONG)"1234567890123456",
+  0x0006, 0x0003, 0x0010, 0x0001,
+  
+  /******** Tree 49 BATICON ****************************************************/
+        -1,        1,        1, G_BOX     ,   /* Object 0  */
+  NONE, STATE14, (LONG)0x00FF1100L,
+  0x0000, 0x0000, 0x0031, 0x0002,
+         0,        2, BATPARM , G_IBOX    ,   /* Object 1  */
+  NONE, STATE10|STATE15, (LONG)0x00011100L,
+  0x0000, 0x0000, 0x0031, 0x0002,
+  BATCMD  ,       -1,       -1, G_STRING  ,   /* Object 2  */
+  NONE, DRAW3D|STATE15, (LONG)"Komm:",
+  0x0001, 0x0001, 0x0006, 0x0001,
+         4,       -1,       -1, G_BUTTON  ,   /* Object 3 BATCMD */
+  SELECTABLE|TOUCHEXIT, STATE11, (LONG)"1234567890123456",
+  0x0008, 0x0001, 0x0010, 0x0001,
+  BATPARM ,       -1,       -1, G_STRING  ,   /* Object 4  */
+  NONE, DRAW3D|STATE15, (LONG)"Parm:",
+  0x001A, 0x0001, 0x0005, 0x0001,
+         1,       -1,       -1, G_BUTTON  ,   /* Object 5 BATPARM */
+  SELECTABLE|LASTOB|TOUCHEXIT, STATE11, (LONG)"1234567890123456",
+  0x0020, 0x0001, 0x0010, 0x0001,
+  
+  /******** Tree 50 ACCICON ****************************************************/
+        -1, ACCINFBX, ACCTOOLS, G_BOX     ,   /* Object 0  */
+  NONE, STATE14, (LONG)0x00FF1100L,
+  0x0000, 0x0000, 0x0052, 0x0005,
+  ACCTOOLS, ACCINFO , ACCINFO , G_IBOX    ,   /* Object 1 ACCINFBX */
+  NONE, WHITEBAK|STATE10|STATE14|STATE15, (LONG)0x00FF1100L,
+  0x0000, 0x0000, 0x0052, 0x0002,
+  ACCINFBX,       -1,       -1, G_STRING  ,   /* Object 2 ACCINFO */
+  NONE, DRAW3D|STATE12|STATE15, (LONG)"12345678901234567890123456789012345678901234567890123456789012345678901234567890",
+  0x0001, 0x0001, 0x0050, 0x0001,
+         0, ACCARROW, ACCZOOM , G_IBOX    ,   /* Object 3 ACCTOOLS */
+  NONE, STATE10|STATE15, (LONG)0x00011100L,
+  0x0000, 0x0002, 0x0052, 0x0003,
+  ACCTEXT ,       -1,       -1, G_BUTTON  ,   /* Object 4 ACCARROW */
+  SELECTABLE|RBUTTON, SELECTED|STATE15, (LONG)"arrow",
+  0x0001, 0x0001, 0x0005, 0x0002,
+  ACCCOL  ,       -1,       -1, G_BUTTON  ,   /* Object 5 ACCTEXT */
+  SELECTABLE|RBUTTON, STATE15, (LONG)"text",
+  0x0006, 0x0001, 0x0004, 0x0002,
+  ACCGROUP,       -1,       -1, G_BUTTON  ,   /* Object 6 ACCCOL */
+  SELECTABLE|RBUTTON, STATE15, (LONG)"field",
+  0x000A, 0x0001, 0x0005, 0x0002,
+  ACCRBUTT,       -1,       -1, G_BUTTON  ,   /* Object 7 ACCGROUP */
+  SELECTABLE|RBUTTON, STATE15, (LONG)"group",
+  0x000E, 0x0001, 0x0005, 0x0002,
+  ACCCHECK,       -1,       -1, G_BUTTON  ,   /* Object 8 ACCRBUTT */
+  SELECTABLE|RBUTTON, STATE15, (LONG)"rbutt",
+  0x0012, 0x0001, 0x0005, 0x0002,
+  ACCLINE ,       -1,       -1, G_BUTTON  ,   /* Object 9 ACCCHECK */
+  SELECTABLE|RBUTTON, STATE15, (LONG)"check",
+  0x0016, 0x0001, 0x0005, 0x0002,
+  ACCBOX  ,       -1,       -1, G_BUTTON  ,   /* Object 10 ACCLINE */
+  SELECTABLE|RBUTTON, STATE15, (LONG)"line",
+  0x001A, 0x0001, 0x0004, 0x0002,
+  ACCGRAF ,       -1,       -1, G_BUTTON  ,   /* Object 11 ACCBOX */
+  SELECTABLE|RBUTTON, STATE15, (LONG)"box",
+  0x001E, 0x0001, 0x0004, 0x0002,
+  ACCSUB  ,       -1,       -1, G_BUTTON  ,   /* Object 12 ACCGRAF */
+  SELECTABLE|RBUTTON, STATE15, (LONG)"graf",
+  0x0022, 0x0001, 0x0004, 0x0002,
+  ACCLOCK ,       -1,       -1, G_BUTTON  ,   /* Object 13 ACCSUB */
+  SELECTABLE|RBUTTON, STATE15, (LONG)"sub",
+  0x0026, 0x0001, 0x0004, 0x0002,
+        15,       -1,       -1, G_BUTTON  ,   /* Object 14 ACCLOCK */
+  SELECTABLE, STATE15, (LONG)"lock",
+  0x002B, 0x0001, 0x0004, 0x0002,
+  ACCCOLUM,       -1,       -1, G_STRING  ,   /* Object 15  */
+  NONE, DRAW3D|STATE15, (LONG)"Feld:",
+  0x0030, 0x0001, 0x0005, 0x0001,
+  ACCZOOM ,       -1,       -1, G_BUTTON  ,   /* Object 16 ACCCOLUM */
+  SELECTABLE|TOUCHEXIT, DRAW3D|STATE11, (LONG)"\0",
+  0x0036, 0x0001, 0x000E, 0x0001,
+  ACCTOOLS,       -1,       -1, G_BUTTON  ,   /* Object 17 ACCZOOM */
+  SELECTABLE|LASTOB|TOUCHEXIT, DRAW3D|STATE11, (LONG)"\0",
+  0x0047, 0x0001, 0x0006, 0x0001,
+  
+  /******** Tree 51 PREVICON ****************************************************/
+        -1, PIBOX   , PIBOX   , G_BOX     ,   /* Object 0  */
+  NONE, STATE14, (LONG)0x00FF1100L,
+  0x0000, 0x0000, 0x0052, 0x0003,
+         0, PIFIRST , PIPAGENR, G_IBOX    ,   /* Object 1 PIBOX */
+  NONE, STATE10|STATE15, (LONG)0x00011100L,
+  0x0000, 0x0000, 0x0052, 0x0003,
+  PIPREV  ,       -1,       -1, G_BUTTON  ,   /* Object 2 PIFIRST */
+  SELECTABLE, STATE15, (LONG)"first",
+  0x0001, 0x0001, 0x0005, 0x0002,
+  PINEXT  ,       -1,       -1, G_BUTTON  ,   /* Object 3 PIPREV */
+  SELECTABLE, STATE15, (LONG)"prev",
+  0x0005, 0x0001, 0x0004, 0x0002,
+  PILAST  ,       -1,       -1, G_BUTTON  ,   /* Object 4 PINEXT */
+  SELECTABLE, STATE15, (LONG)"next",
+  0x0009, 0x0001, 0x0004, 0x0002,
+  PIBW    ,       -1,       -1, G_BUTTON  ,   /* Object 5 PILAST */
+  SELECTABLE, STATE15, (LONG)"last",
+  0x000D, 0x0001, 0x0004, 0x0002,
+  PIZOOM  ,       -1,       -1, G_BUTTON  ,   /* Object 6 PIBW */
+  SELECTABLE, STATE15, (LONG)"bw",
+  0x0012, 0x0001, 0x0004, 0x0002,
+  PIPAGENR,       -1,       -1, G_BUTTON  ,   /* Object 7 PIZOOM */
+  SELECTABLE|TOUCHEXIT, DRAW3D|STATE11, (LONG)"\0",
+  0x0018, 0x0001, 0x0007, 0x0001,
+  PIBOX   ,       -1,       -1, G_STRING  ,   /* Object 8 PIPAGENR */
+  LASTOB, DRAW3D|STATE12|STATE15, (LONG)"Seite    1 von 9999",
+  0x0021, 0x0001, 0x0013, 0x0001,
+  
+  /******** Tree 52 MASKMENU ****************************************************/
+        -1,        1,        7, G_IBOX    ,   /* Object 0  */
+  NONE, NORMAL, (LONG)0x00000000L,
+  0x0000, 0x0000, 0x0080, 0x0019,
+         7,        2,        2, G_BOX     ,   /* Object 1  */
+  NONE, NORMAL, (LONG)0x00001100L,
+  0x0000, 0x0000, 0x0080, 0x0201,
+         1, MMINFO  , MMOPTION, G_IBOX    ,   /* Object 2  */
+  NONE, NORMAL, (LONG)0x00000000L,
+  0x0002, 0x0000, 0x0025, 0x0301,
+  MMRECORD,       -1,       -1, G_TITLE   ,   /* Object 3 MMINFO */
+  NONE, NORMAL, (LONG)" Info",
+  0x0000, 0x0000, 0x0006, 0x0301,
+  MMACTION,       -1,       -1, G_TITLE   ,   /* Object 4 MMRECORD */
+  NONE, NORMAL, (LONG)" Datensatz",
+  0x0006, 0x0000, 0x000B, 0x0301,
+  MMOPTION,       -1,       -1, G_TITLE   ,   /* Object 5 MMACTION */
+  NONE, NORMAL, (LONG)" Aktionen",
+  0x0011, 0x0000, 0x000A, 0x0301,
+         2,       -1,       -1, G_TITLE   ,   /* Object 6 MMOPTION */
+  NONE, NORMAL, (LONG)" Optionen",
+  0x001B, 0x0000, 0x000A, 0x0301,
+         0,        8,       27, G_IBOX    ,   /* Object 7  */
+  NONE, NORMAL, (LONG)0x00000000L,
+  0x0000, 0x0301, 0x0050, 0x0017,
+        10, MMASKINF, MMASKINF, G_BOX     ,   /* Object 8  */
+  NONE, NORMAL, (LONG)0x00FF1100L,
+  0x0002, 0x0000, 0x000F, 0x0001,
+         8,       -1,       -1, G_STRING  ,   /* Object 9 MMASKINF */
+  NONE, NORMAL, (LONG)"  Info... \001F2",
+  0x0000, 0x0000, 0x000F, 0x0001,
+        20, MMSAVE  , MMCALC  , G_BOX     ,   /* Object 10  */
+  NONE, NORMAL, (LONG)0x00FF1100L,
+  0x0008, 0x0000, 0x0014, 0x0009,
+  MMINSERT,       -1,       -1, G_STRING  ,   /* Object 11 MMSAVE */
+  NONE, NORMAL, (LONG)"  Speichern     \007S",
+  0x0000, 0x0000, 0x0014, 0x0001,
+  MMUPDATE,       -1,       -1, G_STRING  ,   /* Object 12 MMINSERT */
+  NONE, NORMAL, (LONG)"  Einf\201gen      \007I",
+  0x0000, 0x0001, 0x0014, 0x0001,
+  MMSEARCH,       -1,       -1, G_STRING  ,   /* Object 13 MMUPDATE */
+  NONE, NORMAL, (LONG)"  \216ndern        \007U",
+  0x0000, 0x0002, 0x0014, 0x0001,
+  MMMULTI ,       -1,       -1, G_STRING  ,   /* Object 14 MMSEARCH */
+  NONE, NORMAL, (LONG)"  Suchen        \007F",
+  0x0000, 0x0003, 0x0014, 0x0001,
+        16,       -1,       -1, G_STRING  ,   /* Object 15 MMMULTI */
+  NONE, NORMAL, (LONG)"  Multi-Suchen  \007M",
+  0x0000, 0x0004, 0x0014, 0x0001,
+  MMDELETE,       -1,       -1, G_STRING  ,   /* Object 16  */
+  EDITABLE, DISABLED, (LONG)"--------------------",
+  0x0000, 0x0005, 0x0014, 0x0001,
+        18,       -1,       -1, G_STRING  ,   /* Object 17 MMDELETE */
+  NONE, NORMAL, (LONG)"  L\224schen       \007D",
+  0x0000, 0x0006, 0x0014, 0x0001,
+  MMCALC  ,       -1,       -1, G_STRING  ,   /* Object 18  */
+  EDITABLE, DISABLED, (LONG)"--------------------",
+  0x0000, 0x0007, 0x0014, 0x0001,
+        10,       -1,       -1, G_STRING  ,   /* Object 19 MMCALC */
+  NONE, NORMAL, (LONG)"  Rechnen       \007R",
+  0x0000, 0x0008, 0x0014, 0x0001,
+        27, MMCLEAR , MMLAST  , G_BOX     ,   /* Object 20  */
+  NONE, NORMAL, (LONG)0x00FF1100L,
+  0x0013, 0x0000, 0x0012, 0x0006,
+        22,       -1,       -1, G_STRING  ,   /* Object 21 MMCLEAR */
+  NONE, NORMAL, (LONG)"  Neue Maske  \007N",
+  0x0000, 0x0000, 0x0012, 0x0001,
+  MMPREV  ,       -1,       -1, G_STRING  ,   /* Object 22  */
+  EDITABLE, DISABLED, (LONG)"------------------",
+  0x0000, 0x0001, 0x0012, 0x0001,
+  MMNEXT  ,       -1,       -1, G_STRING  ,   /* Object 23 MMPREV */
+  NONE, NORMAL, (LONG)"  Zur\201ck      \007Z",
+  0x0000, 0x0002, 0x0012, 0x0001,
+  MMFIRST ,       -1,       -1, G_STRING  ,   /* Object 24 MMNEXT */
+  NONE, NORMAL, (LONG)"  Vor         \007V",
+  0x0000, 0x0003, 0x0012, 0x0001,
+  MMLAST  ,       -1,       -1, G_STRING  ,   /* Object 25 MMFIRST */
+  NONE, NORMAL, (LONG)"  Anfang      \007A",
+  0x0000, 0x0004, 0x0012, 0x0001,
+        20,       -1,       -1, G_STRING  ,   /* Object 26 MMLAST */
+  NONE, NORMAL, (LONG)"  Ende        \007E",
+  0x0000, 0x0005, 0x0012, 0x0001,
+         7, MMIMPORT, MMPOPUP , G_BOX     ,   /* Object 27  */
+  NONE, NORMAL, (LONG)0x00FF1000L,
+  0x001D, 0x0000, 0x001A, 0x0009,
+  MMEXPORT,       -1,       -1, G_STRING  ,   /* Object 28 MMIMPORT */
+  NONE, NORMAL, (LONG)"  Feld importieren... ^I",
+  0x0000, 0x0000, 0x001A, 0x0001,
+  MMOPEN  ,       -1,       -1, G_STRING  ,   /* Object 29 MMEXPORT */
+  NONE, NORMAL, (LONG)"  Feld exportieren... ^E",
+  0x0000, 0x0001, 0x001A, 0x0001,
+        31,       -1,       -1, G_STRING  ,   /* Object 30 MMOPEN */
+  NONE, NORMAL, (LONG)"  Feld anzeigen...    ^O",
+  0x0000, 0x0002, 0x001A, 0x0001,
+  MMFILENA,       -1,       -1, G_STRING  ,   /* Object 31  */
+  EDITABLE, DISABLED, (LONG)"--------------------------",
+  0x0000, 0x0003, 0x001A, 0x0001,
+        33,       -1,       -1, G_STRING  ,   /* Object 32 MMFILENA */
+  NONE, NORMAL, (LONG)"  Dateiname holen...  ^L",
+  0x0000, 0x0004, 0x001A, 0x0001,
+  MMCHANGE,       -1,       -1, G_STRING  ,   /* Object 33  */
+  EDITABLE, DISABLED, (LONG)"--------------------------",
+  0x0000, 0x0005, 0x001A, 0x0001,
+  MMJOIN  ,       -1,       -1, G_STRING  ,   /* Object 34 MMCHANGE */
+  NONE, NORMAL, (LONG)"  Maske wechseln...   ^M",
+  0x0000, 0x0006, 0x001A, 0x0001,
+  MMPOPUP ,       -1,       -1, G_STRING  ,   /* Object 35 MMJOIN */
+  NONE, NORMAL, (LONG)"  Verzweigen...       ^J",
+  0x0000, 0x0007, 0x001A, 0x0001,
+        27,       -1,       -1, G_STRING  ,   /* Object 36 MMPOPUP */
+  LASTOB, NORMAL, (LONG)"  Popup anzeigen...   ^N",
+  0x0000, 0x0008, 0x001A, 0x0001,
+  
+  /******** Tree 53 MASKICON ****************************************************/
+        -1, MIINFO  , MIBOX   , G_BOX     ,   /* Object 0  */
+  NONE, STATE14, (LONG)0x00FF1100L,
+  0x0000, 0x0000, 0x0052, 0x0005,
+  MIBOX   , MIORDER , MIORDER , G_IBOX    ,   /* Object 1 MIINFO */
+  NONE, WHITEBAK|STATE10|STATE14|STATE15, (LONG)0x00FF1100L,
+  0x0000, 0x0000, 0x0052, 0x0002,
+  MIINFO  ,       -1,       -1, G_STRING  ,   /* Object 2 MIORDER */
+  NONE, DRAW3D|STATE12|STATE15, (LONG)"12345678901234567890123456789012345678901234567890123456789012345678901234567890",
+  0x0001, 0x0001, 0x0050, 0x0001,
+         0, MIINDEX , MIDELETE, G_IBOX    ,   /* Object 3 MIBOX */
+  NONE, STATE10|STATE15, (LONG)0x00011100L,
+  0x0000, 0x0002, 0x0052, 0x0003,
+  MIASC   ,       -1,       -1, G_BUTTON  ,   /* Object 4 MIINDEX */
+  SELECTABLE|TOUCHEXIT, STATE11, (LONG)"12345678901234",
+  0x0001, 0x0001, 0x000E, 0x0001,
+  MIDESC  ,       -1,       -1, G_BUTTON  ,   /* Object 5 MIASC */
+  SELECTABLE|RBUTTON, SELECTED|DRAW3D|STATE15, (LONG)"asc",
+  0x0010, 0x0001, 0x0004, 0x0002,
+  MIFIRST ,       -1,       -1, G_BUTTON  ,   /* Object 6 MIDESC */
+  SELECTABLE|RBUTTON, DRAW3D|STATE15, (LONG)"desc",
+  0x0014, 0x0001, 0x0004, 0x0002,
+  MIPREV  ,       -1,       -1, G_BUTTON  ,   /* Object 7 MIFIRST */
+  SELECTABLE, DRAW3D|STATE15, (LONG)"first",
+  0x0019, 0x0001, 0x0005, 0x0002,
+  MINEXT  ,       -1,       -1, G_BUTTON  ,   /* Object 8 MIPREV */
+  SELECTABLE, DRAW3D|STATE15, (LONG)"prev",
+  0x001D, 0x0001, 0x0004, 0x0002,
+  MILAST  ,       -1,       -1, G_BUTTON  ,   /* Object 9 MINEXT */
+  SELECTABLE, DRAW3D|STATE15, (LONG)"next",
+  0x0021, 0x0001, 0x0004, 0x0002,
+  MISAVE  ,       -1,       -1, G_BUTTON  ,   /* Object 10 MILAST */
+  SELECTABLE, DRAW3D|STATE15, (LONG)"last",
+  0x0025, 0x0001, 0x0004, 0x0002,
+  MISEARCH,       -1,       -1, G_BUTTON  ,   /* Object 11 MISAVE */
+  SELECTABLE, DRAW3D|STATE15, (LONG)"ins",
+  0x002A, 0x0001, 0x0004, 0x0002,
+  MICLEAR ,       -1,       -1, G_BUTTON  ,   /* Object 12 MISEARCH */
+  SELECTABLE, DRAW3D|STATE15, (LONG)"search",
+  0x002E, 0x0001, 0x0006, 0x0002,
+  MICALC  ,       -1,       -1, G_BUTTON  ,   /* Object 13 MICLEAR */
+  SELECTABLE, DRAW3D|STATE15, (LONG)"new",
+  0x0032, 0x0001, 0x0004, 0x0002,
+  MIDELETE,       -1,       -1, G_BUTTON  ,   /* Object 14 MICALC */
+  SELECTABLE, DRAW3D|STATE15, (LONG)"calc",
+  0x0036, 0x0001, 0x0004, 0x0002,
+  MIBOX   ,       -1,       -1, G_BUTTON  ,   /* Object 15 MIDELETE */
+  SELECTABLE|LASTOB, DRAW3D|STATE15, (LONG)"trash",
+  0x003A, 0x0001, 0x0005, 0x0002,
+  
+  /******** Tree 54 MASKCONF ****************************************************/
+        -1,        1, MCHELP  , G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|WHITEBAK|STATE15, (LONG)0x00001100L,
+  0x0000, 0x0000, 0x0026, 0x0011,
+         6, MCCLEAR , MCDELETE, G_BUTTON  ,   /* Object 1  */
+  NONE, STATE14, (LONG)"Allgemein",
+  0x0002, 0x0001, 0x0022, 0x0006,
+  MCFSEL  ,       -1,       -1, G_BUTTON  ,   /* Object 2 MCCLEAR */
+  SELECTABLE, SELECTED|DRAW3D|STATE13, (LONG)"~Felder nach Einf\201gen leeren",
+  0x0002, 0x0002, 0x001C, 0x0001,
+  MCPOSPOP,       -1,       -1, G_BUTTON  ,   /* Object 3 MCFSEL */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"Automatische ~Dateiauswahl",
+  0x0002, 0x0003, 0x001A, 0x0001,
+  MCDELETE,       -1,       -1, G_BUTTON  ,   /* Object 4 MCPOSPOP */
+  SELECTABLE, SELECTED|DRAW3D|STATE13, (LONG)"~In Listbox positionieren",
+  0x0002, 0x0004, 0x0019, 0x0001,
+         1,       -1,       -1, G_BUTTON  ,   /* Object 5 MCDELETE */
+  SELECTABLE, SELECTED|DRAW3D|STATE13, (LONG)"~L\224schen best\204tigen",
+  0x0002, 0x0005, 0x0013, 0x0001,
+  MCOK    , MCPLAY  , MCVOLUME, G_BUTTON  ,   /* Object 6  */
+  NONE, STATE14, (LONG)"Sound",
+  0x0002, 0x0008, 0x0022, 0x0005,
+         8,       -1,       -1, G_BUTTON  ,   /* Object 7 MCPLAY */
+  SELECTABLE, DRAW3D|STATE13, (LONG)"~Beim Anzeigen abspielen",
+  0x0002, 0x0002, 0x0018, 0x0001,
+  MCVOLUME,       -1,       -1, G_STRING  ,   /* Object 8  */
+  NONE, DRAW3D|STATE15, (LONG)"Laut~st\204rke:",
+  0x0002, 0x0004, 0x000C, 0x0001,
+         6,       -1,       -1, G_FBOXTEXT,   /* Object 9 MCVOLUME */
+  EDITABLE, DRAW3D, (LONG)&rs_tedinfo[67],
+  0x000E, 0x0004, 0x0004, 0x0001,
+  MCCANCEL,       -1,       -1, G_BUTTON  ,   /* Object 10 MCOK */
+  SELECTABLE|DEFAULT|EXIT, WHITEBAK, (LONG)"~OK",
+  0x0002, 0x000E, 0x000A, 0x0002,
+  MCHELP  ,       -1,       -1, G_BUTTON  ,   /* Object 11 MCCANCEL */
+  SELECTABLE|EXIT|FLAGS13, WHITEBAK, (LONG)"~Abbruch",
+  0x000E, 0x000E, 0x000A, 0x0002,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 12 MCHELP */
+  SELECTABLE|LASTOB|FLAGS14, WHITEBAK, (LONG)"~Hilfe",
+  0x001A, 0x000E, 0x000A, 0x0002,
+  
+  /******** Tree 55 JOIN ****************************************************/
+        -1,        1, JDESCEND, G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|WHITEBAK|STATE15, (LONG)0x00001100L,
+  0x0000, 0x0000, 0x003F, 0x000E,
+  JSTABLE ,       -1,       -1, G_STRING  ,   /* Object 1  */
+  NONE, STATE15, (LONG)"Quelltabelle:",
+  0x0002, 0x0001, 0x000D, 0x0001,
+         3,       -1,       -1, G_STRING  ,   /* Object 2 JSTABLE */
+  NONE, STATE12|STATE15, (LONG)"_________________________________",
+  0x0010, 0x0001, 0x0021, 0x0001,
+         4,       -1,       -1, G_STRING  ,   /* Object 3  */
+  NONE, DRAW3D|STATE15, (LONG)"Quellindex:",
+  0x0002, 0x0003, 0x000B, 0x0001,
+         5,       -1,       -1, G_STRING  ,   /* Object 4  */
+  NONE, DRAW3D|STATE15, (LONG)"Zieltabelle:",
+  0x0016, 0x0003, 0x000C, 0x0001,
+  JSI     ,       -1,       -1, G_STRING  ,   /* Object 5  */
+  NONE, DRAW3D|STATE15, (LONG)"Zielindex:",
+  0x002A, 0x0003, 0x000A, 0x0001,
+  JDT     ,       -1,       -1, G_BOX     ,   /* Object 6 JSI */
+  NONE, STATE13, (LONG)0x00FF1101L,
+  0x0002, 0x0004, 0x0013, 0x0006,
+  JDI     ,       -1,       -1, G_BOX     ,   /* Object 7 JDT */
+  NONE, STATE13, (LONG)0x00FF1101L,
+  0x0016, 0x0004, 0x0013, 0x0006,
+  JOK     ,       -1,       -1, G_BOX     ,   /* Object 8 JDI */
+  NONE, STATE13, (LONG)0x00FF1101L,
+  0x002A, 0x0004, 0x0013, 0x0006,
+  JCANCEL ,       -1,       -1, G_BUTTON  ,   /* Object 9 JOK */
+  SELECTABLE|DEFAULT|EXIT, WHITEBAK, (LONG)"~OK",
+  0x0002, 0x000B, 0x000A, 0x0002,
+  JHELP   ,       -1,       -1, G_BUTTON  ,   /* Object 10 JCANCEL */
+  SELECTABLE|EXIT|FLAGS13, WHITEBAK, (LONG)"~Abbruch",
+  0x000F, 0x000B, 0x000A, 0x0002,
+  JASCEND ,       -1,       -1, G_BUTTON  ,   /* Object 11 JHELP */
+  SELECTABLE|FLAGS14, WHITEBAK, (LONG)"~Hilfe",
+  0x001C, 0x000B, 0x000A, 0x0002,
+  JDESCEND,       -1,       -1, G_BUTTON  ,   /* Object 12 JASCEND */
+  SELECTABLE|RBUTTON, SELECTED|DRAW3D|STATE13, (LONG)"A~ufsteigend",
+  0x002B, 0x000B, 0x000C, 0x0001,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 13 JDESCEND */
+  SELECTABLE|RBUTTON|LASTOB, DRAW3D|STATE13, (LONG)"A~bsteigend",
+  0x002B, 0x000C, 0x000B, 0x0001,
+  
+  /******** Tree 56 HELPMENU ****************************************************/
+        -1,        1,        7, G_IBOX    ,   /* Object 0  */
+  NONE, NORMAL, (LONG)0x00000000L,
+  0x0000, 0x0000, 0x0080, 0x0019,
+         7,        2,        2, G_BOX     ,   /* Object 1  */
+  NONE, NORMAL, (LONG)0x00001100L,
+  0x0000, 0x0000, 0x0080, 0x0201,
+         1, MHINFO  , MHHELP  , G_IBOX    ,   /* Object 2  */
+  NONE, NORMAL, (LONG)0x00000000L,
+  0x0002, 0x0000, 0x0020, 0x0301,
+  MHFILE  ,       -1,       -1, G_TITLE   ,   /* Object 3 MHINFO */
+  NONE, NORMAL, (LONG)" Info",
+  0x0000, 0x0000, 0x0006, 0x0301,
+  MHEDIT  ,       -1,       -1, G_TITLE   ,   /* Object 4 MHFILE */
+  NONE, NORMAL, (LONG)" Datei",
+  0x0006, 0x0000, 0x0007, 0x0301,
+  MHHELP  ,       -1,       -1, G_TITLE   ,   /* Object 5 MHEDIT */
+  NONE, NORMAL, (LONG)" Bearbeiten",
+  0x000D, 0x0000, 0x000C, 0x0301,
+         2,       -1,       -1, G_TITLE   ,   /* Object 6 MHHELP */
+  NONE, NORMAL, (LONG)" Hilfe",
+  0x0019, 0x0000, 0x0007, 0x0301,
+         0,        8,       18, G_IBOX    ,   /* Object 7  */
+  NONE, NORMAL, (LONG)0x00000000L,
+  0x0000, 0x0301, 0x0050, 0x0013,
+        10, MHELPINF, MHELPINF, G_BOX     ,   /* Object 8  */
+  NONE, NORMAL, (LONG)0x00FF1100L,
+  0x0002, 0x0000, 0x0011, 0x0001,
+         8,       -1,       -1, G_STRING  ,   /* Object 9 MHELPINF */
+  NONE, NORMAL, (LONG)"  \232ber Hilfe...",
+  0x0000, 0x0000, 0x0011, 0x0001,
+        13, MHOPENDB, MHCLOSED, G_BOX     ,   /* Object 10  */
+  NONE, NORMAL, (LONG)0x00FF1100L,
+  0x0008, 0x0000, 0x001C, 0x0002,
+  MHCLOSED,       -1,       -1, G_STRING  ,   /* Object 11 MHOPENDB */
+  NONE, NORMAL, (LONG)"  Hilfe-DB \224ffnen...    ^O",
+  0x0000, 0x0000, 0x001C, 0x0001,
+        10,       -1,       -1, G_STRING  ,   /* Object 12 MHCLOSED */
+  NONE, NORMAL, (LONG)"  Hilfe-DB schlie\236en... ^U",
+  0x0000, 0x0001, 0x001C, 0x0001,
+        18, MHUNDO  , MHPREV  , G_BOX     ,   /* Object 13  */
+  NONE, NORMAL, (LONG)0x00FF1100L,
+  0x000F, 0x0000, 0x0014, 0x0004,
+        15,       -1,       -1, G_STRING  ,   /* Object 14 MHUNDO */
+  NONE, NORMAL, (LONG)"  Zur\201ck        ^Z",
+  0x0000, 0x0000, 0x0014, 0x0001,
+  MHNEXT  ,       -1,       -1, G_STRING  ,   /* Object 15  */
+  EDITABLE, DISABLED, (LONG)"--------------------",
+  0x0000, 0x0001, 0x0014, 0x0001,
+  MHPREV  ,       -1,       -1, G_STRING  ,   /* Object 16 MHNEXT */
+  NONE, NORMAL, (LONG)"  N\204chstes Thema +",
+  0x0000, 0x0002, 0x0014, 0x0001,
+        13,       -1,       -1, G_STRING  ,   /* Object 17 MHPREV */
+  NONE, NORMAL, (LONG)"  Voriges Thema  -",
+  0x0000, 0x0003, 0x0014, 0x0001,
+         7, MHUSEHLP, MHCONTEN, G_BOX     ,   /* Object 18  */
+  NONE, NORMAL, (LONG)0x00FF1000L,
+  0x001B, 0x0000, 0x0016, 0x0002,
+  MHCONTEN,       -1,       -1, G_STRING  ,   /* Object 19 MHUSEHLP */
+  NONE, NORMAL, (LONG)"  Hilfe verwenden F1",
+  0x0000, 0x0000, 0x0016, 0x0001,
+        18,       -1,       -1, G_STRING  ,   /* Object 20 MHCONTEN */
+  LASTOB, NORMAL, (LONG)"  Inhalt         ^F1",
+  0x0000, 0x0001, 0x0016, 0x0001,
+  
+  /******** Tree 57 HABOUT ****************************************************/
+        -1,        1,       17, G_BOX     ,   /* Object 0  */
+  NONE, OUTLINED|WHITEBAK|STATE15, (LONG)0x00001100L,
+  0x0000, 0x0000, 0x0027, 0x0015,
+         2,       -1,       -1, G_STRING  ,   /* Object 1  */
+  NONE, STATE11|STATE13|STATE15, (LONG)"HILFE",
+  0x0010, 0x0001, 0x0007, 0x0002,
+         3,       -1,       -1, G_STRING  ,   /* Object 2  */
+  NONE, STATE13|STATE15, (LONG)"Kontextsensitives Hilfesystem",
+  0x0005, 0x0004, 0x001D, 0x0001,
+         4,       -1,       -1, G_STRING  ,   /* Object 3  */
+  NONE, STATE13|STATE15, (LONG)"basierend auf dem",
+  0x000B, 0x0005, 0x0011, 0x0001,
+         5,       -1,       -1, G_STRING  ,   /* Object 4  */
+  NONE, STATE13|STATE15, (LONG)"relationalen Datenbanksystem",
+  0x0006, 0x0006, 0x001C, 0x0001,
+         6,       -1,       -1, G_STRING  ,   /* Object 5  */
+  NONE, STATE13|STATE15, (LONG)"PHOENIX",
+  0x0010, 0x0007, 0x0007, 0x0001,
+         7,       -1,       -1, G_TEXT    ,   /* Object 6  */
+  NONE, NORMAL, (LONG)&rs_tedinfo[68],
+  0x0013, 0x0009, 0x0202, 0x0600,
+         8,       -1,       -1, G_TEXT    ,   /* Object 7  */
+  NONE, NORMAL, (LONG)&rs_tedinfo[69],
+  0x0009, 0x000A, 0x000A, 0x0600,
+         9,       -1,       -1, G_TEXT    ,   /* Object 8  */
+  NONE, NORMAL, (LONG)&rs_tedinfo[70],
+  0x0016, 0x000A, 0x0609, 0x0600,
+        10,       -1,       -1, G_TEXT    ,   /* Object 9  */
+  NONE, NORMAL, (LONG)&rs_tedinfo[71],
+  0x0009, 0x000B, 0x0009, 0x0600,
+        11,       -1,       -1, G_TEXT    ,   /* Object 10  */
+  NONE, DRAW3D, (LONG)&rs_tedinfo[72],
+  0x0014, 0x000B, 0x0600, 0x0600,
+        12,       -1,       -1, G_TEXT    ,   /* Object 11  */
+  NONE, NORMAL, (LONG)&rs_tedinfo[73],
+  0x0016, 0x000B, 0x0009, 0x0600,
+        13,       -1,       -1, G_TEXT    ,   /* Object 12  */
+  NONE, NORMAL, (LONG)&rs_tedinfo[74],
+  0x0011, 0x000C, 0x0006, 0x0600,
+        14,       -1,       -1, G_TEXT    ,   /* Object 13  */
+  NONE, NORMAL, (LONG)&rs_tedinfo[75],
+  0x0007, 0x000D, 0x0419, 0x0600,
+        15,       -1,       -1, G_TEXT    ,   /* Object 14  */
+  NONE, NORMAL, (LONG)&rs_tedinfo[76],
+  0x000E, 0x000E, 0x020B, 0x0600,
+        16,       -1,       -1, G_TEXT    ,   /* Object 15  */
+  NONE, NORMAL, (LONG)&rs_tedinfo[77],
+  0x000D, 0x000F, 0x000C, 0x0600,
+        17,       -1,       -1, G_TEXT    ,   /* Object 16  */
+  NONE, NORMAL, (LONG)&rs_tedinfo[78],
+  0x0011, 0x0010, 0x0205, 0x0600,
+         0,       -1,       -1, G_BUTTON  ,   /* Object 17  */
+  SELECTABLE|DEFAULT|EXIT|LASTOB, WHITEBAK, (LONG)"~OK",
+  0x000E, 0x0012, 0x000A, 0x0002
+};
+
+OBJECT *rs_trindex[] =
+{ &rs_object[0],   /* Tree  0 MENU     */
+  &rs_object[111],   /* Tree  1 ABOUT    */
+  &rs_object[123],   /* Tree  2 DESKTOP  */
+  &rs_object[184],   /* Tree  3 USERIMG  */
+  &rs_object[208],   /* Tree  4 ALERT    */
+  &rs_object[223],   /* Tree  5 SELFILE  */
+  &rs_object[239],   /* Tree  6 SELPATH  */
+  &rs_object[250],   /* Tree  7 SELFONT  */
+  &rs_object[272],   /* Tree  8 USERINTR */
+  &rs_object[305],   /* Tree  9 HELPINX  */
+  &rs_object[373],   /* Tree 10 POPUP    */
+  &rs_object[379],   /* Tree 11 POPUPS   */
+  &rs_object[394],   /* Tree 12 ICONS    */
+  &rs_object[398],   /* Tree 13 LISTWIDT */
+  &rs_object[404],   /* Tree 14 MONTHS   */
+  &rs_object[431],   /* Tree 15 LOADDB   */
+  &rs_object[435],   /* Tree 16 FLUSHKEY */
+  &rs_object[439],   /* Tree 17 INFMETA  */
+  &rs_object[472],   /* Tree 18 MOREINFO */
+  &rs_object[486],   /* Tree 19 SELBOX   */
+  &rs_object[494],   /* Tree 20 CONFIG   */
+  &rs_object[525],   /* Tree 21 IMEXPARM */
+  &rs_object[552],   /* Tree 22 CFGPRN   */
+  &rs_object[589],   /* Tree 23 QUEUE    */
+  &rs_object[597],   /* Tree 24 PAGEFORM */
+  &rs_object[640],   /* Tree 25 PROCBOX  */
+  &rs_object[658],   /* Tree 26 OPENDB   */
+  &rs_object[682],   /* Tree 27 DBINFO   */
+  &rs_object[730],   /* Tree 28 TBLINFO  */
+  &rs_object[752],   /* Tree 29 INXINFO  */
+  &rs_object[776],   /* Tree 30 PARAMS   */
+  &rs_object[784],   /* Tree 31 GETPARM  */
+  &rs_object[792],   /* Tree 32 LOCKSCRN */
+  &rs_object[800],   /* Tree 33 CHNGPASS */
+  &rs_object[814],   /* Tree 34 DELRECS  */
+  &rs_object[824],   /* Tree 35 REMSEL   */
+  &rs_object[836],   /* Tree 36 COPIES   */
+  &rs_object[846],   /* Tree 37 CLIPNAME */
+  &rs_object[852],   /* Tree 38 LISTSRCH */
+  &rs_object[870],   /* Tree 39 NEWWIDTH */
+  &rs_object[884],   /* Tree 40 ORDER    */
+  &rs_object[903],   /* Tree 41 REORGPAR */
+  &rs_object[914],   /* Tree 42 SORTING  */
+  &rs_object[928],   /* Tree 43 STATIST  */
+  &rs_object[947],   /* Tree 44 NEWPROC  */
+  &rs_object[957],   /* Tree 45 LISTICON */
+  &rs_object[966],   /* Tree 46 QBEICON  */
+  &rs_object[970],   /* Tree 47 RPRTICON */
+  &rs_object[985],   /* Tree 48 CALCICON */
+  &rs_object[995],   /* Tree 49 BATICON  */
+  &rs_object[1001],   /* Tree 50 ACCICON  */
+  &rs_object[1019],   /* Tree 51 PREVICON */
+  &rs_object[1028],   /* Tree 52 MASKMENU */
+  &rs_object[1065],   /* Tree 53 MASKICON */
+  &rs_object[1081],   /* Tree 54 MASKCONF */
+  &rs_object[1094],   /* Tree 55 JOIN     */
+  &rs_object[1108],   /* Tree 56 HELPMENU */
+  &rs_object[1129]    /* Tree 57 HABOUT   */
+};
