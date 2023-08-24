@@ -1,0 +1,176 @@
+/*****************************************************************************
+
+    Konvertiert Cybersculpt 3D2-Files in das POV-Sourceformat.
+
+    (c) Coderight Juni 1994:
+
+                  Jochen Knaus
+                  Nickeleshalde 19
+                  88400 Biberach
+           EMail: knaus@ruf.uni-freiburg.de
+
+    Datum:        27.7.1994
+    Update:       30.9.1994 (1.20): kleiner, schneller.
+                  19.12.94  (1.29): Objektsplitting, einh. Kommandozeile.
+                  01.01.95  (1.291): Ausgabebug gefixed.
+                  26.06.95  (1.292): Objektnamen mit '//' auskommentiert.
+                  27.06.95  (1.3) : Gnu C Anpassung (gcc), Fehler auf stdout.
+                  07.07.95  (1.39): "smooth_triangles" integriert, noch ungetestet.
+                  11.07.95  (1.41): "smooth_triangles" fertig (mit bel. Genauigkeit).
+    Version:      1.41
+    Compiler:     `Pure C' oder `Gnu C'.
+
+    Dieses Konvertierprogramm ist Freeware, im Geiste des POV.
+		Hallo an Dirk Klemmt: vielleicht liegt dieses Tool ja bald der Shell bei!
+
+    Das ganze sehr unsauber, unstrukturiert (jaja, wenn keine Punkte da sind...),
+    aber schnell gebastelt und trotzdem portabel (GCC kompatibel --> weltweit gut).
+
+    Aufruf: CYB_POV -flags 3d2_file <Destfile> <objektname>
+            Flags:  -v  : File fÅr POV 1.x erzeugen.
+                    -b  : Automatisches berechnen der Objektgrenzen.
+                    -o  : Objektsplitting.
+                    -l  : Extra LF am Zeilenende ausschalten.
+                    -s  : Smooth Triangles an.
+                    -eX : Setzt Genauigkeit bei smooth_triangle Normalen auf X.
+                          (Default 4).
+
+******************************************************************************/
+
+#include<stdio.h>
+#include<string.h>
+#include<stdlib.h>
+#include<math.h>
+#include<limits.h>                      /* Eve. fÅr Anpassungen gebraucht.  */
+
+#include "cyb_pov.h"                    /* Systembedingte Variablen.        */
+
+#define VERSION_A 1                     /* Versionsnummern. */
+#define VERSION_B 41                    /*        "         */
+
+#ifndef FALSE                           /* TRUE und FALSE ggf. def.         */
+#define FALSE 0
+#endif
+#ifndef TRUE
+#define TRUE 1
+#endif
+
+typedef struct{ float a,b,c; }VEC3;     /* Simple Struct fÅr 3D-Vektor.     */
+
+int   abbruch( void );                  /* Schlieût Files.                  */
+void  write_bounds( void );             /* Bestimmt und schreibt Objektgrz. */
+void  vecadd( VEC3 *, VEC3 *);          /* Vektoraddition fÅr 3D-Veks.      */
+
+FILE  *source, *destin;                 /* Filehandles global...            */
+WORD  wandel[6], minmax[6];
+WORD  pov_mode = 2, bounds = FALSE, obj_split = FALSE, smooth = FALSE,
+      *punkte = NULL, *facetten = NULL;
+VEC3  *normale = NULL, *punkt_norm;
+char  *vorzeichen[6], buffer[4000], minus[2] = { '-', 0 },
+      nullos[2] = { 0 },
+      buffer3[3] = { '}', 10, 0 };      /* Default: CR/LF am Zeilenende.		*/
+int   genau = 4;                        /* Default: Genauigkeit.						*/
+
+int main( int argc, char *argv[] )
+{
+  WORD          header[128], anz_obj, anz_punkte, anz_facetten, divi;
+  VEC3          intp_norm;
+  char          obj_name[10],  buffer2[512], output[48],
+                def_file[PATHLEN] = "STD.POV", def_name[64] = "DEFOBJ",
+                source_file[PATHLEN];
+  register WORD i, j, m = 1;
+  VEC3          v, w;
+  float         len, fdivi;
+
+  /* Startmeldung. */
+  printf( "\n3D2->POV Converter vers. %d.%d, (c) 1994 by Jochen Knaus (AURA), Freeware.\n\n",
+          VERSION_A, VERSION_B );
+
+  /**************************
+    Kommandozeile auswerten.
+   **************************/
+  if( argc <= 1 ) {                           /* Keine Parameter ? */
+    puts( "Kommandozeile: [-vobls] sourcefile [destination] [objectname]" );
+    return FALSE;
+  }
+
+  /* Alle CommandozeileneintrÑge nach Optionen untersuchen. */
+  if( (argv[1])[0] == '-' ) {                 /* "-" beginnt Optionen.    */
+    if( strlen( argv[1] ) > 1 ) {             /* Einzelnes "-"            */
+      for( j=1 ; j < strlen( argv[1] ); j++ ) { /* Alle Optionenzeichen.  */
+        switch( (argv[1])[j] ) {
+          case  'v':  pov_mode = 1; break;    /* Umschalten auf Ver. 1    */
+          case  'b':  bounds = TRUE; break;   /* Autobounding.            */
+          case  'l':  buffer3[1] = 13; break; /* Nur CR als Zeilenendkennung. */
+          case  's':  smooth = TRUE; break;   /* Smooth-Triangles.        */
+          case  'e':  genau = (int) ((argv[1])[++j] - SCAN_ZERO); /* Genauigkeit */
+                      if( genau < 1 || genau > 9 ) {              /* der Ausgabe */
+                        puts( "Use -eX with X between 1 and 9." ); /* der smooth_polys */
+                        return FALSE;                             /* verÑndern? */
+                      }
+                      break;
+          case  'o':  obj_split = TRUE;       /* Objektsplitting.         */
+        }
+      }
+    }
+  }
+  else m = 0;                                /* Filenamen im ersten Argument. */
+
+  /* Dateinamen und Objektnamen (wenn vorhanden) Åbernehmen. */
+  if( argc > ( 1 + m ) ) {
+    strncpy( source_file, argv[1+m], 127 );
+    if( argc > ( 2 + m ) ) {
+      strncpy( def_file, argv[2+m], 127 );
+      if( argc > ( 3 + m ) ) strncpy( def_name, argv[3+m], 63 );
+    }
+  }
+  else {                                      /* Kein zu konvertierendes File ? */
+    puts( "Kein Cybersculptfile angegeben !" );
+    return FALSE;
+  }
+
+  if( strlen( source_file ) == 0 ) {            /* Kein 3D2-File angegeben ? */
+    puts( "No source (3D2) file." );
+    return FALSE;
+  }
+
+  /* Quelldatei (binÑr) îffnen. */
+  if( ( source = fopen( source_file, "rb" ) ) == NULL ) {
+    printf( "Cannot access sourcefile <%s>.\n", source_file );
+    return FALSE;
+  }
+
+  /* Zieldatei (ASCII) erzeugen. */
+  if( ( destin = fopen( def_file, "w+" ) ) == NULL ) {
+    printf( "Cannot create or access destinationfile <%s>.\n", def_file );
+    return FALSE;
+  }
+
+  /* Header lesen, bei Fehler abbrechen. */
+  if( fread( header, 256, 1, source ) < 0 ) return( abbruch() );
+
+  /* 3D2-Kennung ÅberprÅfen. */
+  if( header[0] != 15618 ) {
+    puts( "No 3D2 file, identification wrong." );
+    return( abbruch() );
+  }
+
+  /* Ausgabestring fÅr "sprintf" initialisieren (je nach gewÅnschter POV-Version).
+     (Damit nur eine Ausgaberoutine benîtigt wird). */
+  if( pov_mode == 1 )
+    if( !smooth )
+      strcpy( output, "<%s%d.%d %s%d.%d %s%d.%d>" );
+    else
+      strcpy( output, "<%s%d.%d %s%d.%d %s%d.%d><%.*f %.*f %.*f>" );
+  else
+    if( !smooth )
+      strcpy( output, "<%s%d.%d,%s%d.%d,%s%d.%d>" );
+    else
+      strcpy( output, "<%s%d.%d,%s%d.%d,%s%d.%d><%.*f,%.*f,%.*f>" );
+
+  /* Ausgabefile initialisieren. */
+  anz_obj = header[1];                          /* Anzahl Objekte. */
+  printf( "%s: convert %d object(s).\n\n", source_file, anz_obj );
+
+  /* #declare <objektnamen> erzeugen. */
+  sprintf( buffer, "#declare %s = union {%s", def_name, &buffer3[1] );
