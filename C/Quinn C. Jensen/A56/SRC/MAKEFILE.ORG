@@ -1,0 +1,52 @@
+########################################################
+#
+#  a56 - a DSP56001 assembler
+#
+#  Written by Quinn C. Jensen
+#  July 1990
+#  jensenq@npd.novell.com (or jensenq@qcj.icon.com)
+#
+#######################################################
+
+LIB = -ll
+
+OBJS = main.o gram.o lex.o tok_tab.o subs.o getopt.o
+
+#NOTE: lex.c cannot be compiled with -g.  An assembler bug causes the text
+#  symbols to be messed up (at least on the Icon system).
+
+CFLAGS = -DYYDEBUG
+
+all:	a56 toomf
+
+a56:	$(OBJS)
+	$(CC) $(CFLAGS) -o a56 $(OBJS) $(LIB)
+
+lex.o:	lex.yy.c lex.c gram.h
+	$(CC) -c lex.c
+
+lex.yy.c:	a56.l
+	lex -v a56.l
+
+gram.c:	a56.y
+	yacc a56.y
+	mv y.tab.c gram.c
+
+header:	; yacc -d a56.y
+	mv y.tab.h gram.h
+
+tok_tab.c:	gram.h
+	awk -f tok.awk < gram.h > tok_tab.c
+
+y.output:	a56.y
+	yacc -v a56.y
+
+toomf:	toomf.o
+	$(CC) -o toomf $(CFLAGS) toomf.o
+
+tape:	; tar cvbf 1 - Makefile main.c a56.y lex.c a56.l tok.awk \
+		a56.h qcjlib.h *.a56 | compress > a56.tar.Z
+
+main.o gram.o lex.o:	a56.h
+
+clean:	; rm -f a56 toomf y.output *.o *.out
