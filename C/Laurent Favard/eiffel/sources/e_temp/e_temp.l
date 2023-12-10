@@ -1,0 +1,450 @@
+
+ ILABEL TOS.Q
+
+INC EQU ADDQ #1,
+DEC EQU SUBQ #1,
+
+TAILLE_PILE EQU 1800
+
+RESVALID EQU $426
+RESVECTOR EQU $42A
+PROC_TYPE EQU $59E
+_COOKIE EQU $5A0
+BCONOUT_VEC_IKBD EQU $58E
+
+DEBUT:
+
+ MOVE.L 4(SP),A5;d‚but de la basepage
+ MOVE.L $C(A5),D0;taille segment TEXT
+ ADD.L $14(A5),D0;taille segment DATA
+ ADD.L $1C(A5),D0;taille segment BSS
+ ADD.L #TAILLE_PILE,D0;pour la pile et la basepage
+ AND.B #$FE,D0
+ LEA -104(A5,D0.L),SP
+ SETBLOCK D0,(A5)
+ GETTIME
+ BSR SETTIME_IKBD
+ CLR MACHINE
+ MOVE.L #"_MCH",D0
+ BSR GET_COOKIE
+ BMI.S \2;erreur
+ MOVE.L D0,A0
+ MOVE (A0),MACHINE
+\2:MOVE.L #"Eiff",D0
+ BSR GET_COOKIE
+ BPL \1;cookie-jar existe d‚ja
+ MOVE.L #"Temp",D0
+ BSR GET_COOKIE
+ BPL \1;cookie-jar existe d‚ja
+ MOVE.L #"Eiff",D0
+ BSR INIT_COOKIE;cr‚e cookie-jar
+ BMI \1;erreur
+ MOVE.L D0,A0
+ LEA INFOS_EIFFEL,A1
+ CLR.W (A1);codes multim‚dia
+ MOVE.L A1,(A0)
+ MOVE.L #"Temp",D0
+ BSR INIT_COOKIE;cr‚e cookie-jar
+ BMI \1;erreur
+ MOVE.L D0,A0
+ LEA INFOS_TEMP,A1
+ CLR.L (A1);temperature / AN0 PIC / moteur 0/1 / seuil bas
+ CLR 4(A1);seuil haut / RCTN
+ MOVE.L A1,(A0)
+ KBDVBASE
+ MOVE.L D0,A0
+ LEA DET_STATVEC,A1
+ MOVE.L 12(A0),-4(A1)
+ MOVE.L A1,12(A0);statvec ‚tat IKBD header $F6
+ SETEXEC DET_TIMER_C,#69
+ MOVE.L D0,DET_TIMER_C-4
+ SETEXEC DET_XBIOS,#46;TRAP #14
+ MOVE.L D0,DET_XBIOS-4
+ IKBDWS TEST_TEMP,#0  
+ SUPEXEC INIT_BCONOUT_IKBD
+ KEEPPROC #0,#FIN-DEBUT+TAILLE_PILE;programme r‚sidant
+\1:IKBDWS TEST_TEMP,#0  
+ TERM
+
+SETTIME_IKBD:
+
+ MOVEM.L D0-A2,-(SP)
+ LINK A6,#-8
+ MOVE.L D0,D5
+ MOVE.B #$1B,-8(A6)       ;Settime IKBD
+ MOVE.W D5,D0
+ AND.W #$1F,D0
+ ADD.W D0,D0
+ LEA -2(A6),A0
+ BSR CONV_BCD              ;seconds
+ LSR.L #5,D5
+ MOVE.W D5,D0
+ AND.W #$3F,D0
+ LEA -3(A6),A0
+ BSR CONV_BCD              ;mn
+ LSR.L #6,D5
+ MOVE.W D5,D0
+ AND.W #$1F,D0
+ LEA -4(A6),A0
+ BSR CONV_BCD              ;hours
+ LSR.L #5,D5
+ MOVE.W D5,D0
+ AND.W #$1F,D0
+ LEA -5(A6),A0
+ BSR CONV_BCD              ;day
+ LSR.L #5,D5
+ MOVE.W D5,D0
+ AND.W #$F,D0
+ LEA -6(A6),A0
+ BSR CONV_BCD              ;month
+ LSR.L #4,D5
+ MOVE.W D5,D0
+ AND.W #$7F,D0
+ ADD.W #80,D0
+ CMP.W #100,D0
+ BCS.S \1
+ SUB.W #100,D0
+\1:LEA -7(A6),A0
+ BSR CONV_BCD              ;year
+ IKBDWS -8(A6),#6 
+ UNLK A6
+ MOVEM.L (SP)+,D0-A2
+ RTS
+ 
+CONV_BCD:
+
+ AND.L #$FFFF,D0
+ DIVU #10,D0
+ MOVE.W D0,D1
+ SWAP D0
+ ASL.W #4,D1
+ OR.W D1,D0
+ MOVE.B D0,(A0)
+ RTS
+ 
+INIT_BCONOUT_IKBD:
+
+ LEA BCONOUT_IKBD,A0
+ MOVE.L A0,BCONOUT_VEC_IKBD
+ RTS
+
+ DC.L "XBRA"
+ DC.L "Temp"
+ DC.L 0;adresse de retour
+
+BCONOUT_IKBD:
+
+ MOVE 6(SP),D0
+\5:MOVE SR,-(SP)
+ OR #$700,SR;masque interruptions
+ MOVE IBUFTL_TX_IKBD,D1
+ BTST #1,$FFFFFC00
+ BEQ.S \2;<> Tx Buffer Empty
+ CMP IBUFHD_TX_IKBD,D1
+ BNE.S \2;caractŠre pr‚sent
+ MOVE.B D0,$FFFFFC02
+ BRA.S \1
+\4:MOVE (SP)+,SR 
+ BRA.S \5;attente
+\2:ADDQ #1,D1
+ CMP IBUFSIZE_TX_IKBD,D1
+ BCS.S \3
+ MOVEQ #0,D1
+\3:CMP IBUFHD_TX_IKBD,D1
+ BEQ.S \4;tampon plein 
+ MOVE.L IBUF_TX_IKBD,A1
+ MOVE.B D0,(A1,D1);‚criture dans le tampon
+ MOVE D1,IBUFTL_TX_IKBD
+\1:MOVE (SP)+,SR
+ RTS
+
+IOREC_TX_IKBD:
+
+IBUF_TX_IKBD:DC.L BUFFER_OUT_IKBD
+IBUFSIZE_TX_IKBD:DC.W 256
+IBUFHD_TX_IKBD:DC.W 0
+IBUFTL_TX_IKBD:DC.W 0
+IBUFLOW_TX_IKBD:DC.W 64
+IBUFHI_TX_IKBD:DC.W 192
+
+ DC.L "XBRA"
+ DC.L "Temp"
+ DC.L 0;adresse de retour
+
+DET_TIMER_C:
+
+ MOVEM.L D0/A0,-(SP) 
+ MOVE.B $FFFFFC00,D0
+ BTST #1,D0
+ BEQ.S \1;<> Tx Buffer Empty
+ MOVE IBUFHD_TX_IKBD,D0
+ CMP IBUFTL_TX_IKBD,D0
+ BEQ.S \1;buffer vide
+ ADDQ #1,D0
+ CMP IBUFSIZE_TX_IKBD,D0
+ BCS.S \2
+ MOVEQ #0,D0
+\2:MOVE.L IBUF_TX_IKBD,A0
+ MOVE.B (A0,D0),$FFFFFC02
+ MOVE D0,IBUFHD_TX_IKBD
+\1:MOVEM.L (SP)+,D0/A0
+ MOVE.L DET_TIMER_C-4,-(SP)
+ RTS
+ 
+ DC.L "XBRA"
+ DC.L "Temp"
+ DC.L 0;adresse de retour
+ 
+DET_XBIOS:
+
+ MOVE.L USP,A0
+ BTST #5,(SP);appel en superviseur
+ BEQ.S \2
+ LEA 6(SP),A0
+ TST PROC_TYPE
+ BEQ.S \2
+ TST (A0)+;mot suppl‚mentaire sur la pile si > 68000
+\2:CMP #$19,(A0);IKBDWS
+ BNE.S \3
+\1:MOVE IBUFHD_TX_IKBD,D0
+ CMP IBUFTL_TX_IKBD,D0
+ BNE.S \1;<> buffer vide 
+\3:MOVE.L DET_XBIOS-4,-(SP)
+ RTS
+ 
+ DC.L "XBRA"
+ DC.L "Temp"
+ DC.L 0;adresse de retour
+ 
+DET_STATVEC:
+
+ MOVEM.L A0/A1,-(SP)
+ CMP.B #3,(A0)
+ BNE.S \2
+ ADDQ #1,A0
+ LEA INFOS_TEMP,A1
+ MOVE.B (A0)+,(A1)+;temperature
+ MOVE.B (A0)+,(A1)+;AN0 PIC
+ MOVE.B (A0)+,(A1)+;moteur 0/1
+ MOVE.B (A0)+,(A1)+;seuil bas
+ MOVE.B (A0)+,(A1)+;seuil haut
+ MOVE.B (A0)+,(A1)+;RCTN
+ BRA \1
+\2:CMP.B #5,(A0)
+ BNE \1
+ CMP #3,MACHINE;FALCON
+ BNE \9
+ CMP.B #$23,6(A0);MUTE
+ BNE.S \10
+ EOR.B #3,$FFFF8937;ADDRIN_INPUT
+ BRA \9
+\10:CMP.B #$32,6(A0);VOLUME UP Eiffel
+ BNE.S \8
+ MOVEM.L D0/D1,-(SP)
+ MOVE $FFFF893A,D0
+ AND #$F00,D0
+ SUB #$100,D0
+ AND #$F00,D0
+ CMP #$F00,D0
+ BNE.S \4
+ MOVEQ #0,D0
+\4:MOVE $FFFF893A,D1
+ AND #$F0FF,D1
+ OR D1,D0
+ MOVE D0,$FFFF893A
+ MOVE $FFFF893A,D0
+ AND #$F0,D0
+ SUB #$10,D0
+ AND #$F0,D0
+ CMP #$F0,D0
+ BNE.S \5
+ MOVEQ #0,D0
+\5:MOVE $FFFF893A,D1
+ AND #$FF0F,D1
+ OR D1,D0
+ MOVE D0,$FFFF893A 
+ BRA.S \3
+\8:CMP.B #$21,6(A0);VOLUME DOWN 
+ BNE.S \9
+ MOVEM.L D0/D1,-(SP)
+ MOVE $FFFF893A,D0
+ AND #$F00,D0
+ ADD #$100,D0
+ AND #$F00,D0
+ BNE.S \6
+ MOVE #$F00,D0
+\6:MOVE $FFFF893A,D1
+ AND #$F0FF,D1
+ OR D1,D0
+ MOVE D0,$FFFF893A
+ MOVE $FFFF893A,D0
+ AND #$F0,D0
+ ADD #$10,D0
+ AND #$F0,D0
+ BNE.S \7
+ MOVE #$F0,D0
+\7:MOVE $FFFF893A,D1
+ AND #$FF0F,D1
+ OR D1,D0
+ MOVE D0,$FFFF893A 
+\3:MOVEM.L (SP)+,D0/D1
+\9:ADDQ #5,A0
+ LEA INFOS_EIFFEL,A1
+ MOVE (A0),(A1);codes touches multim‚dia
+\1:MOVEM.L (SP)+,A0/A1
+ MOVE.L DET_STATVEC-4,-(SP)
+ RTS
+ 
+INIT_COOKIE:;nom dans D0.L
+;retourne le pointeur sur donn‚e cookie dans D0 ou < 0 si erreur
+
+ MOVEM.L D1-A1/A6,-(SP)
+ MOVE.L D0,D7
+ BSR GET_COOKIE
+ BPL \1;existe d‚ja
+ SUB.L A6,A6
+ SUPER 1
+ TST.L D0
+ BMI.S \8;mode superviseur
+ SUPER 0
+ MOVE.L D0,A6;sauve SSP
+\8:MOVE.L _COOKIE,D0
+ BEQ \2;le Cookie Jar n'existe pas TOS < 1.6
+ MOVE.L D0,A0
+ MOVEQ #1,D0;compteur nombre de cookies
+\3:TST.L (A0)
+  BEQ.S \4;dernier cookie
+  ADDQ #8,A0
+  INC D0
+ BRA.S \3
+\4:CMP.L 4(A0),D0
+ BCC.S \5;plus de place
+ CLR.L 8(A0);id dernier cookie
+ MOVE.L 4(A0),12(A0);d‚place data dernier cookie (nombre max de cookie)
+ MOVE.L D7,(A0)+;installe nouveau cookie
+ MOVE.L A0,D7
+ CLR.L (A0);contenu initialis‚ … 0
+ BRA \9
+\5:MOVE.L 4(A0),D1;taille
+ BEQ \10;erreur
+ MOVE.L D1,D2
+ ASL.L #4,D2;double la taille (en octets)
+ MOVE.L D2,D0
+ BSR MALLOC_D0
+ BMI \10;erreur
+ MOVE.L _COOKIE,A0
+ MOVE.L D0,A1
+ MOVE.L D1,D2
+ ADD.L D1,D1
+ SUBQ.L #2,D2;recopie
+ BMI.S \7
+\6:MOVE.L (A0)+,(A1)+;id
+  MOVE.L (A0)+,(A1)+;contenu
+ SUBQ.L #1,D2
+ BPL.S \6
+ BRA.S \7
+\2:MOVEQ #64,D0
+ BSR MALLOC_D0;r‚serve la place pour 8 cookie si le Cookie Jar n'existe pas
+ BMI.S \10;erreur
+ MOVE.L D0,_COOKIE
+ LEA DET_RESET,A0
+ MOVE.L RESVECTOR,-4(A0)
+ MOVE.L RESVALID,SAUVE_RESVALID
+ MOVE.L A0,RESVECTOR;d‚tourne reset pour raz vecteur Cookie Jar
+ MOVE.L #$31415926,RESVALID
+ MOVE.L D0,A1
+ MOVEQ #8,D1
+\7:MOVE.L D7,(A1)+;installe nouveau cookie
+ MOVE.L A1,D7
+ CLR.L (A1)+;contenu initialis‚ … 0
+ CLR.L (A1)+;id dernier cookie
+ MOVE.L D1,(A1);taille
+ BRA.S \9
+\10:MOVEQ #-1,D7;erreur
+\9:MOVE.L A6,D0
+ BEQ.S \11
+ SUPER (A6)
+\11:MOVE.L D7,D0
+\1:MOVEM.L (SP)+,D1-A1/A6
+ RTS
+
+MALLOC_D0:
+
+ MOVE.L A0,-(SP)
+ MOVE.L D0,-(SP)
+ MALLOC #-1
+ MOVE.L (SP)+,A0
+ CMP.L D0,A0
+ BCS.S \1
+\3:MOVEQ #-39,D0
+ BRA.S \2
+\1:MALLOC A0
+ TST.L D0
+ BLE.S \3
+\2:MOVE.L (SP)+,A0
+ TST.L D0
+ RTS
+ 
+ DC.L "XBRA"
+ DC.L "Temp"
+ DC.L 0;adresse de retour
+
+DET_RESET:
+
+ CLR.L _COOKIE;vecteur Cookie Jar
+ MOVE.L SAUVE_RESVALID,RESVALID
+ MOVE.L DET_RESET-4,RESVECTOR
+ JMP (A6)
+
+GET_COOKIE:;nom dans D0.L, au retour si < 0 pas de cookie
+;retourne le pointeur sur donn‚e cookie dans D0
+
+ MOVEM.L D1-A0/A6,-(SP)
+ MOVE.L D0,D6
+ SUB.L A6,A6
+ SUPER 1
+ TST.L D0
+ BMI.S \5;mode superviseur
+ SUPER 0
+ MOVE.L D0,A6;sauve SSP
+\5:MOVEQ #0,D7
+ MOVE.L _COOKIE,D0
+ BEQ.S \1
+ MOVE.L D0,A0
+\2:TST.L (A0)
+  BEQ.S \1
+  CMP.L (A0),D6
+  BNE.S \3
+  MOVE.L A0,D7
+  ADDQ #4,D7
+  BRA.S \1
+\3:ADDQ #8,A0
+ BRA.S \2
+\1:MOVE.L A6,D0
+ BEQ.S \4
+ SUPER (A6)
+\4:MOVEQ #-1,D6
+ MOVE.L D7,D0
+ BEQ.S \6
+ MOVEQ #0,D6
+\6:TST D6
+ MOVEM.L (SP)+,D1-A0/A6
+ RTS
+
+ DATA
+
+TEST_TEMP:DC.B $03
+
+ BSS
+MACHINE:DS.W 1
+COMPT_IKBD:DS.W 1
+SAUVE_RESVALID:DS.L 1
+MAP_IKBD:DS.L 1
+INFOS_TEMP:DS.B 6
+INFOS_EIFFEL:DS.B 2
+BUFFER_IN_IKBD:DS.B 256
+BUFFER_OUT_IKBD:DS.B 256
+
+FIN:
+
+ END
