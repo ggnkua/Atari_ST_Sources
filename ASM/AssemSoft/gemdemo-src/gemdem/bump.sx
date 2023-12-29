@@ -1,0 +1,409 @@
+; s„ter/sweden may 3, 1998
+;
+; hi ozk!
+;
+; this is the small bumpmapper I was talking about, not much code at
+; all. the largest parts are actually the ones which do the least
+; (eg, sinus shit..). If you have any questions, pleae email me.
+;
+; cya!
+
+*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*
+; Hujuj, evl. Here it is! This is the 1st attempt at making the 
+; demoes "modules" for the GEM Demo shell. It currently works like 
+; this;
+
+; 1. Create a table of routines for the modules init routine. This 
+;    table is called "demo_init", and at present only contains the 
+;    "mem_alloc" routine used to allocated mem for the texture.
+;    This is done in "startup.prj".
+
+; 2. Search for all files with the extender "*.dmo", and create a set 
+;    up a table with the filenames found. The code is in 
+;    "instldmo.s", routine "get_demofnames".
+
+; 3. Then the routine "install_demoes" is called. This routine is     
+;     also found in "instldemo.s", and does the following
+
+;   a. Starting at the beginning of the demo-filenames, it takes the 
+;      1st filename (meaning the 1st .dmo file in the dir) and calls 
+;      pexec() to load it.
+
+;   b. If pexec() fails, it tries the next *.dmo file in the 
+;      table. I.e, looping to 3.
+
+;   c. Check the ID of the .dmo file found at byte 4 in the TEXT 
+;      segment of the file. If it's a wrong ID, it starts over at 3. 
+;      with the next filename in the table of *.dmo.
+
+;   d. If we get here, a free "slot" in the "demoes" stack is 
+;      searched for. If none found, exit. This stack contains an 
+;      array of demo_paramter-blocks. Look at "demo_bss.h". If a slot 
+;      is found, it sets A3 to points to the found slot and A4 
+;      to point to the "demo_init" table of routs. Then a jsr into 
+;      byte 24 of the TEXT segment of the loaded *.dmo file, where 
+;      the init routine must be, is made. Now it's up to the init 
+;      routine to correctly set up this demo paramter block. The init 
+;      must set the Carry flag if success. If it fails somehow, it 
+;      must clear the carry before returning, in which case the mem 
+;      used to load the module is released. If a init call is 
+;      unsuccessful, no attempts to load more modules are made.
+;      
+;   e. If the init routine returns successful, the demo name is 
+;      extracted from the demo-parameter-block and installed into the 
+;      menu, under "Demoes".
+;      
+;   f. This is repeated until all *.dmo files are processed, up to a 
+;      maximum of 10 modules.
+       
+; I haven't tested it extensively yet, but it seems to be working with the two
+; effects you've created.. so ;-) 
+
+
+; Use these equates to change the resolution.. this way you don't 
+; have to change all the source ;-)
+
+	output .dmo
+	opt p=68030
+	
+bm_xres = 144
+bm_yres = 85
+	include	demo_bss.h	;Containing the demo-parameter-block/demo_init stucture
+	
+	text
+
+; --------------------------------------------------------------
+; ------------- Bumpmapper INIT --------------------------------
+; --------------------------------------------------------------
+
+; The 1st 24 bytes of the text segment, from here to bump_init, can be 
+; looked at as the module header. 
+
+	;In case someone tries to start it standalone...
+	clr.w	-(sp)
+	trap	#1
+
+	;This is the ID that the shell checks to make sure the file is of
+	;the correct format.
+	dc.b 'GEM Demo Executable',0
+	
+; When the shell installs the demo module, it calls this routine, bump_init. Well,
+; the shell actually do a jsr to the 24th byte of the TEXT segment of the module
+; and this is where the init routine should start. This routine is called with the
+; address of the demoes assigned demo-parameter-block (assigned by the shell) in A3
+; and the address of the "demo_init" block in A4. The demo_init block is just a table
+; of routines that is usable by the modules init routine. At this point there's only one
+; routine in this block, namely the mem_alloc routine that init calls to alloc mem for
+; the texture.
+
+; IMPORTANT: 	If the init routine of the module is encountering an error, like no memory could
+;	be allocated, it MUST clear the carry upon returning.
+;	To tell the shell that all went fine, it MUST set the carry flag before returning.
+
+	; A3 = demoes paramter block
+	; A4 = Demo init block
+bump_init:	movem.l	d0-a6,-(sp)
+
+	;When installing itself, the module allocates memory for the texture (or anyting)
+	;and stores the address of the allocated memory in the "d_texture" element of 
+	;the parameter-block. BUT!! the init routine is also called to reinstall the texture
+	;into the allocated buffer when converting the gfx format between different hardware
+	;like videl, CDots and Nova.  So, the 1st thing the init routine should do is
+	;to check if memory already have been allocated by checking the "d_texture" element.
+	;If this is a NULL pointer, the routine knows it's the 1st time it's called, and can
+	;safely assume that this is the "init module" call, and install the whole
+	;demo paramter block. Otherwise, at this stage, it should only recopy the original
+	;texture from it's DATA segment to the allocated buffer.
+	move.l	d_texture(a3),d0	;Get address of texture
+	bne	.alloced		;Not NULL = already installed
+
+	;This is the 1st time around, it's the "init module" call. 1st get memory for the texture
+	;The routine installed at di_memalloc takes the number of bytes to allocate in D0
+	;and the type of memory to install in D1. It does a "tst.l d0" before returning,
+	;so that if the Z (beq error) flag is set upon return, the call failed.
+	move.l	#256*256*4,d0		;Mem for the double buffering.
+	moveq	#3,d1		;Preferably TT, but any mem OK
+	move.l	di_memalloc(a4),a5	;Address of mem alloc routine
+	jsr	(a5)		;Get the memory
+	beq	.no_mem		;Error if equal
+
+
+	;Now set up the parameter block for the shell to use.
+
+; The demo paramter block is constructed as follows ;
+
+;d_winh	rs.w 1 ;This is the window handle (or zero if the demo is not opened). This element is only of interest to the shell.
+
+;d_zoom	rs.b 1 ;This flag tells the module that zoomed mode has been set. This MUST be cleared when the module inits.
+
+;d_resrv0	rs.b 1 ;Reserved, but must be set to null. 
+
+;d_winbss	rs.l 1 ;This will be initialized by the shell, and it points to the shels window BSS when the demo is running.
+	       ;Not of any interest to the module.
+
+;d_basepage	rs.l 1 ;The shell stores the modules basepage here after loading it. Not of any interest to the module, unless
+	       ;it needs some information from it's basepage.
+	       
+;d_init	rs.l 1 ;This is the address of the modules init routine. This is used when converting between gfx hardware.
+
+;d_rout	rs.l 1 ;The routine found here is the "update screen" routine. This routine is called by the shell to redraw/update
+	       ;the contents of the window. There MUST be a routine installed here, otherwise a crash WILL happend.
+;d_50hz	rs.l 1 ;At this element, a routine that the module wants exectuted every 50Hz can be installed. If no 50Hz routine
+	       ;is needed, leave this element NULL.
+;d_xres	rs.w 1 ;This is the x resolution of the visible area, i.e. this is used by the shell to set the windows width.
+
+;d_yres	rs.w 1 ;This is the y resolution of the visible area, i.e. this is used by the shell to set the windows height	       
+
+;d_texture	rs.l 1 ;This is the address of the gfx. This address is used by the shell when converting the gfx between diff. hw.
+
+;d_texturesize	rs.l 1 ;Size of the gfx in the texture buffer (in bytes). Used by the shell when convertin the gfx between diff. hw.
+
+;d_sinus	rs.l 1 ;Pointer to the modules sinus table. This is not used by the shell... can we remove this from the paramter block?
+
+;d_scrnadr	rs.l 1 ;This elemenent will be filled in by the shell. The modules plot/draw/update/redraw routine should use this 
+	       ;address to draw to, as if it was drawing to the video-ram itself. This pointer will point to a buffer in VDI output
+	       ;mode, or to the actual video-ram when in output mode "Direct".
+;d_scnl_jump	rs.l 1 ;This is value is calculated by the shell to give the modules plot/draw/update/redraw routine the correct offset
+	       ;to the next scanline. The value in "d_mscnljmp" must be prepared, cause this is used in the calculation.
+	       ;The calculation is done like this -> scanline_lenght - "d_mscnljmp".
+	       ;BEWARE: This value will be NULL when output mode via VDI is selected!
+;d_mscnljmp	rs.l 1 ;This is a value, installed by the module, that the shell subtracs from the scanline_lenght, and then put into the
+	       ;d_scnl_jump.
+;d_name	rs.l 8 ;This is a 32 byte area holding the demoes name, max 31 character + a NULL string terminator. Used by the shell
+	       ;to Title the modules window and installed into the menu "Demoes".
+
+	clr.w	d_zoom(a3)		;Clear both the flag and the reserved byte
+	move.l	#bump_init,d_init(a3)	;The initializating routine
+	move.l	#bumpmapper,d_rout(a3)	;The plot routine
+	move.l	#bumpmapper_50hz,d_50hz(a3)	;The 50Hz routine
+	move.l	#(bm_xres<<16)+bm_yres,d_xres(a3) ;X & Y resolution of this screen
+	move.l	d0,d_texture(a3)	;Address of texture, D0 contains the address of allocated mem
+	move.l	#256*256*4,d_texturesize(a3)	;Size of texture
+	move.l	#sinus,d_sinus(a3)	;Address of sinus table
+	clr.l	d_scrnadr(a3)		;Clr the screen addr
+	move.l	#bm_xres*2,d_mscnljmp(a3)	;Scanline jump correction ( 288 in this case)
+
+	;The name found here is used in the windows title line and menu
+	move.l	#'Bump',d_name(a3)
+	move.l	#' Map',d_name+4(a3)
+	clr.b	d_name+8(a3)
+
+	lea	d_ctrl1_name(a3),a2
+	
+	move.l	#'Sinu',(a2)+
+	move.l	#'s ad',(a2)+
+	move.l	#'just',(a2)+
+	move.l	#'ing'<<8,(a2)
+		
+
+	move.b	#-1,d_ctrl2_name(a3)
+	move.b	#-1,d_ctrl3_name(a3)
+	move.b	#-1,d_ctrl4_name(a3)
+	move.b	#-1,d_ctrl5_name(a3)
+	move.b	#-1,d_ctrl6_name(a3)
+	
+	;Now copy the gfx to the allocated buffer
+.alloced	move.l	d0,a0
+	move.l	d0,a1
+	adda.l	#256*256*2,a1
+	move.w	#((256*256)/2)-1,d7
+	lea	flare,a2
+.copy_it	move.l	(a2),(a0)+
+	move.l	(a2)+,(a1)+
+	dbra	d7,.copy_it
+
+	;Set carry to indicate success
+	or.b	#1,ccr
+.exit	movem.l	(sp)+,d0-a6
+	rts				;
+
+	;Clear carry to indicate failure.
+.no_mem	and.b	#-2,ccr
+	bra.s	.exit
+
+; --------------------------------------------------------------
+; ------------- Bumpmapper PLOT --------------------------------
+; --------------------------------------------------------------
+
+;ATTENTION:	I call your plot routine with A4 pointing to the correct demo_block!!
+;	This means that you must get the screen_addr/scanline_jump/flair_buff(in this case)
+;	from this block.
+	;80
+	;48
+bumpmapper_50hz:
+	add.l	#40,sinus_x		;Sinuscurve - X move
+	andi.l	#$00001fff,sinus_x	;
+	add.l	#32,sinus_y		;Sinuscurve - Y move
+	andi.l	#$00001fff,sinus_y	;
+	rts
+
+bumpmapper:	tst.b	d_zoom(a4)
+	bne	bumpmapper2
+	
+                ** Changed **
+                ;lea	sinus,a0		;
+                move.l	d_sinus(a4),a0
+                move.l	sinus_x,d0		;
+                move.l	(a0,d0.w),d1		;
+                muls	#88,d1		;
+                asr.l	#8,d1		;
+                asr.l	#7,d1		;
+                add.l	d1,d1		;d1 = X add
+
+
+	** Changed ** ( Why do you load the address of it again here? )
+                ;lea	sinus,a0		;
+	move.l	d_sinus(a4),a0
+                move.l	sinus_y,d0		;
+                move.l	(a0,d0.w),d2		;
+                muls	#64,d2		;
+                asr.l	#8,d2		;
+                asr.l	#7,d2		;
+                mulu.l	#512,d2		;d2 = Y add
+
+	** Changed **
+	;move.l	screen_adr,a0		;destination
+	move.l	d_scrnadr(a4),a0
+	
+	** Changed **
+	;move.l	flare_buff,a1
+	move.l	d_texture(a4),a1
+	
+	;If this is resolution dependant, use the mb_x/yres labels
+	adda.l	#512*64+96,a1 ;flare+512*64+96,a1	;source "flare" graphics
+	add.l	d1,a1		;add sinus X to flare
+	add.l	d2,a1		;add sinus Y to flare
+
+	;Should we put this into the demo_block too?
+	lea.l	bumpmap,a2		;this is the bumpmap surface
+
+	clr.l	d0		;clear for later use in mainloop
+
+	move.w	#bm_yres-1,d7 ;84,d7		;y-loop (100 lines)
+.loop:	move.w	#bm_xres-1,d6 ;143,d6		;x-loop (144 pixels)
+.loop2:	move.w	(a2)+,d0		;get offset from bumpsurface
+	move.w	(a1,d0.l*2),(a0)+		;plus flare via bumpsurfaceo ffset
+	addq.l	#2,a1		;increase flare
+
+	dbra	d6,.loop2
+
+	** Changed **
+	;add.l	scanline_jump,a0	;scanline offset (dest)
+	add.l	d_scnl_jump(a4),a0
+	
+	add.l	#512-288,a1		;scanline offset (source)
+	dbra	d7,.loop
+
+	rts
+
+bumpmapper2:
+	** Changed **
+                ;lea	sinus,a0		;
+                move.l	d_sinus(a4),a0
+                move.l	sinus_x,d0		;
+                move.l	(a0,d0.w),d1		;
+                muls	#88,d1		;
+                asr.l	#8,d1		;
+                asr.l	#7,d1		;
+                add.l	d1,d1		;d1 = X add
+                
+                ** Changed **
+                ;lea	sinus,a0		;
+                move.l	d_sinus(a4),a0
+                move.l	sinus_y,d0		;
+                move.l	(a0,d0.w),d2		;
+                muls	#64,d2		;
+                asr.l	#8,d2		;
+                asr.l	#7,d2		;
+                mulu.l	#512,d2		;d2 = Y add
+
+	** Changed **
+	;move.l	screen_adr,a0		;destination
+	move.l	d_scrnadr(a4),a0
+	
+
+	move.l	a0,a3		;dest 2
+	add.l	#576,a3		;nextline
+	
+	** Changed **
+	;add.l	scanline_jump,a3	;real next line if not vdi
+	add.l	d_scnl_jump(a4),a3
+	
+	** Changed **
+	;move.l	flare_buff,a1
+	move.l	d_texture(a4),a1
+	
+	adda.l	#512*64+96,a1 ;flare+512*64+96,a1	;source "flare" graphics
+	add.l	d1,a1		;add sinus X to flare
+	add.l	d2,a1		;add sinus Y to flare
+
+	;And this again..into the demo block?
+	lea.l	bumpmap,a2		;this is the bumpmap surface
+	clr.l	d0		;clear for later use in mainloop
+
+	move.w	#bm_yres-1,d7 ;84,d7		;y-loop (100 lines)
+.loop:	move.w	#bm_xres-1,d6 ;143,d6		;x-loop (144 pixels)
+.loop2:
+	move.w	(a2)+,d0		;get offset from bumpsurface
+	move.l	(a1,d0.l*2),d1		;plus flare via bumpsurfaceo ffset
+	addq.l	#2,a1		;increase flare
+	move.l	d1,(a0)+
+	move.l	d1,(a3)+
+
+	dbra	d6,.loop2
+
+	;** Changed **
+	;add.l	scanline_jump,a0	;scanline offset (dest)
+	;add.l	scanline_jump,a3
+	;add.l	#576,a0
+	;add.l	#576,a3
+	;add.l	scanline_jump,a0
+	;add.l	scanline_jump,a3
+	;add.l	#512-288,a1		;scanline offset (source)
+	
+	add.l	d_scnl_jump(a4),a0
+	add.l	d_scnl_jump(a4),a3
+	add.l	#576,a0
+	add.l	#576,a3
+	add.l	d_scnl_jump(a4),a0
+	add.l	d_scnl_jump(a4),a3
+	add.l	#512-288,a1
+	
+	dbra	d7,.loop
+
+	rts
+
+
+
+	data
+flare_buff	dc.l	0
+tunnel_buff	dc.l	0
+scanline_jump:	ds.l	1		;bytes to skip each scanline
+
+
+; --------------------------------------------------------------
+; ------------- Section data -----------------------------------
+; --------------------------------------------------------------
+
+	data
+
+	even
+	
+flare:	incbin	'gfx\flare.16b'
+;	ds.w	356*356
+sinus:	incbin	'data\sinus.dat'
+
+	even
+bumpmap:	incbin	'gfx\bump.dat'
+	even 			;always have "even" there!
+
+
+
+; --------------------------------------------------------------
+; ------------- Section BSS ------------------------------------
+; --------------------------------------------------------------
+
+	section	bss
+
+sinus_x:	ds.l	1		;sinus constant X
+sinus_y:	ds.l	1		;sinus constant Y

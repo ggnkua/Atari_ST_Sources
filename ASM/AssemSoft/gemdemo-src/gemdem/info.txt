@@ -1,0 +1,157 @@
+; Hujuj, evl. Here it is! This is the 1st attempt at making the 
+; demoes "modules" for the GEM Demo shell. It currently works like 
+; this;
+;
+; 1. Create a table of routines for the modules init routine. This 
+;    table is called "demo_init", and at present only contains the 
+;    "mem_alloc" routine used to allocated mem for the texture.
+;    This is done in "startup.prj".
+;
+; 2. Search for all files with the extender "*.dmo", and create a set 
+;    up a table with the filenames found. The code is in 
+;    "instldmo.s", routine "get_demofnames".
+;
+; 3. Then the routine "install_demoes" is called. This routine is     
+;     also found in "instldemo.s", and does the following
+;
+;   a. Starting at the beginning of the demo-filenames, it takes the 
+;      1st filename (meaning the 1st .dmo file in the dir) and calls 
+;      pexec() to load it.
+;
+;   b. If pexec() fails, it tries the next *.dmo file in the 
+;      table. I.e, looping to 3.
+;
+;   c. Check the ID of the .dmo file found at byte 4 in the TEXT 
+;      segment of the file. If it's a wrong ID, it starts over at 3. 
+;      with the next filename in the table of *.dmo.
+;
+;   d. If we get here, a free "slot" in the "demoes" stack is 
+;      searched for. If none found, exit. This stack contains an 
+;      array of demo_paramter-blocks. Look at "demo_bss.h". If a slot 
+;      is found, it sets A3 to points to the found slot and A4 
+;      to point to the "demo_init" table of routs. Then a jsr into 
+;      byte 24 of the TEXT segment of the loaded *.dmo file, where 
+;      the init routine must be, is made. Now it's up to the init 
+;      routine to correctly set up this demo paramter block. The init 
+;      must set the Carry flag if success. If it fails somehow, it 
+;      must clear the carry before returning, in which case the mem 
+;      used to load the module is released. If a init call is 
+;      unsuccessful, no attempts to load more modules are made.
+;      
+;   e. If the init routine returns successful, the demo name is 
+;      extracted from the demo-parameter-block and installed into the 
+;      menu, under "Demoes".
+;      
+;   f. This is repeated until all *.dmo files are processed, up to a 
+;      maximum of 10 modules.
+;       
+; I haven't tested it extensively yet, but it seems to be working with the two
+; effects you've created.. so ;-) 
+;
+;
+; Use these equates to change the resolution.. this way you don't 
+; have to change all the source ;-)
+
+
+
+
+
+
+
+;The demo parameter block is zeroed before calling the module's init, so the module only
+;have to set the elements that is optional. Some elements MUST be set
+
+
+; The demo paramter block is constructed as follows ;
+
+* = Not for the module, this is an element used solely by the shell.
++ = Element is initialized/changed by the shell, and the module may use it. (Flags, for example.. d_zoom is one)
+? = Optional. If the module does not need this, just leave it. (shell ignores it when it has a NULL value)
+ = MUST be set by the module. If elemetnts with this mark is not set, the shell will CRASH!!
+# = Not used in any way by the shell.. the module can use as it wish.
+
+* d_winh	rs.w 1 This is the window handle (or zero if the demo is not opened). This element is only of interest to the shell.
+
++ d_zoom	rs.b 1 This flag tells the module that zoomed mode has been set. This MUST be cleared when the module inits.
+
+* d_resrv0	rs.b 1 Reserved, but must be set to null. 
+
+* d_winbss	rs.l 1 This will be initialized by the shell, and it points to the shels window BSS when the demo is running.
+	       Not of any interest to the module.
+
+* d_basepage	rs.l 1 The shell stores the modules basepage here after loading it. Not of any interest to the module, unless
+	       it needs some information from it's basepage.
+	       
+ d_init	rs.l 1 This is the address of the modules init routine. This is used when converting between gfx hardware.
+
+ d_rout	rs.l 1 The routine found here is the "update screen" routine. This routine is called by the shell to redraw/update
+	       the contents of the window. There MUST be a routine installed here, otherwise a crash WILL happend.
+? d_50hz	rs.l 1 At this element, a routine that the module wants exectuted every 50Hz can be installed. If no 50Hz routine
+	       is needed, leave this element NULL.
+ d_xres	rs.w 1 This is the x resolution of the visible area, i.e. this is used by the shell to set the windows width.
+
+ d_yres	rs.w 1 This is the y resolution of the visible area, i.e. this is used by the shell to set the windows height	       
+
+ d_texture	rs.l 1 This is the address of the gfx. This address is used by the shell when converting the gfx between diff. hw.
+
+ d_texturesize	rs.l 1 Size of the gfx in the texture buffer (in bytes). Used by the shell when convertin the gfx between diff. hw.
+
+# d_sinus	rs.l 1 Pointer to the modules sinus table. This is not used by the shell... can we remove this from the paramter block?
+
++ d_scrnadr	rs.l 1 This elemenent will be filled in by the shell. The modules plot/draw/update/redraw routine should use this 
+	       address to draw to, as if it was drawing to the video-ram itself. This pointer will point to a buffer in VDI output
+	       mode, or to the actual video-ram when in output mode "Direct".
++ d_scnl_jump	rs.l 1 This is value is calculated by the shell to give the modules plot/draw/update/redraw routine the correct offset
+	       to the next scanline. The value in "d_mscnljmp" must be prepared, cause this is used in the calculation.
+	       The calculation is done like this -> scanline_lenght - "d_mscnljmp".
+	       BEWARE: This value will be NULL when output mode via VDI is selected!
+ d_mscnljmp	rs.l 1 This is a value, installed by the module, that the shell subtracs from the scanline_lenght, and then put into the
+	       d_scnl_jump element. d_scnl_jump will then contain the correct offset to the next scanline when in direct mode.
+ d_name	rs.l 8 This is a 32 byte area holding the demoes name, max 31 character + a NULL string terminator. Used by the shell
+	       to Title the modules window and installed into the menu "Demoes".
+
+;The following part of the parameter block is can be used by the module to let the user adjust the values used to control
+;the movement.
+? d_ctrl1_name	rs.l 1 Pointer to the name of this value, for example "Sinus X speed". The name of the value must be a null terminated
+	       string no more than 31 characters +NULL terminator (max 32 total) long.
+? d_ctrl1_value	rs.l 1 The value found here is the one used by the module to update the movement. 
+? d_ctrl1_max	rs.l 1 max value (if null, ignored)
+? d_ctrl1_min	rs.l 1 Minimum value (if $FFFFFFFF, ignored)
+? d_ctrl1_step	rs.l 1 Stepping value used when increasing/decreasing the value
+? d_ctrl1_start	rs.l 1 Not used
+
+;And then there's 5 more slots identical to slot #1 above.
+? d_ctrl2_name	rs.l 1
+? d_ctrl2_value	rs.l 1
+? d_ctrl2_max	rs.l 1
+? d_ctrl2_min	rs.l 1
+? d_ctrl2_step	rs.l 1
+? d_ctrl2_start	rs.l 1
+
+? d_ctrl3_name	rs.l 1
+? d_ctrl3_value	rs.l 1
+? d_ctrl3_max	rs.l 1
+? d_ctrl3_min	rs.l 1
+? d_ctrl3_step	rs.l 1
+? d_ctrl3_start	rs.l 1
+
+? d_ctrl4_name	rs.l 1
+? d_ctrl4_value	rs.l 1
+? d_ctrl4_max	rs.l 1
+? d_ctrl4_min	rs.l 1
+? d_ctrl4_step	rs.l 1
+? d_ctrl4_start	rs.l 1
+
+? d_ctrl5_name	rs.l 1
+? d_ctrl5_value	rs.l 1
+? d_ctrl5_max	rs.l 1
+? d_ctrl5_min	rs.l 1
+? d_ctrl5_step	rs.l 1
+? d_ctrl5_start	rs.l 1
+
+? d_ctrl6_name	rs.l 1
+? d_ctrl6_value	rs.l 1
+? d_ctrl6_max	rs.l 1
+? d_ctrl6_min	rs.l 1
+? d_ctrl6_step	rs.l 1
+? d_ctrl6_start	rs.l 1

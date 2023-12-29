@@ -1,0 +1,239 @@
+tn_xres = 144
+tn_yres = 85
+	opt p=68030
+	output .dmo
+	
+	include	demo_bss.h
+	
+	section text
+
+; --------------------------------------------------------------
+; ------------- Tunnel INIT ------------------------------------
+; --------------------------------------------------------------
+	;In case someone tries to start it standalone...
+	clr.w	-(sp)
+	trap	#1
+	dc.b 'GEM Demo Executable',0
+	
+	; A3 = demoes data area
+	; A4 = Demo init block
+	
+tunnel_init:	movem.l	d0-a6,-(sp)
+
+	move.l	d_texture(a3),d0
+	bne	.alloced
+
+	move.l	#256*256*4,d0		;Mem for the double buffering.
+	moveq	#3,d1
+	move.l	di_memalloc(a4),a5
+	jsr	(a5)
+	beq	.no_mem
+
+*** This routine will only execute once, since I above check if the pointer is null or not	
+;=============================================================
+;==== This is the new stuff.. it creates a paramter block ====
+;==== for this demo at "slot" #1. Look at the Tunnel too, ====
+;==== to see that I use "lea demoes+dpb_ssize,a0" to get  ====
+;==== to the next slot. This makes it easer for me to code ===
+;==== as I don't have to redo all the stuff.. and it open ====
+;==== up possibilities like loading demo "modules" so that ===
+;==== we don't have to assemble the shell everytime when it ==
+;==== is finished.. Tell me how you like the idea..       ====
+;=============================================================
+	;Set up the info block..
+	clr.w	d_winh(a3)		;Must be zero on startup. (telling my routines this demo is inactive, and set when the window is opened)
+	clr.w	d_zoom(a3)		;Clear both the flag and the reserved byte
+	move.l	#tunnel_init,d_init(a3)	;The initializating routine
+	move.l	#tunnel,d_rout(a3)	;The routine I jsr to, to update the window
+	move.l	#tunnel_50hz,d_50hz(a3)
+	move.l	#(tn_xres<<16)+tn_yres,d_xres(a3) ;X & Y resolution of this screen (used by me to set window size)
+	move.l	d0,d_texture(a3)
+	move.l	#256*256*4,d_texturesize(a3)
+	move.l	#sinus,d_sinus(a3)
+	clr.l	d_scrnadr(a3)
+	move.l	#tn_xres*2,d_mscnljmp(a3)
+
+	;The name found here is used in the windows title line...
+	;I want to put this name under a menu called "Demoes.." or something too...
+	move.l	#'Tunn',d_name(a3)
+	move.w	#'el',d_name+4(a3)
+	clr.b	d_name+6(a3)
+
+	move.b	#-1,d_ctrl1_name(a3)
+	move.b	#-1,d_ctrl2_name(a3)
+	move.b	#-1,d_ctrl3_name(a3)
+	move.b	#-1,d_ctrl4_name(a3)
+	move.b	#-1,d_ctrl5_name(a3)
+	move.b	#-1,d_ctrl6_name(a3)
+
+.alloced	move.l	d0,a0
+	move.l	d0,a1
+	adda.l	#256*256*2,a1
+	move.w	#((256*256)/2)-1,d7
+	lea	texture,a2
+.copy_it	move.l	(a2),(a0)+
+	move.l	(a2)+,(a1)+
+	dbra	d7,.copy_it
+	or.b	#1,ccr
+.exit	movem.l	(sp)+,d0-a6
+	rts				;
+.no_mem	and.b	#-2,ccr
+	bra.s	.exit
+
+	
+; --------------------------------------------------------------
+; ------------- Tunnel PLOT ------------------------------------
+; --------------------------------------------------------------
+
+tunnel_50hz:
+	add.l	#40,sinus_x		;Sinuscurve - X move
+	andi.l	#$00001fff,sinus_x		;
+	add.l	#32,sinus_y		;Sinuscurve - Y move
+	andi.l	#$00001fff,sinus_y	;
+
+	;8 = scroll speed towards.. divisible by 2
+	;1024 = rotation speed .. divisible by 512
+	add.l	#4+512,tunnel_scroll	;inc scroll
+	and.l	#$1ffff,tunnel_scroll	;loop scroll
+
+	rts
+
+
+tunnel:	tst.b	d_zoom(a4)
+	bne	tunnel2
+	
+	move.l	d_sinus(a4),a0
+                move.l	sinus_x,d0			;
+                move.l	(a0,d0.w),d1		;
+                muls	#104,d1			;
+                asr.l	#8,d1			;
+                asr.l	#7,d1			;
+                add.l	d1,d1			;d1 = X add
+
+	move.l	d_sinus(a4),a0
+                move.l	sinus_y,d0		;
+                move.l	(a0,d0.w),d2		;
+                muls	#64,d2			;
+                asr.l	#8,d2			;
+                asr.l	#7,d2			;
+                mulu.l	#576,d2			;d2 = Y add
+
+	move.l	d_scrnadr(a4),a0
+	
+	lea.l	tunnel_lut+50*576+144,a1	;tunnel offset table
+
+	add.l	d1,a1			;add sinus X to flare
+	add.l	d2,a1			;add sinus Y to flare
+
+	
+	move.l	d_texture(a4),a2
+
+	add.l	tunnel_scroll,a2		;scroll texture
+
+	clr.l	d0			;clear for later use in mainloop
+
+	move.w	#tn_yres-1,d7 ;84,d7			;y-loop (100 lines)
+.loop:	move.w	#tn_xres-1,d6 ;143,d6			;x-loop (144 pixels)
+.loop2:	move.w	(a1)+,d0		;tunnel offset
+	move.w	(a2,d0.l*2),(a0)+	;tunnel plot
+
+	dbra	d6,.loop2
+	add.l	d_scnl_jump(a4),a0
+	add.l	#576-288,a1		;scanline offset (source)
+	dbra	d7,.loop
+
+	rts
+
+
+tunnel2:
+                move.l	d_sinus(a4),a0
+                move.l	sinus_x,d0			;
+                move.l	(a0,d0.w),d1		;
+                muls	#104,d1			;
+                asr.l	#8,d1			;
+                asr.l	#7,d1			;
+                add.l	d1,d1			;d1 = X add
+               
+                move.l	d_sinus(a4),a0
+                move.l	sinus_y,d0		;
+                move.l	(a0,d0.w),d2		;
+                muls	#64,d2			;
+                asr.l	#8,d2			;
+                asr.l	#7,d2			;
+                mulu.l	#576,d2			;d2 = Y add
+
+	move.l	d_scrnadr(a4),a0
+	
+	move.l	a0,a3
+	add.l	#576,a3
+
+	add.l	d_scnl_jump(a4),a3
+
+	lea.l	tunnel_lut+50*576+144,a1	;tunnel offset table
+
+	add.l	d1,a1			;add sinus X to flare
+	add.l	d2,a1			;add sinus Y to flare
+
+	move.l	d_texture(a4),a2
+	
+	add.l	tunnel_scroll,a2		;scroll texture
+
+	clr.l	d0			;clear for later use in mainloop
+
+	move.w	#tn_yres-1,d7 ;#84,d7			;y-loop (100 lines)
+.loop:	move.w	#tn_xres-1,d6 ;#143,d6			;x-loop (144 pixels)
+.loop2:
+	move.w	(a1)+,d0		;tunnel offset
+	move.l	(a2,d0.l*2),d1		;tunnel plot
+	move.l	d1,(a0)+
+	move.l	d1,(a3)+
+
+	dbra	d6,.loop2
+	;add.l	scanline_jump,a0	;scanline offset (dest)
+	;add.l	scanline_jump,a3
+	;add.l	#576,a0
+	;add.l	#576,a3
+	;add.l	scanline_jump,a0
+	;add.l	scanline_jump,a3
+	;add.l	#576-288,a1		;scanline offset (source)
+
+	add.l	d_scnl_jump(a4),a0
+	add.l	d_scnl_jump(a4),a3
+	add.l	#576,a0
+	add.l	#576,a3
+	add.l	d_scnl_jump(a4),a0
+	add.l	d_scnl_jump(a4),a3
+	add.l	#576-288,a1
+	
+	dbra	d7,.loop
+
+	rts
+
+
+
+; --------------------------------------------------------------
+; ------------- Section data -----------------------------------
+; --------------------------------------------------------------
+
+	section	data
+
+
+tunnel_lut:	incbin	'data\tunnel.dat'
+		even 				;always have "even" there!
+
+texture:	incbin	'gfx\texture.16b'
+	;ds.w	256*256
+
+sinus:	incbin	'data\sinus.dat'
+
+; --------------------------------------------------------------
+; ------------- Section BSS ------------------------------------
+; --------------------------------------------------------------
+
+;		section bss
+
+;scanline_jump:	ds.l	1			;bytes to skip each scanline
+
+sinus_x:	ds.l	1
+sinus_y:	ds.l	1
+tunnel_scroll:	ds.l	1
