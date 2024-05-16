@@ -1,0 +1,1682 @@
+; earx presents: "pyromaniac atack" (tm)
+;
+; Starring: pseudo random tables as x-spread and heat decay
+;           offset addressing as upward fire movement
+;           cmp.w and blt.s as firecutter
+;           pal-generator as blue,white,yellow and red
+;           famous /|\ crews as themselves
+;           YelloBiafra as lyricssource
+;
+; Director: MC68k
+;
+; No junk food, just earthly goods
+; I ate weird berries in the woods
+; now I'm seeing colors, I'm getting higher
+; I think I'll start a forest fire!
+;
+; There's a forest fire climbin' the hill
+; burning wealthy California homes
+; Better run run run run run
+; from the fi-re
+;
+; But some of us stay to watch
+; And we think of your insurance costs
+; And we laugh laugh laugh laugh
+; at your lives
+;
+; Windows covered with bars
+; Security guards
+; Is that a house or a fortress?
+; against the rest of the world
+;
+; Windows covered with bars
+; Security guards
+; Is that a house or a prison?
+; How you gonna get out?
+;
+; Electric bull and your tenniscourts
+; pink sports cars and your boats
+; getting fried fried fried fried fried
+; by the fire!
+;
+; Windows covered with bars
+; Floodlights for the yards
+; It's a pleasure to watch you
+; watch it all melt
+;
+; But hey!
+; What about all the cocaine
+; stockpiled in the basement?
+; Be a hero and save it
+; You know you're gonna need it
+;
+; Where's your brand new pretty wife?
+; She might still be inside
+; Either save her or your cocaine from the fire!
+;
+; But the gates and doors are locked
+; 'cause the burglar alarm went off!
+; Ever wonder why we laugh laugh laugh laugh
+; at your lives
+;
+; Windows covered with bars
+; Fences spikes with barbed wire
+; Never looked so helpless
+; engulfed in flames
+;
+; Camera's watching the walls
+; Don't forget the dogs
+; Now you're trapped in your prison
+; How you gonna get out?
+;
+; See the gerbil
+; run run run run run run run run
+; from the fire!
+;
+; Lyrics by Yello Biafra / Dead Kennedys
+
+******** OBJECT EQUATES ********
+
+Greets.CHARS:		=	1		; Greetings words on/off.
+Greets.ACCURATE_RANDOM:	=	0		; Almost makes no difference.
+Greets.DEMO_PAL:	=	1		; demo colors, or more "realistic" ones
+Greets.PAL_TYPE:	=	0		; blue or white hot (only with realistic pal)
+
+Greets.ROOTRAND:	=	10		; variation of the flameroot
+Greets.DECAY:		=	11		; reach to which a flame extends
+Greets.MIN_Y:		=	1		; startingline of the flame routine.
+Greets.SMOOTH:		=	200		; smoothness of flames
+Greets.MIN_FIRE:	=	10		; variation between "ignition" and "burning"
+Greets.XSTART:		=	8&$FFFE
+Greets.XEND:		=	152&$FFFE
+Greets.WIDTH:		=	Greets.XEND-Greets.XSTART
+Greets.FIRE_INC:	=   	10		; 3 = wood, 90 = gas
+
+******** OBJECT TABLE ********
+
+* Must be first in object!!
+Greets.table:
+	DC.L	Greets.mainLoop
+	DC.L	Greets.init
+	DC.L	Greets.setRes
+	DC.L	Greets.lightMatch
+	DC.L	Greets.clear
+	DC.L	Greets.switchCrew
+	DC.L	Greets.incCrew
+	DC.L	0
+
+******** RESOLUTION SETTING ROUTINE ********
+
+Greets.setRes:
+	IFEQ	testmode
+	move.l	#rts,vbl_gfx
+
+	move.w	$0468.w,d0
+.ck468:	cmp.w	$0468.w,d0
+	beq.s	.ck468
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+* Unknown monitormode..
+	rts
+.vga60:	bra.l	vga60_16bit_160_200
+.vga100:bra.l	vga100_16bit_160_100
+.rgb50:	bra.l	rgb50_16bit_320_100
+	ENDC
+	rts
+
+******** INIT SUBROUTINE ********
+
+; OUTPUT:
+; d0.l: =0: All clear, <0: Error, Not initialized!
+Greets.init:
+	lea	Greets.flowPal,a1
+	lea	Greets.pal,a0
+	bsr	Greets.makeColorFlow
+
+	lea	Greets.pal,a1
+	lea	Greets.doublePal,a0
+	bsr	Greets.doubleThePal
+
+	bsr	Greets.initRandomDecay
+	bsr	Greets.initRandomSpread
+
+	bsr	Greets.makeCharTables
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+******** REALTIME INIT SUBROUTINE ********
+
+Greets.realtimeInit:
+* Insert all realtime initialization here (i.e. usage of shared mem, etc.).
+	rts
+
+******** SCREENINIT SUBROUTINE ********
+
+Greets.initScreen:
+	IFEQ	testmode
+	movea.l	scr,a0
+	bsr.l	CLEAR_320200TSCR
+	ENDC
+	rts
+
+******** MAINLOOP SUBROUTINE ********
+
+Greets.mainLoop:
+	move.w	$0468.w,.oldvbl
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr	Greets.realtimeInit
+	move.l	(sp)+,d0
+.end_realtime_init:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr	Greets.initScreen
+.end_screeninit:
+
+	bsr	Greets.paintFlames
+
+	IFNE	Greets.CHARS
+
+	tst.w	Greets.crewActive
+	beq.s	.end_paint_crew
+	bsr	Greets.paintStillGreets
+.end_paint_crew:
+
+	ENDC
+
+	bsr	Greets.flush
+
+	IFEQ	testmode
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	move.l	d0,d1
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+	ENDC
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.res_done
+	bsr	Greets.setRes
+.res_done:
+
+	move.w	.oldvbl(pc),d0
+.wait:	cmp.w	$0468.w,d0
+	beq.s	.wait
+
+	rts
+
+.oldvbl:
+	DC.W	0
+
+******** OBJECT SUBROUTINES ********
+
+Greets.incCrew:
+	move.w	Greets.crewNumber,d0
+	addq.w	#1,d0
+	move.w	Greets.text,d1
+	divu.w	d1,d0
+	swap	d0
+	move.w	d0,Greets.crewNumber
+	rts
+
+Greets.switchCrew:
+	not.w	Greets.crewActive
+	rts
+
+Greets.initRandomDecay:
+	lea	Greets.decayTable,a0
+	moveq	#-1,d7
+	moveq	#Greets.DECAY,d0
+
+.loop:	bsr	Greets.getRandom
+	move.b	d2,(a0)+
+	dbra	d7,.loop
+	rts
+
+Greets.initRandomSpread:
+	lea	Greets.spreadTable,a0
+	moveq	#-1,d7
+	moveq	#3,d0
+
+.loop:	bsr	Greets.getRandom
+	move.w	#1-160,d6
+	sub.w	d2,d6
+	move.w	d6,(a0)+
+	dbra	d7,.loop
+	rts
+
+; Generates a highcolor pallette from a (truecolor) flowtable.
+; INPUT:
+; a0: highcolor buffer to write to
+; a1: instruction table 
+Greets.makeColorFlow:
+	move.w	(a1)+,d7
+	moveq	#0,d0
+	move.w	(a1)+,d0
+	moveq	#1,d6
+	lsl.w	d0,d6
+	move.w	d7,d5
+	mulu.w	d6,d5
+	subq.w	#1,d6
+	movea.w	d6,a5
+	subq.w	#1,d7
+
+.loop:	move.l	(a1)+,d1
+	move.l	(a1),d2
+	move.l	d1,d3
+	move.l	d2,d4
+	lsr.l	#8,d3
+	lsr.l	#8,d4
+	clr.w	d3
+	clr.w	d4
+	sub.l	d3,d4
+	asr.l	d0,d4
+	move.l	a0,a6
+
+.red_loop:
+	swap	d3
+	move.w	d3,d5
+	lsl.w	#8,d5
+	andi.w	#$f800,d5
+	move.w	d5,(a0)+
+	swap	d3
+	add.l	d4,d3
+	dbra	d6,.red_loop
+
+	move.w	a5,d6
+	move.l	a6,a0
+	move.l	d1,d3
+	move.l	d2,d4
+	andi.l	#$00ff0000,d3
+	andi.l	#$00ff0000,d4
+	sub.l	d3,d4
+	asr.l	d0,d4
+
+.green_loop:
+	swap	d3
+	move.w	d3,d5
+	lsl.w	#3,d5
+	andi.w	#$07e0,d5
+	or.w	d5,(a0)+
+	swap	d3
+	add.l	d4,d3
+	dbra	d6,.green_loop
+
+	move.l	a6,a0
+	move.w	a5,d6
+	moveq	#0,d3
+	moveq	#0,d4
+	move.b	d1,d3
+	move.b	d2,d4
+	swap	d3
+	swap	d4
+	sub.l	d3,d4
+	asr.l	d0,d4
+
+.blue_loop:
+	swap	d3
+	move.w	d3,d5
+	lsr.w	#3,d5
+	andi.w	#$001f,d5
+	or.w	d5,(a0)+
+	swap	d3
+	add.l	d4,d3
+	dbra	d6,.blue_loop
+
+	move.w	a5,d6
+	dbra	d7,.loop
+	rts
+
+; INPUT:
+; a0: destination (doubled) palette
+; a1: source palette (256 hc words)
+Greets.doubleThePal:
+	movea.l	a1,a2
+	movea.l	a1,a6
+	move.w	#256-1,d7
+
+.outer_loop:
+	move.w	#256-1,d6
+	movea.l	a6,a1
+
+.inner_loop:
+	move.w	(a2),(a0)+
+	move.w	(a1)+,(a0)+
+	dbra	d6,.inner_loop
+
+	addq	#2,a2
+	dbra	d7,.outer_loop
+	rts
+
+; Return random value in range (-r,+r)
+; INPUT:
+; d0.w=r [0,32767]
+; OUTPUT:
+; d2.w=random value
+Greets.getSignedRandom:
+	lea	Greets.random(pc),a4
+	move.l	(a4),d1
+	move.l	d1,d2
+	mulu.w	d1,d1
+	eor.l	d2,d1
+	addq.l	#7,d1
+	move.l	d1,(a4)
+	move.w	d0,d3
+	add.w	d0,d0
+	addq.w	#1,d0
+	clr.l	d2
+	move.w	d1,d2
+	divu.w	d0,d2
+	swap	d2
+	sub.w	d3,d2
+	rts
+
+; Return random value in range (0,+r)
+; INPUT:
+; d0.w=r [0,65535]
+; OUTPUT:
+; d2.w=random value
+Greets.getRandom:
+	lea	Greets.random(pc),a4
+	move.l	(a4),d1
+	move.l	d1,d2
+	rol.l	d1,d1
+	addi.l	#$1A77F226,d1
+	eor.l	d2,d1
+	move.l	d1,(a4)
+	clr.l	d2
+	move.w	d1,d2
+	divu.w	d0,d2
+	swap	d2
+	rts
+
+; Return random value [0,65535].
+; OUTPUT:
+; d1.w=random value
+Greets.getRawRandom:
+	lea	Greets.random(pc),a4
+	move.l	(a4),d1
+	move.l	d1,d2
+	mulu.w	d1,d1
+	eor.l	d2,d1
+	addq.l	#7,d1
+	move.l	d1,(a4)
+	rts
+
+Greets.random:
+	DC.L	0
+
+Greets.paintFlames:
+	bsr	Greets.makeFlames
+;	bsr	Greets.makeFlameRoots
+	bsr	Greets.dimFlameSides
+	bsr	Greets.smoothenFlameRoots
+	rts
+
+; Make flames by using the flameroots.
+Greets.makeFlames:
+	lea	Greets.screen,a0
+	lea	Greets.spreadTable,a3
+	lea	Greets.decayTable,a4
+	clr.l	d4
+	clr.w	d5
+	move.w	Greets.randomIndex,d4
+	move.w	#Greets.XSTART,d7		; d7.w=x
+	adda.w	d7,a0
+	move.w	#Greets.MIN_Y,d0
+	mulu.w	#160,d0
+	adda.l	d0,a0
+	movea.w	#160,a6				; a6=screenwidth
+	movea.l	a0,a5				; a5=top screenpos
+
+; First column. We clear it.
+	move.w	#Greets.MIN_Y,d6		; d6.w=y
+.pre_yloop:
+	clr.b	-160(a0)
+	adda.l	a6,a0
+	addq.w	#1,d6
+	cmpi.w	#100,d6
+	blt.s	.pre_yloop
+	
+	addq.w	#1,d7
+	moveq	#Greets.DECAY,d1
+	clr.w	d2
+	movea.l	a5,a0
+
+; Inner columns. Just the standard work...
+.xloop:	move.w	#99-Greets.MIN_Y,d6		; d6.w=height-1
+
+.yloop:	move.b	(a0),d5				; d5.b=current pixel
+	cmp.w	d1,d5
+	blt.s	.clear_it
+; Check for x-bounds too??
+
+; Set upper pixel with a random horizontal spread.
+; Calculate horizontal spread..
+	IFNE	Greets.ACCURATE_RANDOM
+	move.w	(a3,d4.l*2),d3			; d3.w=offset of new pixel=-random(3)+1-160
+	sub.b	(a4,d4.l),d5			; d5.b=pixelvalue - random(DECAY)
+	addq.w	#1,d4
+	ELSE
+	move.w	(a3)+,d3
+	sub.b	(a4)+,d5
+	ENDC
+	move.b	d5,(a0,d3.w)			; Set the pixel.
+	adda.l	a6,a0
+	dbra	d6,.yloop
+	bra.s	.end_yloop
+
+; Clear upper pixel.
+.clear_it:
+	clr.b	-160(a0)
+
+.next:	adda.l	a6,a0
+	dbra	d6,.yloop
+.end_yloop:
+
+	addq	#1,a5
+	movea.l	a5,a0
+	addq.w	#1,d7
+	cmpi.w	#Greets.XEND,d7
+	blt.s	.xloop
+
+; Last column. We clear it.
+	move.w	#Greets.MIN_Y,d6		; d6.w=y
+.post_yloop:
+	clr.b	-160(a0)
+	adda.l	a6,a0
+	addq.w	#1,d6
+	cmpi.w	#100,d6
+	blt.s	.post_yloop
+
+	move.w	d4,Greets.randomIndex
+	rts
+
+Greets.lightMatch:
+	move.w	#Greets.WIDTH-5,d0
+	bsr	Greets.getRandom
+	addi.w	#Greets.XSTART,d2
+	lea	(Greets.screen+99*160,d2.w),a0
+	move.l	#$FFFFFFFF,(a0)+
+	move.b	#$FF,(a0)
+	rts
+
+Greets.clear:
+	lea	Greets.screen+99*160,a0
+	clr.l	d0
+	moveq	#160/4-1,d7
+.loop:	move.l	d0,(a0)+
+	dbra	d7,.loop
+	rts
+
+Greets.addWater:
+	lea	Greets.screen+99*160,a0
+	moveq	#10-1,d7
+.loop:	move.w	#Greets.WIDTH,d0
+	bsr	Greets.getRandom
+	addi.w	#Greets.XSTART,d2
+	clr.b	(a0,d2.w)
+	dbra	d7,.loop
+	rts
+
+Greets.makeFlameRoots:
+	lea	Greets.screen+99*160+Greets.XSTART,a0
+	move.w	#Greets.WIDTH-1,d7
+
+.loop:	move.b	(a0),d6				; d6.b=current pixel
+	cmpi.b	#10,d6
+	blt.s	.inc_low_pixel
+; Increase pixelvalue.
+	move.w	Greets.fireInc,d0
+	bsr	Greets.getRandom
+	add.b	d2,d6
+	bra.s	.next
+.inc_low_pixel:
+	move.w	#Greets.ROOTRAND,d0
+	bsr	Greets.getSignedRandom
+	add.w	Greets.moreFire,d2
+	add.b	d2,d6
+.next:	move.b	d6,(a0)+
+	dbra	d7,.loop
+	rts
+
+Greets.dimFlameSides:
+	lea	Greets.screen+99*160,a0
+	move.w	#Greets.WIDTH/8-1,d7
+
+.smooth_loop:
+	bsr	Greets.getRawRandom
+	mulu.w	d1,d1
+	swap	d1
+	mulu.w	#Greets.WIDTH/8,d1
+	swap	d1
+; Clear left side..
+	move.w	#Greets.XSTART,d0
+	add.w	d1,d0
+	clr.b	(a0,d0.w)
+; Clear right side..
+	move.w	#Greets.XEND,d0
+	sub.w	d1,d0
+	clr.b	(a0,d0.w)
+	dbra	d7,.smooth_loop
+	rts
+
+Greets.smoothenFlameRoots:
+	lea	Greets.screen+99*160,a0
+	move.w	#Greets.XSTART+Greets.SMOOTH,d7
+
+.smoothen_loop:
+	clr.w	d0
+	move.w	#-Greets.SMOOTH,d6
+
+.inc_loop:
+	move.w	d6,d1
+	add.w	d7,d1
+	clr.w	d2
+	move.b	(a0,d1.w),d2
+	add.w	d2,d0
+	addq.w	#1,d6
+	cmpi.w	#+Greets.SMOOTH,d6
+	blt.s	.inc_loop
+
+	divu.w	#Greets.SMOOTH*2+1,d0
+	move.b	d0,(a0,d7.w)
+	addq.w	#1,d7
+	cmpi.w	#Greets.XEND-Greets.SMOOTH,d7
+	blt.s	.smoothen_loop
+	rts
+
+Greets.flush:
+	movea.l	scr,a0
+	lea	Greets.screen,a1
+	lea	Greets.doublePal,a2
+	adda.l	#160*Greets.MIN_Y+Greets.XSTART,a1
+	move.w	#99-Greets.MIN_Y-1,d7
+	movea.w	#160-Greets.WIDTH,a6
+	clr.l	d0
+
+	move.w	monitormode,d1
+	cmpi.w	#vga60,d1
+	beq	Greets.flushVga60
+	cmpi.w	#vga100,d1
+	beq.s	Greets.flushVga100
+	cmpi.w	#rgb50,d1
+	beq	Greets.flushRgb50
+* Unknown monitormode..
+	rts
+
+Greets.flushVga100:
+	adda.l	#(160*Greets.MIN_Y+Greets.XSTART)*2,a0
+	movea.l	a6,a5
+	adda.l	a5,a5			; a5=xoffset*2
+
+.yloop:	moveq	#Greets.WIDTH/16-1,d6
+
+.xloop:	REPT	8
+	move.w	(a1)+,d0
+	move.l	(a2,d0.l*4),(a0)+
+	ENDR
+	dbra	d6,.xloop
+
+	adda.l	a5,a0
+	adda.l	a6,a1
+	dbra	d7,.yloop
+
+	rts
+
+Greets.flushVga60:
+	adda.l	#(320*Greets.MIN_Y+Greets.XSTART)*2,a0
+	movea.l	a6,a5
+	adda.w	#160,a5			; a5=xoffset+160
+	adda.l	a5,a5			; a5=(xoffset+160)*2
+	lea	160*2(a0),a3
+
+.yloop:	moveq	#Greets.WIDTH/16-1,d6
+
+.xloop:	REPT	8
+	move.w	(a1)+,d0
+	move.l	(a2,d0.l*4),(a0)+
+	move.l	(a2,d0.l*4),(a3)+
+	ENDR
+	dbra	d6,.xloop
+
+	adda.l	a5,a0
+	adda.l	a5,a3
+	adda.l	a6,a1
+	dbra	d7,.yloop
+	rts
+
+Greets.flushRgb50:
+	adda.l	#(320*Greets.MIN_Y+Greets.XSTART)*2,a0
+	movea.l	a6,a5
+	adda.l	a5,a5
+	adda.l	a5,a5			; a5=xoffset*4
+
+.yloop:	moveq	#Greets.WIDTH/16-1,d6
+
+.xloop:	REPT	8
+	move.w	(a1)+,d0
+	move.l	(a2,d0.l*4),(a0)
+	move.l	(a0)+,(a0)+
+	ENDR
+	dbra	d6,.xloop
+
+	adda.l	a5,a0
+	adda.l	a6,a1
+	dbra	d7,.yloop
+	rts
+
+;
+; Sprite routines
+;
+
+; Converts all char bitmaps into coordinate tables.
+; This uses a bitmap-addresstable and creates a coords-addresstable. 
+Greets.makeCharTables:
+	lea	Greets.charMapAddyTable,a1
+	lea	Greets.coordsAddyTable,a0
+	lea	Greets.coordsBuffer,a3
+	move.w	(a1)+,d7
+	subq.w	#1,d7
+
+.loop:	move.l	a3,(a0)+			; Store coordtable addy.
+	movea.l	(a1)+,a2			; a2: map
+	movem.l	a0/a1,-(sp)
+	move.w	d7,-(sp)
+	bsr	Greets.convMapToCoords
+	move.w	(sp)+,d7
+	movem.l	(sp)+,a0/a1
+
+	dbra	d7,.loop
+	rts
+
+; Convert an 8byte bitmap (8bits*8rows) to a table of coordinates.
+; This uses two passes.
+; 1: establish bounds
+; 2: output formatted coordinates using bounds
+; INPUT:
+; a2: map
+; a3: dest coordtable
+; OUTPUT:
+; a3: next coordtable
+Greets.convMapToCoords:
+; Count coords and get min x and max x.
+	movea.l	a2,a1
+	moveq	#8-1,d7
+	moveq	#7,d1				; d1.w=min x
+	moveq	#0,d2				; d2.w=max x
+	clr.w	d5				; d5.w=current max
+	clr.w	d3				; d3.w=count
+
+.yloop:	move.b	(a1)+,d0
+	clr.w	d6
+	clr.w	d4				; d4.w=current min
+
+.test_bit_loop:
+	add.b	d0,d0
+	bcc.s	.end_reg_bit
+; Register new turd...
+	addq.w	#1,d3
+	tst.w	d4
+	bne.s	.end_set_min
+	move.w	d6,d4				; d4.w=current min=bitnum
+.end_set_min:
+	move.w	d6,d5				; d5.w=current max=bitnum
+.end_reg_bit:
+	addq.w	#1,d6
+	tst.b	d0
+	bne.s	.test_bit_loop
+
+	cmp.w	d1,d4
+	bgt.s	.end_set_new_min
+	move.w	d4,d1
+.end_set_new_min:
+	cmp.w	d2,d5
+	blt.s	.end_set_new_max
+	move.w	d5,d2
+.end_set_new_max:
+	dbra	d7,.yloop
+; d1.w=min x, d2.w=max x, d3.w=coord count
+
+; Calculate width and start x'.
+; xcoords=max-min+1
+; w=2*xcoords-1
+; xstart=-w/2
+	move.w	d2,d4
+	sub.w	d1,d4
+	addq.w	#1,d4				; d4.w=xcoords
+	add.w	d4,d4				; d4.w=2*xcoords
+	subq.w	#1,d4				; d4.w=w=2*xcoords-1
+	lsr.w	#1,d4				; d4.w=w/2
+	neg.w	d4				; d4.w=xstart=-w/2
+
+; Now output coords shit..
+	moveq	#8-1,d7
+	moveq	#-7,d5				; d5.w=ystart=-h/2
+	move.w	d3,(a3)+			; Output coordcount.
+	beq.s	.end
+
+.conv_yloop:
+	move.b	(a2)+,d0
+	lsl.b	d1,d0				; d0=bitfield<<(mix x)
+	move.w	d4,d2
+
+.conv_bitloop:
+	add.b	d0,d0
+	bcc.s	.end_write
+	move.w	d2,(a3)+			; Store x.
+	move.w	d5,(a3)+			; Store y.
+.end_write:
+	addq.w	#2,d2
+	tst.b	d0
+	bne.s	.conv_bitloop
+
+	addq.w	#2,d5
+	dbra	d7,.conv_yloop
+
+.end:	rts
+
+Greets.paintFlyingGreets:
+	move.w	Greets.crewNumber,d0
+	lsl.w	#4,d0
+	lea	(Greets.text+2,d0.w),a1
+
+	move.w	$04BC.w,d2
+	mulu.w	#5,d2
+	not.w	d2
+	andi.w	#$1FFF,d2
+	btst	#12,d2
+	beq.s	.end_standstill
+	move.w	#$7FFF,d0
+	bsr	Greets.paintWord
+	bra.s	.end
+.end_standstill:
+	addi.w	#$0200,d2
+	move.l	#$00FF0000,d1
+	divu.w	d2,d1
+	move.w	d1,d0
+	bsr	Greets.paintWord
+.end:	rts
+
+Greets.paintStillGreets:
+	move.w	Greets.crewNumber,d0
+	lsl.w	#4,d0
+	lea	(Greets.text+2,d0.w),a1
+	bsr	Greets.paintStillWord
+	rts
+
+; INPUT:
+; d0.w=scale [0,$7FFF]
+; a1: text (16 bytes)
+Greets.paintWord:
+	move.w	d0,.scale
+	clr.w	d7
+	
+.loop:	clr.l	d2
+	move.b	(a1)+,d2
+	move.l	a1,-(sp)
+	move.w	d7,-(sp)
+	subi.b	#"A",d2
+	bmi.s	.end_paintchar
+; Process column and row numbers from counter.
+; col=i mod 8, row=i/8
+	move.w	d7,d0
+	move.w	d7,d1
+	andi.w	#$0007,d0
+	sub.w	d0,d1
+
+	subq.w	#3,d0
+	lsl.w	#4,d0
+	subq.w	#8,d0
+	lsl.w	#1,d1
+	subi.w	#90,d1
+
+	muls.w	.scale(pc),d0
+	muls.w	.scale(pc),d1
+	add.l	d0,d0
+	add.l	d1,d1
+	swap	d0
+	swap	d1
+
+	addi.w	#80,d0
+	addi.w	#98,d1
+	movea.l	(Greets.coordsAddyTable,d2.l*4),a1
+	move.w	.scale(pc),d2
+	bsr	Greets.paintChar
+.end_paintchar:
+	move.w	(sp)+,d7
+	movea.l	(sp)+,a1
+	addq.w	#1,d7
+	cmpi.w	#16,d7
+	blt.s	.loop
+	rts
+
+.scale:	DC.W	0
+
+; INPUT:
+; a1: text (16 bytes)
+Greets.paintStillWord:
+	clr.w	d7
+	
+.loop:	clr.l	d2
+	move.b	(a1)+,d2
+	move.l	a1,-(sp)
+	move.w	d7,-(sp)
+	subi.b	#"A",d2
+	bmi.s	.end_paintchar
+; Process column and row numbers from counter.
+; col=i mod 8, row=i/8
+	move.w	d7,d0
+	move.w	d7,d1
+	andi.w	#$0007,d0
+	sub.w	d0,d1
+
+	subq.w	#3,d0
+	lsl.w	#4,d0
+	subq.w	#8,d0
+	lsl.w	#1,d1
+	addi.w	#80,d0
+	addi.w	#75,d1
+	movea.l	(Greets.coordsAddyTable,d2.l*4),a1
+	move.w	#$7FFF,d2
+	bsr	Greets.paintChar
+.end_paintchar:
+	move.w	(sp)+,d7
+	movea.l	(sp)+,a1
+	addq.w	#1,d7
+	cmpi.w	#16,d7
+	blt.s	.loop
+	rts
+
+; INPUT:
+; d0.w= x offset
+; d1.w= y offset
+; d2.w= scale [0,$7FFF]
+; a1: char structure
+Greets.paintChar:
+	movem.w	d0/d1,.pos
+	move.w	d2,.scale
+
+; Then we paint the char using the colored sprite.
+	move.w	(a1)+,d7
+	subq.w	#1,d7
+
+.loop:	movem.w	(a1)+,d0/d1
+	muls.w	.scale(pc),d0
+	muls.w	.scale(pc),d1
+	lsl.l	#1,d0
+	lsl.l	#1,d1
+	swap	d0
+	swap	d1
+	add.w	.pos(pc),d0
+	add.w	.pos+2(pc),d1
+	move.l	a1,-(sp)
+	move.w	d7,-(sp)
+	bsr	Greets.paint3by3Sprite
+	move.w	(sp)+,d7
+	movea.l	(sp)+,a1
+	dbra	d7,.loop
+	rts
+
+.pos:	DC.W	0,0
+.scale:	DC.W	0
+
+; B-ware! No clipping, lardass!
+; INPUT:
+; d0.w: topleft x
+; d1.w: topleft y
+Greets.paint8by8Sprite:
+	subq.w	#4,d0
+	subq.w	#4,d1
+	lea	Greets.screen,a0
+	lea	Greets.preSprite,a1
+	lea	(a0,d0.w),a0
+	move.w	#160,d5
+	mulu.w	d5,d1
+	adda.l	d1,a0
+	movea.l	a0,a6
+	movea.w	d5,a5
+	moveq	#8-1,d7
+
+.yloop:	move.w	(a1)+,d6
+	bmi.s	.end_xloop
+	move.w	(a1)+,d0
+	lea	(a0,d0.w),a0
+
+.xloop:	move.w	(a1)+,d0
+	lsr.w	#1,d0
+	move.b	d0,(a0)+
+	dbra	d6,.xloop
+.end_xloop:
+
+	adda.l	a5,a6
+	movea.l	a6,a0
+	dbra	d7,.yloop
+	rts
+
+; B-ware! No clipping, lardass!
+; INPUT:
+; d0.w: topleft x
+; d1.w: topleft y
+Greets.paint3by3Sprite:
+	lea	(Greets.screen,d0.w),a0
+	mulu.w	#160,d1
+	adda.l	d1,a0
+
+	IFNE	1
+;	move.w	#$7F7F,-160(a0)
+;	move.b	#$7F,-158(a0)
+	move.w	#$FFFF,(a0)
+;	move.b	#$7F,2(a0)
+	move.w	#$FFFF,160(a0)
+;	move.b	#$7F,162(a0)
+	ELSE
+	move.b	#$7F,1-160(a0)
+	move.w	#$7FFF,(a0)
+	move.b	#$7F,2(a0)
+	move.b	#$7F,161(a0)
+	ENDC
+	rts
+
+******** OBJECT DATA ********
+
+	DATA
+
+Greets.moreFire:
+	DC.W	10
+Greets.fireInc:
+	DC.W	Greets.FIRE_INC
+
+Greets.flowPal:
+	IFNE	Greets.DEMO_PAL
+
+	DC.W	(.end-.start)/4-1
+	DC.W	6			;2^6 * 4 = 2^(6+2)=256
+.start:	DC.L	$00000000
+	DC.L	$000000FF
+	DC.L	$FF0000FF
+	DC.L	$FF000000
+	DC.L	$FFFF0000
+.end:
+
+	ELSE
+
+	DC.W	(.end-.start)/4-1
+	DC.W	4
+.start:	DC.L	$00000000
+	DC.L	$7F000000
+	DC.L	$FF000000
+	DC.L	$FF000000
+	DC.L	$FF3F0000
+	DC.L	$FF7F0000
+	DC.L	$FFBF0000
+
+	IFNE	Greets.PAL_TYPE
+	DC.L	$FFFF0000
+	DC.L	$FFFF0000
+	DC.L	$FFFF0000
+	DC.L	$FFFF0000
+	DC.L	$FFFF0000
+	DC.L	$FFFF003F
+	DC.L	$FFFF007F
+	DC.L	$FFFF00BF
+	DC.L	$FFFF00FF
+	DC.L	$FFFF00FF
+	DC.L	$FFFF00FF
+	ELSE
+	DC.L	$FFFF0000
+	DC.L	$FFFF0000
+	DC.L	$FFFF003F
+	DC.L	$FFFF007F
+	DC.L	$FFFF00BF
+	DC.L	$FFFF00FF
+	DC.L	$FFFF00FF
+	DC.L	$BFBF00FF
+	DC.L	$7F7F00FF
+	DC.L	$3F3F00FF
+	DC.L	$000000FF
+	ENDC
+.end:
+	ENDC
+
+Greets.text:
+	DC.W	(.end-.start)/16
+.start:	DC.B	" GREETS "
+	DC.B	"        "
+	DC.B	"  AURA  "
+	DC.B	"        "
+	DC.B	" AVENA  "
+	DC.B	"        "
+	DC.B	" CHECK  "
+	DC.B	" POINT  "
+	DC.B	" COBRA  "
+	DC.B	"        "
+	DC.B	" CREAM  "
+	DC.B	"        "
+	DC.B	"  DHS   "
+	DC.B	"        "
+	DC.B	"EQUINOX "
+	DC.B	"        "
+	DC.B	" ESCAPE "
+	DC.B	"        "
+	DC.B	"  EXA   "
+	DC.B	"        "
+	DC.B	"  FLA   "
+	DC.B	"        "
+	DC.B	"IDEMLINE"
+	DC.B	"        "
+	DC.B	" INTER  "
+	DC.B	"        "
+	DC.B	" LAZER  "
+	DC.B	"        "
+	DC.B	"  LOUD  "
+	DC.B	"        "
+	DC.B	" MAGGIE "
+	DC.B	"        "
+	DC.B	"  MIND  "
+	DC.B	" DESIGN "
+	DC.B	" MYSTIC "
+	DC.B	" BYTES  "
+	DC.B	"NEW BEAT"
+	DC.B	"        "
+	DC.B	"  NEXT  "
+	DC.B	"        "
+	DC.B	" NOCREW "
+	DC.B	"        "
+	DC.B	"  OVER  "
+	DC.B	"LANDERS "
+	DC.B	"OXYGENE "
+	DC.B	"        "
+	DC.B	"PARANOIA"
+	DC.B	"        "
+	DC.B	"  PHF   "
+	DC.B	"        "
+	DC.B	"RES GODS"
+	DC.B	"        "
+	DC.B	"SYNERGY "
+	DC.B	"        "
+	DC.B	"TEENAGE "
+	DC.B	"        "
+	DC.B	"THERAPY "
+	DC.B	"        "
+	DC.B	"  TOYS  "
+	DC.B	"        "
+	DC.B	"  TSCC  "
+	DC.B	"        "
+	DC.B	"TYPHOON "
+	DC.B	"        "
+	DC.B	"WILDFIRE"
+	DC.B	"        "
+	DC.B	"YESCREW "
+	DC.B	"        "
+.end:
+
+;
+; Sprite data
+;
+
+Greets.preSprite:
+	DC.W	2-1,3,$20,$20
+	DC.W	4-1,2,$20,$40,$40,$20
+	DC.W	6-1,1,$20,$40,$80,$80,$40,$20
+	DC.W	8-1,0,$20,$40,$80,$ff,$ff,$80,$40,$20
+	DC.W	8-1,0,$20,$40,$80,$ff,$ff,$80,$40,$20
+	DC.W	6-1,1,$20,$40,$80,$80,$40,$20
+	DC.W	4-1,2,$20,$40,$40,$20
+	DC.W	2-1,3,$20,$20
+
+Greets.charMapAddyTable:
+	DC.W	(.end-.start)/4
+.start:	DC.L	Greets.mapA
+	DC.L	Greets.mapB
+	DC.L	Greets.mapC
+	DC.L	Greets.mapD
+	DC.L	Greets.mapE
+	DC.L	Greets.mapF
+	DC.L	Greets.mapG
+	DC.L	Greets.mapH
+	DC.L	Greets.mapI
+	DC.L	Greets.mapJ
+	DC.L	Greets.mapK
+	DC.L	Greets.mapL
+	DC.L	Greets.mapM
+	DC.L	Greets.mapN
+	DC.L	Greets.mapO
+	DC.L	Greets.mapP
+	DC.L	Greets.mapQ
+	DC.L	Greets.mapR
+	DC.L	Greets.mapS
+	DC.L	Greets.mapT
+	DC.L	Greets.mapU
+	DC.L	Greets.mapV
+	DC.L	Greets.mapW
+	DC.L	Greets.mapX
+	DC.L	Greets.mapY
+	DC.L	Greets.mapZ
+.end:
+
+;  *****
+; *     *
+; * *** *
+; * * * *
+; * *** *
+; *     *
+; * *** *
+;  *   *
+Greets.mapA:
+	DC.B	%0111110
+	DC.B	%1000001
+	DC.B	%1011101
+	DC.B	%1010101
+	DC.B	%1011101
+	DC.B	%1000001
+	DC.B	%1011101
+	DC.B	%1110111
+
+;  ****
+; *    *
+; *  * *
+; *    *
+; *     *
+; *  *  *
+; *     *
+;  *****
+Greets.mapB:
+	DC.B	%0111100
+	DC.B	%1000010
+	DC.B	%1001010
+	DC.B	%1000010
+	DC.B	%1000001
+	DC.B	%1000101
+	DC.B	%1000001
+	DC.B	%0111110
+
+;  ****
+; *    *
+; * ***
+; * *
+; * *
+; * ***
+; *    *
+;  ****
+Greets.mapC:
+	DC.B	%0111100
+	DC.B	%1000010
+	DC.B	%1011100
+	DC.B	%1010000
+	DC.B	%1010000
+	DC.B	%1011100
+	DC.B	%1000010
+	DC.B	%0111100
+
+; *****
+; *    *
+; * **  *
+; * * * *
+; * * * *
+; * **  *
+; *    *
+; *****
+Greets.mapD:
+	DC.B	%1111100
+	DC.B	%1000010
+	DC.B	%1011001
+	DC.B	%1010101
+	DC.B	%1010101
+	DC.B	%1011001
+	DC.B	%1000010
+	DC.B	%0111100
+
+; ******
+; *    *
+; * ****
+; *   *
+; *   *
+; * ****
+; *    *
+; ******
+Greets.mapE:
+	DC.B	%1111110
+	DC.B	%1000010
+	DC.B	%1011110
+	DC.B	%1000100
+	DC.B	%1000100
+	DC.B	%1011110
+	DC.B	%1000010
+	DC.B	%1111110
+
+;  ****
+; *    *
+; * ***
+; * **
+; *   *
+; * **
+; * *
+;  *
+Greets.mapF:
+	DC.B	%0111100
+	DC.B	%1000010
+	DC.B	%1011100
+	DC.B	%1011000
+	DC.B	%1000100
+	DC.B	%1011000
+	DC.B	%1010000
+	DC.B	%0100000
+
+;  ****
+; *    *
+; * ****
+; * *
+; * * **
+; * ** *
+; *    *
+;  ****
+Greets.mapG:
+	DC.B	%0111100
+	DC.B	%1000010
+	DC.B	%1011110
+	DC.B	%1010000
+	DC.B	%1010110
+	DC.B	%1011010
+	DC.B	%1000010
+	DC.B	%0111100
+
+;  *   *
+; * * * *
+; * * * *
+; * *** *
+; *     *
+; * *** *
+; * * * *
+;  *   *
+Greets.mapH:
+	DC.B	%0100010
+	DC.B	%1010101
+	DC.B	%1010101
+	DC.B	%1011101
+	DC.B	%1000001
+	DC.B	%1011101
+	DC.B	%1010101
+	DC.B	%0100010
+
+;  *
+; * *
+; * *
+; * *
+; * *
+; * *
+; * *
+;  *
+Greets.mapI:
+	DC.B	%0100000
+	DC.B	%1010000
+	DC.B	%1010000
+	DC.B	%1010000
+	DC.B	%1010000
+	DC.B	%1010000
+	DC.B	%1010000
+	DC.B	%0100000
+
+;  ****
+; *    *
+;  *** *
+;    * *
+;    * *
+;    * *
+;   *  *
+;    **
+Greets.mapJ:
+	DC.B	%0111100
+	DC.B	%1000010
+	DC.B	%0111010
+	DC.B	%0001010
+	DC.B	%0001010
+	DC.B	%0001010
+	DC.B	%0010010
+	DC.B	%0001100
+
+;  *   *
+; * * * *
+; * * * *
+; * ** *
+; *    *
+; * **  *
+; * * * *
+;  *   *
+Greets.mapK:
+	DC.B	%0100010
+	DC.B	%1010101
+	DC.B	%1010101
+	DC.B	%1011010
+	DC.B	%1000010
+	DC.B	%1011001
+	DC.B	%1010101
+	DC.B	%0100010
+
+;  *
+; * *
+; * *
+; * *
+; * *
+; * **
+; *   *
+;  ***
+Greets.mapL:
+	DC.B	%0100000
+	DC.B	%1010000
+	DC.B	%1010000
+	DC.B	%1010000
+	DC.B	%1010000
+	DC.B	%1011000
+	DC.B	%1000100
+	DC.B	%0111000
+
+;  *   *
+; * *** *
+; *     *
+; *     *
+; *  *  *
+; * * * *
+; * * * *
+;  *   *
+Greets.mapM:
+	DC.B	%0100010
+	DC.B	%1011101
+	DC.B	%1000001
+	DC.B	%1000001
+	DC.B	%1001001
+	DC.B	%1010101
+	DC.B	%1010101
+	DC.B	%0100010
+
+; ******
+; *     *
+; * *** *
+; * * * *
+; * * * *
+; * * * *
+; * * * *
+; *** ***
+Greets.mapN:
+	DC.B	%1111110
+	DC.B	%1000001
+	DC.B	%1011101
+	DC.B	%1010101
+	DC.B	%1010101
+	DC.B	%1010101
+	DC.B	%1010101
+	DC.B	%1110111
+
+;   ***
+;  *   *
+; *  *  *
+; * * * *
+; * * * *
+; *  *  *
+;  *   *
+;   ***
+Greets.mapO:
+	DC.B	%0011100
+	DC.B	%0100010
+	DC.B	%1001001
+	DC.B	%1010101
+	DC.B	%1010101
+	DC.B	%1001001
+	DC.B	%0100010
+	DC.B	%0011100
+
+;  ****
+; *    *
+; *  * *
+; *    *
+; *  **
+; * *
+; * *
+;  *
+Greets.mapP:
+	DC.B	%0111100
+	DC.B	%1000010
+	DC.B	%1001010
+	DC.B	%1000010
+	DC.B	%1001100
+	DC.B	%1010000
+	DC.B	%1010000
+	DC.B	%0100000
+
+; Is this char used much? Well in EQUINOX (ARG!!!)
+;   ***
+;  *   *
+; *  *  *
+; * * * *
+; * * * *
+; *  *  *
+;  *   **
+;   *****
+Greets.mapQ:
+	DC.B	%0011100
+	DC.B	%0100010
+	DC.B	%1001001
+	DC.B	%1010101
+	DC.B	%1010101
+	DC.B	%1001001
+	DC.B	%0100011
+	DC.B	%0011111
+
+;  *****
+; *     *
+; *   * *
+; *     *
+; *    *
+; * **  *
+; * * * *
+; *** ***
+Greets.mapR:
+	DC.B	%0111110
+	DC.B	%1000001
+	DC.B	%1000101
+	DC.B	%1000001
+	DC.B	%1000010
+	DC.B	%1011001
+	DC.B	%1010101
+	DC.B	%1110111
+
+;  ****
+; *    *
+; * ***
+;  * *
+;   * *
+;  *** *
+; *    *
+;  ****
+Greets.mapS:
+	DC.B	%0111100
+	DC.B	%1000010
+	DC.B	%1011100
+	DC.B	%0101000
+	DC.B	%0010100
+	DC.B	%0111010
+	DC.B	%1000010
+	DC.B	%0111100
+
+;  *****
+; *     *
+;  ** **
+;   * *
+;   * *
+;   * *
+;   * *
+;    *
+Greets.mapT:
+	DC.B	%0111110
+	DC.B	%1000001
+	DC.B	%0110110
+	DC.B	%0010100
+	DC.B	%0010100
+	DC.B	%0010100
+	DC.B	%0010100
+	DC.B	%0001000
+
+; *** ***
+; * * * *
+; * * * *
+; * * * *
+; * * * *
+; * *** *
+; *     *
+;  ******
+Greets.mapU:
+	DC.B	%1110111
+	DC.B	%1010101
+	DC.B	%1010101
+	DC.B	%1010101
+	DC.B	%1010101
+	DC.B	%1011101
+	DC.B	%1000001
+	DC.B	%0111111
+
+;  *   *
+; * * * *
+; * * * *
+;  * * *
+;  *   *
+;   * *
+;   * *
+;    *
+Greets.mapV:
+	DC.B	%0100010
+	DC.B	%1010101
+	DC.B	%1010101
+	DC.B	%0101010
+	DC.B	%0101010
+	DC.B	%0010100
+	DC.B	%0010100
+	DC.B	%0001000
+
+;  *   *
+; * * * *
+; * * * *
+; *  *  *
+; *     *
+; *  *  *
+; * * * *
+;  *   *
+Greets.mapW:
+	DC.B	%0100010
+	DC.B	%1010101
+	DC.B	%1010101
+	DC.B	%1001001
+	DC.B	%1000001
+	DC.B	%1001001
+	DC.B	%1010101
+	DC.B	%0100010
+
+;  *   *
+; * * * *
+;  * * *
+;   * *
+;  * * *
+; * * * *
+;  *   *
+Greets.mapX:
+	DC.B	%0000000
+	DC.B	%0100010
+	DC.B	%1010101
+	DC.B	%0101010
+	DC.B	%0010100
+	DC.B	%0101010
+	DC.B	%1010101
+	DC.B	%0100010
+
+; *** ***
+; * * * *
+; *  *  *
+;  *   *
+;   * *
+;   * *
+;   * *
+;   ***
+Greets.mapY:
+	DC.B	%1110111
+	DC.B	%1010101
+	DC.B	%1001001
+	DC.B	%0100010
+	DC.B	%0010100
+	DC.B	%0010100
+	DC.B	%0010100
+	DC.B	%0011100
+
+; ******
+; *    *
+; **** *
+;   * *
+;  * *
+; * ****
+; *    *
+; ******
+Greets.mapZ:
+	DC.B	%1111110
+	DC.B	%1000010
+	DC.B	%1111010
+	DC.B	%0010100
+	DC.B	%0101000
+	DC.B	%1011110
+	DC.B	%1000010
+	DC.B	%1111110
+
+******** OBJECT RESERVES ********
+
+	BSS
+
+Greets.screen:
+	DS.B	160*100
+
+Greets.pal:
+	DS.W	256
+Greets.doublePal:
+	DS.L	256*256
+
+Greets.spreadTable:
+	DS.W	65536
+Greets.decayTable:
+	DS.B	65536
+
+Greets.randomIndex:
+	DS.W	1
+
+;
+; Sprite buffers
+;
+
+Greets.sprite:
+	DS.L	8*8
+
+Greets.coordsAddyTable:
+	DS.L	26
+
+Greets.coordsBuffer:
+	DS.L	26*7*8
+
+Greets.crewNumber:
+	DS.W	1
+Greets.crewActive:
+	DS.W	1
+
+******** END OF DEMO-EFFECT OBJECT ********

@@ -1,8 +1,0 @@
-EXEC:
- MOVE.L #NULL,-(SP)
- MOVE.L #NULL,-(SP)
- MOVE.L #FILENAME,-(SP)
- MOVE.W #0,-(SP)
- MOVE.W #$4B,-(SP)
- TRAP #1
- ADD.L #14,SP

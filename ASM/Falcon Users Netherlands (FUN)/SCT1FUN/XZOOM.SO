@@ -1,0 +1,1466 @@
+* Object skeleton used by DEMOS1.S or DASTD.S (v2.0)
+* v1.0: * Monitormode selection.
+*       * SET_RES routine vbl-synced.
+*       * Screenaddress-setting optimised.
+*
+* v1.1: * Automaticly initializes screenbuffers and resolution.
+*       * Returns resultcode in INIT routine.
+*       * Minor optimisations.
+
+******** OBJECT EQUATES ********
+
+XZoom.FAST_SPRITES:	=	1		; Usage of fast sprite rout.
+
+XZoom.RX:		=	42
+XZoom.RY:		=	26
+
+XZoom.SPRING_AMP:	=	$00100000	; amp of delta pulse in spring excitation (16:16)
+XZoom.SPRING_MASS:	=	$1800		; mass of spring (8:8)
+XZoom.SPRING_FRICTION:	=	$0080		; spring friction (8:8)
+
+******** OBJECT TABLE ********
+
+* Must be first in object!!
+XZoom.table:
+	DC.L	XZoom.mainLoop
+	DC.L	XZoom.init
+	DC.L	XZoom.setRes
+	DC.L	XZoom.incAngle
+	DC.L	XZoom.decAngle
+	DC.L	XZoom.incZoom
+	DC.L	XZoom.decZoom
+	DC.L	XZoom.setCharNull
+	DC.L	XZoom.setMissiles
+	DC.L	XZoom.setCharS
+	DC.L	XZoom.setCharC
+	DC.L	XZoom.setCharT
+	DC.L	XZoom.setChar1
+	DC.L	XZoom.setCharF
+	DC.L	XZoom.setCharU
+	DC.L	XZoom.setCharN
+	DC.L	XZoom.switchWibble
+	DC.L	0
+
+******** RESOLUTION SETTING ROUTINE ********
+
+XZoom.setRes:
+	IFEQ	testmode
+	move.l	#XZoom.updateSpring,vbl_gfx
+
+	move.w	$0468.w,d0
+.ck468:	cmp.w	$0468.w,d0
+	beq.s	.ck468
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+* Unknown monitormode..
+	rts
+.vga60:	bra.l	vga60_16bit_160_200
+	rts
+.vga100:bra.l	vga100_16bit_160_100
+	rts
+.rgb50:	bra.l	rgb50_16bit_320_100
+	ENDC
+	rts
+
+******** INIT SUBROUTINE ********
+
+* OUTPUT: d0.l: 0   = All clear.
+*               neg = Error! Not initialized!
+XZoom.init:
+	lea	XZoom.flowPal,a1
+	lea	XZoom.pal,a0
+	bsr	XZoom.makeColorFlow
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+******** REALTIME INIT SUBROUTINE ********
+
+XZoom.realtimeInit:
+	bsr	XZoom.resetTime
+
+	rts
+
+******** SCREENINIT SUBROUTINE ********
+
+XZoom.initScreen:
+	rts
+
+******** MAINLOOP SUBROUTINE ********
+
+XZoom.mainLoop:
+	move.w	$0468.w,.oldvbl
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.end_realtime_init
+	move.l	d0,-(sp)
+	bsr	XZoom.realtimeInit
+	move.l	(sp)+,d0
+.end_realtime_init:
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr	XZoom.initScreen
+.end_screeninit:
+
+	IFNE	1
+	tst.w	XZoom.wibbleMode
+	beq.s	.normal_zoomrot
+
+	bsr	XZoom.getTime
+	move.w	d0,d1
+	mulu.w	#13,d1
+	lsr.l	#3,d1
+	mulu.w	#11,d0
+	lsr.l	#3,d0
+	lea	sine_tbl,a0
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	Get_Sin	a0,d0,d0
+	Get_Sin	a0,d1,d1
+	asr.w	#8,d0
+	Do_SinModulo	d0
+	Get_Sin	a0,d0,d0
+	asr.w	#2,d1
+	addi.w	#$5000,d1
+	asr.w	#6,d0
+	bra.s	.zoomrotate_it
+
+.normal_zoomrot:
+	move.w	XZoom.angle,d0
+	move.w	XZoom.zoomFactor,d1
+
+.zoomrotate_it:
+	bsr	XZoom.calcVectors
+	addi.l	#80<<8,d4
+	movem.l	XZoom.bufferAddys,a0/a1
+	bsr	XZoom.zoomRotate
+	ELSE
+	movem.l	XZoom.bufferAddys,a0/a1
+	bsr	XZoom.zoom
+	ENDC
+
+	movea.l	XZoom.bufferAddys,a0
+	bsr	XZoom.blur
+
+	tst.w	XZoom.missileMode
+	beq.s	.no_missiles
+	movea.l	XZoom.bufferAddys,a0
+	bsr	XZoom.paintSprites
+	bra.s	.end_paint
+.no_missiles:
+	bsr	XZoom.getTime
+	move.w	d0,d1
+	add.w	d0,d0
+	mulu.w	#3,d1
+	lsr.l	#1,d1
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	lea	sine_tbl,a1
+	Get_Sin	a1,d0,d0
+	Get_Sin	a1,d1,d1
+	asr.w	#8,d0
+	asr.w	#8,d1
+	asr.w	#2,d0
+	asr.w	#3,d1
+	addi.w	#80-4,d0
+	addi.w	#50-4,d1
+	movea.l	XZoom.charAddy,a1
+	tst.l	a1
+	beq.s	.end_paint
+	movea.l	XZoom.bufferAddys,a0
+	bsr	XZoom.paintChar
+.end_paint:
+
+	bsr	XZoom.flush
+
+	lea	XZoom.bufferAddys,a0
+	move.l	(a0)+,d0
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+
+	IFEQ	testmode
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	move.l	d0,d1
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+	ENDC
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.res_done
+	bsr	XZoom.setRes
+.res_done:
+
+	IFNE	1
+	cmpi.w	#vga100,monitormode
+	bne.s	.normal
+	moveq	#4,d2
+	bra.s	.end_get_vblcount
+.normal:moveq	#2,d2
+.end_get_vblcount:
+
+	move.w	.oldvbl(pc),d0
+.wait:	move.w	$0468.w,d1
+	sub.w	d0,d1
+	cmp.w	d2,d1
+	blt.s	.wait
+	ENDC
+
+	rts
+
+.oldvbl:
+	DC.W	0
+
+******** OBJECT SUBROUTINES ********
+
+XZoom.setMissiles:
+	move.w	#1,XZoom.missileMode
+	rts
+
+XZoom.setCharNull:
+	clr.w	XZoom.missileMode
+	clr.l	XZoom.charAddy
+	rts
+
+XZoom.incAngle:
+	add.w	#32,XZoom.angle
+	rts
+
+XZoom.decAngle:
+	sub.w	#32,XZoom.angle
+	rts
+
+XZoom.incZoom:
+	add.w	#1024,XZoom.zoomFactor
+	rts
+
+XZoom.decZoom:
+	sub.w	#1024,XZoom.zoomFactor
+	rts
+
+XZoom.setCharS:
+	bsr	XZoom.pullSpring
+	clr.w	XZoom.missileMode
+	move.l	#XZoom.charS,XZoom.charAddy
+	rts
+
+XZoom.setCharC:
+	bsr	XZoom.pullSpring
+	clr.w	XZoom.missileMode
+	move.l	#XZoom.charC,XZoom.charAddy
+	rts
+
+XZoom.setCharT:
+	bsr	XZoom.pullSpring
+	clr.w	XZoom.missileMode
+	move.l	#XZoom.charT,XZoom.charAddy
+	rts
+
+XZoom.setChar1:
+	bsr	XZoom.pullSpring
+	clr.w	XZoom.missileMode
+	move.l	#XZoom.char1,XZoom.charAddy
+	rts
+
+XZoom.setCharSlash:
+	bsr	XZoom.pullSpring
+	clr.w	XZoom.missileMode
+	move.l	#XZoom.charSlash,XZoom.charAddy
+	rts
+
+XZoom.setCharF:
+	bsr	XZoom.pullSpring
+	clr.w	XZoom.missileMode
+	move.l	#XZoom.charF,XZoom.charAddy
+	rts
+
+XZoom.setCharU:
+	bsr	XZoom.pullSpring
+	clr.w	XZoom.missileMode
+	move.l	#XZoom.charU,XZoom.charAddy
+	rts
+
+XZoom.setCharN:
+	bsr	XZoom.pullSpring
+	clr.w	XZoom.missileMode
+	move.l	#XZoom.charN,XZoom.charAddy
+	rts
+
+XZoom.switchWibble:
+	not.w	XZoom.wibbleMode
+	rts
+
+; INPUT:
+; a0: truecolor buffer to write to (falcon palette format)
+; a1: instruction table 
+XZoom.makeColorFlow:
+	move.l	a0,-(sp)
+
+	move.w	(a1)+,d7
+	moveq	#0,d0
+	move.w	(a1)+,d0
+	moveq	#1,d6
+	lsl.w	d0,d6
+	move.w	d7,d5
+	mulu.w	d6,d5
+	subq.w	#1,d6
+	movea.w	d6,a5
+	subq.w	#1,d7
+
+.loop:	move.l	(a1)+,d1
+	move.l	(a1),d2
+	move.l	d1,d3
+	move.l	d2,d4
+	lsr.l	#8,d3
+	lsr.l	#8,d4
+	clr.w	d3
+	clr.w	d4
+	sub.l	d3,d4
+	asr.l	d0,d4
+	move.l	a0,a6
+
+.red_loop:
+	swap	d3
+	move.w	d3,d5
+	move.b	d5,(a0)
+	addq	#4,a0
+	swap	d3
+	add.l	d4,d3
+	dbra	d6,.red_loop
+
+	move.w	a5,d6
+	move.l	a6,a0
+	move.l	d1,d3
+	move.l	d2,d4
+	andi.l	#$00ff0000,d3
+	andi.l	#$00ff0000,d4
+	sub.l	d3,d4
+	asr.l	d0,d4
+
+.green_loop:
+	swap	d3
+	move.w	d3,d5
+	move.b	d5,1(a0)
+	addq	#4,a0
+	swap	d3
+	add.l	d4,d3
+	dbra	d6,.green_loop
+
+	move.l	a6,a0
+	move.w	a5,d6
+	moveq	#0,d3
+	moveq	#0,d4
+	move.b	d1,d3
+	move.b	d2,d4
+	swap	d3
+	swap	d4
+	sub.l	d3,d4
+	asr.l	d0,d4
+
+.blue_loop:
+	swap	d3
+	move.w	d3,d5
+	move.w	d5,2(a0)
+	addq	#4,a0
+	swap	d3
+	add.l	d4,d3
+	dbra	d6,.blue_loop
+
+	move.w	a5,d6
+	dbra	d7,.loop
+
+	movea.l	(sp)+,a1
+	rts
+
+XZoom.resetTime:
+	move.w	$04BC.w,XZoom.startTime
+	rts
+
+; OUTPUT:
+; d0.w=time relative to start
+XZoom.getTime:
+	move.w	$04BC.w,d0
+	sub.w	XZoom.startTime,d0
+	rts
+
+* INPUT:
+* d0.w: $0-$ff red
+* d1.w: $0-$ff green
+* d2.w: $0-$ff blue
+* a0: highcolor rle sprite buffer to write to
+* a1: bpp rle sprite data
+XZoom.calc8by8Sprite:
+	moveq	#8-1,d7
+
+.yloop:	move.w	(a1)+,d6
+	move.w	d6,(a0)+
+	bmi.s	.end_xloop
+	move.w	(a1)+,(a0)+
+
+.xloop:	moveq	#0,d3
+	move.w	(a1)+,d3
+	move.l	d3,d4
+	move.l	d3,d5
+	mulu.w	d0,d3
+	mulu.w	d1,d4
+	mulu.w	d2,d5
+	andi.w	#%1111100000000000,d3
+	andi.w	#%1111110000000000,d4
+	lsr.w	#5,d4
+	lsr.w	#8,d5
+	lsr.w	#3,d5
+	or.w	d3,d5
+	or.w	d4,d5
+	move.w	d5,(a0)+
+	dbra	d6,.xloop
+.end_xloop:
+
+	dbra	d7,.yloop
+	rts
+
+; INPUT:
+; a1: source viewport
+; a0: dest viewport
+XZoom.zoom:
+	movea.l	a1,a3
+	moveq	#100-1,d7
+	move.l	#(140<<16/160)<<16,d2
+	move.l	#80<<16/100,d4
+	move.l	#9<<16,d3
+
+.yloop:	move.w	#160/10-1,d6
+	moveq	#11,d1
+
+.xloop:	REPT	10
+	move.w	(a1,d1.w*2),(a0)+
+	addx.l	d2,d1
+	ENDR
+	dbra	d6,.xloop
+
+	add.l	d4,d3
+	move.l	d3,d5
+	swap	d5
+	mulu.w	#160*2,d5
+	lea	(a3,d5.l),a1
+	dbra	d7,.yloop
+	rts
+
+; INPUT:
+; a0: viewport
+XZoom.blur:
+	movea.l	a0,a1
+	lea	256*2(a0),a0
+	moveq	#99-1,d7
+	move.l	#%01111011110011110111101111001111,d1
+
+.yloop:	move.w	#160/2-1,d6
+
+.xloop:	move.l	(a1)+,d0
+	lsr.l	#1,d0
+	and.l	d1,d0
+	move.l	(256-2)*2(a1),d2
+	lsr.l	#1,d2
+	and.l	d1,d2
+	add.l	d0,d2
+	move.l	d2,(a0)+
+	dbra	d6,.xloop
+
+	lea	(256-160)*2(a0),a0
+	lea	(256-160)*2(a1),a1
+	dbra	d7,.yloop
+	rts
+
+; Calculates rotationwindow vectors: a, b-a, c-a.
+; We do this the convenient way. If we realize that:
+; b-a = 2(r.x,0)'=2*r.x[+cos(t),+sin(t)]=2[+xc,+xs]
+; c-a = 2(0,r.y)'=2*r.y[-sin(t),+cos(t)]=2[-ys,+yc]
+; 
+;       b-a  
+;   a *----->* b
+;     |
+; c-a |  *--> (rx,0)' = r.x*[+cos(t),+sin(t)]
+;     |  |
+;     v  v
+;   c *  (0,r.y)' = r.y*[-sin(t),+cos(t)]
+;
+; a.x = -cos(t)*r.x +sin(t)*r.y = -xc +ys
+; a.y = -cos(t)*r.x -cos(t)*r.y = -xs -yc
+;
+; b.x = +xc +ys
+; b.y = +xs -yc
+;
+; c.x = -xc -ys
+; c.y = -xs +yc
+;
+; INPUT:
+; d0.w = angle theta = t
+; d1.w = scale [-32768,+32767] =^ [-2.0,+2.0]
+; OUTPUT:
+; d0.w = (b-a).x (8:8)
+; d1.w = (b-a).y (8:8)
+; d2.w = (c-a).x (8:8)
+; d3.w = (c-a).y (8:8)
+; d4.w = a.x (8:8)
+; d5.w = a.y (8:8)
+XZoom.calcVectors:
+	Do_SinModulo	d0
+	Get_SinCos	sine_tbl,d0,d0,d3
+; d0.w=sin(t), d3.w=cos(t)
+
+	muls.w	d1,d0
+	muls.w	d1,d3
+	add.l	d0,d0
+	add.l	d3,d3
+	swap	d0
+	swap	d3
+	move.w	d0,d2
+	move.w	d3,d1
+	muls.w	#+XZoom.RX,d0
+	muls.w	#+XZoom.RX,d1
+	muls.w	#+XZoom.RY,d2
+	muls.w	#+XZoom.RY,d3
+; d0.l=xs, d1.l=xc, d2.l=ys, d3.l=yc
+
+; We calculate a.
+	move.l	d1,d4
+	neg.l	d4
+	add.l	d2,d4
+	move.l	d0,d5
+	neg.l	d5
+	sub.l	d3,d5
+	asr.l	#6,d4
+	asr.l	#6,d5
+
+; We calculate b-a, c-a.
+	asr.l	#5,d0
+	asr.l	#5,d1
+	neg.l	d2
+	asr.l	#5,d2
+	asr.l	#5,d3
+	exg.l	d0,d1
+	rts
+
+; Rotoreaming sewer-screwing.
+; INPUT:
+; d0.l = h.x (8:8)
+; d1.l = h.y (8:8)
+; d2.l = v.x (8:8)
+; d3.l = v.y (8:8)
+; d4.w = x (8:8)
+; d5.w = y (8:8)
+; a1: source viewport
+; a0: dest viewport
+XZoom.zoomRotate:
+	lea	256*50*2(a1),a1
+; We calculate stepvectors (slopes) from the window-vectors.
+	divs.w	#160,d0
+	divs.w	#160,d1
+	divs.w	#100,d2
+	divs.w	#100,d3
+	ext.l	d0
+	ext.l	d1
+	ext.l	d2
+	ext.l	d3
+; d0.w = hx_step, d1.w = hy_step, d2.w = vx_step, d3.w = vy_step (8:8)
+
+; Arrange the upperleft vector coordinates for speed.
+	lsl.l	#8,d4
+	swap	d5
+	move.w	d4,d5
+	swap	d5
+	swap	d4
+; d4.l = x..X, d5.l = x.Yy
+	move.l	d5,d7
+	clr.w	d6
+	move.b	d4,d6
+; d6.b = X, d7.l = x.Yy
+
+; Arrange the vx_step, vy_step coordinates for speed.
+	lsl.l	#8,d2
+	swap	d3
+	move.w	d2,d3
+	swap	d3
+	swap	d2
+	move.b	d2,d5
+	movea.l	d3,a3
+; d5.b = X, a3 = x.Yy
+
+; Arrange the hx_step, hy_step coordinates for speed.
+	lsl.l	#8,d0
+	swap	d1
+	move.w	d0,d1
+	swap	d1
+	swap	d0
+	move.b	d0,d2
+	movea.l	d1,a4
+; d2.b = X, a4 = x.Yy
+
+	move.l	d7,d0
+; d7.l = x.Yy
+
+	clr.l	d4
+	moveq	#100,d7
+
+.yloop:	swap	d7
+	move.w	#160/10-1,d7
+	move.l	d0,d1
+	move.w	d6,d3
+
+.xloop:	REPT	10
+	move.w	d1,d4
+	move.b	d3,d4
+	move.w	(a1,d4.w*2),(a0)+
+	add.l	a4,d1
+	addx.b	d2,d3
+	ENDR
+	dbra	d7,.xloop
+
+	add.l	a3,d0				; Yy:=Yy+Yy_vstep, x:=x+x_vstep
+	addx.b	d5,d6				; X:=X+X_vstep
+	
+	lea	(256-160)*2(a0),a0
+	swap	d7
+	dbra	d7,.yloop
+	rts
+
+; B-ware! No clipping, lardass!
+; INPUT:
+; d0.w: topleft x
+; d1.w: topleft y
+; a0: viewport
+XZoom.paint8by8Sprite:
+	lea	XZoom.sprite,a1
+	lea	(a0,d0.w*2),a0
+	move.w	#256*2,d5
+	mulu.w	d5,d1
+	adda.l	d1,a0
+	movea.l	a0,a6
+	movea.w	d5,a5
+	moveq	#8-1,d7
+
+.yloop:	move.w	(a1)+,d6
+	bmi.s	.end_xloop
+	move.w	(a1)+,d0
+	lea	(a0,d0.w*2),a0
+
+.xloop:	move.w	(a1)+,(a0)+
+.skip_pixel:
+	dbra	d6,.xloop
+.end_xloop:
+
+	adda.l	a5,a6
+	movea.l	a6,a0
+	dbra	d7,.yloop
+	rts
+
+; INPUT:
+; d2.l=.125 colour (double hc word)
+; d3.l=0.25 colour (double hc word)
+; d4.l=0.50 colour (double hc word)
+; d5.l=1.00 colour (double hc word)
+; a0: viewport
+XZoom.paintFastSprite:
+	lea	XZoom.sprite,a1
+	lea	(a0,d0.w*2),a0
+	mulu.w	#256*2,d1
+	adda.l	d1,a0
+
+; 00011000
+	move.l	d2,-2(a0)
+	adda.w	#(256-2)*2,a0
+; 00122100
+	move.w	d2,(a0)+
+	move.l	d3,(a0)+
+	move.w	d2,(a0)
+	adda.w	#(256-4)*2,a0
+; 01233210
+	move.w	d2,(a0)+
+	move.w	d3,(a0)+
+	move.l	d4,(a0)+
+	move.w	d3,(a0)+
+	move.w	d2,(a0)
+	adda.w	#(256-6)*2,a0
+; 12344321
+	move.w	d2,(a0)+
+	move.w	d3,(a0)+
+	move.w	d4,(a0)+
+	move.l	d5,(a0)+
+	move.w	d4,(a0)+
+	move.w	d3,(a0)+
+	move.w	d2,(a0)
+	adda.w	#(256-7)*2,a0
+	move.w	d2,(a0)+
+	move.w	d3,(a0)+
+	move.w	d4,(a0)+
+	move.l	d5,(a0)+
+	move.w	d4,(a0)+
+	move.w	d3,(a0)+
+	move.w	d2,(a0)
+	adda.w	#(256-6)*2,a0
+; 01233210
+	move.w	d2,(a0)+
+	move.w	d3,(a0)+
+	move.l	d4,(a0)+
+	move.w	d3,(a0)+
+	move.w	d2,(a0)
+	adda.w	#(256-4)*2,a0
+; 00122100
+	move.w	d2,(a0)+
+	move.l	d3,(a0)+
+	move.w	d2,(a0)
+; 00011000
+	move.l	d2,(256-2)*2(a0)
+	
+	rts
+
+; INPUT:
+; a0: viewport
+XZoom.paintSprites:
+	move.l	a0,.scr
+	lea	XZoom.spriteTable,a6
+	move.w	(a6)+,d7
+
+.loop:	move.w	d7,-(sp)
+
+	lea	XZoom.preSprite,a1
+	lea	XZoom.sprite,a0
+	move.w	(a6)+,d0
+	move.w	(a6)+,d1
+	move.w	(a6)+,d2
+	move.l	a6,-(sp)
+
+	IFNE	XZoom.FAST_SPRITES
+	bsr	XZoom.calcSpriteColors
+	ELSE
+	lea	XZoom.preSprite,a1
+	lea	XZoom.sprite,a0
+	bsr	XZoom.calc8by8Sprite
+	ENDC
+
+	movea.l	(sp)+,a6
+
+	bsr	XZoom.getTime
+	move.w	d0,d1
+	mulu.w	(a6)+,d0
+	mulu.w	(a6)+,d1
+	lsr.l	#8,d0
+	lsr.l	#8,d1
+	Do_SinModulo	d0
+	Do_SinModulo	d1
+	lea	sine_tbl,a1
+	Get_Sin	a1,d0,d0
+	Get_Sin	a1,d1,d1
+	ext.l	d0
+	ext.l	d1
+	asr.l	#8,d0
+	asr.l	#1,d0
+	asr.l	#8,d1
+	asr.l	#2,d1
+	addi.w	#80-4,d0
+	addi.w	#50-4,d1
+	move.l	a6,-(sp)
+	move.l	.scr(pc),a0
+
+	IFNE	XZoom.FAST_SPRITES
+	bsr	XZoom.paintFastSprite
+	ELSE
+	bsr	XZoom.paint8by8Sprite
+	ENDC
+
+	movea.l	(sp)+,a6
+
+	move.w	(sp)+,d7
+	dbra	d7,.loop
+	rts
+
+.scr:	DC.L	0
+
+; INPUT:
+; d0.w: x offset
+; d1.w: y offset
+; a0: viewport
+; a1: char structure
+XZoom.paintChar:
+	movem.w	d0/d1,.pos
+	move.l	a0,.scr
+	move.l	a1,-(sp)
+
+	move.w	XZoom.springX,d2
+	addi.w	#1<<9,d2
+	move.w	d2,.amp
+
+	movea.l	(sp)+,a1
+; Then we paint the char using the colored sprite.
+	move.w	(a1)+,d7
+	subq.w	#1,d7
+
+	bsr	XZoom.getTime
+	lsr.w	#2,d0
+	andi.w	#$01FF,d0
+	lea	(XZoom.pal,d0.w*4),a2
+
+.loop:
+
+; First we calc some color into our sprite.
+	clr.w	d0
+	clr.w	d1
+	move.b	(a2)+,d0
+	move.b	(a2)+,d1
+	move.w	(a2)+,d2
+	
+	move.w	d7,-(sp)
+	movem.l	a1/a2,-(sp)
+
+	IFNE	XZoom.FAST_SPRITES
+	bsr	XZoom.calcSpriteColors
+	ELSE
+	lea	XZoom.preSprite,a1
+	lea	XZoom.sprite,a0
+	bsr	XZoom.calc8by8Sprite
+	ENDC
+
+	movem.l	(sp)+,a1/a2
+	move.w	(sp)+,d7
+
+	movem.w	(a1)+,d0/d1
+	muls.w	.amp(pc),d0
+	asr.l	#7,d0
+	lsl.l	#2,d1
+	add.w	.pos(pc),d0
+	add.w	.pos+2(pc),d1
+	move.l	a1,-(sp)
+	move.w	d7,-(sp)
+	movea.l	.scr(pc),a0
+	IFNE	XZoom.FAST_SPRITES
+	bsr	XZoom.paintFastSprite
+	ELSE
+	bsr	XZoom.paint8by8Sprite
+	ENDC
+	move.w	(sp)+,d7
+	movea.l	(sp)+,a1
+	dbra	d7,.loop
+	rts
+
+.pos:	DC.W	0,0
+.scr:	DC.L	0
+.amp:	DC.W	0
+
+; INPUT:
+; d0.w= red   [0,$FF]
+; d1.w= green [0,$FF]
+; d2.w= blue  [0,$FF]
+; OUTPUT:
+; d2.l= .125 colour double hc word
+; d3.l= .250 colour double hc word
+; d4.l= .500 colour double hc word
+; d5.l= 1.00 colour double hc word
+XZoom.calcSpriteColors:
+	move.w	d0,d3
+	move.w	d1,d4
+	move.w	d2,d5
+	lsl.w	#8,d3
+	lsl.w	#8,d4
+	lsl.w	#8,d5
+	andi.w	#%1111100000000000,d3
+	andi.w	#%1111110000000000,d4
+	lsr.w	#5,d4
+	lsr.w	#8,d5
+	lsr.w	#3,d5
+	or.w	d3,d5
+	or.w	d4,d5
+	move.w	d5,d4
+	lsr.w	#1,d4
+	andi.w	#%0111101111001111,d4
+	move.w	d4,d3
+	lsr.w	#1,d3
+	andi.w	#%0111101111001111,d3
+	move.w	d3,d2
+	lsr.w	#1,d2
+	andi.w	#%0111101111001111,d2
+	move.w	d5,d6
+	swap	d5
+	move.w	d6,d5
+	move.w	d4,d6
+	swap	d4
+	move.w	d6,d4
+	move.w	d3,d6
+	swap	d3
+	move.w	d6,d3
+	move.w	d2,d6
+	swap	d2
+	move.w	d6,d2
+	rts
+
+XZoom.pullSpring:
+	move.w	#1,XZoom.springPulled
+	rts
+
+XZoom.isSpringPulled:
+	move.w	XZoom.springPulled,d0
+	clr.w	XZoom.springPulled
+	rts
+
+XZoom.updateSpring:
+	move.w	monitormode,d0
+	cmpi.w	#vga100,d0
+	bne.s	.low_vbl_rate
+	move.w	$468.w,d0
+	andi.w	#$0001,d0
+	beq.s	.end
+.low_vbl_rate:
+	bsr	XZoom.incSpringTime
+	bsr	XZoom.calcSpringX
+.end:	rts
+
+XZoom.incSpringTime:
+	move.w	XZoom.springX_1,XZoom.springX_2
+	move.w	XZoom.springX,XZoom.springX_1
+	rts
+
+; x(t) = f(t) -M*(d^2*x(t)/dt^2) -B*dx(t)/dt {time continuous}
+; {translates to}
+; x[t] = f[t] -M(x[t]-2x[t-1]+x[t-2]) -B(x[t]-x[t-1]) {time discrete}
+; {some simplification...}
+; x[t] = (f[t]-M(x[t-2]-2x[t-1])+Bx[t-1])/(1+M+B)
+; OUTPUT:
+; d1.w=x[t] of spring
+XZoom.calcSpringX:
+; Calculate f[t]. This is some delta pulse.
+	clr.l	d1
+	bsr	XZoom.isSpringPulled
+	tst.w	d0
+	beq.s	.end_pulse
+	move.l	#XZoom.SPRING_AMP,d1
+.end_pulse:
+; d1.l=f[t] (16:16)
+
+; Calculate second term: M(x[t-2]-2x[t-1])
+	move.w	XZoom.springX_2,d0
+	move.w	XZoom.springX_1,d2
+	sub.w	d2,d0
+	sub.w	d2,d0
+	muls.w	#XZoom.SPRING_MASS,d0
+; d0.l=M(x[t-2]-2x[t-1]) (16:16)
+
+; Calculate third term: Bx[t-1]
+	move.w	XZoom.springX_1,d2
+	muls.w	#XZoom.SPRING_FRICTION,d2
+; d2.l=Bx[t-1] (16:16)
+
+; Calculate second factor: 1+FR+M
+	move.w	#$0100+XZoom.SPRING_FRICTION+XZoom.SPRING_MASS,d3
+
+; Calculate first factor: f[t]-M(x[t-2]-2x[t-1])+Bx[t-1]
+	sub.l	d0,d1			; d1.w=f[t]-M(x[t-2]-2x[t-1])
+	add.l	d2,d1
+; d1.w=f[t]-M(x[t-2]-2x[t-1])+Bx[t-1]
+
+; Divide the first factor by the second.
+	divs.w	d3,d1
+	move.w	d1,XZoom.springX
+	rts
+
+XZoom.flush:
+	movea.l	XZoom.bufferAddys,a1
+	movea.l	scr,a0
+	cmpi.w	#vga100,monitormode
+	beq	XZoom.flushVga100
+	cmpi.w	#vga60,monitormode
+	beq	XZoom.flushVga60
+	cmpi.w	#rgb50,monitormode
+	beq	XZoom.flushRgb50
+	rts
+
+XZoom.flushVga100:
+	moveq	#100-1,d7
+
+.yloop:	move.w	#160/16-1,d6
+
+.xloop:	REPT	8
+	move.l	(a1)+,(a0)+
+	ENDR
+	dbra	d6,.xloop
+
+	lea	(256-160)*2(a1),a1
+	dbra	d7,.yloop
+	rts
+
+XZoom.flushRgb50:
+	moveq	#100-1,d7
+
+.yloop:	move.w	#160/16-1,d6
+
+.xloop:	REPT	16
+	move.w	(a1)+,d0
+	move.w	d0,(a0)+
+	move.w	d0,(a0)+
+	ENDR
+	dbra	d6,.xloop
+
+	lea	(256-160)*2(a1),a1
+	dbra	d7,.yloop
+	rts
+
+XZoom.flushVga60:
+	moveq	#100-1,d7
+.yloop:	movem.l	(a1)+,d0-d6/a2-a6
+	movem.l	d0-d6/a2-a6,(a0)
+	movem.l	d0-d6/a2-a6,160*2(a0)
+	movem.l	(a1)+,d0-d6/a2-a6
+	movem.l	d0-d6/a2-a6,24*2(a0)
+	movem.l	d0-d6/a2-a6,(160+24)*2(a0)
+	movem.l	(a1)+,d0-d6/a2-a6
+	movem.l	d0-d6/a2-a6,48*2(a0)
+	movem.l	d0-d6/a2-a6,(160+48)*2(a0)
+	movem.l	(a1)+,d0-d6/a2-a6
+	movem.l	d0-d6/a2-a6,72*2(a0)
+	movem.l	d0-d6/a2-a6,(160+72)*2(a0)
+	movem.l	(a1)+,d0-d6/a2-a6
+	movem.l	d0-d6/a2-a6,96*2(a0)
+	movem.l	d0-d6/a2-a6,(160+96)*2(a0)
+	movem.l	(a1)+,d0-d6/a2-a6
+	movem.l	d0-d6/a2-a6,120*2(a0)
+	movem.l	d0-d6/a2-a6,(160+120)*2(a0)
+	movem.l	(a1)+,d0-d6/a2
+	movem.l	d0-d6/a2,144*2(a0)
+	movem.l	d0-d6/a2,(160+144)*2(a0)
+	lea	(256-160)*2(a1),a1
+	lea	160*2*2(a0),a0
+	dbra	d7,.yloop
+	rts
+
+******** OBJECT DATA ********
+
+	DATA
+
+XZoom.preSprite:
+	DC.W	2-1,3,$20,$20
+	DC.W	4-1,2,$20,$40,$40,$20
+	DC.W	6-1,1,$20,$40,$80,$80,$40,$20
+	DC.W	8-1,0,$20,$40,$80,$ff,$ff,$80,$40,$20
+	DC.W	8-1,0,$20,$40,$80,$ff,$ff,$80,$40,$20
+	DC.W	6-1,1,$20,$40,$80,$80,$40,$20
+	DC.W	4-1,2,$20,$40,$40,$20
+	DC.W	2-1,3,$20,$20
+
+XZoom.spriteTable:
+	DC.W	(.end-.start)/10-1
+.start:
+	IFNE	1
+	DC.W	$00,$FF,$FF,$0100,$0180
+	DC.W	$00,$00,$FF,$0300,$0350
+	DC.W	$FF,$00,$FF,$0240,$0410
+	DC.W	$FF,$00,$00,$03A0,$0360
+	DC.W	$FF,$FF,$00,$0170,$0240
+	DC.W	$00,$FF,$00,$02A0,$0340
+	DC.W	$00,$FF,$FF,$01A0,$0130
+	DC.W	$00,$00,$FF,$0270,$0310
+	DC.W	$FF,$00,$FF,$0230,$0210
+	DC.W	$FF,$00,$00,$03B0,$0270
+	DC.W	$FF,$FF,$00,$0150,$0220
+	DC.W	$00,$FF,$00,$0290,$0230
+	ELSE
+	DC.W	$FF,$7F,$00,$0100,$0180
+	DC.W	$00,$7F,$FF,$0300,$0350
+	DC.W	$FF,$00,$7F,$0240,$0410
+	DC.W	$7F,$FF,$7F,$03A0,$0360
+	DC.W	$FF,$FF,$FF,$0170,$0240
+	DC.W	$7F,$00,$FF,$02A0,$0340
+	DC.W	$FF,$FF,$00,$0260,$02A0
+	DC.W	$7F,$FF,$00,$01E0,$0210
+	ENDC
+.end:
+
+;  ****
+; *    *
+; * ***
+;  * *
+;   * *
+;  *** *
+; *    *
+;  ****
+
+XZoom.charS:
+	DC.W	(.end-.start)/4
+.start:	DC.W	-3,-7
+	DC.W	-1,-7
+	DC.W	+1,-7
+	DC.W	+3,-7
+	DC.W	-5,-5
+	DC.W	+5,-5
+	DC.W	-5,-3
+	DC.W	-1,-3
+	DC.W	+1,-3
+	DC.W	+3,-3
+	DC.W	-3,-1
+	DC.W	+1,-1
+	DC.W	-1,+1
+	DC.W	+3,+1
+ 	DC.W	-3,+3
+	DC.W	-1,+3
+	DC.W	+1,+3
+	DC.W	+5,+3
+	DC.W	-5,+5
+	DC.W	+5,+5
+	DC.W	-3,+7
+	DC.W	-1,+7
+	DC.W	+1,+7
+	DC.W	+3,+7
+.end:
+
+;  ****
+; *    *
+; * ***
+; * *
+; * *
+; * ***
+; *    *
+;  ****
+
+XZoom.charC:
+	DC.W	(.end-.start)/4
+.start:	DC.W	-3,-7
+	DC.W	-1,-7
+	DC.W	+1,-7
+	DC.W	+3,-7
+	DC.W	-5,-5
+	DC.W	+5,-5
+	DC.W	-5,-3
+	DC.W	-1,-3
+	DC.W	+1,-3
+	DC.W	+3,-3
+	DC.W	-5,-1
+	DC.W	-1,-1
+	DC.W	-5,+1
+	DC.W	-1,+1
+	DC.W	-5,+3
+	DC.W	-1,+3
+	DC.W	+1,+3
+	DC.W	+3,+3
+	DC.W	-5,+5
+	DC.W	+5,+5
+	DC.W	-3,+7
+	DC.W	-1,+7
+	DC.W	+1,+7
+	DC.W	+3,+7
+.end:
+
+;  *****
+; *     *
+;  ** **
+;   * *
+;   * *
+;   * *
+;   * *
+;    *
+
+XZoom.charT:
+	DC.W	(.end-.start)/4
+.start:	DC.W	-4,-7
+	DC.W	-2,-7
+	DC.W	+0,-7
+	DC.W	+2,-7
+	DC.W	+4,-7
+	DC.W	-6,-5
+	DC.W	+6,-5
+	DC.W	-4,-3
+	DC.W	-2,-3
+	DC.W	+2,-3
+	DC.W	+4,-3
+	DC.W	-2,-1
+	DC.W	+2,-1
+	DC.W	-2,+1
+	DC.W	+2,+1
+	DC.W	-2,+3
+	DC.W	+2,+3
+	DC.W	-2,+5
+	DC.W	+2,+5
+	DC.W	+0,+7
+.end:
+
+;   **
+;  * *
+; *  *
+;  * *
+;  * *
+;  * *
+; *   *
+;  ***
+
+XZoom.char1:
+	DC.W	(.end-.start)/4
+.start:	DC.W	+0,-7
+	DC.W	+2,-7
+	DC.W	-2,-5
+	DC.W	+2,-5
+	DC.W	-4,-3
+	DC.W	+2,-3
+	DC.W	-2,-1
+	DC.W	+2,-1
+	DC.W	-2,+1
+	DC.W	+2,+1
+	DC.W	-2,+3
+	DC.W	+2,+3
+	DC.W	-4,+5
+	DC.W	+4,+5
+	DC.W	-2,+7
+	DC.W	+0,+7
+	DC.W	+2,+7
+.end:
+
+;     *
+;    * *   
+;   * *
+;   * *
+;  * *
+;  * * 
+; * *  
+;  *
+
+XZoom.charSlash:
+	DC.W	(.end-.start)/4
+.start:	DC.W	+3,-7
+	DC.W	+1,-5
+	DC.W	+5,-5
+	DC.W	-1,-3
+	DC.W	+3,-3
+	DC.W	-1,-1
+	DC.W	+3,-1
+	DC.W	-3,+1
+	DC.W	+1,+1
+	DC.W	-3,+3
+	DC.W	+1,+3
+	DC.W	-5,+5
+	DC.W	-1,+5
+	DC.W	-3,+7
+.end:
+
+;  ****
+; *    *
+; * ***
+; * **
+; *   *
+; * **
+; * *
+;  *
+
+XZoom.charF:
+	DC.W	(.end-.start)/4
+.start:	DC.W	-3,-7
+	DC.W	-1,-7
+	DC.W	+1,-7
+	DC.W	+3,-7
+	DC.W	-5,-5
+	DC.W	+5,-5
+	DC.W	-5,-3
+	DC.W	-1,-3
+	DC.W	+1,-3
+	DC.W	+3,-3
+	DC.W	-5,-1
+	DC.W	-1,-1
+	DC.W	+1,-1
+	DC.W	-5,+1
+	DC.W	+3,+1
+	DC.W	-5,+3
+	DC.W	-1,+3
+	DC.W	+1,+3
+	DC.W	-5,+5
+	DC.W	-1,+5
+	DC.W	-3,+7
+.end:
+
+; *** ***
+; * * * *
+; * * * *
+; * * * *
+; * * * *
+; * *** *
+; *     *
+; ******
+
+XZoom.charU:
+	DC.W	(.end-.start)/4
+.start:	DC.W	-6,-7
+	DC.W	-4,-7
+	DC.W	-2,-7
+	DC.W	+2,-7
+	DC.W	+4,-7
+	DC.W	+6,-7
+	DC.W	-6,-5
+	DC.W	-2,-5
+	DC.W	+2,-5
+	DC.W	+6,-5
+	DC.W	-6,-3
+	DC.W	-2,-3
+	DC.W	+2,-3
+	DC.W	+6,-3
+	DC.W	-6,-1
+	DC.W	-2,-1
+	DC.W	+2,-1
+	DC.W	+6,-1
+	DC.W	-6,+1
+	DC.W	-2,+1
+	DC.W	+2,+1
+	DC.W	+6,+1
+	DC.W	-6,+3
+	DC.W	-2,+3
+	DC.W	+0,+3
+	DC.W	+2,+3
+	DC.W	+6,+3
+	DC.W	-6,+5
+	DC.W	+6,+5
+	DC.W	-6,+7
+	DC.W	-4,+7
+	DC.W	-2,+7
+	DC.W	+0,+7
+	DC.W	+2,+7
+	DC.W	+4,+7
+.end:
+
+; ******
+; *     *
+; * *** *
+; * * * * 
+; * * * *
+; * * * *
+; * * * *
+; *** ***
+
+XZoom.charN:
+	DC.W	(.end-.start)/4
+.start:	DC.W	-6,+7
+	DC.W	-4,+7
+	DC.W	-2,+7
+	DC.W	+2,+7
+	DC.W	+4,+7
+	DC.W	+6,+7
+	DC.W	-6,+5
+	DC.W	-2,+5
+	DC.W	+2,+5
+	DC.W	+6,+5
+	DC.W	-6,+3
+	DC.W	-2,+3
+	DC.W	+2,+3
+	DC.W	+6,+3
+	DC.W	-6,+1
+	DC.W	-2,+1
+	DC.W	+2,+1
+	DC.W	+6,+1
+	DC.W	-6,-1
+	DC.W	-2,-1
+	DC.W	+2,-1
+	DC.W	+6,-1
+	DC.W	-6,-3
+	DC.W	-2,-3
+	DC.W	+0,-3
+	DC.W	+2,-3
+	DC.W	+6,-3
+	DC.W	-6,-5
+	DC.W	+6,-5
+	DC.W	-6,-7
+	DC.W	-4,-7
+	DC.W	-2,-7
+	DC.W	+0,-7
+	DC.W	+2,-7
+	DC.W	+4,-7
+.end:
+
+XZoom.charAddy:
+	DC.L	0
+
+XZoom.bufferAddys:
+	DC.L	XZoom.logBuffer1
+	DC.L	XZoom.logBuffer2
+
+XZoom.missileMode:
+	DC.W	0
+XZoom.wibbleMode:
+	DC.W	0
+
+XZoom.zoomFactor:
+	DC.W	$5FFF
+
+XZoom.flowPal:
+	IFNE	0
+	DC.W	(.end-.start)/4
+	DC.W	5
+.start:	DC.L	$7F000000
+	DC.L	$FF00007F
+	DC.L	$7F0000FF
+	DC.L	$007F00FF
+	DC.L	$00FF007F
+	DC.L	$7FFF0000
+	DC.L	$FFFF0000
+	DC.L	$7FFF0000
+	DC.L	$7FFF007F
+	DC.L	$00FF00FF
+	DC.L	$007F00FF
+	DC.L	$7F7F00FF
+	DC.L	$7F0000FF
+	DC.L	$FF0000FF
+	DC.L	$FF00007F
+	DC.L	$FF000000
+	DC.L	$7F000000
+.end:
+	ELSE
+	DC.W	(.end-.start)/4
+	DC.W	7			;2^6 * 4 = 2^(6+2)=256
+.start:	DC.L	$00FF00FF
+	DC.L	$000000FF
+	DC.L	$FF0000FF
+	DC.L	$FF000000
+	DC.L	$FFFF0000
+	DC.L	$00FF0000
+	DC.L	$00FF00FF
+.end:
+	ENDC
+
+******** OBJECT RESERVES ********
+
+	BSS
+
+XZoom.sprite:
+	DS.W	(8+2)*8
+
+	DS.W	256*100
+XZoom.logBuffer1:
+	DS.W	256*100
+	DS.W	256*100
+XZoom.logBuffer2:
+	DS.W	256*100
+	DS.W	256*100
+
+XZoom.pal:
+	DS.L	4096
+
+XZoom.startTime:
+	DS.W	1
+XZoom.angle:
+	DS.W	1
+
+; Spring state variables.
+XZoom.springPulled:
+	DS.W	1
+XZoom.springX:
+	DS.W	1
+XZoom.springX_1:
+	DS.W	1
+XZoom.springX_2:
+	DS.W	1
+
+******** END OF DEMO-EFFECT OBJECT ********

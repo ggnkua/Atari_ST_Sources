@@ -1,0 +1,1141 @@
+* Object skeleton used by DEMOS1.S or DASTD.S (v2.0)
+* v1.0: * Monitormode selection.
+*       * SET_RES routine vbl-synced.
+*       * Screenaddress-setting optimised.
+*
+* v1.1: * Automaticly initializes screenbuffers and resolution.
+*       * Returns resultcode in INIT routine.
+*       * Minor optimisations.
+
+******** OBJECT EQUS ********
+
+******** OBJECT TABLE ********
+
+* Must be first in object!!
+kerstboomFXTable:
+	DC.L	kerstboomFXMAINLOOP
+	DC.L	INIT_kerstboomFX
+	DC.L	SET_kerstboomFXRES
+	DC.L	setWaveRout
+	DC.L	setJumpRout
+	DC.L	triggerExit
+	DC.L	setStar
+	DC.L	triggerEntry
+	DC.L	triggerXExit
+* Add more addresses here..
+	DC.L	0
+
+* Include the Human Fly engine. Which implementation shouldn't be important
+* if it conforms to Human Fly interface standards.
+	INCLUDE	HFLY_CPU.S				* Include the CPU-only engine.
+;	INCLUDE	HFLY_DSP.S				* Include the CPU-DSP engine.
+	TEXT
+
+******** RESOLUTION SETTING ROUTINE ********
+
+SET_kerstboomFXRES:
+	IFEQ	testmode
+	move.l	#rts,vbl_gfx
+
+	move.w	$0468.w,d0
+.ck468:	cmp.w	$0468.w,d0
+	beq.s	.ck468
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq.s	.rgb50
+* Unknown monitormode..
+	rts
+.vga60:	jmp	vga60_16bit_320_200
+	rts
+.vga100:
+	jmp	vga100_16bit_320_200
+	rts
+.rgb50:	jmp	rgb50_16bit_320_200
+	ENDC
+	rts
+
+******** INIT SUBROUTINE ********
+
+* OUTPUT: d0.l: 0   = All clear.
+*               neg = Error! Not initialized!
+INIT_kerstboomFX:
+	bsr	HumanFly.init
+
+	lea	sine_tbl,a1
+	bsr	Matrix.init
+
+	lea	Viewport.settingsTable,a0
+	move.w	#320,Viewport.XSCREEN(a0)
+	move.w	#200,Viewport.YSCREEN(a0)
+	move.w	#0,Viewport.XSTART(a0)
+	move.w	#0,Viewport.YSTART(a0)
+	move.w	#320,Viewport.XEND(a0)
+	move.w	#200,Viewport.YEND(a0)
+	move.w	#160,Viewport.XCENTER(a0)
+	move.w	#100,Viewport.YCENTER(a0)
+	move.w	#256+32,Viewport.ASPECT(a0)
+	move.w	#$100,Viewport.FOCAL(a0)
+	bsr	Viewport.update
+
+	bsr	INIT_COLORTABLES
+
+	lea	textureTable,a0
+	lea	colorTable,a1
+	bsr	Polygon.init
+
+	lea	testobject1_dat+2,a0
+	move.w	(a0)+,d0
+	beq.s	.no_scale
+	movea.l	a0,a1
+	move.w	d0,d7
+	subq.w	#1,d7
+	mulu.w	#Vertex.SIZE,d0
+	adda.l	d0,a0
+.loop:	REPT	3
+	move.w	(a1)+,d0
+	ext.l	d0
+	lsl.l	#1,d0
+	divs.w	#5,d0
+	move.w	d0,(a0)+
+	ENDR
+	dbra	d7,.loop
+.no_scale:
+
+	lea	testobject1_dat,a0
+	move.l	#testobject1_end-testobject1_dat,d0
+	bsr	ObjectRegistry.set
+	tst.w	d0
+	bmi.s	.error
+	lea	testobject2_dat,a0
+	move.l	#testobject2_end-testobject2_dat,d0
+	bsr	ObjectRegistry.set
+	tst.w	d0
+	bmi.s	.error
+	lea	starObject,a0
+	move.l	#endStarObject-starObject,d0
+	bsr	ObjectRegistry.set
+	tst.w	d0
+	bmi.s	.error
+
+	bsr	setStar
+
+	bsr	initWipeBuffer
+
+.success:
+	moveq	#0,d0
+	rts
+.error:	moveq	#-1,d0
+	rts
+
+******** SCREENINIT SUBROUTINE ********
+
+INIT_kerstboomFXSCREEN:
+	lea	Viewport.settingsTable,a0
+	movem.w	Viewport.XSTART(a0),d0/d6
+	movem.w	Viewport.YSTART(a0),d1/d7
+	cmpi.l	#moveStar,trajectRoutine
+	beq.s	.white
+	moveq	#$00000000,d4
+	bra.s	.color_done
+.white:	moveq	#$ffffffff,d4
+.color_done:
+	movea.l	scr,a0
+	bsr	Viewport.paintRectangle
+	rts
+
+******** MAINLOOP SUBROUTINE ********
+
+kerstboomFXMAINLOOP:
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	cmpi.l	#3,d0
+	bhs.s	.end_screeninit
+	bsr	INIT_kerstboomFXSCREEN
+.end_screeninit:
+
+	move.w	$468.w,old468
+
+	tst.w	shrinkMode
+	beq.s	.end_shrinking
+	lea	Viewport.settingsTable,a0
+	move.w	Viewport.XEND(a0),d0
+	cmp.w	Viewport.XCENTER(a0),d0
+	ble.s	.end_shrinking
+	subq.w	#1,d0
+	move.w	d0,Viewport.XEND(a0)
+	addq.w	#1,Viewport.XSTART(a0)
+	move.w	Viewport.YEND(a0),d1
+	cmp.w	Viewport.YCENTER(a0),d1
+	ble.s	.end_shrinking
+	subq.w	#1,d1
+	move.w	d1,Viewport.YEND(a0)
+	addq.w	#1,Viewport.YSTART(a0)
+.end_shrinking:
+
+	movea.l	scr,a0
+	bsr	Primitive.setScreenbuffer
+
+	bsr	PrimitiveMesh.new
+
+	movea.l	trajectRoutine,a0
+	jsr	(a0)
+
+	bsr	PrimitiveMesh.sortZ
+	bsr	PrimitiveMesh.complete
+
+	movea.l	restoreRoutine,a0
+	jsr	(a0)
+
+	movea.l	rectangleTableAddresses,a0
+	bsr	PrimitiveMesh.paint
+
+	lea	rectangleTableAddresses,a0
+ 	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+
+	IFEQ	testmode
+	lea	scr,a0
+ 	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-(a0)
+	move.l	d0,4(a0)
+	move.l	d1,-(a0)
+	move.l	d0,d1
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+	ENDC
+
+	move.w	old468,d0
+.cmp:	cmp.w	$468.w,d0
+	beq.s	.cmp
+
+	move.l	frmcnt,d0
+	sub.l	lastframecount,d0
+	bne.s	.res_done
+	bsr	SET_kerstboomFXRES
+.res_done:
+	rts
+
+******** OBJECT DATA ********
+
+	DATA
+
+TRIANGLETYPE:	=	(3-1)<<Primitive.TYPESHIFT
+QUADRANGLETYPE:	=	(4-1)<<Primitive.TYPESHIFT
+
+phongTexture1:
+	INCBIN	PHONG4FL.APX
+phongTexture2:
+	INCBIN	FLRWVEFL.APX
+
+textureTable:
+	DC.L	phongTexture1
+	DC.L	phongTexture2
+	DC.L	0
+
+testobject1_dat:
+	INCBIN	BALE.FLY
+testobject1_end:
+testobject2_dat:
+	INCBIN	XMASTREE.FLY
+testobject2_end:
+starObject:
+	DC.W	(16+2)*2
+	DC.W	16+2
+* vertices
+	DC.W	+000,+000,-200
+	DC.W	+000,+800,0
+	DC.W	+200,+400,0
+	DC.W	+500,+500,0
+	DC.W	+400,+200,0
+	DC.W	+800,+000,0
+	DC.W	+400,-200,0
+	DC.W	+500,-500,0
+	DC.W	+200,-400,0
+	DC.W	+000,-800,0
+	DC.W	-200,-400,0
+	DC.W	-500,-500,0
+	DC.W	-400,-200,0
+	DC.W	-800,+000,0
+	DC.W	-400,+200,0
+	DC.W	-500,+500,0
+	DC.W	-200,+400,0
+	DC.W	+000,+000,+200
+* normal vectors
+	DC.W	+000,+000,-120
+	DC.W	+000,+120,0
+	DC.W	+031,+063,0
+	DC.W	+079,+079,0
+	DC.W	+063,+031,0
+	DC.W	+120,+000,0
+	DC.W	+063,-031,0
+	DC.W	+079,-079,0
+	DC.W	+031,-063,0
+	DC.W	+000,-120,0
+	DC.W	-031,-063,0
+	DC.W	-079,-079,0
+	DC.W	-063,-031,0
+	DC.W	-120,+000,0
+	DC.W	-063,+031,0
+	DC.W	-079,+079,0
+	DC.W	-031,+063,0
+	DC.W	+000,+000,+120
+
+	DC.W	0
+
+	DC.W	32
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|1,+00,01,02,+18,19,20
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|3,+00,02,03,+18,20,21
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|1,+00,03,04,+18,21,22
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|3,+00,04,05,+18,22,23
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|1,+00,05,06,+18,23,24
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|3,+00,06,07,+18,24,25
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|1,+00,07,08,+18,25,26
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|3,+00,08,09,+18,26,27
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|1,+00,09,10,+18,27,28
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|3,+00,10,11,+18,28,29
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|1,+00,11,12,+18,29,30
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|3,+00,12,13,+18,30,31
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|1,+00,13,14,+18,31,32
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|3,+00,14,15,+18,32,33
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|1,+00,15,16,+18,33,34
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|3,+00,16,01,+18,34,20
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|3,+17,02,01,+35,20,19
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|1,+17,03,02,+35,21,20
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|3,+17,04,03,+35,22,21
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|1,+17,05,04,+35,23,22
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|3,+17,06,05,+35,24,23
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|1,+17,07,06,+35,25,24
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|3,+17,08,07,+35,26,25
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|1,+17,09,08,+35,27,26
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|3,+17,10,09,+35,28,27
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|1,+17,11,10,+35,29,28
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|3,+17,12,11,+35,30,29
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|1,+17,13,12,+35,31,30
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|3,+17,14,13,+35,32,31
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|1,+17,15,14,+35,33,32
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|3,+17,16,15,+35,34,33
+	DC.W	TRIANGLETYPE|Polygon.PHONGSHADED|1,+17,01,16,+35,19,34
+endStarObject:
+
+rectangleTableAddresses:
+	DC.L	rectangleTable
+	DC.L	rectangleTable2
+	DC.L	rectangleTable3
+
+trajectRoutine:
+	DC.L	waveAround
+restoreRoutine:
+	DC.L	restorePic
+
+maggieLogo:
+	;INCBIN	MAGGIE10.APX
+	INCBIN	MAGGIE29.APX
+
+objectYCenter:
+	DC.W	7000
+
+******** OBJECT RESERVES ********
+
+	BSS
+
+backgroundBuffer:
+	DS.W	320*200
+
+traject_start_time:
+	DS.L	1
+exit_start_time:
+	DS.L	1
+wipe_start_time:
+	DS.L	1
+last_wipe_time:
+	DS.L	1
+colorTable:
+	DS.W	64*16
+rectangleTable:
+	DS.W	1+4*32
+rectangleTable2:
+	DS.W	1+4*32
+rectangleTable3:
+	DS.W	1+4*32
+
+old468:	DS.W	1
+
+shrinkMode:
+	DS.W	1
+objectMovement:
+	DS.W	1
+oldObjectYCenter:
+	DS.W	1
+objectXMovement:
+	DS.W	1
+objectXCenter:
+	DS.W	1
+
+******** OBJECT SUBROUTINES ********
+
+	TEXT
+
+setWaveRout:
+	move.l	#restoreBlack,restoreRoutine
+	move.l	#waveAround,trajectRoutine
+	rts
+
+setJumpRout:
+	move.l	#restoreBlack,restoreRoutine
+	move.l	#jumpAround,trajectRoutine
+	rts
+
+triggerExit:
+	move.l	$4ba.w,exit_start_time
+	move.w	#-1,objectMovement
+	rts
+
+triggerEntry:
+	move.w	objectYCenter,oldObjectYCenter
+	move.l	$4ba.w,traject_start_time
+	move.w	#1,objectMovement
+	rts
+
+setStar:
+	move.l	#restorePic,restoreRoutine
+	move.l	$4ba.w,traject_start_time
+	move.l	$4ba.w,wipe_start_time
+	clr.l	last_wipe_time
+	move.l	#moveStar,trajectRoutine
+	rts
+
+triggerXExit:
+	move.l	$4ba.w,exit_start_time
+	move.w	#-1,objectXMovement
+	rts
+
+initWipeBuffer:
+	lea	backgroundBuffer,a0
+	moveq	#$ffffffff,d0
+	move.w	#320*200/2-1,d7
+
+.loop:	move.l	d0,(a0)+
+	dbra	d7,.loop
+	rts
+
+INIT_COLORTABLES:
+	lea	colorTable,a0
+	move.w	#$ffff,d0
+	moveq	#32-1,d7
+
+.dark1greenloop:
+	move.w	d0,(a0)+
+	subi.w	#$0801,d0
+	dbra	d7,.dark1greenloop
+
+	move.w	#$07e0,d0
+	moveq	#96-1,d7
+
+.dark2greenloop:
+	move.w	d0,(a0)+
+	subi.w	#$0020,d0
+	dbra	d7,.dark2greenloop
+
+	move.w	#$ffff,d0
+	moveq	#32-1,d7
+
+.whitegreenloop:
+	move.w	d0,(a0)+
+	move.w	d0,(a0)+
+	subi.w	#$0801,d0
+	dbra	d7,.whitegreenloop
+
+	move.w	#$07e0,d0
+	moveq	#64-1,d7
+
+.greenloop:
+	move.w	d0,(a0)+
+	subi.w	#$0020,d0
+	dbra	d7,.greenloop
+
+	move.w	#$ffff,d0
+	moveq	#8-1,d7
+
+.whitebrownloop:
+	REPT	3
+	move.w	d0,(a0)+
+	move.w	d0,(a0)+
+	subi.w	#$0021,d0
+	ENDR
+	move.w	d0,(a0)+
+	move.w	d0,(a0)+
+	subi.w	#$0821,d0
+	dbra	d7,.whitebrownloop
+
+	move.w	#$bbe0,d0
+	moveq	#32-1,d7
+
+.brownloop:
+	move.w	d0,(a0)+
+	move.w	d0,(a0)+
+	subi.w	#$0820,d0
+	dbra	d7,.brownloop
+
+	move.w	#$ffff,d0
+	moveq	#32-1,d7
+
+.whiteyellowloop:
+	move.w	d0,(a0)+
+	move.w	d0,(a0)+
+	subi.w	#$0001,d0
+	dbra	d7,.whiteyellowloop
+
+	move.w	#$ffe0,d0
+	moveq	#32-1,d7
+
+.yellowloop:
+	move.w	d0,(a0)+
+	subi.w	#$0020,d0
+	move.w	d0,(a0)+
+	subi.w	#$0820,d0
+	dbra	d7,.yellowloop
+	rts
+
+waveAround:
+	tst.w	objectMovement
+	beq.s	.end_movement
+	bpl.s	.pos_movement
+	move.l	$4ba.w,d0
+	sub.l	exit_start_time,d0
+	lsl.l	#3,d0
+	move.w	d0,objectYCenter
+	bra.s	.end_movement
+.pos_movement:
+	moveq	#0,d0
+	move.w	oldObjectYCenter,d0
+	move.l	$4ba.w,d1
+	sub.l	traject_start_time,d1
+	lsl.l	#3,d1
+	sub.l	d1,d0
+	move.w	d0,objectYCenter
+	bgt.s	.end_movement
+ 	clr.w	objectMovement
+.end_movement:
+	move.w	#512,d0
+	move.l	$4ba.w,d1
+	sub.l	traject_start_time,d1
+	move.w	d1,-(sp)
+	move.w	d1,d2
+	mulu.w	#5,d2
+	lsr.l	#2,d2
+	bsr	Matrix.generate
+	move.w	#0,d0
+	move.w	objectYCenter,d1
+	move.w	#8000,d2
+	bsr	Matrix.translate
+	bsr	Matrix.push
+	moveq	#0,d0
+	move.w	(sp)+,d0
+	lsl.w	#1,d0
+	move.l	d0,d1
+	mulu.w	#5,d1
+	lsr.l	#2,d1
+	move.l	d0,d2
+	mulu.w	#13,d2
+	lsr.l	#3,d2
+	bsr	Matrix.generate
+	move.w	#2000,d0
+	move.w	#0,d1
+	move.w	#0,d2
+	bsr	Matrix.translate
+	bsr	Matrix.push
+
+* de kerstboom
+	moveq	#0,d0
+	moveq	#0,d1
+	moveq	#0,d2
+	bsr	Matrix.generate
+	move.w	#0,d0
+	move.w	#0,d1
+	move.w	#300,d2
+	bsr	Matrix.translate
+	bsr	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#1,d1
+	bsr	TransformObject.transform
+	bsr	Matrix.pop
+
+* een kerstballetje
+	moveq	#0,d0
+	moveq	#0,d1
+	moveq	#0,d2
+	bsr	Matrix.generate
+	move.w	#900,d0
+	move.w	#0,d1
+	move.w	#0,d2
+	bsr	Matrix.translate
+	bsr	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr	TransformObject.transform
+	bsr	Matrix.pop
+
+* nog eentje
+	moveq	#0,d0
+	moveq	#0,d1
+	moveq	#0,d2
+	bsr	Matrix.generate
+	move.w	#-1200,d0
+	move.w	#0,d1
+	move.w	#-1100,d2
+	bsr	Matrix.translate
+	bsr	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr	TransformObject.transform
+	bsr	Matrix.pop
+
+* en de laatste
+	moveq	#0,d0
+	moveq	#0,d1
+	moveq	#0,d2
+	bsr	Matrix.generate
+	move.w	#0,d0
+	move.w	#1200,d1
+	move.w	#-1100,d2
+	bsr	Matrix.translate
+	bsr	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr	TransformObject.transform
+	bsr	Matrix.pop
+
+	bsr	Matrix.pop
+	bsr	Matrix.pop
+	rts
+
+jumpAround:
+	tst.w	objectXMovement
+	beq.s	.end_x_movement
+	move.l	$4ba.w,d0
+	sub.l	exit_start_time,d0
+	lsl.l	#3,d0
+	neg.w	d0
+	move.w	d0,objectXCenter
+	bra.s	.end_movement
+.end_x_movement:
+	tst.w	objectMovement
+	beq.s	.end_movement
+	bpl.s	.pos_movement
+	move.l	$4ba.w,d0
+	sub.l	exit_start_time,d0
+	lsl.l	#3,d0
+	move.w	d0,objectYCenter
+	bra.s	.end_movement
+.pos_movement:
+	moveq	#0,d0
+	move.w	oldObjectYCenter,d0
+	move.l	$4ba.w,d1
+	sub.l	traject_start_time,d1
+	lsl.l	#3,d1
+	sub.l	d1,d0
+	move.w	d0,objectYCenter
+	bgt.s	.end_movement
+	clr.w	objectMovement
+.end_movement:
+	move.w	#512,d0
+	move.l	$4ba.w,d1
+	sub.l	traject_start_time,d1
+	move.w	d1,-(sp)
+	move.w	d1,d2
+	mulu.w	#5,d2
+	lsr.l	#2,d2
+	moveq	#0,d1
+	moveq	#0,d2
+	bsr	Matrix.generate
+	move.w	objectXCenter,d0
+	move.w	objectYCenter,d1
+	move.w	#8000,d2
+	bsr	Matrix.translate
+	bsr	Matrix.push
+	moveq	#0,d2
+	move.w	(sp),d2
+
+	lsl.w	#1,d2
+	moveq	#0,d0
+	moveq	#0,d1	
+	bsr	Matrix.generate
+	move.w	(sp)+,d2
+	move.w	d2,d0
+	lsl.w	#5,d2
+	andi.w	#$07ff,d2
+	subi.w	#$0300,d2
+	Do_SinModulo	d0
+	Get_SinCos	sine_tbl,d0,d0,d1
+	asr.l	#3,d0
+	asr.l	#5,d1
+	bsr	Matrix.translate
+	bsr	Matrix.push
+
+* de kerstboom
+	moveq	#0,d0
+	moveq	#0,d1
+	moveq	#0,d2
+	bsr	Matrix.generate
+	move.w	#0,d0
+	move.w	#0,d1
+	move.w	#300,d2
+	bsr	Matrix.translate
+	bsr	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#1,d1
+	bsr	TransformObject.transform
+	bsr	Matrix.pop
+
+* een kerstballetje
+	moveq	#0,d0
+	moveq	#0,d1
+	moveq	#0,d2
+	bsr	Matrix.generate
+	move.w	#900,d0
+	move.w	#0,d1
+	move.w	#0,d2
+	bsr	Matrix.translate
+	bsr	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr	TransformObject.transform
+	bsr	Matrix.pop
+
+* nog eentje
+	moveq	#0,d0
+	moveq	#0,d1
+	moveq	#0,d2
+	bsr	Matrix.generate
+	move.w	#-1200,d0
+	move.w	#0,d1
+	move.w	#-1100,d2
+	bsr	Matrix.translate
+	bsr	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr	TransformObject.transform
+	bsr	Matrix.pop
+
+* en de laatste
+	moveq	#0,d0
+	moveq	#0,d1
+	moveq	#0,d2
+	bsr	Matrix.generate
+	move.w	#0,d0
+	move.w	#1200,d1
+	move.w	#-1100,d2
+	bsr	Matrix.translate
+	bsr	Matrix.push
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#0,d1
+	bsr	TransformObject.transform
+	bsr	Matrix.pop
+
+	bsr	Matrix.pop
+	bsr	Matrix.pop
+	rts
+
+moveStar:
+	tst.w	.first(pc)
+	bne.s	.not_first
+	not.w	.first
+	move.w	#-1,.keyframe_buf+QuatKeyBuf.KEYNUM
+.not_first:
+
+	lea	traject_start_time,a3
+	lea	.trajectory_tbl(pc),a2
+	lea	.keyframe_buf(pc),a1
+	lea	.vertexKey(pc),a0
+	bsr	Keyframer.interpolateVertex
+	lea	.vertexKey(pc),a1
+	bsr	Matrix.convertRotationVertex
+
+	bsr	Matrix.push
+
+* Transform the complete object.
+	moveq	#TransformObject.BACKFACE_CULLING|TransformObject.PERSPECTIVATE,d0
+	moveq	#2,d1
+	bsr	TransformObject.transform
+
+	bsr	Matrix.pop
+
+	rts
+
+.first:
+	DC.W	0
+.vertexKey:
+	DS.B	VertexKey.SIZE
+.keyframe_buf:
+	DS.B	VertexKeyBuf.SIZE
+
+.trajectory_tbl:
+	DC.W	(.end-.start)/VertexKeyEntry.SIZE
+.start:
+	IFNE	1
+
+	DC.W	-02000,+06500				* X, dX
+	DC.W	+00000,+00000				* Y, dY
+	DC.W	+02000,+00000				* Z, dZ
+	DC.W	+00000,+00000				* RX, GRX
+	DC.W	+00000,+08192				* RY, GRY
+	DC.W	+00000,+00000				* RZ, GRZ
+	DC.L	800					* time
+
+	DC.W	+01300,+00000				* X, dX
+	DC.W	+00000,+00000				* Y, dY
+	DC.W	+02000,+00000				* Z, dZ
+	DC.W	+00000,+01024				* RX, GRX
+	DC.W	+04096,+00000				* RY, GRY
+	DC.W	+00000,+00000				* RZ, GRZ
+	DC.L	400					* time
+
+	DC.W	+00000,+00000				* X, dX
+	DC.W	-00500,+00000				* Y, dY
+	DC.W	+02500,+00000				* Z, dZ
+	DC.W	+01024,+01024				* RX, GRX
+	DC.W	+04096,+00000				* RY, GRY
+	DC.W	+00000,+00000				* RZ, GRZ
+	DC.L	400					* time
+
+	DC.W	+01800,+00000				* X, dX
+	DC.W	+01000,+00000				* Y, dY
+	DC.W	+04000,+00000				* Z, dZ
+	DC.W	+02048,+02048				* RX, GRX
+	DC.W	+04096,+00000				* RY, GRY
+	DC.W	+00000,+00512				* RZ, GRZ
+	DC.L	600					* time
+
+	DC.W	-02500,+08000				* X, dX
+	DC.W	+01000,-02000				* Y, dY
+	DC.W	+04000,+00000				* Z, dZ
+	DC.W	+04096,-01500				* RX, GRX
+	DC.W	+04096,+02048				* RY, GRY
+	DC.W	+00512,+00000				* RZ, GRZ
+	DC.L	400					* time
+
+	DC.W	-02500,+01000				* X, dX
+	DC.W	-01000,-01000				* Y, dY
+	DC.W	+04000,+00000				* Z, dZ
+	DC.W	+02596,-02596				* RX, GRX
+	DC.W	+06144,+00000				* RY, GRY
+	DC.W	+00512,+00512				* RZ, GRZ
+	DC.L	600					* time
+
+	DC.W	+03500,+00000				* X, dX
+	DC.W	-01000,+00000				* Y, dY
+	DC.W	+04000,+00000				* Z, dZ
+	DC.W	+00000,+00000				* RX, GRX
+	DC.W	+06144,+00000				* RY, GRY
+	DC.W	+01024,+01000				* RZ, GRZ
+	DC.L	1000					* time
+
+	DC.W	+03500,+00000				* X, dX
+	DC.W	-01000,+00000				* Y, dY
+	DC.W	+04000,+00000				* Z, dZ
+	DC.W	+00000,+00000				* RX, GRX
+	DC.W	+06144,+00000				* RY, GRY
+	DC.W	+08192,+00000				* RZ, GRZ
+	DC.L	10000					* time
+
+	ELSE
+	DC.W	-02000,+06500				* X, dX
+	DC.W	+00000,+00000				* Y, dY
+	DC.W	+02000,+00000				* Z, dZ
+	DC.W	+00000,+00000				* RX, GRX
+	DC.W	+00000,+08192				* RY, GRY
+	DC.W	+00000,+00000				* RZ, GRZ
+	DC.L	800					* time
+
+	DC.W	+01500,+01000				* X, dX
+	DC.W	+00000,+00000				* Y, dY
+	DC.W	+02000,+02000				* Z, dZ
+	DC.W	+00000,+01024				* RX, GRX
+	DC.W	+04096,+00000				* RY, GRY
+	DC.W	+00000,+00000				* RZ, GRZ
+	DC.L	400					* time
+
+	DC.W	+01500,-01000				* X, dX
+	DC.W	+00000,+00500				* Y, dY
+	DC.W	+04000,-01500				* Z, dZ
+	DC.W	+01024,+00000				* RX, GRX
+	DC.W	+04096,+00000				* RY, GRY
+	DC.W	+00000,+00512				* RZ, GRZ
+	DC.L	400					* time
+
+	DC.W	+00500,-01000				* X, dX
+	DC.W	+00500,-01000				* Y, dY
+	DC.W	+02500,+01500				* Z, dZ
+	DC.W	+04096,-01500				* RX, GRX
+	DC.W	+04096,+00000				* RY, GRY
+	DC.W	+00512,+00000				* RZ, GRZ
+	DC.L	400					* time
+
+	DC.W	-00500,+01000				* X, dX
+	DC.W	+00000,-01000				* Y, dY
+	DC.W	+04000,+01500				* Z, dZ
+	DC.W	+02596,-02596				* RX, GRX
+	DC.W	+04096,+00000				* RY, GRY
+	DC.W	+00512,+00512				* RZ, GRZ
+	DC.L	400					* time
+
+	DC.W	-03500,+00000				* X, dX
+	DC.W	+00200,+00000				* Y, dY
+	DC.W	+10000,+00000				* Z, dZ
+	DC.W	+00000,+00000				* RX, GRX
+	DC.W	+04096,+00000				* RY, GRY
+	DC.W	+01024,+01000				* RZ, GRZ
+	DC.L	1000					* time
+
+	DC.W	-03500,+00000				* X, dX
+	DC.W	+00200,+00000				* Y, dY
+	DC.W	+10000,+00000				* Z, dZ
+	DC.W	+00000,+00000				* RX, GRX
+	DC.W	+04096,+00000				* RY, GRY
+	DC.W	+08192,+00000				* RZ, GRZ
+	DC.L	1000					* time
+
+	DC.W	+00000,+00000				* X, dX
+	DC.W	-04000,+00000				* Y, dY
+	DC.W	+05500,+00000				* Z, dZ
+	DC.W	+02048,+00000				* RX, GRX
+	DC.W	+00000,+00000				* RY, GRY
+	DC.W	+08192,+00000				* RZ, GRZ
+	DC.L	10000					* time
+	ENDC
+.end:
+
+restoreBlack:
+	movea.l	rectangleTableAddresses,a0
+	move.w	(a0)+,d7
+	beq.s	.end_restore
+	subq.w	#1,d7
+	moveq	#0,d7
+.restore_loop:
+	move.w	d7,-(sp)
+	movem.w	(a0)+,d1/d7
+	movem.w	(a0)+,d0/d6
+	move.l	a0,-(sp)
+	moveq	#$00000000,d4
+	movea.l	scr,a0
+	bsr	Viewport.paintRectangle
+	movea.l	(sp)+,a0
+	move.w	(sp)+,d7
+	dbra	d7,.restore_loop
+.end_restore:
+	rts
+
+restorePic:
+	bsr	wipeBackground
+	movea.l	scr,a0
+	IFNE	1
+	movea.l	rectangleTableAddresses,a0
+	move.w	(a0)+,d7
+	beq.s	.end_restore
+	subq.w	#1,d7
+	moveq	#0,d7
+.restore_loop:
+	move.w	d7,-(sp)
+	movem.w	(a0)+,d1/d7
+	movem.w	(a0)+,d0/d6
+	move.l	a0,-(sp)
+	moveq	#$00000000,d4
+	movea.l	scr,a0
+	lea	backgroundBuffer,a1
+	bsr	Viewport.copyRectangle
+	movea.l	(sp)+,a0
+	move.w	(sp)+,d7
+	dbra	d7,.restore_loop
+.end_restore:
+	ELSE
+	lea	backgroundBuffer,a1
+	bsr	copyScreen
+	ENDC
+	rts
+
+wipeBackground:
+	move.l	last_wipe_time,d1			* d1.l = lx
+	cmpi.l	#320,d1
+	bhs.s	.end
+* Establish time new point...
+	move.l	$4ba.w,d0
+	sub.l	wipe_start_time,d0
+	lsr.l	#1,d0					* d0.l = rx
+* Now work that booty!
+	move.l	d0,last_wipe_time
+	cmpi.l	#320,d0
+	blo.s	.right_side_okay
+	move.l	#320,d0
+.right_side_okay:
+* d2.l: left x (0<=lx<320)
+* d0.l: right x (lx<=rx<=320)
+	lea	backgroundBuffer,a0
+	lea	maggieLogo+20,a1
+	sub.l	d1,d0					* d2.l = rx-lx = dx
+	ble.s	.end
+	subq.w	#1,d0
+	add.l	d1,d1
+	adda.l	d1,a0
+	adda.l	d1,a1
+	movea.l	a0,a2
+	movea.l	a1,a3
+	move.w	#200-1,d7
+
+.scan_loop:
+	move.w	d0,d6
+
+.pixelloop:
+	move.w	(a1)+,(a0)+
+	dbra	d6,.pixelloop
+
+	lea	640(a2),a2
+	lea	640(a3),a3
+	movea.l	a2,a0
+	movea.l	a3,a1
+	dbra	d7,.scan_loop
+
+.end:	rts
+
+* Copies a 320*200 16bpp screen.
+* INPUT:
+* a0: destination
+* a1: source
+copyScreen:
+	move.w	#200-1,d7
+.loop:	movem.l	(a1)+,d0-d6/a2-a6
+	movem.l	d0-d6/a2-a6,(a0)
+	movem.l	(a1)+,d0-d6/a2-a6
+	movem.l	d0-d6/a2-a6,48(a0)
+	movem.l	(a1)+,d0-d6/a2-a6
+	movem.l	d0-d6/a2-a6,96(a0)
+	movem.l	(a1)+,d0-d6/a2-a6
+	movem.l	d0-d6/a2-a6,144(a0)
+	movem.l	(a1)+,d0-d6/a2-a6
+	movem.l	d0-d6/a2-a6,192(a0)
+	movem.l	(a1)+,d0-d6/a2-a6
+	movem.l	d0-d6/a2-a6,240(a0)
+	movem.l	(a1)+,d0-d6/a2-a6
+	movem.l	d0-d6/a2-a6,288(a0)
+	movem.l	(a1)+,d0-d6/a2-a6
+	movem.l	d0-d6/a2-a6,336(a0)
+	movem.l	(a1)+,d0-d6/a2-a6
+	movem.l	d0-d6/a2-a6,384(a0)
+	movem.l	(a1)+,d0-d6/a2-a6
+	movem.l	d0-d6/a2-a6,432(a0)
+	movem.l	(a1)+,d0-d6/a2-a6
+	movem.l	d0-d6/a2-a6,480(a0)
+	movem.l	(a1)+,d0-d6/a2-a6
+	movem.l	d0-d6/a2-a6,528(a0)
+	movem.l	(a1)+,d0-d6/a2-a6
+	movem.l	d0-d6/a2-a6,576(a0)
+	movem.l	(a1)+,d0-d3
+	movem.l	d0-d3,624(a0)
+	lea	640(a0),a0
+	dbra	d7,.loop
+	rts
+
+* INPUT:
+* d0.w: left x
+* d1.w: upper y
+* d6.w: right x
+* d7.w: lower y
+* d4.l: color (2 words)
+* a0: screen
+* a1: source pic
+Viewport.copyRectangle:
+	lea	Viewport.settingsTable,a2
+
+	cmp.w	Viewport.XSTART(a2),d0
+	bpl.s	.testx0
+	move.w	Viewport.XSTART(a2),d0
+.testx0:
+	cmp.w	Viewport.XEND(a2),d0
+	blt.s	.endtestx0
+	move.w	Viewport.XEND(a2),d0
+	subq.w	#1,d0
+.endtestx0:
+
+	cmp.w	Viewport.YSTART(a2),d1
+	bpl.s	.testy0
+	move.w	Viewport.YSTART(a2),d1
+.testy0:
+	cmp.w	Viewport.YEND(a2),d1
+	blt.s	.endtesty0
+	move.w	Viewport.YEND(a2),d1
+	subq.w	#1,d1
+.endtesty0:
+
+	cmp.w	Viewport.XSTART(a2),d6
+	bpl.s	.testx1
+	move.w	Viewport.XSTART(a2),d6
+.testx1:
+	cmp.w	Viewport.XEND(a2),d6
+	blt.s	.endtestx1
+	move.w	Viewport.XEND(a2),d6
+	subq.w	#1,d6
+.endtestx1:
+
+	cmp.w	Viewport.YSTART(a2),d7
+	bpl.s	.testy1
+	move.w	Viewport.YSTART(a2),d7
+.testy1:
+	cmp.w	Viewport.YEND(a2),d7
+	blt.s	.endtesty1
+	move.w	Viewport.YEND(a2),d7
+	subq.w	#1,d7
+.endtesty1:
+
+	move.w	d0,d2
+	move.w	d1,d3
+	addq.w	#1,d2
+	andi.w	#$fffe,d2
+	adda.w	d2,a0
+	adda.w	d2,a0
+	adda.w	d2,a1
+	adda.w	d2,a1
+	move.w	Viewport.XSCREEN(a2),d5
+	add.w	d5,d5
+	movea.w	d5,a4
+	mulu.w	d5,d3
+	adda.l	d3,a0
+	adda.l	d3,a1
+	sub.w	d0,d6
+	addq.w	#1,d6
+	sub.w	d1,d7
+	lsr.w	#1,d6
+	move.w	d6,d5
+	add.w	d6,d5
+	add.w	d5,d5
+	suba.w	d5,a4
+	ext.l	d6
+	move.l	d6,d5
+	andi.w	#$f,d5
+	lsr.w	#4,d6
+	neg.l	d5
+	lea	(.endpix.w,pc,d5.l*2),a5
+	move.w	d6,d5
+
+.yloop:	move.w	d5,d6
+	jmp	(a5)
+.chunkloop:
+	REPT	16
+	move.l	(a1)+,(a0)+
+	ENDR
+.endpix:
+	dbra	d6,.chunkloop
+
+	adda.l	a4,a0
+	adda.l	a4,a1
+	dbra	d7,.yloop
+.end:	rts
+
+******** END OF DEMO-EFFECT OBJECT ********
