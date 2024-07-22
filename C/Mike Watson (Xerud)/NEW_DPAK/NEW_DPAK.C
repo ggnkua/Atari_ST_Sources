@@ -1,0 +1,1332 @@
+/*
+****************************************************************************
+** STANDARD INCLUDE FILES
+****************************************************************************
+*/
+#include 	<stdio.h>
+#include 	<tos.h>
+#include 	<portab.h>
+#include 	<aes.h>
+#include 	<vdi.h>
+#include 	<string.h>
+#include 	<stdlib.h>
+/*
+****************************************************************************
+** OTHER INCLUDE FILES
+****************************************************************************
+*/
+#include 	<mglobal.h>
+#ifdef		FALCON030
+#include 	"ndp_030.rsh"
+#include 	"ndp_030.rh"
+#endif
+#ifdef		STSTETT
+#include 	"ndp_st.rsh"
+#include 	"ndp_st.rh"
+#endif
+#include 	"windows.h"
+
+#define 	VERSION	"1.1 - 03/10/1993" 
+
+/*
+****************************************************************************
+** FUNCTION PROTOTYPES
+****************************************************************************
+*/
+void	fix_dialog(void);
+
+int		handle_message( int pipe[8] );
+void	event_loop( void );
+int		process_menu_buttons(int window,int button); 
+void	process_info_buttons(int window,int button); 
+void	process_prefs_buttons(int window,int button); 
+int		do_fsel(char *filespec);
+void	repair(void);
+int		load_depack(char *filename);
+int		save_file(char *filename);
+int		depack(char *fname);
+void	tidy_up(void);
+int		do_dial(OBJECT *tree);	
+void	set_up_prefs(void);
+void	find_path(void);
+size_t	fname_pos(char *path);
+void	validate_command_line(void);
+int		process_command_line(char *c_line);
+/*
+****************************************************************************
+** STRUCTURE DEFINITIONS
+****************************************************************************
+*/
+struct	{
+			int		menu_handle;
+			int		info_handle;
+			int		prefs_handle;
+		} form_tab;
+
+struct	WIN_TAB
+		{
+			int		handle;
+			OBJECT	*form;
+			int		xcoord;
+			int		ycoord;
+			int		width;
+			int		height;
+			int		startob;
+		}	wind_tab[255];
+
+/*
+****************************************************************************
+** GLOBAL VARIABLES
+****************************************************************************
+*/
+char	savename[80];
+long	*file_pointer;
+long	file_length;
+long	*depacked_pointer;
+long	depacked_length;
+int		batch=0;
+int		gl_wattr=0;
+int		gl_hattr=0;
+int		gl_wbox=0;
+int		gl_hbox=0;
+int		phys_handle=0;
+int		vdi_handle=0;
+int		max_x=0;
+int		max_y=0;
+int		appl_id=0;
+int		menu_id=0;
+long	rephandle=0;
+int		work_in[11];
+int		work_out[57];
+int		cline;
+char	lfile[64],lpath[64];
+char	clinename[80];
+
+char	title[]="New Depack v"VERSION;
+/*
+****************************************************************************
+** ERROR MESSAGES
+****************************************************************************
+*/
+char	file_error_mess[] = "[1][ | | Ooops, disk error!!][ OK ]";
+char	memory_error_mess[] = "[1][ | | Ooops, no memory for this file][ OK ]";
+char	nodpk_error_mess[] = "[1][ | | Ooops, no memory to unpack | this file!!][ OK ]";
+char	zero_file_mess[] = "[1][ | | This file is zero bytes long!! ][ OK ]";
+char	rez_error_mess[] = "[1][ | | You must run New Depack|In an 80 column mode.][ OK ]";
+char	packed_mess[] = "[1][ | | Write error!!! | Have you packed New Depack?][ OK ]";
+char	win_error_mess[] = "[1][ | Sorry, the GEM desktop | has run out of windows!][ OK ]";
+/*
+****************************************************************************
+** EXTERNAL GLOBAL DEFINITIONS
+****************************************************************************
+*/
+extern	int 	_app;
+extern	long	__id;
+extern	int		__magic;
+extern	int		__batchmode;
+extern	int		__savepath;
+extern	int		__save;
+extern	int		__report;
+extern	char	__repname[90];
+/*
+****************************************************************************
+** Main Program
+****************************************************************************
+*/
+int	main(int argc,char **argv)
+{
+	int	i;
+/*
+** If we are not an accessory and a command line was entered
+** then do this shit.... 
+*/
+	if	((_app)&&(argc-1))
+	{
+		if(!process_command_line(argv[1]))
+			return(0);
+	}
+/*
+** We've got this far, now lets tell GEM about us!!
+*/	
+	appl_id=appl_init();
+/*
+** Find where we were ran from so I can save the prefs 
+*/
+	find_path();
+/*
+** Initialise parameters to Vopenwork
+*/
+	for	(i=0;i<10;work_in[i++]=1);
+		work_in[10]=RC;
+
+	phys_handle = graf_handle(&gl_wbox, &gl_hbox, &gl_wattr, &gl_hattr);
+	vdi_handle = phys_handle;
+
+	v_opnvwk (work_in, &vdi_handle, work_out);
+/*
+** If not in 80 column mode then bomb out
+*/
+	if (work_out[0] >= 639)
+	{
+		max_x = work_out[0];
+		max_y = work_out[1];
+/*
+** If accessory then set up like this.
+*/
+		if (!_app)
+		{
+			Cconout('3');
+			menu_id = menu_register(appl_id,"  New Dpak    ");
+			fix_dialog();
+			set_up_prefs();
+		}
+		else
+/*
+** Otherwise we do this ......
+*/
+		{
+			fix_dialog();
+			set_up_prefs();
+			graf_mouse(0,(void *)0);
+			form_tab.menu_handle=open_window(rs_trindex[0]);
+			ltoa((long)Malloc(-1),rs_object[MENU_FRAM].ob_spec.free_string,10);
+		}
+		if ((!form_tab.menu_handle)&&_app)
+			form_alert(1, win_error_mess);
+		else
+			event_loop();
+	}
+	else
+		form_alert(1, rez_error_mess);
+/*
+** Everything to normal
+*/	
+	tidy_up();
+	v_clsvwk (vdi_handle);
+		
+	appl_exit();
+	return(0);
+}
+/*
+****************************************************************************
+** PROCESS THE COMMAND LINE . . . . .
+****************************************************************************
+*/
+int	process_command_line(char *c_line)
+{
+	DTA	tempdta;
+	size_t z;
+	cline=1;
+	z=fname_pos(c_line);
+	if ((z>3)&&(c_line[z]=='\0'))
+		c_line[z-1]='\0';
+/*
+** See if we have a drive name.
+*/
+	if	((strlen(c_line)==3)
+	&&	(c_line[1]==':')
+	&&	(c_line[2]=='\\'))
+		strcat(c_line,"*.*");
+/*
+** Chance it if a "*" is present
+*/
+	if	(!strrchr(c_line,'*'))
+	{
+		Fsetdta(&tempdta);
+/*
+** Try to find it, if not present then bomb out
+** otherwise if its a directory append \*.* to it. 
+*/		
+		if	(!Fsfirst(c_line,0x37))
+		{
+			if	((tempdta.d_attrib)==FA_SUBDIR)
+			{
+				strcat(c_line,"\\*.*");
+				batch=1;
+			}
+		}
+		else
+			return(0);
+	}
+	else
+		batch=1;
+
+	if (cline)
+		strcpy(clinename,c_line);
+	return(1);
+}
+/*
+****************************************************************************
+** Determine the path we were loaded from
+** Needed so we can save our prefs later on.
+****************************************************************************
+*/
+void find_path(void)
+{
+/*
+** Find the drive
+*/
+	lpath[0]=Dgetdrv()+'A';
+	lpath[1]=':';
+/*
+** Find the path
+*/
+	Dgetpath(lfile,0);
+	strcat(lpath,lfile);
+	
+	lfile[0]='\0';
+/*
+** Determine the filename
+*/
+#ifdef	FALCON030
+	if (!_app)
+		strcat(lpath,"\\NDP_030.ACC");
+	else
+		strcat(lpath,"\\NDP_030.PRG");
+#else
+	if (!_app)
+		strcat(lpath,"\\NDP_ST.ACC");
+	else
+		strcat(lpath,"\\NDO_ST.PRG");
+#endif
+}
+/*
+****************************************************************************
+** Fix the dialog boxes
+** Modify to keep GEM happy and if on a Falcon then we have to
+** make sure that we don't display metallic dialog boxes in a
+** screen mode with less than 16 colours. 
+****************************************************************************
+*/
+void fix_dialog (void)
+{
+	int i = 0,j=NUM_TREE;
+	do
+		do
+		{
+/*
+** Let GEM do it's thing
+*/
+			rsrc_obfix (&rs_object[i], ROOT);
+/*
+** If running in less than 16 colours on a falcon
+** then modify the dialog boxes.
+*/
+#ifdef	FALCON030
+			if (work_out[13] < 16)
+			{
+				if (rs_object[i].ob_type == (G_BOX|0x0100))
+					rs_object[i].ob_spec.obspec.fillpattern=4;
+			}
+#endif
+		}
+		while (!(rs_object[i++].ob_flags & LASTOB));
+
+	while (--j);
+
+}
+/*
+****************************************************************************
+** Set up the preferences
+****************************************************************************
+*/
+void	set_up_prefs(void)
+{
+/*
+** Determine if the prefs stored are valid 
+*/
+	if ((__batchmode+__savepath+__save+__report)!=__magic
+	|| (__id != 'BARF'))
+		__batchmode=__magic=__savepath=__save=__report=1;
+/*
+** Set up batchmode option
+*/	
+	if	(__batchmode)
+		objc_change(rs_trindex[PREFERENCES],RECURSIVE_BUTTON,0,0,0,max_x,max_y,SELECTED,0);			
+	else
+		objc_change(rs_trindex[PREFERENCES],RECURSIVE_BUTTON,0,0,0,max_x,max_y,NORMAL,0);			
+/*
+** Set up savepath option
+*/	
+	if	(__savepath)
+		objc_change(rs_trindex[PREFERENCES],SAVEPATH_BUTTON,0,0,0,max_x,max_y,SELECTED,0);			
+	else
+		objc_change(rs_trindex[PREFERENCES],SAVEPATH_BUTTON,0,0,0,max_x,max_y,NORMAL,0);			
+/*
+** Set up save during batch option
+*/	
+	if	(__save)
+		objc_change(rs_trindex[PREFERENCES],BATCHSAVE_BUTTON,0,0,0,max_x,max_y,SELECTED,0);			
+	else
+		objc_change(rs_trindex[PREFERENCES],BATCHSAVE_BUTTON,0,0,0,max_x,max_y,NORMAL,0);			
+/*
+** Set up report during batch option
+*/	
+	if	(__report)
+		objc_change(rs_trindex[PREFERENCES],BATCHREPT_BUTTON,0,0,0,max_x,max_y,SELECTED,0);			
+	else
+		objc_change(rs_trindex[PREFERENCES],BATCHREPT_BUTTON,0,0,0,max_x,max_y,NORMAL,0);			
+/*
+** Set up the savepath on the prefs form
+*/	
+	rs_trindex[PREFERENCES][DUMP_NAME].ob_spec.tedinfo->te_ptext=__repname;
+}
+/*
+****************************************************************************
+** Main event loop
+****************************************************************************
+*/
+void event_loop( void )
+{
+	EVENT	my_event;
+	int		quit,butt_pressed=0;
+	int		event=0;
+	int		wind_sel=0;
+/*
+** If run from a command line then dont wait for a button
+** buit a timer instead since user is not interacting.
+*/
+	if (cline)
+	{
+		my_event.ev_mflags= MU_MESAG|MU_TIMER;
+		my_event.ev_mtlocount=100;
+	}
+	else
+	{
+		my_event.ev_mflags= MU_MESAG|MU_BUTTON;
+		my_event.ev_mtlocount=0;
+	}
+/*
+** Set up the rest of the event parameters
+*/
+	my_event.ev_mbclicks=0x0102 ;
+	my_event.ev_bmask= 1;
+	my_event.ev_mbstate=my_event.ev_mm1flags=my_event.ev_mm1x=my_event.ev_mm1y=0;
+	my_event.ev_mm1width=my_event.ev_mm1height=my_event.ev_mm2flags=my_event.ev_mm2x=0;
+	my_event.ev_mm2y=my_event.ev_mm2width=my_event.ev_mm2height=0;
+	my_event.ev_mthicount=0;
+/*
+** Loop until quit selected.
+*/
+	do
+	{
+		event=EvntMulti(&my_event);
+/*
+** If GEM has sent us a message then process it
+*/
+		if ( event & MU_MESAG )
+			quit = handle_message(my_event.ev_mmgpbuf);
+/*
+** If timer event occurs then do a load/depack coz it was run
+** from command line. Quit immediatly afterwards.
+*/
+		if ( event & MU_TIMER )
+		{	
+			quit=0;
+/*
+** If report requested then set it up.
+*/
+			if (__report&&batch)
+			{
+/*
+** Open it, if error then bombout
+*/						
+				rephandle = Fcreate(__repname,0);
+	
+				if (rephandle <0)
+				{
+					form_alert( 1, file_error_mess);
+					quit=1;
+				}
+				else
+				{
+					Fwrite((int)rephandle,23,"New Depack Batch Report");
+					Fwrite((int)rephandle,2,"\r\n");
+					Fwrite((int)rephandle,23,"=======================");
+					Fwrite((int)rephandle,2,"\r\n");
+					Fwrite((int)rephandle,2,"\r\n");
+				}
+			}
+/*
+** If report went ok then load and depack 
+*/
+			if (!quit)
+			{
+				quit=load_depack(clinename); 
+/*
+** If batchmode and prefs say we can have a report
+*/
+				if (__report&&batch)
+				{
+					Fclose((int)rephandle);
+				}
+				quit=1;
+			}
+		}
+/*
+** If a mouse button was pressed.
+*/
+		if ( event & MU_BUTTON)
+		{
+			wind_update(BEG_UPDATE);
+/*
+** Determine what window was selected
+*/
+			wind_sel = wind_find(my_event.ev_mmox,my_event.ev_mmoy);
+			wind_update(END_UPDATE);
+/*
+** If it wasn't the desktop then process it. 
+*/
+			if (wind_sel!=0)
+			{
+/*
+** Determine what was pressed
+*/			
+				butt_pressed=objc_find(wind_tab[wind_sel].form,ROOT,MAX_DEPTH,my_event.ev_mmox,my_event.ev_mmoy);
+/*
+** Process the menu
+*/
+				if (wind_sel == form_tab.menu_handle) 
+					quit = process_menu_buttons(wind_sel,butt_pressed);
+/*
+** Process info screen
+*/
+				if ((wind_sel==form_tab.info_handle)
+				&&	(butt_pressed==INFO_EXIT))
+					process_info_buttons(wind_sel,butt_pressed);
+/*
+** Process prefs
+*/
+				if ((wind_sel==form_tab.prefs_handle))
+					process_prefs_buttons(wind_sel,butt_pressed);
+			}			
+		}
+   }
+/*
+** Until quit requested
+*/
+   while ( !quit );
+}
+/*
+****************************************************************************
+** Process messages
+****************************************************************************
+*/
+int handle_message( int pipe[8] )
+{
+	switch (pipe[0])
+	{
+/*
+** Handle window redraw messages
+*/
+		case WM_REDRAW:
+		{
+			if ( wind_tab[pipe[3]].handle!=0)
+				redraw_window( pipe[3] , ROOT , (GRECT *) &pipe[4]);
+			break;
+		}
+/*
+** Handle window topped messages
+*/
+		case WM_TOPPED:
+		{
+			if ( wind_tab[pipe[3]].handle!=0)
+				wind_set( pipe[3], WF_TOP );
+			break;
+
+		}
+/*
+** Handle window closed messages
+*/
+		case WM_CLOSED:
+		{
+			if ( wind_tab[pipe[3]].handle!=0)
+			{
+				kill_window(pipe[3]);
+				if (pipe[3] == form_tab.menu_handle)
+				{
+					form_tab.menu_handle=0;
+					if ( _app )
+						return (1);
+					else
+					{
+						objc_change(wind_tab[pipe[3]].form,SAVE_BUTT,0,wind_tab[pipe[3]].xcoord,wind_tab[pipe[3]].ycoord,wind_tab[pipe[3]].width,wind_tab[pipe[3]].height,DISABLED,1);			
+						tidy_up();
+					}
+				}
+				
+				if (pipe[3] == form_tab.info_handle)
+					form_tab.info_handle=0;
+
+				if (pipe[3] == form_tab.prefs_handle)
+					form_tab.prefs_handle=0;
+
+			}
+			break;
+		}
+/*
+** Handle window moved messages
+*/
+		case WM_MOVED:
+		{
+			if ( wind_tab[pipe[3]].handle!=0)
+
+			{
+				OBJECT	*formptr;
+				mouse_off();
+				wind_calc(1,NAME|CLOSER|MOVER,pipe[4],pipe[5],pipe[6],pipe[7],&pipe[4],&pipe[5],&pipe[6],&pipe[7]);
+				formptr=wind_tab[pipe[3]].form;			
+				formptr->ob_x=pipe[4];
+				formptr->ob_y=pipe[5];
+				wind_tab[pipe[3]].xcoord=pipe[4];
+				wind_tab[pipe[3]].ycoord=pipe[5];
+				wind_tab[pipe[3]].width=pipe[6];
+				wind_tab[pipe[3]].height=pipe[7];
+				wind_calc(0,NAME|CLOSER|MOVER,pipe[4],pipe[5],pipe[6],pipe[7],&pipe[4],&pipe[5],&pipe[6],&pipe[7]);
+				wind_calc(1,NAME|CLOSER|MOVER,pipe[4],pipe[5],pipe[6],pipe[7],&pipe[4],&pipe[5],&pipe[6],&pipe[7]);
+				wind_calc(0,NAME|CLOSER|MOVER,pipe[4],pipe[5],pipe[6],pipe[7],&pipe[4],&pipe[5],&pipe[6],&pipe[7]);
+
+				wind_set( pipe[3], WF_CURRXYWH,  pipe[4], pipe[5], pipe[6], pipe[7] );
+				mouse_on();
+			}
+			break;
+		}
+/*
+** Handle accessory open messages
+*/
+		case AC_OPEN:
+		if ( pipe[4] == menu_id )
+			if (!form_tab.menu_handle)
+			{
+				form_tab.menu_handle=open_window(rs_trindex[0]);
+				if (!form_tab.menu_handle)
+					form_alert(1, win_error_mess);
+			}
+			else
+				wind_set(form_tab.menu_handle, WF_TOP );
+			ltoa((long)Malloc(-1),rs_object[MENU_FRAM].ob_spec.free_string,10);
+			break;
+/*
+** Handle accessory close messages
+*/
+		case AC_CLOSE:
+		if ( pipe[3] == menu_id )
+			tidy_up();
+			break;
+   }
+   return ( 0 );
+}
+/*
+****************************************************************************
+** Process menu
+****************************************************************************
+*/
+int process_menu_buttons(int window,int button)
+{	
+	int		sel_flag;
+	switch	(button)		
+	{
+/*
+****************************************************************************
+** Process LOAD option
+****************************************************************************
+*/
+		case LOAD_BUTT:
+		{
+			int	file_error;
+			char	loadname[80];
+			GRECT	work;
+			form_button(wind_tab[window].form,LOAD_BUTT,1,&sel_flag);
+/*
+** If selection made....
+*/
+			if (sel_flag)
+			{
+				objc_change(wind_tab[window].form,LOAD_BUTT,0,wind_tab[window].xcoord,wind_tab[window].ycoord,wind_tab[window].width,wind_tab[window].height,NORMAL,1);			
+				batch=0;
+/*
+** If request for loadname works then continue
+** else bombout.  
+*/
+				if (do_fsel(loadname))
+				{
+					file_error=1;
+/*
+** If batchmode and prefs say we can have a savename
+*/
+					if ((batch)&&(__savepath)) 
+						file_error=do_fsel(savename);
+/*
+** If it worked then go4it!
+*/
+					if (file_error)
+					{
+/*
+** If batchmode and prefs say we can have a report
+*/
+						if (__report&&batch)
+						{
+/*
+** Open it, if error then bombout
+*/						
+							rephandle = Fcreate(__repname,0);
+	
+							if (rephandle <0)
+							{
+								form_alert( 1, file_error_mess);
+								file_error=-1;
+							}
+							else
+							{
+								Fwrite((int)rephandle,23,"New Depack Batch Report");
+								Fwrite((int)rephandle,2,"\r\n");
+								Fwrite((int)rephandle,23,"=======================");
+								Fwrite((int)rephandle,2,"\r\n");
+								Fwrite((int)rephandle,2,"\r\n");
+							}
+						}
+						if(file_error>=0)
+							file_error=load_depack(loadname); 
+/*
+** If batchmode and prefs say we can have a report
+*/
+						if (__report&&batch)
+						{
+							Fclose((int)rephandle);
+						}
+					}
+					else
+						file_error=-1;
+				}
+				else
+					file_error = -1;
+			}
+			else
+				break;
+/*
+** If we got an error then disable the save button
+*/				
+			if (file_error == -1 || batch)
+				objc_change(wind_tab[window].form,SAVE_BUTT,0,wind_tab[window].xcoord,wind_tab[window].ycoord,wind_tab[window].width,wind_tab[window].height,DISABLED,1);			
+			else				
+			{
+				objc_change(wind_tab[window].form,SAVE_BUTT,0,wind_tab[window].xcoord,wind_tab[window].ycoord,wind_tab[window].width,wind_tab[window].height,NORMAL,1);			
+			}
+/*
+** Set up free ram
+*/
+			ltoa((long)Malloc(-1),rs_object[MENU_FRAM].ob_spec.free_string,10);
+			wind_get(form_tab.menu_handle, WF_WORKXYWH, &work.g_x, &work.g_y, &work.g_w, &work.g_h );
+			redraw_window(form_tab.menu_handle,STATS_BOX,&work);
+			wind_get(form_tab.menu_handle, WF_WORKXYWH, &work.g_x, &work.g_y, &work.g_w, &work.g_h );
+			redraw_window(form_tab.menu_handle,FILE_THINGS_BOX,&work);
+			break;
+		}
+/*
+****************************************************************************
+** Process SAVE option
+****************************************************************************
+*/
+		case SAVE_BUTT:
+		{
+			int	file_error;
+			GRECT	work;
+			form_button(wind_tab[window].form,SAVE_BUTT,1,&sel_flag);
+/*
+** If selection made....
+*/
+			if (sel_flag)
+			{
+				objc_change(wind_tab[window].form,SAVE_BUTT,0,wind_tab[window].xcoord,wind_tab[window].ycoord,wind_tab[window].width,wind_tab[window].height,NORMAL,1);			
+				if (do_fsel(savename))
+					file_error=save_file(savename); 
+				else
+					file_error = -1;
+			}
+			else
+				break;
+				
+			if (file_error == -1)
+			{
+				objc_change(wind_tab[window].form,SAVE_BUTT,0,wind_tab[window].xcoord,wind_tab[window].ycoord,wind_tab[window].width,wind_tab[window].height,NORMAL,1);			
+				depacked_pointer=0;
+			}
+			else				
+			{
+				objc_change(wind_tab[window].form,SAVE_BUTT,0,wind_tab[window].xcoord,wind_tab[window].ycoord,wind_tab[window].width,wind_tab[window].height,DISABLED,1);			
+				Mfree(depacked_pointer);
+				depacked_pointer=0;
+			}
+			ltoa((long)Malloc(-1),rs_object[MENU_FRAM].ob_spec.free_string,10);
+			wind_get(form_tab.menu_handle, WF_WORKXYWH, &work.g_x, &work.g_y, &work.g_w, &work.g_h );
+			redraw_window(form_tab.menu_handle,STATS_BOX,&work);
+			wind_get(form_tab.menu_handle, WF_WORKXYWH, &work.g_x, &work.g_y, &work.g_w, &work.g_h );
+			redraw_window(form_tab.menu_handle,FILE_THINGS_BOX,&work);
+			break;
+		}
+/*
+****************************************************************************
+** Process PREFS option
+****************************************************************************
+*/
+		case PREFS_BUTT:
+		{
+			wind_update(BEG_UPDATE);
+			form_button(wind_tab[window].form,PREFS_BUTT,1,&sel_flag);
+			objc_change(wind_tab[window].form,PREFS_BUTT,0,wind_tab[window].xcoord,wind_tab[window].ycoord,wind_tab[window].width,wind_tab[window].height,NORMAL,1);			
+/*
+** If selection made....
+*/
+			if (sel_flag)
+			{
+				if (form_tab.prefs_handle!=0) /* already present */
+					wind_set(form_tab.prefs_handle, WF_TOP );
+				else
+				{
+					form_tab.prefs_handle=open_window(rs_trindex[1]);
+					if (!form_tab.prefs_handle)
+						form_alert(1, win_error_mess);
+				}
+			}	
+			wind_update(END_UPDATE);
+			break;
+		}
+/*
+****************************************************************************
+** Process INFO option
+****************************************************************************
+*/
+		case INFO_BUTT:
+		{
+			wind_update(BEG_UPDATE);
+			form_button(wind_tab[window].form,INFO_BUTT,1,&sel_flag);
+			objc_change(wind_tab[window].form,INFO_BUTT,0,wind_tab[window].xcoord,wind_tab[window].ycoord,wind_tab[window].width,wind_tab[window].height,NORMAL,1);			
+/*
+** If selection made....
+*/
+			if (sel_flag)
+			{
+				if (form_tab.info_handle!=0) /* already present */
+					wind_set(form_tab.info_handle, WF_TOP );
+				else
+				{
+					form_tab.info_handle=open_window(rs_trindex[2]);
+					if (!form_tab.info_handle)
+						form_alert(1, win_error_mess);
+				}
+			}	
+			wind_update(END_UPDATE);
+			break;
+		}
+/*
+****************************************************************************
+** Process EXIT option
+****************************************************************************
+*/
+		case EXIT_BUTT:
+		{
+			wind_update(BEG_UPDATE);
+			form_button(wind_tab[window].form,EXIT_BUTT,1,&sel_flag);
+			objc_change(wind_tab[window].form,EXIT_BUTT,0,wind_tab[window].xcoord,wind_tab[window].ycoord,wind_tab[window].width,wind_tab[window].height,NORMAL,0);			
+/*
+** If selection made....
+*/
+			if (sel_flag)
+			{
+				kill_window(window);
+				form_tab.menu_handle=0;
+				wind_update(END_UPDATE);
+				if ( _app )
+					return (1);
+				else
+				{
+					objc_change(wind_tab[window].form,SAVE_BUTT,0,wind_tab[window].xcoord,wind_tab[window].ycoord,wind_tab[window].width,wind_tab[window].height,DISABLED,1);			
+					tidy_up();
+				}
+			}
+			wind_update(END_UPDATE);
+			break;
+		}
+	}	
+	return (0);
+}
+/*
+****************************************************************************
+** Process buttons on info screen
+****************************************************************************
+*/
+void process_info_buttons(int window,int button)
+{
+	int sel_flag;
+	wind_update(BEG_UPDATE);
+	form_button(wind_tab[window].form,INFO_EXIT,1,&sel_flag);
+	objc_change(wind_tab[window].form,INFO_EXIT,0,wind_tab[window].xcoord,wind_tab[window].ycoord,wind_tab[window].width,wind_tab[window].height,NORMAL,1);			
+/*
+** If selection made....
+*/
+	if (sel_flag)
+	{
+		kill_window(window);
+		form_tab.info_handle=0;
+	}
+	wind_update(END_UPDATE);
+}
+/*
+****************************************************************************
+** Process buttons on prefs screen
+****************************************************************************
+*/
+void process_prefs_buttons(int window,int button)
+{
+	int sel_flag;
+	wind_update(BEG_UPDATE);
+	form_button(wind_tab[window].form,button,1,&sel_flag);
+
+	if ((button==PREF_OK)
+	||	(button==PREF_CANCEL)
+	||	(button==PREF_SAVE)
+	||	(button==DUMP_NAME))
+	{
+		objc_change(wind_tab[window].form,button,0,wind_tab[window].xcoord,wind_tab[window].ycoord,wind_tab[window].width,wind_tab[window].height,NORMAL,0);			
+		if (sel_flag)
+		{
+			if	(button==DUMP_NAME)
+			{
+				do_fsel(__repname);
+/*				redraw_window(window,ROOT); */
+			}
+			else
+			{
+				if (button!=PREF_CANCEL)
+				{
+					if (rs_trindex[PREFERENCES][RECURSIVE_BUTTON].ob_state==SELECTED)
+						__batchmode=1;
+					else
+						__batchmode=0;
+					if (rs_trindex[PREFERENCES][SAVEPATH_BUTTON].ob_state==SELECTED)
+						__savepath=1;
+					else
+						__savepath=0;
+					if (rs_trindex[PREFERENCES][BATCHSAVE_BUTTON].ob_state==SELECTED)
+						__save=1;
+					else
+						__save=0;
+					if (rs_trindex[PREFERENCES][BATCHREPT_BUTTON].ob_state==SELECTED)
+						__report=1;
+					else
+						__report=0;
+
+					__magic=__batchmode+__savepath+__save+__report;										
+				
+					if	(button==PREF_SAVE)
+					{
+						long handle = Fopen(lpath,2);
+						int *ptr = Malloc(200);
+						if (handle < 0)
+							form_alert( 1, file_error_mess);
+						else
+						{
+							if ((Fread ((int)handle,200,ptr))<0)
+							{
+								form_alert( 1, file_error_mess);
+								Fclose((int)handle);
+							}
+							else
+							{					
+								if(*(long*)((char *)ptr+44)!='BARF')
+								{
+									form_alert( 1, packed_mess);
+									Fclose ((int)handle);
+								}
+								else
+								{
+									ptr[24]=__magic;																
+									ptr[25]=__batchmode;																
+									ptr[26]=__savepath;																
+									ptr[27]=__save;																
+									ptr[28]=__report;		
+
+									strcpy((char *)ptr+58,__repname);														
+	
+									Fseek(0,(int)handle,0);
+	
+									if ((Fwrite ((int)handle,200,ptr))<0)
+										form_alert( 1, file_error_mess);
+									Fclose ((int)handle);
+								}
+							}
+						}
+						Mfree(ptr);
+					}
+				}
+				set_up_prefs();
+
+				kill_window(window);
+				form_tab.prefs_handle=0;
+			}
+		}
+	}
+	wind_update(END_UPDATE);
+}
+/*
+****************************************************************************
+** Load & depack file in loadname
+****************************************************************************
+*/
+int load_depack (char *filename)
+{
+	long handle;
+	size_t	z;
+	DTA mydta;
+	DTA *my_dta;
+	char pathname[80];
+	char extend[80];
+	GRECT	work;
+
+	my_dta=&mydta;
+
+	Fsetdta(my_dta);
+	
+	z=fname_pos(filename);
+	
+	strcpy(extend,filename+z);
+
+	strcpy(pathname,filename);	
+	pathname[z]='\0';
+	
+	if ((Fsfirst(filename,0x37))<0)
+	{
+		if (batch)
+			form_alert( 1, file_error_mess);
+		return(-1);
+	}
+/*
+** Loop round all the files
+*/
+	do
+	{
+		if (my_dta->d_attrib!=FA_SUBDIR)
+		{
+/*
+** Set up the pathname
+** Open le file
+*/
+			z=fname_pos(filename);
+			filename[z]='\0';
+
+			strcpy(rs_object[MENU_FNAME].ob_spec.free_string,my_dta->d_fname);
+
+			strcat(filename,my_dta->d_fname);
+			handle = Fopen (filename,2);
+/*
+** Ensure that memory is free
+*/	
+			if (depacked_length)
+			{
+				memset(depacked_pointer,0,depacked_length);
+				Mfree(depacked_pointer);
+				depacked_pointer=0;
+				depacked_length=0;
+			}
+/*
+** Handle unfound files
+*/	
+			if (handle <0)
+			{
+				Fclose ((int)handle);
+				if (!batch)
+				{
+					form_alert( 1, file_error_mess);
+					return(-1);
+				}
+				else
+					continue;
+			}
+/*
+** Unpacked size to form & redraw 
+*/
+			ltoa(my_dta->d_length,rs_object[MENU_PAKSIZE].ob_spec.free_string,10);
+			wind_get(form_tab.menu_handle, WF_WORKXYWH, &work.g_x, &work.g_y, &work.g_w, &work.g_h );
+			redraw_window(form_tab.menu_handle,STATS_BOX,&work);
+/*
+** Error if null file
+*/
+			if (my_dta->d_length == 0)
+			{
+				Fclose ((int)handle);
+				if (!batch)
+				{
+					form_alert( 1, zero_file_mess);
+					return(-1);
+				}
+				else
+					continue;
+			}
+/*
+** Allocate space for the file
+*/	
+			file_pointer=Malloc(my_dta->d_length);
+
+/*
+** If space found then load the snecker!
+*/
+			if(file_pointer)
+			{
+				int packed=0;
+				file_length=my_dta->d_length; 
+				if ((Fread ((int)handle,my_dta->d_length,file_pointer))<0)
+				{
+					Mfree(file_pointer);
+					form_alert( 1, file_error_mess);
+					Fclose ((int)handle);
+					if (!batch)
+						return(-1);
+				}
+				else
+				{
+					Fclose ((int)handle);
+
+					depacked_length=0;
+/*
+** Depack the file
+*/
+					packed=depack((char *)my_dta->d_fname);
+					if (__report&&batch)
+					{
+						Fwrite((int)rephandle,(long)strlen(filename),filename);
+						Fwrite((int)rephandle,2,"\r\n");
+						Fwrite((int)rephandle,11,"Fileinfo : ");
+						Fwrite((int)rephandle,(long)strlen(rs_object[FINFO1].ob_spec.free_string),rs_object[FINFO1].ob_spec.free_string);
+						Fwrite((int)rephandle,2,"\r\n");
+						Fwrite((int)rephandle,2,"\r\n");
+					}					
+
+					ltoa(depacked_length,rs_object[MENU_UNPAKSIZE].ob_spec.free_string,10);
+					wind_get(form_tab.menu_handle, WF_WORKXYWH, &work.g_x, &work.g_y, &work.g_w, &work.g_h );
+					redraw_window(form_tab.menu_handle,STATS_BOX,&work);
+					wind_get(form_tab.menu_handle, WF_WORKXYWH, &work.g_x, &work.g_y, &work.g_w, &work.g_h );
+					redraw_window(form_tab.menu_handle,FILE_THINGS_BOX,&work);
+					memset(file_pointer,0,file_length);
+					Mfree(file_pointer);
+					switch (packed)
+					{
+						case 1:	/* PACKED */
+						{
+							if ((!batch) && cline)	/* !BATCH MODE & CLINE MODE */ 
+							{
+								save_file(filename);
+								return(1);
+							}
+
+							if (cline)							/* BATCH MODE & CLINE MODE */
+									save_file(filename);
+
+							if (!batch&&!cline)			/* !BATCH MODE & ! CLINE MODE */
+								return(0);
+
+							if (__save&&!cline)	/* IF WE CAN SAVE DURING BATCH */
+							{
+								if (__savepath&&!cline)
+								{
+									z=fname_pos(savename);
+									savename[z]='\0';
+									strcat(savename,my_dta->d_fname);
+									save_file(savename);
+								}
+								else
+									save_file(filename);
+							}
+							break;
+						}
+						case 0:		/* UNPACKED */
+						{
+							if (!batch)	
+								return(-1);
+							break;
+						}
+						case -1:	/* NO RAM */
+						{
+							form_alert( 1, nodpk_error_mess);
+							if (!batch)
+								return(-1);		
+							break;
+						}
+					}
+				}
+			}
+/*
+** Error if no ram free
+*/
+			else
+			{
+				form_alert( 1, memory_error_mess);
+				if (!batch)
+					return(-1);
+			}	
+		}
+		else
+		{
+			if ((*(char *)my_dta->d_fname!='.')&&(__batchmode))
+			{
+				z=fname_pos(pathname);
+				strcat(pathname,my_dta->d_fname);
+				strcat(pathname,"\\");
+				strcat(pathname,extend);
+				load_depack(pathname);
+				pathname[z]='\0';
+				Fsetdta(my_dta);
+			}
+		}
+	}while(!Fsnext());
+	return(-1);
+}
+/*
+****************************************************************************
+** Save file in savename
+****************************************************************************
+*/
+int save_file (char *filename)
+{
+	long handle = Fcreate(filename,0);
+	
+	if (handle <0)
+	{
+		form_alert( 1, file_error_mess);
+		return(-1);
+	}
+
+	if ((Fwrite ((int)handle,depacked_length,depacked_pointer))<0)
+	{
+		form_alert( 1, file_error_mess);
+		Fclose ((int)handle);
+		return(-1);
+	}
+	Fclose ((int)handle);
+
+	memset(depacked_pointer,0,depacked_length);
+	Mfree(depacked_pointer);
+	depacked_pointer=0;
+	depacked_length=0;
+	return(0);
+}
+/*
+****************************************************************************
+** Do a fileselector
+** Pass pointer to filename
+** Return button state
+****************************************************************************
+*/
+int	do_fsel(char *filespec)
+{
+	char	file[64],path[64];
+	int		button;
+	size_t	z;
+	
+	for(z=79;z--;filespec[z]=0);
+	for(z=63;z--;file[z]=0);
+	for(z=63;z--;path[z]=0);
+
+	path[0]=Dgetdrv()+'A';
+	path[1]=':';
+	
+	Dgetpath(file,0);
+	strcat(path,file);
+	
+	file[0]='\0';
+	strcat(path,"\\*.*");
+	fsel_input(path,file,&button);
+	repair();
+
+	if (button)	
+	{
+		strcpy (filespec,path);
+		if (strlen(file)==0)
+		{
+			batch=1;
+			return(button);
+		}
+		z=fname_pos(filespec);
+
+		filespec[z]='\0';
+		Dsetdrv(path[0]-'A');
+		Dsetpath(filespec+3);
+		strcat(filespec,file);
+	}
+	return(button);
+}
+/*
+****************************************************************************
+** Return the position of the filename in a path
+****************************************************************************
+*/
+size_t	fname_pos(char *path)
+{
+	size_t	z;
+	z=strlen(path);
+	while(z && (path[z-1] != '\\'))
+		z--;
+	return(z);
+}
+/*
+****************************************************************************
+** Repair the damage!!!
+****************************************************************************
+*/
+void	repair(void)
+{
+	int	event,dummy;
+	EVENT	my_event;
+	do
+	{
+		my_event.ev_mflags= MU_MESAG|MU_TIMER;
+		my_event.ev_mbclicks=my_event.ev_bmask= 0;
+		my_event.ev_mbstate=my_event.ev_mm1flags=my_event.ev_mm1x=my_event.ev_mm1y=0;
+		my_event.ev_mm1width=my_event.ev_mm1height=my_event.ev_mm2flags=my_event.ev_mm2x=0;
+		my_event.ev_mm2y=my_event.ev_mm2width=my_event.ev_mm2height=my_event.ev_mtlocount=0;
+		my_event.ev_mthicount=0;
+
+		event=EvntMulti(&my_event);
+		if ( event & MU_MESAG )
+			dummy=handle_message(my_event.ev_mmgpbuf);
+	} while(event != MU_TIMER);
+}
+/*
+****************************************************************************
+** Tidy up the system
+****************************************************************************
+*/
+void	tidy_up(void)
+{
+	if (form_tab.menu_handle) 
+		kill_window(form_tab.menu_handle);
+	if (form_tab.prefs_handle) 
+		kill_window(form_tab.prefs_handle);
+	if (form_tab.info_handle) 
+		kill_window(form_tab.info_handle);
+	if (depacked_length)
+	{
+		Mfree(depacked_pointer);
+		depacked_pointer=0;
+		depacked_length=0;
+	}	
+	form_tab.menu_handle=form_tab.prefs_handle=form_tab.info_handle=0;
+}
+/*
+****************************************************************************
+** Draw a dialog box (non windowed)
+****************************************************************************
+*/
+int	do_dial(OBJECT *tree)
+{
+	int	x,y,w,h,but;
+	wind_update(BEG_UPDATE);
+	form_center(tree,&x,&y,&w,&h);
+	form_dial(FMD_START,0,0,0,0,x,y,w,h);
+	objc_draw(tree,ROOT,MAX_DEPTH,x,y,w,h);
+	but=form_do(tree,0);
+	form_dial(FMD_FINISH,0,0,0,0,x,y,w,h);
+	objc_change(tree,but,0,x,y,w,h,NORMAL,0);			
+	wind_update(END_UPDATE);
+	repair();
+	return(but);
+}
