@@ -1,0 +1,840 @@
+* @@@@		@@@ 	@@@@   @@@@@@	@@@@
+*  @@	   @@ @@   @@  @@	 @@    @@  @@
+*  @@	  @@   @@ @@		 @@   @@
+*  @@	  @@   @@ @@		 @@   @@
+*  @@	@ @@   @@ @@  @@@	 @@   @@
+*  @@  @@  @@ @@   @@  @@	 @@    @@  @@
+* @@@@@@@	@@@ 	@@@@@  @@@@@@	@@@@
+
+* Logic routines for moving objects around 3D space. Calls many routines in
+* COMBAT. Note - the logic routines for the launch/dock sequence are in the
+* ENDGAME file (although they are included in the jump block).
+
+* Version 1.0 4th April 1988 Copyright (c) 1988 Mr. Micro Ltd.
+* Designed and coded by Rob Nicholson. Adapted from the MSX version.
+
+	include macros
+
+	xref build_number,disp_message,str_copy,str_cat,local_z_rotate
+	xref explode_object,find_object,release_cargo,fx,do_circle
+	xref random,auto_pilot,inst_echar,get_dist,reduce_shields
+	xref target_lost,local_x_rotate,rand,move_object,alloc_object
+	xref create_object,copy_object,monst,transform,random_direction
+	xref do_launch1a,do_launch1b,do_launch2a,do_launch2b,do_launch3a
+	xref do_launch3b,do_launch4a,do_launch4b,do_dock1a,do_dock1b,do_dock1c
+	xref do_dock2a,do_dock2b,do_dock3a,do_dock3b,do_dock3c,do_dock3d
+	xref do_dock4a,do_dock4b,do_dock5a
+
+* ---- LOCAL CONSTANTS ----
+
+launch_dist:	equ 3600				distance of launch before turn
+land_dist:		equ $10000*3/4			distance of ship before land
+missile_range:	equ 300 				missile hit range before detonate
+missile_damage: equ 48					damage to shields from missile
+dist_peel_off:	equ 480 				distance to peel off (max)
+max_rad:		equ 255 				maximum explosion radius
+fire_range: 	equ 7000				distance to start firing
+run_limit:		equ $1200				min. run away distance
+run_range:		equ $1000				range of run away distances
+photon_life:	equ 35					life of photon bolt
+photon_vel: 	equ 250 				speed of photon bolt
+photon_size:	equ 10					size of photon
+hit_range:		equ 500 				range for photon hit on player
+hit_prob:		equ 200 				probability of being hit
+avoid_range:	equ 32					range of avoid distances
+avoid_limit:	equ 60					min. avoid distance
+judder: 		equ 5					length of judder
+ecm_range:		equ 1000				range of ECM
+ecm_prob:		equ 25					probability of ECM trigger
+fspeed: 		equ 10					fragment explosion speed (end game)
+bspeed: 		equ 7					barrel explosion speed
+
+	module logic
+
+
+* *************************************
+* **								 **
+* ** DO_LOGIC - EXECUTE OBJECT LOGIC **
+* **								 **
+* *************************************
+
+* Executes the appropriate object logic routine. The UNDER_ATTACK flag is
+* also set if the object is angry with the player.
+
+* Entry: None
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr do_logic,global
+
+	btst #angry,flags(a5)				angry with player ?
+	if <ne> then.s						yes
+		st under_attack(a6) 			set under attack flag
+	endi
+	move logic(a5),d0					fetch logic routine address
+	asl #2,d0
+	lea logic_vectors(pc),a0
+	move.l (a0,d0),a0
+	jmp (a0)							execute logic and exit
+
+
+* *************************************
+* **								 **
+* ** ROTATING - ROTATE AROUND Z AXIS **
+* **								 **
+* *************************************
+
+* Rotates the object around its own z axis by 0.8 degree in a clockwise
+* direction. Only rotates if the space station is visible.
+
+	subr do_rotating
+
+	tst visible(a6) 					visible ?
+	if <ne> then.s						yes
+		move #8,d0						rotate around z axis
+		jsr local_z_rotate
+	endi
+
+	ret
+
+
+* **************************************************
+* **											  **
+* ** DO_TWISTING - TWIST OBJECT AROUND THE Z AXIS **
+* **											  **
+* **************************************************
+
+* Twists the current object around the z axis. Used to spin the cargo
+* canisters
+
+	subr do_twisting
+
+	bsr do_cruising 					perform cruise logic
+	tst visible(a6) 					visible ?
+	if <ne> then.s						yes
+		moveq #25,d0					rotate through 2.5 degrees
+		jsr local_z_rotate
+	endi
+
+	ret 								return
+
+
+* *************************************
+* **								 **
+* ** EXPLOSION - OBJECT IS EXPLODING **
+* **								 **
+* *************************************
+
+* Advances the explosion to the next stage.
+
+	subr do_explosion
+
+	dec exp_timer(a5)					explosion over ?
+	if <ne> then.s						no
+		move force(a5),d0				add force to radius
+		add d0,exp_rad(a5)
+		dec force_timer(a5) 			ready for change in force ?
+		if <eq> then.s					yes
+			move #rate,force_timer(a5)
+			tst force(a5)
+			if <ne> then.s
+				dec force(a5)
+			endi
+		endi
+	else.s
+		bset #remove,flags(a5)			explosion over, remove object
+		btst #no_bounty,flags(a5)		any bounty message ?
+		if <eq> then.s					yes
+			move bounty(a5),d0			any bounty ?
+			if <ne> then.s				yes
+				lea text2(pc),a0		build message 'Bounty xxx credits'
+				lea pad(a6),a1
+				jsr str_copy
+				hclr d0
+				move #$80,d1
+				move.l a1,a0
+				dec.l a0
+				jsr build_number
+				lea pad(a6),a0
+				lea text3(pc),a1
+				jsr str_cat
+				lea pad(a6),a0			display message
+				jsr disp_message
+				movem bounty(a5),d0 	add bounty to cash
+				add.l d0,cash(a6)
+			else.s
+				lea text4(pc),a0		print "No bounty"
+				jsr disp_message
+			endi
+		endi
+	endi
+
+	ret
+
+
+* **********************************************
+* **										  **
+* ** POLICE - LAUNCH VIPER FROM SPACE STATION **
+* **										  **
+* ***********************************************
+
+* Launch police vipers from space station and attack player.
+
+	subr do_police
+
+	bsr speed_control					increase speed
+	bsr peel_off_check					close to player ?
+	bcc.s avoid1						yes, avoid player
+	lea station_rec(a6),a4				compute distance from space station
+	jsr get_dist
+	cmp.l #launch_dist,d2				reached turn distance ?
+	ret <lo>							no
+
+avoid1:
+
+	move #log_run_off,next_logic(a5)	run after peel off
+	bra start_peel_off					start to peel off, then attack
+
+
+* ***********************************************
+* **										   **
+* ** LAUNCH - LAUNCH TRADER FROM SPACE STATION **
+* **										   **
+* ***********************************************
+
+* Launch trader ship from space station.
+
+	subr do_launch
+
+	bsr speed_control					speed up
+	bsr peel_off_check					close to player ?
+	if <cs> then.s						no
+		lea station_rec(a6),a4			compute distance from space station
+		jsr get_dist
+		cmp.l #launch_dist,d2			outside launch distance ?
+		ret <lo>						no, return
+	endi
+	move type(a5),d0					rotate thro' either 90 or 135 degrees
+	sub #cobra,d0						depending on the object type
+	btst #1,d0
+	if <eq> then.s
+		move.l #90*10,d1
+	else.s
+		move.l #135*10,d1
+	endi
+	move turn_rate(a5),d2				calculate no. turns required to
+	divu d2,d1							reach this angle
+	move d1,peel_x_count(a5)
+	btst #0,d0							either + or - rotation
+	if <ne> then.s
+		neg d2
+	endi
+	move d2,peel_x(a5)
+	clr peel_z_count(a5)				no z rotation
+	move #log_peel_off,logic(a5)		set logic type
+	move #log_cruise,next_logic(a5) 	cruise after peel off
+
+	ret
+
+
+* *************************************
+* **								 **
+* ** CRUISING - CRUISE INTO DISTANCE **
+* **								 **
+* *************************************
+
+* Logic routine: Object cruises into the distance at full speed.
+
+	subr do_cruising
+
+	bclr #angry,flags(a5)				not angry any more
+	move #1,on_course(a5)				speed up to maximum
+	bsr speed_control
+	move.l obj_range(a5),d0 			way off radar ?
+	cmp.l #radar_range,d0
+	if <hi> then.s						yes
+		move.l a5,a4					check for lost target
+		jsr target_lost
+		bset #remove,flags(a5)			remove object from world
+	endi
+
+	ret
+
+
+* *****************************************
+* **									 **
+* ** FLY_PLANET - FLY TOWARDS THE PLANET **
+* **									 **
+* *****************************************
+
+* Logic routine: Fly a shuttle towards the planet.
+
+	subr do_fly_planet
+
+	bsr peel_off_check					close to player ?
+	if <cc> then.s						yes, peel off and run
+		move #log_cruise,next_logic(a5)
+		bra start_peel_off
+	endi
+	move.b loop_ctr(a6),d0				only check 1 in 4
+	and.b #3,d0
+	if <eq> then.s
+		bsr speed_control				speed up to maximum
+		lea planet_rec(a6),a4			within landing distance ?
+		jsr get_dist
+		cmp.l #land_dist,d2
+		if <lo> then.s					yes
+			bset #remove,flags(a5)		remove the object
+		endi
+	endi
+
+	ret
+
+
+* *************************************
+* **								 **
+* ** PEEL_OFF - PEEL OFF FROM COURSE **
+* **								 **
+* *************************************
+
+* Logic routine: Peels from current path.
+
+	subr do_peel_off
+
+	bsr speed_control					speed up to maximum
+	tst peel_x_count(a5)				peeling in x direction ?
+	if <ne> then.s						yes
+		dec peel_x_count(a5)			rotate in x direction
+		move peel_x(a5),d0
+		jsr local_x_rotate
+	endi
+	tst peel_z_count(a5)				peeling in z direction ?
+	if <ne> then.s						yes
+		dec peel_z_count(a5)			rotate in z direction
+		move peel_z(a5),d0
+		jsr local_z_rotate
+	endi
+	move peel_x_count(a5),d0			finished peel off ?
+	or peel_z_count(a5),d0
+	ret <ne>							no
+	move next_logic(a5),d0				move to next logic sequence
+	move d0,logic(a5)
+	cmp #log_cruise,d0					cruising ?
+	ret <eq>							yes, return
+	cmp #log_avoid,d0					avoid player ?
+	ret <eq>							yes, return
+	cmp #log_run_off,d0 				run off ?
+	beq start_run_off					yes, start to run off
+	move #100,counter(a5)				time to run
+
+	ret
+
+
+
+* ************************************************
+* **											**
+* ** DO_ESCAPE - FLY OFF PART OF ESCAPE CAPSULE **
+* **											**
+* ************************************************
+
+* Process the logic of the escape capsule (Cobra).
+
+	subr do_escape
+
+	clr controls_locked(a6) 			release controls
+	st just_docked(a6)					phew!
+
+	ret 								return
+
+
+* ****************************
+* **						**
+* ** ATTACK - ATTACK PLAYER **
+* **						**
+* ****************************
+
+* Flies towards the player, lasers blasting.
+
+	subr do_attack
+
+	bset #angry,flags(a5)				angry with player
+	tst radar_obj(a6)					within space station space ?
+	if <ne> then.s						yes
+		cmp #typ_pirate,ship_type(a5)	pirate ?
+		if <eq> then.s					yes
+			move #log_cruise,logic(a5)	bugger off
+		endi
+	endi
+	cmp.l #fire_range,obj_range(a5) 	close enough to fire ?
+	bhi no_fire 						no
+	tst on_course(a5)					on course ?
+	beq no_fire 						no
+	tst cloaking_on(a6) 				cloaking device on ?
+	bne no_fire 						yes
+	jsr random							correct probability ?
+	cmp mood(a5),d0
+	bhi no_fire 						no
+	tst controls_locked(a6) 			controls locked (escape) ?
+	bne no_fire 						yes
+	jsr alloc_object					allocate object record for photon
+	ret <cc>							none left
+	jsr copy_object 					use attacker's object record
+	move zpos(a4),mother_z(a4)			save sign of attackers z coord
+	move gun_node(a4),d0				find gun node
+	move.l nodes(a4),a0
+	asl #3,d0
+	lea (a0,d0),a0
+	jsr transform						transform from local to world
+	ext.l d0							add node coords to world coords
+	add.l d0,xpos(a4)
+	ext.l d1
+	add.l d1,ypos(a4)
+	ext.l d2
+	add.l d2,zpos(a4)
+	move.b #%10000111,flags(a4) 		no radar, point, invincible, in use
+	move #photon,type(a4)				it's a photon bolt
+	move #photon_size,obj_rad(a4)
+	move #log_photon,logic(a4)
+	move #photon_life,counter(a4)
+	cmp #constr,type(a5)				constrictor ?
+	if <eq> then.s						yes
+		moveq #6,d0 					mega laser
+	else
+		move rating(a6),d0				determine range of damage depending
+		add d0,d0						on player's rating
+		lea damage(pc),a0
+		move (a0,d0),d2
+		jsr rand
+		inc d0
+	endi
+	move d0,force(a4)					store hit force for later
+	jsr create_object					create object
+	move #photon_vel,velocity(a4)		set laser speed
+	sfx laser							trigger sound effect
+
+no_fire:
+
+	bsr peel_off_check					peel off ?
+	if <cc> then.s						yes
+		move #log_run_off,next_logic(a5)
+		bra start_peel_off
+	endi
+	moveq #0,d0 						auto-pilot towards player
+	moveq #0,d1
+	moveq #0,d2
+	bsr auto_pilot
+	moveq #6,d0 						adjust speed and exit
+	bra speed_control
+
+
+* *******************************************
+* **									   **
+* ** RUN_OFF - RUN OFF INTO DISTANCE LOGIC **
+* **									   **
+* *******************************************
+
+* Logic to run into the distance.
+
+	subr do_run_off
+
+	bsr speed_control					speed upto maximum
+	dec counter(a5) 					still running ?
+	if <eq> then.s						no
+		move #log_attack,logic(a5)		turn to attack
+		move health(a5),pre_attack(a5)	save health before attack
+		clr on_course(a5)				not on course
+	endi
+
+	ret
+
+
+* *************************
+* **					 **
+* ** TIMER - TIMER LOGIC **
+* **					 **
+* *************************
+
+* Decrements a timer, when zero the object is removed.
+
+	subr do_timer
+
+	dec counter(a5) 					timeout ?
+	ret <ne>							no
+	bset #remove,flags(a5)				remove object from world
+
+	ret
+
+
+* ********************************
+* **							**
+* ** PHOTON - PHOTON BOLT LOGIC **
+* **							**
+* ********************************
+
+* Performs the logic for a photon bolt.
+
+	subr do_photon
+
+	cmp.l #hit_range,obj_range(a5)		within hit range ?
+	if <lo> then.s						yes
+*		 jsr random 					 correct probability
+*		cmp #hit_prob,d0
+*		ret <hs>						no
+		move force(a5),d0				hit shields
+		jsr reduce_shields
+*		move #judder,judder_ctr(a6) 	start judder
+	endi
+	dec counter(a5) 					life over ?
+	ret <ne>							no
+	bset #remove,flags(a5)				remove bolt from world
+
+	ret
+
+
+* **************************************
+* **								  **
+* ** AVOID - AVOID PLAYER FOR A WHILE **
+* **								  **
+* **************************************
+
+* Avoid player after being hit.
+
+	subr do_avoid
+
+	moveq #avoid_range,d2				set run distance
+	jsr rand
+	add #avoid_limit,d0
+	move d0,counter(a5)
+	move #log_run_off,logic(a5) 		run off for a while
+	move #1,on_course(a5)
+
+	ret
+
+
+* *****************************************************
+* **												 **
+* ** DO_LOCKED - TRACK MISSILE FROM PLAYER TO TARGET **
+* **												 **
+* *****************************************************
+
+* Tracks a missile launched by the player towards its target
+
+	subr do_locked
+
+	move.l target(a5),a4				get target's coords
+	movem.l xpos(a4),d0-d2
+	jsr auto_pilot						execute auto-pilot
+	moveq #6,d0 						more/less gas
+	bsr speed_control
+	jsr get_dist						calculate distance to target
+	tst ecm_fitted(a4)					ECM fitted to target ?
+	beq.s no_ecm						no
+	tst ecm_on(a6)						ECM already on ?
+	bne.s no_ecm						yes
+	cmp.l #ecm_range,d2 				within ECM range ?
+	if <lo> then.s						yes
+		move type(a4),d0				target = space station ?
+		cmp #spacestn,d0
+		beq ecm_missile 				yes
+		cmp #constr,d0					constrictor ?
+		beq ecm_missile 				yes
+		cmp #cougar,d0					cougar ?
+		beq ecm_missile 				yes
+		tst ecm_jammed(a6)				ECM jammed ?
+		bne no_ecm						yes
+		jsr random						random chance to ECM
+		cmp #ecm_prob,d0
+		bhi no_ecm
+
+ecm_missile:
+
+		sfx ecm 						trigger ECM effect
+		clr f_echar(a6) 				flag instrument change
+		st who_ecm(a6)					computer started ECM
+		ret 							return
+	endi
+
+no_ecm:
+
+	lsr.l #1,d2 						within range ?
+	cmp.l #255,d2
+	ret <hi>							definately not!
+	cmp obj_rad(a4),d2
+	ret <hi>							no
+	jsr explode_object					explode target
+	jsr release_cargo					release any cargo
+	sfx explosion						trigger explosion effect
+	bset #remove,flags(a5)				remove missile
+
+	ret
+
+
+* ***********************************************
+* **										   **
+* ** DO_MISSILE - TRACK MISSILE TOWARDS PLAYER **
+* **										   **
+* ***********************************************
+
+* Tracks a missile towards the player.
+
+	subr do_missile
+
+	moveq #0,d0 						auto-pilot towards the player
+	moveq #1,d1
+	moveq #2,d2
+	jsr auto_pilot
+	moveq #6,d0 						more/less gas
+	bsr speed_control
+	cmp.l #missile_range,obj_range(a5)	within range ?
+	if <lo> then.s						yes
+		move.l a5,a4					explode the missile
+		jsr explode_object
+		moveq #missile_damage,d0		reduce shields
+		jsr reduce_shields
+	endi
+
+	ret 								return
+
+
+* **********************************************
+* **										  **
+* ** DO_ENDGAME1 - END GAME EXPLOSION PART #1 **
+* **										  **
+* **********************************************
+
+* Moves the Cobra closer towards the front of the screen.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr do_endgame1
+
+	sub.l #100,zpos(a5) 				move closer
+	cmp.l #1000,zpos(a5)				reached the front ?
+	if <le> then						yes
+		move #15,force(a5)				initialise explosion
+		move #rate,force_timer(a5)
+		move #exp_dur,exp_timer(a5)
+		clr exp_rad(a5)
+		clr velocity(a5)
+		move #log_exploding,logic(a5)
+		bset #point,flags(a5)			not normal 3D object
+		loop 1,2						release 2 canisters
+			jsr alloc_object			allocate an object
+			push d7 					copy main object
+			jsr copy_object
+			move.b #%1,flags(a4)		in use
+			jsr random_direction		move in random direction
+			move #barrel,type(a4)		it's a twisting barrel
+			move #log_twisting,logic(a4)
+			jsr create_object			create the object
+			move #bspeed,velocity(a4)	set speed of barrel
+			pop d7						next barrel
+		next 1
+		loop 1,5						release 5 platlets
+			jsr alloc_object			allocate an object
+			push d7 					copy main object
+			jsr copy_object
+			move.b #%1,flags(a4)		in use
+			jsr random_direction		move in random direction
+			move #platlet,type(a4)		it's a twisting platlet
+			move #log_twisting,logic(a4)
+			jsr create_object			create the object
+			move #fspeed,velocity(a4)	set speed of fragment
+			jsr random					random colour
+			and #7*2,d0
+			lea fragment_cols(pc),a0
+			move (a0,d0),obj_colour(a4)
+			moveq #50,d0				move fragment out a tidge
+			jsr move_object
+			pop d7						next fragment
+		next 1
+		sfx explosion					sfx: explosion
+	else.s
+		moveq #30,d0					rotate
+		jsr local_x_rotate
+		moveq #-30,d0
+		jsr local_z_rotate
+	endi
+
+	ret 								return
+
+
+* *******************************************
+* **									   **
+* ** SPEED_CONTROL - CONTROL SPEED OF SHIP **
+* **									   **
+* *******************************************
+
+* Controls the speed of the current object. If the object is on course, then
+* it's speed is increased upto the maximum speed. If not on course, then the
+* speed in decreased.
+
+* Entry:  ON_COURSE = On course counter
+*		  D0 = Minimum speed
+* Exit:   None
+
+* Regs:   D1 corrupt.
+* Subr:   None
+
+	subr speed_control
+
+	move velocity(a5),d1				fetch objects speed
+	tst on_course(a5)					on course ?
+	if <ne> then.s						yes
+		addq #2,d1						increase speed
+		cmp vel_max(a5),d1
+		if <gt> then.s
+			move vel_max(a5),d1
+		endi
+	else.s
+		subq #2,d1						reduce speed
+		if d1 <lt> d0 then.s
+			move d0,d1
+		endi
+	endi
+	move d1,velocity(a5)				update speed
+
+	ret
+
+
+* ****************************************
+* **									**
+* ** START_PEEL_OFF - START TO PEEL OFF **
+* **									**
+* ****************************************
+
+* Start the current object peeling off from it's current path. The angle for
+* the x and z rotations are randomized between 45 and 180 degrees. The number
+* of turns required to reach this angle is calculated and stored in the
+* objects record. NOTE - the peel related entries in the record must be laid
+* out as follows as they are accessed directly:
+
+*		peel_x_count:	ds.w 1
+*		peel_x: 		ds.w 1
+*		peel_z_count:	ds.w 1
+*		peel_z: 		ds.w 1
+
+* Entry: A5 = ptr: object's record
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr start_peel_off,global
+
+	lea peel_x_count(a5),a0 			point to peel x count
+	loop 1,2							loop for x and z
+		move #180-45,d2 				choose random angle
+		jsr rand
+		add #45,d0
+		mulu #10,d0 					calculate no. turns required to
+		move turn_rate(a5),d2			achieve this angle
+		divu d2,d0
+		move d0,0(a0)
+		jsr random						set peel angle (+/- turn_rate)
+		tst.b d0
+		if <mi> then.s
+			neg d2
+		endi
+		move d2,2(a0)
+		addq.l #4,a0					next angle
+	next 1
+	move #log_peel_off,logic(a5)		peel off logic
+	move #1,on_course(a5)				object on course
+
+	ret
+
+
+* *****************************************
+* **									 **
+* ** PEEL_OFF_CHECK - CHECK FOR PEEL OFF **
+* **									 **
+* *****************************************
+
+* Checks if the current object is close enough to peel off.
+
+* Entry: None
+* Exit:  IF close enough THEN
+*			Carry flag clear (CC)
+*		 ELSE
+*			Carry flag set (CS)
+*		 ENDIF
+
+* Regs: ?
+* Subr: ?
+
+	subr peel_off_check
+
+	move approach(a6),d0				flying away from us ?
+	if <mi> then.s						yes
+		clr d0							peel distance = 0
+	else.s
+		mulu #600,d0					calculate peel distance
+		divu turn_rate(a5),d0
+		add #1024,d0
+	endi
+	hclr d0 							set carry if within distance
+	cmp.l obj_range(a5),d0
+
+	ret
+
+
+* **********************************************
+* **										  **
+* ** START_RUN_OFF - START OBJECT RUNNING OFF **
+* **										  **
+* **********************************************
+
+* Initialises the logic for running away for a while.
+
+	subr start_run_off,global
+
+	move #run_range,d2					range = rand(run_range)+run_limit
+	jsr rand
+	add #run_limit,d0
+	hclr d0 							calculate no. loops required to reach
+	divu vel_max(a5),d0 				this range
+	move d0,counter(a5)
+	move #1,on_course(a5)				object is on course
+
+	ret
+
+
+* ---- LOCAL DATA ----
+
+* Table of logic vectors.
+
+logic_vectors:
+
+	dc.l return,do_explosion,do_rotating,do_locked,do_launch,do_police
+	dc.l do_attack,do_peel_off,do_run_off,do_twisting,do_fly_planet,do_avoid
+	dc.l do_cruising,do_missile,do_escape,do_timer,do_photon,do_endgame1
+	dc.l do_launch1a,do_launch1b,do_launch2a,do_launch2b,do_launch3a
+	dc.l do_launch3b,do_launch4a,do_launch4b,do_circle,do_dock1a,do_dock1b
+	dc.l do_dock1c,do_dock2a,do_dock2b,do_dock3a,do_dock3b,do_dock3c
+	dc.l do_dock3d,do_dock4a,do_dock4b,do_dock5a
+
+* Table of laser damage range for ratings.
+
+damage:
+
+	dc.w 3,3,3,5,5,5,7,7,7
+
+* List of colours for fragments.
+
+fragment_cols:
+
+	dc 6,7,8,17,18,19,1,47
+
+* Text strings.
+
+text2:	dz <Bounty: >
+text3:	dz < credits>
+text4:	dz <No bounty!>
+

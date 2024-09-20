@@ -1,0 +1,2011 @@
+;	@@@@	 @@   @@@@		 @@   @@   @@  @@  @@
+;  @@  @@	@@@@   @@		@@@@   @@ @@   @@  @@
+; @@	   @@  @@  @@	   @@  @@	@@@    @@  @@
+; @@	   @@  @@  @@	   @@  @@	@@@ 	@@@@
+; @@  @@@  @@@@@@  @@	@  @@@@@@  @@ @@	 @@
+;  @@  @@  @@  @@  @@  @@  @@  @@ @@   @@	 @@
+;	@@@@@  @@  @@ @@@@@@@  @@  @@ @@   @@	@@@@
+
+; Generation of galaxy and products. Drawing of galactic and local navigation
+; charts.
+
+; Atari Version 1.0 19th April 1988 Copyright (c) 1988 Mr. Micro Ltd.
+; Designed and coded by Rob Nicholson. Converted from the MSX version.
+
+; Modification history:
+
+; V1.1	30/03/90	'Cursor reset to xxxx' prompt changed to 'Current system: '
+
+	include macros
+
+	xref getrandx,tokens,product_table,invert_icon,prepare_text,str_copy,block
+	xref build_number,print_centre,set_colour,plotxy,bit_masks
+	xref draw_sprite,print_string,dot_to_addr,colour_masks,line,build_sprite
+	xref str_len,text_colour,clear_input,fuel_distance,print_number,fx,rand
+	xref input_line,str_compare,buy_cargo,sell_cargo,wait_key,data,hold_clock
+	xref equip_ship,init_cursor,hide_cursor,status,data,restore_cursor
+	xref options,disk,inventory,market_prices,launch,error_box
+	xref check_docked,str_cat
+
+; ---- LOCAL CONSTANTS ----
+
+middle_x:		equ text_left+text_width/2	(centre screen coords)
+middle_y:		equ text_top+text_depth/2
+gal_width:		equ 255 					size of galaxy
+gal_depth:		equ 127
+
+; ---- LOCAL VARIABLES ----
+
+	vars galaxy
+
+circle_rad: 		ds.w 1				radius of circle
+cent_x: 			ds.w 1				centre planet coords
+cent_y: 			ds.w 1
+smallest:			ds.l 1				smallest distance
+biggest:			ds.l 1				biggest distance
+furthest_planet:	ds.w 1				furthest planet away
+no_lock:			ds.w 1				flag: don't lock
+left_limit: 		ds.w 1				limits of local chart
+right_limit:		ds.w 1
+top_limit:			ds.w 1
+bottom_limit:		ds.w 1
+x_window:			ds.w 1				coords of planet at middle
+y_window:			ds.w 1
+found:				ds.w 1				flag: required planet found
+no_planets: 		ds.w 1				no. planets on local chart
+circle_x:			ds.w 1				coords of circle
+circle_y:			ds.w 1
+planet_col: 		ds.w 1				colour of planet
+ellipse_a:			ds.w 1				ellipse parameters
+ellipse_b:			ds.w 1
+half_length:		ds.w 1				half length of label (pixels)
+middle_planet:		ds.w 1				planet # at middle of display
+done:				ds.w 1				lines done bit flags
+this_planet:		ds.w 1				current planet # (scanning)
+
+	end_vars galaxy
+
+
+; ****************************************************
+; **												**
+; ** RANGE_PLOT - PLOT A RANGE CIRCLE PIXEL (MACRO) **
+; **												**
+; ****************************************************
+
+; Plots a pixel in either the local or galactic range circles.
+
+; Syntax: RANGE_PLOT subr,x_sign,x_coord,y_sign,y_coord
+
+; Where:  subr		= plot routine prefix (l or g)
+;		  x_sign	= sign of x coord (+/-1)
+;		  x_offset	= coord to use for x offset (x or y)
+;		  y_sign	= sign of y coord (+/-1)
+;		  y_offset	= coord to use for y offset (x or y)
+
+; Entry: (D4,D5) = x,y coords (top right quadrant)
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+range_plot: macro
+
+	ifc '\3','x'						setup x coord
+		move d3,d0
+	endc
+	ifc '\3','y'
+		move d4,d0
+	endc
+	ifc '\5','x'						setup y coord
+		move d3,d1
+	endc
+	ifc '\5','y'
+		move d4,d1
+	endc
+	ifc '\2','-'						negate if required
+		neg d0
+	endc
+	ifc '\4','-'
+		neg d1
+	endc
+	bsr \1_circle_plot					plot point
+
+	endm
+
+
+; ************************************************
+; **											**
+; ** L_LINE - DRAW A LINE OF THE PLANET (MACRO) **
+; **											**
+; ************************************************
+
+; Draws the four horizontal lines of a planet using the 8 way symmetry of
+; the circle algorithm
+
+; Syntax: L_LINE x1_sign,x1,y1_sign,y1,x2_sign,x2,y2_sign,y2
+
+; Where: xx_sign = sign to apply to coord (+1 or -1)
+;		 x/y1	 = coords of point #1
+;		 x/y2	 = coords of point #2
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+l_line: macro
+
+	move circle_\2(a6),d0				setup x1
+	ifc '\1','-'
+		neg d0
+	endc
+	move circle_\4(a6),d1				setup y1
+	ifc '\3','-'
+		neg d1
+	endc
+	move circle_\6(a6),d2				setup x2
+	ifc '\5','-'
+		neg d2
+	endc
+	move circle_\8(a6),d3				setup y2
+	ifc '\7','-'
+		neg d3
+	endc
+	move circle_rad(a6),d4				add radius of circle to all coords
+	add d4,d0
+	add d4,d1
+	add d4,d2
+	add d4,d3
+	jsr line							draw the line
+
+	endm
+
+
+; *********************************************
+; **										 **
+; ** DLINE - DRAW EXPANDING BOX LINE (MACRO) **
+; **										 **
+; *********************************************
+
+; Draws one of the lines of the expanding box (unless done).
+
+; Syntax: DLINE x1,y1,x2,y2
+
+; Where:  bit	  = bit # to test (0..3)
+;		  (x1,y1) = coords of point #1
+;		  (x2,y2) = coords of point #2
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: LINE
+
+dline: macro
+
+	move \1(a6),d0						set up coords
+	move \2(a6),d1
+	move \3(a6),d2
+	move \4(a6),d3
+	jsr line							draw the line
+
+	endm
+
+
+; ************************************************
+; **											**
+; ** MOVELINE - MOVE EXPANDING LINE OUT (MACRO) **
+; **											**
+; ************************************************
+
+; Moves a line outwards unless done bit is clear. Checks for reaching the
+; limits of the window.
+
+; Syntax: MOVELINE bit,coord,dir,limit
+
+; Where:  bit	= bit number in DONE (0..3)
+;		  coord = coord to move (x1/y1/x2/y2)
+;		  dir	= direction to move (+1 or -1)
+;		  limit = limit of movement
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+moveline: macro
+
+	btst #\1,done(a6)					line done ?
+	if <ne> then.s						no
+		move \2(a6),d0					fetch coord
+		ifgt \3 						+1 ?
+			addq #\3,d0 				add direction to coord
+			if d0 <gt> #\4 then.s		if outside limit
+				move #\4,d0 			clamp at limit
+				bclr #\1,done(a6)		line done
+			endi
+		endc
+		iflt \3 						-1 ?
+			subq #-\3,d0				subtract direction from coord
+			if d0 <lt> #\4 then.s		if outside limit
+				move #\4,d0 			clamp at limit
+				bclr #\1,done(a6)
+			endi
+		endc
+		move d0,\2(a6)					update coord
+	endi
+
+	endm
+
+	module galaxy
+
+
+; ******************************************
+; **									  **
+; ** FIRST_PLANET - START AT FIRST PLANET **
+; **									  **
+; ******************************************
+
+; Copies the galactic seed into the random seed to that the next planet
+; generated (GEN_PLANET or GEN_POSITION) will generate the data for the
+; first planet in the current galaxy.
+
+; Entry: None
+; Exit:  RSEED1/2/3 initialised
+
+; Regs:  A0,A1 and D7 corrupt.
+; Subr:  None
+
+	subr first_planet
+
+	lea gal_seed(a6),a0 				copy galactic seed
+	lea rseed1(a6),a1
+	loop 1,3
+		move (a0)+,(a1)+
+	next 1
+	clr this_planet(a6) 				reset counter
+
+	ret
+
+
+; *****************************************
+; **									 **
+; ** SKIP_PLANETS - SKIP THROUGH PLANETS **
+; **									 **
+; *****************************************
+
+; Advances the random number routine passed a specified no. of planets.
+
+; Entry: D0 = no. of planets to skip.
+; Exit:  None
+
+; Regs:  D0-D3 corrupt.
+; Subr:  None
+
+	subr skip_planets
+
+	move d0,d3							no. loops = no. planets*4
+	ret <eq>							none to skip
+	asl #2,d3
+	dec d3
+	movem rseed1(a6),d0-d2				fetch seed values
+	loop 1
+		add d1,d0						perform random
+		add d2,d0
+		exg d0,d1
+		exg d1,d2
+	next 1,d3
+	movem d0-d2,rseed1(a6)				store new seed values
+
+	ret
+
+
+; ***************************************
+; **								   **
+; ** GEN_PLANET - GENERATE PLANET DATA **
+; **								   **
+; ***************************************
+
+; Generates the planet data from the current random number.
+
+; Entry: Seed in RSEED[3]
+; Exit:  Planet into in CPLANET record
+
+; Regs:  ?
+; Subr:  ?
+
+	subr gen_planet
+
+	lea rseed1(a6),a0					copy seed into planet record
+	lea cplanet+seed(a6),a1
+	loop 1,3
+		move (a0)+,(a1)+
+	next 1
+	move.b rseed2(a6),d0				generate x coord
+	and #255,d0
+	mulu #gal_width,d0
+	divu #255,d0
+	move d0,cplanet+xcoord(a6)
+	move.b rseed1(a6),d0				generate y coord
+	and #255,d0
+	mulu #gal_depth,d0
+	divu #255,d0
+	move d0,cplanet+ycoord(a6)
+	move rseed2(a6),d0					generate government
+	lsr #3,d0
+	and #7,d0
+	move d0,cplanet+govern(a6)
+	move rseed1(a6),d1					generate economy
+	lsr #8,d1
+	and #7,d1
+	sub #2,d0
+	subx d0,d0
+	and #2,d0
+	or d1,d0
+	move d0,cplanet+econ(a6)
+	eor #7,d0							generate tech level
+	move rseed2(a6),d1
+	lsr #8,d1
+	and #3,d1
+	add d1,d0
+	move cplanet+govern(a6),d1
+	lsr #1,d1
+	addx d1,d0
+	inc d0
+	move d0,cplanet+tech(a6)
+	lea cplanet+pname(a6),a0			set name tokens and exit
+	bra name_tokens
+
+
+; *********************************************
+; **										 **
+; ** GEN_POSITION - GENERATE PLANET POSITION **
+; **										 **
+; *********************************************
+
+; Generates the planets position from the current random seed and advances
+; the seed to the next planet.
+
+; Entry: None
+; Exit:  (D0,D1) = galactic coords
+
+; Regs: ?
+; Subr: ?
+
+	subr gen_position
+
+	move.b rseed2(a6),d0				generate x coord
+	and #255,d0
+	mulu #gal_width,d0
+	divu #255,d0
+	push d0
+	move.b rseed1(a6),d0				generate y coord
+	and #255,d0
+	mulu #gal_depth,d0
+	divu #255,d0
+	push d0
+	moveq #1,d0 						advance to next planet
+	bsr skip_planets
+	pop d1								fetch coords
+	pop d0
+
+	ret
+
+
+; ***********************************
+; **							   **
+; ** NAME_TOKENS - SET NAME TOKENS **
+; **							   **
+; ***********************************
+
+; Sets the four name tokens and stores them in a buffer. The random routine
+; called four times.
+
+; Entry: A0 = ptr: token buffer
+; Exit:  ?
+
+; Regs:  ?
+; Subr:  ?
+
+	subr name_tokens,global
+
+	push.b rseed1+1(a6) 				save 1st random seed
+	loop 1,4							loop four times
+		move.b rseed3(a6),d0			assume token ok
+		and #31,d0
+		move d0,(a0)
+		jsr getrandx					advance random
+		tst d7							last token ?
+		if <eq> then.s					yes
+			pop.b d0					initial rseed[0] & 64=0 ?
+			and #64,d0
+			if <eq> then.s				yes
+				clr (a0)				shorten name
+			endi
+		endi
+		addq.l #2,a0					advance pointer
+	next 1								next token
+
+	ret
+
+
+; ***************************************
+; **								   **
+; ** BUILD_NAME - BUILD NAME OF PLANET **
+; **								   **
+; ***************************************
+
+; Expands (detokenises) the name of the planet.
+
+; Entry: D0 = planet no.
+; Exit:  Planet name in PLANET_NAME buffer (zero terminated)
+;		 Length of name in D0
+;		 Planet record in CPLANET
+
+; Regs:  ?
+; Subr:  ?
+
+	subr build_name,global
+
+	bsr get_planet_info 				get planet record
+	lea cplanet+pname(a6),a0			expand name
+	bra detoken_name
+
+
+; *******************************************
+; **									   **
+; ** DETOKEN_NAME - DETOKENISE PLANET NAME **
+; **									   **
+; *******************************************
+
+; Detokenises a planet name into the Planet_Name buffer.
+
+; Entry: A0 = ptr: tokens (four bytes)
+; Exit:  Planet name in Planet_Name buffer (zero terminated).
+;		 D0 = Length of name
+
+; Regs:  ?
+; Subr:  ?
+
+	subr detoken_name,global
+
+	lea planet_name(a6),a1				point to output buffer
+	lea tokens,a2						token string table
+	clr d0								length = zero
+	loop 1,4							4 tokens to expand
+		move (a0)+,d1					get next token
+		add d1,d1						index into tokens
+		loop 2,d6,2 					copy into buffer (unless space)
+			cmp.b #32,(a2,d1)
+			if <ne> then.s
+				move.b (a2,d1),(a1)+
+				inc d0
+			endi
+			inc d1
+		next 2,d6
+	next 1								next token
+	clr.b (a1)							terminate string
+	bclr #5,planet_name(a6) 			convert 1st character to upper case
+
+	ret
+
+
+; *********************************************
+; **										 **
+; ** GET_PLANET_INFO - GET INFO ABOUT PLANET **
+; **										 **
+; *********************************************
+
+; Winds the random number generator onto the required planet and generates
+; the planets record (CPLANET)
+
+; Entry: D0 = planet no. required
+; Exit:  Planet data stored in CPLANET
+
+; Regs:  D0-D3, A0-A1 corrupt.
+; Subr:  FIRST_PLANET, SKIP_PLANETS
+
+	subr get_planet_info,global
+
+	bsr first_planet					back to 1st planet
+	bsr skip_planets					skip to required planet
+	bra gen_planet						generate planet and exit
+
+
+; *******************************************
+; **									   **
+; ** GEN_PRICES - GENERATE PLANET'S PRICES **
+; **									   **
+; *******************************************
+
+; Generates the table of prices and quantity for a space station. These
+; figures are calculated using the original Elite algorithm. Each entry
+; in the Products array is four words long:
+
+;		<price>,<quantity>,<units>,<illegal>
+
+; Entry: PLANET = system planet no.
+; Exit:  PRODUCTS array initialised
+
+; Regs:  ?
+; Subr:  ?
+
+	subr gen_prices,global
+
+	move current(a6),d0 				generate planet details
+	bsr get_planet_info
+	lea cplanet(a6),a0					copy into system planet record
+	lea splanet(a6),a1
+	loop 1,planet_len/2
+		move (a0)+,(a1)+
+	next 1
+	move rseed1(a6),d1					set price of fuel
+	and #31,d1
+	inc d1
+	move d1,price_fuel(a6)
+	lea product_table,a0				product generation table
+	lea products(a6),a1 				products array
+	move cplanet+econ(a6),d0			get economy of planet
+	move fluctuation(a6),d1 			get price fluctuation
+	loop 1,max_products-2
+		move 6(a0),d2					mask fluctuation with state
+		and d1,d2
+		move 2(a0),d3					get gradient
+		and #31,d3
+		mulu d0,d3						multiply by economy
+		move d2,d4						add to fluctuation
+		add d3,d2
+		sub d3,d4						subtract from fluctuation
+		tst.b 3(a0) 					positive gradient ?
+		if <pl> then.s					yes
+			exg d2,d4					swap values
+		endi
+		add 0(a0),d4					calculate price
+		move d4,price(a1)
+		add 4(a0),d2					calculate quantity
+		tst.b d2						zero quantity if minus
+		if <mi> then.s
+			clr d2
+		else.s
+			and #63,d2
+		endi
+		move d2,quantity(a1)			store in array
+		move 2(a0),d2					determine unit
+		lsr #5,d2
+		and #3,d2
+		move d2,units(a1)
+		move 8(a0),naughty(a1)			set illegal factor
+		add.l #10,a0					next product
+		add.l #product_len,a1
+	next 1
+
+	ret
+
+
+; *********************************************
+; **										 **
+; ** GALACTIC_CHART - DISPLAY GALACTIC CHART **
+; **										 **
+; *********************************************
+
+; Main galactic chart display.
+
+; Entry: None
+; Exit:  None
+
+; Regs:  ?
+; Subr:  ?
+
+	subr galactic_chart,global
+
+	tst cockpit_on(a6)					coming from cockpit ?
+	if <eq> then.s						no
+		moveq #icon_galactic,d0 		invert icon
+		jsr invert_icon
+	endi
+	jsr prepare_text					prepare text display
+	lea text1(pc),a0					build title
+	lea pad(a6),a1
+	jsr str_copy
+	move.l a1,a0
+	dec.l a0
+	move galaxy_no(a6),d0
+	inc d0
+	ext.l d0
+	clr d1
+	jsr build_number
+	lea pad(a6),a0						print title
+	moveq #title_y,d1
+	jsr print_centre
+	bsr first_planet					start at the first planet
+	lea gal_colours(pc),a5				start of colour list
+	loop 1,256							loop for 256 planets
+		push d7
+		repeat							set pixel colour
+			move (a5)+,d0
+			break if <pl>
+			lea gal_colours(pc),a5
+		endr
+		jsr set_colour
+		bsr gen_position				generate position
+		bsr conv_gal_scr				convert to screen coords
+		jsr plotxy						plot pixel
+		pop d7							next planet
+	next 1
+	bsr g_range_circle					draw range circle
+	lea galactic_chart_table(pc),a0 	initialise cursor
+	jsr init_cursor 					initialise cross hair-cursor
+	tst witch_space(a6) 				draw cross-hair cursor
+	if <eq> then.s
+		bsr g_centre_cursor
+	else.s
+		movem witch_x(a6),d0/d1
+		bsr conv_gal_scr
+		bsr repos_cursor
+	endi
+	moveq #disp_galactic,d0 			set display type
+	move d0,disp_type(a6)
+	move d0,last_screen(a6)
+
+	ret
+
+
+; ************************************************
+; **											**
+; ** G_RANGE_CIRCLE - DRAW GALACTIC CHART RANGE **
+; **											**
+; ************************************************
+
+; Draws the current range circle on the galactic chart.
+
+; Entry: None
+; Exit:  None
+
+; Regs:  ?
+; Subr:  ?
+
+	subr g_range_circle
+
+	moveq #red,d0						plot circle in red
+	jsr set_colour
+	move.l scr_base(a6),d0				save current screen base
+	push.l d0
+	move.l flip_screen(a6),d7			flip to other screen
+	eor.l d7,d0
+	move.l d0,scr_base(a6)
+	move.l d0,a0						clear VRAM
+	loop 1,32000/4
+		clr.l (a0)+
+	next 1
+	clr d3								x = 0
+	move equip+fuel(a6),d4				y = radius = fuel/4
+	lsr #2,d4
+	move d4,circle_rad(a6)
+	move d4,d5							d = 3-2*radius
+	add d5,d5
+	subq #3,d5
+	neg d5
+	repeat
+		range_plot g,+,x,+,y			plot 8 points of the circle using
+		range_plot g,+,y,+,x			eight way symmetry
+		range_plot g,+,y,-,x
+		range_plot g,+,x,-,y
+		range_plot g,-,x,-,y
+		range_plot g,-,y,-,x
+		range_plot g,-,y,+,x
+		range_plot g,-,x,+,y
+		tst d5							d < 0 ?
+		if <mi> then.s					yes
+			move d3,d0					d = d + 4*x + 6
+			asl #2,d0
+			add d0,d5
+			addq #6,d5
+		else.s
+			move d3,d0					d = d + 4*(x - y) + 10
+			sub d4,d0
+			asl #2,d0
+			add d0,d5
+			add #10,d5
+			dec d4						--y
+		endi
+		inc d3							++x
+	until d3 <gt> d4					until x>y
+	lea range_spr(a6),a4				point to range sprite record
+	move circle_rad(a6),d0				calculate pixel width (and depth)
+	add d0,d0
+	inc d0
+	move d0,d1							calculate word width
+	dec d1
+	lsr #4,d1
+	inc d1
+	move.l scr_base(a6),a0				source = screen base
+	lea 16000(a0),a1					destn  = screen base + 16000
+	move.l a1,data_ptr(a4)				set sprite data pointer
+	move d1,(a1)+						store width and depth
+	move d0,(a1)+
+	dec d0								adjust counts for DBRA
+	dec d1
+	loop 1								loop for each pixel line
+		push.l a0						save source screen ptr
+		move d1,d7						loop for each word
+		loop 2
+			move 0(a0),d2				build mask
+			or 2(a0),d2
+			or 4(a0),d2
+			or 6(a0),d2
+			not d2
+			move d2,(a1)+				store mask
+			loop 3,d6,4 				store four planes
+				move (a0)+,(a1)+
+			next 3,d6
+		next 2							next word
+		pop.l a0						next pixel line
+		add #160,a0
+	next 1,d0
+	tst witch_space(a6) 				witch space ?
+	if <eq> then.s						no
+		movem splanet+xcoord(a6),d0/d1	get planet coords
+	else.s
+		movem witch_x(a6),d0/d1 		get witch space coords
+	endi
+	bsr conv_gal_scr					convert to screen coords
+	sub circle_rad(a6),d0				position sprite
+	sub circle_rad(a6),d1
+	move d0,sp_xpos(a4)
+	move d1,sp_ypos(a4)
+	pop.l scr_base(a6)					restore screen base
+	jmp draw_sprite 					draw the sprite and return
+
+
+; ************************************************
+; **											**
+; ** G_CIRCLE_PLOT - PLOT A POINT OF THE CIRCLE **
+; **											**
+; ************************************************
+
+; Plots a single pixel in the galactic chart range circle.
+
+; Entry: (D0,D1) = x,y coords (0,0 centre)
+; Exit:  None
+
+; Regs:  ?
+; Subr:  ?
+
+	subr g_circle_plot
+
+	add circle_rad(a6),d0				convert to screen coords
+	add circle_rad(a6),d1
+	jmp plotxy							plot point and exit
+
+
+; ***************************************
+; **								   **
+; ** LOCAL_CHART - DISPLAY LOCAL CHART **
+; **								   **
+; ***************************************
+
+; Main display routine for the local chart.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr local_chart,global
+
+	move disp_type(a6),d0				already on this display ?
+	if d0 <eq> #disp_local then.s		yes
+		tst witch_space(a6) 			in witch space ?
+		bne beep						yes, beep and exit
+	endi
+	tst cockpit_on(a6)					cockpit displayed ?
+	if <eq> then.s						no
+		moveq #icon_local,d0			invert icon
+		jsr invert_icon
+	endi
+	move disp_type(a6),d0				already on this display ?
+	if d0 <eq> #disp_local then.s		yes
+		jsr l_lock_on					lock onto nearest planet
+		move req_planet(a6),d0
+	else.s
+		cmp #disp_galactic,d0			coming from galactic chart ?
+		if <eq> then.s					yes
+			bsr expand					expand screen
+			move req_planet(a6),d0
+		else.s
+			move current(a6),d0
+		endi
+	endi
+	move d0,middle_planet(a6)			save planet at middle
+	jsr prepare_text					prepare display
+	lea text4(pc),a0					print heading
+	moveq #title_y,d1
+	jsr print_centre
+	tst witch_space(a6) 				witch space ?
+	if <eq> then.s						no
+		move middle_planet(a6),d0		get coords of middle planet
+		bsr get_planet_info
+		movem cplanet+xcoord(a6),d0/d1
+	else.s
+		movem witch_x(a6),d0/d1 		use witch space coords
+	endi
+	bsr collect_planets 				collect planets
+	lea planet_list(a6),a0				loop for each planet
+	move no_planets(a6),d7
+	dec d7
+	loop 1
+		move (a0)+,d0					get planet #
+		bsr draw_planet 				draw planet
+	next 1								next planet
+	lea planet_list(a6),a0				loop for each planet
+	move no_planets(a6),d7
+	dec d7
+	loop 1
+		move (a0)+,d0					get planet #
+		bsr label_planet				label the planet
+	next 1
+	move middle_planet(a6),d0			current planet at middle ?
+	cmp current(a6),d0
+	call <eq>,l_range_circle			yes, draw circle
+	tst found(a6)						required planet found ?
+	if <eq> then.s						no
+		bsr home_cursor 				home the cursor
+	endi
+	jsr init_cursor 					initialise cross hair-cursor
+	tst witch_space(a6) 				draw cross-hair cursor
+	if <eq> then.s
+		bsr l_centre_cursor
+	else.s
+		movem witch_x(a6),d0/d1
+		bsr l_conv_gal_scr
+		bsr repos_cursor
+	endi
+	lea local_chart_table(pc),a0		initialise cursor
+	jsr init_cursor
+	move #disp_local,d0 				set display type and last screen
+	move d0,disp_type(a6)
+	move d0,last_screen(a6)
+
+	ret
+
+
+; ******************************************
+; **									  **
+; ** HOME_CURSOR - HOME CROSS-HAIR CURSOR **
+; **									  **
+; ******************************************
+
+; Centres the cross-hair cursor back on the current planet.
+
+; V1.1	- 'Cursor reset to xxxx' prompt changed to 'Current system: '
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr home_cursor,global
+
+	tst witch_space(a6) 				witch space ?
+	if <ne> then.s						yes
+		movem witch_x(a6),d0/d1 		fetch witch space coords
+		move disp_type(a6),d2			local chart displayed ?
+		cmp #disp_local,d2
+		if <eq> then.s					yes
+			bsr l_conv_gal_scr			centre cursor over witch space
+			bsr repos_cursor
+		else.s
+			cmp #disp_galactic,d2		galactic chart displayed ?
+			if <eq> then.s				yes
+				bsr conv_gal_scr		centre cursor over witch space
+				bsr repos_cursor
+			endi
+		endi
+	else.s
+		move current(a6),req_planet(a6) home planet
+		move disp_type(a6),d0			local chart displayed ?
+		cmp #disp_local,d0
+		if <eq> then.s					yes
+			move current(a6),d0 		system planet at centre  ?
+			cmp middle_planet(a6),d0
+			if <ne> then.s				no
+				clr disp_type(a6)		redraw local chart
+				bsr local_chart
+			else.s
+				bsr l_centre_cursor 	re-centre cursor
+			endi
+		else.s
+			cmp #disp_galactic,d0		galactic chart displayed ?
+			if <eq> then.s				yes
+				bsr g_centre_cursor 	re-centre cursor
+			endi
+		endi
+	endi
+	tst cockpit_on(a6)					cockpit displayed ?
+	if <eq> then.s						no
+		jsr hold_clock					hold clock display
+		jsr clear_input 				print 'Current system '
+		lea text8(pc),a0
+		jsr print_string
+		move current(a6),d0 			print planet's name
+		bsr build_name
+		lea planet_name(a6),a0
+		jsr print_string
+		pop display_clock(a6)			restore clock display
+	endi
+
+	ret
+
+
+; *********************************************
+; **										 **
+; ** L_RANGE_CIRCLE - DRAW LOCAL CHART RANGE **
+; **										 **
+; *********************************************
+
+; Draws the current range circle on the local chart.
+
+; Entry: None
+; Exit:  None
+
+; Regs:  ?
+; Subr:  ?
+
+	subr l_range_circle
+
+	clr d3								x = 0
+	move equip+fuel(a6),d4				calculate radius
+	mulu #text_depth,d4
+	divu #8*y_range,d4
+	move d4,circle_rad(a6)
+	move d4,d5							d = 3-2*radius
+	add d5,d5
+	subq #3,d5
+	neg d5
+	repeat
+		range_plot l,+,x,+,y			plot 8 points of the circle using
+		range_plot l,+,y,+,x			eight way symmetry
+		range_plot l,+,y,-,x
+		range_plot l,+,x,-,y
+		range_plot l,-,x,-,y
+		range_plot l,-,y,-,x
+		range_plot l,-,y,+,x
+		range_plot l,-,x,+,y
+		tst d5							d < 0 ?
+		if <mi> then.s					yes
+			move d3,d0					d = d + 4*x + 6
+			asl #2,d0
+			add d0,d5
+			addq #6,d5
+		else.s
+			move d3,d0					d = d + 4*(x - y) + 10
+			sub d4,d0
+			asl #2,d0
+			add d0,d5
+			add #10,d5
+			dec d4						--y
+		endi
+		inc d3							++x
+	until d3 <gt> d4					until x>y
+
+	ret
+
+
+; *********************************************
+; **										 **
+; ** L_CIRCLE_PLOT - PLOT A POINT THE CIRCLE **
+; **										 **
+; *********************************************
+
+; Plots a point on the local chart range circle.
+
+; Entry: (D0,D1) = x,y coord
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr l_circle_plot
+
+	add #middle_x,d0					centre coords
+	add #middle_y,d1
+	bsr dot_to_addr 					get screen address
+	and #15,d0							get plot bit mask
+	asl #2,d0
+	lea bit_masks(pc),a1
+	move.l (a1,d0),d0
+	move.l 0(a0),d2 					pixel already plotted ?
+	or.l 4(a0),d2
+	and.l d0,d2
+	ret <ne>							yes, return
+	move.l d0,d1						build clear mask
+	not.l d1
+	lea colour_masks(pc),a1 			index into colour line masks
+	lea white*8(a1),a1
+	and.l d1,(a0)						clear current plane #0 and #1
+	move.l (a1)+,d2 					plot pixel in plane #0 and #1
+	and.l d0,d2
+	or.l d2,(a0)+
+	and.l d1,(a0)						clear current plane #2 and #3
+	move.l (a1),d2						plot pixel in plane #2 and #3
+	and.l d0,d2
+	or.l d2,(a0)
+
+	ret
+
+
+; **********************************************
+; **										  **
+; ** DRAW_PLANET - DRAW PLANET ON LOCAL CHART **
+; **										  **
+; **********************************************
+
+; Draws the planet on the local chart. The planet definition is build up
+; in the invisible screen, converted to a sprite a displayed by the sprite
+; routine.
+
+; Entry: D0 = planet #
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr draw_planet
+
+	movem.l d7/a0,-(sp) 				save registers
+	bsr get_planet_info 				fetch information about planet
+	move cplanet+econ(a6),d0			determine colour of planet
+	add d0,d0
+	lea colour_list(pc),a0
+	move (a0,d0),d0
+	jsr set_colour
+	move.l scr_base(a6),d0				save current screen base
+	push.l d0
+	move.l flip_screen(a6),d1			flip to other screen
+	eor.l d1,d0
+	move.l d0,scr_base(a6)
+	clr circle_x(a6)					x = 0
+	move cplanet+seed+2(a6),d0			calculate radius
+	rol #4,d0
+	and #1,d0
+	addq #2,d0
+	move d0,circle_rad(a6)
+	move d0,circle_y(a6)
+	add d0,d0							clear block
+	push d0
+	and #$fff0,d0
+	add #16,d0
+	move d0,d3
+	move d0,d4
+	clr d0
+	clr d1
+	clr d2
+	clr d5
+	jsr block
+	pop d0								d = 3-2*radius
+	subq #3,d0
+	neg d0
+	repeat
+		push d0 						save d
+		l_line +,x,+,y,-,x,+,y			draw lines
+		l_line +,y,+,x,-,y,+,x
+		l_line +,y,-,x,-,y,-,x
+		l_line +,x,-,y,-,x,-,y
+		pop d0							d < 0 ?
+		if <mi> then.s					yes
+			move circle_x(a6),d1		d = d + 4*x + 6
+			asl #2,d1
+			add d1,d0
+			addq #6,d0
+		else.s
+			move circle_x(a6),d1		d = d + 4*(x - y) + 10
+			sub circle_y(a6),d1
+			asl #2,d1
+			add d1,d0
+			add #10,d0
+			dec circle_y(a6)			--y
+		endi
+		inc circle_x(a6)				++x
+		move circle_x(a6),d1			until x>y
+	until d1 <gt> circle_y(a6)
+	lea range_spr(a6),a4				point to range sprite record
+	move circle_rad(a6),d0				calculate pixel width (and depth)
+	add d0,d0
+	inc d0
+	move d0,d1							calculate word width
+	dec d1
+	lsr #4,d1
+	inc d1
+	jsr build_sprite					build sprite from screen
+	pop.l scr_base(a6)					restore screen pointer
+	movem cplanet+xcoord(a6),d0/d1		calculate coords of planet
+	bsr l_conv_gal_scr
+	sub circle_rad(a6),d0
+	sub circle_rad(a6),d1
+	movem d0/d1,sp_xpos(a4)
+	jsr draw_sprite 					draw the planet
+	movem.l (sp)+,d7/a0 				restore registers
+
+	ret
+
+
+; **************************************************
+; **											  **
+; ** LABEL_PLANET - LABEL A PLANET ON LOCAL CHART **
+; **											  **
+; **************************************************
+
+; Attempts to label a planet on the local chart. Uses an ellipse tracking
+; method to place the text around until a free area is found.
+
+; Entry: D0 = planet #
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr label_planet
+
+	movem.l d7/a0,-(sp) 				save registers
+	bsr build_name						build planets name
+	lea planet_name(a6),a0				calculate length of name
+	jsr str_len
+	move cplanet+seed+2(a6),d1			calculate radius
+	rol #3,d1
+	and #3,d1
+	addq #3,d1
+	asl #2,d0							calculate 'a'
+	move d0,half_length(a6)
+	addq #8,d0
+	add d1,d0
+	move d0,ellipse_a(a6)
+	add #8,d1							calculate 'b'
+	move d1,ellipse_b(a6)
+	movem cplanet+xcoord(a6),d0/d1		calculate centre coords
+	bsr l_conv_gal_scr
+	movem d0/d1,cent_x(a6)
+	lea ellipse_trigs(pc),a0			loop for each angle
+	move #no_angles-1,d7
+	loop 1
+		move (a0)+,d0					calculate x coord
+		muls ellipse_a(a6),d0
+		add.l d0,d0
+		swap d0
+		add cent_x(a6),d0
+		move (a0)+,d1					calculate y coord
+		muls ellipse_b(a6),d1
+		add.l d1,d1
+		swap d1
+		add cent_y(a6),d1
+		movem.l d7/a0,-(sp) 			save registers
+		sub half_length(a6),d0			calculate coords of top left
+		and #$fff8,d0
+		subq #4,d1
+		move half_length(a6),d2 		calculate width
+		add d2,d2
+		cmp #text_left,d0				start outside left edge ?
+		blt try_next					yes, try next angle
+		move d0,d3						finish outside right edge ?
+		add d2,d3
+		dec d3
+		cmp #text_right,d3
+		bgt try_next					yes, try next angle
+		cmp #text_top,d1				start outside top edge ?
+		blt try_next					yes, try next angle
+		move d1,d3						finish outside bottom edge ?
+		addq #7,d3
+		cmp #text_bottom,d3
+		bgt try_next					yes
+		jsr dot_to_addr 				calculate screen address (byte)
+		moveq #1,d3
+		btst #3,d0
+		if <ne> then.s
+			inc a0
+			moveq #7,d3
+		endi
+		lsr #3,d2						calculate width in bytes
+		dec d2
+		loop 2,8						loop for each pixel line
+			movem.l d2/d3/a0,-(sp)		save base screen address
+			loop 3
+				move.b 0(a0),d0 		all black ?
+				or.b 2(a0),d0
+				or.b 4(a0),d0
+				or.b 6(a0),d0
+				if <ne> then.s			no
+					add.l #3*4,sp		forget stacked parameters
+					bra try_next		try next angle
+				endi
+				add d3,a0
+				eor #7^1,d3
+			next 3,d2
+			movem.l (sp)+,d2/d3/a0		next pixel line
+			add #160,a0
+		next 2
+		sub #160*8,a0					position cursor
+		move.l a0,text_addr(a6)
+		clr column(a6)
+		move cplanet+tech(a6),d0		set text colour using tech level
+		dec d0
+		bclr #0,d0
+		lea colour_list(pc),a0
+		move (a0,d0),d0
+		moveq #black,d1
+		jsr text_colour
+		lea planet_name(a6),a0
+		jsr print_string
+		addq.l #2*4,sp					balance stack
+		bra labelled					exit routine
+
+try_next:
+
+		movem.l (sp)+,d7/a0 			next angle
+	next 1
+
+labelled:
+
+	movem.l (sp)+,d7/a0 				restore registers
+
+	ret
+
+
+; ******************************************************
+; **												  **
+; ** COLLECT_PLANETS - COLLECT PLANETS ON LOCAL CHART **
+; **												  **
+; ******************************************************
+
+; Collects together all the planets on the local chart and places their
+; numbers in a list.
+
+; Entry: (D0,D1)	 = galactic coords of planet a centre of window
+; Exit:  FOUND		 = flag: set if required planet encountered
+;		 PLANET_LIST = list of planets on local chart
+;		 NO_PLANETS  = no. planets in above list
+;		 X/Y_WINDOW  = x,y coords of planet at centre of window
+
+; Regs: ?
+; Subr: ?
+
+	subr collect_planets
+
+	movem d0/d1,x_window(a6)			save centre coords
+	sub #x_range,d0 					calculate chart limits
+	move d0,left_limit(a6)
+	add #2*x_range,d0
+	move d0,right_limit(a6)
+	sub #y_range,d1
+	move d1,top_limit(a6)
+	add #2*y_range,d1
+	move d1,bottom_limit(a6)
+	lea planet_list(a6),a3				start of planet list
+	clr no_planets(a6)					nothing in the list
+	clr found(a6)						clear found flag
+	bsr first_planet					start with planet #0
+	clr d7
+	repeat
+		bsr gen_position				generate planets coords
+		cmp left_limit(a6),d0			check if in limits
+		blt.s outside
+		cmp right_limit(a6),d0
+		bgt.s outside
+		cmp top_limit(a6),d1
+		blt.s outside
+		cmp bottom_limit(a6),d1
+		bgt.s outside
+		move d7,(a3)+					save planet # in list
+		inc no_planets(a6)
+		cmp req_planet(a6),d7			required planet found ?
+		if <eq> then.s					yes
+			st found(a6)
+		endi
+outside:
+		inc d7							next planet
+	until d7 <eq> #256
+
+	ret
+
+
+; ******************************************************
+; **												  **
+; ** CONV_GAL_SCR - CONVERT GALACTIC TO SCREEN COORDS **
+; **												  **
+; ******************************************************
+
+; Converts a set of galactic coords to screen coords.
+
+; Entry: (D0,D1) = galactic x,y coords
+; Exit:  (D0,D1) = screen x,y coords
+
+; Regs: ?
+; Subr: ?
+
+	subr conv_gal_scr
+
+	mulu #text_width,d0 				convert to screen coords
+	divu #gal_width,d0
+	add #text_left,d0
+	mulu #text_depth,d1
+	divu #gal_depth,d1
+	add #text_top,d1
+
+	ret
+
+
+; ******************************************************
+; **												  **
+; ** CONV_SCR_GAL - CONVERT SCREEN TO GALACTIC COORDS **
+; **												  **
+; ******************************************************
+
+; Converts a set of screen coords to galactic coords.
+
+; Entry: (D0,D1) = screen x,y coords
+; Exit:  (D0,D1) = galactic x,y coords
+
+; Regs: ?
+; Subr: ?
+
+	subr conv_scr_gal
+
+	sub #text_left,d0					convert x coord
+	if <cs> then.s
+		clr d0
+	endi
+	mulu #gal_width,d0
+	divu #text_width,d0
+	sub #text_top,d1					convert y coord
+	if <cs> then.s
+		clr d1
+	endi
+	mulu #gal_depth,d1
+	divu #text_depth,d1
+
+	ret
+
+
+; *************************************
+; **								 **
+; ** G_CENTRE_CURSOR - CENTRE CURSOR **
+; **								 **
+; *************************************
+
+; Centres the cross-hari cursor on the current planet on the galactic chart.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr g_centre_cursor,global
+
+	move req_planet(a6),d0				get coords of planet
+	bsr get_planet_info
+	movem cplanet+xcoord(a6),d0/d1
+	bsr conv_gal_scr					convert to screen coords
+	bra repos_cursor					reposition cursor
+
+
+; ******************************************
+; **									  **
+; ** G_LOCK_ON - LOCK ONTO NEAREST PLANET **
+; **									  **
+; ******************************************
+
+; Finds the nearest planet on the galactic chart.
+
+; Entry: None
+; Exit:  REQ_PLANET = Nearest planet
+
+; Regs: ?
+; Subr: ?
+
+	subr g_lock_on,global
+
+	movem cursor_spr+sp_xpos(a6),d0/d1	fetch cursor coords
+	add #10,d0							convert to centre screen coords
+	add #8,d1
+	bsr conv_scr_gal					convert to galactic coords
+	bra search							search for planet
+
+
+; ********************************************************
+; **													**
+; ** L_CONV_GAL_SCR - CONVERT GALACTIC TO SCREEN COORDS **
+; **													**
+; ********************************************************
+
+; Converts a set of local galactic coords to screen coords using the
+; formula below:
+
+;		x_scr = (x_gal - x_window) * text_depth/(2*y_range) + middle_x
+;		y_scr = (y_gal - y_window) * text_depth/(2*y_range) + middle_y
+
+;		where x/y_gal	 = galactic coords
+;			  x/y_window = galactic coords of centre planet
+;			  text_width = width of the screen window
+;			  text_depth = depth of the screen window
+;			  middle_x/y = screen centre coords of window
+
+; Entry: (D0,D1) = local galactic x,y coords
+; Exit:  (D0,D1) = screen x,y coords
+
+; Regs: ?
+; Subr: ?
+
+	subr l_conv_gal_scr
+
+	sub x_window(a6),d0 				see notes above for details
+	muls #text_depth,d0
+	divs #2*y_range,d0
+	add #middle_x,d0
+	sub y_window(a6),d1
+	muls #text_depth,d1
+	divs #2*y_range,d1
+	add #middle_y,d1
+
+	ret
+
+
+; ********************************************************
+; **													**
+; ** L_CONV_SCR_GAL - CONVERT SCREEN To GALACTIC COORDS **
+; **													**
+; ********************************************************
+
+; Converts a set of screen coords to local galactic coords using the
+; formula below. Note - this is the complete opposite of the equations used
+; in the L_Conv_Gal_Scr routine above.
+
+;		x_gal = (x_scr - middle_x) * (2*y_range)/text_depth + x_window
+;		y_gal = (y_scr - middle_y) * (2*y_range)/text_depth + y_window
+
+;		where x/y_scr	 = screen coords
+;			  x/y_window = galactic coords of centre planet
+;			  text_width = width of the screen window
+;			  text_depth = depth of the screen window
+;			  middle_x/y = screen centre coords of window
+
+; Entry: (D0,D1) = screen x,y coords
+; Exit:  (D0,D1) = galactic x,y coords
+
+; Regs: ?
+; Subr: ?
+
+	subr l_conv_scr_gal
+
+	sub #middle_x,d0					see notes above
+	muls #2*y_range,d0
+	divs #text_depth,d0
+	add x_window(a6),d0
+	sub #middle_y,d1
+	muls #2*y_range,d1
+	divs #text_depth,d1
+	add y_window(a6),d1
+
+	ret
+
+
+; *************************************
+; **								 **
+; ** L_CENTRE_CURSOR - CENTRE CURSOR **
+; **								 **
+; *************************************
+
+; Centres the cross-hair cursor on the current planet on the local chart.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr l_centre_cursor,global
+
+	move req_planet(a6),d0				get coords of planet
+	bsr get_planet_info
+	movem cplanet+xcoord(a6),d0/d1
+	bsr l_conv_gal_scr					convert to screen coords
+	bra repos_cursor					reposition cursor
+
+
+; ******************************************
+; **									  **
+; ** L_LOCK_ON - LOCK ONTO NEAREST PLANET **
+; **									  **
+; ******************************************
+
+; Finds the nearest planet on the local galactic chart.
+
+; Entry: None
+; Exit:  REQ_PLANET = Nearest planet
+
+; Regs: ?
+; Subr: ?
+
+	subr l_lock_on,global
+
+	movem cursor_spr+sp_xpos(a6),d0/d1	fetch cursor coords
+	add #7,d0							convert to centre screen coords
+	add #7,d1
+	bsr l_conv_scr_gal					convert to galactic coords
+	movem d0/d1,cent_x(a6)				save coords
+	move.l #-1,smallest(a6) 			initialise smallest distance
+	bsr first_planet					start at first planet
+	lea planet_list(a6),a3
+	clr d7
+	repeat
+		bsr gen_position				calculate distance to planet
+		if d7 <eq> (a3) then.s			if planet in the list
+			bsr square_distance 		calculate square distance
+			cmp.l smallest(a6),d0		smallest distance yet ?
+			if <lo> then.s				yes
+				move.l d0,smallest(a6)	use this planet
+				move d7,req_planet(a6)
+			endi
+			addq.l #2,a3				skip entry in planet list
+		endi
+		inc d7							next planet
+	until d7 <eq> #256
+
+	ret
+
+
+; ***************************************
+; **								   **
+; ** SEARCH - SEARCH GALAXY FOR PLANET **
+; **								   **
+; ***************************************
+
+; Searches the galaxy for the nearest and furthest planets.
+
+; Entry: (D0,D1)	= galactic coords
+; Exit:  REQ_PLANET = nearest planet
+;		 D0 		= furthest planet
+
+; Regs: ?
+; Subr: ?
+
+	subr search,global
+
+	movem d0/d1,cent_x(a6)				save coords
+	move.l #-1,smallest(a6) 			initialise distances
+	clr.l biggest(a6)
+	bsr first_planet					start at first planet
+	clr d7
+	repeat
+		bsr gen_position				calculate distance to planet
+		bsr square_distance
+		cmp.l smallest(a6),d0			smallest distance yet ?
+		if <lo> then.s					yes
+			move.l d0,smallest(a6)		use this planet
+			move d7,req_planet(a6)
+		endi
+		cmp.l biggest(a6),d0			biggest distance yet ?
+		if <hi> then.s					yes
+			move.l d0,biggest(a6)		use this planet
+			move d7,furthest_planet(a6)
+		endi
+		inc d7							next planet
+	until d7 <eq> #256
+	move furthest_planet(a6),d0 		get furthest planet
+
+	ret
+
+
+; *************************************************
+; **											 **
+; ** SQUARE_DISTANCE - CALCULATE SQUARE DISTANCE **
+; **											 **
+; *************************************************
+
+; Calculates the squared distance between two planets.
+
+; Entry: (D0,D1)	= coords of planet #1
+;		 CENT_X/Y	= coords of planet #2
+; Exit:  D0.L = squared distance
+
+; Regs: ?
+; Subr: ?
+
+	subr square_distance
+
+	sub cent_x(a6),d0					calculate diffences
+	sub cent_y(a6),d1
+	muls d0,d0							add squares
+	muls d1,d1
+	add.l d1,d0
+
+	ret
+
+
+; *************************************************
+; **											 **
+; ** REPOS_CURSOR - REPOSITION CROSS-HAIR CURSOR **
+; **											 **
+; *************************************************
+
+; Repositions the cross-hair cursor on the screen.
+
+; Entry: (D0,D1) = screen coords of centre
+; Exit:  None
+
+; Regs: ?
+; Subr: DRAW_SPRITE
+
+	subr repos_cursor
+
+	jsr hide_cursor 					hide mouse cursor
+	sub #10,d0							calculate coords of top left of
+	sub #8,d1							the sprite
+	lea hyper_spr(a6),a4				position the sprite
+	movem d0/d1,sp_xpos(a4)
+	jsr draw_sprite
+	jmp restore_cursor					restore cursor
+
+
+; *****************************************
+; **									 **
+; ** S_PLANET - CLICK ON PLANET (SINGLE) **
+; **									 **
+; *****************************************
+
+; Action routine for single click on planet on either the galactic or
+; local chart.
+
+; Entry: D0 = which screen (0=galactic,!0=local)
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr s_planet
+
+	tst d0								galactic chart ?
+	if <eq> then.s						yes
+		tst no_lock(a6) 				allow lock ?
+		if <eq> then.s					yes
+			bsr g_lock_on				lock onto nearest planet
+			bsr g_centre_cursor
+		else.s
+			clr no_lock(a6) 			allow lock on
+		endi
+	else.s
+		bsr l_lock_on					lock onto nearest planet
+		bsr l_centre_cursor
+	endi
+	jsr clear_input 					clear command window
+	jsr hide_cursor 					remove cursor
+	move req_planet(a6),d0				print planet's name
+	jsr build_name
+	lea planet_name(a6),a0
+	jsr print_string
+	lea text2(pc),a0					print ": "
+	jsr print_string
+	jsr fuel_distance					print fuel distance
+	move #$80,d1
+	jsr print_number
+	lea text3(pc),a0					print "light years"
+	jsr print_string
+	jmp restore_cursor					restore cursor and exit
+
+
+; *****************************************
+; **									 **
+; ** D_PLANET - CLICK ON PLANET (DOUBLE) **
+; **									 **
+; *****************************************
+
+; Action routine for double click on a planet on either the local or
+; galactic charts
+
+; Entry: D0 = display type (0=galactic,!0=local)
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr d_planet
+
+	tst d0								galactic chart ?
+	if <eq> then.s						yes
+		bsr g_lock_on					lock onto nearest planet
+		bsr g_centre_cursor 			centre cursor over planet
+		bra local_chart 				display local chart
+	endi
+	bsr l_lock_on						lock onto nearest planet
+	jmp data							print data on planet
+
+
+; **************************************
+; **								  **
+; ** DISP_DISTANCE - DISPLAY DISTANCE **
+; **								  **
+; **************************************
+
+; Display distance to planet - keyboard input only.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr disp_distance,global
+
+	move disp_type(a6),d0				print distance if local or galactic
+	cmp #disp_galactic,d0				charts displayed
+	beq s_planet
+	cmp #disp_local,d0
+	beq s_planet
+	bra beep							error - beep and return
+
+
+; *************************
+; **					 **
+; ** EXPAND - EXPAND BOX **
+; **					 **
+; *************************
+
+; Draws the expanded box effect used when flipping from the galactic to
+; local charts.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr expand
+
+	jsr hide_cursor 					disable cursor
+	moveq #white,d0 					draw line in white
+	jsr set_colour
+	movem hyper_spr+sp_xpos(a6),d0/d1	set up initial coords
+;	 addq #7,d0
+;	 and #$fff8,d0
+	move d0,x1(a6)
+	addq #7,d0
+	move d0,x2(a6)
+	addq #7,d1
+	and #$fff8,d1
+	move d1,y1(a6)
+	addq #7,d1
+	move d1,y2(a6)
+	move.b #%1111,done(a6)				all lines NOT done
+	repeat
+		moveline 0,y1,-4,text_top		move lines out
+		moveline 1,x2,+4,text_right
+		moveline 2,y2,+4,text_bottom
+		moveline 3,x1,-4,text_left
+		dline x1,y1,x2,y1				draw white outline
+		dline x2,y1,x2,y2
+		dline x2,y2,x1,y2
+		dline x1,y2,x1,y1
+		move x1(a6),d0					clear top
+		inc d0
+		move y1(a6),d1
+		inc d1
+		move x2(a6),d3
+		sub d0,d3
+		moveq #7,d4
+		clr d5
+		clr d2
+		jsr block
+		move x2(a6),d0					clear right
+		subq #7,d0
+		move y1(a6),d1
+		inc d1
+		moveq #7,d3
+		move y2(a6),d4
+		sub d1,d4
+		clr d2
+		clr d5
+		jsr block
+		move x1(a6),d0					clear bottom
+		inc d0
+		move y2(a6),d1
+		subq #7,d1
+		move x2(a6),d3
+		sub d0,d3
+		moveq #7,d4
+		clr d2
+		clr d5
+		jsr block
+		move x1(a6),d0					clear left
+		inc d0
+		move y1(a6),d1
+		inc d1
+		moveq #7,d3
+		move y2(a6),d4
+		sub d1,d4
+		clr d2
+		clr d5
+		jsr block
+		tst done(a6)					until all done
+	until <eq>
+	jmp restore_cursor					restore cursor and return
+
+
+; *************************
+; **					 **
+; ** BEEP - PRODUCE BEEP **
+; **					 **
+; *************************
+
+; Produce an error beep.
+
+; Entry: None
+; Exit:  None
+
+; Regs: D0 corrupt.
+; Subr: FX
+
+	subr beep
+
+	sfx error
+
+	ret
+
+
+; ******************************************
+; **									  **
+; ** FIND_PLANET - FIND A SELECTED PLANET **
+; **									  **
+; ******************************************
+
+; Finds a requested planet on the galactic chart.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr find_planet,global
+
+	tst count_down(a6)					countdown in progress ?
+	bne beep							yes, beep and return
+	cmp #disp_galactic,disp_type(a6)	on galactic chart ?
+	if <ne> then.s						no
+		bsr galactic_chart				display chart
+	endi
+	jsr clear_input 					input planet name
+	lea text5(pc),a0
+	jsr print_string
+	moveq #'A'>>8,d0
+	moveq #'Z'>>8,d1
+	moveq #10,d2
+	moveq #-1,d3						(no keypad)
+	jsr input_line
+	cmp #27,d0							ESC pressed ?
+	ret <eq>							yes
+	lea input(a6),a0					just <return> pressed ?
+	tst.b (a0)+
+	ret <eq>							yes
+	repeat								convert name to lower case
+		move.b (a0),d0
+		break.s if <eq>
+		add.b #32,(a0)+
+	endr
+	bsr first_planet					start at 1st planet
+	repeat								loop for each planet
+		bsr gen_planet					generate planet info.
+		lea cplanet+pname(a6),a0		build planet name
+		bsr detoken_name
+		lea planet_name(a6),a0			found ?
+		lea input(a6),a1
+		jsr str_compare
+		if <eq> then.s					yes
+			move this_planet(a6),d0 	fetch required planet #
+			move d0,req_planet(a6)
+			bsr g_centre_cursor 		centre cursor over planet
+			st no_lock(a6)				display distance and return
+			clr d0
+			bra s_planet
+		endi
+		inc this_planet(a6) 			next planet
+		cmp #256,this_planet(a6)
+	until <eq>
+	lea text6(pc),a0					build 'unable to find planet xxx'
+	lea pad(a6),a1
+	jsr str_copy
+	lea pad(a6),a0
+	lea input(a6),a1
+	jsr str_cat
+	lea pad(a6),a0
+	lea text7(pc),a1
+	jsr str_cat
+	lea pad(a6),a0						display error message and return
+	jmp error_box
+
+
+;*****************************************************
+;*													**
+;* CHOOSE_PLANET - CHOOSE NEARBY PLANET FOR MISSION **
+;*													**
+;*****************************************************
+
+; Choose a random planet in the local vicinity for the mission.
+
+; Entry:  None
+; Exit:   MISSION_PLANET = Planet number
+rob
+; Regs:   ?
+; Subr:   ?
+
+	subr choose_planet,global
+
+	movem splanet+xcoord(a6),d0/d1		build list of planets
+	bsr collect_planets
+	repeat
+		move no_planets(a6),d2			choose random planet
+		jsr rand
+		add d0,d0						index into planet list
+		lea planet_list(a6),a0
+		move (a0,d0),d0 				fetch planet #
+		cmp current(a6),d0				until not current planet
+	until <ne>
+	move d0,mission_planet(a6)			save mission planet #
+
+	ret 								return
+
+
+; ---- LOCAL DATA ----
+
+; List of colours for galactic chart points.
+
+gal_colours:
+
+	dc.w mid_blue,lgt_green,lgt_blue,red,magenta,yellow,white,-1
+
+; List of colours for planets and text.
+
+colour_list:
+
+	dc lgt_blue,lgt_green,magenta,red,yellow,white,orange,lgt_grey
+
+; Ellipse trig table.
+
+ellipse_trigs:
+
+	dc.w 32767,0,30790,11206,25100,21062,16383,28377,5689,32269,-5690,32269
+	dc.w -16384,28377,-25101,21062,-30791,11206,-32767,-1,-30791,-11207
+	dc.w -25101,-21063,-16384,-28378,-5690,-32270,5689,-32270,16383,-28378
+	dc.w 25100,-21063,30790,-11207
+
+no_angles: equ (*-ellipse_trigs)/4
+
+; Galactic chart action table.
+
+galactic_chart_table:
+
+	action text_left,0,text_right,text_bottom,0,-1,planet
+	include icons.m68
+	dc.w -1
+	dc.l 0
+
+; Local chart action table.
+
+local_chart_table:
+
+	action text_left,0,text_right,text_bottom,-1,-1,planet
+	include icons.m68
+	dc.w -1
+	dc.l 0
+
+; Misc. messages.
+
+text1:	db 'Galactic Chart #',0
+text2:	db ': ',0
+text3:	db ' Light Years',0
+text4:	db 'Local Navigation Chart',0
+text5:	db 'Planet name ? ',0
+text6:	db 'Unable to find planet ',0
+text7:	db ' in this galaxy',0
+text8:	db 'Current system: ',0

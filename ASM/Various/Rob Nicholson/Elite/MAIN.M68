@@ -1,0 +1,1100 @@
+* @@   @@	 @@    @@@@@@ @@   @@
+* @@@ @@@	@@@@	 @@   @@@  @@
+* @@@@@@@  @@  @@	 @@   @@@@ @@
+* @@@@@@@  @@  @@	 @@   @@ @@@@
+* @@ @ @@  @@@@@@	 @@   @@  @@@
+* @@   @@  @@  @@	 @@   @@   @@
+* @@   @@  @@  @@  @@@@@@ @@   @@
+
+* Main logic file. Performs most of the logic for the whole game. If you're
+* looking for something, this is a good place to start.
+
+* Atari ST Version 1.0 20th March 1988 Copyright (c) 1988 Mr. Micro Ltd.
+* Designed and coded by Rob Nicholson. Adapted from the MSX version.
+
+; Modification history:
+
+;	V1.0	20/03/88	Original version.
+;	V1.1	26/03/90	Police record reset to clean when using the escape
+;						capsule.
+
+	include macros
+
+	xref calc_distance,fx,build_number,check_docked,reset_system,start_fade
+	xref front_view,set_roll_angles,random,status,wait,gen_prices,message
+	xref wait_key,clear_image,dust_cloud,swap_screen,clear_input,hexagon
+	xref disp_message,damping,print_string,launch_system,get_range,draw_object
+	xref world_x_rotate,world_z_rotate,do_logic,move,hyperspace
+	xref disp_debug,mini_radar,obj_data,rand,check_hack,launch_sequence
+	xref remove_radar,radar,ecm,draw_sight,recharge,dock_check
+	xref flash_message,reduce_energy,object_logic,read_key,check_hit,well_done
+	xref draw_lasers,orthogonal,torus_drive,collision,update_inst,run_docking
+	xref check_police,check_inflight,draw_all,text_blatt,docking_sequence
+
+* ---- LOCAL CONSTANTS ----
+
+spcstn_space:	equ $22500				Space station space orbit
+persistance:	equ 30					Persistance of game info
+max_palt:		equ $24000				max planet altitude
+min_palt:		equ $0c000				min planet altitude
+max_salt:		equ $20000				max sun altitude
+min_salt:		equ $08000				min sun altitude
+max_ctemp:		equ bar_width			max cabin temperature
+overheat:		equ max_ctemp*3/4		temperature for overheating warning
+fuel_dist:		equ max_ctemp*23/24 	temperature for fuel scooping
+
+	module main
+
+
+* *************************************
+* **								 **
+* ** GAME_LOGIC - PERFORM GAME LOGIC **
+* **								 **
+* *************************************
+
+* Perform the main game logic loop.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr game_logic,global
+
+	tst cockpit_on(a6)					cockpit displayed ?
+	if <ne> then.s						yes
+		jsr clear_image 				clear image buffer
+		jsr remove_radar				remove radar from screen
+		jsr update_inst 				update instruments (as required)
+		jsr dust_cloud					draw and move the dust
+	endi
+	bsr do_countdown					perform any countdown
+	bsr damping 						automatic damping
+	dec reduce_ctr(a6)					ready to reduce energy ?
+	if <eq> then.s						yes
+		let reduce_rate,reduce_ctr		re-load counter
+		tst cloaking_on(a6) 			cloaking device active ?
+		if <ne> then.s					yes
+			moveq #1,d0 				reduce energy
+			jsr reduce_energy
+			lea text18(pc),a0			flash message
+			jsr flash_message
+		endi
+		tst ecm_jammed(a6)				ecm on ?
+		if <ne> then.s					yes
+			moveq #1,d0 				reduce energy
+			jsr reduce_energy
+			lea text19(pc),a0
+			jsr flash_message
+		endi
+	endi
+	bsr torus_drive 					process torus jump drive
+	clr under_attack(a6)				assume not under attack
+	move at_target(a6),hit_check(a6)	set hit check flag (if set)
+	clr at_target(a6)					assume no lasers reached target
+	lea objects(a6),a5					point to 1st object
+	clr this_obj(a6)
+	repeat								loop for each object
+		btst #in_use,flags(a5)			object in use ?
+		if <ne> then					yes
+			jsr get_range				compute range
+			jsr collision				check for collision/docking
+			jsr draw_object 			draw object
+			jsr radar					plot on radar
+			jsr mini_radar
+			jsr do_logic				perform logic
+			jsr check_hit				check for laser hit
+			tst roll_angle(a6)			player rolling ?
+			call <ne>,world_z_rotate	yes
+			tst climb_angle(a6) 		player climbing ?
+			call <ne>,world_x_rotate	yes
+			jsr orthogonal				make vectors orthogonal
+			jsr move					move in world
+		endi
+		lea obj_len(a5),a5				next object
+		inc this_obj(a6)
+		cmp #max_objects,this_obj(a6)
+	until <eq>
+	move.l last_ptr(a6),d0				store radar buffer last pointer
+	move.l scr_base(a6),d1
+	if.l d1 <eq> screen1_ptr(a6) then.s
+		move.l d0,last1_ptr(a6)
+	else
+		move.l d0,last2_ptr(a6)
+	endi
+	tst witch_space(a6) 				witch space ?
+	if <eq> then.s						no
+		jsr radar_lock					lock onto object (radar)
+		bsr calc_altitude				calculate altitude above planet & sun
+	endi
+	tst stop_skip(a6)					stop space skip ?
+	if <ne> then.s						yes
+		clr controls_locked(a6)
+		clr stop_skip(a6)
+		clr torus_on(a6)
+		clr dust_type(a6)
+		move old_speed(a6),speed(a6)	restore speed
+	endi
+	jsr warnings						issue warnings
+	jsr ecm 							perform ecm routine
+	tst just_docked(a6) 				have we just docked ?
+	if <ne> then.s						yes
+		jsr docking 					perform docking routine
+	else
+		jsr recharge					trickle charge shields etc.
+		tst cockpit_on(a6)				cockpit displayed ?
+		if <ne> then.s					yes
+			jsr draw_all				draw all stored objects
+			jsr draw_lasers 			draw our lasers
+			jsr draw_sight				draw laser sight
+			moveq #lgt_blue,d0			display any messages
+			jsr text_blatt
+*			jsr disp_debug
+			jsr swap_screen 			swap screens
+		endi
+		repeat							clamp the frame rate to #3
+			cmp #3,frame_count(a6)
+		until <hs>
+	endi
+	jsr remove_objects					removed any flaged objects
+	jsr object_logic					perform misc. object logic
+	jsr run_docking 					run docking computer
+	jsr hyperspace						perform hyperspace jump
+	jsr is_game_over					check for game over
+
+	ret
+
+
+* ***************************************
+* **								   **
+* ** CLEAR_OBJECTS - CLEAR ALL OBJECTS **
+* **								   **
+* ***************************************
+
+* Clears all object records, zeros all object counters.
+
+* Entry: None
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr clear_objects,global
+
+	lea objects(a6),a0					clear object records
+	loop 1,obj_len*max_objects/2
+		clr (a0)+
+	next 1
+	lea obj_ctr(a6),a0					clear object counters
+	loop 1,max_obj_num
+		clr.b (a0)+
+	next 1
+	clr pirate_count(a6)				clear pirate and trader count
+	clr trader_count(a6)
+
+	ret
+
+
+* *******************************************
+* **									   **
+* ** ALLOC_OBJECT - ALLOCATE OBJECT RECORD **
+* **									   **
+* *******************************************
+
+* Attempts to allocate a free object record.
+
+* Entry: None
+* Exit:  IF record allocated THEN
+*			Carry flag set (CS)
+*			A4.L = ptr to record
+*		 ELSE
+*			Carry flag clear (CC)
+
+* Regs:  A4 corrupt.
+* Subr:  None
+
+	subr alloc_object,global
+
+	push d7 							save D7
+	lea objects(a6),a4					scan each object
+	loop 1,max_objects
+		btst #in_use,flags(a4)			record free ?
+		if <eq> then.s					yes
+			pop d7						restore D7
+			sec 						set carry flag (alloc ok)
+			rts 						return
+		endi
+		lea obj_len(a4),a4				try next object
+	next 1
+	pop d7								restore D7
+	clc 								clear carry flag (alloc failed)
+
+	ret
+
+
+* *****************************************
+* **									 **
+* ** CREATE_OBJECT - CREATE A NEW OBJECT **
+* **									 **
+* *****************************************
+
+* Creates a new object. Unlike the MSX version, the record has already
+* been allocated using ALLOC_OBJECT.
+
+* Entry: A4 = ptr: record to create
+* Exit:  None
+
+* Regs:  All preserved.
+* Subr:  None
+
+	subr create_object,global
+
+	movem.l d0-d2/d7/a0-a1,-(sp)		save registers
+	move type(a4),d0					fetch object type
+	cmp #max_obj_num,d0 				is there a header ?
+	if <lo> then.s						maybe
+		asl #2,d0						index into pointer table
+		lea obj_data,a0
+		move.l (a0,d0),a0				fetch pointer to object data
+		lea nodes(a4),a1				copy bytes into record
+		loop 1,obj_data_len
+			move.b (a0)+,(a1)+
+		next 1
+		move health(a4),pre_attack(a4)	in full health
+		move.l surfaces(a4),a0			fetch no. of surface types
+		move (a0)+,d2
+		cmp #spacestn,type(a4)			space station ?
+		if <ne> then.s					no
+			jsr rand					choose a random surface type
+		else.s
+			move cplanet+seed(a6),d0	use seed for colour of space station
+			and #1,d0
+		endi
+		asl #2,d0						fetch pointer to surface
+		move.l (a0,d0),surfaces(a4)
+	endi
+	move energy_max(a4),health(a4)		in full health
+	tst velocity(a4)					non-zero velocity ?
+	if <ne> then.s						yes
+		move vel_max(a4),velocity(a4)	set velocity to maximum
+	endi
+	move #-1,obj_colour(a4) 			use normal colour
+	move type(a4),d0					if not planet or sun
+	if d0 <lo> #max_obj_num then.s
+		lea obj_ctr(a6),a0				increment object counter
+		addq.b #1,(a0,d0)
+		move ship_type(a4),d0			trader ?
+		cmp #typ_trader,d0
+		if <eq> then.s					yes
+			inc trader_count(a6)
+		else
+			cmp #typ_pirate,d0			pirate ?
+			if <eq> then.s				yes
+				inc pirate_count(a6)
+			endi
+		endi
+	endi
+	st obj_range(a4)					object range not yet set up
+	movem.l (sp)+,d0-d2/d7/a0-a1		restore registers
+
+	ret
+
+
+* ************************************************
+* **											**
+* ** REMOVE_OBJECTS - REMOVE ANY FLAGED OBJECTS **
+* **											**
+* ************************************************
+
+* Removes any objects that have been flagged to be removed from the 3D world.
+* Due to the queuing of objects to be drawn, the 'remove' flag was introduced
+* to replace a call to REMOVE_OBJECT. The old system caused problems of
+* objects being queued to be drawn (by DRAW_OBJECT), then removed by their
+* logic routine, re-allocated by another logic routine in the same main loop.
+* The DRAW_ALL routine would then take the queued object (which has been
+* redefined) and then drew it - UG!
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr remove_objects,global
+
+	lea objects(a6),a5					loop for each object
+	loop 1,max_objects
+		btst #remove,flags(a5)			remove object ?
+		if <ne> then.s					yes
+			bsr remove_object
+		endi
+		lea obj_len(a5),a5				next object
+	next 1
+
+	ret 								return
+
+
+* ******************************************
+* **									  **
+* ** REMOVE_OBJECT - REMOVE OBJECT RECORD **
+* **									  **
+* *******************************************
+
+* Removes an object from the world by clearing the IN_USE flag. Adjusts the
+* object counters as required.
+
+* Entry: A5 = ptr: object record
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr remove_object
+
+	bclr #in_use,flags(a5)				clear in use flag
+	bclr #remove,flags(a5)				don't remove again
+	move type(a5),d0					planet or sun ?
+	if d0 <lo> #max_obj_num then.s		no
+		lea obj_ctr(a6),a0				decrement object counter
+		subq.b #1,(a0,d0)
+		bsr repair_drive				repair hyperdrive in witch space
+		move ship_type(a5),d0			trader ?
+		cmp #typ_trader,d0
+		if <eq> then.s					yes
+			dec trader_count(a6)
+		else
+			cmp #typ_pirate,d0			pirate ?
+			if <eq> then.s				yes
+				dec pirate_count(a6)
+			endi
+		endi
+		cmp #cougar,type(a5)			cougar ?
+		if <eq> then.s					yes
+			clr mission(a6) 			mission over
+		endi
+	endi
+
+	ret
+
+
+* ************************************************
+* **											**
+* ** REPAIR_DRIVE - REPAIR DRIVE IN WITCH SPACE **
+* **											**
+* ************************************************
+
+* Decrements the # of thargoids left to kill if in witch space and the
+* current object is a thargoid or thargon.
+
+* Entry: A5 = ptr: object record
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr repair_drive
+
+	tst witch_space(a6) 				in witch space ?
+	ret <eq>							no, return
+	tst tharg_count(a6) 				still some left to kill ?
+	ret <eq>							no (already repaired)
+	move type(a5),d0					thargoid ?
+	cmp #thargoid,d0
+	if <eq> then.s						yes
+		dec tharg_count(a6)
+	endi
+
+	ret 								return
+
+
+* **************************************
+* **								  **
+* ** COPY_OBJECT - COPY OBJECT RECORD **
+* **								  **
+* **************************************
+
+* Copies an object's record to another record
+
+* Entry: A5.L = ptr: source record
+*		 A4.L = ptr: destination record
+* Exit:  None
+
+* Regs: All preserved.
+* Subr: None
+
+	subr copy_object,global
+
+	push d7 							save D7
+	loop 1,obj_len						copy record
+		move.b (a5,d7),(a4,d7)
+	next 1
+	pop d7								restore D7
+
+	ret
+
+
+* ******************************************
+* **									  **
+* ** FIND_OBJECT - FIND AN OBJECTS RECORD **
+* **									  **
+* ******************************************
+
+* Finds the record address of an object.
+
+* Entry: D0 = object number (0..??)
+* Exit:  A4 = ptr: object's record
+
+* Regs:  ?
+* Subr:  None
+
+	subr find_object,global
+
+	mulu #obj_len,d0					index into object records
+	lea objects(a6),a4
+	lea (a4,d0),a4
+
+	ret
+
+
+* ****************************
+* **						**
+* ** BEEP - MAKE ERROR BEEP **
+* **						**
+* ****************************
+
+* Makes a beep error so signal an error.
+
+* Entry: None
+* Exit:  None
+
+* Regs:  D0 corrupt.
+* Subr:  FX
+
+	subr beep
+
+	sfx error							never!
+
+	ret
+
+
+* ************************************
+* **								**
+* ** BUILD_TIME - BUILD TIME STRING **
+* **								**
+* ************************************
+
+* Builds the game time into a string of the form 12:34:56
+
+* Entry: A0 = ptr: game time (8 words)
+*		 A1 = ptr: string to store time
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr build_time,global
+
+	exg a0,a1							swap parameters
+	push pad_char(a6)					save pad character
+	move #'0'>>8,pad_char(a6)			pad with zeros
+	move 6(a1),d0						build hours
+	hclr d0
+	move #$8002,d1
+	jsr build_number
+	move.b #':',-1(a0)
+	move 4(a1),d0						build minutes
+	hclr d0
+	move #$8002,d1
+	jsr build_number
+	move.b #':',-1(a0)
+	move 2(a1),d0						build seconds
+	hclr d0
+	move #$8002,d1
+	jsr build_number
+	pop pad_char(a6)					restore pad character
+
+	ret
+
+
+* ****************************************
+* **									**
+* ** LAUNCH - LAUNCH FROM SPACE STATION **
+* **									**
+* ****************************************
+
+* Launches the Cobra from the space station.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr launch,global
+
+	tst docked(a6)						infight ?
+	jp <eq>,front_view					yes, display front view
+	jsr check_hack						check if program has been hacked
+	jsr launch_sequence 				display launch sequence
+	jsr reset_system					reset star system
+	jsr launch_system					create launch system
+	st checkpoint(a6)					ignore checkpoint check
+	move #-1,launch_spin(a6)			spin as leaving
+	move #max_roll/4,roll_angle(a6)
+	jsr set_roll_angles
+	jsr front_view						display front view
+	move mission(a6),d0 				mission #1 state #6 ?
+	if d0 <eq> #$16 then.s				yes
+		inc mission(a6) 				move to state #7
+		rts
+	endi
+	and #240,d0 						mission #3 ?
+	cmp #$30,d0
+	ret <ne>							no, return
+	clr.l snova(a6) 					explode sun
+
+	ret
+
+
+* **************************************
+* **								  **
+* ** DO_COUNTDOWN - PERFORM COUNTDOWN **
+* **								  **
+* **************************************
+
+* Performs the countdown to hyperspace jump.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr do_countdown
+
+	tst count_down(a6)					countdown running ?
+	if <ne> then.s						yes
+		lea text4(pc),a0				build number
+		move count_down(a6),d0
+		hclr d0
+		clr d1
+		bsr build_number
+		tst cockpit_on(a6)				cockpit on ?
+		if <ne> then.s					yes
+			lea text3(pc),a0			print message
+			jsr disp_message
+		else
+			move count_down(a6),d0		countdown changed ?
+			cmp last_value(a6),d0
+			if <ne> then.s				yes
+				move d0,last_value(a6)	update last value
+				jsr clear_input 		print message
+				lea text3(pc),a0
+				jsr print_string
+			endi
+		endi
+	endi
+
+	ret
+
+
+* ************************************
+* **								**
+* ** TEXT_OUT - OUTPUT TEXT MESSAGE **
+* **								**
+* ************************************
+
+* Outputs a text message to either the cockpit or command window.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr text_out,global
+
+	tst cockpit_on(a6)					cockpit on ?
+	if <ne> then.s						yes
+		jsr disp_message				display message
+	else
+		jsr clear_input 				clear command window
+		jsr message 					print message
+	endi
+
+	ret
+
+
+* ***********************************************
+* **										   **
+* ** LOCK_CONTROLS - LOCK THE COBRA'S CONTROLS **
+* **										   **
+* ***********************************************
+
+* Locks the speed and movement controls of the Cobra. Sets the roll and climb
+* angles to zero.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr lock_controls,global
+
+	st controls_locked(a6)				lock controls
+	clr roll_angle(a6)					clear roll and climb angles
+	clr climb_angle(a6)
+
+	ret
+
+
+* ******************************************
+* **									  **
+* ** DOCKING - DOCKING WITH SPACE STATION **
+* **									  **
+* ******************************************
+
+* The player has just docked with the space station.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr docking
+
+	clr count_down(a6)					clear any count down
+	clr jump_trigger(a6)
+	clr just_docked(a6) 				clear 'just docked' flag
+	clr condition(a6)					condition green
+	clr controls_locked(a6) 			controls not locked
+	jsr docking_sequence				display docking sequence
+	cmp #8,rating(a6)					reached Elite ?
+	if <eq> then.s						yes
+		tst logo_shown(a6)				logo already shown ?
+		call <eq>,well_done 			no, display well done message
+	endi
+	jsr start_fade						start music fade
+	st docked(a6)						we are docked
+	jmp dock_check						check for mission messages
+
+
+* **********************************
+* **							  **
+* ** RADAR_LOCK - LOCK MINI-RADAR **
+* **							  **
+* **********************************
+
+* Locks the mini-radar onto either the planet or space station. Also checks
+* if we have been naughty and launches a few vipers at us
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr radar_lock
+
+	move.l planet_range(a6),d0			fetch range to planet
+	tst station_destroyed(a6)			space station destroyed ?
+	if <ne> then.s						yes
+		moveq #-1,d0					force lock onto planet
+	endi
+	if.l d0 <lo> #spcstn_space then.s	yes
+		tst radar_obj(a6)				just entered space station space ?
+		if <eq> then.s					no
+			inc radar_obj(a6)			lock onto space station (obj#1)
+			clr f_schar(a6) 			flag instrument change
+			tst checkpoint(a6)			just entered space station space ?
+			if <eq> then.s				yes
+				st checkpoint(a6)		only check once per system
+				jsr check_police		check for police attack
+			endi
+		endi
+	else
+		tst radar_obj(a6)				just left space station space ?
+		if <ne> then.s					yes
+			clr radar_obj(a6)			lock onto planet (obj#0)
+			clr f_schar(a6) 			flag instrument change
+		endi
+	endi
+
+	ret
+
+
+* ************************************
+* **								**
+* ** ID_OBJECT - SET OBJECT ID FLAG **
+* **								**
+* ************************************
+
+* Sets the flag that will trigger an object ID when any object moves
+* within the sights.
+
+* Entry:  None (called from ACTION)
+* Exit:   None
+
+* Regs:   ?
+* Subr:   ?
+
+	subr id_object,global
+
+	st id_trigger(a6)					set ID trigger
+	lea text24(pc),a0					display message and exit
+	bra disp_message
+
+
+* *******************************************
+* **									   **
+* ** IS_GAME_OVER? - CHECK IF GAME IS OVER **
+* **									   **
+* *******************************************
+
+* Checks certain variables to determine whether the game is over. If so,
+* then the GAME_OVER flag is set.
+
+* Entry:  None
+* Exit:   GAME_OVER = True/False
+
+* Regs:   ?
+* Subr:   None
+
+	subr is_game_over
+
+	moveq #-1,d0						assume game not over
+	tst altitude(a6)					hit planet ?
+	if <eq> then.s						yes
+		moveq #hit_planet,d0
+	endi
+	tst energy(a6)						no energy ?
+	if <eq> then.s						yes
+		moveq #no_energy,d0
+	endi
+	cmp #max_ctemp,cabin_temp(a6)		overheated ?
+	if <eq> then.s						yes
+		moveq #overheated,d0
+	endi
+	tst d0								game over ?
+	if <pl> then.s						yes
+		st game_over(a6)
+		move d0,reason(a6)
+	endi
+
+	ret
+
+
+* *******************************
+* **						   **
+* ** WARNINGS - ISSUE WARNINGS **
+* **						   **
+* *******************************
+
+* Issues warnings to the player.
+
+* Entry:  None
+* Exit:   None
+
+* Regs:   ?
+* Subr:   ?
+
+	subr warnings
+
+	clr condition(a6)					condition green
+	cmp #max_energy*3/4,d0				energy below 3/4 ?
+	if <lo> then.s						yes
+		move #1,condition(a6)			condition yellow
+	endi
+	cmp #max_ltemp*3/4,laser_temp(a6)	laser temperature > 3/4 ?
+	if <hi> then.s						yes
+		move #1,condition(a6)
+	endi
+	tst police_record(a6)				clean ?
+	if <ne> then.s						no
+		move #1,condition(a6)
+	endi
+	tst under_attack(a6)				under attack ?
+	if <ne> then.s						yes
+		move #1,condition(a6)
+	endi
+	cmp #max_energy/4,energy(a6)		energy low ?
+	if <lo> then.s						yes
+		lea text1(pc),a0				display "energy low"
+		jsr flash_message
+		move #2,condition(a6)			condition red
+	endi
+	tst witch_space(a6) 				in witch space ?
+	if <eq> then.s						no
+		cmp #8,altitude(a6) 			low altitude ?
+		if <lo> then.s					yes
+			lea text2(pc),a0			display "altitude low"
+			jsr flash_message
+			move #2,condition(a6)		condition red
+		endi
+		cmp #overheat,cabin_temp(a6)	cabin overheating ?
+		if <hs> then.s					yes
+			move #2,condition(a6)
+		endi
+	else
+		tst tharg_count(a6) 			drive repaired ?
+		if <eq> then.s					yes
+			lea text17(pc),a0
+			jsr flash_message
+		endi
+	endi
+	move mission(a6),d0 				mission warnings
+	if d0 <eq> #$32 or d0 <eq> #$33 then.s
+		lea text8(pc),a0				display warning
+		jsr flash_message
+		move #2,condition(a6)
+	endi
+
+
+* *******************************************************
+* **												   **
+* ** CALC_ALTITUDE - CALCULATE PLANET AND SUN ALTITUDE **
+* **												   **
+* *******************************************************
+
+* Calculates the altitude above the planet and sun.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr calc_altitude
+
+	move.l planet_range(a6),d0			get distance to planet
+	cmp.l #max_palt,d0					outside orbit ?
+	if <hi> then.s						yes
+		move.l #max_palt,d0
+	else.s
+		cmp.l #min_palt,d0				inside orbit ?
+		if <lo> then.s					yes
+			move.l #min_palt,d0
+		endi
+	endi
+	sub.l #min_palt,d0					calculate altitude
+	lsr.l #1,d0
+	mulu #bar_width,d0
+	divu #(max_palt-min_palt)/2,d0
+	cmp altitude(a6),d0 				altitude changed ?
+	if <ne> then.s						yes
+		move d0,altitude(a6)			store new altitude
+		clr f_altitude(a6)				flag instrument change
+	endi
+	move.l sun_range(a6),d0 			get distance to sun
+	cmp.l #max_salt,d0					outside orbit ?
+	if <hi> then.s						yes
+		move.l #max_salt,d0
+	else.s
+		cmp.l #min_salt,d0				inside orbit ?
+		if <lo> then.s					yes
+			move.l #min_salt,d0
+		endi
+	endi
+	sub.l #min_salt,d0					calculate altitude
+	lsr.l #1,d0
+	mulu #bar_width,d0
+	divu #(max_salt-min_salt)/2,d0
+	sub #bar_width,d0
+	neg d0
+	cmp cabin_temp(a6),d0				temperature changed ?
+	if <ne> then.s						yes
+		move d0,cabin_temp(a6)			store new temperature
+		clr f_temp(a6)					flag instrument change
+	endi
+	cmp #fuel_dist,d0					within fuel scoop distance ?
+	ret <lo>							no, return
+	tst equip+fuel_scoop(a6)			carrying fuel scoop ?
+	ret <eq>							no, return
+	cmp #max_speed/2,speed(a6)			moving at 1/2 speed or more ?
+	ret <lo>							no
+	cmp #70,equip+fuel(a6)				fuel tanks full ?
+	ret <eq>							yes, return
+	inc equip+fuel(a6)					increase fuel
+	clr f_fuel(a6)						update display
+	lea text5(pc),a0					print "fuel scoop activated"
+	jmp flash_message
+
+
+* ************************************************
+* **											**
+* ** MAGNIFICATION - CHANGE RADAR MAGNIFICATION **
+* **											**
+* ************************************************
+
+* Changes the radar magnification between x1 and x2.
+
+	subr magnification,global
+
+	move radar_scale+2(a6),d0			current x 1 ?
+	cmp #radar_range,d0
+	if <eq> then.s						yes
+		lsr #1,d0						switch to x 2
+	else.s
+		add d0,d0						switch to x 1
+	endi
+	move d0,radar_scale+2(a6)			update radar scale
+	clr f_magnify(a6)					flag instrument change
+
+	ret 								return
+
+
+* *****************************************************
+* **												 **
+* ** CLOAKING_TOGGLE - TOGGLE CLOAKING DEVICE ON/OFF **
+* **												 **
+* *****************************************************
+
+* Toggles the cloaking device on and off (assuming we have it). Once
+* activated, other ships can't shoot us.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr cloaking_toggle,global
+
+	jsr check_inflight					check we're in flight
+	tst equip+cloaking_device(a6)		fitted ?
+	beq beep							no, beep and return
+	not cloaking_on(a6) 				toggle flag
+
+	ret 								return
+
+
+* **********************************************
+* **										  **
+* ** JAMMER_TOGGLE - TOGGLE ECM JAMMER ON/OFF **
+* **										  **
+* **********************************************
+
+* Toggles the ECM jammer on and off (assuming we have one). When activated,
+* the enemy can't ECM our missiles and vica versa.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr jammer_toggle,global
+
+	jsr check_inflight					check we're in flight
+	tst equip+ecm_jammer(a6)			fitted ?
+	beq beep							no
+	not ecm_jammed(a6)					toggle flag
+
+	ret 								return
+
+
+* ************************************
+* **								**
+* ** ESCAPE - LAUNCH ESCAPE CAPSULE **
+* **								**
+* ************************************
+
+* Launches an escape capsule from the Cobra.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr escape,global
+
+	jsr check_inflight					check we're in flight
+	tst equip+escape_capsule(a6)		fitted ?
+	if <eq> then.s						no
+		lea text29(pc),a0
+		jsr disp_message
+		bra beep
+	endi
+	tst witch_space(a6) 				witch space ?
+	if <ne> then.s						yes
+
+escape_malfunction:
+
+		lea text30(pc),a0
+		jsr disp_message
+		bra beep
+	endi
+	cmp #$52,mission(a6)				mission #5, state #2 ?
+	beq escape_malfunction				yes
+	jsr alloc_object					allocate an object
+	bcc escape_malfunction
+	clr count_down(a6)					stop any countdown
+	clr jump_trigger(a6)				and any jump triggered
+	move.b #1,flags(a4) 				in use
+	lea escape_data(pc),a0				set up coords and vectors
+	lea xpos(a4),a1
+	loop 1,(3*2+3*3)
+		move (a0)+,(a1)+
+	next 1
+	move #log_peel_off,logic(a4)		peel off to right
+	move #50,peel_x_count(a4)
+	move #20,peel_x(a4)
+	move #50,peel_z_count(a4)
+	move #10,peel_z(a4)
+	st on_course(a4)
+	st velocity(a4)
+	move #log_escape,next_logic(a4) 	escape after peel off
+	move #cobra,type(a4)				it's a cobra
+	jsr create_object					create the object
+	clr equip+escape_capsule(a6)		only use once
+	clr police_record(a6)				status = clean
+	clr speed(a6)						slow right down
+	bsr lock_controls					lock the controls
+	bsr front_view						force front view
+	lea hold(a6),a0 					empty the hold (except special)
+	loop 1,max_products-2
+		clr.l (a0)+
+	next 1
+	sfx missile 						use missile effect
+	lea text6(pc),a0					print ok message and return
+	jmp disp_message
+
+
+* ---- LOCAL DATA ----
+
+* Escape capsule coords and vectors.
+
+escape_data:
+
+	dc.l 0,-200,1000
+	dc.w unit,0,0
+	dc.w 0,unit,0
+	dc.w 0,0,unit
+
+* Various text messages.
+
+text1:	db 'Energy Low',0
+text2:	db 'Altitude Low',0
+text3:	db 'Countdown:'
+text4:	db '   '
+text5:	db 'Fuel Scoop Activated',0
+text6:	db 'Capsule released',0
+text7:	db 'Game Over',0
+text8:	db 'Danger: Supernova!',0
+text9:	db 'Malfunction!!!',0
+text10: db 'Game Time: '
+text11: db '00:00:00',0
+text12: db 'Mag x 1',0
+text13: db 'Mag x 2',0
+text14: db 'Score: '
+text15: ds 10
+text17: db 'Drive repaired',0
+text18: db 'Cloaking active',0
+text19: db 'Jammer active',0
+text24: db 'ID active',0
+text29: db 'Capsule Not Installed',0
+text30: db 'Capsule Malfunction!',0

@@ -1,0 +1,821 @@
+;	 @@    @@  @@  @@@@@@	@@@   @@@@@@   @@@@@@ @@@@		@@@    @@@@@@
+;	@@@@   @@  @@  @ @@ @  @@ @@   @@  @@	 @@    @@	   @@ @@   @ @@ @
+;  @@  @@  @@  @@	 @@   @@   @@  @@  @@	 @@    @@	  @@   @@	 @@
+;  @@  @@  @@  @@	 @@   @@   @@  @@@@@	 @@    @@	  @@   @@	 @@
+;  @@@@@@  @@  @@	 @@   @@   @@  @@		 @@    @@	@ @@   @@	 @@
+;  @@  @@  @@  @@	 @@    @@ @@   @@		 @@    @@  @@  @@ @@	 @@
+;  @@  @@	@@@@	@@@@	@@@   @@@@	   @@@@@@ @@@@@@@	@@@ 	@@@@
+
+; Auto-pilot routines. Used for controlling objects and the player.
+
+; Version 1.0 6th September 1988 Copyright (c) 1988 Mr. Micro Ltd.
+; Designed and coded by Rob Nicholson
+
+; Modification history:
+
+; V1.1	30/03/90	Unable to engage docking computer while hyperspace
+;					countdown is active.
+
+	include macros
+
+	xref calc_distance,magnitude_table,sqrt,local_z_rotate,quiet
+	xref calc_yvector,local_x_rotate,set_roll_angles,set_climb_angles
+	xref flash_message,disp_message,fx,start_tune,blue_danube,start_fade
+	xref check_inflight
+
+; ---- LOCAL CONSTANTS ----
+
+roll_rate:		equ 4					rate of roll angle change
+climb_rate: 	equ 4					rate of climb angle change
+speed_rate: 	equ 4					rate of speed change
+turn_dist:		equ 3000				distance of turn point from station
+min_turn_dist:	equ 10					min. distance before turn
+quite_near: 	equ 100 				quite near target point
+blast_time: 	equ 30					length of blast time
+tolerance:		equ 100 				angle of tolerance before approach
+auto_speed: 	equ max_speed*3 		maximum auto-docking speed
+
+; ---- LOCAL VARIABLES ----
+
+	vars auto
+
+magnitude:		ds.w 1					magnitude of vector
+stage_ptr:		ds.l 1					ptr: current docking stage
+stage_ctr:		ds.w 1					ctr: length of stage
+
+	end_vars auto
+
+; ---- LOCAL MACROS ----
+
+; DOT vector - calculate dot product.
+
+dot: macro
+
+	move \1+i(a5),d0					Dx * Vi
+	muls d3,d0
+	move \1+j(a5),d1					Dy * Vj
+	muls d4,d1
+	add.l d1,d0
+	move \1+k(a5),d1					Dz * Vk
+	muls d5,d1
+	add.l d1,d0
+	divs magnitude(a6),d0				divide by magnitude
+
+	endm
+
+	module auto
+
+
+; ***************************************
+; **								   **
+; ** GET_DIST - GET DISTANCE TO OBJECT **
+; **								   **
+; ***************************************
+
+; Calculates the distance between the current object and another object.
+
+; Entry: A4 = ptr: target object
+;		 A5 = ptr: current object
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr get_dist,global
+
+	move.l xpos(a4),d0					calculate distances along the axes
+	sub.l xpos(a5),d0
+	if <mi> then.s
+		neg.l d0
+	endi
+	move.l ypos(a4),d1
+	sub.l ypos(a5),d1
+	if <mi> then.s
+		neg.l d1
+	endi
+	move.l zpos(a4),d2
+	sub.l zpos(a5),d2
+	if <mi> then.s
+		neg.l d2
+	endi
+	jmp calc_distance					calculate distance between
+
+
+; *************************************
+; **								 **
+; ** AUTO_PILOT - EXECUTE AUTO-PILOT **
+; **								 **
+; *************************************
+
+; Executes the auto-pilot sequence to manouevre an object to point towards
+; another object. Each of the distances along is reduced to fit into 14 bits.
+; This size is required to ensure that the magnitude is always < 32767. A
+; 15 bit limit could under certain (rare) circumstances generate a number
+; >32767 which would play hell with the DIVS instruction.
+
+; Entry: (D0.L,D1.L,D2.L) = world coords to fly towards
+;		 A5 			  = ptr: current object
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr auto_pilot,global
+
+	tst on_course(a5)					still on course ?
+	if <ne> then.s						maybe
+		dec on_course(a5)
+		ret <ne>						yes, return
+	endi
+	sub.l xpos(a5),d0					calculate distances along the axes
+	move.l d0,d3						and OR the abs(dist) together
+	if <mi> then.s
+		neg.l d0
+	endi
+	sub.l ypos(a5),d1
+	move.l d1,d4
+	if <mi> then.s
+		neg.l d1
+	endi
+	or.l d1,d0
+	sub.l zpos(a5),d2
+	move.l d2,d5
+	if <mi> then.s
+		neg.l d2
+	endi
+	or.l d2,d0
+	asl.l #2,d0 						calculate amount to reduce each
+	swap d0 							distance to fit in 14 bits
+	add d0,d0
+	lea magnitude_table,a0
+	move (a0,d0),d6
+	asr.l d6,d3 						reduce the distances
+	asr.l d6,d4
+	asr.l d6,d5
+	move d3,d0							take squares and add
+	muls d0,d0
+	move d4,d1
+	muls d1,d1
+	add.l d1,d0
+	move d5,d1
+	muls d1,d1
+	add.l d1,d0
+	push d3 							take square root
+	jsr sqrt
+	move d2,magnitude(a6)
+	pop d3
+	add d6,d6							determine the size of the window for
+	lea object_windows(pc),a0
+	move (a0,d6),d6
+	dot x_vector						calculate dot product with x vector
+	move d0,d1							within window ?
+	if <mi> then.s
+		neg d1
+	endi
+	cmp d6,d1
+	if <hi> then.s						no
+		push d0 						calculate angle difference
+		bsr angle_diff
+		cmp turn_rate(a5),d0			angle too high ?
+		if <hi> then.s					yes
+			move turn_rate(a5),d0		clamp to maximum
+		endi
+		tst (sp)+						set correct angle
+		if <mi> then.s
+			neg d0
+		endi
+		jsr local_z_rotate				rotate along z axis
+	else
+		movem d3-d6,-(sp)				calculate y vector
+		jsr calc_yvector
+		movem (sp)+,d3-d6				calculate dot product with y vector
+		dot y_vector
+		move z_vector+k(a5),d1			z signs different ?
+		eor d5,d1
+		if <mi> then.s					yes
+			move turn_rate(a5),d1		fetch rotation angle and adjust sign
+			tst d0
+			if <mi> then.s
+				neg d1
+			endi
+			move d1,d0
+			jsr local_x_rotate			rotate around x axis
+		else
+			move d0,d1					within window ?
+			if <mi> then.s
+				neg d1
+			endi
+			cmp d6,d1
+			if <hi> then.s				no
+				push d0 				calculate angle difference
+				bsr angle_diff
+				cmp turn_rate(a5),d0	angle too high ?
+				if <hi> then.s			yes, clamp to maximum
+					move turn_rate(a5),d0
+				endi
+				tst (sp)+				set correct angle
+				if <mi> then.s
+					neg d0
+				endi
+				jsr local_x_rotate		rotate around x axis
+			else
+				move #10,on_course(a5)	object on course for 4 loops
+			endi
+		endi
+	endi
+
+	ret
+
+
+; *******************************************
+; **									   **
+; ** ANG_DIFF - CALCULATE ANGLE DIFFERENCE **
+; **									   **
+; *******************************************
+
+; Calculates the angle between the two vectors of the dot product. This is
+; determined by taking the arc-cosine of the dot product. A binary search
+; of the table is used for this function. However, this table only contains
+; the arc-cosines of angles from 70 to 90 degrees. All angles outside this
+; range return an angle of 20 degrees.
+
+; Entry: D1 = abs(dot_product)
+; Exit:  D0 = angle left to turn x 10
+
+; Regs: None
+; Subr: D0/D2/D6/D7/A0 corrupt.
+
+	subr angle_diff
+
+	lea arc_cosines(pc),a0				base of arc cosine table
+	cmp (a0),d1 						outside table ?
+	if <hi> then.s						yes
+		move #(90-70)*10,d0 			turn of > 20 degrees required
+	else
+		clr d6							initialise left and right
+		move #(90-70)*10+1,d7
+		repeat
+			move d6,d0					middle = (left+right)/2
+			add d7,d0
+			move d0,d2
+			lsr #1,d0
+			bclr #0,d2					found ?
+			cmp (a0,d2),d1
+			break.s if <eq> 			yes, exit loop
+			cmp d0,d6					left = middle ?
+			break.s if <eq> 			yes, give up
+			cmp (a0,d2),d1				set left/right boundary
+			if <hs> then.s
+				move d0,d7
+			else.s
+				move d0,d6
+			endi
+		endr
+		sub #200,d0 					calculate angle of turn left
+		neg d0
+	endi
+
+	ret
+
+
+; *********************************************
+; **										 **
+; ** AUTO_ROTATE - SET ANGLES FOR AUTO-PILOT **
+; **										 **
+; *********************************************
+
+; Sets the angles for the players auto-pilot. Used for the docking sequence.
+
+; Entry: (D0.L,D1.L,D2.L) = coordinates of the target
+; Exit:  D0 = on course flag (!0 = on course)
+
+; Regs: ?
+; Subr: ?
+
+	subr auto_rotate
+
+	move.l d0,d3						determine reduction factor by OR'ing
+	if <mi> then.s						the unsigned x,y and z distances
+		neg.l d0
+	endi
+	move.l d1,d4
+	if <mi> then.s
+		neg.l d1
+	endi
+	or.l d1,d0
+	move.l d2,d5
+	if <mi> then.s
+		neg.l d2
+	endi
+	or.l d2,d0
+	asl.l #2,d0 						calculate amount to reduce each
+	swap d0 							distance to fit in 14 bits
+	add d0,d0
+	lea magnitude_table,a0
+	move (a0,d0),d6
+	asr.l d6,d3 						reduce the distances
+	asr.l d6,d4
+	asr.l d6,d5
+	move d3,d0							calculate x^2+y^2
+	muls d0,d0
+	move d4,d1
+	muls d1,d1
+	add.l d1,d0
+	push.l d0							(save x^2+y^2)
+	push.l d3							take square root
+	jsr sqrt
+	pop.l d3
+	add d6,d6							determine the size of the window
+	lea cobra_windows(pc),a0
+	move (a0,d6),d6
+	move.l d3,d0						calculate dot product with x vector
+	swap d0
+	asr.l #2,d0
+	divs d2,d0
+	move d0,d1							calculate abs(angle)
+	if <mi> then.s
+		neg d1
+	endi
+	cmp d6,d1							within tolerance angle ?
+	if <hi> then.s						no
+		addq.l #4,sp					balance stack
+		bsr angle_diff					calculate angle difference
+		cmp #max_roll,d0				angle too high ?
+		if <hi> then.s					yes
+			move #max_roll,d0			clamp to maximum
+		endi
+		eor d4,d3						set correct angle
+		if <mi> then.s
+			neg d0
+		endi
+		bsr set_roll					set new roll angle
+		clr d0							kill any climb
+		bsr set_climb
+		clr d0							not on course
+	else
+		move d5,d0						calculate x^2+y^2+z^2
+		muls d0,d0
+		add.l (sp)+,d0
+		push.l d3						calculate square root
+		jsr sqrt
+		pop.l d3
+		move d2,magnitude(a6)
+		move.l d4,d0					calculate dot product with y vector
+		swap d0
+		asr.l #2,d0
+		divs d2,d0
+		tst d5							z signs different ?
+		if <mi> then.s					yes
+			move #max_climb,d1			fetch rotation angle and adjust sign
+			tst d0
+			if <mi> then.s
+				neg d1
+			endi
+			move d1,d0					set climb angle
+			bsr set_climb
+			clr d0						kill any roll
+			bsr set_roll
+			clr d0						not on course
+		else
+			move d0,d1					within window ?
+			if <mi> then.s
+				neg d1
+			endi
+			cmp d6,d1
+			if <hi> then.s				no
+				push d0 				calculate angle difference
+				bsr angle_diff
+				cmp #max_climb,d0		angle too high ?
+				if <hi> then.s			yes, clamp to maximum
+					move #max_climb,d0
+				endi
+				tst (sp)+				set correct angle
+				if <mi> then.s
+					neg d0
+				endi
+				bsr set_climb			set climb rotation
+				clr d0					kill any roll
+				bsr set_roll
+				clr d0					not on course
+			else.s
+				clr d0					kill roll and climb angles
+				bsr set_roll
+				clr d0
+				bsr set_climb
+				moveq #-1,d0			on course
+			endi
+		endi
+	endi
+
+	ret
+
+
+; ****************************************
+; **									**
+; ** SET_ROLL - SET ROLL ANGLE OF COBRA **
+; **									**
+; ****************************************
+
+; Sets the roll angle of the Cobra to a required angle.
+
+; Entry: D0 = required angle
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr set_roll
+
+	move roll_angle(a6),d1				already at required angle ?
+	cmp d1,d0
+	ret <eq>							yes
+	tst d0								zero angle ?
+	if <eq> then.s						yes
+		clr d1
+	else.s
+		if <pl> then.s					positive roll ?
+			tst d1						currently negative ?
+			if <lt> then.s				yes
+				clr d1					auto-centre roll
+			else.s
+				addq #roll_rate,d1		increase roll angle
+				if d1 <gt> d0 then.s	clamp at maximum
+					move d0,d1
+				endi
+			endi
+		else.s
+			tst d1						currently positive ?
+			if <gt> then.s				yes
+				clr d1					auto-centre roll
+			else.s
+				subq #roll_rate,d1		decrease roll angle
+				if d1 <lt> d0 then.s	clamp at minimum
+					move d0,d1
+				endi
+			endi
+		endi
+	endi
+	move d1,roll_angle(a6)				set roll angle
+	jsr set_roll_angles
+	clr f_roll(a6)						force instrument change
+
+	ret 								return
+
+
+; ******************************************
+; **									  **
+; ** SET_CLIMB - SET CLIMB ANGLE OF COBRA **
+; **									  **
+; ******************************************
+
+; Sets the climb/dive angle of the Cobra to a required angle.
+
+; Entry: D0 = required angle
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr set_climb
+
+	move climb_angle(a6),d1 			already at required angle ?
+	cmp d1,d0
+	ret <eq>							yes
+	tst d0								zero angle ?
+	if <eq> then.s						yes
+		clr d1
+	else.s
+		if <pl> then.s					positive climb ?
+			tst d1						currently negative ?
+			if <lt> then.s				yes
+				clr d1					auto-centre climb
+			else.s
+				addq #climb_rate,d1 	increase climb angle
+				if d1 <gt> d0 then.s	clamp at maximum
+					move d0,d1
+				endi
+			endi
+		else.s
+			tst d1						currently positive ?
+			if <gt> then.s				yes
+				clr d1					auto-centre climb
+			else.s
+				subq #climb_rate,d1 	decrease climb angle
+				if d1 <lt> d0 then.s	clamp at minimum
+					move d0,d1
+				endi
+			endi
+		endi
+	endi
+	move d1,climb_angle(a6) 			set climb angle
+	jsr set_climb_angles
+	clr f_climb(a6) 					force instrument change
+
+	ret 								return
+
+
+; ************************************************
+; **											**
+; ** COMPUTER - ENABLE/DISABLE DOCKING COMPUTER **
+; **											**
+; ************************************************
+
+; Command routine to enable/disable docking computer. The docking computer
+; using a very similar algorithm to the normal objects. Note - the docking
+; computer can increase speed to a Auto_Speed which is faster than the speed
+; when on manual. Due to this, several other routines in the game clamp have
+; to clamp the speed to Max_Speed (e.g. dust).
+
+; V1.1	30/03/90	Unable to engage docking computer while hyperspace
+;					countdown is active.
+
+; Entry: None
+; Exit:  None
+
+; Regs: All corrupt.
+; Subr: ?
+
+	subr computer,global
+
+	jsr check_inflight					check we are in flight
+	tst count_down(a6)					hyperspace countdown activated ?
+	bne beep							yes, beep and exit
+	tst computer_on(a6) 				computer active ?
+	if <ne> then.s						yes
+		clr computer_on(a6) 			turn it off
+		clr controls_locked(a6) 		release controls
+		cmp #max_speed,speed(a6)		clamp speed at maximum
+		if <hi> then.s
+			move #max_speed,speed(a6)
+			clr f_speed(a6)
+		endi
+		jmp start_fade					stop music and return
+	endi
+	tst equip+docking_comp(a6)			do we have a docking computer ?
+	if <eq> then.s						no
+		lea text25(pc),a0
+		jsr disp_message
+		bra beep
+	endi
+	tst radar_obj(a6)					in space station space ?
+	if <eq> then.s						no
+		lea text26(pc),a0
+		jsr disp_message
+		bra beep
+	endi
+	tst no_entry(a6)					have we been naughty ?
+	if <ne> then.s						yes
+		lea text27(pc),a0
+		jsr disp_message
+		bra beep
+	endi
+	tst witch_space(a6) 				are we in witch space ?
+	if <ne> then.s						yes
+		lea text28(pc),a0
+		jsr disp_message
+		bra beep
+	endi
+	cmp #$52,mission(a6)				mission #5, state #2 ?
+	beq beep							yes
+	btst #f_docking,user(a6)			fast docking sequence ?
+	if <eq> then.s						no
+		st computer_on(a6)				enable computer
+		st controls_locked(a6)			lock keyboard controls
+		move.l #stage4,stage_ptr(a6)	start at stage #4
+		move #blast_time,stage_ctr(a6)
+	else.s
+		st just_docked(a6)				instant dock
+	endi
+	lea blue_danube,a0					start tune playing
+	jmp start_tune
+
+
+; **********************
+; **				  **
+; ** BEEP - MAKE BEEP **
+; **				  **
+; **********************
+
+; Makes an error beep.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr beep
+
+	sfx error
+
+	ret
+
+
+; ****************************************
+; **									**
+; ** RUN_DOCKING - RUN DOCKING COMPUTER **
+; **									**
+; ****************************************
+
+; Routine to run the docking computer.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr run_docking,global
+
+	tst computer_on(a6) 				computer active ?
+	ret <eq>							no
+	lea text1(pc),a0					flash "Docking Computer Active"
+	jsr flash_message
+	move.l stage_ptr(a6),a0 			execute stage logic
+	jmp (a0)
+
+
+; *************************
+; **					 **
+; ** DOCKING STAGE LOGIC **
+; **					 **
+; *************************
+
+; Routines to perform the docking logic.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+; Flying towards the turning point.
+
+	subr stage1
+
+	lea station_rec(a6),a5				fetch coords of space station
+	movem.l xpos(a5),d0-d2
+	move #turn_dist,d3					calculate position of the turning
+	move z_vector+i(a5),d4				point in the world (D0,D1,D2)
+	muls d3,d4
+	asl.l #2,d4
+	swap d4
+	ext.l d4
+	add.l d4,d0
+	move z_vector+j(a5),d4
+	muls d3,d4
+	asl.l #2,d4
+	swap d4
+	ext.l d4
+	add.l d4,d1
+	move z_vector+k(a5),d4
+	muls d3,d4
+	asl.l #2,d4
+	swap d4
+	ext.l d4
+	add.l d4,d2
+	bsr auto_rotate 					rotate towards required point
+	move magnitude(a6),d1				close enough ?
+	cmp #min_turn_dist,d1
+	if <hs> then.s						no
+		bsr speed_control				execute speed control logic
+	else.s
+		move.l #stage2,stage_ptr(a6)	move to next stage
+		clr speed(a6)					all stop
+		clr f_speed(a6)
+	endi
+
+	ret
+
+	subr stage2
+
+	lea station_rec(a6),a5				lock onto station
+	movem.l xpos(a5),d0-d2
+	bsr auto_rotate
+	tst d0								locked on ?
+	ret <eq>							not yet
+	move.l #stage3,stage_ptr(a6)		move to next stage
+
+	ret 								return
+
+	subr stage3
+
+	lea station_rec(a6),a5				within allowable range ?
+	move x_vector+i(a5),d0
+	if <mi> then.s
+		neg d0
+	endi
+	cmp #tolerance,d0
+	ret <hi>							no
+	move.l #stage5,stage_ptr(a6)		move to next stage
+	move #-8,roll_angle(a6) 			match roll of space station
+	jsr set_roll_angles
+	clr f_roll(a6)
+
+	ret
+
+	subr stage4
+
+	moveq #-1,d0						travel for a while
+	move #auto_speed,magnitude(a6)
+	bsr speed_control
+	dec stage_ctr(a6)
+	ret <ne>
+	move.l #stage1,stage_ptr(a6)		move to stage #1
+
+	ret
+
+	subr stage5
+
+	move #auto_speed,magnitude(a6)	   accelerate to max speed
+	moveq #-1,d0
+	bsr speed_control
+
+	ret 								return
+
+
+; *************************************************
+; **											 **
+; ** SPEED_CONTROL - PERFORM SPEED CONTROL LOGIC **
+; **											 **
+; *************************************************
+
+; Speeds the Cobra up if on course, else slows us down.
+
+; Entry: D0 = on course flag (as set by AUTO_ROTATE)
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr speed_control
+
+	move speed(a6),d1					fetch current speed
+	tst d0								on course ?
+	if <ne> then.s						yes
+		if d1 <lo> #auto_speed then.s	speed up to maximum
+			addq #speed_rate,d1
+			if d1 <hi> #auto_speed then.s
+				move #auto_speed,d1
+			endi
+			clr f_speed(a6) 			update instruments
+		endi
+		if d1 <hi> magnitude(a6) then.s clamp at maximum distance
+			move magnitude(a6),d1
+			clr f_speed(a6)
+		endi
+	else.s
+		tst d1							slow down
+		if <ne> then.s
+			subq #speed_rate,d1
+			if <mi> then.s
+				clr d1
+			endi
+			clr f_speed(a6)
+		endi
+	endi
+	move d1,speed(a6)					update speed
+
+	ret 								return
+
+
+; ---- LOCAL DATA ----
+
+; Windows (cosines) for auto-pilot dot products.
+
+object_windows:
+
+	dc 857,1428,1997,2563,3126,3686,4240,4790
+
+cobra_windows:
+
+	dc 71,286,572,857,1143,1429,1713,1997,2280
+
+; Table of arc-cosines.
+
+arc_cosines:
+
+	dc.w 5604,5577,5550,5523,5496,5469,5442,5415,5388,5361,5334,5307,5280
+	dc.w 5253,5226,5199,5172,5144,5117,5090,5063,5036,5009,4981,4954,4927
+	dc.w 4899,4872,4845,4818,4790,4763,4736,4708,4681,4653,4626,4598,4571
+	dc.w 4544,4516,4489,4461,4434,4406,4378,4351,4323,4296,4268,4241,4213
+	dc.w 4185,4158,4130,4102,4075,4047,4019,3991,3964,3936,3908,3880,3853
+	dc.w 3825,3797,3769,3741,3713,3686,3658,3630,3602,3574,3546,3518,3490
+	dc.w 3462,3434,3406,3378,3350,3323,3294,3266,3238,3210,3182,3154,3126
+	dc.w 3098,3070,3042,3014,2986,2958,2930,2901,2873,2845,2817,2789,2761
+	dc.w 2732,2704,2676,2648,2620,2591,2563,2535,2507,2478,2450,2422,2393
+	dc.w 2365,2337,2309,2280,2252,2224,2195,2167,2139,2110,2082,2054,2025
+	dc.w 1997,1968,1940,1912,1883,1855,1826,1798,1770,1741,1713,1684,1656
+	dc.w 1627,1599,1570,1542,1513,1485,1457,1428,1400,1371,1343,1314,1286
+	dc.w 1257,1229,1200,1171,1143,1114,1086,1057,1029,1000,972,943,915,886
+	dc.w 858,829,800,772,743,715,686,658,629,600,572,543,515,486,458,429,400
+	dc.w 372,343,315,286,257,229,200,172,143,114,86,57,29,0
+
+; Misc. text messages.
+
+text1:	db 'Docking Computer Active',0
+text25: db 'Computer Not Installed',0
+text26: db 'Too Far From Station',0
+text27: db 'Access To Station Denied',0
+text28: db 'Computer Malfunction!',0
+

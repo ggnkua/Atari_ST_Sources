@@ -1,0 +1,1313 @@
+; @@@@@@@ @@@@	   @@@@@@	@@@@   @@  @@  @@@@@@
+;  @@	@  @@		 @@    @@  @@  @@  @@  @ @@ @
+;  @@ @    @@		 @@   @@	   @@  @@	 @@
+;  @@@@    @@		 @@   @@	   @@@@@@	 @@
+;  @@ @    @@	@	 @@   @@  @@@  @@  @@	 @@
+;  @@	   @@  @@	 @@    @@  @@  @@  @@	 @@
+; @@@@	  @@@@@@@  @@@@@@	@@@@@  @@  @@	@@@@
+
+; Process the flight of objects in 3D space. Check for collision. Misc.
+; routines concerned with 3D world. Cobra control routines.
+
+; Atari ST Version 1.0 7th May 1988 Copyright (c) 1988 Mr. Micro Ltd.
+; Designed and coded by Rob Nicholson. Adapted from the MSX version.
+
+; Modification history:
+
+; V1.1	30/03/90	Unable to engage hyperdrive on mission #5 while in the
+;					Thargoid system, i.e. you are forced to destroy the space
+;					station.
+
+	include macros
+
+	xref calc_distance,set_roll_angles,set_climb_angles,check_inflight,random
+	xref text_out,fuel_distance,disp_message,lock_controls,hyperspace_effect
+	xref search,get_planet_info,clear_objects,new_mission,gen_prices,block,fx
+	xref create_system,reset_system,instruments,flush_keyboard,clear_image
+	xref text_blatt,update_inst,swap_screen,wait,magnitude_table,sqrt,get_unit
+	xref pirate_attack,explode_object,target_lost,reduce_shields,cargo_spare
+	xref illegal,product_list,find_table,rand
+
+; ---- LOCAL CONSTANTS ----
+
+torus_dur:			equ 30				duration of jump drive
+torus_speed:		equ 2000			speed under torus jump drive
+collision_dist: 	equ 100 			collision distance
+dock_dist:			equ $a0 			make it this far and you've docked
+dock_x: 			equ 60				docking x,y limits
+dock_y: 			equ 30
+min_zangle: 		equ $3c23			min. docking z angle = cos(20)*$4000
+min_xangle: 		equ $3c23			min. docking x angle = cos(20)*$4000
+max_retro:			equ 5				maximum times retros can be used
+
+; ---- LOCAL VARIABLES ----
+
+	vars flight
+
+inhibit_roll:		ds.w 1				flag: inhibit roll damping
+inhibit_climb:		ds.w 1				flag: inhibit climb damping
+fuel_needed:		ds.w 1				fuel needed for the trip
+salvage_ok: 		ds.w 1				flag: salvage was ok
+colour_idx: 		ds.w 1				index: hyperspace colour list
+no_damping: 		ds.w 1				supress any damping (mouse over-ride)
+force_stop: 		ds.w 1				flag: force jump stop
+
+	end_vars flight
+
+	module flight
+
+
+; *************************************
+; **								 **
+; ** GET_RANGE - GET RANGE TO OBJECT **
+; **								 **
+; *************************************
+
+; Calculates the range from the player to the current object.
+
+; Entry: None
+; Exit:  OBJ_RANGE = range (32 bit word)
+
+; Regs:  ?
+; Subr:  ?
+
+	subr get_range,global
+
+	move.l xpos(a5),d0					calculate distance to object
+	if <mi> then.s
+		neg.l d0
+	endi
+	 move.l ypos(a5),d1
+	if <mi> then.s
+		neg.l d1
+	endi
+	move.l zpos(a5),d2
+	if <mi> then.s
+		neg.l d2
+	endi
+	jsr calc_distance
+	move type(a5),d0					check for planet
+	if d0 <eq> #planet then.s
+		move.l d2,planet_range(a6)
+	else.s
+		if d0 <eq> #sun then.s			check for sun
+			move mission(a6),d0 		check for exploding sun
+			cmp #$32,d0
+			if <eq> then.s
+				add.l snova(a6),d2
+				sub.l #3000,snova(a6)
+			else.s
+				cmp #$33,d0
+				if <eq> then.s
+					add.l snova(a6),d2
+					sub.l #3000,snova(a6)
+				endi
+			endi
+			move.l d2,sun_range(a6)
+		else.s
+			cmp #spacestn,d0			space station ?
+			if <eq> then.s				yes
+				move.l d2,station_range(a6)
+			endi
+		endi
+	endi
+	move.l obj_range(a5),d0 			first time ?
+	if <mi> then.s						yes
+		clr d0							speed of approach = 0
+	else.s
+		sub.l d2,d0 					calculate speed of approach
+	endi
+	move d0,approach(a6)
+	move.l d2,obj_range(a5) 			update object range
+
+	ret
+
+
+; **********************************************
+; **										  **
+; ** INCREASE_SPEED - INCREASE SPEED OF COBRA **
+; **										  **
+; **********************************************
+
+; Increase the speed of the Cobra.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr increase_speed,global
+
+	cmp #max_speed,speed(a6)			at maximum speed ?
+	if <lo> then.s						no
+		move speed(a6),d0				increase speed
+		addq #2,d0
+		if d0 <hi> #max_speed then.s
+			moveq #max_speed,d0
+		endi
+		move d0,speed(a6)
+		clr f_speed(a6)
+		clr retro_count(a6) 			stop any retro-rockets
+	endi
+
+	ret
+
+
+; **********************************************
+; **										  **
+; ** DECREASE_SPEED - DECREASE SPEED OF COBRA **
+; **										  **
+; **********************************************
+
+; Decreases the speed of the Cobra.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr decrease_speed,global
+
+	tst speed(a6)						at minimum speed ?
+	if <ne> then.s						no
+		move speed(a6),d0				decrease speed
+		subq #2,d0
+		if <mi> then.s
+			clr d0
+		endi
+		move d0,speed(a6)
+		clr f_speed(a6)
+	endi
+
+	ret
+
+
+; *************************************
+; **								 **
+; ** ROLL_LEFT - ROLL THE COBRA LEFT **
+; **								 **
+; *************************************
+
+; Increase the roll angle towards the left, i.e. anti-clockwise.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr roll_left,global
+
+	move #-max_roll,d0					maximum rol angle
+	lea roll_angle(a6),a0				ptr: angle to change
+	lea inhibit_roll(a6),a1 			ptr: inhibit flag
+	lea f_roll(a6),a2					ptr: instrument change flag
+	lea set_roll_angles,a3				ptr: set trig values
+	bra change_angle					change the angle
+
+
+; ***************************************
+; **								   **
+; ** ROLL_RIGHT - ROLL THE COBRA RIGHT **
+; **								   **
+; ***************************************
+
+; Increase the roll angle towards the right, i.e. clockwise.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr roll_right,global
+
+	move #max_roll,d0					maximum rol angle
+	lea roll_angle(a6),a0				ptr: angle to change
+	lea inhibit_roll(a6),a1 			ptr: inhibit flag
+	lea f_roll(a6),a2					ptr: instrument change flag
+	lea set_roll_angles,a3				ptr: set trig values
+	bra change_angle					change the angle
+
+
+; **********************************
+; **							  **
+; ** CLIMB - ADJUST RATE OF CLIMB **
+; **							  **
+; **********************************
+
+; Increases the angle of climb and updates the instruments.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr climb,global
+
+	move #max_climb,d0					maximum climb angle
+	lea climb_angle(a6),a0				ptr: angle to change
+	lea inhibit_climb(a6),a1			ptr: inhibit flag
+	lea f_climb(a6),a2					ptr: instrument change flag
+	lea set_climb_angles,a3 			ptr: set trig values
+	bra change_angle					change the angle and exit
+
+
+; ********************************
+; **							**
+; ** DIVE - ADJUST RATE OF DIVE **
+; **							**
+; ********************************
+
+; Decreases the angle of climb and updates the instruments.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr dive,global
+
+	move #-max_climb,d0 				maximum climb angle
+	lea climb_angle(a6),a0				ptr: angle to change
+	lea inhibit_climb(a6),a1			ptr: inhibit flag
+	lea f_climb(a6),a2					ptr: instrument change flag
+	lea set_climb_angles,a3 			ptr: set trig values
+	bra change_angle					change the angle and exit
+
+
+; ***********************************************
+; **										   **
+; ** CHANGE_ANGLE - CHANGE ROLL OR CLIMB ANGLE **
+; **										   **
+; ***********************************************
+
+; Changes the angle of roll and updates the display.
+
+; Entry: D0 = maximum value
+;		 A0 = ptr: angle
+;		 A1 = ptr: inhibit flag
+;		 A2 = ptr: instrument change flag
+;		 A3 = ptr: trig value routine
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr change_angle
+
+	tst from_mouse(a6)					change from mouse ?
+	if <ne> then.s						yes
+		st no_damping(a6)
+		clr device(a6)
+	else.s
+		clr no_damping(a6)
+	endi
+	st (a1) 							stop damping
+	move (a0),d1						fetch angle
+	cmp d0,d1							already at maximum ?
+	ret <eq>							yes, return
+	tst d0								increase angle ?
+	if <pl> then.s						yes
+		tst d1							angle >= 0 ?
+		if <ge> then.s					yes
+			addq #2,d1					increase angle
+			if d1 <gt> d0 then.s
+				move d0,d1
+			endi
+		else.s
+			btst #f_centre,user(a6) 	auto-recentre ?
+			if <ne> then.s				yes
+				clr d1					angle = 0
+			else.s
+				addq #2,d1				increase angle >> +ve
+			endi
+		endi
+	else.s
+		tst d1							angle <= 0 ?
+		if <le> then.s					yes
+			subq #2,d1					decrease angle
+			if d1 <lt> d0 then.s
+				move d0,d1
+			endi
+		else.s
+			btst #f_centre,user(a6) 	auto-recentre ?
+			if <ne> then.s				yes
+				clr d1					angle = 0
+			else.s
+				subq #2,d1				decrease angle >> -ve
+			endi
+		endi
+	endi
+	move d1,(a0)						update angle
+	clr (a2)							flag instrument change
+	jmp (a3)							exit via set trig values
+
+
+; *******************************************
+; **									   **
+; ** CANCEL_ANGLES - CANCEL ROLL AND CLIMB **
+; **									   **
+; *******************************************
+
+; Cancels any roll and climb.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr cancel_angles,global
+
+	tst roll_angle(a6)					rolling ?
+	if <ne> then.s						yes
+		clr roll_angle(a6)				stop rolling
+		jsr set_roll_angles
+		clr f_roll(a6)
+	endi
+	tst climb_angle(a6) 				climbing ?
+	if <ne> then.s						yes
+		clr climb_angle(a6) 			stop climbing
+		jsr set_climb_angles
+		clr f_climb(a6)
+	endi
+
+	ret 								return
+
+
+; *********************************
+; **							 **
+; ** DAMPING - AUTOMATIC DAMPING **
+; **							 **
+; *********************************
+
+; Performs the automatic damping of the roll and climb angles. Also dampens
+; the retro-rockets.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr damping,global
+
+	tst retro_count(a6) 				retro's firing ?
+	if <ne> then.s						yes
+		dec retro_count(a6)
+	endi
+	tst computer_on(a6) 				docking computer on ?
+	ret <ne>							yes
+	tst launch_spin(a6) 				in launch spin ?
+	if <ne> then.s						yes
+		tst roll_angle(a6)				still rolling ?
+		if <gt> then.s					yes
+			dec roll_angle(a6)			reduce roll and exit
+			clr f_roll(a6)
+			jmp set_roll_angles
+		endi
+		clr launch_spin(a6) 			spin over
+	endi
+	tst no_damping(a6)					mouse damping over-ride ?
+	ret <ne>							yes, return
+	btst #f_damping,user(a6)			auto-damping on ?
+	if <ne> then						yes
+		tst inhibit_roll(a6)			roll damping inhibited ?
+		if <eq> then.s					no
+			tst roll_angle(a6)			any roll ?
+			if <ne> then.s				yes
+				if <pl> then.s
+					subq #8,roll_angle(a6)
+					if <lt> then.s
+						clr roll_angle(a6)
+					endi
+				else.s
+					addq #8,roll_angle(a6)
+					if <gt> then.s
+						clr roll_angle(a6)
+					endi
+				endi
+				clr f_roll(a6)
+				jsr set_roll_angles
+			endi
+		endi
+		tst inhibit_climb(a6)			climb damping inhibited ?
+		if <eq> then.s					no
+			tst climb_angle(a6) 		any climb ?
+			if <ne> then.s				yes
+				if <pl> then.s
+					subq #8,climb_angle(a6)
+					if <lt> then.s
+						clr climb_angle(a6)
+					endi
+				else.s
+					addq #8,climb_angle(a6)
+					if <gt> then.s
+						clr climb_angle(a6)
+					endi
+				endi
+				clr f_climb(a6)
+				jsr set_climb_angles
+			endi
+		endi
+		clr inhibit_roll(a6)			clear inhibit flags
+		clr inhibit_climb(a6)
+	endi
+
+	ret
+
+
+; **************************************
+; **								  **
+; ** MOVE - MOVE OBJECT THROUGH SPACE **
+; **								  **
+; **************************************
+
+; Moves the current object though the 3D world using the following equations:
+
+;		x = x + zi*velocity
+;		y = y + zj*velocity
+;		z = z + zk*velocity - speed
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr move,global
+
+	move velocity(a5),d0				get velocity of the object
+	move.l a5,a4						move object along z vector
+	bsr move_object
+	tst retro_count(a6) 				retros firing ?
+	if <ne> then.s						yes
+		dec retro_count(a6) 			set backwards speed
+		move retro_count(a6),d0
+		neg d0
+	else.s
+		move speed(a6),d0				move towards player
+	endi
+	ext.l d0
+	sub.l d0,zpos(a5)
+
+	ret
+
+
+; *****************************************************
+; **												 **
+; ** MOVE_OBJECT - MOVE THE OBJECT ALONG FLIGHT PATH **
+; **												 **
+; *****************************************************
+
+; Moves an object along it's flight path, i.e. the z direction vector.
+
+; Entry: A4.L = ptr: object's record
+;		 D0.W = distance to move (2's complement)
+; Exit:  D1.L = distance moved in z direction
+
+; Regs: D1 corrupt.
+; Subr: None
+
+	subr move_object,global
+
+	clr d2								used for rounding
+	move z_vector+i(a4),d1				zi * velocity (/16384)
+	muls d0,d1
+	asl.l #2,d1
+	roxl #1,d1							(get rounding bit)
+	swap d1
+	addx d2,d1
+	ext.l d1							add to x coord
+	add.l d1,xpos(a4)
+	move z_vector+j(a4),d1				zj * velocity (/16384)
+	muls d0,d1
+	asl.l #2,d1
+	roxl #1,d1
+	swap d1
+	addx d2,d1
+	ext.l d1							add to y coord
+	add.l d1,ypos(a4)
+	move z_vector+k(a4),d1				zk * velocity (/16384)
+	muls d0,d1
+	asl.l #2,d1
+	roxl #1,d1
+	swap d1
+	addx d2,d1
+	ext.l d1							add to z coord
+	add.l d1,zpos(a4)
+
+	ret
+
+
+; **********************************************
+; **										  **
+; ** START_HYPERSPACE - START HYPERSPACE JUMP **
+; **										  **
+; **********************************************
+
+; Starts the countdown to hyperspace jump to another system (if within range).
+
+; V1.1	30/03/90	Unable to engage hyperdrive on mission #5 while in the
+;					Thargoid system, i.e. you are forced to destroy the space
+;					station.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr start_hyperspace,global
+
+	bsr check_inflight					check we are in flight
+	tst count_down(a6)					already in countdown ?
+	bne beep							yes
+	tst witch_space(a6) 				in witch space ?
+	if <ne> then.s						yes
+		tst tharg_count(a6) 			killed enough thargoids ?
+		if <ne> then.s					no
+			lea text5(pc),a0			display message
+			jmp text_out
+		endi
+	else.s
+		cmp #$52,mission(a6)			attacking Thargoid space station ?
+		if <eq> then.s					yes
+			lea text13(pc),a0			display "Drive Malfunction"
+			jsr text_out
+			bra beep
+		endi
+	endi
+	tst last_screen(a6) 				galactic/local chart displayed ?
+	if <eq> then.s						no
+
+same_system:
+
+		bsr beep						error beep
+		lea text1(pc),a0				print message
+		jmp text_out
+	endi
+	tst witch_space(a6) 				in witch space ?
+	if <eq> then.s						no
+		move req_planet(a6),d0			same system as current system ?
+		cmp current(a6),d0
+		beq same_system 				yes
+	endi
+	jsr fuel_distance					with range ?
+	if d0 <hi> equip+fuel(a6) then.s	no
+		bsr beep						display message
+		lea text2(pc),a0
+		jmp text_out
+	endi
+	move d0,fuel_needed(a6) 			store fuel needed from trip
+	move #50,count_jiffy(a6)			start countdown
+	move #10,count_down(a6)
+	clr last_value(a6)
+	clr jump_type(a6)
+
+	ret
+
+
+;***********************************************
+;*											  **
+;* START_GALACTIC - START GALACTIC HYPERDRIVE **
+;*											  **
+;***********************************************
+
+; Starts the galactic hyperdrive (if fitted).
+
+; Entry:  None
+; Exit:   None
+
+; Regs:   ?
+; Subr:   ?
+
+	subr start_galactic,global
+
+	jsr check_inflight					check we're flying
+	tst equip+hyperdrive(a6)			do we have a hyperdrive ?
+	if <eq> then.s						no
+		lea text9(pc),a0				print error and exit
+		jsr disp_message
+		bra beep
+	endi
+	tst count_down(a6)					already on countdown ?
+	bne beep							yes
+	clr equip+hyperdrive(a6)			only use once
+	clr fuel_needed(a6) 				no fuel needed
+	move #50,count_jiffy(a6)			start countdown
+	move #30,count_down(a6)
+	clr last_value(a6)
+	clr jump_type(a6)
+	st jump_type(a6)					galactic jump
+
+	ret
+
+
+; ******************************************
+; **									  **
+; ** HYPERSPACE - PERFORM HYPERSPACE JUMP **
+; **									  **
+; ******************************************
+
+; Makes the jump to hyperspace when triggered - used for local and galaxy
+; jumps.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr hyperspace,global
+
+	tst jump_trigger(a6)				jump triggered ?
+	ret <eq>							no, return
+	bsr mission_check					perform misc. mission checks
+	clr jump_trigger(a6)				clear misc. variables
+	clr witch_space(a6)
+	clr condition(a6)
+	clr radar_obj(a6)
+	jsr lock_controls					lock players controls
+	jsr hyperspace_effect				draw the hyperspace effect
+	tst.b key_states+$38(a6)			alt key pressed ?
+	if <ne> then.s						yes
+		st witch_space(a6)				force witch space
+	else.s
+		jsr random						enter witch space ?
+		if d0 <lo> #witch_prob then.s	yes
+			st witch_space(a6)
+		endi
+	endi
+	clr text_frames(a6) 				clear message
+	tst jump_type(a6)					galaxy jump ?
+	if <ne> then.s						yes
+		clr equip+hyperdrive(a6)		use only once
+		inc galaxy_no(a6)				increment galaxy
+		and #7,galaxy_no(a6)
+		lea gal_seed(a6),a0 			rotate galaxy seed
+		loop 1,6
+			move.b (a0),d0
+			rol.b #1,d0
+			move.b d0,(a0)+
+		next 1
+		move #$60,d0					locate nearest planet
+		move #$60,d1
+		jsr search
+		cmp #$12,mission(a6)			mission #1, state #2 ?
+		if <eq> then.s					yes
+			inc mission(a6) 			state #3
+			move req_planet(a6),d0		set up mission planet
+			move d0,mission_planet(a6)
+			move #5,mission_count(a6)	visit 5 planets
+		endi
+	endi
+	tst witch_space(a6) 				witch space ?
+	if <ne> then.s						yes
+		move req_planet(a6),d0			position half way between the last
+		jsr get_planet_info 			planet and the destination
+		move cplanet+xcoord(a6),d0
+		add splanet+xcoord(a6),d0
+		lsr #1,d0
+		move d0,witch_x(a6)
+		move cplanet+ycoord(a6),d0
+		add splanet+ycoord(a6),d0
+		lsr #1,d0
+		move d0,witch_y(a6)
+		move rating(a6),d0				need to kill (rating+1)*2 thargoids
+		inc d0
+		add d0,d0
+		move d0,tharg_count(a6)
+		move rating(a6),d2				max. at once = rnd((rating+3)/2)+1
+		addq #3,d2
+		lsr #1,d2
+		jsr rand
+		inc d0
+		move d0,tharg_max(a6)
+		jsr clear_objects				clear all objects
+		lsr fuel_needed(a6) 			halve the amount of fuel
+	else.s
+		tst galaxy_no(a6)				outside galaxy #1 ?
+		if <ne> then.s					yes
+			tst mission(a6) 			already on mission ?
+			if <eq> then.s				no
+				dec jump_count(a6)		ready for next mission ?
+				if <eq> then.s			yes
+					jsr new_mission 	start new mission
+				endi
+			endi
+		endi
+		cmp #$14,mission(a6)			entering last system ?
+		if <eq> then.s					yes
+			move req_planet(a6),d0		correct system ?
+			cmp mission_planet(a6),d0
+			if <eq> then.s				yes
+				inc mission(a6) 		move to state #5
+			endi
+		endi
+		jsr random						random fluctuation of prices
+		move d0,fluctuation(a6)
+		move req_planet(a6),current(a6) move to new system and generate the
+		jsr gen_prices					prices
+		jsr create_system				create new world
+	endi
+	jsr reset_system					reset star system
+	clr last_screen(a6) 				force hyperspace selection
+	lsr police_record(a6)				halve the police record
+	move fuel_needed(a6),d0 			reduce fuel
+	sub d0,equip+fuel(a6)
+	jsr instruments 					redraw instruments
+	tst witch_space(a6) 				witch space ?
+	if <ne> then.s						yes
+		lea text5(pc),a0				print "Drive malfunction!"
+		jsr disp_message
+	endi
+	jsr flush_keyboard					clear keyboard etc.
+	cmp #$30,mission(a6)				mission #3 ?
+	ret <ne>							no, return
+	jsr clear_image 					clear screen image
+	move #x_left,d0 					colour screen red
+	move #y_top,d1
+	moveq #-1,d2
+	move #x_size,d3
+	move #y_size,d4
+	move #red,d5
+	jsr block
+	moveq #70,d0						calculate balance count
+	sub equip+fuel(a6),d0
+	push d0
+	repeat
+		tst equip+fuel(a6)				fuel = 0 ?
+		break.s if <eq> 				yes, exit the loop
+		dec equip+fuel(a6)				reduce fuel
+		clr f_fuel(a6)
+		lea text4(pc),a0				display "Fuel Leak!"
+		jsr disp_message
+		moveq #white,d0
+		jsr text_blatt
+		jsr update_inst
+		jsr swap_screen
+		moveq #2,d0 					wait for two frames
+		jsr wait
+	endr
+	pop d0								balance wait
+	mulu #3,d0
+	jsr wait
+	clr text_frames(a6) 				clear message
+	inc mission(a6) 					move to state #$31
+
+	ret
+
+
+; *****************************************
+; **									 **
+; ** TORUS - ENGAGE TORUS JUMP DRIVE	 **
+; **									 **
+; *****************************************
+
+; Engages the torus jump drive to fly rapidly though space.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr torus,global
+
+	jsr check_inflight					check we are flying
+	tst torus_on(a6)					already on ?
+	if <ne> then.s						yes
+		move #1,torus_ctr(a6)			stop jump drive
+		st force_stop(a6)
+		ret
+	endi
+	tst witch_space(a6) 				in witch space ?
+	if <ne> then.s						yes
+		lea text10(pc),a0				print error
+		jsr disp_message
+		bra beep
+	endi
+	cmp #max_speed,speed(a6)			at maximum speed ?
+	if <ne> then.s						no
+		lea text7(pc),a0				print 'Velocity Locked'
+		jsr disp_message
+		bra beep
+	endi
+	move trader_count(a6),d0			mass locked ?
+	or.w pirate_count(a6),d0
+	or.b obj_ctr+thargoid(a6),d0
+	if <ne> then.s						yes
+		lea text8(pc),a0				print 'Mass Locked'
+		jsr disp_message
+		bra beep
+	endi
+	move.l planet_range(a6),d0			decide whether sun or planet is
+	move.l sun_range(a6),d1 			closest ?
+	if.l d1 <lo> d0 then.s
+		move.l d1,d0
+		move.l #torus_sun,d1
+	else.
+		move.l #torus_planet,d1
+	endi
+	if.l d0 <lo> d1 then.s				if too close
+		lea text8(pc),a0				print 'Mass locked'
+		jsr disp_message
+		bra beep
+	endi
+	move speed(a6),old_speed(a6)		save current speed
+	bsr lock_controls					lock the controls
+	tst torus_ctr(a6)					re-load counter ?
+	if <eq> then.s						yes
+		move #torus_dur,torus_ctr(a6)	set duration of torus jump
+	endi
+	st torus_on(a6) 					engage torus drive
+	clr force_stop(a6)
+	moveq #1,d0 						initialise dust
+	move d0,dust_size(a6)
+	move d0,dust_ctr(a6)
+	move #2,dust_type(a6)
+	move #10,latch(a6)
+	move #8,max_len(a6)
+	sfx spacejump						start sound effect
+
+	ret 								return
+
+
+; ********************************************
+; **										**
+; ** TORUS_DRIVE - PROCESS TORUS JUMP DRIVE **
+; **										**
+; ********************************************
+
+; Process the torus jump drive system.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr torus_drive,global
+
+	tst torus_on(a6)					drive active ?
+	ret <eq>							no
+	dec torus_ctr(a6)					decrement counter
+	if <eq> then.s						jump over
+		clr torus_on(a6)				stop special drive
+		cmp #$21,mission(a6)			mission #2, state #1 ?
+		if <eq> then.s					yes
+			bsr attack					attack by pirates
+		else.s
+			jsr random					random probability of attack
+			move splanet+govern(a6),d1
+			asl #5,d1
+			cmp d0,d1
+			if <lo> then.s
+				bsr attack
+			else.s
+				tst force_stop(a6)		force stop ?
+				if <eq> then.s			no, carry on
+					move #torus_dur,torus_ctr(a6)
+					st torus_on(a6)
+				else.s
+					clr force_stop(a6)
+					st stop_skip(a6)
+				endi
+			endi
+		endi
+	else.s
+		move.l planet_range(a6),d0		planet nearest ?
+		move.l sun_range(a6),d1
+		if.l d0 <ls> d1 then.s			yes
+			move.l #torus_planet,d2
+			tst.l planet_rec+zpos(a6)
+		else.s
+			move.l d1,d0
+			move.l #torus_sun,d2
+			tst.l sun_rec+zpos(a6)
+		endi
+		if <pl> then.s					infront of us
+			move.l #torus_speed,d1		assume full jump
+			sub.l d1,d0 				too big ?
+			if.l d0 <lo> d2 then.s		yes
+				add.l d1,d0 			use min. distance
+				sub.l d2,d0
+				push d0
+				st stop_skip(a6)		force stop
+				lea text8(pc),a0
+				jsr disp_message
+				bsr beep
+				pop d1
+			endi
+		else.s
+			move #torus_speed,d1		use full jump
+		endi
+		move d1,speed(a6)				set forward speed
+	endi
+
+	ret
+
+
+; ********************************
+; **							**
+; ** ATTACK - ATTACK BY PIRATES **
+; **							**
+; ********************************
+
+; Stop torus drive and attack by pirates.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr attack
+
+	clr dust_type(a6)					normal dust
+	clr controls_locked(a6) 			controls not locked
+	move old_speed(a6),speed(a6)		restore speed of Cobra
+	jmp pirate_attack					attack for pirate
+
+
+; ***************************************
+; **								   **
+; ** COLLISION - COLLISION WITH OBJECT **
+; **								   **
+; ***************************************
+
+; Checks for a collision with the curent object - also used for docking.
+
+; Entry: A5 = ptr: current object
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr collision,global
+
+	move type(a5),d0					missile ?
+	cmp #missile,d0
+	ret <eq>							yes, return
+	cmp #cougar,d0						cougar ?
+	ret <eq>							yes, return
+	cmp #platlet,d0 					platlet ?
+	if <eq> then.s						yes
+		btst #no_radar,flags(a5)		part of explosion ?
+		ret <ne>						yes
+	endi
+	cmp #log_exploding,logic(a5)		exploding ?
+	ret <eq>							yes, return
+	btst #point,flags(a5)				point object ?
+	ret <ne>							yes, return
+	tst computer_on(a6) 				docking computer active ?
+	if <eq> then.s						no
+		tst controls_locked(a6) 		controls locked ?
+		ret <ne>						yes, return
+	endi
+	tst obj_range(a5)					close ?
+	ret <ne>							no, return
+	move obj_rad(a5),d0 				within collision range ?
+	add #collision_dist,d0
+	cmp obj_range+2(a5),d0
+	ret <lo>							no, return
+	tst no_entry(a6)					allow entry to space station ?
+	bne.s check_salvage 				yes
+	cmp #$52,mission(a6)				mission #5, state #2 ?
+	beq.s check_salvage 				yes
+	cmp #spacestn,type(a5)				space station ?
+	if <ne> then.s						no
+
+check_salvage:
+
+		move type(a5),d0				cargo canister ?
+		cmp #barrel,d0
+		beq.s do_salvage				yes
+		cmp #platlet,d0 				platlet ?
+		beq.s do_salvage				yes
+		cmp #worm,d0					escape capsule ?
+		beq.s do_salvage				yes
+		cmp #thargon,d0 				thargon ?
+		if <eq> then.s					yes
+
+do_salvage:
+
+			bsr salvage 				salvage cargo
+			tst salvage_ok(a6)			ok ?
+			ret <ne>					yes, return
+		endi
+	endi
+	cmp #spacestn,type(a5)				space station ?
+	if <ne> then.s						no
+		sub #25,health(a5)				reduce health
+		if <cs> then.s					oops
+			move.l a5,a4				explode object
+			bset #no_bounty,flags(a4)
+			st collided(a6)
+			jsr explode_object
+			jsr target_lost 			check for lost missile target
+			sfx explosion				trigger explosion effect
+		endi
+		cmp #constr,type(a5)			constrictor ?
+		if <eq> then.s					yes
+			move #255,d0				bye, bye
+		else.s
+			moveq #10,d0
+		endi
+		jmp reduce_shields				reduce shields and return
+	endi
+	move z_vector+k(a5),d3				get z vector k component
+	tst.l d2							behind us ?
+	if <mi> then.s						yes
+		tst d3							negative k component ?
+		bmi hit_station 				yes, reduce shields
+	else.s
+		tst d3							positive k component ?
+		bpl hit_station 				yes, reduce shields
+		neg d3
+	endi
+	cmp #min_zangle,d3					within angle ?
+	blo hit_station 					no, reduce shields
+	movem.l xpos(a5),d0-d2				fetch coords of space station
+	move.l d0,d3						x within limits ?
+	if <mi> then.s
+		neg.l d3
+	endi
+	cmp.l #dock_x,d3
+	bhi hit_station 					no, reduce shields
+	move.l d1,d3						y within limits ?
+	if <mi> then.s
+		neg.l d3
+	endi
+	cmp.l #dock_y,d3
+	bhi hit_station 					no, reduce shields
+	move x_vector+j(a5),d3				x vector within angle ?
+	if <mi> then.s
+		neg d3
+	endi
+	cmp #min_xangle,d3
+	blo hit_station 					no, reduce shields
+	cmp #dock_dist,obj_range+2(a5)		within docking distance ?
+	if <lo> then.s						yes
+		st just_docked(a6)				hooray, we've docked
+	endi
+
+	ret 								return
+
+
+; *********************************************
+; **										 **
+; ** HIT_STATION - HIT STATION WHILE DOCKING **
+; **										 **
+; *********************************************
+
+; Reduce the shields due to hitting the space station.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr hit_station
+
+	move speed(a6),d0					reduce shields (use speed)
+	lsr #1,d0
+	addq #2,d0
+	jmp reduce_shields
+
+
+; *****************************************
+; **									 **
+; ** SALVAGE - SALVAGE OBJECT FROM SPACE **
+; **									 **
+; *****************************************
+
+; Salvage the current object from space.
+
+; Entry: A5 = ptr: object record
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr salvage
+
+	clr salvage_ok(a6)					assume salvage NOT ok
+	tst equip+fuel_scoop(a6)			do we have a fuel scoop
+	ret <eq>							no, return
+	tst.l zpos(a5)						in front of us ?
+	ret <mi>							no, return
+	tst.l ypos(a5)						below us ?
+	ret <pl>							no, return
+	move cargo_type(a5),d0				cloaking device ?
+	if <mi> then.s						yes
+		inc equip+cloaking_device(a6)	mount cloaking device
+		lea text6(pc),a0
+	else
+		mulu #product_len,d0			find size of one unit
+		lea products(a6),a4
+		move units(a4,d0),d0
+		jsr get_unit
+		jsr cargo_spare 				enough room for one unit ?
+		cmp.l d4,d3
+		ret <lo>						no, return
+		jsr random						determine amount to add (1..4)
+		and #3,d0
+		inc d0
+		push d0 						(save for later)
+		move cargo_type(a5),d1			index into cargo hold array
+		asl #2,d1
+		lea hold(a6),a0
+		lea (a0,d1),a0
+		repeat
+			sub.l d4,d3 				enough room ?
+			break.s if <cs> 			no
+			add.l d4,(a0)				add to cargo hold
+			dec d0						next item
+		until <eq>
+		pop d1							check for illegal goods
+		push.l a5
+		move cargo_type(a5),d0
+		mulu #product_len,d0
+		lea products(a6),a5
+		lea (a5,d0),a5
+		jsr illegal
+		pop.l a5
+		move cargo_type(a5),d0			find message
+		lea product_list,a0
+		jsr find_table
+	endi
+	jsr disp_message					display the message
+	bset #remove,flags(a5)				remove object from world
+	jsr target_lost 					check for lost missile target
+	sfx cargo							trigger salvage effect
+	st salvage_ok(a6)					salvage is ok
+
+	ret 								return
+
+
+; *************************
+; **					 **
+; ** BEEP - PRODUCE BEEP **
+; **					 **
+; *************************
+
+; Produce an error beep.
+
+; Entry: None
+; Exit:  None
+
+; Regs: D0 corrupt.
+; Subr: FX
+
+	subr beep
+
+	sfx error
+
+	ret
+
+
+;***************************************************
+;*												  **
+;* MISSION_CHECK - PERFORM MISSION RELATED CHECKS **
+;*												  **
+;***************************************************
+
+; Performs the logic checks when leaving a planet system.
+
+; Entry:  None
+; Exit:   None
+
+; Regs:   ?
+; Subr:   None
+
+	subr mission_check
+
+	move mission(a6),d0 				on a mission ?
+	ret <eq>							no, return (faster)
+	move d0,d1							on mission #3 ?
+	and #240,d1
+	cmp #$30,d1
+	if <eq> then.s						yes
+		cmp #$33,d0 					mission accepted ?
+		if <eq> then.s					yes
+			inc mission(a6) 			mission state #4
+		else.s
+			clr mission(a6) 			mission over
+		endi
+		ret
+	endi
+	cmp #$51,d0 						mission #5, state #1 ?
+	if <eq> then.s						yes
+		inc mission(a6) 				state #2
+	endi
+
+	ret 								return
+
+
+; **************************************
+; **								  **
+; ** FIRE_RETROS - FIRE RETRO-ROCKETS **
+; **								  **
+; **************************************
+
+; Fire the retro-rockets (if fitted). These blast you backwards very fast.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr fire_retros,global
+
+	tst equip+retro_rockets(a6) 		rocket's installed ?
+	if <eq> then.s						no
+		lea text11(pc),a0				print message
+		jsr disp_message
+		bra beep
+	endi
+	move #retro_life,retro_count(a6)	fire retro-rockets
+	clr speed(a6)
+	clr f_speed(a6)
+	inc retro_used(a6)					all used ?
+	cmp #max_retro,retro_used(a6)
+	if <eq> then.s						yes
+		clr equip+retro_rockets(a6) 	remove rocket handler
+		clr retro_used(a6)
+	endi
+	sfx missile
+	lea text12(pc),a0					print message
+	jmp disp_message
+
+
+; ---- LOCAL DATA ----
+
+; Hyperspace colour sequence.
+
+hyper_colours:
+
+	dc.w mid_blue,lgt_green,magenta,mid_green,lgt_blue,yellow,white,-1
+
+; Text messages.
+
+text1:	db 'Select system!',0
+text2:	db 'Beyond range!',0
+text3:	db c_cursor,11,14*8,'Hyperdrive Engaged',0
+text4:	db 'Fuel Leak',0
+text5:	db 'Drive Malfunction!',0
+text6:	db 'Cloaking device',0
+text7:	db 'Velocity Locked!',0
+text8:	db 'Mass Locked!',0
+text9:	db 'Hyperdrive not installed',0
+text10: db 'Torus Drive Malfunction',0
+text11: db 'No Retro-Rockets!',0
+text12: db 'Retro-Rockets Fired!',0
+text13:	db 'Hyperdrive Malfunction!',0

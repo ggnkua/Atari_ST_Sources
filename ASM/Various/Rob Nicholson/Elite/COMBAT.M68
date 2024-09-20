@@ -1,0 +1,1728 @@
+;	@@@@	@@@   @@   @@ @@@@@@	 @@    @@@@@@
+;  @@  @@  @@ @@  @@@ @@@  @@  @@	@@@@   @ @@ @
+; @@	  @@   @@ @@@@@@@  @@  @@  @@  @@	 @@
+; @@	  @@   @@ @@@@@@@  @@@@@   @@  @@	 @@
+; @@	  @@   @@ @@ @ @@  @@  @@  @@@@@@	 @@
+;  @@  @@  @@ @@  @@   @@  @@  @@  @@  @@	 @@
+;	@@@@	@@@   @@   @@ @@@@@@   @@  @@	@@@@
+
+; Performs all combat related routines.
+
+; Atari ST Version 1.0 18th May 1988 Copyright (c) 1988 Mr. Micro Ltd.
+; Designed and coded by Rob Nicholson.
+
+; Modification history:
+
+;	V1.0	18/05/88	Original version.
+;	V1.1	26/03/90	Rating clamped at Elite. See Add_Kill.
+;						Reduce_Shields routine debugged.
+
+	include macros
+
+	xref fx,disp_message,check_inflight,random,start_peel_off
+	xref release_cargo,random,rand,alloc_object,create_object,line,copy_object
+	xref short_equip,find_table,str_copy,str_cat,monst,orbit,vector_pos
+	xref random_direction,move_object,calc_distance,magnitude_table,sqrt
+	xref local_x_rotate,local_z_rotate,calc_yvector,start_run_off
+
+; ---- LOCAL CONSTANTS ----
+
+slow_charge:	equ 24					Charge rates
+medium_charge:	equ 15
+fast_charge:	equ 9
+rand_range: 	equ $2000				range for orbit's
+rand_limit: 	equ $4000				minimum distance
+launch_range:	equ $1800				player range before launch
+laser_life: 	equ 8					life of laser beam
+platlet_life:	equ 50					life of platlet
+platlet_vel:	equ 50					speed of platlet
+spacing1:		equ 700 				spacing of squadrons
+
+; ---- LOCAL VARIABLES ----
+
+	vars combat
+
+exploded:		ds.w 1					flag: object exploded
+found:			ds.w 1					object found
+launch_rate:	ds.w 1					rate of viper launch
+next_pos:		ds.w 1					next position for pirate
+obj_hit:		ds.w 1					flag: object hit with this laser
+magnitude:		ds.w 1					magnitude of vector
+
+	end_vars combat
+
+	module combat
+
+; ****************************************************
+; **												**
+; ** ENGAGE_ECM - ENGAGE ELECTRONIC COUNTER MEASURE **
+; **												**
+; ****************************************************
+
+; Engages (starts) the ECM if fitted. Called from ACTION.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr engage_ecm,global
+
+	jsr check_inflight					check we're flying
+	tst equip+ecm_system(a6)			ECM fitted ?
+	if <eq> then.s						no
+		lea text14(pc),a0				print error message
+		jsr disp_message
+		bra beep
+	endi
+	tst ecm_jammed(a6)					ECM jammed ?
+	if <ne> then.s						yes
+		lea text15(pc),a0				print error message
+		jsr disp_message
+		bra beep
+	endi
+	tst ecm_on(a6)						ECM already on ?
+	bne beep							yes
+	sfx ecm 							start sound effect
+	clr f_echar(a6) 					flag instrument change
+
+	ret
+
+
+; **************************************
+; **								  **
+; ** ECM - ELECTRONIC COUNTER MEASURE **
+; **								  **
+; **************************************
+
+; Process the ECM is activated.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr ecm,global
+
+	tst ecm_on(a6)						ECM active ?
+	ret <eq>							no, return
+	move.b loop_ctr(a6),d0				only reduce 1 in 4
+	and.b #3,d0
+	if <eq> then.s
+		tst who_ecm(a6) 				did player start ECM ?
+		if <eq> then.s					yes
+			tst shields_fx(a6)			shields reduced effect
+			if <eq> then.s
+				sfx shields
+			endi
+			moveq #1,d0 				reduce energy
+			bsr reduce_energy
+		endi
+	endi
+	clr exploded(a6)					assume no objects exploded
+	lea objects(a6),a4					loop for each object
+	loop 1,max_objects
+		bsr ecm_check					check if destroyed by ECM
+		add.l #obj_len,a4
+	next 1
+	tst exploded(a6)					any objects destroyed ?
+	if <ne> then.s						yes
+		sfx explosion					start explosion
+	endi
+
+	ret
+
+
+; **************************************************
+; **											  **
+; ** ECM_CHECK - CHECK IF OBJECT DESTROYED BY ECM **
+; **											  **
+; **************************************************
+
+; Checks if an object is destroyed by the current ECM wave.
+
+; Entry: A4 = ptr: object record (must be active)
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr ecm_check
+
+	btst #in_use,flags(a4)				object in use ?
+	ret <eq>							no
+	cmp #missile,type(a4)				missile ?
+	ret <ne>							no
+	btst #point,flags(a4)				exploding missile ?
+	ret <ne>							yes
+	bset #no_bounty,flags(a4)			no bounty for ECM
+	bra explode_object
+
+
+; *************************
+; **					 **
+; ** BEEP - PRODUCE BEEP **
+; **					 **
+; *************************
+
+; Produce an error beep.
+
+; Entry: None
+; Exit:  None
+
+; Regs: D0 corrupt.
+; Subr: FX
+
+	subr beep
+
+	sfx error
+
+	ret
+
+
+; ****************************************
+; **									**
+; ** EXPLODE_OBJECT - EXPLODE AN OBJECT **
+; **									**
+; ****************************************
+
+; Explodes an object and adds its kill rating to players score.
+
+; Entry: A4 = ptr: object record
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr explode_object,global
+
+	save_all							save all registers
+	move #15,force(a4)					initialise explosion
+	move #rate,force_timer(a4)
+	move #exp_dur,exp_timer(a4)
+	clr exp_rad(a4)
+	clr velocity(a4)
+	move #log_exploding,logic(a4)
+	bset #invincible,flags(a4)			can't be shot
+	bset #point,flags(a4)				not normal 3D object
+	bset #no_radar,flags(a4)			remove from radar
+	st exploded(a6) 					object exploded
+	bsr add_kill						add kill rating
+	tst collided(a6)					collided with object ?
+	if <eq> then.s						no
+		move ship_type(a4),d0			trader ?
+		cmp #typ_trader,d0
+		if <eq> then.s					yes
+			bsr inc_record				increase police record
+		else.s
+			cmp #typ_police,d0			police ?
+			if <eq> then.s				yes
+				bsr inc_record			increase police record
+			endi
+		endi
+	endi
+	cmp #thargoid,type(a4)				thargoid ?
+	if <eq> then.s						yes
+		lea objects(a6),a0				scatter any thargons
+		move this_obj(a6),d0
+		loop 1,max_objects
+			btst #in_use,flags(a0)
+			if <ne> then.s
+				cmp #thargon,type(a0)
+				if <eq> then.s
+					cmp mother(a0),d0
+					if <eq> then.s
+						move #log_cruise,logic(a0)
+						move #act_nothing,attack_type(a0)
+					endi
+				endi
+			endi
+			lea obj_len(a0),a0
+		next 1
+	endi
+	tst collided(a6)					collided ?
+	bne.s give_up						yes, no platlets
+	move.l a4,a5						release a few platlets
+	loop 1,6
+		jsr alloc_object				allocate an object
+		bcc.s give_up					none left
+		push d7 						copy main object
+		jsr copy_object
+		move.b #%10000011,flags(a4) 	no radar, in use
+		jsr random_direction			move in random direction
+		move #platlet,type(a4)			it's a platlet
+		move #log_timer,logic(a4)		logic is timing
+		move #platlet_life,counter(a4)
+		st velocity(a4) 				move at full speed
+		jsr create_object				create the object
+		moveq #no_colours,d2			choose random colour from the list
+		jsr rand
+		add d0,d0
+		lea platlet_colours(pc),a0
+		move (a0,d0),obj_colour(a4)
+		move #platlet_vel,velocity(a4)	set speed of fragment
+		pop d7							next platlet
+	next 1
+
+give_up:
+
+	sfx explosion						sfx: explosion
+	clr collided(a6)					clear collided flag
+	restore_all 						restore all registers
+
+	ret
+
+
+; *****************************************
+; **									 **
+; ** INC_RECORD - INCREASE POLICE RECORD **
+; **									 **
+; *****************************************
+
+; Increase police record for destroying a trader or policeman.
+
+; Entry: None
+; Exit:  None
+
+; Regs: All registers preserved.
+; Subr: None
+
+	subr inc_record
+
+	add.b #64,police_record+1(a6)		increase record by 64
+	if <cs> then.s						clamp at 255
+		move #255,police_record(a6)
+	endi
+
+	ret
+
+
+; *****************************************
+; **									 **
+; ** ADD_KILL - ADD KILL RATING TO SCORE **
+; **									 **
+; *****************************************
+
+; Adds an object kill rating to players score.
+
+; V1.1	- Rating clamped at Elite status. Previous versions just carried
+;		  on through memory (Rating: Fuel)
+
+; Entry: A4 = ptr: object record
+; Exit:  None
+
+; Regs: ?
+
+	subr add_kill
+
+	move.l score(a6),d0 				add rating to score
+	move.w kill_rating(a4),d1
+	ext.l d1
+	add.l d1,d0
+	move.l d0,score(a6)
+	cmp #max_rating,rating(a6)			at Elite status ?
+	if <lo> then.s						no
+		move rating(a6),d1				entered new rating band ?
+		asl #2,d1
+		lea rating_bands(pc),a0
+		cmp.l (a0,d1),d0
+		if <hs> then.s					yes
+			inc rating(a6)				next rating
+		else.s
+			inc.b kill_count+1(a6)		increment kill counter
+			ret <ne>					not 256 kills
+		endi
+	else.s
+		inc.b kill_count+1(a6)			increment kill counter
+		ret <ne>						not 256 kills
+	endi
+	lea text5(pc),a0					print message
+	jmp disp_message
+
+
+; **************************************
+; **								  **
+; ** RECHARGE - RECHARGE ENERGY BANKS **
+; **								  **
+; **************************************
+
+; Recharges the shields and energy banks.
+
+; Entry:  None
+; Exit:   None
+
+; Regs:   ?
+; Subr:   CHARGE_ENERGY, CHARGE_SHIELDS
+
+	subr recharge,global
+
+	lea recharge_count(a6),a0			ready for recharge ?
+	dec (a0)
+	ret <ne>							no
+	move equip+energy_unit(a6),d0		do we have an energy unit ?
+	if <eq> then.s						no
+		move #slow_charge,(a0)			reload counter
+		bsr charge_energy				charge energy banks
+		cmp #max_energy,energy(a6)		at full capacity ?
+		if <eq> then.s					yes
+			bsr charge_shields			charge shields
+		endi
+	else.s
+		dec d0							determine rate of charge
+		if <eq> then.s
+			moveq #medium_charge,d0
+		else.s
+			moveq #fast_charge,d0
+		endi
+		move d0,(a0)					reload counter
+		bsr charge_energy				change energy and shields then exit
+		bsr charge_shields
+	endi
+
+	ret
+
+
+; *****************************************
+; **									 **
+; ** CHARGE_ENERGY - CHARGE ENERGY BANKS **
+; **									 **
+; *****************************************
+
+; Increases the charge in the energy banks by 1 unit unless already at
+; full charge. Also reduces temperature of lasers.
+
+; Entry:  None
+; Exit:   None
+
+; Regs:   ?
+; Subr:   None
+
+	subr charge_energy
+
+	tst laser_temp(a6)					lasers cold ?
+	if <ne> then.s						no
+		dec laser_temp(a6)				reduce temperature
+		clr f_laser(a6)
+	endi
+	cmp #max_energy,energy(a6)			already at max ?
+	if <ne> then.s						no
+		inc energy(a6)					increase energy
+		clr f_energy(a6)
+	endi
+
+	ret
+
+
+; *************************************************
+; **											 **
+; ** CHARGE_SHIELDS - CHARGE FRONT & AFT SHIELDS **
+; **											 **
+; *************************************************
+
+; Charges the front and aft shields by one unit unless already at full
+; charge.
+
+; Entry:  None
+; Exit:   None
+
+; Regs:   ?
+; Subr:   ?
+
+	subr charge_shields
+
+	cmp #max_shield,front_shield(a6)	front already at max ?
+	if <ne> then.s						no
+		inc front_shield(a6)			increase shield and update display
+		clr f_front(a6)
+	endi
+	cmp #max_shield,aft_shield(a6)		aft already at max ?
+	if <ne> then.s						no
+		inc aft_shield(a6)				increase shield and update display
+		clr f_aft(a6)
+	endi
+
+	ret
+
+
+; ******************************************
+; **									  **
+; ** REDUCE_SHIELDS - REDUCE SHIELD POWER **
+; **									  **
+; ******************************************
+
+; Reduces the shields due to collision or laser fire.
+
+; V1.1	- Routine debugged to prevent loss on equipment you didn't have.
+;		  Not entirely satisfied this has been fixed.
+
+; Entry: D0 = Hit power (amount to reduce shields/energy)
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr reduce_shields,global
+
+	list on
+
+	tst shields_fx(a6)					effect running ?
+	if <eq> then.s						no
+		push d0
+		sfx shields
+		pop d0
+	endi
+	lea front_shield(a6),a0 			assume front shields
+	cmp #photon,type(a5)				photon bolt ?
+	if <eq> then.s						yes
+		tst mother_z(a5)				test z coord of attacker
+	else.s
+		tst zpos(a5)					test z coord of object
+	endi
+	if <mi> then.s						behind us
+		lea aft_shield(a6),a0			use aft shields
+	endi
+	tst (a0)							anything left in shields
+	if <ne> then						yes
+		sub d0,(a0) 					reduce shield
+		if <cs> then.s					shields can't take all the power
+			move (a0),d0				determine how much left after hit
+			neg d0
+			clr (a0)					no shield power
+		else.s
+			clr d0						nothing left
+		endi
+		push d0 						update display
+		clr f_front(a6)
+		clr f_aft(a6)
+		pop d0
+	endi
+	tst d0								any hit power left
+	ret <eq>							no, return
+	bsr reduce_energy					reduce energy
+	cmp #max_energy/2,energy(a6)		nearly out of energy ?
+	ret <hs>							no, return
+	jsr random							randomly destroy equipment/cargo
+	cmp #destroy_prob,d0
+	ret <hs>
+	moveq #equip_range+1,d2 			choose random start position
+	jsr rand
+	tst d0								cargo ?
+	if <eq> then.s						yes
+		lea hold(a6),a0 				do we have any cargo ?
+		loop 1,max_products-2
+			tst.l (a0)+
+			if <ne> then.s				yes
+				lea hold(a6),a0 		empty the hold (except special)
+				loop 2,max_products-2
+					clr.l (a0)+
+				next 2
+				lea text12(pc),a0
+				jmp disp_message
+			endi
+		next 1
+		ret
+	endi
+	addq #first_equip/2-1,d0			index into equipment table
+	add d0,d0
+	lea equip(a6),a0
+	loop 1,equip_range					check equipment list
+		tst (a0,d0) 					laser ?
+		if <pl> then.s					no
+			if <ne> then.s				equipment installed!
+				clr (a0,d0) 			remove item (that's life)
+				lsr #1,d0				find equipment description
+				lea short_equip,a0
+				jsr find_table
+				lea pad(a6),a1			copy into buffer
+				jsr str_copy
+				lea pad(a6),a0			append ' lost'
+				lea text13(pc),a1
+				jsr str_cat
+				lea pad(a6),a0			print message and return
+				jmp disp_message
+			endi
+		endi
+		addq #2,d0						advance to next item of equipment
+		cmp #last_equip+2,d0			wrap around ?
+		if <hs> then.s					yes
+			moveq #first_equip,d0
+		endi
+	next 1								check next item
+
+	ret
+
+
+; *****************************************
+; **									 **
+; ** REDUCE_ENERGY - REDUCE ENERGY BANKS **
+; **									 **
+; *****************************************
+
+; Reduces the energy banks by a specified amount and updates the display.
+
+; Entry: D0 = amount to reduce shields
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr reduce_energy,global
+
+	sub d0,energy(a6)					reduce energy
+	if <cs> then.s						bye, bye - no energy left
+		clr energy(a6)
+	endi
+	clr f_energy(a6)					flag change
+
+	ret 								return
+
+
+; ******************************************
+; **									  **
+; ** CHECK_HIT - CHECK WHETHER OBJECT HIT **
+; **									  **
+; ******************************************
+
+; Checks whether the current object has been hit by the lasers. The OBJ_HIT
+; flag is set when the lasers have hit an object. This prevents any cargo
+; canisters etc. from being destroyed immediatelty.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr check_hit,global
+
+	tst hit_check(a6)					laser reached target ?
+	ret <eq>							no, return
+	tst in_sights(a6)					in sights ?
+	ret <eq>							no, return
+	tst obj_hit(a6) 					object already hit ?
+	ret <ne>							yes, return
+	move logic(a5),d0					on attack run ?
+	cmp #log_attack,d0
+	if <ne> then.s						no
+		cmp #log_peel_off,d0			peeling off ?
+		if <ne> then.s					no
+			move attack_type(a5),d1 	decide on action to take
+			cmp #act_nothing,d1
+			if <ne> then.s
+				cmp #act_runaway,d1
+				if <eq> then.s
+					move #log_cruise,d0
+				else.s
+					cmp #log_run_off,d0
+					if <ne> then.s
+						move #log_attack,d0
+						move health(a5),pre_attack(a5)
+					else.s
+						move #log_avoid,d0
+					endi
+				endi
+				move d0,next_logic(a5)	store next logic type
+				bsr start_peel_off		start to peel off
+			endi
+		endi
+	endi
+	move laser_power(a6),d0 			fetch laser power
+	move type(a5),d1					space station ?
+	cmp #spacestn,d1
+	if <eq> then.s						yes
+		add.b #10,police_record+1(a6)	increase police record
+		if <cs> then.s
+			move #255,police_record(a6)
+		endi
+		st no_entry(a6) 				don't allow entry to space station
+		clr d0							no laser power at all
+	endi
+	sub d0,health(a5)					reduce object's health
+	if <cs> then.s						dead
+		cmp #constr,d1					constrictor ?
+		if <eq> then.s					yes
+			inc mission(a6) 			state #16
+		else.s
+			cmp #dodec,d1				alien space station ?
+			if <eq> then.s				yes
+				st station_destroyed(a6)
+				inc mission(a6)
+			endi
+		endi
+		move.l a5,a4					explode object
+		bsr explode_object
+		bsr target_lost 				check for lost target
+		sfx explosion
+		jsr release_cargo				release any cargo
+	else.s
+		move health(a5),d0				lost > 1/2 energy this attack ?
+		add d0,d0
+		cmp pre_attack(a5),d0
+		if <lo> then.s					yes
+			bsr low_energy				perform low energy logic
+		endi
+	endi
+	move.b obj_ctr+viper(a6),d0 		< 2 vipers around ?
+	add.b launch_count+1(a6),d0
+	cmp.b #2,d0
+	if <lo> then.s						yes
+		tst radar_obj(a6)				within space station space ?
+		if <ne> then.s					yes
+			move type(a5),d0			space station ?
+			cmp #spacestn,d0
+			beq prep					yes
+			move ship_type(a5),d0		trader ?
+			cmp #typ_trader,d0
+			beq prep					yes
+			cmp #typ_police,d0			police ?
+			beq prep					yes
+			cmp #typ_alien,d0			alien ?
+			beq prep					yes
+			cmp #$52,mission(a6)		mission #5, state #2 ?
+			if <eq> then.s				yes
+prep:		   bsr prepare_vipers
+			endi
+		endi
+	endi
+	st obj_hit(a6)						set object hit flag
+	sfx hit 							sfx: hit
+
+	ret
+
+
+; ***********************************
+; **							   **
+; ** LOW_ENERGY - LOW ENERGY LOGIC **
+; **							   **
+; ***********************************
+
+; Perform logic checks when energy of object reduced to 1/2 initial value.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+
+	subr low_energy
+
+	bsr launch_escape			random launch of escape capsule
+	tst no_missiles(a5) 		any missiles left ?
+	if <ne> then.s				yes
+		jsr random				prob = rating*4+missile_prob
+		move rating(a6),d1
+		asl #2,d1
+		add #missile_prob,d1
+		cmp d1,d0
+		if <lo> then.s
+			cmp #thargoid,type(a5)
+			if <eq> then.s
+				bsr thargons
+			else.s
+				bsr launch_missile
+			endi
+		endi
+	endi
+	cmp #act_nothing,attack_type(a5)	able to peel off ?
+	if <ne> then.s						yes
+		jsr random						peel off ?
+		cmp #peel_prob,d0
+		if <lo> then.s					yes
+			move #log_run_off,d0		peel off
+			move d0,next_logic(a5)
+			jsr start_peel_off
+		else.s
+			move health(a5),pre_attack(a5)
+		endi
+	endi
+
+	ret 								return
+
+
+; ************************************************
+; **											**
+; ** PREPARE_VIPERS - PREPARE VIPERS FOR LAUNCH **
+; **											**
+; ************************************************
+
+; Prepares vipers for launch from space station.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr prepare_vipers
+
+	move rating(a6),d2					no. to launch = RND((rating+1)*2)+1
+	inc d2
+	add d2,d2
+	jsr rand
+	inc d0
+	if d0 <hi> #6 then.s				max. launch of 6
+		moveq #6,d0
+	endi
+	move d0,launch_count(a6)
+	move #200,launch_rate(a6)
+
+	ret
+
+
+; ***********************************************
+; **										   **
+; ** LAUNCH_MISSILE - LAUNCH MISSILE AT PLAYER **
+; **										   **
+; ***********************************************
+
+; Launches a missile at the player from the current object. If no object
+; records are available, no missile is launched.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: alloc_object, copy_object, create_object, disp_message
+
+	subr launch_missile
+
+	cmp.l #2000,obj_range(a5)			too close ?
+	ret <lo>							yes, return
+	tst cloaking_on(a6) 				cloaking device on ?
+	ret <ne>							yes, return
+	jsr alloc_object					allocate object record
+	ret <cc>							no record free
+	jsr copy_object 					copy current objects record
+	move.b #%00100001,flags(a4) 		in use, no bounty
+	st velocity(a4) 					move at full speed
+	move #log_missile,logic(a4) 		fly towards player
+	move #missile,type(a4)				it's a missile
+	jsr create_object					create object
+	dec no_missiles(a5) 				reduce missile count
+	sfx alert							trigger single alert
+	lea text7(pc),a0					print message and exit
+	jmp disp_message
+
+
+; **********************************************
+; **										  **
+; ** THARGONS - LAUNCH THARGONS FROM THARGOID **
+; **										  **
+; **********************************************
+
+; Releases a group of thargons from a thargoid mother ship.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr thargons
+
+	clr no_missiles(a5) 				no more thargons please
+	jsr random							release 4..7 thargons
+	and #3,d0
+	addq #3,d0
+	loop 1								loop for each thargon
+		jsr alloc_object				allocate a record for the thargon
+		ret <cc>						none left, give up
+		push d0 						copy thargoid mothership
+		jsr copy_object
+		move.b #1,flags(a4) 			in use
+		st velocity(a4) 				move at full speed
+		move #log_run_off,logic(a4) 	run off before attack
+		move #thargon,type(a4)			it's a thargon
+		move this_obj(a6),mother(a4)	store mother ship number
+		jsr random_direction			move in random direction
+		jsr start_run_off				start run off sequence
+		jsr create_object				create the thargon
+		pop d0							next thargon
+	next 1,d0
+
+	ret 								return
+
+
+; *******************************************
+; **									   **
+; ** LAUNCH_ESCAPE - LAUNCH ESCAPE CAPSULE **
+; **									   **
+; *******************************************
+
+; Launch an escape capsule from the current object.
+
+; Entry: A5 = ptr: current object
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr launch_escape
+
+	jsr random							random probability
+	cmp #escape_prob,d0
+	ret <hs>							no
+	move ship_type(a5),d0				trader pirate or shuttle ?
+	cmp #typ_shuttle,d0
+	ret <hi>							no
+	cmp #act_nothing,attack_type(a5)	dead ?
+	ret <eq>							yes
+	jsr alloc_object					allocate a record
+	ret <cc>							none left
+	move #log_none,logic(a5)			mothership just drifts
+	move #act_nothing,attack_type(a5)	do nothing when hit
+	jsr copy_object 					copy current object's record
+	move.b #1,flags(a4) 				in use
+	st velocity(a4) 					move at full speed
+	move #worm,type(a4) 				it's a worm
+	jsr random_direction				fly in random direction
+	move #log_cruise,logic(a4)			leg it
+	jmp create_object
+
+
+; ************************
+; **					**
+; ** FIRE - FIRE LASERS **
+; **					**
+; ************************
+
+; Attempt to fire the Cobra's lasers.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr fire,global
+
+	tst laser_type(a6)					laser fitted ?
+	ret <mi>							no, return
+	cmp #max_ltemp,laser_temp(a6)		laser overheated ?
+	ret <eq>							yes, return
+	tst firing(a6)						already firing ?
+	ret <ne>							yes, return
+	clr obj_hit(a6) 					object not hit (yet!)
+	move laser_rate(a6),firing(a6)		start laser firing
+	lea lasers(a6),a0					find free laser record
+	repeat
+		tst active(a0)
+		break.s if <eq>
+		add.l #laser_len,a0
+	endr
+	st active(a0)						record in use
+	move #laser_life,life(a0)			start of life
+	lea pulse_x(a0),a0					setup coords and vector
+	lea laser_data(pc),a1
+	loop 1,d6,6
+		move (a1)+,(a0)+
+	next 1,d6
+	inc laser_temp(a6)					increase laser temperature
+	clr f_laser(a6)
+	sfx laser							trigger sound effect
+
+	ret
+
+
+; *****************************************
+; **									 **
+; ** OBJECT_LOGIC - PERFORM OBJECT LOGIC **
+; **									 **
+; *****************************************
+
+; Perform misc. object logic, e.g. creation of asteroids.
+
+; Entry:  None
+; Exit:   None
+
+; Regs:   ?
+; Subr:   ?
+
+	subr object_logic,global
+
+	tst witch_space(a6) 				in witch space ?
+	bne create_thargoids				yes, create thargoids and return
+	bsr launch_vipers					launch any vipers
+	bsr launch_shuttle					launch shuttle
+	bsr create_asteroid 				create asteroids in deep space
+	bsr create_trader					create traders (launch/deep space)
+	bsr create_pirates					create pirates
+
+	ret
+
+
+; ************************************************
+; **											**
+; ** TARGET_LOST - CHECK IF MISSILE TARGET LOST **
+; **											**
+; ************************************************
+
+; Checks if tan object (which has just been destroyed) was the target of a
+; missile. If so, the missile is removed from the 3D world.
+
+; Entry: A4 = ptr: object record
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr target_lost,global
+
+	cmp #2,missile_state(a6)			missile targetted ?
+	if <hs> then.s						yes
+		move.l target_ptr(a6),d0		targetted on this object ?
+		cmp.l a4,d0
+		if <eq> then.s					yes
+			bsr unarm_missile			unarm missile
+			bra.s remove_missile
+		endi
+	endi
+	bsr check_missile					any missile tracking object ?
+	tst d7
+	if <pl> then.s						yes
+		bset #remove,flags(a0)			remove the missile
+
+remove_missile:
+
+		lea text1(pc),a0				print "Target lost"
+		jsr disp_message
+		clr f_missiles(a6)				flag instrument update
+	endi
+
+	ret
+
+
+; ******************************************
+; **									  **
+; ** CHECK_MISSILE - CHECK MISSILE TARGET **
+; **									  **
+; ******************************************
+
+; Checks if a missile is currently fired at an object.
+
+; Entry: A4 = ptr: objects record
+; Exit:  IF missile found THEN
+;			D7 >= 0
+;			A0 =  ptr: missile's record
+;		ELSE
+;			D7 < 0
+;		ENDIF
+
+; Regs: ?
+; Subr: ?
+
+	subr check_missile,global
+
+	lea objects(a6),a0					point to 1st object
+	loop 1,max_objects					loop for each object
+		btst #in_use,flags(a0)			object in use and a missile ?
+		if <ne> then.s
+			cmp #missile,type(a0)
+			if <eq> then.s				yes
+				move.l target(a0),d0	locked onto this object ?
+				cmp.l a4,d0
+				ret <eq>				yes, return
+			endi
+		endi
+		add.l #obj_len,a0				next object
+	next 1
+
+	ret
+
+
+; ***************************************
+; **								   **
+; ** TARGET_MISSILE - TARGET A MISSILE **
+; **								   **
+; ***************************************
+
+; Targets a missile and updates the display.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr target_missile,global
+
+	jsr check_inflight					check we're flying
+	tst missile_state(a6)				missile already targetted ?
+	if <ne> then.s						yes
+		lea text16(pc),a0				print error message
+		jsr disp_message
+		bra beep
+	endi
+	tst equip+missiles(a6)				any missiles ?
+	if <eq> then.s						no
+		lea text17(pc),a0				print error message
+		jsr disp_message
+		bra beep
+	endi
+	inc missile_state(a6)				target missile
+	clr f_missiles(a6)
+
+	ret 								return
+
+
+; ***********************************************
+; **										   **
+; ** UNARM_MISSILE - UNARM A TARGETTED MISSILE **
+; **										   **
+; ***********************************************
+
+; Unarms a previously targetted missile and updates the display.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr unarm_missile,global
+
+	tst missile_state(a6)				missile targetted ?
+	if <eq> then.s						no
+		lea text18(pc),a0				print error message
+		jsr disp_message
+		bra beep
+	endi
+	clr missile_state(a6)				unarm missile
+	clr f_missiles(a6)
+
+	ret 								return
+
+
+; *******************************************
+; **									   **
+; ** FIRE_MISSILE - FIRE MISSILE AT TARGET **
+; **									   **
+; *******************************************
+
+; Launches a missile at it's target.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr fire_missile,global
+
+	cmp #2,missile_state(a6)			locked ?
+	if <ne> then.s						no
+		lea text19(pc),a0				print error message
+		jsr disp_message
+		bra beep
+	endi
+	jsr alloc_object					allocate object record
+	if <cc> then.s						none left
+		bsr beep						error beep
+		lea text6(pc),a0				print "Missile jammed!" and exit
+		jmp disp_message
+	endi
+	clr missile_state(a6)				missile not targetted
+	move.b #%00100001,flags(a4) 		no bounty, in use
+	lea missile_data(pc),a0 			set coords and vectors
+	lea xpos(a4),a1
+	loop 1,(3*2+3*3)
+		move (a0)+,(a1)+
+	next 1
+	move #missile,type(a4)				it's a missile
+	move #log_locked,logic(a4)			locked onto target
+	move.l target_ptr(a6),target(a4)	set pointer to target object
+	st velocity(a4) 					launch at full speed
+	jsr create_object					create object
+	sfx missile 						launch sound effect
+	dec equip+missiles(a6)				missile used
+	clr f_missiles(a6)
+
+	ret 								return
+
+
+; **********************************************
+; **										  **
+; ** RANDOM_POSITION - CHOOSE RANDOM POSITION **
+; **										  **
+; **********************************************
+
+; Chooses a random position and direction for an object. Also sets the object
+; as 'in use', sets the velocity to maximum and creates the object.
+
+; Entry: A4 = ptr: objects record
+; Exit:  None
+
+; Regs: ?
+; Subr: RAND, ORBIT, RANDOM_DIRECTION, CREATE_OBJECT
+
+	subr random_position
+
+	move.b #1,flags(a4) 				in use
+	st velocity(a4) 					move at full speed
+	move #rand_range,d2 				place in random orbit
+	jsr rand
+	add #rand_limit,d0
+	ext.l d0
+	move #360,d1
+	jsr orbit
+	jsr random_direction				fly in random direction
+	jmp create_object					create the object and return
+
+
+; **************************************************
+; **											  **
+; ** LAUNCH_SHIP - LAUNCH SHIP FROM SPACE STATION **
+; **											  **
+; **************************************************
+
+; Launches a ship from the the space station by copying the space stations
+; coordinates and moving the ship along the z axis to the door.
+
+; Entry: A4 = ptr: object record
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr launch_ship
+
+	tst station_destroyed(a6)			has station been destroyed ?
+	if <eq> then.s						no
+		lea station_rec(a6),a0			use stations position and vectors
+		loop 1,(3*4+9*2)
+			move.b xpos(a0,d7),xpos(a4,d7)
+		next 1
+		move obj_rad(a0),d0 			move to the door
+		jsr move_object
+		clr velocity(a4)				slowly speed up
+		move #1,on_course(a4)			object on course
+		move.b #1,flags(a4) 			record in use
+		jsr create_object				create the object
+	endi
+
+	ret
+
+
+; ********************************************
+; **										**
+; ** LAUNCH_VIPERS - LAUNCHES POLICE VIPERS **
+; **										**
+; ********************************************
+
+; Launches vipers from the space station. Note - if on mission #5, then
+; thargoids are launched instead.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr launch_vipers
+
+	tst launch_count(a6)				any to launch ?
+	ret <eq>							no, return
+	dec launch_rate(a6) 				ready to launch ?
+	ret <ne>							no
+	move #200,launch_rate(a6)			re-set counter
+	jsr alloc_object					allocate object record
+	ret <cc>							none left
+	dec launch_count(a6)				viper has been launched
+	cmp #$52,mission(a6)				on mission #5 ?
+	if <eq> then.s						yes
+		moveq #thargoid,d0				launch thargoid
+	else.s
+		moveq #viper,d0 				launch viper
+	endi
+	move d0,type(a4)
+	move #log_police,logic(a4)			attack launch
+	bsr launch_ship 					launch object
+
+	ret
+
+
+; ********************************************************
+; **													**
+; ** LAUNCH_SHUTTLE - LAUNCH SHUTTLE FROM SPACE STATION **
+; **													**
+; ********************************************************
+
+; Routine to launch a shuttle from the space station.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr launch_shuttle
+
+	tst radar_obj(a6)					within space station space ?
+	ret <eq>							no
+	move.l station_range(a6),d0 		too close ?
+	cmp.l #launch_range,d0
+	ret <lo>							yes
+	tst.b obj_ctr+shuttle(a6)			shuttle running ?
+	ret <ne>							yes
+	tst.b obj_ctr+transporter(a6)		transporter running ?
+	ret <ne>							yes
+	cmp #$52,mission(a6)				mission #5, state #2 ?
+	ret <eq>							yes
+	dec shuttle_ctr(a6) 				ready for shuttle launch ?
+	ret <ne>							no
+	move #512,shuttle_ctr(a6)			re-load counter
+	jsr alloc_object					allocate a new object
+	ret <cc>							no objects left
+	jsr random							random object type
+	and #1,d0
+	add #shuttle,d0
+	move d0,type(a4)
+	move #log_fly_planet,logic(a4)		fly towards planet
+	bsr launch_ship 					launch ship
+
+	ret
+
+
+; *****************************************************
+; **												 **
+; ** CREATE_ASTEROID - CREATE ASTEROID IN DEEP SPACE **
+; **												 **
+; *****************************************************
+
+; Creates an asteroid in deep space.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr create_asteroid
+
+	tst radar_obj(a6)					in deep space ?
+	ret <ne>							no
+	tst.b obj_ctr+asteroid(a6)			asteroid around ?
+	ret <ne>							yes
+	dec asteroid_ctr(a6)				ready to create ?
+	ret <ne>							no
+	move #512,asteroid_ctr(a6)			re-load counter
+	jsr alloc_object					allocate an object
+	ret <cc>							none left
+	move.b #1,flags(a4) 				create asteroid
+	move #rand_range,d2 				range = rand(rand_range)+rand_limit
+	jsr rand
+	add #rand_limit,d0
+	ext.l d0
+	move #360,d1
+	jsr orbit
+	jsr vector_pos						point at player
+	move #asteroid,type(a4) 			it's an asteroid
+	move #log_cruise,logic(a4)			flying through space
+	st velocity(a4) 					move at maximum speed
+	jsr create_object					create object
+	jsr random							prob. 0.1 ?
+	if d0 <lo> #26 then.s				yes
+		and #3,d0						release 1..4 platlets when hit
+		inc d0
+	else.s
+		clr d0							no platlets
+	endi
+	move d0,no_canisters(a4)
+
+	ret 								return
+
+
+; ******************************************
+; **									  **
+; ** CREATE_TRADER - LAUNCH/CREATE TRADER **
+; **									  **
+; ******************************************
+
+; Either creates a trader ship in deep space or launches a trader from
+; the space station.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr create_trader
+
+	tst trader_count(a6)				any traders around ?
+	ret <ne>							yes
+	dec trader_ctr(a6)					ready to launch
+	ret <ne>							no
+	jsr alloc_object					allocate an object
+	ret <cc>							none left
+	move #512,trader_ctr(a6)			re-load counter
+	moveq #no_traders,d2				random trader ship
+	jsr rand
+	add #traders,d0
+	move d0,type(a4)
+	tst radar_obj(a6)					deep space ?
+	if <eq> then.s						yes
+		move #log_cruise,logic(a4)		crusing through space
+		jsr random_position 			create at random position
+	else.s
+		cmp.l #2000,station_range(a6)	too close ?
+		if <hi> then.s					no
+			move #log_launch,logic(a4)	launch
+			bsr launch_ship
+		endi
+	endi
+
+	ret
+
+
+; ********************************************************
+; **													**
+; ** CREATE_THARGOIDS - CREATE THARGOIDS IN WITCH SPACE **
+; **													**
+; ********************************************************
+
+; Keeps creating thargoids when the player hits witch space.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr create_thargoids
+
+	move.b obj_ctr+thargoid(a6),d0		max. no. of thargoids around ?
+	cmp.b tharg_max+1(a6),d0
+	ret <eq>							yes, return
+	jsr alloc_object					allocate an object
+	ret <cc>							none left
+	move #thargoid,type(a4) 			create random thargoid
+	move #log_attack,logic(a4)
+	clr on_course(a4)
+	jmp random_position
+
+
+; ***************************************************
+; **											   **
+; ** CREATE_PIRATES - CREATE PIRATES IN DEEP SPACE **
+; **											   **
+; ***************************************************
+
+; Creates a squadron of pirates if it's time.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr create_pirates
+
+	move mission(a6),d0 				attack by constrictor ?
+	cmp #$15,d0
+	if <eq> then.s						yes
+		tst.b obj_ctr+constr(a6)		constrictor around ?
+		beq pirate_attack				no
+		ret 							return (no other pirates)
+	endi
+	tst radar_obj(a6)					in deep space ?
+	ret <ne>							no
+	cmp #2,pirate_count(a6) 			< 2 pirates around ?
+	ret <hs>							no
+	dec pirate_ctr(a6)					ready to create ?
+	ret <ne>							no
+	move splanet+govern(a6),d0			re-load counter
+	addq #2,d0
+	moveq #9,d1
+	asl d1,d0
+	move d0,pirate_ctr(a6)
+	bra pirate_attack					attack by pirates
+
+
+; ***********************************************
+; **										   **
+; ** PIRATE_ATTACK - CREATE PIRATES AND ATTACK **
+; **										   **
+; ***********************************************
+
+; Create a squadron of pirates which attack the player.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr pirate_attack,global
+
+	jsr alloc_object					allocate 1st object
+	ret <cc>							none left
+	lea text2(pc),a0					print "Condition RED!"
+	jsr disp_message
+	move mission(a6),d0 				decide on 1st object type
+	if d0 <eq> #$21 or d0 <eq> #$52 then.s
+		moveq #thargoid,d0
+	else.s
+		if d0 <eq> #$15 then.s
+			moveq #constr,d0
+		else.s
+			if d0 <eq> #$41 then.s
+				tst.b obj_ctr+cougar(a6)
+				ret <ne>
+				moveq #cougar,d0
+			else.s
+				bsr random_pirate
+			endi
+		endi
+	endi
+	move d0,type(a4)
+	move.b #1,flags(a4) 				in use
+	move #log_attack,logic(a4)			attack player
+	clr on_course(a4)					not on course
+	st velocity(a4) 					attack at full speed
+	move #rand_range,d2 				random orbit
+	jsr rand
+	add #rand_limit,d0
+	ext.l d0
+	move #360,d1
+	jsr orbit
+	jsr vector_pos						point at player
+	jsr create_object					create object
+	move type(a4),d0					constrictor ?
+	cmp #constr,d0
+	ret <eq>							yes, no more pirates
+	move mission(a6),d0 				mission #2, state #1 ?
+	cmp #$21,d0
+	if <ne> then.s						no
+		cmp #$52,d0 					mission #5, state #2 ?
+		if <ne> then.s					no
+			move type(a4),d0			thargoid ?
+			cmp #thargoid,d0
+			ret <eq>					yes, no more pirates
+		endi
+	endi
+	move.l a4,a5						calculate y vector
+	jsr calc_yvector
+	cmp #$41,mission(a6)				cougar mission ?
+	if <ne> then.s						no
+		move rating(a6),d2				no. attack=rnd((rating+3)/2)
+		addq #3,d2
+		lsr #1,d2
+		jsr rand
+	else.s
+		moveq #2,d0 					create two asps
+	endi
+	tst d0								no more ?
+	ret <eq>							yes, return
+	lea squadron_positions(pc),a0		start of positions table
+	move d0,d7							loop for each object
+	dec d7
+	loop 1
+		jsr alloc_object				allocate an object record
+		ret <cc>						none left
+		jsr copy_object 				copy red-leader (centre)
+		move mission(a6),d0 			choose object type
+		if d0 <eq> #$41 then.s
+			moveq #asp,d0
+		else.s
+			if d0 <eq> #$21 or d0 <eq> #$52 then.s
+				moveq #thargoid,d0
+			else.s
+				bsr random_pirate
+			endi
+		endi
+		move d0,type(a4)
+		move (a0)+,d0					A1 = ptr: vector to move along
+		lea (a4,d0),a1
+		move (a0)+,d0					fetch the spacing
+		lea xpos(a4),a2 				A2 = ptr: coordinates
+		loop 2,d6,3 					loop for each coordinate
+			move (a1)+,d1				calculate distance along vector
+			muls d0,d1
+			asl.l #2,d1
+			swap d1
+			ext.l d1
+			add.l d1,(a2)+
+		next 2,d6						next component/coord
+		jsr create_object				create object
+	next 1								next object
+
+	ret 								return
+
+
+; ******************************************
+; **									  **
+; ** RANDOM_PIRATE - CHOOSE RANDOM PIRATE **
+; **									  **
+; ******************************************
+
+; Chooes a random pirate ship.
+
+; Entry: None
+; Exit:  D0 = object #
+
+; Regs: ?
+; Subr: RAND
+
+	subr random_pirate
+
+	moveq #no_pirates,d2				choose random type
+	jsr rand
+	add #pirates,d0
+
+	ret 								return
+
+
+; ********************************************
+; **										**
+; ** CHECK_POLICE - CHECK FOR POLICE ATTACK **
+; **										**
+; ********************************************
+
+; Checks if the police need to attack the player when entering space station
+; space. This depends upon his police record.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr check_police,global
+
+	move police_record(a6),d0			any record ?
+	ret <eq>							no, return
+	lsr #2,d0							probability of attack =
+	move splanet+govern(a6),d2				record/4+govern*16
+	asl #4,d2
+	add d0,d2
+	jsr random							within probability range ?
+	cmp d2,d0
+	blo prepare_vipers					yes, prepare vipers
+
+	ret 								return
+
+
+; **************************************
+; **								  **
+; ** LAUNCH_BOMB - LAUNCH ENERGY BOMB **
+; **								  **
+; **************************************
+
+; Launches the energy bomb (if fitted) which instantly destroys all objects
+; (excepts suns, planets, space station and thargoids). It may only be used
+; once.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr launch_bomb,global
+
+	jsr check_inflight					check if inflight
+	tst equip+energy_bomb(a6)			do we have an energy bomb
+	if <eq> then.s						no
+		lea text20(pc),a0				print error message
+		jsr disp_message
+		bra beep
+	endi
+	lea objects(a6),a4					assume all objects
+	moveq #max_objects-1,d7
+	tst witch_space(a6) 				witch space ?
+	if <eq> then.s						no
+		add.l #obj_len*3,a4 			skip 1st three objects
+		subq #3,d7
+	endi
+	clr exploded(a6)					nothing exploded yet
+	loop 1								loop for each object
+		btst #in_use,flags(a4)			in use ?
+		if <ne> then.s					yes
+			move type(a4),d0			thargoid ?
+			cmp #thargoid,d0
+			beq ignore_bomb 			yes
+			cmp #platlet,d0 			platlet ?
+			beq ignore_bomb 			yes
+			cmp #constr,d0				constrictor ?
+			beq ignore_bomb 			yes
+			cmp #cougar,d0				cougar ?
+			beq ignore_bomb
+			push d7 					destroy object
+			bset #no_bounty,flags(a4)
+			bsr explode_object
+			pop d7
+
+ignore_bomb:
+
+		endi
+		lea obj_len(a4),a4				next object
+	next 1
+	tst exploded(a6)					anything exploded ?
+	if <ne> then.s						yes
+		clr equip+energy_bomb(a6)		only use once
+	else.s
+		bsr beep						beep (nothing to destroy)
+	endi
+
+	ret 								return
+
+
+; ---- LOCAL DATA ----
+
+; Initial data for laser beams (125,50,500,5000).
+
+laser_data:
+
+	dc.w -125,-50,500
+	dc.w 409,164,16378
+
+; Rating bands for score.
+
+rating_bands:
+
+	dc.l $800,$1000,$2000,$4000,$8000,$20000,$a0000,$190000
+
+; List of colours for platlets.
+
+platlet_colours:
+
+	dc 8,3,47,27,6,25,9
+
+no_colours: equ (*-platlet_colours)/2
+
+; List of positions for pirates around the squadron leader.
+
+squadron_positions:
+
+	dc.w x_vector,+spacing1
+	dc.w x_vector,-spacing1
+	dc.w y_vector,+spacing1
+	dc.w y_vector,-spacing1
+
+; Missile launch data.
+
+missile_data:
+
+	dc.l 0,-40,50
+	dc.w unit,0,0
+	dc.w 0,unit,0
+	dc.w 0,0,unit
+
+; Text strings.
+
+text1:	db 'Target lost',0
+text2:	db 'Condition RED!',0
+text5:	db 'Right on Commander',0
+text6:	db 'Missile Jammed!',0
+text7:	db 'Incoming missile',0
+text12: db 'Cargo lost',0
+text13: db ' lost',0
+text14: db 'ECM Not Installed',0
+text15: db 'ECM Jammed',0
+text16: db 'Missile Already Targetted',0
+text17: db 'No Missiles Left!',0
+text18: db 'Missile Not Targetted',0
+text19: db 'Missile Not Locked',0
+text20: db 'Energy Bomb Not Installed',0

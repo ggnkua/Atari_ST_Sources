@@ -1,0 +1,1795 @@
+*	@@@@	@@@    @@  @@ @@   @@ @@@@@ 	@@@@
+*  @@  @@  @@ @@   @@  @@ @@@  @@  @@ @@   @@  @@
+*  @@	  @@   @@  @@  @@ @@@@ @@  @@  @@  @@
+*	@@@@  @@   @@  @@  @@ @@ @@@@  @@  @@	@@@@
+*	   @@ @@   @@  @@  @@ @@  @@@  @@  @@	   @@
+*  @@  @@  @@ @@   @@  @@ @@   @@  @@ @@   @@  @@
+*	@@@@	@@@ 	@@@@  @@   @@ @@@@@ 	@@@@
+
+* Sound driver (music and effects).
+
+* Atari ST Version 1.0 30th March 1988 Copyright (c) 1988 Mr. Micro Ltd.
+* Designed and coded by Rob Nicholson. Adapted from the MSX version.
+
+	include macros
+	include notes
+
+	xref random
+
+* ---- LOCAL CONSTANTS ----
+
+fade_rate:		equ 15					rate of volume fade
+click_tone: 	equ 100 				Keyclick tone period
+click_dur:		equ 200 					"    envelope duration
+teletype_tone:	equ 50					teletype tone period
+teletype_dur:	equ 100 					"    envelope duration
+locked_tone:	equ 50					Missile locked tone period
+locked_dur: 	equ 10					   "      "    duration
+exp_period: 	equ 20					Explosion period
+exp_tone:		equ 31						"     noise tone
+laser_start:	equ 300 				Laser start tone
+laser_end:		equ 180 				Laser end tone
+laser_step: 	equ -10 				Laser tone step
+shields_cutoff: equ 25					Cutoff frequency for shields
+alert_tone: 	equ 300 				Initial alert tone
+alert_cutoff:	equ 150 				Cutoff tone
+alert_step: 	equ 10					Step between tones
+error_high: 	equ 512 				Error: Tone high
+error_low:		equ 768 					   Tone low
+error_dur:		equ 3						   Duration (of each tone)
+base_tone:		equ 50					Base tone for hexagon effect
+ecm_min:		equ 100 				ECM: Min. tone
+ecm_max:		equ 200 					 Max. tone
+ecm_dur:		equ 20						 Duration
+ecm_step:		equ 50						 Step size
+hit_dur:		equ 31					Hit: Duration
+hit_step:		equ 4						 Step size
+ramp_size:		equ 7					Length of ramp
+ramp_size2: 	equ 16					length of the second ramp
+
+* Setup constants.
+
+first:				set -1				Flag: First entry in SET sequence
+setup_service:		equ 0				Setup index constants
+setup_flagptr:		equ 1
+setup_tone: 		equ 2
+setup_volume:		equ 3
+setup_duration: 	equ 4
+setup_cycle:		equ 5
+setup_direction:	equ 6
+setup_done: 		equ 7
+setup_noise_on: 	equ 8
+setup_envelope: 	equ 9
+setup_noise_tone:	equ 10
+setup_hold: 		equ 11
+
+* Define sound effects record.
+
+	offset 0
+
+chn_active: 		ds.w 1				Channel active flag
+reg_tone:			ds.w 1				Register for tone period
+reg_volume: 		ds.w 1				Register for volume
+duration:			ds.w 1				Duration counter
+volume: 			ds.w 1				Channel volume
+service:			ds.l 1				Address of service routine
+cycle:				ds.w 1				Cycle counter
+flag_ptr:			ds.w 1				Pointer to a flag
+direction:			ds.w 1				Direction of something
+tone:				ds.w 1				Current tone
+clear_env:			ds.w 1				Flag: Clear envelope (volume)
+hold_chan:			ds.w 1				Flag: Hold this channel
+sect_ptr:			ds.l 1				Section pointer
+tune_ptr:			ds.l 1				Data pointer
+break:				ds.l 1				Break note flag
+period: 			ds.l 1				Period counter
+
+fx_len: equ *
+
+; ---- LOCAL VARIABLES ----
+
+	vars sounds
+
+chan_1: 			ds.b fx_len 		sound effects records
+chan_2: 			ds.b fx_len
+chan_3: 			ds.b fx_len
+music_start:		ds.l 1				Ptr: Start of music score
+no_channels:		ds.w 1				No. channels used by music
+alloc_ctr:			ds.w 1				Allocate counter
+sound_type: 		ds.w 1				Sound type: 0=none,1=music,-1=effects
+fx_done:			ds.w 1				Flag: Set when effects processed
+hold_sound: 		ds.w 1				Flag: hold sounds from interrupts
+fade_out:			ds.w 1				flag: fade out the music
+
+	end_vars sounds
+
+	module sounds
+
+
+* ***********************************************
+* **										   **
+* ** SET_FX - SETUP SOUND EFFECT ENTRY (MACRO) **
+* **										   **
+* ***********************************************
+
+* Sets up a field of the sound effect record and outputs a value to the
+* sound chip (if required).
+
+* Syntax: SET_FX <func>,(<parms>)
+
+* Where:  <func>  = required function, e.g. volume
+*		  <parms> = optional parameters required by function
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+set_fx: macro
+
+	ifne first
+		bsr setup
+		first: set 0
+	endc
+	ifeq setup_\1-setup_done
+		first: set -1
+	endc
+	dc.w setup_\1
+	ifeq setup_\1-setup_service
+		dc.l \2
+		exitm
+	endc
+	ifeq nargs-3
+		dc.w \3,\2
+		exitm
+	endc
+	ifeq nargs-2
+		dc.w \2
+	endc
+
+	endm
+
+
+* ********************************************
+* **										**
+* ** RESET_AY8912 - RESET AY8912 SOUND CHIP **
+* **										**
+* ********************************************
+
+* Resets the AY8912 sound chip to the following state. Only registers #0 to
+* #10 are effected.
+
+*	Tone registers	#0..#5			Set to zero (no tone)
+*	Noise tone		#6				Set to zero
+*	Enable register #7				Set to %11111000
+*	Volume register #8..#10 		Set to zero (no volume)
+
+* Entry: None
+* Exit:  None
+
+* Regs:  D0/D1/D7 corrupt.
+* Subr:  PSG_OUTPUT
+
+	subr reset_ay8912
+
+	move #10,d0 					start at register #10
+	loop 1
+		clr d1						assume zero
+		if d0 <eq> #7 then.s
+			move #%11111000,d1
+		endi
+		bsr psg_output
+	next 1,d0
+
+	ret
+
+
+* *************************************
+* **								 **
+* ** PSG_OUTPUT - OUTPUT BYTE TO PSG **
+* **								 **
+* *************************************
+
+* Writes a byte to one of the PSG registers.
+
+* Entry: D0 = register # (0..15)
+*		 D1 = value to write (0..255)
+* Exit:  None
+
+* Regs:  All preserved.
+* Subr:  None
+
+	subr psg_output
+
+	move.b d0,psg_select			select register
+	move.b d1,psg_write 			write value
+
+	ret
+
+
+* *************************************
+* **								 **
+* ** START_TUNE - START TUNE PLAYING **
+* **								 **
+* *************************************
+
+* Starts a tune playing on interrupts.
+
+* Entry: A0 = ptr: start of music data
+* Exit:  None
+
+* Regs:  All corrupt.
+* Subr:  ?
+
+	subr start_tune,global
+
+	st hold_sound(a6)					stop sound interrupts
+	bsr init_music						initialise music system
+	move.l a0,music_start(a6)			save music start address
+	lea chan_1(a6),a1					start with 1st channel
+	move (a0)+,d7						get no. of channels required
+	move d7,no_channels(a6)
+	move #8,d0							start at volume register #8
+	dec d7								loop for each channel required
+	loop 1
+		move.l (a0)+,a2 				setup 1st section
+		move.l (a2)+,tune_ptr(a1)
+		move.l a2,sect_ptr(a1)
+		move.w (a0)+,d1 				setup volume
+		move d1,volume(a1)
+		bsr psg_output
+		clr period(a1)					clear period counter
+		clr break(a1)					not broken
+		move #fade_rate,duration(a1)	set fade counter
+		st chn_active(a1)				channel active
+		add #fx_len,a1					next channel
+		inc d0
+	next 1
+	clr hold_sound(a6)					allow sound interrupts
+
+	ret
+
+
+* *******************************
+* **						   **
+* ** FX - START A SOUND EFFECT **
+* **						   **
+* *******************************
+
+* Starts a sound effect running on interrupts.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr fx,global
+
+	btst #f_fx,user(a6) 				effects enabled ?
+	ret <eq>							no, return
+	cmp #1,sound_type(a6)				music playing ?
+	ret <eq>							yes, return
+	tst hold_sound(a6)					sound held ?
+	ret <ne>							yes, don't start
+	save_all							save all registers
+	st hold_sound(a6)					disable sound interrupts
+	asl #2,d0							get address of FX_xx routine
+	lea fx_vectors(pc),a0
+	move.l (a0,d0),a0
+	bsr init_effects					initialise for effects
+	bsr allocate_channel				allocate a channel
+	jsr (a0)							execute FX_xx routine
+	st chn_active(a5)					channel is active
+	clr hold_sound(a6)					release sound
+	restore_all 						restore all registers
+
+	ret
+
+
+* ******************************************
+* **									  **
+* ** INIT_MUSIC - INITIALISE MUSIC SYSTEM **
+* **									  **
+* ******************************************
+
+* Initialise music system (if not already initialised).
+
+* Entry: None
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr init_music
+
+
+	moveq #1,d0 						already playing music ?
+	cmp sound_type(a6),d0
+	if <ne> then.s						no
+		bsr init_queues 				initialise sound queues
+	endi
+	clr fade_out(a6)					clear fade out flag
+
+	ret
+
+
+* *******************************************
+* **									   **
+* ** INIT_EFFECTS - INITIALISE FOR EFFECTS **
+* **									   **
+* *******************************************
+
+* If the sound system isn't playing effects, the sound chip and sound
+* queues are initialised.
+
+* Entry:  None
+* Exit:   None
+
+* Regs: ?
+* Subr: INIT_QUEUES
+
+	subr init_effects
+
+	moveq #-1,d0						already playing effects ?
+	cmp sound_type(a6),d0
+	if <ne> then.s						no
+		bsr init_queues 				initialise sound queues
+	endi
+
+	ret
+
+
+* *******************************************
+* **									   **
+* ** INIT_QUEUES - INITIALISE SOUND QUEUES **
+* **									   **
+* *******************************************
+
+* Initialises the three sound channels for either music or effects.
+
+* Entry: D0 = sound type (1=music,-1=effects)
+* Exit:  None
+
+* Regs: D0/D1/D7/A1 corrupt.
+* Subr: RESET_AY8912
+
+	subr init_queues
+
+	move d0,sound_type(a6)				store sound type
+	lea chan_1(a6),a1					clear sound queues
+	loop 1,fx_len*3/2
+		clr (a1)+
+	next 1
+	bsr reset_ay8912					reset sound chip
+	move #$0,chan_1+reg_tone(a6)		set up tone registers
+	move #$2,chan_2+reg_tone(a6)
+	move #$4,chan_3+reg_tone(a6)
+	move #$8,chan_1+reg_volume(a6)		set up volume registers
+	move #$9,chan_2+reg_volume(a6)
+	move #$A,chan_3+reg_volume(a6)
+
+	ret
+
+
+* ******************************
+* **						  **
+* ** SOUND - IRQ SOUND DRIVER **
+* **						  **
+* ******************************
+
+* Process (on VSYNC) music/sound queues on each of the channels.
+
+* Entry: None
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr sound,global
+
+	st fx_done(a6)						effects done
+	tst hold_sound(a6)					sounds held ?
+	ret <ne>							yes, return
+	tst sound_type(a6)					any sound ?
+	ret <eq>							no, return
+	lea chan_1(a6),a5					start with channel #1
+	loop 1,3							loop for each channel
+		tst chn_active(a5)				channel active ?
+		if <ne> then.s					yes
+			push d7 					execute PLAY or service routine
+			tst sound_type(a6)
+			if <pl> then.s
+				bsr play
+			else.s
+				move.l service(a5),a0
+				jsr (a0)
+			endi
+			pop d7
+		endi
+		add #fx_len,a5					next channel
+	next 1
+	cmp #1,sound_type(a6)				playing music ?
+	if <eq> then.s						yes
+		tst no_channels(a6) 			music finished ?
+		if <eq> then.s					yes
+			tst fade_out(a6)			fading out ?
+			if <eq> then.s				no, start music again
+				move.l music_start(a6),a0
+				bsr start_tune
+			else.s
+				clr fade_out(a6)		clear fade out flag
+				clr sound_type(a6)		allow sound effects
+			endi
+		endi
+	endi
+
+	ret
+
+
+* ***********************
+* **				   **
+* ** PLAY - PLAY MUSIC **
+* **				   **
+* ***********************
+
+* Plays music on one channel. If last note has finished, a new one is
+* started.
+
+* Entry: A5 = ptr: channel record
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr play
+
+	tst period(a5)						last note finished ?
+	if <eq> then.s						yes
+		tst break(a5)					break in note ?
+		if <ne> then.s					yes
+			clr break(a5)				clear flag
+			move #rest,d0				play a rest
+			bra play_note
+		endi
+		move.l tune_ptr(a5),a0			get address of data
+again:	move.b (a0)+,d0 				end of section ?
+		if.b d0 <eq> #end_sect then.s	yes
+			move.l sect_ptr(a5),a1		get section pointer
+			move.l (a1)+,d0 			end of tune ?
+			if <eq> then.s				yes
+				dec no_channels(a6) 	silence channel and exit
+				bra silence
+			endi
+			move.l a1,sect_ptr(a5)		start next section
+			move.l d0,a0
+			bra.s again
+		endi
+		move.b (a0)+,d1 				get period
+		if <mi> then.s					break in note
+			st break(a5)				set break flag
+			and #127,d1 				decrement period
+			add d1,d1
+			dec d1
+		else.s
+			ext d1
+			add d1,d1
+		endi
+		dec d1							set period counter
+		move d1,period(a5)
+		move.l a0,tune_ptr(a5)			update pointer
+		bsr play_note					play the note
+	else.s
+		dec period(a5)					decrement period
+	endi
+	tst fade_out(a6)					fading out the music ?
+	if <ne> then.s						yes
+		dec duration(a5)				decrease volume
+		if <eq> then.s
+			move #fade_rate,duration(a5)
+			move volume(a5),d0
+			if <ne> then.s
+				dec d0
+				if <eq> then.s
+					dec no_channels(a6)
+					bsr silence
+				else.s
+					move d0,volume(a5)
+					bsr set_volume
+				endi
+			endi
+		endi
+	endi
+
+	ret
+
+
+* *********************************************
+* **										 **
+* ** PLAY_NOTE - SETS FREQUENCY OF A CHANNEL **
+* **										 **
+* *********************************************
+
+* Calculates the frequency of a note and sets the frequency (tone) of the
+* channel.
+
+* Entry: D0.B = note
+* Exit:  None
+
+* Regs:  ?
+* Subr:  SET_TONE
+
+	subr play_note
+
+	lea tone_periods(pc),a0 			index into tone periods table
+	and #255,d0
+	add d0,d0
+	move (a0,d0),d0 					set tone and exit
+	bra set_tone
+
+
+* *********************************
+* **							 **
+* ** SILENCE - SILENCE A CHANNEL **
+* **							 **
+* *********************************
+
+* Silences a channel by setting the tone to zero.
+
+* Entry: None
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr silence
+
+	clr chn_active(a5)					channel not active
+	clr d0								set tone to zero
+	bra set_tone
+
+
+* *****************************************
+* **									 **
+* **  SILENCE_EFFECT - SILENCE AN EFFECT **
+* **									 **
+* *****************************************
+
+* Silences a channel by setting the pitch to 0 and stopping any noise.
+* Any flag byte associated with the effect is also cleared.
+
+* Entry: A5 = ptr: current channel
+* Exit:  None
+
+* Regs: D0-D2 corrupt.
+* Subr: REG7_MASK, PSG_OUTPUT, SET_TONE.
+
+	subr silence_effect
+
+	bsr reg7_mask						stop noise
+	or.b d0,d1
+	moveq #7,d0
+	bsr psg_output
+	tst clear_env(a5)					envelope to clear ?
+	if <ne> then.s						yes
+		clr d0							volume = 0
+		move d0,clear_env(a5)
+		bsr set_volume
+	endi
+	move flag_ptr(a5),d0				flag to clear ?
+	if <ne> then.s						yes
+		clr (a6,d0) 					clear the flag and pointer
+		clr flag_ptr(a5)
+	endi
+	clr chn_active(a5)					channel not active
+	clr hold_chan(a5)					channel not held
+	clr d0								set tone to zero
+	bra set_tone
+
+
+* ***********************************
+* **							   **
+* ** START_FADE - START MUSIC FADE **
+* **							   **
+* ***********************************
+
+* Starts any music fading.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr start_fade,global
+
+	cmp #1,sound_type(a6)				music playing ?
+	ret <ne>							no
+	st fade_out(a6) 					start fade out
+
+	ret 								return
+
+
+* **********************************
+* **							  **
+* ** REG7_MASK - BUILD NOISE MASK **
+* **							  **
+* **********************************
+
+* Builds up the noise masks for register #7 (channel select), e.g. if the
+* current channel is 2 (bit 1 of register #7), the	routine  returns	two
+* masks:	11110111b  and 00001000b. These masks can then be AND'd or OR'd
+* with register #7 to enable/disable noise.
+
+* Entry: A5 = ptr: current channel record
+* Exit:  D0 = Contents of register #7
+*		 D1 = Disable mask, e.g. %00010000
+*		 D2 = Enable mask, e.g. %11101111
+*		 Register #7 selected
+
+* Regs: ?
+* Subr: None
+
+	subr reg7_mask
+
+	move reg_volume(a5),d0				determine channel from volume
+	subq #7,d0
+	moveq #%00000100,d1 				Build disable mask
+	asl d0,d1
+	move d1,d2							build enable mask
+	not d2
+	move.b #7,psg_select				read register #7
+	move.b psg_read,d0
+
+	ret
+
+
+* ******************************
+* **						  **
+* ** NOISE_ON - TURN NOISE ON **
+* **						  **
+* ******************************
+
+* Turns noise on with the current channel.
+
+* Entry:  None
+* Exit:   None
+
+* Regs: ?
+* Subr: REG7_MASK
+
+	subr noise_on
+
+	bsr reg7_mask						build mask
+	and.b d2,d0 						enable noise
+	move.b d0,d1
+	moveq #7,d0
+	bra psg_output
+
+
+* ***********************************
+* **							   **
+* ** SET_TONE - SET TONE REGISTERS **
+* **							   **
+* ***********************************
+
+* Sets the tone registers of the current channel.
+
+* Entry: D0 = tone
+* Exit:  None
+
+* Regs:  D1 corrupt.
+* Subr:  PSG_OUTPUT
+
+	subr set_tone
+
+	push d0 							save tone
+	move d0,d1							set tone low
+	move reg_tone(a5),d0
+	bsr psg_output
+	ror #8,d1							set tone high
+	inc d0
+	bsr psg_output
+	pop d0								restore tone
+
+	ret
+
+
+* ****************************************
+* **									**
+* ** SET_VOLUME - SET VOLUME OF CHANNEL **
+* **									**
+* ****************************************
+
+* Sets the volume of the current channel.
+
+* Entry: D0 = volume
+* Exit:  None
+
+* Regs: D1 corrupt.
+* Subr: PSG_OUTPUT
+
+	subr set_volume
+
+	push d0 							save volume
+	move d0,d1							fetch volume register
+	move reg_volume(a5),d0
+	bsr psg_output						set volume
+	pop d0								restore volume
+
+	ret
+
+
+* ****************************************
+* **									**
+* ** QUIET - SILENCE ALL THREE CHANNELS **
+* **									**
+* ****************************************
+
+* Silences all three channels and clears any associated flag pointers.
+
+* Entry: None
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr quiet,global
+
+	st hold_sound(a6)					hold sounds from interrupts
+	tst sound_type(a6)					effects active ?
+	if <mi> then.s						yes
+		lea chan_1(a6),a0				start with channel #1
+		loop 1,3						3 channels to check
+			tst chn_active(a0)			channel active ?
+			if <ne> then.s				yes
+				clr hold_chan(a0)		clear hold flag
+				move flag_ptr(a0),d0	flag to clear ?
+				if <ne> then.s			yes
+					clr flag_ptr(a0)	clear pointer
+					clr (a6,d0) 		clear flag
+				endi
+			endi
+			add #fx_len,a0				next channel
+		next 1
+	endi
+	bsr reset_ay8912					reset sound chip
+	clr sound_type(a6)					sound not active
+	clr hold_sound(a6)					release sound
+
+	ret
+
+
+* ****************************************
+* **									**
+* ** MARK_TIME - MARK TIME UNTIL CUTOFF **
+* **									**
+* ****************************************
+
+* Interrupt driver for several effects. Decrements the duration counter
+* until it reaches zero and then silences the effect.
+
+* Entry:  None
+* Exit:   None
+
+* Regs: ?
+* Subr: SILENCE_EFFECT
+
+	subr mark_time
+
+	dec duration(a5)					effect finished ?
+	beq silence_effect					yes, silence effect
+
+	ret
+
+
+* *************************************************
+* **											 **
+* ** ALLOCATE_CHANNEL - ALLOCATE A SOUND CHANNEL **
+* **											 **
+* *************************************************
+
+* Whenever a sound effect is requested, this routine is called to allocate one
+* of the three sound channels. The effect is then  created on this channel. If
+* all three channels are  currently  in  use,  the next channel in sequence is
+* silenced and then allocated. This sequence just  cycles  through	the  three
+* channels and doesn't use any kind of priority.
+
+* Entry: None
+* Exit:  A5 = ptr: channel record to use
+
+* Regs: D0/D7/A5 corrupt.
+* Subr: None
+
+	subr allocate_channel
+
+	lea chan_1(a6),a5					start with channel #1
+	loop 1,3							three channels to test
+		tst chn_active(a5)				active ?
+		ret <eq>						no, use this channel
+		add.l #fx_len,a5				next channel
+	next 1
+	lea chan_1(a6),a5					all used, use next in sequence
+	repeat
+		move alloc_ctr(a6),d0			advance the counter (backwards)
+		dec alloc_ctr(a6)
+		if <mi> then.s
+			move #2,alloc_ctr(a6)
+		endi
+		mulu #fx_len,d0 				until channel not held
+		tst hold_chan(a5,d0)
+	until <eq>
+	lea (a5,d0),a5						set pointer to channel record
+	tst chn_active(a5)					channel active ?
+	if <ne> then.s						yes
+		bsr silence_effect				silence the effect
+	endi
+
+	ret
+
+
+* **************************
+* **					  **
+* ** SETUP - SETUP EFFECT **
+* **					  **
+* **************************
+
+* Sets up an effect from a setup table following the call.
+
+* Entry: None (table follows CALL)
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr setup
+
+	pop.l a1							fetch the address of the table
+	repeat
+		move (a1)+,d0					fetch function
+		asl #2,d0						index into setup vector table
+		lea setup_vectors(pc),a0
+		move.l (a0,d0),a0				fetch vector
+		jsr (a0)						execute routine
+	endr
+
+
+* ***********************************************
+* **										   **
+* ** INIT_SERVICE - INITIALISE SERVICE POINTER **
+* **										   **
+* ***********************************************
+
+* Intialises the interrupt service routine entry.
+
+* Entry:  A1 = ptr: setup data
+* Exit:   A1 = A1+4
+
+* Regs: ?
+* Subr: None
+
+	subr init_service
+
+	move.l (a1)+,service(a5)			Fetch service routine
+
+	ret
+
+
+********************************************
+**										  **
+** INIT_FLAGPTR - INITIALISE FLAG POINTER **
+**										  **
+********************************************
+
+* Initialises the flag pointer entry.
+
+* Entry:  A1 = ptr: setup data
+*		  A5 = ptr: channel record
+* Exit:   A1 = A1+2
+
+* Regs: D0 corrupt.
+* Subr: None
+
+	subr init_flagptr
+
+	move (a1)+,d0						get flag's variable offset
+	st (a6,d0)							set the flag to true (nonzero)
+	move d0,flag_ptr(a5)				store offset in record
+
+	ret
+
+
+* *********************************
+* **							 **
+* ** INIT_TONE - INITIALISE TONE **
+* **							 **
+* *********************************
+
+* Initialises the tone entry and calls SET_TONE.
+
+* Entry: A1 = ptr: setup data
+*		 A5 = ptr: channel record
+* Exit:  A1 = A1+2
+
+* Regs: ?
+* Subr: SET_TONE
+
+	subr init_tone
+
+	move (a1)+,d0							fetch the tone and store
+	move d0,tone(a5)
+	bra set_tone							set tone and exit
+
+
+* *************************************
+* **								 **
+* ** INIT_VOLUME - INITIALISE VOLUME **
+* **								 **
+* *************************************
+
+* Initialise the volume entry and calls SET_VOLUME.
+
+* Entry: A1 = ptr: setup data
+*		 A5 = ptr: channel record
+* Exit:  A1 = A1+2
+
+* Regs: ?
+* Subr: SET_VOLUME
+
+	subr init_volume
+
+	move (a1)+,d0							Set volume
+	move d0,volume(a5)
+	bra set_volume
+
+
+* *****************************************
+* **									 **
+* ** INIT_DURATION - INITIALISE DURATION **
+* **									 **
+* *****************************************
+
+* Initialises the duration entry.
+
+* Entry: A1 = ptr: setup data
+*		 A5 = ptr: channel record
+* Exit:  A1 = A1+2
+
+* Regs: ?
+* Subr: ?
+
+	subr init_duration
+
+	move (a1)+,duration(a5) 			Store in duration
+
+	ret
+
+
+* ***********************************
+* **							   **
+* ** INIT_CYCLE - INITIALISE CYCLE **
+* **							   **
+* ***********************************
+
+* Initialises the cycle entry.
+
+* Entry:  A1 = SETUP pointer
+* Exit:   A1 = A1+2
+
+* Regs: ?
+* Subr: ?
+
+	subr init_cycle
+
+	move (a1)+,cycle(a5)				store in cycle
+
+	ret
+
+
+* *******************************************
+* **									   **
+* ** INIT_DIRECTION - INITIALISE DIRECTION **
+* **									   **
+* *******************************************
+
+* Initialises the direction entry.
+
+* Entry:  A1 = SETUP pointer
+* Exit:   A1 = A1+2
+
+* Regs: ?
+* Subr: ?
+
+	subr init_direction
+
+	move (a1)+,direction(a5)			store in direction
+
+	ret
+
+
+* ******************************************
+* **									  **
+* ** INIT_DONE - TERMINATE SETUP SEQUENCE **
+* **									  **
+* ******************************************
+
+* Used to terminate the setup sequence. Pops the return address off the
+* stack and then jumps the the SETUP pointer
+
+* Entry: A1 = ptr: setup data
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+init_done:
+
+	addq.l #4,sp						clear return address
+	jmp (a1)							return to caller
+
+
+* **************************************************
+* **											  **
+* ** INIT_ENVELOPE - INITIALISE HARDWARE ENVELOPE **
+* **											  **
+* **************************************************
+
+* Initialise the hardware envelope period and type. Sets up registers
+* 11 to 13.
+
+* Entry: A1 = ptr: setup data
+*		 A5 = ptr: channel record
+* Exit:  A1 = A1+4
+
+* Regs: ?
+* Subr: PSG_OUTPUT
+
+	subr init_envelope
+
+	st clear_env(a5)					Clear envelope when silenced
+	moveq #12,d0						Set period reg 12 high byte first
+	move.b (a1)+,d1
+	bsr psg_output
+	dec d0								Set reg 11 low byte
+	move.b (a1)+,d1
+	bsr psg_output
+	addq #2,d0							Set reg 13 type
+	move (a1)+,d1
+	bsr psg_output
+	moveq #16,d0						Set volume to 16
+	bra set_volume
+
+
+* ********************************************
+* **										**
+* ** INIT_NOISE_TONE - INTIALISE NOISE TONE **
+* **										**
+* ********************************************
+
+* Intialise noise tone (0..31)
+
+* Entry: A1 = ptr: setup data
+*		 A5 = ptr: channel record
+* Exit:  A1 = A1+2
+
+* Regs: ?
+* Subr: PSG_OUTPUT
+
+	subr init_noise_tone
+
+	move (a1)+,d1						Fetch noise tone
+	moveq #6,d0 						Output to sound chip and exit
+	bra psg_output
+
+
+* **************************************
+* **								  **
+* ** INIT_HOLD - INITIALISE HOLD FLAG **
+* **								  **
+* **************************************
+
+* Sets the hold flag so the current channel can't be re-allocated.
+
+* Entry:  None
+* Exit:   None
+
+* Regs: ?
+* Subr: ?
+
+	subr init_hold
+
+	st hold_chan(a5)					Set flag
+
+	ret
+
+
+* *****************************
+* **						 **
+* ** FX_KEYCLICK - KEY-CLICK **
+* **						 **
+* *****************************
+
+* Produce a key click sound effect.
+
+	subr fx_keyclick
+
+	set_fx tone,click_tone				Setup effect
+	set_fx duration,2
+	set_fx service,mark_time
+	set_fx envelope,1,click_dur
+	set_fx done
+
+	ret
+
+
+* ********************************************
+* **										**
+* ** FX_TELETYPE - PRINTING TELETYPE EFFECT **
+* **										**
+* ********************************************
+
+	subr fx_teletype
+
+	set_fx tone,teletype_tone			setup effect
+	set_fx duration,2
+	set_fx service,mark_time
+	set_fx envelope,1,teletype_dur
+	set_fx done
+
+	ret
+
+
+* ********************************
+* **							**
+* ** FX_LOCKED - MISSILE LOCKED **
+* **							**
+* ********************************
+
+* Produces the effect when missile locks on target.
+
+	subr fx_locked
+
+	set_fx volume,12					Setup effect
+	set_fx tone,locked_tone
+	set_fx duration,locked_dur
+	set_fx service,mark_time
+	set_fx done
+
+	ret
+
+
+* **************************************
+* **								  **
+* ** FX_EXPLOSION  - OBJECT EXPLODING **
+* **								  **
+* **************************************
+
+* Produces the effect when an object explodes.
+
+	subr fx_explosion
+
+	set_fx noise_on 					Initialise effect
+	set_fx duration,exp_period
+	set_fx volume,15
+	set_fx service,do_explosion
+	set_fx done
+
+	ret
+
+do_explosion:
+
+	jsr random							Random noise
+	move d0,d1
+	moveq #6,d0
+	bsr psg_output
+	dec duration(a5)					Ready for volume change ?
+	ret <ne>							No
+	move #exp_period,duration(a5)		Reload counter
+	dec volume(a5)						Explosion finished ?
+	beq silence_effect					Yes, silence channel
+	move volume(a5),d0					Set volume and return
+	bra set_volume
+
+
+* **************************************************
+* **											  **
+* ** FX_MULTI_LASER - MULTIPLE SOUND EFFECT LASER **
+* **											  **
+* **************************************************
+
+* Produces the effect whenever the gun is used, note that by adding
+* to it different TONE value's a multitued of effects can be produced.
+
+	subr fx_multi_laser
+
+	set_fx envelope,8,ramp_size2			Initialise ramp
+	set_fx tone,15
+	set_fx duration,17
+	set_fx service,do_multi_laser
+	set_fx done
+
+	ret
+
+do_multi_laser:
+
+	addq #2,tone(a5)
+	move tone(a5),d0
+	bsr set_tone
+	dec duration(a5)
+	ret <ne>
+	bra silence_effect
+
+
+* ******************************
+* **						  **
+* ** FX_SHIELDS - SHIELDS HIT **
+* **						  **
+* ******************************
+
+* Initialise effect when shields hit.
+
+	subr fx_shields
+
+	set_fx noise_on 					Initialise effect
+	set_fx volume,13
+	set_fx service,do_shields
+	set_fx flagptr,shields_fx
+	set_fx tone,0
+	set_fx done
+
+	ret
+
+do_shields:
+
+	moveq #6,d0 						Set noise tone
+	move tone(a5),d1
+	bsr psg_output
+	inc tone(a5)						Increase tone
+	cmp #shields_cutoff,tone(a5)		finished ?
+	ret <ne>							No
+	bra silence_effect					Silence effect and exit
+
+
+* *************************************
+* **								 **
+* ** FX_ALERT - GENERAL ALERT SIGNAL **
+* **								 **
+* *************************************
+
+* Initialise general purpose alert effect.
+
+	subr fx_alert
+
+	set_fx volume,9 					Initialise effect
+	set_fx tone,alert_tone
+	set_fx service,do_alert
+	set_fx flagptr,alert_fx
+	set_fx done
+
+	ret
+
+do_alert:
+
+	move tone(a5),d0					Set tone
+	bsr set_tone
+	sub #alert_step,d0					Increase pitch
+	move d0,tone(a5)
+	cmp #alert_cutoff,d0				Cutoff ?
+	ret <hs>							No, return
+	bra silence_effect					Silence effect and exit
+
+
+* ***************************
+* **					   **
+* ** FX_ERROR - ERROR BEEP **
+* **					   **
+* ***************************
+
+* Produce two-tone error beep.
+
+	subr fx_error
+
+	set_fx volume,12						Initialise effect
+	set_fx tone,error_high
+	set_fx duration,error_dur+32768
+	set_fx service,do_error
+	set_fx done
+
+	ret
+
+do_error:
+
+	dec duration(a5)					Decrement counter
+	if <vs> then.s						Entering 2nd tone
+		move #error_dur,duration(a5)
+		move #error_low,d0
+		bra set_tone
+	endi
+	ret <ne>							Return
+	bra silence_effect					Finished
+
+
+* ************************************
+* **								**
+* ** FX_HEXAGON - EXPANDING HEXAGON **
+* **								**
+* ************************************
+
+* Produce tone on expanding hexagon.
+
+	subr fx_hexagon
+
+	clr kill_hexagon(a6)				Clear 'done' flag
+	move.l #do_hexagon,service(a5)		Create sound
+
+	ret
+
+do_hexagon:
+
+	tst kill_hexagon(a6)				Finished ?
+	bne silence_effect					yes, silence effect
+	move hex_tone(a6),d0				Set volume
+	lsr #3,d0
+	and #15,d0
+	bsr set_volume
+	move hex_tone(a6),d0				set tone and exit
+	add #base_tone,d0
+	bra set_tone
+
+
+* ****************************
+* **						**
+* ** FX_ECM - ECM ON EFFECT **
+* **						**
+* ****************************
+
+* Creates the ECM effect.
+
+ecm_length: equ ((ecm_max-ecm_min)/ecm_step+1)*ecm_dur*2
+
+	subr fx_ecm
+
+	set_fx volume,12						initialise effect
+	set_fx tone,ecm_min
+	set_fx cycle,ecm_dur
+	set_fx flagptr,ecm_on
+	set_fx service,do_ecm
+	set_fx hold
+	set_fx done
+
+	ret
+
+do_ecm:
+
+	move tone(a5),d0					set tone
+	bsr set_tone
+	tst cycle(a5)						increasing tone ?
+	if <pl> then.s						yes
+		add #ecm_step,tone(a5)			add tone step
+		cmp #ecm_max,tone(a5)			at max ?
+		if <hs> then.s					yes
+			dec cycle(a5)
+			if <eq> then.s				yes
+				bsr silence_effect		silence effect
+				clr who_ecm(a6) 		clear who ECM'd flag
+				clr f_echar(a6) 		flag instrument change
+				rts 					exit
+			endi
+			bchg #7,cycle(a5)			start ramping down
+		endi
+	else.s
+		sub #ecm_step,tone(a5)			subtract tone step
+		cmp #ecm_min,tone(a5)			at min ?
+		if <lo> then.s					yes
+			bchg #7,cycle(a5)			start ramping up
+		endi
+	endi
+
+	ret
+
+
+* ********************************
+* **							**
+* ** FX_HIT - OBJECT HIT EFFECT **
+* **							**
+* ********************************
+
+* Produce effect when object hit by our laser fire.
+
+	subr fx_hit
+
+	set_fx noise_on 					Initialise effect
+	set_fx volume,14
+	set_fx duration,hit_dur
+	set_fx service,do_hit
+	set_fx done
+
+	ret
+
+do_hit:
+
+	sub #hit_step,duration(a5)			decrease duration/tone
+	bcs silence_effect					effect over
+	moveq #6,d0 						set noise tone
+	move duration(a5),d1
+	bra psg_output
+
+
+* ***********************************************
+* **										   **
+* ** FX_SPACEJUMP	- WHIPLASH EFFECT FOR JUMP **
+* **										   **
+* ***********************************************
+
+* Produces the effect whenever JUMP is used
+
+	subr fx_spacejump
+
+	set_fx tone,18
+	set_fx duration,6
+	set_fx direction,10
+	set_fx cycle,2
+	set_fx volume,0
+	set_fx service,do_spacejump
+	set_fx done
+
+	ret
+
+do_spacejump:
+
+	cmp #2,cycle(a5)				1st part ?
+	if <eq> then.s					yes
+		add #2,volume(a5)			volume += 2
+		moveq #110,d0				tone = 110
+	else.s
+		inc tone(a5)				decrease pitch
+		moveq #6,d0
+		move tone(a5),d1			slur the white-noise
+		bsr psg_output
+		bsr noise_on				enable white-noise
+		move tone(a5),d0
+	endi
+	bsr set_tone					set the tone
+	dec direction(a5)				ready for volume change ?
+	if <eq> then.s					yes
+		move #14,direction(a5)		re-load counter
+		dec volume(a5)				decrease volume
+	endi
+	move volume(a5),d0				set volume
+	bsr set_volume
+	dec duration(a5)				end of this part ?
+	ret <ne>						no
+	move #160,duration(a5)			re-load counter
+	dec cycle(a5)					next part
+	beq silence_effect				all done
+
+	ret
+
+
+* *********************************
+* **							 **
+* ** FX_MISSILE - MISSILE LAUNCH **
+* **							 **
+* *********************************
+
+* Produces the effect whenever a missile is released
+
+	subr fx_missile
+
+	set_fx volume,15
+	set_fx duration,30
+	set_fx cycle,15
+	set_fx noise_on
+	set_fx service,do_missile
+	set_fx done
+
+	ret
+
+do_missile:
+
+	move duration(a5),d1				put value of DURATION into A
+	moveq #6,d0 						and then put A into C
+	bsr psg_output						finally create new white-noise tone.
+	dec duration(a5)					End of section ?
+	ret <ne>							No
+	move #5,duration(a5)				Re-load counter
+	move cycle(a5),d0
+	bsr set_volume
+	dec tone(a5)
+	move tone(a5),d0
+	bsr set_tone
+	dec cycle(a5)
+	beq silence_effect
+
+	ret
+
+
+* ************************************
+* **								**
+* ** FX_WARP	- HYPERSPACE EFFECT **
+* **								**
+* ************************************
+
+* Produces the effect whenever HYPERSPACE is used
+
+	subr fx_warp
+
+	set_fx envelope,8,ramp_size 		Intialise effect
+	set_fx tone,170
+	set_fx duration,85
+	set_fx cycle,38
+	set_fx flagptr,end_hyperspace
+	set_fx service,do_warp1
+	set_fx done
+
+	ret
+
+do_warp1:
+
+	inc tone(a5)						increase the tone
+	move tone(a5),d0
+	bsr set_tone
+	dec duration(a5)					end of this cycle ?
+	ret <ne>							no, return
+	move cycle(a5),duration(a5) 		reload the counter
+	moveq #60,d0						set the tone to 60
+	move d0,tone(a5)
+	bsr set_tone
+	sub #2,cycle(a5)					cycle -= 2
+	ret <ne>							no end yet
+	move #255,d0						tone = 255
+	move d0,tone(a5)
+	bsr set_tone
+	bsr noise_on						turn noise on
+	set_fx duration,15
+	set_fx cycle,15
+	set_fx service,do_warp2
+	set_fx done
+	clr end_hyperspace(a6)
+
+	ret
+
+do_warp2:
+
+	move duration(a5),d1				put value of DURATION into A
+	moveq #6,d0 						and then put A into C
+	bsr psg_output						finally create new white-noise tone.
+	dec duration(a5)					End of section ?
+	ret <ne>							No
+	move #15,duration(a5)				Re-load counter
+	move cycle(a5),d0
+	bsr set_volume
+	dec tone(a5)
+	move tone(a5),d0
+	bsr set_tone
+	dec cycle(a5)
+	beq silence_effect
+
+	ret
+
+
+* *************************************
+* **								 **
+* ** FX_CARGO	- CONFORMATION NOISE **
+* **								 **
+* *************************************
+
+* This effect is triggered every time a cargo cannister is retrieved
+
+	subr fx_cargo
+
+	set_fx volume,12
+	set_fx tone,80
+	set_fx duration,15
+	set_fx cycle,2
+	set_fx service,do_cargo
+	set_fx done
+
+	ret
+
+do_cargo:
+
+	move duration(a5),d0				set the volume
+	bsr set_volume
+	dec duration(a5)					decrease the volume
+	ret <ne>							not end of section
+	moveq #120,d0						set tone to #120
+	bsr set_tone
+	move #15,duration(a5)				duration = 15
+	dec cycle(a5)						finished ?
+	beq silence_effect					yes, silence effect
+
+	ret
+
+
+* ******************************************************
+* **												  **
+* ** FX_BOMB	- ENERGY BOMB RELEASE & EXPLODE SOUND **
+* **												  **
+* ******************************************************
+
+* This effect is triggered when the ENERGY BOMB is released
+
+	subr fx_bomb
+
+	set_fx volume,15
+	set_fx noise_on
+	set_fx duration,5
+	set_fx cycle,15
+	set_fx service,do_bomb
+	set_fx done
+
+	ret
+
+do_bomb:
+
+	move duration(a5),d1				give the white-noise the tone value
+	moveq #6,d0 						of _DURATION
+	bsr psg_output
+	dec duration(a5)
+	ret <ne>
+	move #5,duration(a5)
+	move cycle(a5),d0
+	bsr set_volume
+	dec cycle(a5)
+	beq silence_effect
+
+	ret
+
+
+* ********************************************
+* **										**
+* ** FX_BANG	- ENERGY BOMB EXPLODE SOUND **
+* **										**
+* ********************************************
+
+* This is part of the explosion effect
+
+	subr fx_bang
+
+	set_fx volume,0
+	set_fx noise_on
+	set_fx duration,2
+	set_fx cycle,16
+	set_fx service,do_bang
+	set_fx done
+
+	ret
+
+do_bang:
+
+	moveq #18,d1
+	moveq #6,d0
+	bsr psg_output
+	dec duration(a5)
+	ret <ne>
+	move #2,duration(a5)
+	move volume(a5),d0
+	bsr set_volume
+	inc volume(a5)
+	dec cycle(a5)
+	ret <ne>
+	set_fx duration,5					trigger the after effect
+	set_fx cycle,15
+	set_fx service,do_bomb
+	set_fx done
+
+	ret
+
+
+* *******************************************
+* **									   **
+* ** FX_DOOR - LAUNCH DOORS OPENING EFFECT **
+* **									   **
+* *******************************************
+
+	subr fx_doors
+
+	set_fx envelope,8,ramp_size2
+	set_fx volume,16
+	set_fx tone,100
+	set_fx duration,55
+	set_fx service,do_doors
+	set_fx done
+	clr fx_off(a6)
+
+	ret
+
+do_doors:
+
+	tst duration(a5)
+	if <ne> then.s
+		dec duration(a5)
+		dec tone(a5)
+		move tone(a5),d0
+		bsr set_tone
+	endi
+	tst fx_off(a6)
+	bne silence_effect
+
+	ret
+
+	ifne 0
+
+*************************************
+**								   **
+** FX_SLAM	- A THUD SORT OF SOUND **
+**								   **
+*************************************
+
+Action: Door, thud kind of effect, for the intro piccy of ripley, just before
+		you enter into the final battle game.
+
+
+fx_slam:
+
+	set_fx volume,15
+	set_fx tone,400
+	set_fx noise_tone,150
+	set_fx noise_on
+	set_fx cycle,15
+	set_fx duration,15
+	set_fx service,do_slam
+	set_fx done
+	jp create_channel
+
+do_slam:
+
+	ld hl,cycle
+	ld a,(hl)
+	call set_volume
+	decb duration
+	ret nz
+	setb duration,4
+	decb cycle
+	jp z,silence_effect
+
+	ret
+	endc
+
+
+* ---- LOCAL DATA ----
+
+; Table of tone periods for each octave and note. Last entry in the table is
+; a rest.
+
+tone_periods:
+
+	dc.w 1911,1804,1703,1607,1517,1432,1351,1276,1204,1136,1073,1012  ;1
+	dc.w  956, 902, 851, 804, 758, 716, 676, 638, 602, 568, 536, 506  ;2
+	dc.w  478, 451, 426, 402, 379, 358, 338, 319, 301, 284, 268, 253  ;3
+	dc.w  239, 225, 213, 201, 190, 179, 169, 159, 150, 142, 134, 127  ;4
+	dc.w  119, 113, 106, 100,  95,	89,  84,  80,  75,	71,  67,  63  ;5
+	dc.w   60,	56,  53,  50,  47,	45,  42,  40,  38,	36,  34,  32  ;6
+	dc.w	0
+
+* Table of vectors to set_fxup routines.
+
+setup_vectors:
+
+	dc.l init_service,init_flagptr,init_tone,init_volume,init_duration
+	dc.l init_cycle,init_direction,init_done,noise_on,init_envelope
+	dc.l init_noise_tone,init_hold
+
+* Table of sound effect vectors
+
+fx_vectors:
+
+	dc.l fx_keyclick			A
+	dc.l fx_locked				B
+	dc.l fx_explosion			C
+	dc.l fx_multi_laser 		D
+	dc.l fx_shields 			E
+	dc.l fx_alert				F
+	dc.l fx_error				G
+	dc.l fx_hexagon 			H
+	dc.l fx_ecm 				I
+	dc.l fx_hit 				J
+	dc.l fx_spacejump			K
+	dc.l fx_missile 			L
+	dc.l fx_warp				M
+	dc.l fx_cargo				N
+	dc.l fx_bang				O
+	dc.l fx_doors				P
+	dc.l fx_teletype

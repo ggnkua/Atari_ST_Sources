@@ -1,0 +1,288 @@
+* @@   @@	 @@    @@@@@@  @@  @@	@@@@
+* @@@ @@@	@@@@   @ @@ @  @@  @@  @@  @@
+* @@@@@@@  @@  @@	 @@    @@  @@  @@
+* @@@@@@@  @@  @@	 @@    @@@@@@	@@@@
+* @@ @ @@  @@@@@@	 @@    @@  @@	   @@
+* @@   @@  @@  @@	 @@    @@  @@  @@  @@
+* @@   @@  @@  @@	@@@@   @@  @@	@@@@
+
+* Low level maths routines.
+
+	include macros
+
+	xref magnitude_table
+
+	section 0
+
+
+* *************************************
+* **								 **
+* ** RANDOM - GENERATE RANDOM NUMBER **
+* **								 **
+* *************************************
+
+* Generates the next random number in the sequence using a 23 bit
+* polynomial.
+
+* Entry: None
+* Exit:  D0 = Random number (0..255)
+
+* Regs:  D0 and D1 corrupt
+* Subr:  None
+
+	subr random,global
+
+	move.b random_seed+2(a6),d1 		get bits 17..23 (and 24)
+	move.b random_seed+1(a6),d0 		get bits 9..16 (new bits 17..23)
+	move.b d0,random_seed+2(a6)
+	move #0,ccr 						put bit 16 in extend
+	cmp.b #$80,d0
+	if <cs> then.s
+		move #16,ccr
+	endi
+	roxl.b #1,d1						put bits 16..23 in temp
+	roxr.b #1,d0						put bit 9 in carry
+	move.b random_seed+0(a6),d0 		get bits 1..8 (new bits 9..16)
+	move.b d0,random_seed+1(a6)
+	roxr.b #1,d0						not bits 2..9
+	eor.b d1,d0 						compute new bits 1..8
+	move.b d0,random_seed+0(a6) 		save that
+	and #255,d0 						mask out upper byte
+
+	ret
+
+
+* **************************************
+* **								  **
+* ** RAND - GENERATES A RANDOM NUMBER **
+* **								  **
+* **************************************
+
+* Generates a random number in a certain range.
+
+* Entry: D2 = range (0..65535)
+* Exit:  D0 = random number
+
+* Regs:  D0 and D1 corrupt
+* Subr:  RANDOM
+
+	subr rand,global
+
+	bsr random							generate low byte
+	push d0
+	bsr random							generate high byte
+	asl #8,d0
+	or (sp)+,d0 						combine bytes
+	mulu d2,d0							clamp within range
+	swap d0
+
+	ret
+
+
+* *******************************
+* **						   **
+* ** SQRT - 32 BIT SQUARE ROOT **
+* **						   **
+* *******************************
+
+* Calculates the square root of a 32 bit unsigned integer.
+
+* Entry: D0.L = number
+* Exit:  D2.W = square root
+
+* Regs:  D0-D3/D7 corrupt.
+* Subr:  None
+
+	subr sqrt,global
+
+	clr d1								take square root
+	clr d2
+	move.l #$40000000,d3				initialise subtrahend
+	loop 1,16
+		sub.l d3,d0 					subtract subtrahend
+		subx d2,d1						trial subtract
+		if <cs> then.s					failed, restore
+			add.l d3,d0
+			addx d2,d1
+		endi
+		eor #1<<extend,ccr				invert extend bit
+		roxl #1,d2						rotate extend bit into D2
+		asl.l #1,d0 					shift D1+D0 left two bits
+		roxl #1,d1
+		asl.l #1,d0
+		roxl #1,d1
+	next 1
+
+	ret
+
+
+* *******************************************************
+* **												   **
+* ** CALC_DISTANCE - CALCULATE DISTANCE BETWEEN POINTS **
+* **												   **
+* *******************************************************
+
+* Calculates the distance between two points in the 3D world. The formula
+* used is d=sqr(x^2+y^2+z^2), where x,y,z are the distances between the
+* points. The 24 bit 3D world coords are reduced to 16 bits as required.
+
+* Entry: (D0.L,D1.L,D2.L) = distance's along the x,y,z axes (unsigned)
+* Exit:  D2.L			  = distance between points
+
+* Regs:  D0-D7 & A0 corrupt
+* Subr:  DISTANCE
+
+	subr calc_distance,global
+
+	move.l d0,d4						determine magnitude of largest
+	or.l d1,d4							distance
+	or.l d2,d4
+	add.l d4,d4 						determine amount to reduce each
+	swap d4 							to fit in 15 bits
+	add d4,d4
+	lea magnitude_table,a0
+	move (a0,d4),d4
+	lsr.l d4,d0 						reduce diffences to 16 bits
+	lsr.l d4,d1
+	lsr.l d4,d2
+	mulu d0,d0							take squares of differences and add
+	mulu d1,d1
+	mulu d2,d2
+	add.l d1,d0
+	add.l d2,d0
+	bsr sqrt							take the square root
+	hclr d2 							re-scale result
+	asl.l d4,d2
+
+	ret
+
+
+* **********************************
+* **							  **
+* ** GETRANDX - GET RANDOM NUMBER **
+* **							  **
+* **********************************
+
+* Gets the next random number.
+
+* Entry: None
+* Exit:  None
+
+* Regs:  D0-D2 corrupt.
+* Subr:  None
+
+	subr getrandx,global
+
+	movem rseed1(a6),d0-d2				get seed
+	add d1,d0							randomize
+	add d2,d0
+	exg d0,d1
+	exg d1,d2
+	movem d0-d2,rseed1(a6)				store seeds
+
+	ret
+
+
+* ***********************************************
+* **										   **
+* ** DIVIDE_BY_10 - DIVIDE 32 BIT NUMBER BY 10 **
+* **										   **
+* ***********************************************
+
+* Action: Divides a 32 bit unsigned number by 10. Used to strip digits from
+*		  a binary number when converting to decimal.
+
+* Entry:  D0.L = 32 bit number
+* Exit:   D0.L = D0.L DIV 10
+*		  D3.W = remainder (0..9)
+
+* Regs:   D0, D3 and D7 corrupt.
+* Subr:   None
+
+	subr divide_by_10,global
+
+	moveq #0,d3 					clear the remainder
+	loop 1,32						32 bits to divide
+		roxl.l #1,d0				rotate dividend/quotient left
+		roxl #1,d3					into the remainder
+		sub #10,d3					trial subtract
+		if <lt> then.s				failed
+			add #10,d3				restore remainder
+		endi
+	next 1
+	roxl.l #1,d0					rotate last bit in
+	not.l d0						invert all bits
+
+	ret
+
+
+* *************************************************
+* **											 **
+* ** DIVIDE_BY_1E5 - DIVIDE 32 BIT NUMBER BY 1E5 **
+* **											 **
+* *************************************************
+
+* Divides a 32 bit unsigned number by 100,000. Used to convert grammes to
+* tonnes for printing. The Print_Number routine further divides the number
+* by 10 while printing.
+
+* Entry:  D3.L = 32 bit number
+* Exit:   D0.L = Quotient
+
+* Regs:   ?
+* Subr:   None
+
+	subr divide_by_1e5,global
+
+	moveq #0,d0 					clear the remainder
+	move.l #100000,d1				D1 = divisor
+	loop 1,32						32 bits to divide
+		roxl.l #1,d3				rotate dividend/quotient left
+		roxl.l #1,d0				into the remainder
+		sub.l d1,d0 				trial subtract
+		if <cs> then.s				failed
+			add.l d1,d0 			restore remainder
+		endi
+	next 1
+	roxl.l #1,d3					rotate last bit in
+	not.l d3						invert all bits
+	move.l d3,d0					D0 = quotient
+
+	ret
+
+
+* **********************************
+* **							  **
+* ** SQRT_16 - 16 BIT SQUARE ROOT **
+* **							  **
+* **********************************
+
+* Calculates the square root of a 16 bit unsigned integer.
+
+* Entry: D0 = number
+* Exit:  D2 = square root
+
+* Regs:  D0-D3/D7 corrupt.
+* Subr:  None
+
+	subr sqrt_16,global
+
+	clr d1								clear accumlators
+	clr d2
+	move #$4000,d3						initialise subtrahend
+	loop 1,8
+		sub d3,d0						subtract subtrahend
+		subx d2,d1						trial subtract
+		if <cs> then.s					failed, restore
+			add d3,d0
+			addx d2,d1
+		endi
+		eor #1<<extend,ccr				invert extend bit
+		roxl #1,d2						rotate extend bit into D2
+		asl #1,d0						shift D1+D0 left two bits
+		roxl #1,d1
+		asl #1,d0
+		roxl #1,d1
+	next 1
+
+	ret

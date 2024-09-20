@@ -1,0 +1,1226 @@
+; @@@@@@@	@@@    @@  @@  @@@@@@ @@@@@@
+;  @@	@  @@ @@   @@  @@	 @@    @@  @@
+;  @@ @   @@   @@  @@  @@	 @@    @@  @@
+;  @@@@   @@   @@  @@  @@	 @@    @@@@@
+;  @@ @   @@ @@ @  @@  @@	 @@    @@
+;  @@	@ @@  @@   @@  @@	 @@    @@
+; @@@@@@@  @@@ @@	@@@@   @@@@@@ @@@@
+
+; Routines for equipping the Cobra ship.
+
+; Version 1.0 25th July 1988 Copyright (c) 1988 Mr. Micro Ltd.
+; Designed and coded by Rob Nicholson.
+
+; Modification history:
+
+; V1.1	30/03/90	'E-L-I-T-E' message flashes on status screen.
+
+	include macros
+	include bitlist
+
+	xref invert_icon,prepare_text,print_centre,text_colour,find_bitmap,locate
+	xref put_bitmap,print_number,print_string,init_cursor,clear_input,str_copy
+	xref find_table,equipment_list,str_cat,error_box,hide_cursor,line
+	xref draw_sprite,restore_cursor,remove_sprite,set_colour,ratings
+	xref build_number,build_name,print_table,lines,launch,buy_cargo,sell_cargo
+	xref galactic_chart,local_chart,data,market_prices,inventory,disk,options
+	xref find_planet,home_cursor,monst,check_docked,flush_keyboard
+
+; ---- LOCAL CONSTANTS ----
+
+equip_x:		equ 4					coords of 1st equipment icon
+equip_y:		equ 17
+laser_x:		equ 54					coords of mount laser box
+laser_y:		equ 50
+cobra_x1:		equ laser_x+48
+cobra_y1:		equ laser_y+22
+cobra_x2:		equ 81					status screen cobra
+cobra_y2:		equ 93
+
+; ---- LOCAL VARIABLES ----
+
+	vars equip
+
+this_equip: 	ds.w 1					current equipment item #
+max_equip:		ds.w 1					maximum equipment for planet
+xc1:			ds.w 1					highlight window coords
+yc1:			ds.w 1
+xc2:			ds.w 1
+yc2:			ds.w 1
+selected:		ds.w 1					flag: cargo item selected
+valid_pos:		ds.b 4					valid laser positions
+laser_idx:		ds.w 1					idx: laser dismounted
+old:			ds.w 1					old laser state (if any)
+free_pos:		ds.w 1					no. free laser positions (dbra)
+base_y: 		ds.w 1					base y of equipment tree
+
+	end_vars equip
+
+; ---- LOCAL MACROS ----
+
+; draw_line x1,y1,x2,y2 - draw line between coords
+
+draw_line: macro
+
+	move \1(a6),d0
+	move \2(a6),d1
+	move \3(a6),d2
+	move \4(a6),d3
+	jsr line
+
+	endm
+
+	module equip
+
+
+; ************************************
+; **								**
+; ** EQUIP_SHIP - EQUIP SHIP SCREEN **
+; **								**
+; ************************************
+
+; Action entry point for the equip ship screen.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr equip_ship,global
+
+	jsr check_docked					check we are docked
+	moveq #icon_equip,d0				invert icon
+	jsr invert_icon
+	jsr prepare_text					prepare text screen
+	lea text1(pc),a0					print "Equip Ship"
+	moveq #title_y,d1
+	jsr print_centre
+	clr d7								work out how much of the list can be
+	lea tech_levels(pc),a0				displayed
+	move splanet+tech(a6),d0
+	while d0 <hs> (a0)+ do
+		inc d7
+	endw
+	move d7,max_equip(a6)
+	moveq #orange,d0					print in orange
+	moveq #trans,d1
+	jsr text_colour
+	clr this_equip(a6)					start at item #0
+	repeat
+		move this_equip(a6),d0			find bit map for equipment icon
+		add #bit_equipment,d0
+		jsr find_bitmap
+		bsr icon_coords 				find coords of icon
+		jsr put_bitmap					draw equipment icon
+		bsr icon_coords 				position cursor for price
+		lsr #3,d0
+		add #40,d1
+		jsr locate
+		bsr find_equip					fetch price of equipment
+		tst this_equip(a6)				fuel ?
+		if <eq> then.s					yes
+			move #128,d1				print in floating point
+		else.s
+			divu #10,d0
+			hclr d0
+			move #$8004,d1
+		endi
+		jsr print_number
+		lea text2(pc),a0				print "Cr"
+		jsr print_string
+		inc this_equip(a6)				next item of equipment
+		move this_equip(a6),d0
+		cmp max_equip(a6),d0
+	until <eq>
+	lea equip_ship_action(pc),a0		initialise cursor
+	jsr init_cursor
+	clr selected(a6)					equipment not selected
+
+	rts 								return
+
+
+; **************************************
+; **								  **
+; ** EQUIP_ICON - CLICK ON EQUIP ICON **
+; **								  **
+; **************************************
+
+; This routine is called everytime the equip icon is clicked (single/double).
+; equip ship screen.
+
+	subr equip_icon
+
+	moveq #icon_equip,d0				invert icon
+	jsr invert_icon
+	tst selected(a6)					equipment selected ?
+	if <ne> then.s						yes
+		move this_equip(a6),d0			buy it
+		bsr d_equip
+	endi
+
+	ret
+
+
+; *************************************************
+; **											 **
+; ** S_EQUIP - CLICK ON EQUIP SHIP ICON (SINGLE) **
+; **											 **
+; *************************************************
+
+; Action routine for single click on any of the equipment icons on the
+; equip ship screen. Checks first if the area clicked is valid.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr s_equip
+
+	cmp max_equip(a6),d0				valid click ?
+	bhs no_select						no, clear any selection
+	bsr draw_highlight					draw highlight around equipment
+	jsr clear_input 					clear input line
+	move this_equip(a6),d0				print description of equipment
+	lea equipment_desc(pc),a0
+	jsr find_table
+	move #prompt_y,d1
+	jmp print_centre
+
+
+; *************************************************
+; **											 **
+; ** D_EQUIP - CLICK ON EQUIP SHIP ICON (DOUBLE **
+; **											 **
+; *************************************************
+
+; Action routine for double click on any of the equipment icons on the
+; equip ship screen. Checks first if the area clicked is valid.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr d_equip
+
+	cmp max_equip(a6),d0				valid click ?
+	bhs no_select						no, clear any selection
+	bsr draw_highlight					highlight selected item
+	bsr find_equip						find equipement record
+	move this_equip(a6),d1				fuel ?
+	if d1 <eq> #0 then.s				yes
+		bra buy_fuel
+	endi
+	cmp #1,d1							buy missiles ?
+	beq buy_missiles					yes
+	tst (a5)							laser ?
+	bmi buy_laser						yes
+	tst (a5)							already got one ?
+	beq deduct							no, purchase and deduct
+	lea text9(pc),a0					copy "Only 1" into buffer
+	lea pad(a6),a1
+	jsr str_copy
+	lea equipment_list,a0				add description
+	move this_equip(a6),d0
+	jsr find_table
+	move.l a0,a1
+	lea pad(a6),a0
+	jsr str_cat
+	lea pad(a6),a0						add " allowed"
+	lea text10(pc),a1
+	jsr str_cat
+	lea pad(a6),a0						print error box
+	jsr error_box
+	bra no_select						remove highlight
+
+
+; ****************************************
+; **									**
+; ** BUY_FUEL - FILL UP THE FUEL TANKS	**
+; **									**
+; ****************************************
+
+; Calculate how much fuel is required to fill the tanks up to the max.
+; of 7 light years (held as 70). if the player doesn't have enough money
+; to fill the tanks, the routine calculates how much they can buy
+
+; Entry: A5 = ptr: equipment array
+; Exits: None
+
+; Regr: ?
+; Subr: PRINT_CASH, MESSAGE
+
+	subr buy_fuel
+
+	move mission(a6),d0 				on 3rd mission ?
+	and #240,d0
+	if d0 <eq> #$30 then.s				yes
+		lea text3(pc),a0				print "No fuel" message
+		jsr error_box
+		bra no_select					remove highlight and return
+	endi
+	moveq #70,d0						calculate how much fuel is required
+	sub fuel(a5),d0 					to fill the tank
+	if <eq> then.s						already full!
+		lea text4(pc),a0
+		jsr error_box
+		bra no_select
+	endi
+	repeat
+		move price_fuel(a6),d1			calculate how much it is going to cost
+		mulu d0,d1						(amount x cost)
+		divu #10,d1
+		ext.l d1
+		sub.l cash(a6),d1
+		neg.l d1
+		break.s if <pl> 				we have enough dosh!
+		move cash+2(a6),d0				calculate amount of fuel the player
+		mulu #10,d0
+		divu price_fuel(a6),d0			can buy
+	endr
+	move.l d1,cash(a6)					update cash
+	add d0,fuel(a5)
+	bsr no_select						print cash left
+	bra cash_left
+
+
+; ************************************************
+; **											**
+; ** BUY_MISSILES - EQUIP COBRA WITH MISSILES	**
+; **											**
+; ************************************************
+
+; Equip the cobra with another missle. the launcher can only hold four
+; missiles and amessage to print if the launcher is already full.
+; Cash is deducted if sufficient funds.
+
+; Entry: A5.L = ptr: equipment array
+;		 D0.L = price of each missile
+; Exits: None
+
+; Regr: ?
+; Subr: DEDUCT and MESSAGES
+
+	subr buy_missiles
+
+	cmp #4,(a5) 						already got 4 missiles ?
+	if <eq> then.s						yes
+		lea text7(pc),a0				print error message
+		jsr error_box
+		bra no_select
+	endi
+	moveq #missiles,d6					try and buy missile
+	bra deduct
+
+
+; ****************************************
+; **									**
+; ** BUY_LASER - EQUIP COBRA WITH LASER **
+; **									**
+; ****************************************
+
+; Attempt to buy one of the four type of laser. The status of the laser is held
+; in the EQUIP list in bitwise format. Bit 15 is set to prevent DEDUCT from
+; incrementing the entry when deducting the price of the laser. The bits are:-
+
+;							1 X X X R L B F
+;							7 6 5 4 3 2 1 0
+
+;	This is a complex routine (it took long enough to write) and its main
+;	functions are :-
+
+;	1.	If four laser are already mounted, print a message and exit.
+;	2.	If three laser are mounted, automatically mount the last laser.
+;	3.	Ask the user where he want to mount the laser and check valid.
+;	4.	If there is another type of laser mounted in the required position
+;		demount that laser and reimburse the cost.
+;	5.	Check the player has enough cash
+
+; Entry: A5 = ptr: equipment list
+; Exits: None
+
+; Regr: ?
+; Subr: ?
+
+	subr buy_laser
+
+	move (a5),d1						already four lasers mounted ?
+	and #15,d1
+	if d1 <eq> #15 then.s				yes
+		lea text11(pc),a0				print message
+		jsr error_box
+		bra no_select					remove highlight and exit
+	endi
+	jsr hide_cursor 					display blank box for mounting lasers
+	lea temp_spr(a6),a4
+	move.l scr_base(a6),d0
+	add #16384,d0
+	move.l flip_screen(a6),d1
+	eor.l d1,d0
+	move.l d0,buffer_ptr(a4)
+	moveq #bit_lasers,d0
+	jsr find_bitmap
+	move.l a0,data_ptr(a4)
+	move #laser_x,sp_xpos(a4)
+	move #laser_y,sp_ypos(a4)
+	jsr draw_sprite
+	moveq #bit_cobra,d0 				find cobra bitmap
+	jsr find_bitmap
+	move #cobra_x1,d0					draw cobra
+	move #cobra_y1,d1
+	jsr put_bitmap
+	jsr find_equip						fetch current laser state (%0010)
+	move (a5),d0
+	lea position_coords(pc),a0			loop for each position
+	loop 1,4
+		lsr #1,d0						laser mounted on this view ?
+		if <cc> then.s					no
+			movem.l d0/d7/a0,-(sp)
+			push 2(a0)					fetch x and y coords of dialog box
+			push 4(a0)
+			move (a0),d0				find bit map
+			jsr find_bitmap
+			pop d1						draw dialog box
+			pop d0
+			jsr put_bitmap
+			movem.l (sp)+,d0/d7/a0
+		endi
+		addq.l #6,a0					next position
+	next 1
+	jsr clear_input 					print prompt
+	lea text12(pc),a0
+	move #prompt_y,d1
+	jsr print_centre
+	lea mount_action_table(pc),a0		initialise cursor
+	jsr init_cursor
+	repeat								wait for click
+		tst button_pressed(a6)
+	until <ne>
+	move.w function(a6),d0				execute action routine
+	move.l action_ptr(a6),a0
+	clr button_pressed(a6)
+	jsr (a0)
+	jsr flush_keyboard					remove any pending characters
+	jmp restore_cursor					restore entry cursor state
+
+
+; *********************************************
+; **										 **
+; ** REMOVE_MOUNT - REMOVE MOUNT LASER PANEL **
+; **										 **
+; *********************************************
+
+; Removes the mount laser panel from the screen.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr remove_mount
+
+	jsr hide_cursor 					remove mount display
+	lea temp_spr(a6),a4
+	jsr remove_sprite
+	bsr no_select						remove highlight
+	jmp restore_cursor
+
+
+; **************************************
+; **								  **
+; ** MOUNT - CLICK MOUNT LASER BUTTON **
+; **								  **
+; **************************************
+
+; Action routine for single/double click of mount laser routine.
+
+; Entry: D0 = bit # (0..3)
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr mount
+
+	push d0 							remove mount panel
+	bsr remove_mount
+	bsr find_equip						valid mount position ?
+	pop d1
+	btst d1,1(a5)
+	ret <ne>							no (already mounted)
+	lea laser_list(pc),a0				start of laser items array
+	lea equip(a6),a4					start of equipment array
+	clr d3								assume not replacing a laser
+	loop 1,4
+		move (a0)+,d2					fetch next laser type (index)
+		cmp this_equip(a6),d2			current laser ?
+		if <ne> then.s					no
+			add d2,d2					laser to be replaced ?
+			btst d1,1(a4,d2)
+			if <ne> then.s				yes
+				move d2,d3				save index and state for later
+				move (a4,d2),d4
+				bclr d1,1(a4,d2)		demount laser
+				lea equip_price(pc),a1	reimburse cost
+				add d2,d2
+				move.l (a1,d2),d2
+				move.l cash(a6),d5
+				add.l d2,cash(a6)
+			endi
+		endi
+	next 1
+	sub.l d0,cash(a6)					do we have enough money ?
+	if <cs> then.s						no
+		add.l d0,cash(a6)				restore cash
+		tst d3							laser demounted ?
+		if <ne> then.s					yes
+			move.w d4,(a4,d3)			remount laser
+			move.l d5,cash(a6)			restore cash
+		endi
+		lea text8(pc),a0				print error message
+		jsr error_box
+	else.s
+		bset d1,1(a5)					mount the laser
+		bsr cash_left					print cash left
+	endi
+
+	ret 								return
+
+
+; *************************************************
+; **											 **
+; ** ICON_COORDS - RETURN COORDS OF CURRENT ICON **
+; **											 **
+; *************************************************
+
+; Returns the x and y coords of the current equipment icon.
+
+; Entry: THIS_EQUIP = current cargo item #
+; Exit:  (D0,D1)	= screen coords
+
+; Regs: ?
+; Subr: ?
+
+	subr icon_coords
+
+	move this_equip(a6),d1				index into coords table
+	asl #2,d1
+	lea equip_coords(pc),a1
+	move 0(a1,d1),d0					fetch x coord
+	move 2(a1,d1),d1					fetch y coord
+
+	ret 								return
+
+
+; ****************************************
+; **									**
+; ** FIND_EQUIP - FIND EQUIPMENT RECORD **
+; **									**
+; ****************************************
+
+; Returns a pointer to the relevant equipment record and the price.
+
+; Entry: THIS_EQUIP = equipment #
+; Exit:  A5.L = ptr: equipment record
+;		 D0.L = price of equipment
+
+; Regs: D0/A0/A5 corrupt.
+; Subr: None
+
+	subr find_equip
+
+	move this_equip(a6),d0				index into equipment array
+	add d0,d0
+	lea equip(a6),a5
+	lea (a5,d0),a5
+	lea equip_price(pc),a0				fetch price of equipment
+	add d0,d0
+	move.l (a0,d0),d0
+	if <eq> then.s						must be fuel (price = 0)
+		move price_fuel(a6),d0
+		ext.l d0
+	endi
+
+	ret 								return
+
+
+; ***********************************************
+; **										   **
+; ** DRAW_HIGHLIGHT - HIGHLIGHT EQUIPMENT ICON **
+; **										   **
+; ***********************************************
+
+; Draws a highlight window around the selected equipment icon. First removes
+; any highlight from another icon.
+
+; Entry: D0 = equipment item #
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr draw_highlight
+
+	push d0 							cargo item already selected ?
+	tst selected(a6)
+	if <ne> then.s						yes
+		moveq #black,d0 				remove highlight
+		bsr highlight
+	endi
+	move (sp)+,this_equip(a6)			highlight selected item
+	moveq #white,d0
+	bsr highlight
+	st selected(a6) 					item selected
+
+	rts 								return
+
+
+; ***********************************************
+; **										   **
+; ** HIGHLIGHT - HIGHLIGHT SELECTED CARGO ITEM **
+; **										   **
+; ***********************************************
+
+; Highlight (or remove) the selected equipment icon. This is a low level
+; routine that does the actual drawing. You should use DRAW_HIGHLIGHT which
+; removes any previous highlight.
+
+; Entry: D0 = colour to draw lines
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr highlight
+
+	jsr set_colour						set line colour
+	jsr hide_cursor 					remove cursor
+	bsr icon_coords 					calculate coords of box
+	move d0,d2
+	move d1,d3
+	subq #4,d0
+	subq #1,d1
+	add #58,d2
+	add #48,d3
+	movem d0-d3,xc1(a6)
+	draw_line xc1,yc1,xc2,yc1			top edge
+	draw_line xc2,yc1,xc2,yc2			right edge
+	draw_line xc2,yc2,xc1,yc2			bottom edge
+	draw_line xc1,yc2,xc1,yc1			left edge
+	jmp restore_cursor
+
+
+; **************************************
+; **								  **
+; ** NO_SELECT - REMOVE ANY SELECTION **
+; **								  **
+; **************************************
+
+; Routine called everytime an area outside other boundaries is selected.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr no_select
+
+	tst selected(a6)					equipment item selected ?
+	if <ne> then.s						yes
+		moveq #black,d0 				remove highlight
+		bsr highlight
+		clr selected(a6)				nothing selected
+	endi
+	jsr clear_input 					clear input window
+	moveq #-1,d0						clear any inverted icon
+	jmp invert_icon
+
+
+; **************************************
+; **								  **
+; ** CASH_LEFT - PRINT REMAINING CASH **
+; **								  **
+; **************************************
+
+; Prints the amount of cash left on the command line.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr cash_left
+
+	jsr clear_input 					clear input line
+	lea text5(pc),a0					copy "Cash left: into buffer
+	lea pad(a6),a1
+	jsr str_copy
+	move.l cash(a6),d0					add cash
+	move #$80,d1
+	move.l a1,a0
+	dec.l a0
+	jsr build_number
+	lea pad(a6),a0						add " credits"
+	lea text6(pc),a1
+	jsr str_cat
+	lea pad(a6),a0						print string
+	move #prompt_y,d1
+	jmp print_centre
+
+
+; *****************************************
+; **									 **
+; ** DEDUCT - DEDUCT AMOUNT OF EQUIPMENT **
+; **									 **
+; *****************************************
+
+; Deduct the price of an item of equpment and mark the item as purchased
+; (unless bit 15 is set)
+
+; Entry: A5.L = ptr: equipment record
+;		 D0.L = price of equipment
+; Exits: Purchase_Ok flag set if enought money
+
+; Regr: ?
+; Subr: ?
+
+	subr deduct
+
+	sub.l d0,cash(a6)					subtract from cash
+	if <cs> then.s						not enough money ?
+		add.l d0,cash(a6)				restore cash
+		lea text8(pc),a0				print error message
+		jsr error_box
+		bsr no_select					remove highlight
+	else
+		inc (a5)						install equipment
+		bsr no_select					remove highlight
+		bsr cash_left					print cash left
+	endi
+
+	ret 								return
+
+
+; ***********************************
+; **							   **
+; ** STATUS - PLAYER STATUS SCREEN **
+; **							   **
+; ***********************************
+
+; Display player status screen (location, equipment etc.) Due to the large
+; number of coordinates, it was felt that contants would make the routine
+; look more complex.
+
+; V1.1	- 'E-L-I-T-E' message flashes on status screen.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr status,global
+
+	tst cockpit_on(a6)					cockpit displayed ?
+	if <eq> then.s						no
+		moveq #icon_status,d0			invert icon
+		jsr invert_icon
+	endi
+	jsr prepare_text					prepare text screen
+	bsr print_name						print commander's name
+	lea text13(pc),a0					print headings
+	jsr print_string
+	moveq #16,d0						print present system
+	moveq #text_top+2,d1
+	jsr locate
+	moveq #orange,d0
+	moveq #trans,d1
+	jsr text_colour
+	tst witch_space(a6)
+	if <ne> then.s
+		lea text15(pc),a0
+	else
+		move current(a6),d0
+		jsr build_name
+		lea planet_name(a6),a0
+	endi
+	jsr print_string
+	moveq #12,d0						print hyperspace systems
+	moveq #text_top+2+8,d1
+	jsr locate
+	move req_planet(a6),d0
+	jsr build_name
+	lea planet_name(a6),a0
+	jsr print_string
+	moveq #11,d0						print condition
+	moveq #text_top+2+16,d1
+	jsr locate
+	tst docked(a6)
+	if <eq> then.s
+		move condition(a6),d0
+		lea condition_cols(pc),a0
+		jsr print_table
+	else.s
+		lea text17(pc),a0
+		jsr print_string
+	endi
+	moveq #14,d0						print police record
+	moveq #text_top+2+24,d1
+	jsr locate
+	moveq #white,d0
+	moveq #trans,d1
+	jsr text_colour
+	move police_record(a6),d0
+	if <ne> then.s
+		if d0 <lo> #50 then.s
+			moveq #1,d0
+		else.s
+			moveq #2,d0
+		endi
+	endi
+	lea legal_status(pc),a0
+	jsr print_table
+	moveq #8,d0 						print rating
+	moveq #text_top+2+32,d1
+	jsr locate
+	cmp #max_rating,rating(a6)			(flash if Elite)
+	if <eq> then.s
+		moveq #pulse,d0
+	else.s
+		moveq #lgt_blue,d0
+	endi
+	moveq #trans,d1
+	jsr text_colour
+	move rating(a6),d0
+	lea ratings,a0
+	jsr print_table
+	moveq #6,d0 						print fuel
+	moveq #text_top+2+40,d1
+	jsr locate
+	moveq #yellow,d0
+	moveq #trans,d1
+	jsr text_colour
+	move equip+fuel(a6),d0
+	ext.l d0
+	move #128,d1
+	jsr print_number
+	lea text16(pc),a0
+	jsr print_string
+	moveq #6,d0 						print cash
+	moveq #text_top+2+48,d1
+	jsr locate
+	move.l cash(a6),d0
+	move #128,d1
+	jsr print_number
+	lea text6(pc),a0					(credits)
+	jsr print_string
+	moveq #bit_cobra,d0 				display cobra
+	jsr find_bitmap
+	move #cobra_x2,d0
+	move #cobra_y2,d1
+	jsr put_bitmap
+	moveq #lgt_grey,d0					draw lines in grey
+	jsr set_colour
+	clr base_y(a6)						start at bottom of equipment tree
+	lea equip+2(a6),a0					loop for each item of equipment
+	clr this_equip(a6)
+	repeat
+		tst (a0)						item fitted and not a laser
+		if <gt> then					yes
+			push.l a0					first item on the tree ?
+			move base_y(a6),d1
+			if <eq> then.s				yes
+				move #bit_arrow_left,d0 display little (ah!) arrow
+				jsr find_bitmap
+				move #181,d0
+				move #109,d1
+				jsr put_bitmap
+				lea equip_lines(pc),a0	draw connecting lines
+				jsr lines
+				move #111,base_y(a6)	set base y coord
+			else.s
+				move #210,d0			draw connecting lines
+				move #210,d2
+				move d1,d3
+				subq #8,d3
+				move d3,base_y(a6)
+				jsr line
+				move #210,d0
+				move base_y(a6),d1
+				move #218,d2
+				move d1,d3
+				jsr line
+			endi
+			move this_equip(a6),d0		energy unit ?
+			cmp #8,d0
+			if <eq> then.s				yes
+				move.l (sp),a0			naval energy unit ?
+				cmp #2,(a0)
+				if <eq> then.s			yes
+					moveq #16,d0
+				endi
+			endi
+			push d0 					find bitmap
+			add #bit_equip_text,d0
+			jsr find_bitmap
+			move #220,d0				draw equipment text description
+			move base_y(a6),d1
+			subq #2,d1
+			jsr put_bitmap
+			pop d0						missiles (bit offset = 0) ?
+			if <eq> then.s				yes
+				bsr number_missiles 	draw # of missiles
+			endi
+			pop.l a0
+		endi
+		addq.l #2,a0					next item of equipment
+		inc this_equip(a6)
+		cmp #16,this_equip(a6)
+	until <eq>
+	lea laser_data(pc),a5				start of laser data
+	loop 1,4							loop for each position
+		move 0(a5),d0					fetch bit # (0..3)
+		lea laser_types(pc),a1			check if laser mounted
+		lea equip(a6),a2
+		loop 2,d6,4
+			move (a1)+,d1
+			btst d0,1(a2,d1)
+			if <ne> then.s				laser mounted
+				bsr label_laser 		label the laser
+				bra next_position		try next position
+			endi
+			addq.l #2,a1
+		next 2,d6
+
+next_position:
+
+		lea 16(a5),a5					next position of laser
+	next 1
+	moveq #white,d0 					draw clock outline
+	jsr set_colour
+	lea clock_outline(pc),a0
+	jsr lines
+	st display_clock(a6)				display the clock
+	lea status_action_table(pc),a0		initialise cursor
+	jmp init_cursor
+
+
+; **********************************************************
+; **													  **
+; ** NUMBER_MISSILES - PRINT NUMBER OF MISSILES INSTALLED **
+; **													  **
+; **********************************************************
+
+; Displays the number of missiles installed on the Cobra after the
+; 'Missiles x ' message.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr number_missiles
+
+	move equip+missiles(a6),d0			find bitmap
+	add #bit_numbers-1,d0
+	jsr find_bitmap
+	move #220+58,d0 					draw equipment text description
+	move base_y(a6),d1
+	subq #2,d1
+	jmp put_bitmap
+
+
+; ***************************************
+; **								   **
+; ** LABEL_LASER - DISPLAY LASER LABEL **
+; **								   **
+; ***************************************
+
+; Draws the label line and laser description around the Cobra on the status
+; screen.
+
+; Entry: A5 = ptr: laser label data table
+;		 A1 = ptr: width of description
+;		 D1 = idx: equipment array
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr label_laser
+
+	push d7 							save D7 (counter)
+	push (a1)							save width of description
+	push d1 							save equipment index
+	move 2(a5),d0						find arrow bit map
+	jsr find_bitmap
+	move 4(a5),d0						draw the arrow
+	move 6(a5),d1
+	jsr put_bitmap
+	pop.w d0							find the label description
+	lsr #1,d0
+	add #bit_equip_text-1,d0
+	jsr find_bitmap
+	pop d0								centre description
+	lsr #1,d0
+	sub 8(a5),d0
+	neg d0
+	move 10(a5),d1						draw the description
+	jsr put_bitmap
+	move.l 12(a5),a0
+	jsr lines
+	pop.w d7							restore D7
+
+	ret 								return
+
+
+; ****************************************
+; **									**
+; ** PRINT_NAME - PRINT COMMANDERS NAME **
+; **									**
+; ****************************************
+
+; Prints the commanders name at the top of the text screen (centered)
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr print_name,global
+
+	lea text14(pc),a0					copy 'Commander ' into buffer
+	lea pad(a6),a1
+	jsr str_copy
+	lea pad(a6),a0						add players name
+	lea player_name(a6),a1
+	jsr str_cat
+	lea pad(a6),a0						print 'Commander xxxx' centered
+	moveq #title_y,d1
+	jmp print_centre
+
+
+; ---- LOCAL DATA ----
+
+; Table of screen coords of equipment icons.
+
+equip_coords:
+
+	dc equip_x,equip_y					fuel
+	dc equip_x+64,equip_y				missiles
+	dc equip_x+128,equip_y				extra cargo hold
+	dc equip_x+192,equip_y				ECM
+	dc equip_x+256,equip_y				pulse laser
+	dc equip_x,equip_y+52				beam laser
+	dc equip_x+64,equip_y+52			extra energy unit
+	dc equip_x+128,equip_y+52			escape capsule
+	dc equip_x+192,equip_y+52			energy bomb
+	dc equip_x+256,equip_y+52			fuel scoop
+	dc equip_x,equip_y+104				docking computer
+	dc equip_x+64,equip_y+104			hyperdrive
+	dc equip_x+128,equip_y+104			mining laser
+	dc equip_x+192,equip_y+104			military laser
+	dc equip_x+256,equip_y+104			retro-rockets
+
+; Equip ship action table.
+
+equip_ship_action:
+
+	action 131,174,163,180,0,0,equip_icon
+	action equip_x-2,equip_y-2,equip_x+57,equip_y+40,0,-1,equip
+	action equip_x-2+64,equip_y-2,equip_x+57+64,equip_y+40,1,-1,equip
+	action equip_x-2+128,equip_y-2,equip_x+57+128,equip_y+40,2,-1,equip
+	action equip_x-2+192,equip_y-2,equip_x+57+192,equip_y+40,3,-1,equip
+	action equip_x-2+256,equip_y-2,equip_x+57+256,equip_y+40,4,-1,equip
+	action equip_x-2,equip_y-2+52,equip_x+57,equip_y+40+52,5,-1,equip
+	action equip_x-2+64,equip_y-2+52,equip_x+57+64,equip_y+40+52,6,-1,equip
+	action equip_x-2+128,equip_y-2+52,equip_x+57+128,equip_y+40+52,7,-1,equip
+	action equip_x-2+192,equip_y-2+52,equip_x+57+192,equip_y+40+52,8,-1,equip
+	action equip_x-2+256,equip_y-2+52,equip_x+57+256,equip_y+40+52,9,-1,equip
+	action equip_x-2,equip_y-2+104,equip_x+57,equip_y+40+104,10,-1,equip
+	action equip_x+62,equip_y+102,equip_x+57+64,equip_y+40+104,11,-1,equip
+	action equip_x+126,equip_y+102,equip_x+57+128,equip_y+40+104,12,-1,equip
+	action equip_x+190,equip_y+102,equip_x+57+192,equip_y+40+104,13,-1,equip
+	action equip_x+256,equip_y+102,equip_x+57+256,equip_y+40+104,14,-1,equip
+	include icons.m68
+	dc.w -1
+	dc.l no_select
+
+; Status screen action table.
+
+status_action_table:
+
+	include icons.m68
+	dc.w -1
+	dc.l 0
+
+; No. of available products for each tech. level.
+
+tech_levels:
+
+	dc 0,0,0,2,3,4,5,6,7,8,9,10,10,10,10,-1
+
+; List of equipment prices.
+
+equip_price:
+
+	dc.l 0,300,4000,6000,4000,10000,5250,10000,9000,15000,15000,50000
+	dc.l 8000,60000,80000
+
+; List of laser types (indexes into EQUIP array).
+
+laser_list:
+
+	dc pulse_lasers>>1,mining_lasers>>1,beam_lasers>>1,military_lasers>>1
+
+; Coords of the laser position dialog boxes.
+
+position_coords:
+
+	dc bit_positions+0,laser_x+81,laser_y+5 	front
+	dc bit_positions+1,laser_x+85,laser_y+77	rear
+	dc bit_positions+2,laser_x+14,laser_y+32	left
+	dc bit_positions+3,laser_x+154,laser_y+32	right
+
+; Mount laser action table.
+
+mount_action_table:
+
+	action laser_x+81,laser_y+5,laser_x+127,laser_y+19,0,0,mount
+	action laser_x+85,laser_y+77,laser_x+123,laser_y+91,1,0,mount
+	action laser_x+14,laser_y+32,laser_x+52,laser_y+46,2,0,mount
+	action laser_x+154,laser_y+32,laser_x+200,laser_y+46,3,0,mount
+	dc.w -1
+	dc.l remove_mount
+
+; Initial equipment line.
+
+equip_lines:
+
+	dc 184,111,218,111,-1
+
+; Clock outline window.
+
+clock_outline:
+
+	dc clock_x*8-2,clock_y-2,clock_x*8+91,clock_y-2
+	dc clock_x*8+91,clock_y+17,clock_x*8-2,clock_y+17
+	dc clock_x*8-2,clock_y-2,-1
+
+; Laser equipment position data. Format:
+
+;	dc.w bit#,bit_map#,bit_x,bit_y,text_x,text_y
+;	dc.l line_list_ptr
+
+laser_data:
+
+	dc.w 0,bit_arrow_right,115,97,78,86 	front
+	dc.l front_lines
+	dc.w 1,bit_arrow_up,131,144,112,152 	rear
+	dc.l rear_lines
+	dc.w 2,bit_arrow_right,76,124,44,112	left
+	dc.l left_lines
+	dc.w 3,bit_arrow_left,192,121,237,130	right
+	dc.l right_lines
+
+laser_types:
+
+	dc pulse_lasers,63,beam_lasers,59
+	dc mining_lasers,71,military_lasers,83
+
+front_lines:
+
+	dc 78,93,78,99,114,99,-1
+
+rear_lines:
+
+	dc 112,150,112,148,133,148,133,147,-1
+
+left_lines:
+
+	dc 44,119,44,126,75,126,-1
+
+right_lines:
+
+	dc 237,128,237,123,195,123,-1
+
+; Full equipment descriptions.
+
+equipment_desc:
+
+	dz <Fuel (WS Thru-Space Drive)>
+	dz <Lance and Ferman Missiles>
+	dz <Mariner 35t Freight Chamber>
+	dz <Interspace Heavy Element ECM>
+	dz <Ingram Model 1919A4 Pulse Laser>
+	dz <Ingram Model 1928A2 Beam Laser>
+	dz <Deep Space ReQax Fuel Scoop>
+	dz <Xeesian FastJet LSC Escape Capsule>
+	dz <Medusa Pandora Energy Bomb>
+	dz <Extra Zieman Energy Unit>
+	dz <SinCorn RemLock Docking Computer>
+	dz <Xexor/Hikan Galactic Hyperdrive>
+	dz <Kruger ARM64 Sp. Mining laser>
+	dz <M1928A2 Military laser>
+	dz <Xasar Ion Retro-Rockets>
+
+; Misc. text strings,
+
+text1:	db 'Equip Ship',0
+text2:	db ' Cr',0
+text3:	db 'Fuel is not available from this station',0
+text4:	db 'Fuel system already full (7.0 light years)',0
+text5:	db 'Cash left: ',0
+text6:	db ' credits',0
+text7:	db 'Maximum of 4 missiles already installed',0
+text8:	db 'Sorry - you don''t have enought credits',0
+text9:	db 'Only 1 ',0
+text10: db ' allowed.',0
+text11: db 'All lasers (of that type) aleady mounted',0
+text12: db 'Select Position For Laser',0
+text13: db c_cursor,clock_x+1,clock_y,'Game Time'
+		db c_ink,magenta
+		db c_cursor,0,text_top+2
+		db 'Present System:'
+		db c_cursor,0,text_top+2+8
+		db 'Hyperspace:'
+		db c_cursor,0,text_top+2+16
+		db 'Condition:'
+		db c_cursor,0,text_top+2+24
+		db 'Legal Status:'
+		db c_cursor,0,text_top+2+32
+		db 'Rating:'
+		db c_cursor,0,text_top+2+40
+		db 'Fuel:'
+		db c_cursor,0,text_top+2+48
+		db 'Cash:'
+		db 0
+text14: db 'Commander ',0
+text15: db 'Not Known',0
+text16: db ' light years',0
+text17: db c_ink,lgt_green,'Docked',0
+
+; Table of legal status strings.
+
+legal_status:
+
+	db 'Clean',0
+	db 'Offender',0
+	db 'Fugitive',0
+
+; Table of colours for condition.
+
+condition_cols:
+
+	db c_ink,lgt_green,'Green',0
+	db c_ink,yellow,'Yellow',0
+	db c_ink,pulse,'Red',0

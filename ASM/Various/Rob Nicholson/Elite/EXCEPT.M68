@@ -1,0 +1,784 @@
+* @@@@@@@ @@   @@	@@@@  @@@@@@@ @@@@@@   @@@@@@
+*  @@	@  @@ @@   @@  @@  @@	@  @@  @@  @ @@ @
+*  @@ @ 	@@@   @@	   @@ @    @@  @@	 @@
+*  @@@@ 	@@@   @@	   @@@@    @@@@@	 @@
+*  @@ @    @@ @@  @@	   @@ @    @@		 @@
+*  @@	@ @@   @@  @@  @@  @@	@  @@		 @@
+* @@@@@@@ @@   @@	@@@@  @@@@@@@ @@@@		@@@@
+
+* 68000 exception handlers for VBLANK and keyboard interrupts.
+
+* Version 1.0 1st April 1988 Copyright (c) 1988 Mr. Micro Ltd.
+* Designed and coded by Rob Nicholson. Adapted from the MSX verison.
+
+	include macros
+	include bitlist
+
+	xref sound,vars,locate,text_colour,print_string,print_number,print_char
+	xref build_time,draw_sprite,fx,store_key,single_click
+	xref double_click,remove_sprite,find_bitmap
+
+* ---- LOCAL CONSTANTS ----
+
+pulse_rate: equ 4						rate of colour pulse
+min_x:		equ 0-10					limits of cursor movement
+max_x:		equ 320-10
+min_y:		equ 0-8
+max_y:		equ 200-9
+first_col:	equ 7						cycling colours
+last_col:	equ 11
+
+* ---- LOCAL VARIABLES ----
+
+	vars except
+
+csr_state:			ds.w 1				state (colour) of text cursor
+csr_clock:			ds.w 1				cursor flash clock
+engine_port:		ds.w 1				colour of engine port (cycle)
+engine_dir: 		ds.w 1				direction of colour (0 or !0)
+packet: 			ds.b 8				buffer for special packet data
+packet_idx: 		ds.w 1				index for next byte into above
+packet_ctr: 		ds.w 1				no. bytes to store in buffer
+last_joy:			ds.w 1				state of joystick last time
+click_clock:		ds.w 1				clock used for mouse clicking
+which_click:		ds.w 1				flag: 1st or 2nd click
+
+	end_vars except
+
+	module except
+
+* *************************************
+* **								 **
+* ** VBLANK - VERTICAL BLANK ROUTINE **
+* **								 **
+* *************************************
+
+* This routine is called every flyback and performs functions.
+
+* Entry: None
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr vblank,global
+
+	lea vars,a6 						point to variables
+	st flyback(a6)						flyback has occured
+	inc frame_count(a6) 				increment frame counter
+	cmp #2,condition(a6)				condition red ?
+	if <eq> then.s
+		tst alert_fx(a6)				effect running ?
+		if <eq> then.s					no
+			sfx alert
+		endi
+	endi
+	bsr clock							process game clock
+	tst count_down(a6)					countdown running ?
+	if <ne> then.s						yes
+		tst game_frozen(a6) 			game frozen ?
+		if <eq> then.s					no
+			dec count_jiffy(a6) 		process countdown
+			if <eq> then.s
+				move #50,count_jiffy(a6)
+				sfx locked
+				dec count_down(a6)
+				if <eq> then.s
+					st jump_trigger(a6)
+				endi
+			endi
+		endi
+	else.s
+	   jsr drive_cursor 				draw cross-hair cursor
+	endi
+	jsr sound							execute sound
+	bsr colour_cycle					cycle colours
+
+	ret
+
+
+* ********************************************
+* **										**
+* ** KEY_MIDI_IRQ - KEYBOARD/MIDI INTERRUPT **
+* **										**
+* ********************************************
+
+* Process an interrupt the keyboard or midi interface and take appropriate
+* action.
+
+* Entry: None
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr key_midi_irq,global
+
+	movem.l d0-d2/a0-a1/a6,-(sp)		save registers
+	lea vars,a6 						point to variables
+	repeat
+		move.b key_status,d0			get keyboard ACIA status
+		btst #7,d0						interrupt ?
+		if <ne> then.s					yes
+			bsr key_irq 				process keyboard interrupt
+		endi
+		move.b midi_status,d0			key midi ACIA status
+		btst #7,d0						interrupt ?
+		if <ne> then.s					yes
+			move.b midi_rx,d0			read and ignore byte
+		endi
+		btst #4,mfp_io					until no more interrupts
+	until <ne>
+	bclr #6,mfp_service_b				clear interrupt service bit
+	movem.l (sp)+,d0-d2/a0-a1/a6		restore registers
+
+	rte 								return from exception
+
+
+* **********************************
+* **							  **
+* ** KEY_IRQ - KEYBOARD INTERRUPT **
+* **							  **
+* **********************************
+
+* Process a keyboard interrupt.
+
+* Entry: D0.B = keyboard ACIA status register
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr key_irq
+
+	move.b key_rx,d1					read byte from ACIA
+	and #255,d1
+	btst #0,d0							RX buffer full ?
+	if <ne> then.s						yes
+		tst packet_ctr(a6)				special packet bytes ?
+		if <ne> then.s					yes
+			move packet_idx(a6),d0		store in the buffer
+			lea packet(a6),a0
+			move.b d1,(a0,d0)
+			inc packet_idx(a6)			increment index
+			dec packet_ctr(a6)			decrement counter
+			if <eq> then.s				all bytes received
+				bsr process_packet
+			endi
+		else.s
+			if d1 <lo> #$f6 then.s		not special packet
+				bsr key_change			process change of a key
+			else.s
+				bsr special_packet		process special packet
+			endi
+		endi
+	endi
+
+	ret
+
+
+* ******************************************
+* **									  **
+* ** KEY_CHANGE - PROCESS CHANGE OF A KEY **
+* **									  **
+* ******************************************
+
+* Process a change of key state.
+
+* Entry: D1 = byte read from keyboard
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr key_change
+
+	lea key_states(a6),a0				point to key state array
+	tst.b d1							key press ?
+	if <pl> then.s						yes
+		st (a0,d1)						set state to $FF
+		lea key_table(pc),a1			fetch ASCII value of key press
+		move.b (a1,d1),d0
+		call <ne>,store_key 			store in keyboard buffer
+	else.s
+		bclr #7,d1						set state to $00
+		sf (a0,d1)
+	endi
+
+	ret 								return
+
+
+* ******************************************************
+* **												  **
+* ** SPECIAL_PACKET - PROCESS SPECIAL KEYBOARD PACKET **
+* **												  **
+* ******************************************************
+
+* Process a packet of bytes from the keyboard. Stores the byte in the packet
+* buffer and initialise the buffer for subsequent bytes.
+
+* Entry: D1 = packet byte ($F6..$FF)
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr special_packet
+
+	move.b d1,packet(a6)				store byte in buffer
+	move.w #1,packet_idx(a6)			store from bytes #1 onwards
+	sub #$f6,d1 						set packet count depending on the
+	lea packet_sizes(pc),a0 			packet type
+	move.b (a0,d1),packet_ctr+1(a6)
+
+	ret
+
+
+* ********************************************************
+* **													**
+* ** PROCESS_PACKET - PROCESS A SPECIAL KEYBOARD PACKET **
+* **													**
+* ********************************************************
+
+* This routine is called after a special packet has been received from the
+* keyboard controller.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr process_packet
+
+	move.b packet(a6),d0				execute packet handler
+	sub.b #$f6,d0
+	and #255,d0
+	asl #2,d0
+	lea packet_handlers(pc),a0
+	move.l (a0,d0),a0
+	jmp (a0)
+
+
+* ********************************************
+* **										**
+* ** PROCESS_MOUSE - PROCESS A MOUSE PACKET **
+* **										**
+* ********************************************
+
+* Processes a special mouse packet from the keyboard controller.
+
+* Entry: None
+* Exit:  None
+
+* Regs: D0 corrupt.
+* Subr: ?
+
+	subr process_mouse
+
+	move.b packet(a6),d0				fetch button state
+	clr.b key_states+$77(a6)			assume no buttons
+	clr.b key_states+$78(a6)
+	btst #1,d0							left button pressed ?
+	if <ne> then.s						yes
+		st key_states+$77(a6)
+	endi
+	btst #0,d0							right button pressed ?
+	if <ne> then.s						yes
+		st key_states+$78(a6)
+	endi
+	move.b packet+1(a6),d0				fetch x movement
+	ext d0								add to total x movememt
+	add d0,move_x(a6)
+	move.b packet+2(a6),d0				fetch y movement
+	ext d0								add to total y movement
+	add d0,move_y(a6)
+
+	ret 								return
+
+
+* **************************************************
+* **											  **
+* ** PROCESS_JOYSTICK - PROCESS A JOYSTICK PACKET **
+* **											  **
+* **************************************************
+
+* Processes a special joystick packet from the keyboard controller. Joystick
+* movements are converted to key presses and stored in the key states array
+* using at the following positions:
+
+*		key_states+$73 - up
+*				   $74 - down
+*				   $75 - left
+*				   $76 - right
+
+* Entry: None
+* Exit:  None
+
+* Regs: D0/D1/A0 corrupt.
+* Subr: None
+
+	subr process_joystick
+
+	st device(a6)						input device = joystick
+	move.b packet+1(a6),d0				fetch joystick bits
+	lea key_states+$73(a6),a0			convert bits to key state values
+	loop 1,d1,4
+		ror.b #1,d0
+		if <cc> then.s
+			clr.b (a0)+
+		else.s
+			st (a0)+
+		endi
+	next 1,d1
+
+	ret 								return
+
+
+* *************************************
+* **								 **
+* ** JOYSTICK - BUILD JOYSTICK STATE **
+* **								 **
+* *************************************
+
+* Checks the Key_States array and builds up the joystick direction word.
+
+* Entry: A0 = ptr: key states array
+* Exit:  D0 = joystick state word (active high)
+
+* Regs:  D0-D2 and A1 corrupt.
+* Subr:  None
+
+	subr joystick,global
+
+	clr d0								clear all bits
+	lea key_states(a6),a1				point to keyboard state table
+	repeat
+		move (a0)+,d1					get bit no.
+		break if <mi>					end of table
+		repeat
+			move (a0)+,d2				get scan code
+			break if <mi>				end of list
+			tst.b (a1,d2)				key pressed ?
+			if <ne> then.s				yes
+				bset d1,d0				set bit
+			endi
+		endr
+	endr
+
+	ret
+
+
+* ********************************
+* **							**
+* ** CLOCK - PROCESS GAME CLOCK **
+* **							**
+* ********************************
+
+* Advance the game clock.
+
+* Entry:  None
+* Exit:   None
+
+* Regs:   ?
+* Subr:   ?
+
+	subr clock
+
+	dec fast_ticker(a6) 				next second ?
+	ret <ne>							no
+	move #50,fast_ticker(a6)			re-load counter
+	tst game_frozen(a6) 				game frozen ?
+	ret <ne>							yes
+	inc game_time+0(a6) 				advance seconds
+	cmp #60,game_time+0(a6) 			next minute ?
+	if <eq> then.s						yes
+		clr game_time+0(a6) 			reset seconds
+		inc game_time+2(a6) 			advance minutes
+		cmp #60,game_time+2(a6) 		next hour ?
+		if <eq> then.s					yes
+			clr game_time+2(a6) 		reset seconds
+			inc game_time+4(a6) 		advance hour
+			cmp #24,game_time+4(a6) 	next day ?
+			if <eq> then.s				yes
+				clr game_time+4(a6) 	reset hours
+				inc game_time+6(a6) 	advance days
+				cmp #24,game_time+6(a6) reset clock ?
+				if <eq> then.s			yes
+					clr game_time+0(a6)
+					clr game_time+2(a6)
+					clr game_time+4(a6)
+					clr game_time+6(a6)
+				endi
+			endi
+		endi
+	endi
+	tst display_clock(a6)				display the clock ?
+	if <ne> then.s						yes
+		lea cursor_spr(a6),a4			cursor below middle ?
+		cmp #100,sp_ypos(a4)
+		call <hi>,remove_sprite 		yes, remove it
+		move #clock_x,d0				position and colour for clock
+		move #clock_y+8,d1
+		jsr locate
+		moveq #white,d0
+		moveq #black,d1
+		jsr text_colour
+		lea game_time(a6),a0			build time
+		lea input(a6),a1
+		jsr build_time
+		lea input(a6),a0				print time (days/hours/mins)
+		jsr print_string
+		move.b #':',d0					print seconds
+		jsr print_char
+		push pad_char(a6)
+		move #'0'>>8,pad_char(a6)
+		move game_time+0(a6),d0
+		hclr d0
+		move #$8002,d1
+		jsr print_number
+		pop pad_char(a6)
+	endi
+
+	ret
+
+
+* ******************************************
+* **									  **
+* ** HOLD_CLOCK - HOLD CLOCK FOR PRINTING **
+* **									  **
+* ******************************************
+
+* Pushes the current DISPLAY_CLOCK status on the stack and stops the clock
+* running. Used for routines that need to print on the bottom line.
+
+* Entry: None
+* Exit:  0(SP).W = current clock status (pop display_clock(a6) to restart)
+
+* Regs: A0 corrupt.
+* Subr: None
+
+	subr hold_clock,global
+
+	pop.l a0							fetch return address
+	push display_clock(a6)				save current clock state
+	clr display_clock(a6)				stop the clock
+	jmp (a0)							exit to caller
+
+
+* ********************************************
+* **										**
+* ** DRIVE_CURSOR - DRIVE CROSS-HAIR CURSOR **
+* **										**
+* ********************************************
+
+* Drives the cross-hair cursor around the screen under joystick control.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr drive_cursor
+
+	tst csr_on(a6)						cursor on ?
+	ret <eq>							no, return
+	lea cursor_codes(pc),a0 			build joystick word
+	bsr joystick
+	push d0 							attempt to move cursor ?
+	if <eq> then.s						no
+		move #1,csr_speed(a6)			set speed to 1
+	else.s
+		lea move_data(pc),a0			point to move data table
+		move csr_speed(a6),d1			fetch cursor speed
+		loop 1,4						four directions to check
+			ror #1,d0					move in this direction ?
+			if <cs> then.s				yes
+				move (a0)+,d2			fetch record offset (x or y)
+				tst (a0)+				positive movement ?
+				if <pl> then.s			yes
+					add d1,(a6,d2)
+				else.s
+					sub d1,(a6,d2)
+				endi
+			else.s
+				addq.l #4,a0			skip past data
+			endi
+		next 1							next direction
+		dec csr_clk(a6) 				allow speed up ?
+		if <eq> then.s					yes
+			move #csr_acc,csr_clk(a6)	reset clock
+			cmp #max_csr,csr_speed(a6)	at maximum speed ?
+			if <ne> then.s				no
+				inc csr_speed(a6)		increase speed
+			endi
+		endi
+	endi
+	lea cursor_spr(a6),a4				point to cursor sprite record
+	move move_x(a6),d0					any x movement ?
+	if <ne> then.s						yes
+		move sp_xpos(a4),d1 			add movement to x coord and clamp
+		add d0,d1
+		cmp #min_x,d1
+		if <lt> then.s
+			move #min_x,d1
+		else.s
+			cmp #max_x,d1
+			if <gt> then.s
+				move #max_x,d1
+			endi
+		endi
+		move d1,sp_xpos(a4) 			update x coord
+		clr move_x(a6)					clear x movement
+	endi
+	move move_y(a6),d0					any y movement ?
+	if <ne> then.s						yes
+		move sp_ypos(a4),d1 			add movement to y coord and clamp
+		add d0,d1
+		cmp #min_y,d1
+		if <lt> then.s
+			move #min_y,d1
+		else.s
+			cmp #max_y,d1
+			if <gt> then.s
+				move #max_y,d1
+			endi
+		endi
+		move d1,sp_ypos(a4) 			update y coord
+		clr move_y(a6)					clear y movement
+	endi
+	move cursor_type(a6),d0 			find cursor's bit map
+	if <pl> then.s						type is positive, draw the sprite
+		add #bit_cursors,d0
+		jsr find_bitmap
+		move.l a0,data_ptr(a4)
+		jsr draw_sprite 				draw the sprite
+	endi
+	pop d0								button pressed ?
+	btst #trigger,d0
+	if <ne> then.s						yes
+		btst #trigger,last_joy(a6)		pressed last time ?
+		if <eq> then.s					no
+			tst which_click(a6) 		1st click ?
+			if <eq> then.s				yes
+				clr click_clock(a6) 	reset the mouse clock
+				inc which_click(a6) 	on 2nd click
+			else.s
+				cmp #2,click_clock(a6)	2nd click within 2 frames ?
+				if <hi> then.s			no
+					push d0 			process double click
+					jsr double_click
+					clr which_click(a6)
+					pop d0
+				endi
+			endi
+		endi
+	endi
+	move.b d0,last_joy(a6)				save current joystick state
+	tst which_click(a6) 				timing click ?
+	if <ne> then.s						yes
+		inc click_clock(a6) 			timeout ?
+		move click_clock(a6),d0
+		cmp click_rate(a6),d0
+		if <hs> then.s					yes
+			jsr single_click			process single click
+			clr which_click(a6) 		stop timing
+		endi
+	endi
+
+	ret 								return
+
+
+* ********************************************
+* **										**
+* ** COLOUR_CYCLE - CYCLE COLOURS ON VBLANK **
+* **										**
+* ********************************************
+
+* Cycle certain colours every VBLANK.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr colour_cycle
+
+	tst stop_cycle(a6)					cycling stopped ?
+	ret <ne>							yes, return
+	move cycle_type(a6),d0				execute relevant colour cycle
+	asl #2,d0							routine
+	lea cycle_list(pc),a0
+	move.l (a0,d0),a0
+	jmp (a0)
+
+
+* **************************************
+* **								  **
+* ** ENGINE_PULSE - PULSE THE ENGINES **
+* **								  **
+* **************************************
+
+* Pulses the colour used for the engines (different reds). This is colour
+* cycle type #0
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr engine_pulse
+
+	btst #0,fast_ticker+1(a6)			cycle every 1/25th second
+	if <eq> then.s
+		move engine_port(a6),d0 		fetch current colour
+		tst engine_dir(a6)				increase/decrease red
+		if <pl> then.s
+			add #$100,d0
+			cmp #$700,d0
+			if <eq> then.s
+				not engine_dir(a6)
+			endi
+		else.s
+			sub #$100,d0
+			cmp #$200,d0
+			if <eq> then.s
+				not engine_dir(a6)
+			endi
+		endi
+		move d0,engine_port(a6)
+		move d0,palette+pulse*2 		set cycling colour
+	endi
+
+	ret
+
+
+* *******************************************
+* **									   **
+* ** FLASH_COLOUR - FLASH COLOUR RED/WHITE **
+* **									   **
+* *******************************************
+
+* Routine to flash red/white - used for cursor etc. on text screens. This is
+* colour cycle type #1.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr flash_colour
+
+	inc csr_clock(a6)					ready for change of colour ?
+	cmp #csr_rate,csr_clock(a6)
+	if <eq> then.s						yes
+		clr csr_clock(a6)				reset clock
+		not csr_state(a6)				change colour
+		if <eq> then.s
+			move #$700,d0				red
+		else.s
+			move #$777,d0				white
+		endi
+		move d0,palette+pulse*2 		change palette
+	endi
+
+	ret 								return
+
+
+* *********************************************
+* **										 **
+* ** STROBE_COLOURS - STROBE COLOURS ON LOGO **
+* **										 **
+* *********************************************
+
+* Strobes the colours on the 'well done' logo screen. This is colour cycle
+* type #2
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr strobe_colours
+
+	btst #0,fast_ticker+1(a6)			strobe every 1/25th second
+	ret <eq>
+	lea palette+first_col*2,a0			save 1st colour
+	push (a0)
+	loop 1,(last_col-first_col) 		loop for each colour
+		move 2(a0),(a0)+				move colour
+	next 1
+	pop (a0)							wrap 1st colour round
+
+	ret 								return
+
+
+* ---- LOCAL DATA ----
+
+* Length of each packet for the codes $F6 to $FF.
+
+packet_sizes:
+
+	dc.b 7,5,2,2,2,2,6,2,1,1
+
+* Keyboard table for scan codes to ASCII translation.
+
+key_table:
+
+	dc.b 0,27,'1234567890-=',127,9						00-0F
+	dc.b 'QWERTYUIOP[]',13,0,'AS'						10-1F
+	dc.b 'DFGHJKL',0,0,0,0,'#ZXCV'						20-2F
+	dc.b 'BNM',0,0,0,0,0,0,0,0,128,129,130,131,132		30-3F
+	dc.b 133,134,135,136,137,0,0,0,0,0,0,0,0,0,0,0		40-4F
+	dc.b 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0				50-5F
+	dc.b 0,0,138,0,0,0,'*789456123' 					60-6F
+	dc.b '0',0,13,0,0,0,0,0,0,0,0,0,0,0,0,0 			70-7F
+
+* Drive cursor keyboard scan codes.
+
+	even
+
+cursor_codes
+
+	dc up,$48,$73,-1					up	  - csr_up, joy_up
+	dc down,$50,$74,-1					down  - csr_down, joy_down
+	dc left,$4b,$75,-1					left  - csr_left, joy_left
+	dc right,$4d,$76,-1 				right - csr_right, joy_right
+	dc trigger,$77,$78,$39,-1			fire  - left/right button,space
+	dc -1
+
+* Movement table for cross-hair cursor.
+
+move_data:
+
+	dc.w move_y,-1						cursor up
+	dc.w move_y,+1						cursor down
+	dc.w move_x,-1						cursor left
+	dc.w move_x,+1						cursor right
+
+* Special keyboard packet handlers.
+
+packet_handlers:
+
+	dc.l return 						$f6 	 - status package
+	dc.l return 						$f7 	 - absolute mouse position
+	dc.l process_mouse					$f8->$fb - mouse movement
+	dc.l process_mouse
+	dc.l process_mouse
+	dc.l process_mouse
+	dc.l return 						$fc 	 - unknown ?
+	dc.l return 						$fd 	 - unknown ?
+	dc.l process_joystick				$fe 	 - joystick #0 movement
+	dc.l process_joystick				$ff 	 - joystick #1 movement
+
+* Table of colour cycle routines.
+
+cycle_list:
+
+	dc.l engine_pulse,flash_colour,strobe_colours
+

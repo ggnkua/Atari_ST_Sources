@@ -1,0 +1,1079 @@
+*	@@@@	@@@ 	@@@@  @@@  @@ @@@@@@   @@@@@@  @@@@@@
+*  @@  @@  @@ @@   @@  @@  @@  @@  @@  @@	 @@    @ @@ @
+* @@	  @@   @@ @@	   @@ @@   @@  @@	 @@ 	 @@
+* @@	  @@   @@ @@	   @@@@    @@@@@	 @@ 	 @@
+* @@	  @@   @@ @@	   @@ @@   @@		 @@ 	 @@
+*  @@  @@  @@ @@   @@  @@  @@  @@  @@		 @@ 	 @@
+*	@@@@	@@@ 	@@@@  @@@  @@ @@@@	   @@@@@@	@@@@
+
+* All routines to do with the display of the cockpit.
+
+	include macros
+	include bitlist
+
+	xref l_swap_front,l_swap_rear,l_swap_left,l_swap_right
+	xref w_swap_front,w_swap_rear,w_swap_left,w_swap_right,monst
+	xref blank_screen,kill_sprites,print_string,block,draw_sprite,polygon
+	xref message,clear_input,clear_image,text_blatt
+	xref set_colour,fx,wait_key,hold_clock,wait,remove_sprite,dot_to_addr
+	xref draw_screen,cockpit,find_bitmap,put_bitmap
+
+* --- LOCAL CONSTANTS ----
+
+front_shield_x: 	equ 42				instrument positions
+front_shield_y: 	equ 132
+front_shield_col:	equ magenta
+aft_shield_x:		equ 42
+aft_shield_y:		equ 141
+aft_shield_col: 	equ magenta
+fuel_x: 			equ 42
+fuel_y: 			equ 150
+fuel_col:			equ red
+cabintemp_x:		equ 42
+cabintemp_y:		equ 159
+cabintemp_col:		equ yellow
+laser_x:			equ 42
+laser_y:			equ 168
+laser_col:			equ lgt_blue
+altitude_x: 		equ 42
+altitude_y: 		equ 177
+altitude_col:		equ mid_blue
+missile_x:			equ 43
+missile_y:			equ 186
+speed_x:			equ 231
+speed_y:			equ 132
+roll_x: 			equ 232
+roll_y: 			equ 141
+climb_x:			equ 232
+climb_y:			equ 150
+energy_x:			equ 231
+energy_y:			equ 186
+energy_col: 		equ magenta
+no_steps:			equ 6				no. steps in hexagon
+view_x: 			equ 136 			position of view sprite
+view_y: 			equ 1
+schar_x:			equ 206 			position of 'S' sprite
+schar_y:			equ 185
+schar_width:		equ 13
+schar_depth:		equ 13
+echar_x:			equ 101 			position of 'E' sprite
+echar_y:			equ 185
+echar_width:		equ 13
+echar_depth:		equ 13
+magnify_x:			equ 100 			coordinates of magnify
+magnify_y:			equ 140
+
+* ---- LOCAL VARIABLES ----
+
+	vars cockpit
+
+line_x: 		ds.w 1					line instr. coords
+line_y: 		ds.w 1
+line_pos:		ds.w 1					position of line
+rad_1:			ds.w 1					radius' of hexagon
+rad_2:			ds.w 1
+rad_3:			ds.w 1
+colour: 		ds.w 1
+pass:			ds.w 1					current hexagon pass
+laser_def:		ds.l 1					ptr: laser sight definition
+laser_yc:		ds.w 1					y coord of laser sight
+
+	end_vars cockpit
+
+* ---- LOCAL MACROS ----
+
+* SET_VIEW macro direction,id
+*				 \1 	   \2
+
+set_view: macro
+
+	subr \1_view,global
+
+	bsr check_inflight					check were in flight
+	let.l w_swap_\1,w_view_ptr			set swap coords pointer (16/32)
+	let.l l_swap_\1,l_view_ptr
+	move.w #\2,d0						D0 = view number (0..3)
+	bra select_view 					select the view
+
+	endm
+
+	module cockpit
+
+
+* *********************************
+* **							 **
+* ** XXX_VIEW - SET COCKPIT VIEW **
+* **							 **
+* *********************************
+
+* Four subroutines (FRONT_VIEW, REAR_VIEW, LEFT_VIEW, RIGHT_VIEW) to
+* set the view throught the cockpit.
+
+* Entry: None
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	set_view front,0
+	set_view rear,1
+	set_view left,2
+	set_view right,3
+
+
+* *********************************
+* **							 **
+* ** SELECT_VIEW - SELECT A VIEW **
+* **							 **
+* *********************************
+
+* Selects a particular cockpit view.
+
+* Entry: D0 = view number (0..3)
+*		 A0 = ptr: data for view text
+
+* Exit:  None
+* Exit:  None
+
+	subr select_view
+
+	tst cockpit_on(a6)					cockpit displayed ?
+	if <eq> then.s						no
+		movem.l d0/a0,-(sp) 			draw cockpit
+		bsr prepare_cockpit
+		st view(a6) 					force view change
+		movem.l (sp)+,d0/a0
+	endi
+	if d0 <ne> view(a6) then.s			not on this view
+		move d0,view(a6)				find view bitmap
+		add #bit_views,d0
+		jsr find_bitmap
+		lea temp_spr(a6),a4
+		move.l a0,data_ptr(a4)
+		bset #dont_save,sp_flags(a4)	draw the view
+		bset #dual_screen,sp_flags(a4)
+		move #view_x,sp_xpos(a4)
+		move #view_y,sp_ypos(a4)
+		jsr draw_sprite
+		bclr #dual_screen,sp_flags(a4)
+		bclr #dont_save,sp_flags(a4)
+		lea lasers(a6),a0				all laser records inactive
+		moveq #laser_len,d0
+		loop 1,max_lasers
+			clr active(a0)
+			add.l d0,a0
+		next 1
+	endi
+	bra define_sight					define laser sight
+
+
+* ***********************************************
+* **										   **
+* ** PREPARE_COCKPIT - PREPARE COCKPIT DISPLAY **
+* **										   **
+* ***********************************************
+
+* Draws the cockpit on the screen and initialises all related variables.
+
+* Entry: None
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr prepare_cockpit
+
+	st stop_cycle(a6)					stop colour cycling
+	clr csr_on(a6)						turn cursor off
+	clr disp_type(a6)					no text display
+	clr display_clock(a6)				stop clock
+	clr.l last1_ptr(a6) 				nothing on radar
+	clr.l last2_ptr(a6)
+	clr radar_obj(a6)					outside space station space
+	clr cycle_type(a6)					pulse engines
+	st cockpit_on(a6)					cockpit displayed
+	jsr kill_sprites					kill all sprites
+	lea cockpit,a0						draw cockpit screen on the invisble
+	move.l scr_base(a6),d0				screen
+	move.l flip_screen(a6),d1
+	eor.l d1,d0
+	move.l d0,a1
+	push.l a1
+	jsr draw_screen
+	pop.l a0							copy into the visible screen
+	move.l scr_base(a6),a1
+	loop 1,32000/4
+		move.l (a0)+,(a1)+
+	next 1
+	bsr instruments 					update all instruments
+	pea cockpit+2						define palette
+	ext_bios setpalette,6
+	clr stop_cycle(a6)					allow colour cycling
+
+	ret
+
+
+* *******************************************
+* **									   **
+* ** INST_BAR - DRAW A BAR TYPE INSTRUMENT **
+* **									   **
+* *******************************************
+
+* Draws a bar type instrument on the cockpit.
+
+* Entry: (D0,D1) = x,y coord
+*		 D3 	 = width (0..48)
+*		 D5 	 = colour (0..15)
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr inst_bar
+
+	tst d3								anything to draw ?
+	if <ne> then.s						yes
+		movem d0/d1/d3,-(sp)			save parameters
+		clr d2							draw block (current screen)
+		moveq #6,d4
+		jsr block
+		movem (sp)+,d0/d1/d3			restore parameters
+	endi
+	add d3,d0							x += width
+	sub #48,d3							calculate width of right half
+	neg d3
+	if <ne> then.s						something to clear
+		clr d2							clear rest of bar
+		moveq #6,d4
+		clr d5
+		jsr block
+	endi
+
+	ret
+
+
+* *********************************************
+* **										 **
+* ** INST_LINE - DRAW A LINE TYPE INSTRUMENT **
+* **										 **
+* *********************************************
+
+* Draws (completely) a line type instrument, e.g. the roll indicators. The
+* bar is always drawn in green.
+
+* Entry: (D0,D1) = x,y coords
+*		 D3 	 = offset for bar (0..46)
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr inst_line
+
+	movem d0/d1/d3,line_x(a6)		save parameters
+	tst d3							right upto left edge ?
+	if <ne> then.s					no
+		clr d2						clear left half
+		moveq #6,d4
+		clr d5
+		jsr block
+	endi
+	movem line_x(a6),d0/d1/d3
+	add d3,d0
+	clr d2
+	moveq #2,d3
+	moveq #6,d4
+	moveq #lgt_green,d5
+	jsr block
+	moveq #bar_width-2,d3			right upto right edge ?
+	sub line_pos(a6),d3
+	if <ne> then.s					no
+		movem line_x(a6),d0/d1		clear right half
+		add line_pos(a6),d0
+		addq #2,d0
+		clr d2
+		moveq #6,d4
+		clr d5
+		jsr block
+	endi
+
+	ret
+
+
+* *******************************************************
+* **												   **
+* ** INST_FRONT_SHIELD - DRAW FRONT SHIELDS INSTRUMENT **
+* **												   **
+* *******************************************************
+
+* Draws (completely) the front shield instrument.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr inst_front_shield,global
+
+	move front_shield(a6),d3			scale the bar
+	mulu #bar_width,d3
+	divu #max_shield,d3
+	move #front_shield_x,d0 			draw bar
+	move #front_shield_y,d1
+	move #front_shield_col,d5
+	bra inst_bar
+
+
+* ***************************************************
+* **											   **
+* ** INST_AFT_SHIELD - DRAW AFT SHIELDS INSTRUMENT **
+* **											   **
+* ***************************************************
+
+* Draws (completely) the aft shield instrument.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr inst_aft_shield,global
+
+	move aft_shield(a6),d3				scale the bar
+	mulu #bar_width,d3
+	divu #max_shield,d3
+	move #aft_shield_x,d0				draw bar
+	move #aft_shield_y,d1
+	move #aft_shield_col,d5
+	bra inst_bar
+
+
+* **************************************
+* **								  **
+* ** INST_FUEL - DRAW FUEL INSTRUMENT **
+* **								  **
+* **************************************
+
+* Draws (completely) the fuel instrument.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr inst_fuel,global
+
+	move equip+fuel(a6),d3				scale the bar
+	mulu #bar_width,d3
+	divu #max_fuel,d3
+	move #fuel_x,d0 					draw bar
+	move #fuel_y,d1
+	move #fuel_col,d5
+	bra inst_bar
+
+
+* ************************************************************
+* **														**
+* ** INST_CABINTEMP - DRAW THE CABIN TEMPERATURE INSTRUMENT **
+* **														**
+* ************************************************************
+
+* Draws (completely) the cabin temperate instrument.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr inst_cabintemp,global
+
+	move cabin_temp(a6),d3				draw the bar
+	move #cabintemp_x,d0
+	move #cabintemp_y,d1
+	move #cabintemp_col,d5
+	bra inst_bar
+
+
+* **************************************************
+* **											  **
+* ** INST_LASER - DRAW LASER TEMPERATE INSTRUMENT **
+* **											  **
+* **************************************************
+
+* Draws (completely) the laser temperature instrument.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr inst_laser,global
+
+	move laser_temp(a6),d3				scale the bar
+	mulu #bar_width,d3
+	divu #max_ltemp,d3
+	move #laser_x,d0					draw bar
+	move #laser_y,d1
+	move #laser_col,d5
+	bra inst_bar
+
+
+* **********************************************
+* **										  **
+* ** INST_ALTITUDE - DRAW ALTITUDE INSTRUMENT **
+* **										  **
+* **********************************************
+
+* Draws (completely) the altitude
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr inst_altitude,global
+
+	move #altitude_x,d0 				draw bar
+	move #altitude_y,d1
+	move altitude(a6),d3
+	move #altitude_col,d5
+	bra inst_bar
+
+
+* **********************************************
+* **										  **
+* ** INST_MISSILES - DRAW THE MISSILE DISPLAY **
+* **										  **
+* **********************************************
+
+* Draws (completely) the missile sprites.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr inst_missiles,global
+
+	lea missile_spr(a6),a4				setup pointer to sprite record
+	move #missile_x,sp_xpos(a4) 		coords of 1st sprite
+	move #missile_y,sp_ypos(a4)
+	moveq #1,d0 						start with 1st sprite
+	repeat
+		move missile_state(a6),d1		fetch missile state
+		cmp equip+missiles(a6),d0		sprite > no. missiles installed ?
+		if <hi> then.s					yes
+			lea empty_defn(pc),a0		use empty definition
+		else.s
+			lea installed_defn(pc),a0	assume installed definition
+			if <eq> then.s				last missile in list
+				cmp #1,d1				armed ?
+				if <eq> then.s			yes
+					lea active_defn(pc),a0
+				else.s
+					cmp #2,d1			locked ?
+					if <eq> then.s		yes
+						lea locked_defn(pc),a0
+					endi
+				endi
+			endi
+		endi
+		move.l a0,data_ptr(a4)			setup sprite data pointer
+		push d0 						draw sprite
+		jsr draw_sprite
+		add #12,sp_xpos(a4) 			next sprite
+		pop d0
+		inc d0
+	until d0 <eq> #5
+
+	ret
+
+
+* *********************************************
+* **										 **
+* ** INST_SPEED - DRAWS THE SPEED INSTRUMENT **
+* **										 **
+* *********************************************
+
+* Draws (completely) the speed instrument. Note - the docking computer can
+* set the speed to twice the normal maximum to speed up docking.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr inst_speed,global
+
+	move speed(a6),d3					fetch speed
+	if d3 <hi> #max_speed then.s		clamp at maximum
+		moveq #max_speed,d3
+	endi
+	if d3 <hs> #max_speed*7/8 then.s	determine colour
+		moveq #red,d5
+	else.s
+		moveq #yellow,d5
+	endi
+	move d5,speed_col(a6)
+	mulu #bar_width,d3					scale the speed
+	divu #max_speed,d3
+	move #speed_x,d0					draw the bar
+	move #speed_y,d1
+	bra inst_bar
+
+
+* ******************************************
+* **									  **
+* ** INST_ROLL - DRAWS THE ROLL INDICATOR **
+* **									  **
+* ******************************************
+
+* Draws (completely) the roll indicator bar.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr inst_roll,global
+
+	move roll_angle(a6),d3				calculate position of bar
+	add #max_roll,d3
+	mulu #bar_width-2,d3
+	divu #max_roll*2,d3
+	move #roll_x,d0 					draw the bar
+	move #roll_y,d1
+	bra inst_line
+
+
+* ********************************************
+* **										**
+* ** INST_CLIMB - DRAWS THE CLIMB INDICATOR **
+* **										**
+* ********************************************
+
+* Draws (completely) the climb indicator bar.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr inst_climb,global
+
+	move climb_angle(a6),d3 			calculate position of bar
+	add #max_climb,d3
+	mulu #bar_width-2,d3
+	divu #max_climb*2,d3
+	move #climb_x,d0					draw the bar
+	move #climb_y,d1
+	bra inst_line
+
+
+* ***********************************************
+* **										   **
+* ** INST_ENERGY - DRAWS THE ENERGY INSTRUMENT **
+* **										   **
+* ***********************************************
+
+* Draws (completely) the energy instrument.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr inst_energy,global
+
+	move #energy_y,d1					start y coord
+	move energy(a6),d0					fetch energy and scale
+	mulu #bar_width*4,d0
+	divu #max_energy,d0
+	loop 1,4							four bars to draw
+		if d0 <hi> #bar_width then.s	if full bar
+			move #bar_width,d3
+			sub d3,d0
+		else.s
+			move d0,d3
+			clr d0
+		endi
+		movem d0/d1/d7,-(sp)			draw the bar
+		move #energy_x,d0
+		moveq #energy_col,d5
+		bsr inst_bar
+		movem (sp)+,d0/d1/d7			next bar
+		sub #9,d1
+	next 1
+
+	ret
+
+
+* ***************************************
+* **								   **
+* ** INST_SCHAR - DRAWS THE 'S' SYMBOL **
+* **								   **
+* ***************************************
+
+* Draws (or removes) the 'S' character when in space station space.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr inst_schar,global
+
+	tst radar_obj(a6)					outside space station space ?
+	if <eq> then.s						yes
+		move #schar_x,d0				clear 'S' from screen
+		move #schar_y,d1
+		clr d2
+		move #schar_width,d3
+		move #schar_depth,d4
+		moveq #black,d5
+		jsr block
+	else.s
+		moveq #bit_schar,d0 			find bitmap
+		jsr find_bitmap
+		move #schar_x,d0				display 'S'
+		move #schar_y,d1
+		jsr put_bitmap
+	endi
+
+	ret
+
+
+* ***************************************
+* **								   **
+* ** INST_ECHAR - DRAWS THE 'E' SYMBOL **
+* **								   **
+* ***************************************
+
+* Draws (or removes) the 'E' character when the ECM is active.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr inst_echar,global
+
+	tst ecm_on(a6)						ecm active ?
+	if <eq> then.s						yes
+		move #echar_x,d0				clear 'E' from screen
+		move #echar_y,d1
+		clr d2
+		move #echar_width,d3
+		move #echar_depth,d4
+		moveq #black,d5
+		jsr block
+	else.s
+		moveq #bit_echar,d0 			find bitmap
+		jsr find_bitmap
+		move #echar_x,d0				display 'E'
+		move #echar_y,d1
+		jsr put_bitmap
+	endi
+
+	ret
+
+
+* ********************************************************
+* **													**
+* ** INST_MAGNIFY - UPDATE MAGNIFICATION INSTRUMENT 	**
+* **													**
+* ********************************************************
+
+* Redraws the magnification instrument (x1 or x2)
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr inst_magnify
+
+	move radar_scale+2(a6),d0			current x 1 ?
+	cmp #radar_range,d0
+	if <eq> then.s						yes
+		moveq #bit_magnify+0,d0
+	else.s
+		moveq #bit_magnify+1,d0
+	endi
+	jsr find_bitmap 					find the bitmap
+	move #magnify_x,d0					draw x1 or x2
+	move #magnify_y,d1
+	jmp put_bitmap
+
+
+* ****************************************
+* **									**
+* ** INSTRUMENTS - DRAW ALL INSTRUMENTS **
+* **									**
+* ****************************************
+
+* Flags all instruments to be drawn
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr instruments,global
+
+	lea f_front(a6),a0					clear all instrument flags
+	moveq #no_flags-1,d7
+	loop 1
+		clr (a0)+
+	next 1
+
+	ret 								return
+
+
+* **********************************************
+* **										  **
+* ** UPDATE_INST - UPDATE FLAGGED INSTRUMENTS **
+* **										  **
+* **********************************************
+
+* Updates all instruments that have been flagged as changed.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr update_inst,global
+
+	move.l scr_base(a6),d0				decide which screen is currently
+	if.l d0 <eq> screen1_ptr(a6) then.s being used
+		moveq #0,d0
+	else.s
+		moveq #1,d0
+	endi
+	lea f_front(a6),a0					point to instrument flags
+	moveq #no_flags-1,d7				loop for each flag
+	loop 1
+		btst d0,(a0)					update this instrument ?
+		if <eq> then.s					yes
+			bset d0,(a0)				flag as updated
+			movem.l d0/d7/a0,-(sp)		save registers
+			sub #no_flags-1,d7			get address of instrument routine
+			neg d7
+			asl #2,d7
+			lea inst_list(pc),a0
+			move.l (a0,d7),a0
+			jsr (a0)					draw the instrument
+			movem.l (sp)+,d0/d7/a0		restore registers
+		endi
+		addq.l #2,a0					next instrument
+	next 1
+
+	ret 								return
+
+
+* *************************************************
+* **											 **
+* ** CHECK_COCKPIT - CHECKS IF COCKPIT DISPLAYED **
+* **											 **
+* *************************************************
+
+* Checks if the cockpit is display. If not, then the return address is
+* removed from the stack and then a RTS made, i.e. return to previous
+* caller.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr check_cockpit,global
+
+	tst cockpit_on(a6)					cockpit displayed ?
+	if <eq> then.s						no
+		addq.l #4,sp					clear return address
+	endi
+
+	ret
+
+
+* ********************************************
+* **										**
+* ** CHECK_INFLIGHT - CHECK COBRA IS FLYING **
+* **										**
+* ********************************************
+
+* Checks if the Cobra is currently in flight. If not, an error message
+* is displayed and the return address removed before RTS
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr check_inflight,global
+
+	tst docked(a6)						docked ?
+	if <ne> then.s						yes
+		sfx error						trigger error beep effect
+		jsr hold_clock					hold the clock display
+		jsr clear_input 				clear command window
+		lea text2(pc),a0				print 'Docked!'
+		jsr message
+		pop display_clock(a6)			restore clock
+		addq.l #4,sp					remove the return address
+	endi
+
+	ret
+
+
+* ***************************************
+* **								   **
+* ** DEFINE_SIGHT - DEFINE LASER SIGHT **
+* **								   **
+* ***************************************
+
+* Decides which laser (if any) is fitted on the current view.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr define_sight
+
+	move #-1,laser_type(a6) 			assume no laser
+	move view(a6),d0					build view mask, e.g. %0010
+	moveq #1,d1
+	rol d0,d1
+	lea laser_list(pc),a0				scan each laser type
+	clr d0
+	repeat
+		move (a0)+,d2					laser fitted ?
+		move (a6,d2),d2
+		and d1,d2						fitted on this view ?
+		if <ne> then.s					yes
+			move d0,laser_type(a6)		set laser type (0..3)
+		endi
+		inc d0							next laser
+	until d0 <eq> #4
+	move laser_type(a6),d0				laser fitted on this view ?
+	ret <mi>							no, return
+	mulu #6,d0							fetch information about the laser
+	lea laser_info(pc),a0
+	lea (a0,d0),a0
+	move.w (a0)+,laser_rate(a6)
+	move.w (a0)+,laser_power(a6)
+	move.w (a0)+,d0 					fetch pointer to definition
+	jsr find_bitmap
+	move.l a0,laser_def(a6)
+	move 2(a0),d0						fetch the depth
+	sub #y_size,d0						centre in the window
+	neg d0
+	lsr #1,d0
+	add #y_top,d0
+	move d0,laser_yc(a6)
+
+	ret
+
+
+* ***************************************
+* **								   **
+* ** DRAW_SIGHT - DRAW THE LASER SIGHT **
+* **								   **
+* ***************************************
+
+* Copies the sight definition onto the screen. Called every time the
+* bitmap is cleared.
+
+* Entry: LASER_DEF = ptr: laser sprite definition
+*		 LASER_YC  = y coordinate down the screen
+* Exit:  None
+
+* Regs: ?
+* Subr: None
+
+	subr draw_sight,global
+
+	tst laser_type(a6)					laser fitted ?
+	ret <mi>							no, return
+	move.l laser_def(a6),a0 			draw the sprite
+	move #160-16,d0
+	move laser_yc(a6),d1
+	jmp put_bitmap
+
+
+* ---- LOCAL DATA ----
+
+* List of instrument routines.
+
+inst_list:
+
+	dc.l inst_front_shield,inst_aft_shield,inst_fuel,inst_cabintemp
+	dc.l inst_laser,inst_altitude,inst_missiles,inst_speed,inst_roll
+	dc.l inst_climb,inst_energy,inst_magnify,inst_echar,inst_schar
+
+no_flags: equ (*-inst_list)/4
+
+* Missile - not installed.
+
+* Colour - currently white (%1111)
+
+emp_c0: equ $ffff
+emp_c1: equ $ffff
+emp_c2: equ $ffff
+emp_c3: equ $ffff
+
+* Bit map definition.
+
+emp_0:	equ %1111111111000000
+emp_1:	equ %1100000011000000
+emp_2:	equ %1100000011000000
+emp_3:	equ %1100000011000000
+emp_4:	equ %1100000011000000
+emp_5:	equ %1111111111000000
+
+* The actual sprite defintion.
+
+empty_defn:
+
+	dc.w 1,6
+	dc.w %111111,emp_0&emp_c0,emp_0&emp_c1,emp_0&emp_c2,emp_0&emp_c3
+	dc.w %111111,emp_1&emp_c0,emp_1&emp_c1,emp_1&emp_c2,emp_1&emp_c3
+	dc.w %111111,emp_2&emp_c0,emp_2&emp_c1,emp_2&emp_c2,emp_2&emp_c3
+	dc.w %111111,emp_3&emp_c0,emp_3&emp_c1,emp_3&emp_c2,emp_3&emp_c3
+	dc.w %111111,emp_4&emp_c0,emp_4&emp_c1,emp_4&emp_c2,emp_4&emp_c3
+	dc.w %111111,emp_5&emp_c0,emp_5&emp_c1,emp_5&emp_c2,emp_5&emp_c3
+
+* Missile sprite - installed but no in use.
+
+* Colour - currently green (%1000)
+
+ins_c0: equ $0000
+ins_c1: equ $0000
+ins_c2: equ $0000
+ins_c3: equ $ffff
+
+* Bit map definition.
+
+ins_0:	equ %1111111111000000
+ins_1:	equ %1111111111000000
+ins_2:	equ %1111111111000000
+ins_3:	equ %1111111111000000
+ins_4:	equ %1111111111000000
+ins_5:	equ %1111111111000000
+
+* The actual sprite defintion.
+
+installed_defn:
+
+	dc.w 1,6
+	dc.w %111111,ins_0&ins_c0,ins_0&ins_c1,ins_0&ins_c2,ins_0&ins_c3
+	dc.w %111111,ins_1&ins_c0,ins_1&ins_c1,ins_1&ins_c2,ins_1&ins_c3
+	dc.w %111111,ins_2&ins_c0,ins_2&ins_c1,ins_2&ins_c2,ins_2&ins_c3
+	dc.w %111111,ins_3&ins_c0,ins_3&ins_c1,ins_3&ins_c2,ins_3&ins_c3
+	dc.w %111111,ins_4&ins_c0,ins_4&ins_c1,ins_4&ins_c2,ins_4&ins_c3
+	dc.w %111111,ins_5&ins_c0,ins_5&ins_c1,ins_5&ins_c2,ins_5&ins_c3
+
+* Missile sprite - actived but not locked.
+
+* Colour - currently magenta (%0100)
+
+act_c0: equ $0000
+act_c1: equ $0000
+act_c2: equ $ffff
+act_c3: equ $0000
+
+* Bit map definition.
+
+act_0:	equ %1111111111000000
+act_1:	equ %1111111111000000
+act_2:	equ %1111111111000000
+act_3:	equ %1111111111000000
+act_4:	equ %1111111111000000
+act_5:	equ %1111111111000000
+
+* The actual sprite defintion.
+
+active_defn:
+
+	dc.w 1,6
+	dc.w %111111,act_0&act_c0,act_0&act_c1,act_0&act_c2,act_0&act_c3
+	dc.w %111111,act_1&act_c0,act_1&act_c1,act_1&act_c2,act_1&act_c3
+	dc.w %111111,act_2&act_c0,act_2&act_c1,act_2&act_c2,act_2&act_c3
+	dc.w %111111,act_3&act_c0,act_3&act_c1,act_3&act_c2,act_3&act_c3
+	dc.w %111111,act_4&act_c0,act_4&act_c1,act_4&act_c2,act_4&act_c3
+	dc.w %111111,act_5&act_c0,act_5&act_c1,act_5&act_c2,act_5&act_c3
+
+* Missile sprite - locked on target.
+
+* Colour - currently red (%0110)
+
+lck_c0: equ $0000
+lck_c1: equ $ffff
+lck_c2: equ $ffff
+lck_c3: equ $0000
+
+* Bit map definition.
+
+lck_0:	equ %1111111111000000
+lck_1:	equ %1111111111000000
+lck_2:	equ %1111111111000000
+lck_3:	equ %1111111111000000
+lck_4:	equ %1111111111000000
+lck_5:	equ %1111111111000000
+
+* The actual sprite defintion.
+
+locked_defn:
+
+	dc.w 1,6
+	dc.w %111111,lck_0&lck_c0,lck_0&lck_c1,lck_0&lck_c2,lck_0&lck_c3
+	dc.w %111111,lck_1&lck_c0,lck_1&lck_c1,lck_1&lck_c2,lck_1&lck_c3
+	dc.w %111111,lck_2&lck_c0,lck_2&lck_c1,lck_2&lck_c2,lck_2&lck_c3
+	dc.w %111111,lck_3&lck_c0,lck_3&lck_c1,lck_3&lck_c2,lck_3&lck_c3
+	dc.w %111111,lck_4&lck_c0,lck_4&lck_c1,lck_4&lck_c2,lck_4&lck_c3
+	dc.w %111111,lck_5&lck_c0,lck_5&lck_c1,lck_5&lck_c2,lck_5&lck_c3
+
+* Laser sight information. Format:
+
+*	dc.w fire_rate,fire_power,bitmap#
+
+laser_info:
+
+	dc 10,5,bit_sights+0				pulse laser
+	dc 8,7,bit_sights+3 				mining laser
+	dc 6,9,bit_sights+2 				beam laser
+	dc 3,11,bit_sights+1				military laser
+
+* List of lasers in equipment list.
+
+laser_list:
+
+	dc equip+pulse_lasers
+	dc equip+mining_lasers
+	dc equip+beam_lasers
+	dc equip+military_lasers
+
+* Misc. text messages.
+
+text2:	db 'Docked!',0

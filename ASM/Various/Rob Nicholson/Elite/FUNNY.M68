@@ -1,0 +1,640 @@
+* @@@@@@@  @@  @@ @@   @@ @@   @@  @@  @@
+*  @@	@  @@  @@ @@@  @@ @@@  @@  @@  @@
+*  @@ @    @@  @@ @@@@ @@ @@@@ @@  @@  @@
+*  @@@@    @@  @@ @@ @@@@ @@ @@@@	@@@@
+*  @@ @    @@  @@ @@  @@@ @@  @@@	 @@
+*  @@	   @@  @@ @@   @@ @@   @@	 @@
+* @@@@		@@@@  @@   @@ @@   @@	@@@@
+
+* This module handles the creation and printing of the funny descriptions
+* given to each system, e.g. Lave is most well known for it's hoopy casinos.
+
+* Version 1.0 19th April 1988 Copyright (c) 1988 Mr. Micro Ltd
+* Designed and coded by Rob Nicholson. Adapted from the MSX version.
+* Initial conversion by Gary Patchen.
+
+	include macros
+
+	xref locate,print_string,name_tokens,build_name,detoken_name
+	xref str_copy,str_cat,text_colour,left_arm,right_arm
+
+* * LOCAL CONSTANTS
+
+line_width: equ 29						max width of each line of text
+max_lines:	equ 6						max lines of print (hopefully)
+funny_x:	equ 10						locate coords for text
+funny_y:	equ 125
+
+* ---- LOCAL VARIABLES ----
+
+	vars funny
+
+up_flag:		ds.w 1					flag convert 1st char to upper case
+fibs2a: 		ds.w 1					2 random seeds
+fibs2b: 		ds.w 1
+token_buffer:	ds.b 4					token buffer
+ian_buffer: 	ds.b 14 				buffer for 'ian string
+build_buffer:	ds.b 256				buffer for building the description
+output_buffer:	ds.b 256				output buffer to the screen
+line_count: 	ds.w 1					count of # lines to display
+
+	end_vars funny
+
+	module funny
+
+
+* ************************************************
+* **											**
+* ** FUNNY_STR - PRINT FUNNY SYSTEM DESCRIPTION **
+* **											**
+* ************************************************
+
+* Entry routine to funny. Print the full description on the bottom part of
+* the screen.
+
+* Entry:  None
+* Exit:   None
+
+* Regs:   ?
+* Subr:   ?
+
+	subr funny_str,global
+
+	moveq #yellow,d0					set text colour
+	moveq #black,d1
+	jsr text_colour
+	cmp #$41,mission(a6)				mission #4 ?
+	if <ne> then.s						no
+		move req_planet(a6),d0			build planet name
+		jsr build_name
+		move cplanet+seed+0(a6),d0		set up random seed
+		move cplanet+seed+2(a6),d1
+		eor d1,d0
+		move d0,fibs2a(a6)
+		move cplanet+seed+4(a6),d1
+		eor d1,d0
+		move d0,fibs2b(a6)
+		lea build_buffer(a6),a0 		clear string buffer
+		loop 1,256/4
+			clr.l (a0)+
+		next 1
+		lea base_string(pc),a4			expand base token
+		lea build_buffer+1(a6),a5
+		bsr detok
+		clr.b (a5)						terminate string
+	else.s
+		lea text1(pc),a0				copy mission message string
+		lea build_buffer+1(a6),a1
+		jsr str_copy
+	endi
+	clr d1								line count = 0
+	lea build_buffer+1(a6),a0			point to start of string
+	lea output_buffer(a6),a1			point to output buffer
+	repeat
+		moveq #line_width,d0			index to line break
+		tst.b (a0,d0)					end of string ?
+		if <eq> then.s					yes
+			jsr str_copy				copy string into output
+			inc d1
+			break						exit loop
+		endi
+		repeat							find a space
+			cmp.b #' ',(a0,d0)
+			break if <eq>
+			dec d0
+		endr
+		clr.b (a0,d0)					break line here
+		push.w d0						print string
+		push.l a0
+		jsr str_copy					copy string
+		inc d1
+		pop.l a0						next part of string
+		pop.w d0
+		lea 1(a0,d0),a0
+	endr
+	move d1,d7							D7 = line counter
+	dec d7
+	sub #max_lines,d1					calculate where to print the text
+	neg d1
+	if <mi> then.s						just in case there is a description
+		clr d1							somewhere that is longer than 6 lines
+	endi
+	asl #2,d1
+	add #funny_y,d1
+	lea output_buffer(a6),a0			print text description
+	loop 1
+		push d1
+		moveq #funny_x,d0
+		jsr locate
+		jsr print_string
+		pop d1
+		addq #8,d1
+	next 1,d7
+
+	ret 								return
+
+
+* *********************************
+* **							 **
+* ** DETOK - DETOKENISE A STRING **
+* **							 **
+* *********************************
+
+* Detokenise a string of data into a output string.Note that this string itself
+* may contain further tokens which in turn cause DETOK to be called recursively.
+
+* Entry:  A4 = Pointer to string to detokenise (zero terminated)
+*		  A5 = Output string pointer
+
+* Exit:   A4,a5 updated as required.
+
+* Regs:   ?
+* Subr:   DETOK+special routines.
+
+	subr detok
+
+	move.b (a4)+,d0 					fetch next byte
+	ret <eq>							end of string, yes so return
+	if <mi> then.s						token
+		push.l a4						save data pointer
+		and #127,d0 					index into token pointer (x20)
+		mulu #20,d0
+		lea toktab(pc),a4
+		lea (a4,d0),a4
+		bsr randtok 					random token
+		asl #2,d0						use selected random token
+		move.l (a4,d0),a4
+		bsr detok						detokenise this string
+		pop.l a4						next byte of original string
+		bra detok
+	endi
+	if.b d0 <lo> #32 then.s 			if special code
+		ext d0							index into vector table
+		asl #2,d0
+		lea special_vectors(pc),a0
+		move.l -4(a0,d0),a0 			fetch vector
+		push.l a4						execute special routine
+		jsr (a0)
+		pop.l a4
+		bra detok						next byte
+	endi
+	if.b d0 <eq> #' ' then.s			if space ?
+		cmp.b -1(a5),d0 				last character a space ?
+		beq detok						yes ignore second space
+	endi
+	tst up_flag(a6) 					convert to upper case ?
+	if <ne> then.s						yes
+		cmp.b #' ',-1(a5)				last character a space ?
+		if <eq> then.s					yes
+			if.b d0 <hs> #'a' then.s	convert to upper case
+				if.b d0 <ls> #'z' then.s
+					bclr #5,d0
+				endi
+			endi
+		endi
+	endi
+	move.b d0,(a5)+ 					store in buffer
+	bra detok							Next byte
+
+
+* *********************************
+* **							 **
+* ** PR_NAME - PRINT_PLANET NAME **
+* **							 **
+* *********************************
+
+* Include the current planet name into the output string using DETOK.
+* A space if appened to the name
+
+* Entry: A5 = Output string pointer
+* Exit:  A5 updated as required.
+
+* Regs:   ?
+* Subr:   DETOK
+
+	subr pr_name
+
+	lea planet_name(a6),a4				copy polanet name into output string
+	bsr detok
+	move.b #' ',(a5)+					final space
+
+	ret
+
+
+* *************************************
+* **								 **
+* ** NAMIAN - PRINT PLANET NAME +IAN **
+* **								 **
+* *************************************
+
+* Similar in function to PR_NAME but appends 'ian' to the planets name.
+* If the name ends in a vowel, the vowel is overwritten.
+
+* Entry:  a5 = Output string pointer
+* Exit:   a5 updated.
+
+* Regs: ?
+* Subr: DETOK
+
+	subr namian
+
+	lea planet_name(a6),a0				copy planets name into buffer
+	lea ian_buffer(a6),a1
+	jsr str_copy
+	dec.l a1							point to zero byte
+	move.b -1(a1),d0					overwrite last character if vowel
+	lea vowels(pc),a0
+	loop 1,5
+		cmp.b (a0)+,d0
+		if <eq> then.s
+			dec.l a1
+		endi
+	next 1
+	lea ian_buffer(a6),a0				append "ian "
+	lea ianstr(pc),a1
+	jsr str_cat
+	lea ian_buffer(a6),a4				copy into output string
+	bra detok
+
+
+* *************************************
+* **								 **
+* ** BACK - MOVE OUTPUT POINTER BACK **
+* **								 **
+* *************************************
+
+* Moves the output pointer back one character. Called via a jump table.
+
+* Entry:  A5 = Output string pointer
+* Exit:   A5 = A5-1
+
+* Regs: A5 corrupt.
+* Subr: None
+
+	subr back
+
+	dec.l a5							move desination pointer back
+
+	ret
+
+
+* **********************************************
+* **										  **
+* ** FIRSTUP - CONVERT 1ST CHAR TO UPPER CASE **
+* **										  **
+* **********************************************
+
+* Sets the flag to signal to DETOK that the 1st character of each word
+* is to be converted to upper case. Called via a jump table.
+
+* Entry:  None
+* Exit:   None
+
+* Regs: ?
+* Subr: None
+
+	subr firstup
+
+	st up_flag(a6)						set flag
+
+	ret
+
+
+* *****************************
+* **						 **
+* ** ASIS - PRINT CASE AS IS **
+* **						 **
+* *****************************
+
+* Clears the flag as set by FIRSTUP. Called via jump table.
+
+* Entry:  None
+* Exit:   None
+
+* Regs: ?
+* Subr: None
+
+	subr asis
+
+	clr up_flag(a6) 					clear flag
+
+	ret
+
+
+* *********************************
+* **							 **
+* ** RNDNAME - PRINT RANDOM NAME **
+* **							 **
+* *********************************
+
+* Includes a random name in the output string buffer. Uses the same
+* routines as the planet naming system.
+
+* Entry:  a5 = Output string pointer
+* Exit:   a5 updated.
+
+* Regs: ?
+* Subr: DETOK, NAME_TOKENS, DETOKEN_NAME.
+
+	subr rndname
+
+	lea planet_name(a6),a0				save planet's name
+	lea ian_buffer(a6),a1
+	jsr str_copy
+	move fibs2a(a6),d0					setup seeds
+	move d0,rseed1(a6)
+	move fibs2b(a6),d1
+	move d1,rseed2(a6)
+	eor d0,d1
+	move d1,rseed3(a6)
+	lea token_buffer(a6),a0 			build tokens
+	bsr name_tokens
+	lea token_buffer(a6),a0 			expand tokens
+	bsr detoken_name
+	lea planet_name(a6),a4				copy name into output string
+	bsr detok
+	move.b #' ',(a5)+					final space
+	lea ian_buffer(a6),a0				restore planet's name
+	lea planet_name(a6),a1
+	jmp str_copy
+
+
+* ***********************************
+* **							   **
+* ** RANDTOK - CHOOSE RANDOM TOKEN **
+* **							   **
+* ***********************************
+
+* Each of the tokens has five entries, this routine chooses one of
+* them randomly using a seed derived from the planet's own seed.
+
+* Entry:  FIBS2A and FIBS2B are two random seeds (see FUNNY_STR)
+* Exit:   D0 = Random token number (0..4)
+
+* Regs: ?
+* Subr: ?
+
+	subr randtok
+
+	move fibs2b(a6),d0					randomize
+	move fibs2a(a6),d1
+	move d0,fibs2a(a6)
+	add d1,d0
+	move d0,fibs2b(a6)
+	and.l #255,d0						divide low byte by 52
+	divu #52,d0
+
+	ret
+
+
+* **** LOCAL DATA ****
+
+* Table of vectors to special routines.
+
+special_vectors:
+
+	dc.l pr_name,namian,rndname,back,firstup,asis
+
+* Table of tokens. There are five entries per token.
+
+toktab:
+
+	dc.l tok128a,tok128b,tok128c,tok128d,tok128e,tok129a,tok129b,tok129c
+	dc.l tok129d,tok129e,tok130a,tok130b,tok130c,tok130d,tok130e,tok131a
+	dc.l tok131b,tok131c,tok131d,tok131e,tok132a,tok132b,tok132c,tok132d
+	dc.l tok132e,tok133a,tok133b,tok133c,tok133d,tok133e,tok134a,tok134b
+	dc.l tok134c,tok134d,tok134e,tok135a,tok135b,tok135c,tok135d,tok135e
+	dc.l tok136a,tok136b,tok136c,tok136d,tok136e,tok137a,tok137b,tok137c
+	dc.l tok137d,tok137e,tok138a,tok138b,tok138c,tok138d,tok138e,tok139a
+	dc.l tok139b,tok139c,tok139d,tok139e,tok140a,tok140b,tok140c,tok140d
+	dc.l tok140e,tok141a,tok141b,tok141c,tok141d,tok141e,tok142a,tok142b
+	dc.l tok142c,tok142d,tok142e,tok143a,tok143b,tok143c,tok143d,tok143e
+	dc.l tok144a,tok144b,tok144c,tok144d,tok144e,tok145a,tok145b,tok145c
+	dc.l tok145d,tok145e,tok146a,tok146b,tok146c,tok146d,tok146e,tok147a
+	dc.l tok147b,tok147c,tok147d,tok147e,tok148a,tok148b,tok148c,tok148d
+	dc.l tok148e,tok149a,tok149b,tok149c,tok149d,tok149e,tok150a,tok150b
+	dc.l tok150c,tok150d,tok150e,tok151a,tok151b,tok151c,tok151d,tok151e
+	dc.l tok152a,tok152b,tok152c,tok152d,tok152e,tok153a,tok153b,tok153c
+	dc.l tok153d,tok153e,tok154a,tok154b,tok154c,tok154d,tok154e,tok155a
+	dc.l tok155b,tok155c,tok155d,tok155e,tok156a,tok156b,tok156c,tok156d
+	dc.l tok156e,tok157a,tok157b,tok157c,tok157d,tok157e,tok158a,tok158b
+	dc.l tok158c,tok158d,tok158e,tok159a,tok159b,tok159c,tok159d,tok159e
+	dc.l tok160a,tok160b,tok160c,tok160d,tok160e,tok161a,tok161b,tok161c
+	dc.l tok161d,tok161e,tok162a,tok162b,tok162c,tok162d,tok162e,tok163a
+	dc.l tok163b,tok163c,tok163d,tok163e,tok164a,tok164b,tok164c,tok164d
+	dc.l tok164e,tok165a,tok165b,tok165c,tok165d,tok165e,tok166a,tok166b
+	dc.l tok166c,tok166d,tok166e
+
+* List of token strings.
+
+tok128a:	db 'fabled ',0
+tok128b:	db 'notable ',0
+tok128c:	db 'well known ',0
+tok128d:	db 'famous ',0
+tok128e:	db 'noted ',0
+tok129a:	db 'very ',0
+tok129b:	db 'mildly ',0
+tok129c:	db 'most ',0
+tok129d:	db 'reasonably ',0
+tok129e:	db 0
+tok130a:	db 'ancient ',0
+tok130b:	db 151,0
+tok130c:	db 'great ',0
+tok130d:	db 'vast ',0
+tok130e:	db 'pink ',0
+tok131a:	db 5,156,' ',155,6,'plantations ',0
+tok131b:	db 'mountains ',0
+tok131c:	db 154,0
+tok131d:	db 165,'forests ',0
+tok131e:	db 'oceans ',0
+tok132a:	db 166,0
+tok132b:	db 'mountain ',0
+tok132c:	db 'edible ',0
+tok132d:	db 'tree ',0
+tok132e:	db 'spotted ',0
+tok133a:	db 157,0
+tok133b:	db 158,0
+tok133c:	db 134,4,'oid ',0
+tok133d:	db 164,0
+tok133e:	db 163,0
+tok134a:	db 'walking ',141,0
+tok134b:	db 'crab ',0
+tok134c:	db 'bat ',0
+tok134d:	db 'lobst ',0
+tok134e:	db 3,0
+tok135a:	db 'ancient ',0
+tok135b:	db 'exceptional ',0
+tok135c:	db 'eccentric ',0
+tok135d:	db 'ingrained ',0
+tok135e:	db 151,0
+tok136a:	db 'shyness ',0
+tok136b:	db 'silliness ',0
+tok136c:	db 'mating traditions ',0
+tok136d:	db 'loathing of ',137,0
+tok136e:	db 'love for ',137,0
+tok137a:	db 'food blenders ',0
+tok137b:	db 'tourists ',0
+tok137c:	db 'poetry ',0
+tok137d:	db 'discos ',0
+tok137e:	db 145,0
+tok138a:	db 'its ',130,131,0
+tok138b:	db 'the ',2,132,133,0
+tok138c:	db 'its inhabitant''s ',135,136,0
+tok138d:	db 159,6,0
+tok138e:	db 'its ',144,145,0
+tok139a:	db 'beset ',0
+tok139b:	db 'plagued ',0
+tok139c:	db 'ravaged ',0
+tok139d:	db 'cursed ',0
+tok139e:	db 'scourged ',0
+tok140a:	db 150,'civil war ',0
+tok140b:	db 141,132,133,4,'s ',0
+tok140c:	db 'a ',141,'disease ',0
+tok140d:	db 150,'earth quakes ',0
+tok140e:	db 150,'solar activity ',0
+tok141a:	db 'killer ',0
+tok141b:	db 'deadly ',0
+tok141c:	db 'evil ',0
+tok141d:	db 'lethal ',0
+tok141e:	db 'vicious ',0
+tok142a:	db 'juice ',0
+tok142b:	db 'brandy ',0
+tok142c:	db 'water ',0
+tok142d:	db 'brew ',0
+tok142e:	db 'gargle blasters ',0
+tok143a:	db 3,0
+tok143b:	db 2,133,0
+tok143c:	db 2,3,0
+tok143d:	db 2,141,0
+tok143e:	db 141,3,0
+tok144a:	db 'fabulous ',0
+tok144b:	db 'exotic ',0
+tok144c:	db 'hoopy ',0
+tok144d:	db 'unusual ',0
+tok144e:	db 'exciting ',0
+tok145a:	db 'cuisine ',0
+tok145b:	db 'night life ',0
+tok145c:	db 'casinos ',0
+tok145d:	db 'sit comms ',0
+tok145e:	db 159,6,0
+tok146a:	db 1,0
+tok146b:	db 'The planet ',1,0
+tok146c:	db 'The world ',1,0
+tok146d:	db 'This planet ',0
+tok146e:	db 'This world ',0
+tok147a:	db 129,128,'for ',138,0
+tok147b:	db 129,128,'for ',138,'and ',138,0
+tok147c:	db 139,'by ',140,0
+tok147d:	db 129,128,'for ',138,'but is ',139,'by ',140,0
+tok147e:	db 'a ',148,149,0
+tok148a:	db 4,'n unremarkable ',0
+tok148b:	db 'boring ',0
+tok148c:	db 'dull ',0
+tok148d:	db 'tedious ',0
+tok148e:	db 'revolting ',0
+tok149a:	db 'planet ',0
+tok149b:	db 'world ',0
+tok149c:	db 'place ',0
+tok149d:	db 'little planet ',0
+tok149e:	db 'dump ',0
+tok150a:	db 'frequent ',0
+tok150b:	db 'occasional ',0
+tok150c:	db 'unpredictable ',0
+tok150d:	db 'dreadful ',0
+tok150e:	db 'deadly ',0
+tok151a:	db 'funny ',0
+tok151b:	db 'wierd ',0
+tok151c:	db 'unusual ',0
+tok151d:	db 'strange ',0
+tok151e:	db 'peculiar ',0
+tok152a:	db 'son of a bitch ',0
+tok152b:	db 'scoundrel ',0
+tok152c:	db 'blackguard ',0
+tok152d:	db 'rougue ',0
+tok152e:	db 'whoreson beetle headed flap ear''d knave',0
+tok153a:	db 0
+tok153b:	db 0
+tok153c:	db 0
+tok153d:	db 0
+tok153e:	db 0
+tok154a:	db 'parking meters ',0
+tok154b:	db 'dust clouds ',0
+tok154c:	db 'ice bergs ',0
+tok154d:	db 'rock formations',0
+tok154e:	db 'volcanoes ',0
+tok155a:	db 'plant ',0
+tok155b:	db 'tulip ',0
+tok155c:	db 'bannana ',0
+tok155d:	db 'corn ',0
+tok155e:	db 'weed ',0
+tok156a:	db 3,0
+tok156b:	db 2,3,0
+tok156c:	db 2,141,0
+tok156d:	db 'inhabitant ',0
+tok156e:	db 2,3,0
+tok157a:	db 'shrew ',0
+tok157b:	db 'beast ',0
+tok157c:	db 'bison ',0
+tok157d:	db 'snake ',0
+tok157e:	db 'wolf ',0
+tok158a:	db 'leopard ',0
+tok158b:	db 'cat ',0
+tok158c:	db 'monkey ',0
+tok158d:	db 'goat ',0
+tok158e:	db 'fish ',0
+tok159a:	db 5,143,142,0
+tok159b:	db 2,5,157,160,0
+tok159c:	db 'its ',5,144,158,160,0
+tok159d:	db 161,162,0
+tok159e:	db 5,143,142,0
+tok160a:	db 'meat ',0
+tok160b:	db 'cutlet ',0
+tok160c:	db 'steak ',0
+tok160d:	db 'burgers ',0
+tok160e:	db 'soup ',0
+tok161a:	db 'ice ',0
+tok161b:	db 'mud ',0
+tok161c:	db 'zero-G ',0
+tok161d:	db 'vacuum ',0
+tok161e:	db 2,'ultra ',0
+tok162a:	db 'hockey ',0
+tok162b:	db 'cricket ',0
+tok162c:	db 'karate ',0
+tok162d:	db 'polo ',0
+tok162e:	db 'tennis ',0
+tok163a:	db 'wasp ',0
+tok163b:	db 'moth ',0
+tok163c:	db 'grub ',0
+tok163d:	db 'ant ',0
+tok163e:	db 3,0
+tok164a:	db 'poet ',0
+tok164b:	db 'arts graduate ',0
+tok164c:	db 'yak ',0
+tok164d:	db 'snail ',0
+tok164e:	db 'slug ',0
+tok165a:	db 'dense ',0
+tok165b:	db 'lush ',0
+tok165c:	db 'rain ',0
+tok165d:	db 'bamboo ',0
+tok165e:	db 'deciduous ',0
+tok166a:	db 'green ',0
+tok166b:	db 'black ',0
+tok166c:	db 'yellow stripey ',0
+tok166d:	db 'pinky grey ',0
+tok166e:	db 'white ',0
+
+* Base string for planet description
+
+base_string: db 6,146,'is ',147,4,'.',0
+
+* 'IAN' suffix to planet name.
+
+ianstr: db 'ian ',0
+
+* The 5 vowels.
+
+vowels: db 'aeiou'
+
+* The mission text message.
+
+text1:	db 'There''s a mean nasty ship out there waiting to destroy you!',0

@@ -1,0 +1,547 @@
+*	 @@    @@@@@@  @@@@@@ @@@@@@	 @@ 	@@@@   @@@@@@
+*	@@@@   @ @@ @  @ @@ @  @@  @@	@@@@   @@  @@  @ @@ @
+*  @@  @@	 @@ 	 @@    @@  @@  @@  @@ @@		 @@
+*  @@  @@	 @@ 	 @@    @@@@@   @@  @@ @@		 @@
+*  @@@@@@	 @@ 	 @@    @@ @@   @@@@@@ @@		 @@
+*  @@  @@	 @@ 	 @@    @@  @@  @@  @@  @@  @@	 @@
+*  @@  @@	@@@@	@@@@  @@@  @@  @@  @@	@@@@	@@@@
+
+* Display attract screen at start of game.
+
+* Atari ST Version 1.0 1st April 1988 Copyright (c) 1988 Mr. Micro Ltd.
+* Designed and coded by Rob Nicholson. Adpated from the MSX version.
+
+	include macros
+
+	xref reset_system,front_view,init_cursor,blue_danube,start_tune,orthogonal
+	xref create_object,clear_image,disp_message,text_blatt,get_range,draw_all
+	xref draw_object,update_inst,swap_screen,local_x_rotate,local_z_rotate
+	xref joystick,set_climb_angles,world_x_rotate,set_roll_angles,read_key
+	xref world_z_rotate,start_fade,restore_state,disk,status,random,wait
+	xref clear_objects,alloc_object,print_string
+
+* ---- LOCAL CONSTANTS ----
+
+max_radius: 	equ y_max*5/4			maximum radius on screen (attract)
+tum_ang:		equ 15*10				tumble angle of rotation
+p_white:		equ 9					white panel
+p_red:			equ 27					red panel
+
+* ---- LOCAL VARIABLES ----
+
+	vars attract
+
+x_rotation: 		ds.w 1				rotation around x axis
+z_rotation: 		ds.w 1				rotation around z axis
+max_x_rot:			ds.w 1				maximum x rotation
+max_z_rot:			ds.w 1				maximum z rotation
+min_zpos:			ds.w 1				minimum z position
+at_front:			ds.w 1				flag: at front of screen
+fade_count: 		ds.w 1				attract fade counter
+fading: 			ds.w 1				flag: fading away
+letter: 			ds.l 1				ptr: current letter record
+attract_ptr:		ds.l 1				ptr: attract ship list
+tumble_in:			ds.w 1				flag: tumbling in (not out)
+control:			ds.w 1				flag: controller (0=computer)
+which_rot:			ds.w 1				which rotation method
+
+	end_vars attract
+
+* ---- LOCAL MACROS ----
+
+* STEER bit,angle,routine
+
+steer: macro
+
+	btst #\1,joy_state+1(a6)			key pressed ?
+	if <ne> then.s						yes
+		st control(a6)					player in control
+		tst which_rot(a6)
+		if <eq> then.s
+			move #\2,d0 				move in selected direction
+			jsr local_\3_rotate
+		else.s
+			ifc '\3','x'
+				move #\2/8,d0			move in selected direction
+				move d0,climb_angle(a6)
+				jsr set_climb_angles
+			endc
+			ifc '\3','z'
+				move #\2,d0 			move in selected direction
+				move d0,roll_angle(a6)
+				jsr set_roll_angles
+			endc
+			jsr world_\3_rotate
+		endi
+	endi
+
+	endm
+
+	module attract
+
+
+* **************************************
+* **								  **
+* ** ATTRACT - DISPLAY ATTRACT SCREEN **
+* **								  **
+* **************************************
+
+* Displays the attract mode screen and waits for 'Y' or 'N' to be pressed.
+* Also displays the tumbling 'ELITE' symbol.
+
+* Entry: None
+* Exit:  None
+
+* Regs:  All corrupt
+* Subr:  None
+
+	subr attract,global
+
+	jsr reset_system					reset variables (for instruments)
+	clr docked(a6)						display front view
+	clr cockpit_on(a6)
+	jsr front_view
+	st cockpit_on(a6)
+	st docked(a6)
+	clr control(a6) 					computer in control
+	clr which_rot(a6)					local rotation
+	push cursor_type(a6)				save current cursor type
+	move #-1,cursor_type(a6)			disable display of cursor
+	lea full_screen(pc),a0				initialise cursor
+	jsr init_cursor
+	cmp #$10,mission(a6)				1st mission ?
+	if <ne> then.s						no
+		lea blue_danube,a0				start theme tune
+		jsr start_tune
+
+display_title:
+
+		bsr tumble						tumble title in
+		lea attract_list(pc),a0 		point to start of ship list
+	else.s
+		lea constrictor_list(pc),a0 	just display constrictor
+	endi
+	move.l a0,attract_ptr(a6)
+
+new_ship:
+
+	move.l attract_ptr(a6),a0			get next object type
+	move (a0)+,d0
+	bmi.s display_title 				end of list, display title again
+	move.l a0,attract_ptr(a6)
+	lea objects(a6),a4					create object record
+	move d0,type(a4)
+	lea attract_data(pc),a0
+	lea xpos(a4),a1
+	loop 1,30
+		move.b (a0)+,(a1)+
+	next 1
+	clr flags(a4)
+	clr logic(a4)
+	jsr create_object					create the object
+	move #1,max_x_rot(a6)				force new rotation
+	move #1,max_z_rot(a6)
+	clr x_rotation(a6)					no rotations
+	clr z_rotation(a6)
+	clr at_front(a6)					not at front
+	clr fading(a6)						not fading
+	move #300,fade_count(a6)			set time to fade
+	moveq #0,d0 						calculate minimum z position
+	move obj_rad(a4),d0
+	moveq #9,d1
+	asl.l d1,d0
+	divu #max_radius,d0
+	move d0,min_zpos(a6)
+	move.l a4,a5						A5 = ptr: current object
+	repeat
+		jsr orthogonal					check angles and unity
+		jsr clear_image 				clear screen image
+		clr text_row(a6)				display object type
+		move.l text(a5),a0
+		jsr disp_message
+		moveq #orange,d0
+		jsr text_blatt
+		move #no_rows-1,text_row(a6)	reset text blatt row
+		cmp #$10,mission(a6)			mission #1 ?
+		if <eq> then.s					yes
+			lea text3(pc),a0			display "Hit any key for mission"
+		else.s
+			lea text1(pc),a0			display "Load new commander ?"
+		endi
+		jsr disp_message
+		moveq #lgt_blue,d0
+		jsr text_blatt
+		jsr get_range					get range to object
+		jsr draw_object 				draw ship (into list)
+		jsr draw_all
+		jsr update_inst 				update instruments
+		jsr swap_screen 				swap screen
+		tst fading(a6)					fading ?
+		if <ne> then.s					yes
+			cmp #5,scr_radius(a5)		way in the distance ?
+			blo new_ship				yes, generate new ship
+			add #240,zpos+2(a5) 		move into the distance
+		else.s
+			tst at_front(a6)			at front of screen ?
+			if <eq> then.s				no
+				move zpos+2(a5),d0		move closer and check for at front
+				sub #240,d0
+				cmp min_zpos(a6),d0
+				if <lt> then.s
+					st at_front(a6)
+					move min_zpos(a6),d0
+				endi
+				move d0,zpos+2(a5)
+			endi
+		endi
+		tst control(a6) 				computer in control ?
+		if <eq> then.s					yes
+			move x_rotation(a6),d0		rotate object
+			move max_x_rot(a6),d1
+			bsr change_rotate
+			move d0,x_rotation(a6)
+			move d1,max_x_rot(a6)
+			jsr local_x_rotate
+			move z_rotation(a6),d0
+			move max_z_rot(a6),d1
+			bsr change_rotate
+			move d0,z_rotation(a6)
+			move d1,max_z_rot(a6)
+			jsr local_z_rotate
+			cmp #$10,mission(a6)		mission #1 ?
+			if <ne> then.s				no
+				dec fade_count(a6)		ready to start fade ?
+				if <eq> then.s			yes
+					st fading(a6)		start fading
+				endi
+			endi
+		endi
+		lea cursor_codes(pc),a0 		build joystick state
+		jsr joystick
+		move d0,joy_state(a6)
+		steer 0,-40,x					allow user to steer object
+		steer 1,+40,x
+		steer 2,+40,z
+		steer 3,-40,z
+		tst.b key_states+$17(a6)		move nearer (I) ?
+		if <ne> then.s					yes
+			sub.l #50,zpos(a5)
+			st control(a6)
+		endi
+		tst.b key_states+$18(a6)		move further away (O) ?
+		if <ne> then.s					yes
+			add.l #50,zpos(a5)
+			st control(a6)
+		endi
+		jsr read_key					key pressed ?
+		tst d0
+		if <ne> then.s					yes
+			cmp #$10,mission(a6)		mission #1 ?
+			break if <eq>				yes, exit loop
+			cmp.b #'Y',d0				exit if Y or N pressed
+			break if <eq>
+			cmp.b #'N',d0
+			break if <eq>
+			cmp.b #'F',d0				fade ?
+			if <eq> then.s				yes
+				st fading(a6)			start fading
+				st control(a6)			player in control
+			endi
+			cmp.b #'D',d0				back to demo mode ?
+			if <eq> then.s				yes
+				clr control(a6)
+			endi
+			cmp.b #'A',d0				toggle axis rotation ?
+			if <eq> then.s				yes
+				not which_rot(a6)
+				st control(a6)
+			endi
+		endi
+		tst button_pressed(a6)			mouse button pressed ?
+		if <ne> then.s					yes
+			moveq #'N'>>8,d0			assume 'N' pressed
+			clr button_pressed(a6)
+			break.s 					exit loop
+		endi
+	endr
+	clr csr_on(a6)						disable cursor
+	pop cursor_type(a6) 				restore cursor type
+	cmp #$10,mission(a6)				contrictor mission ?
+	ret <eq>							yes, return
+	push d0 							stop music
+	jsr start_fade
+	jsr restore_state					restore game status
+	move cursor_type(a6),d0
+	clr witch_space(a6) 				initialise for game
+	clr controls_locked(a6)
+	clr condition(a6)
+	pop d0								load new commander ?
+	if.b d0 <eq> #'Y' then.s			yes
+		st force_load(a6)				force load from disk
+		jsr disk
+	else.s
+		jsr status						display status screen
+	endi
+
+	ret
+
+
+* ***********************************************
+* **										   **
+* ** CHANGE_ROTATE - CHANGE ROTATION OF OBJECT **
+* **										   **
+* ***********************************************
+
+* Changes to rotation angle of the object. The rotation swings backwards
+* and forwards between a positive and negative angle.
+
+* Entry: D0 = current rotation angle
+*		 D1 = current maximum angle
+
+* Regs:  ?
+* Subr:  ?
+
+	subr change_rotate
+
+	tst d1								positive maximum ?
+	if <pl> then.s						yes
+		addq #2,d0						increase angle of rotation
+		if d0 <ge> d1 then.s			reached maximum
+			push d0 					choose new maximum (-)
+			jsr random
+			and #63,d0
+			add #40,d0
+			neg d0
+			move d0,d1
+			pop d0
+		endi
+	else.s
+		subq #2,d0						decrease angle of rotation
+		if d0 <le> d1 then.s			reached minimum
+			push d0 					choose new maximum (+)
+			and #63,d0
+			add #40,d0
+			move d0,d1
+			pop d0
+		endi
+	endi
+
+	ret
+
+
+* **********************************
+* **							  **
+* ** TUMBLE - TUMBLE TITLE EFFECT **
+* **							  **
+* **********************************
+
+* This routine creates the tumble 'ELITE' letters at the start of the game.
+* The letters are normal objects rotated and moved nearer.
+
+* Entry: None
+* Exit:  None
+
+* Regs:  All corrupt.
+* Subr:  ?
+
+	subr tumble
+
+	jsr clear_objects					clear all objects
+	st tumble_in(a6)					tumble in
+	move #no_rows-1,text_row(a6)		position of text
+	lea title_list(pc),a0				title object list
+	loop 1,5							5 letters to display
+		jsr alloc_object				allocate an object
+		move.b #1,flags(a4) 			in use
+		clr logic(a4)					no logic
+		move (a0)+,type(a4) 			set object type
+		move (a0)+,d0					set x position
+		ext.l d0
+		move.l d0,xpos(a4)
+		lea normal_data(pc),a1			set y,z position and vectors
+		lea ypos(a4),a2
+		loop 2,d6,26
+			move.b (a1)+,(a2)+
+		next 2,d6
+		jsr create_object				create the object
+		move #p_white,obj_colour(a4)	tumble in white
+		move.l a4,letter(a6)			save pointer to current letter
+		movem.l d7/a0,-(sp) 			tumble letter in
+		bsr tumble_letters
+		movem.l (sp)+,d7/a0
+		tst d0							key pressed while tumbling ?
+		ret <ne>						yes, return
+	next 1								next letter
+	move #2*50,d0						wait for 2 seconds
+	bsr wait
+	clr tumble_in(a6)					tumble into the distance
+	bsr tumble_letters
+
+	ret
+
+
+* *********************************************
+* **										 **
+* ** TUMBLE_LETTERS - TUMBLE CURRENT LETTERS **
+* **										 **
+* *********************************************
+
+* Tumbles the current set of letters in or out depending on the TUMBLE_IN
+* flag.
+
+* Entry: None
+* Exit:  D0 = flag: key pressed while tumbling
+
+* Regs:  All corrupt.
+* Subr:  ?
+
+	subr tumble_letters
+
+	loop 1,48							loop 48 times
+		push d7
+		jsr clear_image 				clear screen image
+		lea objects(a6),a5				scan through the objects
+		repeat
+			btst #in_use,flags(a5)		last object ?
+			break if <eq>				yes
+			tst tumble_in(a6)			tumbling in ?
+			if <ne> then.s				yes
+				cmp.l letter(a6),a5 	current letter ?
+				if <eq> then.s			yes
+					tst (sp)			rotate towards us
+					if <ne> then.s
+						move #tum_ang,d0
+						jsr local_x_rotate
+					else.s
+						bsr clamp_vertical
+					endi
+					sub #106,zpos+2(a5) move closer
+				endi
+			else.s
+				move #-tum_ang,d0		rotate away from us
+				jsr local_x_rotate
+				add #106,zpos+2(a5) 	move further away
+			endi
+			jsr get_range				get range to object
+			jsr draw_object 			draw the object
+			lea obj_len(a5),a5			next object
+		endr
+		lea text4(pc),a0				display copyright messages
+		jsr print_string
+		lea text2(pc),a0
+		jsr print_string
+		jsr draw_all					actually draw all the objects
+		jsr update_inst 				update instruments
+		jsr swap_screen 				swap screens
+		repeat							clamp frame rate
+			cmp #3,frame_count(a6)
+		until <hs>
+		pop d7							key pressed ?
+		jsr read_key
+		tst d0
+		ret <ne>						yes, return
+		move button_pressed(a6),d0		button pressed ?
+		if <ne> then.s					yes
+			clr button_pressed(a6)		clear button press
+			ret 						return (D0 != 0)
+		endi
+	next 1
+
+	ret
+
+
+* ***********************************************
+* **										   **
+* ** CLAMP_VERTICAL - CLAMP LETTER TO VERTICAL **
+* **										   **
+* ***********************************************
+
+* Due to inaccuracies in the rotations, the letters are not exactly vertical
+* when they reach the front of the screen. This routine just fills in the
+* vectors again.
+
+* Entry: A5 = ptr: object record
+* Exit:  None
+
+* Regs:  A0-A1 corrupt.
+* Subr:  None
+
+	subr clamp_vertical
+
+	lea normal_data+8(pc),a0			source data
+	lea x_vector(a5),a1 				destination
+	loop 1,9							9 words to copy (3 per vector)
+		move (a0)+,(a1)+
+	next 1
+	move #p_red,obj_colour(a5)			draw in red
+
+	ret
+
+
+* ---- LOCAL DATA ----
+
+* List of ships to display in attract mode.
+
+attract_list:
+
+	dc cobra,krait,thargoid,boa,gecko,moray,adder,mamba,viper,ferdelance
+	dc cobra_mk1,python,anaconda,asp,sidewinder,wolf,shuttle,transporter
+	dc -1
+
+constrictor_list:
+
+	dc.w constr,-1
+
+* Initial position and vectors for each object in attract.
+
+attract_data:
+
+	dc.l 0,0,8000
+	dc.w unit,0,0
+	dc.w 0,-unit,0
+	dc.w 0,0,-unit
+
+* Initial position (y and z) and vectors for each letter in tumble.
+
+normal_data:
+
+	dc.l 0,5888
+	dc.w unit,0,0
+	dc.w 0,unit,0
+	dc.w 0,0,unit
+
+* List of shapes to display in tumble sequence.
+
+title_list:
+
+	dc.w letter_e,-120
+	dc.w letter_l,-60
+	dc.w letter_i,0
+	dc.w letter_t,60
+	dc.w letter_e,120
+
+* Drive cursor keyboard scan codes.
+
+cursor_codes
+
+	dc.w up,$48,-1
+	dc.w down,$50,-1
+	dc.w left,$4b,-1
+	dc.w right,$4d,-1
+	dc.w -1
+
+* Full screen mouse action table.
+
+full_screen:
+
+	action 0,0,319,199,0,0,0
+	dc.w -1
+	dc.l 0
+
+* Text messages.
+
+text1:	dz <Load new commander ?>
+text2:	db c_cursor,6,14*8,c_colour,lgt_green,black,96
+		db 'ST Version by Mr. Micro Ltd.',0
+text3:	dz <Press any key for mission>
+text4:	db c_cursor,11,1*8,c_colour,yellow,black,96,'(c) Bell & Braben',0
