@@ -165,7 +165,7 @@ short dl_fileinfo(char *path, short usepar, FILESYS *filesys, WP_ENTRY *item,
 	char *wname, *lpath;
 	char *fmask, *dlstr;
 	short cont, done, ok, attr, fkey, atfirst, i, l, desk, file;
-	short nfiles, nfolders, nlinks;
+	long nfiles, nfolders, nlinks;
 	unsigned long size;
 	long fret;
 	long magic[2];
@@ -385,8 +385,8 @@ tree[FINAME].ob_spec.tedinfo->te_txtlen = MAXNAME;
 
 
 			prlong11(size, tree[FISIZE].ob_spec.free_string);
-			sprintf(tree[FLFILES].ob_spec.free_string, "%-6d", nfiles);
-			sprintf(tree[FLFOLDERS].ob_spec.free_string, "%-6d", nfolders);
+			sprintf(tree[FLFILES].ob_spec.free_string, "%-6ld", nfiles);
+			sprintf(tree[FLFOLDERS].ob_spec.free_string, "%-6ld", nfolders);
 		}
 
 		/* MiNT-Flags */

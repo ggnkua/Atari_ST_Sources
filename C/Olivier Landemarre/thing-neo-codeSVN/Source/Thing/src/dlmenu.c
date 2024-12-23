@@ -2663,7 +2663,7 @@ void dl_info(void) {
 	WP_ENTRY *item, iobj;
 	WG_ENTRY *gitem;
 	char ipath[MAX_PLEN];
-	short nfiles, nfolders, nlinks;
+	long nfiles, nfolders, nlinks;
 	unsigned long size;
 	WININFO *win;
 	ICONDESK *p;
@@ -3325,7 +3325,7 @@ short dl_delete(char *buf) {
 	XATTR xattr;
 	short (*delfunc)(char *, short *, short *, short, char *);
 	char *readbuf;
-	short nlinks;
+	long nlinks;
 
 	objectTree = rs_trindex[WAITCOPY];
 

@@ -223,8 +223,8 @@ static short build_filename(char *dst, char *a, char *b) {
 }
 #endif
 
-short dir_check(char *path, short *nfiles, short *nfolders, unsigned long *size,
-		short *nlinks, short follow, short sub)
+short dir_check(char *path, long *nfiles, long *nfolders, unsigned long *size,
+		long *nlinks, short follow, short sub)
 #ifndef ORIG_DIRCHECK
 		{
 	short fret, xread, len;

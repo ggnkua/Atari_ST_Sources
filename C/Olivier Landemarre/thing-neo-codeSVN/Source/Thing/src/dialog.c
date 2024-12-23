@@ -2400,7 +2400,7 @@ static short cstop;
 
 /* Unterfunktion: Kopieren einer einzelnen Datei */
 
-static short dl_copy_file(char *src, char *dst, short *nfiles, short *nfolders,
+static short dl_copy_file(char *src, char *dst, long *nfiles, long *nfolders,
 		unsigned long total, unsigned long *ready, short link, short del, short ren,
 		short *crepl, short backup, char *dlst) {
 	FILESYS sfilesys, dfilesys;
@@ -2971,7 +2971,7 @@ DEBUGLOG((0, "dl_copy_file(%s, %s)\n", src, dst));
 	*ready = *ready - size;
 
 	p = rs_trindex[WAITCOPY][WCFILES].ob_spec.tedinfo->te_ptext;
-	itoa(*nfiles, p, 10);
+	ltoa(*nfiles, p, 10);
 	i = (short) strlen(p);
 	while (i < 7) {
 		p[i] = ' ';
@@ -2990,7 +2990,7 @@ DEBUGLOG((0, "dl_copy_file(%s, %s)\n", src, dst));
 /**
  *
  */
-static short dl_copy_folder(char *src, char *dst, short *nfiles, short *nfolders,
+static short dl_copy_folder(char *src, char *dst, long *nfiles, long *nfolders,
 		unsigned long total, unsigned long *ready, short del, short ren,
 		short *crepl, short backup, char *dlst) {
 	FILESYS sfilesys, dfilesys;
@@ -3005,7 +3005,8 @@ static short dl_copy_folder(char *src, char *dst, short *nfiles, short *nfolders
 	short exist, isdir;
 	short doit, done, rdone, rdoit;
 	char *p;
-	short mfiles, mfolders, mlinks, l;
+	long mfiles, mfolders, mlinks;
+	short l;
 	unsigned long msize, s;
 	short mx, my, ks, mb;
 	short stop, alret;
@@ -3479,14 +3480,14 @@ DEBUGLOG((0, "dl_copy_folder(%s, %s)\n", src, dst));
 		*ready = 0L;
 
 	p = rs_trindex[WAITCOPY][WCFILES].ob_spec.tedinfo->te_ptext;
-	itoa(*nfiles, p, 10);
+	ltoa(*nfiles, p, 10);
 	i = (short) strlen(p);
 	while (i < 7) {
 		p[i] = ' ';
 		i++;
 	}
 	p = rs_trindex[WAITCOPY][WCFOLDERS].ob_spec.tedinfo->te_ptext;
-	itoa(*nfolders, p, 10);
+	ltoa(*nfolders, p, 10);
 	i = (short) strlen(p);
 	while (i < 7) {
 		p[i] = ' ';
@@ -3657,8 +3658,8 @@ static void dl_copy_kcmd(short del, short ren, char *kcmd) {
  * Unterfunktion: Umfang der Daten ermitteln, abh„ngig von
  * Linkverfolgung
  */
-static short dl_copy_size(char *buf, char *dpath, short *nfiles, short *nfolders,
-		unsigned long *size, short *nlinks, short *kdrv, short follow, short mode) {
+static short dl_copy_size(char *buf, char *dpath, long *nfiles, long *nfolders,
+		unsigned long *size, long *nlinks, short *kdrv, short follow, short mode) {
 	short j, ok;
 	char name[MAX_PLEN], *bufpos;
 
@@ -3700,7 +3701,7 @@ short dl_copy(char *path, short ks, char *buf) {
 	short kdrv, kdrv1, kuse;
 	short whandle;
 	OBJECT *tree;
-	short nlinks;
+	long nlinks;
 	FILESYS dfs;
 
 	tree = rs_trindex[WAITCOPY];
@@ -3933,8 +3934,8 @@ short dl_copy(char *path, short ks, char *buf) {
 				else
 					strcpy(tree[WCTEXT].ob_spec.free_string, rs_frstr[MSCOPY1]);
 			}
-			itoa(dcopy->nfiles, tree[WCFILES].ob_spec.tedinfo->te_ptext, 10);
-			itoa(dcopy->nfolders, tree[WCFOLDERS].ob_spec.tedinfo->te_ptext, 10);
+			ltoa(dcopy->nfiles, tree[WCFILES].ob_spec.tedinfo->te_ptext, 10);
+			ltoa(dcopy->nfolders, tree[WCFOLDERS].ob_spec.tedinfo->te_ptext, 10);
 			prlong((unsigned long) (dcopy->total - (long) dcopy->nfolders), tree[WCSIZE].ob_spec.tedinfo->te_ptext);
 			tree[WCSRC].ob_spec.tedinfo->te_ptext[0] = 0;
 			tree[WCDST].ob_spec.tedinfo->te_ptext[0] = 0;
