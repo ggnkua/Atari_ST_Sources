@@ -1028,17 +1028,17 @@ TEXT
 **************************************************************
 incbins
 ***************************************************************
-font		incbin     "A:\redzone.pi1"       *FONT FILE
+font		incbin     "redzone.pi1"       *FONT FILE
 ****
 tune_no         dc.l  1 	    *TUNE NUMBER THAT IS PLAYED
 ****
-music           incbin  a:\MUS6              *MUSIC FILE
+music           incbin  MUS6              *MUSIC FILE
 ****
-piccy	incbin "A:\WILL.pi1"     change to your piccys name
+piccy	incbin "WILL.pi1"     change to your piccys name
 ****
-bottompiccy  incbin "a:\brother.pi1"    *BOTTOM BORDER PICCY
+bottompiccy  incbin "brother.pi1"    *BOTTOM BORDER PICCY
 ****
-resetpiccy   incbin  "a:\a.pi1"          *reset piccy
+resetpiccy   incbin  "a.pi1"          *reset piccy
 *****************************************************************
 *raster bars data       					*
 * ONLY CHANGE LAST THREE NUMBERS AND LEAVE THE FIRST AS 0      	*
