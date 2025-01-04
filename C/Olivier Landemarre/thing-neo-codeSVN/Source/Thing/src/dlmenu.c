@@ -2769,8 +2769,8 @@ void dl_info(void) {
 						l = (short)strlen(wpath->path);
 						strShortener(baum2[SIPATH].ob_spec.free_string, wpath->path, 30);
 						prlong11(size, baum2[SISIZE].ob_spec.free_string);
-						sprintf(baum2[SIFILES].ob_spec.free_string, "%-6d", nfiles);
-						sprintf(baum2[SIFOLDERS].ob_spec.free_string, "%-6d", nfolders);
+						sprintf(baum2[SIFILES].ob_spec.free_string, "%-6ld", nfiles);
+						sprintf(baum2[SIFOLDERS].ob_spec.free_string, "%-6ld", nfolders);
 						frm_start(&fi_selinfo, conf.wdial, conf.cdial, 1);
 						done = 0;
 						while (!done) {
@@ -3029,7 +3029,7 @@ static short dstop;
 
 /* Unterfunktion: Datei loeschen */
 
-short dl_del_file(char *name, short *nfiles, short *nfolders, short total, char *dlst) {
+static short dl_del_file(char *name, long *nfiles, long *nfolders, short total, char *dlst) {
 	short fret;
 	long s;
 	short mx, my, mb, ks;
@@ -3113,7 +3113,7 @@ short dl_del_file(char *name, short *nfiles, short *nfolders, short total, char 
 
 /* Unterfunktion: Rekursives Loeschen eines Ordners */
 
-short dl_del_folder(char *name, short *nfiles, short *nfolders, short total, char *dlst) {
+short dl_del_folder(char *name, long *nfiles, long*nfolders, short total, char *dlst) {
 	FILESYS filesys;
 	_DTA dta, *odta;
 	short usemint;
@@ -3323,7 +3323,7 @@ short dl_delete(char *buf) {
 	WG_ENTRY *gitem, *gitem1;
 	OBJECT *objectTree;
 	XATTR xattr;
-	short (*delfunc)(char *, short *, short *, short, char *);
+	short (*delfunc)(char *, long *, long *, short, char *);
 	char *readbuf;
 	long nlinks;
 
@@ -3410,8 +3410,8 @@ short dl_delete(char *buf) {
 					tree = rs_trindex[DELETE];
 					tree[DLSOURCE].ob_spec.free_string[0] = drv;
 					prlong11(dcopy->size, tree[DLSIZE].ob_spec.free_string);
-					sprintf(tree[DLFILES].ob_spec.free_string, "%-6d", dcopy->nfiles);
-					sprintf(tree[DLFOLDERS].ob_spec.free_string, "%-6d", dcopy->nfolders);
+					sprintf(tree[DLFILES].ob_spec.free_string, "%-6ld", dcopy->nfiles);
+					sprintf(tree[DLFOLDERS].ob_spec.free_string, "%-6ld", dcopy->nfolders);
 					frm_start(&fi_delete, conf.wdial, conf.cdial, 1);
 					done = 0;
 					while (!done) {
@@ -3493,8 +3493,8 @@ short dl_delete(char *buf) {
 		if (ok && go) {
 			/* Status-Box vorbereiten und ausgeben */
 			strcpy(objectTree[WCTEXT].ob_spec.free_string, rs_frstr[MSDEL1]);
-			itoa(dcopy->nfiles, objectTree[WCFILES].ob_spec.tedinfo->te_ptext, 10);
-			itoa(dcopy->nfolders, objectTree[WCFOLDERS].ob_spec.tedinfo->te_ptext, 10);
+			ltoa(dcopy->nfiles, objectTree[WCFILES].ob_spec.tedinfo->te_ptext, 10);
+			ltoa(dcopy->nfolders, objectTree[WCFOLDERS].ob_spec.tedinfo->te_ptext, 10);
 			objectTree[WCSRC].ob_spec.tedinfo->te_ptext[0] = 0;
 			objectTree[WCSIZE].ob_flags |= HIDETREE;
 			objectTree[WCSTXT].ob_flags |= HIDETREE;

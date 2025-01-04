@@ -3555,7 +3555,7 @@ static void dl_copy_conf_mode(OBJECT *tree, short mode) {
  *
  */
 static void dl_copy_conf(short *ok, short *del, short *ren, char *path,
-		unsigned long size, short nfiles, short nfolders, short src, short *mode,
+		unsigned long size, long nfiles, long nfolders, short src, short *mode,
 		short *follow, short *backup) {
 	short done;
 	OBJECT *tree;
@@ -3578,8 +3578,8 @@ static void dl_copy_conf(short *ok, short *del, short *ren, char *path,
 	}
 	tree[CPDEST].ob_spec.tedinfo->te_ptext[0] = path[0];
 	prlong11(size, tree[CPSIZE].ob_spec.free_string);
-	sprintf(tree[CPFILES].ob_spec.free_string, "%-6d", nfiles);
-	sprintf(tree[CPFOLDERS].ob_spec.free_string, "%-6d", nfolders);
+	sprintf(tree[CPFILES].ob_spec.free_string, "%-6ld", nfiles);
+	sprintf(tree[CPFOLDERS].ob_spec.free_string, "%-6ld", nfolders);
 
 	dl_copy_conf_mode(tree, *mode);
 
