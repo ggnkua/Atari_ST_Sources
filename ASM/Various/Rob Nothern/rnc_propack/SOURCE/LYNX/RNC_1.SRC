@@ -1,0 +1,586 @@
+; Monday 16-Mar-92 00:28:00
+* === RNC_1.SRC =================================================================
+*
+* Cartridge File RNC Unpack Routines (Method 1)  --  Handy Software
+*
+* Copyright (c) 1992 Rob Northen Computing, Tel. (UK) 0428-713635
+*
+* Date      Name        Description
+* --------- ----------- --------------------------------------------------------
+* 16 Mar 92 R.Northen   Created this file!
+*
+* ==============================================================================
+
+; Use PP.EXE to pack a raw data file or Epyx .BIN file using Method 1 or 2
+;
+; Use RNC_1.SRC to unpack Method 1 RNC packed files, OR
+;
+; Use RNC_2.SRC to unpack Method 2 RNC packed files
+;
+; Call READFILERNC macro to unpack a packed file, in the same way as you
+;
+; would call the READFILE macro to read an unpacked file
+;
+; Use HANDYROM to assemble .BIN or raw data files into a Cart ROM image
+;
+
+        BEGIN_ZPAGE
+cartdat .DS 2
+counts  .DS 2
+blocks  .DS 1
+rncdat  .DS 4
+hufftab .DS 2
+bitbufl .DS 2
+bitbufh .DS 2
+bufbits .DS 1
+bitlen  .DS 1
+hufcde  .DS 2
+hufbse  .DS 2
+temp1   .DS 1
+temp2   .DS 1
+temp3   .DS 1
+        END_ZPAGE
+
+rawtab  .DS $80
+postab  .DS $80
+slntab  .DS $80
+tmptab  .DS $10
+
+#MACRO GETCARTBYTE
+        lda RCART_0
+        inc CartOffsetLow
+        bne ??.0
+        jsr NextCartPage
+??.0    .eq *
+#ENDMACRO
+
+GetCartByteSub
+        lda RCART_0
+        inc CartOffsetLow
+        bne NextCartPage2
+
+NextCartPage
+* ******************************************************************************
+* update high byte of cart page counter and if zero update cart page
+* ON EXIT:
+*   - all registers are preserved
+* ******************************************************************************
+#IF ROMPAGESIZE>256
+        inc CartOffsetHigh
+        bne NextCartPage2
+#ENDIF
+        pha
+        phx
+        phy
+        inc CartPage
+        lda CartPage
+        jsr SetCartPage
+        lda #<{-ROMPAGESIZE}
+        sta CartOffsetLow
+#if ROMPAGESIZE>256
+        lda #>{-ROMPAGESIZE}
+        sta CartOffsetHigh
+#ENDIF
+        ply
+        plx
+        pla
+NextCartPage2
+        rts
+
+ReadFile0RNC
+* ***************************************************************************
+* This routine will unpack into RAM a Packed game cartridge file.  Presumes
+* that the cartridge 0 port is all set up to start reading.  Also presumes
+* that sysptr points to the directory entry of the file to be loaded, that the
+* CartDirectory buffer is filled out, and that CartPage and
+* CartOffsetLow,High reflect the state of port 0.
+*
+* ON ENTRY:
+*    - If you have specified that the file directory has a ROMDIR_DEST field
+*      which specifies that the directory has a RAM destination field:
+*         If the A register is non-zero, X,Y (low,high) is presumed to have
+*         the RAM destination for the file; if A is zero, then the RAM
+*         destination is taken from the directory entry
+*    - If you have not specified that the file directory has a ROMDIR_DEST
+*      field you must specify RAM destination of the file:
+*         X,Y (low,high) has the RAM destination for the file
+*    - The cartridge 0 port is all set up to read the first byte of the file
+*
+* ON EXIT:
+*    - CartPage and CartOffsetLow,High are advanced to the byte beyond
+*      the last byte read
+*    - X,Y (low,high) has RAM address of the byte beyond the last written
+
+        #IFDEF ROMDIR_DEST
+        cmp #1
+        bcs .99
+        ldx CartDirectory+ROMDIR_DEST   ; get RAM destination from directory
+        ldy CartDirectory+ROMDIR_DEST+1
+        #ENDIF
+
+.99
+        STX sysptr              ; X,Y has the RAM destination pointer
+        STY sysptr+1
+
+        SET_TO_READ_CART
+
+#IF ROMPAGESIZE>256
+        sec                     ; set Y to complement of CartOffsetHigh
+        lda CartOffsetHigh      ;  to facilitate bounds checking
+        sbc #>ROMPAGESIZE
+        sta CartOffsetHigh
+#ENDIF
+
+        ldy #18
+.00
+        jsr GetCartByteSub
+        dey
+        bne .00
+        sta blocks
+        stz bufbits
+        jsr GetCartByteSub
+        sta bitbufl
+        jsr GetCartByteSub
+        sta bitbufl+1
+        ldx #2
+        jsr GetBitsX
+
+.01
+        lda #<rawtab
+        sta hufftab
+        lda #>rawtab
+        sta hufftab+1
+        jsr MakeHuff
+        lda #<postab
+        sta hufftab
+        lda #>postab
+        sta hufftab+1
+        jsr MakeHuff
+        lda #<slntab
+        sta hufftab
+        lda #>slntab
+        sta hufftab+1
+        jsr MakeHuff
+        ldx #16
+        jsr GetBitsX
+        ldy rncdat+1
+        ldx rncdat
+        beq .02
+        iny
+.02
+        stx counts
+        sty counts+1
+        jmp .10
+
+.03
+        lda #<postab
+        sta hufftab
+        lda #>postab
+        sta hufftab+1
+        jsr GetVal
+        lda sysptr
+        clc
+        sbc rncdat
+        sta temp1
+        lda sysptr+1
+        sbc rncdat+1
+        sta temp2
+        lda #<slntab
+        sta hufftab
+        lda #>slntab
+        sta hufftab+1
+        jsr GetVal
+        ldy rncdat+1
+        lda rncdat
+        clc
+        adc #2
+        beq .04
+        iny
+.04
+        bcc .05
+        iny
+.05
+        tax
+        sty rncdat+1
+        ldy #0
+.06
+        lda (temp1),y
+        sta (sysptr),y
+        iny
+        beq .08
+.07
+        dex
+        bne .06
+        dec rncdat+1
+        bne .06
+        bra .09
+.08
+        inc temp2
+        inc sysptr+1
+        bra .07
+.09
+        tya
+        clc
+        adc sysptr
+        sta sysptr
+        bcc .10
+        inc sysptr+1
+
+.10
+        lda #<rawtab
+        sta hufftab
+        lda #>rawtab
+        sta hufftab+1
+        jsr GetVal
+        lda rncdat
+        ora rncdat+1
+        bne .11
+        jmp .22
+.11
+        ldy rncdat+1
+        ldx rncdat
+        beq .12
+        iny
+.12
+        sty rncdat+1
+        ldy #0
+.13
+        cpy #2
+        beq .14
+        lda cartdat,y
+        sta (sysptr),y
+        iny
+        dex
+        bne .13
+        dec rncdat+1
+        bne .13
+        cpy #2
+        beq .17
+        lda cartdat+1
+        bra .18
+.14
+        GETCARTBYTE
+        sta (sysptr),y
+        iny
+        beq .16
+.15
+        dex
+        bne .14
+        dec rncdat+1
+        bne .14
+        bra .17
+.16
+        inc sysptr+1
+        bra .15
+.17
+        jsr GetCartByteSub
+.18
+        sta temp1
+        sta cartdat
+        jsr GetCartByteSub
+        sta temp2
+        sta cartdat+1
+        tya
+        clc
+        adc sysptr
+        sta sysptr
+        bcc .19
+        inc sysptr+1
+.19
+        stz bitbufh
+        stz bitbufh+1
+        ldy bufbits
+        beq .21
+.20
+        asl temp1
+        rol temp2
+        rol bitbufh
+        rol bitbufh+1
+        dey
+        bne .20
+        ldy bufbits
+.21
+        lda msktabl,y
+        and bitbufl
+        ora temp1
+        sta bitbufl
+        lda msktabh,y
+        and bitbufl+1
+        ora temp2
+        sta bitbufl+1
+.22
+        dec counts
+        bne .23
+        dec counts+1
+        beq .24
+.23
+        jmp .03
+.24
+        dec blocks
+        beq .25
+        jmp .01
+.25
+
+#IF ROMPAGESIZE>256
+        lda CartOffsetHigh
+        clc
+        adc #>ROMPAGESIZE
+        sta CartOffsetHigh
+#ENDIF
+
+        ldx sysptr
+        ldy sysptr+1
+        jmp RestoreReturn
+
+* ******************************************************************************
+
+GetVal
+        ldy #$ff
+GetVal2
+        iny
+GetVal3
+        lda (hufftab),y
+        iny
+        and bitbufl
+        sta rncdat
+
+        lda (hufftab),y
+        iny
+        and bitbufl+1
+        sta rncdat+1
+
+        lda (hufftab),y
+        iny
+        cmp rncdat
+        bne GetVal2
+
+        lda (hufftab),y
+        iny
+        cmp rncdat+1
+        bne GetVal3
+
+        tya
+        adc #{15*4-1}
+        tay
+
+        lda (hufftab),y
+        pha
+        iny
+        lda (hufftab),y
+        jsr GetBits
+        pla
+        cmp #2
+        bcs GetVal4
+        sta rncdat
+        stz rncdat+1
+        rts
+GetVal4
+        sbc #1
+        pha
+        jsr GetBits
+        pla
+        tay
+        cpy #8
+        bcc GetVal5
+        lda bittabl-8,y
+        ora rncdat+1
+        sta rncdat+1
+        rts
+GetVal5
+        lda bittabl,y
+        ora rncdat
+        sta rncdat
+        rts
+
+bittabl
+        .BY  1
+        .BY  2
+        .BY  4
+        .BY  8
+        .BY  16
+        .BY  32
+        .BY  64
+        .BY  128
+
+* ******************************************************************************
+
+GetBits
+        tax
+GetBitsX
+        lda msktabl,x
+        and bitbufl
+        sta rncdat
+
+        lda msktabh,x
+        and bitbufl+1
+        sta rncdat+1
+
+        lda bufbits
+        bne GetBits4
+GetBits3
+        jsr GetCartByteSub
+        sta cartdat
+        sta bitbufh
+        jsr GetCartByteSub
+        sta cartdat+1
+        sta bitbufh+1
+        lda #16
+        sta bufbits
+GetBits4
+        lsr bitbufh+1
+        ror bitbufh
+        ror bitbufl+1
+        ror bitbufl
+        dex
+        beq GetBits5
+        dec bufbits
+        bne GetBits4
+        beq GetBits3
+GetBits5
+        dec bufbits
+GetBits6
+        rts
+
+msktabl
+        .BY  0
+        .BY  1
+        .BY  3
+        .BY  7
+        .BY  15
+        .BY  31
+        .BY  63
+        .BY  127
+        .BY  255
+        .BY  255
+        .BY  255
+        .BY  255
+        .BY  255
+        .BY  255
+        .BY  255
+        .BY  255
+        .BY  255
+
+msktabh
+        .BY  0
+        .BY  0
+        .BY  0
+        .BY  0
+        .BY  0
+        .BY  0
+        .BY  0
+        .BY  0
+        .BY  0
+        .BY  1
+        .BY  3
+        .BY  7
+        .BY  15
+        .BY  31
+        .BY  63
+        .BY  127
+        .BY  255
+
+* ******************************************************************************
+
+MakeHuff
+        ldx #5
+        jsr GetBitsX
+        lda rncdat
+        beq GetBits6
+        sta temp1
+        sta temp2
+        ldy #0
+MakeHuff2
+        phy
+        ldx #4
+        jsr GetBitsX
+        ply
+        lda rncdat
+        sta tmptab,y
+        iny
+        dec temp2
+        bne MakeHuff2
+
+        ldy #1
+        sty bitlen
+        dey
+        sty hufcde
+        sty hufcde+1
+        sty hufbse
+        lda #$80
+        sta hufbse+1
+MakeHuff3
+        lda temp1
+        sta temp2
+        stz temp3
+MakeHuff4
+        lda bitlen
+        ldx temp3
+        cmp tmptab,x
+        bne MakeHuff8
+
+        tax
+        lda msktabl,x
+        sta (hufftab),y
+        iny
+        lda msktabh,x
+        sta (hufftab),y
+        iny
+        lda hufcde
+        sta rncdat+2
+        lda hufcde+1
+        sta rncdat+3
+MakeHuff5
+        asl rncdat+2
+        rol rncdat+3
+        ror rncdat+1
+        ror rncdat
+        dex
+        bne MakeHuff5
+
+        lda #16
+        sec
+        sbc bitlen
+        beq MakeHuff7
+        tax
+MakeHuff6
+        lsr rncdat+1
+        ror rncdat
+        dex
+        bne MakeHuff6
+MakeHuff7
+        lda rncdat
+        sta (hufftab),y
+        iny
+        lda rncdat+1
+        sta (hufftab),y
+        iny
+        tya
+        pha
+        clc
+        adc #{15*4}
+        tay
+        lda temp3
+        sta (hufftab),y
+        iny
+        lda bitlen
+        sta (hufftab),y
+        pla
+        tay
+        lda hufbse
+        clc
+        adc hufcde
+        sta hufcde
+        lda hufbse+1
+        adc hufcde+1
+        sta hufcde+1
+MakeHuff8
+        inc temp3
+        dec temp2
+        bne MakeHuff4
+        lsr hufbse+1
+        ror hufbse
+        inc bitlen
+        lda bitlen
+        cmp #17
+        bne MakeHuff3
+        rts
