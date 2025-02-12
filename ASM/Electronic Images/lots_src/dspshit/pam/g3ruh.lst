@@ -1,0 +1,748 @@
+
+Motorola DSP56000 Assembler  Version 3.1  94-07-21  14:50:16  g3ruh.asm  Page 1
+
+
+
+1                                  page    132,68,1,1
+2                                  opt     rc
+4      
+5                        ;***************************************************************
+6                        ;* G3RUH.ASM -- 9600 bit/s G3RUH modem                       *
+7                        ;*                                                       *
+8                        ;* 9600 bit/s two level PAM demodulation with fixed rate       *
+9                        ;* sampling and adaptive equalizer.                          *
+10                       ;*                                                       *
+11                       ;* PAM demodulation is based on some ideas presented in book   *
+12                       ;*      Lee, E., A., Messerschmitt, D., G.:                  *
+13                       ;*      "Digital Communication",                            *
+14                       ;*      Kluwer, 1988                                      *
+15                       ;*                                                       *
+16                       ;* Symbol synchronization is base on the article               *
+17                       ;*      Mueller, K., H., Mller, M.:                        *
+18                       ;*      "Timing Recovery in Digital Synchronous Data           *
+19                       ;*      Receivers",                                            *
+20                       ;*      IEEE Trans. on Comm., Vol. COM-23, No. 5, May 1976     *
+21                       ;*                                                       *
+22                       ;* This module uses registers as follows:                     *
+23                       ;*  r0 - general purpose (temporary use)                      *
+24                       ;*  r1 - general purpose (temporary use)                      *
+25                       ;*  r2 - sample buffer pointer                              *
+26                       ;*  r4 - output filter pointer                              *
+27                       ;*  r6 - general purpose (temporary use)                      *
+28                       ;*                                                       *
+29                       ;* Copyright (C) 1993, 1994 by Tecnomen. All rights reserved.  *
+30                       ;* Author(s): Jarkko Vuori                                  *
+31                       ;* Modification(s):                                        *
+32                       ;***************************************************************
+33     
+34        000001         kiss      set     1         ; give KISS data/debug data for SPY
+35     
+247    
+248    
+249       000100         buflen    equ     256       ; codec sample buffer lenght
+250    
+251       4.800000E+004  fs        equ     48000.0   ; sampling frequency
+252       9.600000E+003  fd        equ     9600.0    ; decision rate
+253       000002         I         equ     2         ; interpolation factor
+254       000005         D         equ     5         ; decimation factor 48k*(I/D)=19.2k
+255    
+256                      ; AGC
+257       4.000000E-001  refLev    equ     0.4       ; reference level for AGC
+258       000014         agcN      equ     20        ; agc analyse block lenght
+259       1.000000E+002  agcGain   equ     100.0     ; agc integrator gain
+260    
+261                      ; symbol synchro
+262       9.000000E-001  syncf     equ     0.9
+263    
+264                      ; DCD
+265       5.000000E-002  DCDFil    equ     0.05      ; decision error IIR LPF coefficient
+266    
+267                      ; G3RUH specific
+268       010800         poly      equ     $10800    ; G3RUH,K9NG scrambler polynomial (x^17 + x^12 + 1)
+269    
+270                      ; flags
+271       000000         xmit      equ     0         ; xmit on/off
+272       000002         car       equ     2         ; carrier on/off
+273       000003         spyflg    equ     3         ; spy on/off
+274    
+
+
+Motorola DSP56000 Assembler  Version 3.1  94-07-21  14:50:16  g3ruh.asm  Page 2
+G3RUH demodulator
+
+
+275    
+276                      ; macro for red LED handling
+277                      pttled    macro   mode
+278  m                             b\mode  #0,x:$ffe4
+279  m                             endm
+280    
+281                      ; macro for green LED handling
+282                      carled    macro   mode
+283  m                             b\mode  #2,x:$ffe4
+284  m                             endm
+285    
+286                      ; first order high-pass IIR filter
+287                      ; input in a, output in a
+288                      ; frq is -3dB point (fc/fs)
+289                      hpass     macro   acc,frq,store
+290  m                   c1        set     -1.0/@cos(6.28319*frq)*(1.0-@sin(6.28319*frq))
+291  m                             move    acc,x0
+292  m                             move    #>(1.0-c1)/2.0,y0
+293  m                             mpyr    x0,y0,acc x:<store,y0
+294  m                             move    acc,x:<store
+295  m                             sub     y0,acc    x:<store+1,x0
+296  m                             move    #>c1,y0
+297  m                             macr    -x0,y0,acc
+298  m                             move    acc,x:<store+1
+299  m                             endm
+300    
+301    
+302       P:0040                   org     p:user_code
+303    
+304       P:0040 67F400            move              #buffer+2,r7 ; codec sample buffer ptr
+                 000402
+305       P:0042 05F427            move              #buflen*4-1,m7
+                 0003FF
+306    
+307       P:0044 62F400            move              #buffer,r2  ; sample buffer read ptr
+                 000400
+308       P:0046 3A0300            move              #4-1,n2
+309       P:0047 05F422            move              #buflen*4-1,m2
+                 0003FF
+310    
+311       P:0049 64F400            move              #filtx,r4   ; transmit filter ptr
+                 000030
+312       P:004B 05F424            move              #oftaps-1,m4
+                 00000A
+313    
+314                                if      kiss
+315       P:004D 54F400            move              #reject,a1  ; serial interface to KISS mode
+                 000139
+316       P:004F 55F400            move              #ptt,b1
+                 00013A
+317                                opensc
+319                                endif
+320    
+321                      ; fs = 48 kHz, line input, line output, no gain and attenuation
+322                                ctrlcd  1,r2,buflen,LINEI,0.0,0.0,LINEO,0.0,0.0
+343                                opencd  fs/1000.0
+372    
+373                      ; wait for one complete block
+374                      loop      waitblk r2,buflen,D
+392    
+393                      ; then filter the left channel
+394       P:006E 05F420            move              #buflen*4-1,m0
+
+
+Motorola DSP56000 Assembler  Version 3.1  94-07-21  14:50:16  g3ruh.asm  Page 3
+G3RUH demodulator
+
+
+                 0003FF
+395       P:0070 70F400            move              #-4,n0
+                 FFFFFC
+396    
+397                      ; calculate even phase
+398       P:0072 669B00            move              x:<eadr,r6
+399       P:0073 225000            move              r2,r0
+400       P:0074 200013            clr     a
+401       P:0075 F0C800            move              x:(r0)+n0,x0 y:(r6)+,y0
+402       P:0076 061BA0            rep     #iftaps-1
+403       P:0077 F0C8D2            mac     x0,y0,a   x:(r0)+n0,x0 y:(r6)+,y0
+404       P:0078 61F4D3            macr    x0,y0,a   #ocoeffs,r1
+                 000022
+405    
+406                      ; high-pass filter the signal (to reject CS4215 offset)
+407                                hpass   a,5.0/(2.0*fd),hpf ; fc = 5 Hz
+417    
+418                      ; AGC
+419       P:0084 21C400            move              a,x0
+420       P:0085 4EA000            move                          y:<agc,y0
+421       P:0086 2000D0            mpy     x0,y0,a
+422       P:0087 0608A0            rep     #8
+423       P:0088 200032            asl     a
+424       P:0089 5E1A00            move                          a,y:<s2
+425    
+426                      ; calculate two first phases of the output filter
+427       P:008A 205A1B            clr     b         (r2)+
+428       P:008B F09900            move              x:(r1)+,x0  y:(r4)+,y0
+429       P:008C 060AA0            rep     #oftaps-1
+430       P:008D F099DA            mac     x0,y0,b   x:(r1)+,x0  y:(r4)+,y0
+431       P:008E 2000DB            macr    x0,y0,b
+432       P:008F 5F4A00            move                          b,y:(r2)+n2
+433    
+434       P:0090 205A1B            clr     b         (r2)+
+435       P:0091 F09900            move              x:(r1)+,x0  y:(r4)+,y0
+436       P:0092 060AA0            rep     #oftaps-1
+437       P:0093 F099DA            mac     x0,y0,b   x:(r1)+,x0  y:(r4)+,y0
+438       P:0094 2000DB            macr    x0,y0,b
+439       P:0095 5F4A00            move                          b,y:(r2)+n2
+440    
+441                      ; calculate odd phase
+442       P:0096 669C00            move              x:<oadr,r6
+443       P:0097 225000            move              r2,r0
+444       P:0098 200013            clr     a
+445       P:0099 F0C800            move              x:(r0)+n0,x0 y:(r6)+,y0
+446       P:009A 061BA0            rep     #iftaps-1
+447       P:009B F0C8D2            mac     x0,y0,a   x:(r0)+n0,x0 y:(r6)+,y0
+448       P:009C 2000D3            macr    x0,y0,a
+449    
+450                      ; high-pass filter the signal (to reject CS4215 offset)
+451                                hpass   a,5.0/(2.0*fd),hpf ; fc = 5 Hz
+461    
+462                      ; AGC
+463       P:00A7 21C400            move              a,x0
+464       P:00A8 4EA000            move                          y:<agc,y0
+465       P:00A9 2000D0            mpy     x0,y0,a
+466       P:00AA 0608A0            rep     #8
+467       P:00AB 200032            asl     a
+468       P:00AC 5E1800            move                          a,y:<s1
+469    
+470                      ; make decision (for symbol synchro)
+471       P:00AD 44F403            tst     a         #refLev,x0
+
+
+Motorola DSP56000 Assembler  Version 3.1  94-07-21  14:50:16  g3ruh.asm  Page 4
+G3RUH demodulator
+
+
+                 333333
+472       P:00AF 023040            tpl     x0,a
+473       P:00B0 44F400            move              #-refLev,x0
+                 CCCCCD
+474       P:00B2 02B040            tmi     x0,a
+475    
+476       P:00B3 4C9900            move                          y:<d1,x0    ; update decisions
+477       P:00B4 4C1B00            move                          x0,y:<d3
+478       P:00B5 5E1900            move                          a,y:<d1
+479    
+480                      ; calculate three last phases of the output filter
+481       P:00B6 205A1B            clr     b         (r2)+
+482       P:00B7 F09900            move              x:(r1)+,x0  y:(r4)+,y0
+483       P:00B8 060AA0            rep     #oftaps-1
+484       P:00B9 F099DA            mac     x0,y0,b   x:(r1)+,x0  y:(r4)+,y0
+485       P:00BA 2000DB            macr    x0,y0,b
+486       P:00BB 5F4A00            move                          b,y:(r2)+n2
+487    
+488       P:00BC 205A1B            clr     b         (r2)+
+489       P:00BD F09900            move              x:(r1)+,x0  y:(r4)+,y0
+490       P:00BE 060AA0            rep     #oftaps-1
+491       P:00BF F099DA            mac     x0,y0,b   x:(r1)+,x0  y:(r4)+,y0
+492       P:00C0 2000DB            macr    x0,y0,b
+493       P:00C1 5F4A00            move                          b,y:(r2)+n2
+494    
+495       P:00C2 205A1B            clr     b         (r2)+
+496       P:00C3 F09900            move              x:(r1)+,x0  y:(r4)+,y0
+497       P:00C4 060AA0            rep     #oftaps-1
+498       P:00C5 F099DA            mac     x0,y0,b   x:(r1)+,x0  y:(r4)+,y0
+499       P:00C6 2054DB            macr    x0,y0,b   (r4)-
+500       P:00C7 5F4A00            move                          b,y:(r2)+n2
+501    
+502                      ; AGC control
+503       P:00C8 5E9800            move                          y:<s1,a
+504       P:00C9 200026            abs     a
+505       P:00CA 4CA200            move                          y:<agcmax,x0
+506       P:00CB 45F445            cmp     x0,a      #>1,x1
+                 000001
+507       P:00CD 028040            tlo     x0,a
+508       P:00CE 5E2200            move                          a,y:<agcmax
+509    
+510       P:00CF 5EA100            move                          y:<agcn,a   ; if one block searched
+511       P:00D0 45F464            sub     x1,a      #>agcN,x1
+                 000014
+512       P:00D2 5E2100            move                          a,y:<agcn
+513       P:00D3 0E20E0            jne     <_agc
+514    
+515       P:00D4 4D2100            move                          x1,y:<agcn  ; calculate error and filter it
+516       P:00D5 5EA21B            clr     b                     y:<agcmax,a
+517       P:00D6 5F2200            move                          b,y:<agcmax
+518       P:00D7 57F400            move              #refLev,b
+                 333333
+519    
+520       P:00D9 45F41C            sub     a,b       #>@pow(2,-5)*agcGain/(fs/agcN),x1 ; rectangular integration
+                 002AAB
+521       P:00DB 21E400            move              b,x0
+522       P:00DC 5EA000            move                          y:<agc,a
+523       P:00DD 2000A3            macr    x0,x1,a
+524       P:00DE 200026            abs     a
+525       P:00DF 5E2000            move                          a,y:<agc
+526                      _agc
+527    
+
+
+Motorola DSP56000 Assembler  Version 3.1  94-07-21  14:50:16  g3ruh.asm  Page 5
+G3RUH demodulator
+
+
+528                      ; Symbol synchro
+529       P:00E0 5E9900            move                          y:<d1,a
+530       P:00E1 4C9B00            move                          y:<d3,x0
+531       P:00E2 4C9A44            sub     x0,a                  y:<s2,x0
+532       P:00E3 21C500            move              a,x1
+533       P:00E4 5F9C00            move                          y:<rwfilt,b
+534       P:00E5 44F4AB            macr    x0,x1,b   #syncf,x0
+                 733333
+535    
+536       P:00E7 5F1C4F            cmpm    x0,b                  b,y:<rwfilt ; check if limits reached
+537       P:00E8 0E90F5            jlt     <_sync3
+538    
+539       P:00E9 20000B            tst     b         ; yes, clear filter and advance or retard sampling
+540       P:00EA 0AF0A3            jpl     _sync1
+                 0000F1
+541       P:00EC 0D0142            jsr     <retard
+542       P:00ED 44F400            move              #>-2*syncf/3,x0
+                 B33333
+543       P:00EF 0AF080            jmp     _sync2
+                 0000F4
+544       P:00F1 0D014F  _sync1    jsr     <advance
+545       P:00F2 44F400            move              #>2*syncf/3,x0
+                 4CCCCD
+546       P:00F4 4C1C00  _sync2    move                          x0,y:<rwfilt
+547                      _sync3
+548    
+549                      ; unscramble symbol, result in C
+550       P:00F5 5E9900            move                          y:<d1,a     ; databit to C
+551       P:00F6 200032            asl     a
+552       P:00F7 559E00            move              x:<usrem,b1
+553       P:00F8 0E00FC            jcc     <unscram
+554       P:00F9 44F400            move              #>(poly<<1)|1,x0
+                 021001
+555       P:00FB 20004B            eor     x0,b
+556       P:00FC 20002B  unscram   lsr     b
+557       P:00FD 551E00            move              b1,x:<usrem
+558    
+559                      ; make symbol decision (with NRZ-S decoding), databit in C, result in C
+560       P:00FE 4C9E3F            rol     b                     y:<prvrsym,x0
+561       P:00FF 5D1E4B            eor     x0,b                  b1,y:<prvrsym
+562       P:0100 20001F            not     b
+563       P:0101 20002B            lsr     b
+564    
+565                      ; forward to the HDLC handler
+566                                if      kiss
+567                                putbit
+569                                endif
+570    
+571                      ; Get next bit to be sent
+572                                if      kiss
+573                                getbit  ; fetch a new one
+575       P:0104 0E2106            jne     <_gb1
+576                                endif
+577       P:0105 00FEB9            andi    #$fe,ccr  ; send zero if no data to be sent
+578    
+579       P:0106 4C9F37  _gb1      rol     a                     y:<prvxsym,x0 ; NRZ-S coding
+580       P:0107 200017            not     a
+581       P:0108 200043            eor     x0,a
+582       P:0109 5C1F27            ror     a                     a1,y:<prvxsym
+583    
+584       P:010A 200013            clr     a         ; scrambler, databit in C flag, result in a (-1 or 1)
+585       P:010B 449D37            rol     a         x:<srem,x0
+
+
+Motorola DSP56000 Assembler  Version 3.1  94-07-21  14:50:16  g3ruh.asm  Page 6
+G3RUH demodulator
+
+
+586       P:010C 45F443            eor     x0,a      #-0.7,x1
+                 A66666
+587       P:010E 44F423            lsr     a         #>poly,x0
+                 010800
+588       P:0110 0E0112            jcc     <_gb2
+589       P:0111 200043            eor     x0,a
+590       P:0112 541D00  _gb2      move              a1,x:<srem
+591       P:0113 56F400            move              #0.7,a
+                 59999A
+592       P:0115 020060            tcc     x1,a
+593    
+594       P:0116 0A1FA0            jset    #xmit,x:<flag,_out1 ; if xmit on, then mute output
+                 000119
+595       P:0118 200013            clr     a
+596       P:0119 5E6400  _out1     move                          a,y:(r4)    ; put bit to output filter
+597    
+598    
+599                      ; calculate the eye opening
+600       P:011A 5F9900            move                          y:<d1,b
+601       P:011B 4C9800            move                          y:<s1,x0
+602       P:011C 20004C            sub     x0,b
+603       P:011D 45F42E            abs     b         #DCDFil,x1
+                 066666
+604    
+605                      ; filter it (with first order IIR filter)
+606       P:011F 21E400            move              b,x0
+607       P:0120 44F4A8            mpy     x0,x1,b   #(1.0-DCDFil),x0
+                 79999A
+608       P:0122 4D9D00            move                          y:<eyefilt,x1
+609       P:0123 2000AB            macr    x0,x1,b
+610       P:0124 5F1D00            move                          b,y:<eyefilt
+611    
+612                      ; and make decision if carrier detected
+613       P:0125 0A1FA2            jset    #car,x:<flag,_caron
+                 000130
+614       P:0127 44F400            move              #0.6/3-0.07,x0 ; check if carrier appeared
+                 10A3D7
+615       P:0129 20004D            cmp     x0,b
+616       P:012A 0AF0A7            jgt     _car2
+                 000138
+617                                carled  set
+619       P:012D 0A1F22            bset    #car,x:<flag
+620                                caron
+622       P:012F 0C0138            jmp     <_car2
+623    
+624       P:0130 44F400  _caron    move              #0.6/3+0.07,x0 ; check if carrier disappeared
+                 228F5C
+625       P:0132 20004D            cmp     x0,b
+626       P:0133 0AF0A9            jlt     _car2
+                 000138
+627                                carled  clr
+629       P:0136 0A1F02            bclr    #car,x:<flag
+630                                caroff
+632                      _car2
+633    
+634                                if      !kiss
+637                                endif
+638    
+639                      ; all this again, sigh!
+640       P:0138 0C0060            jmp     <loop
+641    
+642    
+
+
+Motorola DSP56000 Assembler  Version 3.1  94-07-21  14:50:16  g3ruh.asm  Page 7
+G3RUH demodulator
+
+
+643                      ; KISS parameter handling
+644       P:0139 00000C  reject    rts
+645    
+646                      ; transmitter PTT control
+647       P:013A 0AF0A0  ptt       jcc     _pttoff
+                 00013F
+648                                pttled  set
+650       P:013D 0A1F20            bset    #xmit,x:<flag
+651       P:013E 00000C            rts
+652                      _pttoff   pttled  clr
+654       P:0140 0A1F00            bclr    #xmit,x:<flag
+655       P:0141 00000C            rts
+656    
+657                      ; retard sampling
+658       P:0142 569B00  retard    move              x:<eadr,a   ; select previous filter tap set
+659       P:0143 44F400            move              #>iftaps,x0
+                 00001C
+660       P:0145 44F444            sub     x0,a      #>icoeffs,x0
+                 00003B
+661       P:0147 44F445            cmp     x0,a      #>ifbnks*iftaps,x0
+                 0000E0
+662       P:0149 0E014C            jhs     <_adv1
+663       P:014A 205A00            move              (r2)+
+664       P:014B 204A40            add     x0,a      (r2)+n2     ; jumped over the first taps set
+665       P:014C 561B40  _adv1     add     x0,a      a,x:<eadr   ; store those new tap set addresses
+666       P:014D 561C00            move              a,x:<oadr
+667       P:014E 00000C            rts
+668    
+669                      ; advance sampling
+670       P:014F 569B00  advance   move              x:<eadr,a   ; select next filter tap set
+671       P:0150 44F400            move              #>iftaps,x0
+                 00001C
+672       P:0152 44F440            add     x0,a      #>icoeffs+ifbnks*iftaps,x0
+                 00011B
+673       P:0154 44F445            cmp     x0,a      #>ifbnks*iftaps,x0
+                 0000E0
+674       P:0156 0E8159            jlo     <_ret1
+675       P:0157 205200            move              (r2)-
+676       P:0158 204244            sub     x0,a      (r2)-n2     ; jumped over the first taps set
+677       P:0159 561B40  _ret1     add     x0,a      a,x:<eadr   ; store those new tap set addresses
+678       P:015A 561C00            move              a,x:<oadr
+679       P:015B 00000C            rts
+680    
+681    
+682                      ; *** special spy ***
+683       P:015C 0A1FA3  spy       jset    #spyflg,x:<flag,_spyon
+                 00016F
+684    
+685                                lookc   ; check if spy operation requested
+687       P:015F 0E8188            jcs     <_spyend
+688       P:0160 56F400            move              #>'S',a
+                 000053
+689       P:0162 200045            cmp     x0,a
+690       P:0163 0E2188            jne     <_spyend
+691    
+692       P:0164 44F400            move              #>'P',x0    ; yes, send first a preamble
+                 000050
+693                                putc
+695       P:0167 54F400            move              #>512,a1
+                 000200
+696       P:0169 542000            move              a1,x:<spyn
+697       P:016A 54F400            move              #>1,a1
+
+
+Motorola DSP56000 Assembler  Version 3.1  94-07-21  14:50:16  g3ruh.asm  Page 8
+G3RUH demodulator
+
+
+                 000001
+698       P:016C 542100            move              a1,x:<spym
+699       P:016D 0A1F23            bset    #spyflg,x:<flag
+700       P:016E 0C0188            jmp     <_spyend
+701    
+702                      ; spy is active, send a register to the host
+703       P:016F 57A100  _spyon    move              x:<spym,b
+704       P:0170 47F400            move              #>1,y1
+                 000001
+705       P:0172 47F47C            sub     y1,b      #>1,y1
+                 000001
+706       P:0174 572100            move              b,x:<spym
+707       P:0175 0E2188            jne     <_spyend
+708       P:0176 472100            move              y1,x:<spym
+709    
+710       P:0177 21C600            move              a,y0        ; LSB first
+711       P:0178 0608A0            rep     #8
+712       P:0179 200023            lsr     a
+713       P:017A 218400            move              a1,x0
+714                                putc
+716    
+717       P:017C 20CE00            move              y0,a        ; then HSB
+718       P:017D 0610A0            rep     #16
+719       P:017E 200023            lsr     a
+720       P:017F 218400            move              a1,x0
+721                                putc
+723    
+724       P:0181 56A000            move              x:<spyn,a   ; check if all samples allready given
+725       P:0182 44F400            move              #>1,x0
+                 000001
+726       P:0184 200044            sub     x0,a
+727       P:0185 562000            move              a,x:<spyn
+728       P:0186 0E2188            jne     <_spyend
+729       P:0187 0A1F03            bclr    #spyflg,x:<flag
+730    
+731       P:0188 00000C  _spyend   rts
+732    
+733    
+734       X:0018                   org     x:user_data
+735    
+736       X:0018         n         dc      8
+737    
+738       X:0019         hpf       ds      2         ; data storage for the input DC-cancellation IIR filter
+739    
+740       X:001B         eadr      dc      icoeffs   ; input polyphase filter even bank pointer
+741       X:001C         oadr      dc      icoeffs+ifbnks*iftaps ; input polyphase filter odd  bank pointer
+742    
+743       X:001D         srem      ds      1
+744       X:001E         usrem     ds      1
+745    
+746       X:001F         flag      dc      0
+747       X:0020         spyn      ds      1
+748       X:0021         spym      ds      1
+749    
+750                                include 'filtx.asm'
+751                      ; Output multirate raised cosine filter
+752                      ; Produced by MATLAB (17-Jul-94)
+753       00000B         oftaps    equ     11
+754       000005         ofbnks    equ     5
+755    
+756       X:0022         ocoeffs   dc      1.644457e-04,-1.504433e-03,2.385762e-03,1.674666e-02
+757       X:0026                   dc      -1.088596e-01,5.989722e-01,3.432659e-01,-5.464372e-02
+
+
+Motorola DSP56000 Assembler  Version 3.1  94-07-21  14:50:16  filtx.asm  Page 9
+G3RUH demodulator
+
+
+758       X:002A                   dc      5.612879e-05,4.056970e-03,-7.251839e-04
+759    
+760       X:002D                   dc      5.203691e-04,-1.647690e-03,-2.131887e-03,3.241543e-02
+761       X:0031                   dc      -1.269868e-01,8.030427e-01,9.854408e-02,3.074350e-03
+762       X:0035                   dc      -9.180722e-03,2.196331e-03,2.954776e-04
+763    
+764       X:0038                   dc      6.201181e-04,-3.993065e-04,-7.471807e-03,3.183892e-02
+765       X:003C                   dc      -6.504636e-02,8.817981e-01,-6.707127e-02,3.399076e-02
+766       X:0040                   dc      -8.337602e-03,-4.715450e-04,7.199058e-04
+767    
+768       X:0043                   dc      2.479836e-04,1.881502e-03,-8.309344e-03,2.901430e-03
+769       X:0047                   dc      9.617447e-02,8.078832e-01,-1.317905e-01,3.488017e-02
+770       X:004B                   dc      -2.404078e-03,-1.965893e-03,5.765207e-04
+771    
+772       X:004E                   dc      -6.027904e-04,3.516846e-03,5.127770e-05,-5.194205e-02
+773       X:0052                   dc      3.370923e-01,6.062329e-01,-1.137336e-01,1.817043e-02
+774       X:0056                   dc      2.720424e-03,-1.807943e-03,0.000000e+00
+775    
+776       X:0400         buffer    dsm     buflen*4
+777    
+778    
+779       Y:0018                   org     y:user_data
+780    
+781       Y:0018         s1        ds      1
+782       Y:0019         d1        ds      1
+783       Y:001A         s2        ds      1
+784       Y:001B         d3        ds      1
+785    
+786       Y:001C         rwfilt    dc      0
+787       Y:001D         eyefilt   dc      0
+788    
+789       Y:001E         prvrsym   ds      1         ; previous received symbol
+790       Y:001F         prvxsym   ds      1         ; previous xmitted symbol
+791    
+792       Y:0020         agc       dc      @pow(2,-7)
+793       Y:0021         agcn      dc      agcN      ; agc block counter
+794       Y:0022         agcmax    dc      0
+795    
+796       Y:0030         filtx     dsm     oftaps
+797    
+798                                include 'filtr.asm'
+799                      ; Input multirate, interpolation and raised cosine filter
+800                      ; Produced by MATLAB (19-Jul-94)
+801       00001C         iftaps    equ     28
+802       000008         ifbnks    equ     8
+803    
+804                      ; Input filter even part
+805       Y:003B         icoeffs   dc      1.329706e-05,3.924698e-05,8.760116e-04,1.477363e-03
+806       Y:003F                   dc      1.140257e-03,-2.206576e-03,-9.605002e-03,-1.769563e-02
+807       Y:0043                   dc      -1.734849e-02,2.796666e-03,4.858163e-02,1.132852e-01
+808       Y:0047                   dc      1.772121e-01,2.159940e-01,2.133782e-01,1.704168e-01
+809       Y:004B                   dc      1.048885e-01,4.133357e-02,-1.651849e-03,-1.891216e-02
+810       Y:004F                   dc      -1.740436e-02,-8.717248e-03,-1.525536e-03,1.417046e-03
+811       Y:0053                   dc      1.488979e-03,7.939218e-04,5.330688e-06,-1.670007e-06
+812    
+813       Y:0057                   dc      -4.216658e-05,-1.044840e-04,7.506352e-04,1.451274e-03
+814       Y:005B                   dc      1.677234e-03,-6.166012e-04,-7.264751e-03,-1.640500e-02
+815       Y:005F                   dc      -2.017703e-02,-6.912373e-03,3.175383e-02,9.292505e-02
+816       Y:0063                   dc      1.598427e-01,2.081126e-01,2.180767e-01,1.857147e-01
+817       Y:0067                   dc      1.248583e-01,5.926047e-02,9.897174e-03,-1.434840e-02
+818       Y:006B                   dc      -1.759613e-02,-1.067046e-02,-3.195389e-03,6.477284e-04
+819       Y:006F                   dc      1.411814e-03,1.015851e-03,-3.052778e-05,5.324129e-06
+
+
+Motorola DSP56000 Assembler  Version 3.1  94-07-21  14:50:16  filtr.asm  Page 10
+G3RUH demodulator
+
+
+820    
+821       Y:0073                   dc      -4.366212e-05,-9.739543e-05,6.545850e-04,1.342415e-03
+822       Y:0077                   dc      1.804911e-03,1.722784e-04,-5.706474e-03,-1.492705e-02
+823       Y:007B                   dc      -2.071642e-02,-1.162791e-02,2.205181e-02,7.999910e-02
+824       Y:007F                   dc      1.478207e-01,2.016444e-01,2.198593e-01,1.949708e-01
+825       Y:0083                   dc      1.377890e-01,7.116073e-02,1.753095e-02,-1.156738e-02
+826       Y:0087                   dc      -1.810894e-02,-1.228414e-02,-4.421130e-03,1.873044e-04
+827       Y:008B                   dc      1.415259e-03,1.116384e-03,-5.788162e-05,5.004941e-06
+828    
+829       Y:008F                   dc      -2.151334e-20,-3.432007e-20,5.518829e-04,1.177438e-03
+830       Y:0093                   dc      1.591011e-03,2.059060e-04,-5.022291e-03,-1.358596e-02
+831       Y:0097                   dc      -1.945943e-02,-1.172191e-02,1.963765e-02,7.548632e-02
+832       Y:009B                   dc      1.428459e-01,1.984866e-01,2.200963e-01,1.984866e-01
+833       Y:009F                   dc      1.428459e-01,7.548632e-02,1.963765e-02,-1.172191e-02
+834       Y:00A3                   dc      -1.945943e-02,-1.358596e-02,-5.022291e-03,2.059060e-04
+835       Y:00A7                   dc      1.591011e-03,1.177438e-03,-1.724617e-20,-1.280673e-20
+836    
+837       Y:00AB                   dc      3.650439e-05,7.248276e-05,3.874720e-04,1.019568e-03
+838       Y:00AF                   dc      1.371597e-03,1.873044e-04,-4.421130e-03,-1.228414e-02
+839       Y:00B3                   dc      -1.810894e-02,-1.156738e-02,1.753095e-02,7.116073e-02
+840       Y:00B7                   dc      1.377890e-01,1.949708e-01,2.198593e-01,2.016444e-01
+841       Y:00BB                   dc      1.478207e-01,7.999910e-02,2.205181e-02,-1.162791e-02
+842       Y:00BF                   dc      -2.071642e-02,-1.492705e-02,-5.706474e-03,1.722784e-04
+843       Y:00C3                   dc      1.768407e-03,1.274937e-03,2.092314e-04,-5.794314e-07
+844    
+845       Y:00C7                   dc      2.938883e-05,5.636789e-05,1.634385e-04,9.080921e-04
+846       Y:00CB                   dc      1.369647e-03,6.477284e-04,-3.195389e-03,-1.067046e-02
+847       Y:00CF                   dc      -1.759613e-02,-1.434840e-02,9.897174e-03,5.926047e-02
+848       Y:00D3                   dc      1.248583e-01,1.857147e-01,2.180767e-01,2.081126e-01
+849       Y:00D7                   dc      1.598427e-01,9.292505e-02,3.175383e-02,-6.912373e-03
+850       Y:00DB                   dc      -2.017703e-02,-1.640500e-02,-7.264751e-03,-6.166012e-04
+851       Y:00DF                   dc      1.647845e-03,1.400230e-03,5.566689e-04,3.275081e-06
+852    
+853       Y:00E3                   dc      -7.678584e-06,-1.434860e-05,-3.101461e-05,8.358586e-04
+854       Y:00E7                   dc      1.502276e-03,1.417046e-03,-1.525536e-03,-8.717248e-03
+855       Y:00EB                   dc      -1.740436e-02,-1.891216e-02,-1.651849e-03,4.133357e-02
+856       Y:00EF                   dc      1.048885e-01,1.704168e-01,2.133782e-01,2.159940e-01
+857       Y:00F3                   dc      1.772121e-01,1.132852e-01,4.858163e-02,2.796666e-03
+858       Y:00F7                   dc      -1.734849e-02,-1.769563e-02,-9.605002e-03,-2.206576e-03
+859       Y:00FB                   dc      1.147936e-03,1.490041e-03,9.123569e-04,-2.689898e-06
+860    
+861       Y:00FF                   dc      -3.082973e-05,-5.645818e-05,-1.030231e-04,7.626422e-04
+862       Y:0103                   dc      1.527134e-03,1.898530e-03,-2.408664e-04,-6.890268e-03
+863       Y:0107                   dc      -1.654278e-02,-2.162454e-02,-1.031714e-02,2.650862e-02
+864       Y:010B                   dc      8.706158e-02,1.553712e-01,2.068938e-01,2.207890e-01
+865       Y:010F                   dc      1.914045e-01,1.314081e-01,6.449439e-02,1.262169e-02
+866       Y:0113                   dc      -1.398550e-02,-1.853997e-02,-1.176993e-02,-3.812312e-03
+867       Y:0117                   dc      5.727853e-04,1.525273e-03,1.128120e-03,-2.496413e-05
+868    
+869                      ; Input filter odd part
+870       Y:011B                   dc      2.617030e-07,6.021975e-04,1.210605e-03,1.548649e-03
+871       Y:011F                   dc      -2.814891e-05,-5.470762e-03,-1.401329e-02,-1.931313e-02
+872       Y:0123                   dc      -1.034717e-02,2.256103e-02,7.955385e-02,1.469056e-01
+873       Y:0127                   dc      2.010979e-01,2.202489e-01,1.961392e-01,1.389412e-01
+874       Y:012B                   dc      7.143374e-02,1.660525e-02,-1.327523e-02,-1.978515e-02
+875       Y:012F                   dc      -1.328472e-02,-4.626652e-03,4.453181e-04,1.667277e-03
+876       Y:0133                   dc      1.184831e-03,-3.979576e-05,-1.964820e-05,-1.181120e-05
+877    
+878       Y:0137                   dc      -4.246166e-06,3.356215e-04,1.041578e-03,1.702810e-03
+879       Y:013B                   dc      1.002999e-03,-3.384221e-03,-1.187186e-02,-1.966682e-02
+880       Y:013F                   dc      -1.637892e-02,9.091898e-03,6.027803e-02,1.271418e-01
+881       Y:0143                   dc      1.878047e-01,2.185807e-01,2.066900e-01,1.574505e-01
+
+
+Motorola DSP56000 Assembler  Version 3.1  94-07-21  14:50:16  filtr.asm  Page 11
+G3RUH demodulator
+
+
+882       Y:0147                   dc      9.113187e-02,3.165527e-02,-5.362713e-03,-1.797691e-02
+883       Y:014B                   dc      -1.469935e-02,-6.600362e-03,-7.768121e-04,1.271679e-03
+884       Y:014F                   dc      1.159460e-03,2.225179e-04,7.759348e-05,4.520589e-05
+885    
+886       Y:0153                   dc      -6.978141e-06,1.100335e-04,9.097953e-04,1.658568e-03
+887       Y:0157                   dc      1.412173e-03,-2.176969e-03,-1.017182e-02,-1.890929e-02
+888       Y:015B                   dc      -1.878177e-02,1.839512e-03,4.856973e-02,1.140611e-01
+889       Y:015F                   dc      1.780460e-01,2.161034e-01,2.125305e-01,1.691363e-01
+890       Y:0163                   dc      1.040909e-01,4.166832e-02,-2.453187e-04,-1.711629e-02
+891       Y:0167                   dc      -1.601482e-02,-8.133986e-03,-1.608547e-03,1.095792e-03
+892       Y:016B                   dc      1.247619e-03,5.628666e-04,1.004185e-04,5.615105e-05
+893    
+894       Y:016F                   dc      -1.157848e-20,-2.326084e-20,8.489062e-04,1.477126e-03
+895       Y:0173                   dc      1.267588e-03,-1.855970e-03,-9.116352e-03,-1.747117e-02
+896       Y:0177                   dc      -1.803667e-02,6.485008e-04,4.498353e-02,1.090439e-01
+897       Y:017B                   dc      1.737064e-01,2.145388e-01,2.145388e-01,1.737064e-01
+898       Y:017F                   dc      1.090439e-01,4.498353e-02,6.485008e-04,-1.803667e-02
+899       Y:0183                   dc      -1.747117e-02,-9.116352e-03,-1.855970e-03,1.267588e-03
+900       Y:0187                   dc      1.477126e-03,8.489062e-04,-4.477418e-20,-3.309182e-20
+901    
+902       Y:018B                   dc      8.773008e-06,-1.677986e-05,8.102853e-04,1.307802e-03
+903       Y:018F                   dc      1.095792e-03,-1.608547e-03,-8.133986e-03,-1.601482e-02
+904       Y:0193                   dc      -1.711629e-02,-2.453187e-04,4.166832e-02,1.040909e-01
+905       Y:0197                   dc      1.691363e-01,2.125305e-01,2.161034e-01,1.780460e-01
+906       Y:019B                   dc      1.140611e-01,4.856973e-02,1.839512e-03,-1.878177e-02
+907       Y:019F                   dc      -1.890929e-02,-1.017182e-02,-2.176969e-03,1.412173e-03
+908       Y:01A3                   dc      1.705946e-03,1.026994e-03,-1.373851e-04,-6.716106e-05
+909    
+910       Y:01A7                   dc      7.904685e-06,-3.225802e-06,7.074337e-04,1.220075e-03
+911       Y:01AB                   dc      1.271679e-03,-7.768121e-04,-6.600362e-03,-1.469935e-02
+912       Y:01AF                   dc      -1.797691e-02,-5.362713e-03,3.165527e-02,9.113187e-02
+913       Y:01B3                   dc      1.574505e-01,2.066900e-01,2.185807e-01,1.878047e-01
+914       Y:01B7                   dc      1.271418e-01,6.027803e-02,9.091898e-03,-1.637892e-02
+915       Y:01BB                   dc      -1.966682e-02,-1.187186e-02,-3.384221e-03,1.002999e-03
+916       Y:01BF                   dc      1.740111e-03,1.122398e-03,-1.492942e-04,-6.486063e-05
+917    
+918       Y:01C3                   dc      -2.246644e-06,-8.489095e-07,5.053837e-04,1.164639e-03
+919       Y:01C7                   dc      1.667277e-03,4.453181e-04,-4.626652e-03,-1.328472e-02
+920       Y:01CB                   dc      -1.978515e-02,-1.327523e-02,1.660525e-02,7.143374e-02
+921       Y:01CF                   dc      1.389412e-01,1.961392e-01,2.202489e-01,2.010979e-01
+922       Y:01D3                   dc      1.469056e-01,7.955385e-02,2.256103e-02,-1.034717e-02
+923       Y:01D7                   dc      -1.931313e-02,-1.401329e-02,-5.470762e-03,-2.814891e-05
+924       Y:01DB                   dc      1.539084e-03,1.191805e-03,5.701804e-05,2.045353e-05
+925    
+926       Y:01DF                   dc      -9.631001e-06,-8.060780e-06,2.648173e-04,1.067928e-03
+927       Y:01E3                   dc      1.868732e-03,1.304420e-03,-2.969851e-03,-1.166577e-02
+928       Y:01E7                   dc      -2.035504e-02,-1.875820e-02,4.684636e-03,5.450542e-02
+929       Y:01EB                   dc      1.217058e-01,1.847805e-01,2.193447e-01,2.111043e-01
+930       Y:01EF                   dc      1.638676e-01,9.725282e-02,3.569798e-02,-3.911715e-03
+931       Y:01F3                   dc      -1.842444e-02,-1.584155e-02,-7.496354e-03,-1.113028e-03
+932       Y:01F7                   dc      1.298261e-03,1.279307e-03,3.974903e-04,1.001137e-04
+933    
+934       Y:0400                   dsm     buflen*4
+935    
+936                                end
+
+0    Errors
+0    Warnings
+
+
+
+
+
