@@ -1,0 +1,2 @@
+
+void	Verschieben(int Copy);

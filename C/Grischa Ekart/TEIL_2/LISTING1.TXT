@@ -1,0 +1,270 @@
+/*            PAINT.C V1.0, 22.2.1992           */
+/* Autor: Grischa Ekart / (c) 1992 MAXON Computer  */
+
+#include "g:\acs\acs.h"
+#include <tos.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+static  Awindow *paint_create(void *not_used);
+static  int paint_open(Awindow *window);
+static  void paint_closed(Awindow *window);
+static  int paint_service(Awindow *window, int task, void *in_out);
+static  int tool_open(Awindow *window);
+static  void tool_closed(Awindow *window);
+static  int cdecl draw_rect(PARMBLK *pb);
+static  void user_click(void);
+static  void term(Awindow *window);
+static  void paint_clear(void);
+static  void paint_close(void);
+static  void paint_load(void);
+static  void paint_quit(void);
+
+typedef struct {
+    MFDB    bitblk;
+    char    name[80];
+    char    picture[32000L];
+} PICTURE;
+
+MFDB    screen;
+
+#include    "paint.h"
+#include    "paint.ah"
+
+Awindow *toolbox;
+int     tool_count = 0;
+
+int
+ACSinit(void)
+{
+    Awindow *rootwindow;
+
+    rootwindow = Awi_root();/* Adresse vom Rootfenster */
+    if(rootwindow == NULL)
+        return(FAIL);
+
+    toolbox = Awi_create(&TOOLFENSTER); /* erzeuge Toolbox */
+    if(toolbox == NULL)
+        return(FAIL);
+
+    (rootwindow->service)(rootwindow, AS_NEWCALL,
+        &PAINTFENSTER.create); /* NEU-Icon îffnet Paintfenster */
+
+    screen.fd_addr = 0L;    /* aktueller Bildschirm */
+    return(OK);
+}
+
+static Awindow
+*paint_create(void *not_used)
+{
+    Awindow *window;
+    PICTURE *picture;
+
+    picture = Ax_malloc(sizeof(PICTURE));
+    if(picture == NULL)
+        return(NULL);
+
+    memset(picture, 0, sizeof(PICTURE));
+    window = Awi_create(&PAINTFENSTER);
+    if(window == NULL)
+    {
+        Ax_free(picture);
+        return(NULL);
+    }
+    picture->bitblk.fd_addr = &picture->picture;
+    window->user = picture;
+    window->work[USERPAR].ob_spec.userblk->ub_parm =
+        (long)picture;
+
+    (window->open)(window);
+    return(window);
+}
+
+static int
+paint_open(Awindow *window)
+{
+    (toolbox->open)(toolbox);
+    Awi_open(window);
+    return(OK);
+}
+
+static void
+paint_closed(Awindow *window)
+{
+    (toolbox->closed)(toolbox);
+    Awi_closed(window);
+}
+
+static int
+paint_service(Awindow *window, int task, void *in_out)
+{
+    switch(task)
+    {
+        case AS_TERM:
+            term(window);
+            break;
+
+        default:
+            return(FALSE);
+    }
+    return(TRUE);
+}
+
+static void
+term(Awindow *window)
+{
+    Ax_free(window->user);  /* Bildspeicher freigeben */
+    Awi_delete(window);     /* Fenster lîschen */
+}
+
+static int
+tool_open(Awindow *window)
+{
+    tool_count++;
+    if(window->wi_id == -1)
+        Awi_open(window);
+    else
+        Awi_topped(window);
+
+    return(OK);
+}
+
+static void
+tool_closed(Awindow *window)
+{
+    tool_count--;
+    if(!tool_count)
+    {
+        window->state |= AWS_TERM;
+        Awi_closed(window);
+        window->state &= ~AWS_TERM;
+    }
+}
+
+static void
+paint_clear(void)
+{
+    PICTURE *picture;
+
+    picture = ev_window->user;
+    if(alert_str("[1][| Wollen Sie das Bild  |%s| wirklich lîschen?]"
+                    "[ Nein |  Ja  ]", ev_window->name) == 2)
+    {
+        memset(picture->picture, 0, 32000L);
+        Awi_redraw(ev_window, &ev_window->wi_work);
+    }
+}
+
+static void
+paint_quit(void)
+{
+    term(ev_window);
+}
+
+static void
+paint_close(void)
+{
+    (ev_window->closed)(ev_window);
+}
+
+static char *fileselect (void)
+    /*
+     *  Hole Filenamen
+     */
+{
+  char *p;
+  int button;
+  char file [16];
+    static char path [80];          /* letzter Pfad */
+
+  path [0] = 'A' + Dgetdrv ();              /* aktuelles Laufwerk ermitteln */
+  path [1] = ':';
+  Dgetpath (path + 2, 0);                   /* aktueller Pfad */
+  if (path [2] == 0) { path [2] = '\\'; path [3] = '\0'; };
+  p = strrchr (path, '\\');                 /* select entfernen */
+  *(p + 1) = '\0';
+  strcat (path, "*.PIC");                   /* PIC suchen */
+  file [0] = '\0';
+
+  Aev_unhidepointer ();                     /* Zeiger wieder sichtbar */
+  if (fsel_input (path, file, &button) == 0 ||
+      button == 0 ||
+      file [0] == '\0') {
+    return NULL;
+  };
+
+  if (strlen (file) == 9) {                 /* 8 + . doch extension anhÑngen */
+    if (*(file + 8) == '.') strcat (file, "PIC");
+  };
+  if (strchr (file, '.') == NULL) {         /* hÑnge extension an */
+    strcat (file, ".PIC");
+  };
+
+  p = strrchr (path, '\\');                 /* select entfernen */
+  strcpy (p + 1, file);
+
+  return path;
+}
+
+static void
+paint_load(void)
+{
+    PICTURE *picture;
+    FILE    *file;
+    char    *name;
+
+    picture = ev_window->user;
+    name = fileselect();
+    if(name == NULL)
+        return;
+
+    strcpy(picture->name, name);
+    if((file = fopen(picture->name, "rb")) == NULL)
+    {
+        form_alert(1, "[1][File not found.][ Again ]");
+        return;
+    }
+    if(fread(picture->picture, 1L, 32000L, file) != 32000L)
+    {
+        form_alert(1, "[1][Falsches Dateiformat!][ Abbruch ]");
+        fclose(file);
+        return;
+    }
+    Ast_delete(ev_window->name);
+    ev_window->name = Ast_create(name);
+    wind_set(ev_window->wi_id, WF_NAME, ev_window->name, 0, 0);
+    picture->bitblk.fd_w = 640;
+    picture->bitblk.fd_h = 400;
+    picture->bitblk.fd_stand = 1;
+    picture->bitblk.fd_wdwidth = 40;
+    picture->bitblk.fd_nplanes = 1;
+    Awi_redraw(ev_window, &ev_window->wi_work);
+}
+
+static int cdecl
+draw_rect(PARMBLK *pb)
+{
+    PICTURE *picture;
+    int     pxyarray[8];
+    int     index[2] = {BLACK, WHITE};
+
+    picture = (PICTURE  *)pb->pb_parm;  /* eigene Daten */
+    pxyarray[0] = pb->pb_xc - pb->pb_x;
+    pxyarray[1] = pb->pb_yc - pb->pb_y;
+    pxyarray[2] = pxyarray[0] + pb->pb_wc - 1;
+    pxyarray[3] = pxyarray[1] + pb->pb_hc - 1;
+    pxyarray[4] = pb->pb_xc;
+    pxyarray[5] = pb->pb_yc;
+    pxyarray[6] = pb->pb_xc + pb->pb_wc - 1;
+    pxyarray[7] = pb->pb_yc + pb->pb_hc - 1;
+    vrt_cpyfm(vdi_handle, MD_REPLACE, pxyarray, &picture->bitblk, &screen, index);
+    return(pb->pb_prevstate);
+}
+
+static void
+user_click(void)
+{
+    /* ÅberprÅfen, welches Tool angewÑhlt ist und entsprechend
+       zeichnen. */
+}
