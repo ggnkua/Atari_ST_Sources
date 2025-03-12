@@ -1,0 +1,744 @@
+* @@@@@    @@  @@	@@@@   @@@@@@
+*  @@ @@   @@  @@  @@  @@  @ @@ @
+*  @@  @@  @@  @@  @@		 @@
+*  @@  @@  @@  @@	@@@@	 @@
+*  @@  @@  @@  @@	   @@	 @@
+*  @@ @@   @@  @@  @@  @@	 @@
+* @@@@@ 	@@@@	@@@@	@@@@
+
+* Routines to process the dust particles.
+
+* Atari ST Version 1.0 5th May 1988 Copyright (c) 1988 Mr. Micro Ltd.
+* Designed and coded by Rob Nicholson. Adapted from the MSX version.
+
+	include macros
+
+	xref random,rand,sqrt,fx,set_colour,plotxy,monst,dust_cos,dust_sin
+
+* ---- LOCAL CONSTANTS ----
+
+max_dust_speed: 	equ 18				maximum dust speed
+mag:				equ 30000			dust trig magnification factor
+
+* ---- LOCAL RECORDS ----
+
+* Dust record definition.
+
+	offset 0
+
+dust_x: 		ds.l 1					x coordinate
+dust_y: 		ds.l 1					y coordinate
+
+dust_len:	equ *						size of one record
+dust_store: equ no_dust*dust_len		size of all records
+
+* ---- LOCAL VARIABLES ----
+
+	vars dust
+
+dust_front: 	ds.b dust_store 		dust records (four views)
+dust_rear:		ds.b dust_store
+dust_left:		ds.b dust_store
+dust_right: 	ds.b dust_store
+dust_ptr:		ds.l 1					ptr: dust records to use
+move_ptr:		ds.l 1					ptr: routine for new particle
+roll_pars:		ds.l 3					parameters for dust roll
+climb_pars: 	ds.l 3					parameters for dust climb
+dust_count: 	ds.w 1					counter for each particle of dust
+dust_rate:		ds.w 1					dust movement rate
+
+	end_vars dust
+
+	module dust
+
+* *******************************************
+* **									   **
+* ** OUTCODES - DETERMINE OUTCODES (MACRO) **
+* **									   **
+* *******************************************
+
+* This macro builds up the 'outcodes' flags for the 'Cohen-Sutherland' line
+* clipping algorithm. The bits in the outcodes are defined as follows:
+
+*	Bit 0 - outside left edge		$01
+*	Bit 1 - outside right edge		$02
+*	Bit 2 - outside bottom edge 	$04
+*	Bit 3 - outside top edge		$08
+
+* Syntax: OUTCODES xreg,yreg,flag_reg
+* Exit:   \3 = outcodes flags
+
+* Regs:   \3 corrupt.
+* Subr:   None
+
+outcodes: macro
+
+	clr \3								clear flags
+	if \1 <lt> #x_min then.s			left edge check
+		bset #0,\3
+	endi
+	if \1 <gt> #x_max then.s			right edge check
+		bset #1,\3
+	endi
+	if \2 <lt> #y_min then.s			bottom edge check
+		bset #2,\3
+	endi
+	if \2 <gt> #y_max then.s			top edge check
+		bset #3,\3
+	endi
+
+	endm
+
+
+* *******************************************
+* **									   **
+* ** MOVE_FRONT - MOVE DUST FOR FRONT VIEW **
+* **									   **
+* *******************************************
+
+* Moves the current dust particle for the front view.
+
+* Entry: A5 = ptr: dust record
+*		 A3 = ptr: dust cosine table
+*		 A4 = ptr: dust sine table
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr move_forward
+
+	move dust_x(a5),d2					abs(x)
+	if <mi> then.s
+		neg d2
+	endi
+	move dust_y(a5),d3					abs(y)
+	if <mi> then.s
+		neg d3
+	endi
+	asl #7,d3							index into trig tables (x128)
+	add d2,d3
+	add d3,d3
+	move (a3,d3),d2 					fetch cos(a)
+	move (a4,d3),d3 					fetch sin(a)
+	mulu dust_rate(a6),d2				multiply by dust's speed
+	mulu dust_rate(a6),d3
+	move.l dust_x(a5),d0				adjust sign
+	if <mi> then.s
+		neg.l d2
+	endi
+	move.l dust_y(a5),d1
+	if <mi> then.s
+		neg.l d3
+	endi
+	add.l d2,d0
+	add.l d3,d1
+	swap d0 							off screen ?
+	swap d1
+	outcodes d0,d1,d2
+	tst d2
+	if <ne> then.s						yes
+		bsr new_coords					generate new coords
+	else.s
+		swap d0
+		swap d1
+	endi
+	movem.l d0/d1,dust_x(a5)			update dust record
+
+	ret
+
+
+* *****************************************
+* **									 **
+* ** MOVE_REAR - MOVE DUST FOR REAR VIEW **
+* **									 **
+* *****************************************
+
+* Moves the current dust particle for the rear view.
+
+* Entry: A5 = ptr: dust record
+*		 A3 = ptr: dust cosine table
+*		 A4 = ptr: dust sine table
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr move_rear
+
+	movem.l dust_x(a5),d0/d1			fetch coords
+	swap d0 							abs(x)
+	move d0,d2
+	if <mi> then.s
+		neg d2
+	endi
+	swap d1 							abs(y)
+	move d1,d3
+	if <mi> then.s
+		neg d3
+	endi
+	if d2 <lo> #30 then.s				check for reaching centre
+		cmp #30,d3
+		blo.s new_rear
+	endi
+	outcodes d0,d1,d4					check if off screen
+	tst d4
+	if <ne> then.s						yes
+
+new_rear:
+
+		bsr new_coords					generates new coordinates
+		swap d0 						calculate new abs(x) and abs(y)
+		swap d1
+		move d0,d2
+		if <mi> then.s
+			neg d2
+		endi
+		move d1,d3
+		if <mi> then.s
+			neg d3
+		endi
+	endi
+	asl #7,d3							index into trig tables
+	add d2,d3
+	add d3,d3
+	move (a3,d3),d2 					fetch cos(a)
+	move (a4,d3),d3 					fetch sin(a)
+	mulu dust_rate(a6),d2				multiply by dust's speed
+	mulu dust_rate(a6),d3
+	swap d0 							adjust sign
+	if <pl> then.s
+		neg.l d2
+	endi
+	swap d1
+	if <pl> then.s
+		neg.l d3
+	endi
+	add.l d2,d0 						move dust
+	add.l d3,d1
+	movem.l d0/d1,dust_x(a5)			update dust record
+
+	ret
+
+
+* *****************************************
+* **									 **
+* ** MOVE_LEFT - MOVE DUST FOR LEFT VIEW **
+* **									 **
+* *****************************************
+
+* Moves the current dust particle for the left view.
+
+* Entry: A5 = ptr: dust record
+*		 A3 = ptr: dust cosine table
+*		 A4 = ptr: dust sine table
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr move_left
+
+	movem.l dust_x(a5),d0/d1			fetch coords
+	move dust_rate(a6),d2				calculate movement
+	mulu #20000,d2
+	sub.l d2,d0 						move dust (x only)
+	swap d0 							off screen ?
+	swap d1
+	outcodes d0,d1,d2
+	tst d2
+	if <ne> then.s						yes
+		bsr new_coords					generate new coords
+	else.s
+		swap d0
+		swap d1
+	endi
+	movem.l d0/d1,dust_x(a5)			update dust record
+
+	ret
+
+
+* *******************************************
+* **									   **
+* ** MOVE_RIGHT - MOVE DUST FOR RIGHT VIEW **
+* **									   **
+* *******************************************
+
+* Moves the current dust particle for the right view.
+
+* Entry: A5 = ptr: dust record
+*		 A3 = ptr: dust cosine table
+*		 A4 = ptr: dust sine table
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr move_right
+
+	movem.l dust_x(a5),d0/d1			fetch coords
+	move dust_rate(a6),d2				calculate movement
+	mulu #20000,d2
+	add.l d2,d0 						move dust (x only)
+	swap d0 							off screen ?
+	swap d1
+	outcodes d0,d1,d2
+	tst d2
+	if <ne> then.s						yes
+		bsr new_coords					generate new coords
+	else.s
+		swap d0
+		swap d1
+	endi
+	movem.l d0/d1,dust_x(a5)			update dust record
+
+	ret
+
+
+* **************************************
+* **								  **
+* ** NEW_COORDS - GENERATE NEW COORDS **
+* **								  **
+* **************************************
+
+* Generate new dust coords and speed.
+
+* Entry: A5 	 = ptr: dust record
+* Exit:  (D0,D1) = new dust coords
+
+* Regs: ?
+* Subr: ?
+
+	subr new_coords
+
+	repeat
+		move #x_size,d2 				x = rand(x_size)+x_min
+		jsr rand
+		add #x_min,d0
+		push d0
+		move #y_size,d2 				y = rand(y_size)+y_min
+		jsr rand
+		add #y_min,d0
+		move d0,d1
+		move d0,d2
+		pop d0							until x<>0 and y<>0
+		or d0,d2
+	until <ne>
+	swap d0 							move coords to high word
+	swap d1
+	clr d0
+	clr d1
+
+	ret 								return
+
+
+* ***************************************
+* **								   **
+* ** INIT_DUST - INITIALISE DUST CLOUD **
+* **								   **
+* ***************************************
+
+* Initialise dust cloud on all four views. Calculates the dust sine and
+* cosine tables.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr init_dust,global
+
+	lea dust_front(a6),a5				point to 1st record
+	loop 1,no_dust*4					loop for each record
+		bsr new_coords					generate new coords
+		movem.l d0/d1,dust_x(a5)
+		lea dust_len(a5),a5 			next record
+	next 1
+
+	ret
+
+
+* *************************************
+* **								 **
+* ** DRAW_DUST - DRAW THE DUST CLOUD **
+* **								 **
+* *************************************
+
+* Draws the dust cloud (and moves it).
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr draw_dust
+
+	tst witch_space(a6) 				in witch space ?
+	ret <ne>							yes, no dust
+	move view(a6),d0					fetch current view
+	tst retro_count(a6) 				retros active ?
+	if <ne> then.s						yes
+		bchg #0,d0						flip view
+	endi
+	asl #3,d0
+	lea setup_vectors(pc),a0
+	move.l 0(a0,d0),move_ptr(a6)		set move vector
+	move view(a6),d0					set dust base pointer
+	asl #3,d0
+	move.l 4(a0,d0),d0
+	lea (a6,d0),a0
+	move.l a0,dust_ptr(a6)
+	tst roll_angle(a6)					rolling left/right ?
+	if <ne> then.s						yes
+		lea dust_roll_ptrs(pc),a0		setup dust rotation
+		bsr setup_rotate
+		movem.l d0/d1/a0,roll_pars(a6)
+	endi
+	tst climb_angle(a6) 				climb/diving ?
+	if <ne> then.s						yes
+		lea dust_climb_ptrs(pc),a0		setup dust rotation
+		bsr setup_rotate
+		movem.l d0/d1/a0,climb_pars(a6)
+	endi
+	tst dust_type(a6)					normal dust ?
+	if <eq> then.s						yes
+		moveq #yellow,d0				set dust colour to yellow
+		jsr set_colour
+		move retro_count(a6),d0 		retro's active ?
+		if <eq> then.s					no
+			move speed(a6),d0
+			if d0 <hi> #max_speed then.s
+				moveq #max_speed,d0
+			endi
+		else.s
+			mulu #max_speed,d0
+			divu #retro_life,d0
+		endi
+	else.s
+		move #max_speed/8,d0
+	endi
+	cmp #1,view(a6) 					rear view ? 	** FUDGE **
+	if <eq> then.s						yes
+		tst climb_angle(a6) 			climb/dive ?
+		if <ne> then.s					yes
+			cmp #max_speed/2,d0 		clamp at half maximum speed
+			if <hi> then.s
+				moveq #max_speed/2,d0
+			endi
+		endi
+	endi
+	mulu #max_dust_speed,d0 			calculate dust speed
+	divu #max_speed,d0
+	inc d0
+	move d0,dust_rate(a6)
+	lea dust_cos,a3 					point to trig tables
+	lea dust_sin,a4
+	move.l dust_ptr(a6),a5				point to 1st record
+	move #no_dust,dust_count(a6)		loop for each particle
+	repeat
+		tst dust_type(a6)				normal dust ?
+		if <ne> then.s					no
+			move dust_count(a6),d0		set the dust colour
+			and #7,d0
+			add d0,d0
+			lea dust_colours(pc),a0
+			move (a0,d0),d0
+			jsr set_colour
+		endi
+		move.l move_ptr(a6),a0			move the dust
+		jsr (a0)
+		swap d0 						convert to physical screen coords
+		swap d1
+		add #x_left-x_min,d0
+		neg d1
+		add #y_top+y_max,d1
+		jsr plotxy						plot pixel
+		tst roll_angle(a6)				rolling ?
+		if <ne> then.s					yes
+			movem.l roll_pars(a6),d0/d1/a0
+			jsr (a0)
+		endi
+		tst climb_angle(a6) 			climbing ?
+		if <ne> then.s					yes
+			movem.l climb_pars(a6),d0/d1/a0
+			jsr (a0)
+		endi
+		lea dust_len(a5),a5 			next particle
+		dec dust_count(a6)
+	until <eq>
+
+	ret
+
+
+* **********************************
+* **							  **
+* ** DUST_CLOUD - DRAW DUST CLOUD **
+* **							  **
+* **********************************
+
+* Draws the cloud of dust with special checks for hyperspace and torus
+* jump drive.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr dust_cloud,global
+
+	tst dust_type(a6)					normal dust ?
+	beq draw_dust						yes, draw the dust
+	move dust_size(a6),d7				draw the dust
+	loop 1
+		push d7
+		jsr draw_dust
+		pop d7
+	next 1
+	dec dust_ctr(a6)					ready for change in length ?
+	if <eq> then.s						yes
+		move latch(a6),dust_ctr(a6) 	re-load counter
+		move dust_size(a6),d0			fetch length of dust
+		cmp max_len(a6),d0				already at maximum length ?
+		if <lo> then.s					no
+			inc dust_size(a6)
+		endi
+	endi
+
+	ret 								return
+
+
+* *************************************************
+* **											 **
+* ** SETUP_ROTATE - SETUP DUST ROTATE PARAMETERS **
+* **											 **
+* *************************************************
+
+* Sets up the parameters for the dust rotation depending upon the view.
+
+* Entry: A0 = ptr: table of pointers
+* Exit:  D0 = parameter #1	(trig value)
+*		 D1 = parameter #2	(only if rotate)
+*		 A0 = ptr: rotate routine (Rotate_Dust or Dust_Vert)
+
+* Regs: ?
+* Subr: ?
+
+	subr setup_rotate
+
+	move view(a6),d0					fetch current view
+	asl #2,d0							index into table
+	move.l (a0,d0),a0					execute routine and return
+	jmp (a0)
+
+
+* ************************
+* **					**
+* ** ROTATE SUBROUTINES **
+* **					**
+* ************************
+
+* The 8 subroutines below are called by ROTATE_VIEW to rotate the dust
+* cloud in response the player climbing or rolling. The routines are
+* split into two halves: rolling and climbing. There are four routines in
+* each section (four views).
+
+* Entry: A0 = ptr: rotate vector table (i.e. rotate or climb)
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr rview_front
+
+	move.l roll_cos(a6),d0				cos = cos(roll)
+	move.l roll_sin(a6),d1				sin = sin(roll)
+	asl.l #6,d0 						scale trig values to 16 bit
+	swap d0
+	asl.l #6,d1
+	swap d1
+	lea rotate_dust(pc),a0				using Rotate_Dust routine
+
+	ret
+
+	subr rview_rear
+
+	move.l roll_cos(a6),d0				cos = cos(roll)
+	move.l roll_sin(a6),d1				sin = -sin(roll)
+	neg.l d1
+	asl.l #6,d0 						scale trig values to 16 bit
+	swap d0
+	asl.l #6,d1
+	swap d1
+	lea rotate_dust(pc),a0				using Rotate_Dust routine
+
+	ret
+
+	subr rview_left
+
+	move roll_sin(a6),d0				Move vertically using sin(roll)
+	asr #1,d0
+	lea dust_vert(pc),a0				using Dust_Vert routine
+
+	ret
+
+	subr rview_right
+
+	move roll_sin(a6),d0				Move vertically using -sin(roll)
+	neg d0
+	asr #1,d0
+	lea dust_vert(pc),a0				using Dust_Vert routine
+
+	ret
+
+	subr cview_front
+
+	move climb_sin(a6),d0				Move vertically using -sin(climb)
+	neg d0
+	asr #1,d0
+	lea dust_vert(pc),a0				using Dust_Vert routine
+
+	ret
+
+	subr cview_rear
+
+	move climb_sin(a6),d0				Move vertically using sin(climb)
+	asr #1,d0
+	lea dust_vert(pc),a0				using Dust_Vert routine
+
+	ret
+
+	subr cview_left
+
+	move.l climb_cos(a6),d0 			cos = cos(climb)
+	move.l climb_sin(a6),d1 			sin = -sin(climb)
+	neg.l d1
+	asl.l #6,d0 						scale trig values to 16 bit
+	swap d0
+	asl.l #6,d1
+	swap d1
+	lea rotate_dust(pc),a0				using Rotate_Dust routine
+
+	ret
+
+	subr cview_right
+
+	move.l climb_cos(a6),d0 			cos = cos(climb)
+	move.l climb_sin(a6),d1 			sin = sin(climb)
+	asl.l #6,d0 						scale trig values to 16 bit
+	swap d0
+	asl.l #6,d1
+	swap d1
+	lea rotate_dust(pc),a0				using Rotate_Dust routine
+
+	ret
+
+
+* **************************************
+* **								  **
+* ** ROTATE_DUST - ROTATE DUST AROUND **
+* **								  **
+* **************************************
+
+* Rotates the current particle of dust using the rotation equation:
+
+*		x' = x*cos(a)-y*sin(a)
+*		y' = x*sin(a)+y*cos(a)
+
+* The screen coords of each particle of dust is stored in the top 16 bits
+* of the dusts coordinates. It is these values that are rotated around.
+
+* Entry: D0 = cosine value
+*		 D1 = sine value
+*		 A5 = ptr: dust record
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	Subr Rotate_Dust
+
+	move dust_x(a5),d2					fetch x and y coords (high word)
+	move dust_y(a5),d3
+	move d2,d4							x*cos(a)
+	muls d0,d4
+	move d3,d5							y*sin(a)
+	muls d1,d5
+	sub.l d5,d4 						x*cos(a)-y*sin(a)
+	asl.l #2,d4
+	swap d4
+	move d2,d5							x*sin(a)
+	muls d1,d5
+	move d3,d6							y*cos(a)
+	muls d0,d6
+	add.l d6,d5 						x*sin(a)+y*cos(a)
+	asl.l #2,d5
+	swap d5
+	move d4,dust_x(a5)					store new coords and adjust the
+	eor d2,d4							sign of the low words if changed
+	if <mi> then.s
+		neg dust_x+2(a5)
+	endi
+	move d5,dust_y(a5)
+	eor d3,d5
+	if <mi> then.s
+		neg dust_y+2(a5)
+	endi
+
+	ret
+
+
+* **************************************
+* **								  **
+* ** DUST_VERT - MOVE DUST VERTICALLY **
+* **								  **
+* **************************************
+
+* Moves the dust particle vertically.
+
+* Entry: D0 = amount to move
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr dust_vert
+
+	move dust_y(a5),d1					fetch current y coord
+	add d0,dust_y(a5)					add offset to y coord
+	eor d1,d0							sign changed ?
+	if <mi> then.s						yes
+		neg dust_y+2(a5)				negate low word and step
+	endi
+
+	ret
+
+
+* ---- LOCAL DATA ----
+
+* Vectors for setup routine for eaxh view.
+
+setup_vectors:
+
+	dc.l move_forward,dust_front
+	dc.l move_rear,dust_rear
+	dc.l move_left,dust_left
+	dc.l move_right,dust_right
+
+* List of colours for the dust.
+
+dust_colours:
+
+	dc.w red,lgt_green,mid_blue,magenta,white,yellow,lgt_blue,lgt_grey
+
+* Table of pointers for dust rotation.
+
+dust_roll_ptrs:
+
+	dc.l rview_front,rview_rear,rview_left,rview_right
+
+dust_climb_ptrs:
+
+	dc.l cview_front,cview_rear,cview_left,cview_right

@@ -1,0 +1,1145 @@
+* @@  @@ @@@@@@@   @@@@   @@@@@@   @@@	 @@@@@@
+* @@  @@  @@   @  @@  @@  @ @@ @  @@ @@   @@  @@
+* @@  @@  @@ @	 @@ 		@@	 @@   @@  @@  @@
+* @@  @@  @@@@	 @@ 		@@	 @@   @@  @@@@@
+* @@  @@  @@ @	 @@ 		@@	 @@   @@  @@ @@
+*  @@@@   @@   @  @@  @@	@@	  @@ @@   @@  @@
+*	@@	 @@@@@@@   @@@@    @@@@    @@@	 @@@  @@
+
+* Vector graphics high-level draw routines for all objects. Main routine is
+* DRAW_OBJECT which plots the current object.
+
+* Atari ST Version 1.0 18th March 1988 Copyright (c) 1988 Mr. Micro Ltd.
+* Designed and coded by Rob Nicholson. Adapted from the MSX version.
+
+	include macros
+
+	xref disp_message,fx,check_missile,magnitude_table,c_line
+	xref draw_explosion,draw_point,monst,solid_polygon,sqrt,c_solid_polygon
+	xref set_colour,this_panel
+
+* ---- LOCAL CONSTANTS ----
+
+depth:				equ 100 			screen depth
+exp_nodes:			equ 50				no. of explosion nodes
+fire_range: 		equ 3000			length of laser fire
+turn_dist:			equ 1000			turn distance outside space station
+max_lines:			equ 10				maximum no. of surface lines
+
+* ---- DEPTH SORTED DRAW RECORD ----
+
+	offset 0
+
+obj_ptr:			ds.l 1				ptr: object record
+prev_ptr:			ds.l 1				ptr: previous record (0=none)
+next_ptr:			ds.l 1				ptr: next record (0=none)
+
+draw_len:	equ *
+draw_size:	equ draw_len*max_objects
+
+* ---- LOCAL STORAGE ----
+
+	vars vector
+
+node_list:			ds.b node_size		list of node records
+draw_list:			ds.b draw_size		depth sorted draw records
+list_ptr:			ds.l 1				ptr: start of list
+lines_done: 		ds.b max_lines		flags: line drawn
+surface_vector: 	ds.w 3				surface vector components
+explode_x:			ds.w 1				distance to move each coordinate of
+explode_y:			ds.w 1				the exploding cobra (end game)
+explode_z:			ds.w 1
+
+	end_vars vector
+
+* ---- LOCAL MACROS ----
+
+* CROSS vector,comp,v1,c1,v2,c2,v3,c3,v4,c4
+
+cross: macro
+
+	move \3_vector+\4(a5),d0
+	muls \5_vector+\6(a5),d0
+	move \7_vector+\8(a5),d1
+	muls \9_vector+\a(a5),d1
+	sub.l d1,d0
+	asl.l #2,d0
+	swap d0
+	move d0,\1_vector+\2(a5)
+
+	endm
+
+
+* *******************************************
+* **									   **
+* ** OUTCODES - DETERMINE OUTCODES (MACRO) **
+* **									   **
+* *******************************************
+
+* This macro builds up the 'outcodes' flags for the 'Cohen-Sutherland' line
+* clipping algorithm. The bits in the outcodes are defined as follows:
+
+*	Bit 0 - outside left edge		$01
+*	Bit 1 - outside right edge		$02
+*	Bit 2 - outside bottom edge 	$04
+*	Bit 3 - outside top edge		$08
+
+* Syntax: OUTCODES xreg,yreg
+* Exit:   NFLAGS(A3) = outcodes flags
+
+* Regs:   None
+* Subr:   None
+
+outcodes: macro
+
+	if \1 <lt> #x_min then.s			left edge check
+		bset #off_left,nflags(a3)
+	else.s
+		if \1 <gt> #x_max then.s		right edge check
+			bset #off_right,nflags(a3)
+		endi
+	endi
+	if \2 <lt> #y_min then.s			bottom edge check
+		bset #off_bottom,nflags(a3)
+	else.s
+		if \2 <gt> #y_max then.s		top edge check
+			bset #off_top,nflags(a3)
+		endi
+	endi
+
+	endm
+
+
+	module vector
+
+* ***************************************
+* **								   **
+* ** DRAW_OBJECT - DRAW CURRENT OBJECT **
+* **								   **
+* ***************************************
+
+* Draws the current object on the invisible screen. GET_RANGE must have
+* been called to setup the objects range. NOTE - this routine doesn't actually
+* draw the object - it is just stored in a list depending upon it's z coord.
+* The objects are actually drawn after all the objects have been processed.
+
+* Entry: A5 = ptr: object record.
+* Exiit: None
+
+* Regs:  D0-D7 and A0-A4 corrupt.
+* Subr:  ?
+
+	subr draw_object,global
+
+	sf in_sights(a6)					not in sights
+	sf visible(a6)						not visible
+	sf invisible(a6)					not invisible
+	tst cockpit_on(a6)					cockpit displayed ?
+	ret <eq>							no, don't draw
+	cmp #cougar,type(a5)				cougar ?
+	if <eq> then.s						yes
+		cmp #log_exploding,logic(a5)	exploding ?
+		if <ne> then.s					no
+			btst #6,loop_ctr(a6)		flash on and off
+			if <ne> then.s
+				st invisible(a6)
+				rts
+			endi
+		endi
+	endi
+	movem.l xpos(a5),d0-d2				flip coords for view
+	move.l l_view_ptr(a6),a0
+	jsr (a0)
+	tst.l d2							behind us (z <= 0) ?
+	ret <le>							yes, exit routine
+	movem.l d0-d2,this_xpos(a5) 		store view adjusted coords
+	cmp #log_exploding,logic(a5)		exploding ?
+	if <eq> then.s						yes
+		move exp_rad(a5),hits_rad(a5)
+	endi
+	bsr check_sights					check if in the sights
+	cmp #log_exploding,logic(a5)		exploding ?
+	if <ne> then.s						no
+		tst scr_radius(a5)				visible yet ?
+		ret <eq>						no, exit routine
+		bsr visibility					object visible ?
+		tst d3
+		ret <eq>						no, exit routine
+		st visible(a6)					object is visible
+	endi
+	move.l next_record(a6),d0			first object drawn ?
+	if <eq> then.s						yes
+		lea draw_list(a6),a1			create 1st record
+		move.l a1,list_ptr(a6)
+		clr.l prev_ptr(a1)
+		clr.l next_ptr(a1)
+		bra inserted
+	endi
+	move.l d0,a1						A1 = ptr: record to create
+	move.l this_zpos(a5),d0 			fetch z coord of current object
+	move.l list_ptr(a6),a0				point to 1st record
+	tst reverse_draw(a6)				draw in reverse direction ?
+	if <eq> then.s						no
+		repeat
+			move.l obj_ptr(a0),a2		A2 = ptr: object record
+			cmp.l this_zpos(a2),d0		insert here ?
+			if <gt> then.s				yes
+insert_here:	move.l prev_ptr(a0),d0	insert record
+				move.l d0,prev_ptr(a1)
+				if <ne> then.s
+					move.l d0,a2
+					move.l a1,next_ptr(a2)
+				else.s
+					move.l a1,list_ptr(a6)
+				endi
+				move.l a0,next_ptr(a1)
+				move.l a1,prev_ptr(a0)
+				bra inserted
+			endi
+			move.l next_ptr(a0),d1		last record ?
+			break.s if <eq> 			yes
+			move.l d1,a0				next record
+		endr
+	else.s
+		repeat
+			move.l obj_ptr(a0),a2		A2 = ptr: object record
+			cmp.l this_zpos(a2),d0		insert here ?
+			blt insert_here 			yes
+			move.l next_ptr(a0),d1		last record ?
+			break.s if <eq> 			yes
+			move.l d1,a0				next record
+		endr
+	endi
+	move.l a1,next_ptr(a0)				add record
+	move.l a0,prev_ptr(a1)
+	clr.l next_ptr(a1)
+
+inserted:
+
+	move.l a5,obj_ptr(a1)				store object record pointer
+	lea draw_len(a1),a1 				advance next record pointer
+	move.l a1,next_record(a6)
+
+	ret 								return
+
+
+* *********************************
+* **							 **
+* ** DRAW_ALL - DRAW ALL OBJECTS **
+* **							 **
+* *********************************
+
+* Draws all the objects stored in the depth sorted draw list.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr draw_all,global
+
+	tst.l next_record(a6)				nothing to draw ?
+	ret <eq>							yes, return
+	move.l list_ptr(a6),a0				point to 1st record
+	repeat
+		move.l obj_ptr(a0),a5			draw the object
+		push.l a0
+		bsr draw_it
+		pop.l a0
+		move.l next_ptr(a0),a0			next record
+		move.l a0,d0
+	until <eq>
+
+	ret 								return
+
+
+* *******************************
+* **						   **
+* ** DRAW_IT - DRAW THE OBJECT **
+* **						   **
+* *******************************
+
+* Draws the current object on the screen. Called ONLY from DRAW_ALL. This
+* routine sifts out special objects (e.g. planets, explosions) and then
+* passes each surface to DRAW_SURFACE.
+
+* Entry: A5 = ptr: object record
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr draw_it
+
+	cmp #log_exploding,logic(a5)		exploding ?
+	beq draw_explosion					yes, draw explosion and return
+	move type(a5),d0					get object type
+	btst #point,flags(a5)				planet/sun ?
+	bne draw_point						yes
+	cmp #platlet,d0 					platlet ?
+	if <ne> then.s						no
+		cmp #4,scr_radius(a5)			screen radius < 4 ?
+		blo draw_point					yes, draw as a small sun
+	endi
+	bsr calc_yvector					calculate the y vector
+	lea node_list+nflags(a6),a0 		clear all node list flags
+	move no_nodes(a5),d7
+	loop 1
+		clr (a0)
+		lea node_len(a0),a0
+	next 1
+	lea lines_done(a6),a0				clear 'lines done' flags
+	loop 1,max_lines/2
+		clr (a0)+
+	next 1
+	move.l surfaces(a5),a4				point to 1st surface
+	move.w no_surfaces(a5),d7			loop for each surface
+	loop 1
+		push d7
+		tst hidden(a5)					perform hidden line removal ?
+		if <ne> then.s					yes
+			bsr back_surface			surface visible ?
+			if <mi> then.s				yes
+				addq.l #4,a4			skip pointer to next surface
+				bsr draw_surface		draw the surface
+			else.s
+				move.l (a4),a4			skip the surface
+			endi
+		else.s
+			bsr draw_surface			draw the surface
+		endi
+		pop d7							next surface
+	next 1
+
+	ret
+
+
+* *************************************************
+* **											 **
+* ** DRAW_SURFACE - DRAW A SURFACE OF THE OBJECT **
+* **											 **
+* *************************************************
+
+* Draws a surface of the object. A surface is made up of a list of panels,
+* each of which can be either solid (+1) or a line (-1). The end of the list
+* is specified by a zero byte.
+
+* Entry: A4 = ptr: surface data
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr draw_surface
+
+	repeat
+		tst (a4)+						no more panels ?
+		break.s if <eq> 				yes
+		if <pl> then.s					solid panel
+			bsr draw_panel
+		else.s							line
+			bsr draw_line
+		endi
+	endr
+
+	ret 								return
+
+
+* *************************************
+* **								 **
+* ** DRAW_PANEL - DRAW A SOLID PANEL **
+* **								 **
+* *************************************
+
+* Draws a panel on a surface.
+
+* Entry: A4 = ptr: surface data
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr draw_panel
+
+	move obj_colour(a5),d0				over-ride colour ?
+	if <mi> then.s						no
+		move (a4)+,d0					fetch the colour of the panel
+	else
+		addq.l #2,a4					skip colour
+	endi
+	asl #4,d0							index into panel colour table
+	lea panel_colours(pc),a0
+	lea (a0,d0),a0
+	move.l a0,colour_ptr(a6)			save pointer
+	moveq #-1,d5						clobber first node
+	move #+32767,poly_min_y(a6) 		initialise polygon limits
+	move #-32768,poly_max_y(a6)
+	clr clip_panel(a6)					assume no clipping
+	repeat
+		move (a4)+,d6					fetch next node #
+		break if <mi>					end of panel
+		move d6,d0						index to relant node record (a3)
+		asl #node_mult,d0
+		lea node_list(a6),a3
+		lea (a3,d0),a3
+		btst #screen,nflags(a3) 		screen coords calculated ?
+		if <eq> then					no
+			bset #world,nflags(a3)		world coords already calculated ?
+			if <ne> then.s				yes, therefore behind viewer
+				repeat					skip rest of list
+					tst (a4)+
+				until <mi>
+				ret 					return (ignore surface)
+			endi
+			move d6,d0					index into nodes table
+			asl #3,d0
+			move.l nodes(a5),a0
+			lea (a0,d0),a0
+			bsr transform				transform to local world coords
+			move.l w_view_ptr(a6),a0	swap coords for view
+			jsr (a0)
+			add this_xpos+2(a5),d0		convert to world coords
+			add this_ypos+2(a5),d1
+			add this_zpos+2(a5),d2
+			if <le> then.s				behind viewer
+				repeat					skip rest of list
+					tst (a4)+
+				until <mi>
+				ret 					return (ignore surface)
+			endi
+			moveq #9,d3 				convert to screen coords
+			ext.l d0
+			ext.l d1
+			asl.l d3,d0 				(xv = xw*512/z)
+			divs d2,d0
+			if <vs> then.s
+				tst.l d0
+				if <pl> then.s
+					move #maxint,d0
+				else.s
+					move #-maxint,d0
+				endi
+			endi
+			asl.l d3,d1 				(yv = yw*512/z)
+			divs d2,d1
+			if <vs> then.s
+				tst.l d1
+				if <pl> then.s
+					move #maxint,d1
+				else.s
+					move #-maxint,d1
+				endi
+			endi
+			movem d0/d1,scr_x(a3)		store in record
+			outcodes d0,d1				build outcodes byte
+			bset #screen,nflags(a3) 	screen coords have been calculated
+		else.s
+			move scr_y(a3),d1
+		endi
+		move.b nflags(a3),d0			set clip flag if required
+		and.b #15,d0
+		or.b d0,clip_panel(a6)
+		bclr #last,nflags(a3)			not last node
+		cmp poly_min_y(a6),d1			check for smallest y coord
+		if <lt> then.s
+			move d1,poly_min_y(a6)
+		endi
+		cmp poly_max_y(a6),d1			check for largest y coord
+		if <gt> then.s
+			move d1,poly_max_y(a6)
+			move.l a3,top_ptr(a6)
+		endi
+		tst.l d5						first node ?
+		if <mi> then.s					yes
+			move.l a3,d5				first node = this node
+		else.s
+			move.l a3,next(a2)			tie current and last nodes together
+			move.l a2,prev(a3)
+		endi
+		move.l a3,a2					last node = this node
+	endr
+	push.l a4							save data pointer
+	move.l d5,a4						point to 1st node
+	move.l a3,prev(a4)					link last and first nodes together
+	move.l a4,next(a3)
+	tst.b clip_panel(a6)				panel need clipping ?
+	if <eq> then.s						no
+		jsr solid_polygon				draw solid polygon
+	else.s
+		jsr c_solid_polygon 			draw clipped solid polygon
+	endi
+	pop.l a4							restore data pointer
+
+	ret 								return
+
+
+* **************************************
+* **								  **
+* ** DRAW_LINE - DRAW LINE ON SURFACE **
+* **								  **
+* **************************************
+
+* Draws a line on the surface, e.g. the gun on the cobra. Before drawing
+* the line, a check is made to see if the line has already been drawn.
+
+* Entry: A4 = ptr: surface data
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr draw_line
+
+	move (a4)+,d0						fetch line colour
+	asl #4,d0							index into panel colour table
+	lea panel_colours(pc),a0
+	lea (a0,d0),a0
+	move.l a0,colour_ptr(a6)			save pointer
+	move (a4)+,d0						line already drawn ?
+	lea lines_done(a6),a0
+	tst.b (a0,d0)
+	if <ne> then.s						yes
+		addq.l #6,a4					skip line data
+		ret 							return
+	endi
+	st (a0,d0)							flag line as drawn
+	moveq #-1,d5						clobber 1st node
+	repeat
+		move (a4)+,d6					fetch next node #
+		break if <mi>					end of line
+		move d6,d0						index to relavant node record (a3)
+		asl #node_mult,d0
+		lea node_list(a6),a3
+		lea (a3,d0),a3
+		btst #screen,nflags(a3) 		screen coords calculated ?
+		if <eq> then					no
+			bset #world,nflags(a3)		world coords already calculated ?
+			if <ne> then.s				yes, therefore behind viewer
+				repeat					skip rest of list
+					tst (a4)+
+				until <mi>
+				ret 					return (ignore line)
+			endi
+			move d6,d0					index into nodes table
+			asl #3,d0
+			move.l nodes(a5),a0
+			lea (a0,d0),a0
+			bsr transform				transform to local world coords
+			move.l w_view_ptr(a6),a0	swap coords for view
+			jsr (a0)
+			add this_xpos+2(a5),d0		convert to world coords
+			add this_ypos+2(a5),d1
+			add this_zpos+2(a5),d2
+			if <le> then.s				behind viewer
+				repeat					skip rest of list
+					tst (a4)+
+				until <mi>
+				ret 					return (ignore surface)
+			endi
+			moveq #9,d3 				convert to screen coords
+			ext.l d0
+			ext.l d1
+			asl.l d3,d0 				(xv = xw*512/z)
+			divs d2,d0
+			if <vs> then.s
+				tst.l d0
+				if <pl> then.s
+					move #maxint,d0
+				else.s
+					move #-maxint,d0
+				endi
+			endi
+			asl.l d3,d1 				(yv = yw*512/z)
+			divs d2,d1
+			if <vs> then.s
+				tst.l d1
+				if <pl> then.s
+					move #maxint,d1
+				else.s
+					move #-maxint,d1
+				endi
+			endi
+			movem d0/d1,scr_x(a3)		store in record
+			bset #screen,nflags(a3) 	screen coords have been calculated
+		endi
+		tst.l d5						first node ?
+		if <mi> then.s					yes
+			move.l a3,d5				first node = this node
+		endi
+	endr
+	push.l a4							save data pointer
+	move.l d5,a4						point to 1st node
+	movem scr_x(a4),d0/d1				fetch coords of line
+	movem scr_x(a3),d2/d3
+	jsr c_line							draw line
+	pop.l a4							restore data pointer
+
+	ret 								return
+
+
+* *********************************************
+* **										 **
+* ** VISIBILITY - CHECK IF OBJECT IS VISIBLE **
+* **										 **
+* *********************************************
+
+* Checks to see if the current object is visible by checking if the circle
+* around the object falls totally outside the window.
+
+* Entry: CENTRE_X/Y = x,y coords of centre
+* Exit:  D3 		= visibility flag, 0 = totally outside window
+
+* Regs:   ?
+* Subr:   ?
+
+	subr visibility
+
+	clr d3								assume not visible
+	move scr_radius(a5),d2				D2 = screen radius
+	move centre_x(a5),d4				calculate left limit of circle
+	sub d2,d4
+	cmp #x_max,d4						outside right edge ?
+	ret <gt>							yes, exit routine
+	add d2,d4							calculate right limit of circle
+	add d2,d4
+	cmp #x_min,d4						outside left edge ?
+	ret <lt>							yes, exit routine
+	move centre_y(a5),d4				calculate bottom limit of circle
+	sub d2,d4
+	cmp #y_max,d4						outside top edge ?
+	ret <gt>							yes, exit routine
+	add d2,d4							calculate top limit of circle
+	add d2,d4
+	cmp #y_min,d4						outside bottom edge ?
+	ret <lt>							yes, exit routine
+	dec d3								object visible (D3 = -1)
+
+	ret
+
+
+* **************************************
+* **								  **
+* ** VIEW_SWAP - SWAP COORDS FOR VIEW **
+* **								  **
+* **************************************
+
+* Four routines to flip the coords for the current view. Note - there are
+* two sets of routines, one for 16 bit and one for 32 bit.
+
+* Entry: (D0,D1,D2) = x,y,z coords
+* Exit:  (D0,D1,D2) = swapped x,y,z coords
+
+* Regs:  ?
+* Subr:  None
+
+	subr w_swap_front,global
+	subr l_swap_front,global
+
+	ret
+
+	subr w_swap_rear,global
+
+	neg.w d0							negate x and z
+	neg.w d2
+
+	ret
+
+	subr l_swap_rear,global
+
+	neg.l d0							negate x and z
+	neg.l d2
+
+	ret
+
+	subr w_swap_left,global
+
+	exg d0,d2							swap x and z
+	neg.w d2							negate z coord
+
+	ret
+
+	subr l_swap_left,global
+
+	exg d0,d2							swap x and z
+	neg.l d2							negate z coord
+
+	ret
+
+	subr w_swap_right,global
+
+	exg d0,d2							swap x and z
+	neg.w d0							negate x coord
+
+	ret
+
+	subr l_swap_right,global
+
+	exg d0,d2							swap x and z
+	neg.l d0							negate x coord
+
+	ret
+
+
+* *****************************************
+* **									 **
+* ** PERSPECTIVE - CALCULATE PERSPECTIVE **
+* **									 **
+* *****************************************
+
+* Performs the perspective calculation:
+
+*			xs = x*256/z
+
+* Entry: D0.L = coordinate (x or y)
+*		 D2.W = z coord (scaled down to 16 bits)
+*		 D3.W = amount to scale result
+* Exit:  D0.W = screen coord
+
+* Regs:  ?
+* Subr:  None
+
+	subr perspective
+
+	moveq #9,d1 						x*512/z
+	asl.l d1,d0
+	divs d2,d0
+	if <vc> then.s						no overflow
+		asr d3,d0						scale the result
+		rts
+	endi
+	tst.l d0							clamp at +/0 maxint
+	if <mi> then.s
+		move #-maxint,d0
+	else.s
+		move #maxint,d0
+	endi
+
+	ret
+
+
+* ******************************************
+* **									  **
+* ** TRANSFORM - TRANSFORM LOCAL TO WORLD **
+* **									  **
+* ******************************************
+
+* Transforms from local object coords to world coords using the matrix
+* transformation:
+
+*	xw = xl*xi + yl*yi + zl*zi
+*	yw = xl*xj + yl*yj + zl*zj
+*	zw = xl*xk + yl*yk + zl*zk
+
+* Entry: A0 = pointer to xl,yl,zl
+* Exit:  (D0,D1,D2) = x,y,z world coords
+*		 A0 = A0 + 6
+
+* Regs:  D0-D3/A0/A1 modified.
+* Subr:  None
+
+	subr transform,global
+
+	lea x_vector(a5),a1 				point to xi
+	move (a0)+,d3						fetch xl
+	move (a1)+,d0						xl*xi
+	muls d3,d0
+	move (a1)+,d1						xl*xj
+	muls d3,d1
+	move (a1)+,d2						xl*xk
+	muls d3,d2
+	move (a0)+,d3						fetch yl
+	move (a1)+,d4						yl*yi
+	muls d3,d4
+	add.l d4,d0
+	move (a1)+,d4						yl*yj
+	muls d3,d4
+	add.l d4,d1
+	move (a1)+,d4						yl*yk
+	muls d3,d4
+	add.l d4,d2
+	move (a0)+,d3						fetch zl
+	move (a1)+,d4						zl*zi
+	muls d3,d4
+	add.l d4,d0
+	asl.l #2,d0 						divide by 16384
+	swap d0
+	move (a1)+,d4						zl*zj
+	muls d3,d4
+	add.l d4,d1
+	asl.l #2,d1 						divide by 16384
+	swap d1
+	move (a1)+,d4						zl*zk
+	muls d3,d4
+	add.l d4,d2
+	asl.l #2,d2 						divide by 16384
+	swap d2
+
+	ret
+
+
+* **************************************************
+* **											  **
+* ** CHECK_SIGHTS - CHECK IF OBJECT WITHIN SIGHTS **
+* **											  **
+* **************************************************
+
+* Calculates the size of the circle surrounding the current object and checks
+* whether it falls within the laser sights. Also calculates the screen radius
+* of the object.
+
+* Entry: A5 = ptr: object record
+* Exit:  ?
+
+* Regs:  ?
+* Subr:  ?
+
+	subr check_sights
+
+	move.l obj_range(a5),d2 			fetch objects range
+	move.l d2,d3						determine amount to scale z coord to
+	add.l d3,d3 						fit into 15 bits
+	swap d3
+	add d3,d3
+	lea magnitude_table,a0
+	move (a0,d3),d3
+	lsr.l d3,d2 						scale the z coord
+	move.l this_xpos(a5),d0 			calculate view x coord of centre
+	bsr perspective
+	move d0,centre_x(a5)
+	move.l this_ypos(a5),d0 			calculate view y coord of centre
+	bsr perspective
+	move d0,centre_y(a5)
+	move obj_rad(a5),d0 				calculate screen radius of object
+	ext.l d0
+	bsr perspective
+	move d0,scr_radius(a5)
+	move hits_rad(a5),d0				calculate screen radius for hits
+	ext.l d0
+	bsr perspective
+	tst laser_type(a6)					laser on this view
+	ret <mi>							no, return
+	btst #invincible,flags(a5)			invincible ?
+	ret <ne>							yes, return
+	move centre_x(a5),d1				within sights along x axis ?
+	if <mi> then.s
+		neg d1
+	endi
+	cmp d0,d1
+	ret <hi>							no, return
+	move centre_y(a5),d1				within sights along y axis ?
+	if <mi> then.s
+		neg d1
+	endi
+	cmp d0,d1
+	ret <hi>							no, return
+	st in_sights(a6)					object within sights!
+	tst id_trigger(a6)					ID triggered ?
+	if <ne> then.s						yes
+		clr id_trigger(a6)				clear trigger
+		move.l text(a5),a0				display objects type
+		jsr disp_message
+		sfx locked
+	endi
+	cmp #1,missile_state(a6)			missile armed ?
+	ret <ne>							no, return
+	move.l a5,a4						missile already on intercept ?
+	jsr check_missile
+	tst d7
+	ret <pl>							yes, return
+	inc missile_state(a6)				flag target found
+	clr f_missiles(a6)					update display
+	move.l a5,target_ptr(a6)
+	sfx locked							object locked on target
+	lea text1(pc),a0					display message
+	jmp disp_message
+
+
+* ***************************************
+* **								   **
+* ** CALC_YVECTOR - CALCULATE Y VECTOR **
+* **								   **
+* ***************************************
+
+* Calculates the y vector by taking the cross product of the x and z
+* vectors.
+
+* Entry: None
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr calc_yvector,global
+
+	btst #yvector_ok,flags(a5)			y vector ok ?
+	if <eq> then.s						no
+		bset #yvector_ok,flags(a5)		it is now
+		cross y,i,z,j,x,k,x,j,z,k		cross product of x and z
+		cross y,j,x,i,z,k,z,i,x,k
+		cross y,k,z,i,x,j,x,i,z,j
+	endi
+
+	ret
+
+
+* *********************************
+* **							 **
+* ** FIX_UNIT - FIX UNIT VECTORS **
+* **							 **
+* *********************************
+
+* Fixes a vector to unit magnitude by dividing each component by the square
+* root of the sum of the squares.
+
+* Entry: A0 = ptr: vector(i)
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr fix_unit,global
+
+	move i(a0),d0						calculate the sum of the squares
+	muls d0,d0
+	move j(a0),d1
+	muls d1,d1
+	add.l d1,d0
+	move k(a0),d1
+	muls d1,d1
+	add.l d1,d0
+	jsr sqrt							take square root
+	move i(a0),d0						divide vector(i) by root
+	swap d0
+	clr d0
+	asr.l #2,d0
+	divs d2,d0
+	move d0,i(a0)
+	move j(a0),d0						divide vector(j) by root
+	swap d0
+	clr d0
+	asr.l #2,d0
+	divs d2,d0
+	move d0,j(a0)
+	move k(a0),d0						divide vector(k) by root
+	swap d0
+	clr d0
+	asr.l #2,d0
+	divs d2,d0
+	move d0,k(a0)
+
+	ret
+
+
+* ******************************************
+* **									  **
+* ** ORTHOGONAL - MAKE VECTORS ORTHOGONAL **
+* **									  **
+* ******************************************
+
+* Due to inaccuracies in the rotation calculation, the vectors tend to become
+* non-orthogonal, i.e. the move away from right angles and reduce in size.
+* This has the effect of distorting the shape and reducing it's size any many
+* rotations. The function of this routine is to, occasionally, fix the vectors
+* back to right angles and fix them to unit vectors. This is perform by:
+
+*	1 - Making sure the x and z vectors are unit vectors by ensuring the sum
+*		of the i,j,k components is unity.
+
+*	2 - Calculate the y vector by taking the cross product of the x and z
+*		vectors (CALC_YVECTOR)
+
+*	3 - Calculate the z vector ty taking the cross product of the x and y
+*		vectors.
+
+	subr orthogonal,global
+
+	cmp #max_rot,rot_count(a5)			enough rotations ?
+	if <hi> then.s						yes
+		clr rot_count(a5)				clear counter
+		lea x_vector(a5),a0 			make x vector a unit vector
+		bsr fix_unit
+		lea z_vector(a5),a0 			make z vector a unit vector
+		bsr fix_unit
+		bclr #yvector_ok,flags(a5)		calculate y vector (cross product)
+		bsr calc_yvector
+		cross z,i,x,j,y,k,y,j,x,k		calculate z vector (cross product)
+		cross z,j,y,i,x,k,x,i,y,k
+		cross z,k,x,i,y,j,y,i,x,j
+	endi
+
+	ret
+
+
+* *****************************************************
+* **												 **
+* ** BACK_SURFACE - PERFORM BACK SURFACE ELIMINATION **
+* **												 **
+* *****************************************************
+
+* Performs back surface elimination by calculating to dot product between
+* the surface vector and the line of sight vector. If the result is minus,
+* the surface is visible to the viewer.
+
+* Entry: A3 = ptr: surface vector (magnitude 1st)
+* Exit:  IF surface visible THEN
+*			Sign flag set (minus)
+*		 ELSE
+*			Sign flag reset (positive)
+*		 ENDIF
+
+* Regs:  ?
+* Subr:  ?
+
+	subr back_surface
+
+	move.l a4,a0						transform surface vector from local to
+	bsr transform						world coordinates
+	move.l w_view_ptr(a6),a1			swap for view
+	jsr (a1)
+	move.l a0,a4
+	move d0,d3							(D3,D4,D5) = surface vector
+	move d1,d4
+	move d2,d5
+	add this_xpos+2(a5),d0				add world coords of object
+	add this_ypos+2(a5),d1
+	add this_zpos+2(a5),d2
+	muls d3,d0							calculate dot product
+	muls d4,d1
+	muls d5,d2
+	add.l d1,d0
+	add.l d2,d0
+
+	ret
+
+
+* **** LOCAL DATA ****
+
+* Table of plane colour data for the panels.
+
+panel_colours:
+
+	dc.w $0000,$0000,$0000,$0000
+	dc.w $0000,$0000,$0000,$0000
+	dc.w $FFFF,$0000,$0000,$0000
+	dc.w $FFFF,$0000,$0000,$0000
+	dc.w $0000,$FFFF,$0000,$0000
+	dc.w $0000,$FFFF,$0000,$0000
+	dc.w $FFFF,$FFFF,$FFFF,$0000
+	dc.w $FFFF,$FFFF,$FFFF,$0000
+	dc.w $0000,$0000,$0000,$FFFF
+	dc.w $0000,$0000,$0000,$FFFF
+	dc.w $FFFF,$0000,$0000,$FFFF
+	dc.w $FFFF,$0000,$0000,$FFFF
+	dc.w $0000,$FFFF,$0000,$FFFF
+	dc.w $0000,$FFFF,$0000,$FFFF
+	dc.w $FFFF,$FFFF,$0000,$FFFF
+	dc.w $FFFF,$FFFF,$0000,$FFFF
+	dc.w $0000,$0000,$FFFF,$FFFF
+	dc.w $0000,$0000,$FFFF,$FFFF
+	dc.w $FFFF,$FFFF,$FFFF,$FFFF
+	dc.w $FFFF,$FFFF,$FFFF,$FFFF
+	dc.w $5555,$FFFF,$0000,$5555
+	dc.w $AAAA,$FFFF,$0000,$AAAA
+	dc.w $0000,$AAAA,$5555,$5555
+	dc.w $0000,$5555,$AAAA,$AAAA
+	dc.w $5555,$0000,$0000,$0000
+	dc.w $AAAA,$0000,$0000,$0000
+	dc.w $0000,$5555,$0000,$0000
+	dc.w $0000,$AAAA,$0000,$0000
+	dc.w $5555,$5555,$5555,$0000
+	dc.w $AAAA,$AAAA,$AAAA,$0000
+	dc.w $0000,$0000,$0000,$5555
+	dc.w $0000,$0000,$0000,$AAAA
+	dc.w $5555,$0000,$0000,$5555
+	dc.w $AAAA,$0000,$0000,$AAAA
+	dc.w $0000,$5555,$0000,$5555
+	dc.w $0000,$AAAA,$0000,$AAAA
+	dc.w $5555,$5555,$0000,$5555
+	dc.w $AAAA,$AAAA,$0000,$AAAA
+	dc.w $0000,$0000,$5555,$5555
+	dc.w $0000,$0000,$AAAA,$AAAA
+	dc.w $5555,$5555,$5555,$5555
+	dc.w $AAAA,$AAAA,$AAAA,$AAAA
+	dc.w $FFFF,$5555,$0000,$FFFF
+	dc.w $FFFF,$AAAA,$0000,$FFFF
+	dc.w $AAAA,$0000,$5555,$FFFF
+	dc.w $5555,$0000,$AAAA,$FFFF
+	dc.w $FFFF,$AAAA,$AAAA,$0000
+	dc.w $FFFF,$5555,$5555,$0000
+	dc.w $AAAA,$FFFF,$AAAA,$0000
+	dc.w $5555,$FFFF,$5555,$0000
+	dc.w $FFFF,$0000,$FFFF,$0000
+	dc.w $FFFF,$0000,$FFFF,$0000
+	dc.w $FFFF,$5555,$5555,$AAAA
+	dc.w $FFFF,$AAAA,$AAAA,$5555
+	dc.w $0000,$FFFF,$FFFF,$0000
+	dc.w $0000,$FFFF,$FFFF,$0000
+	dc.w $5555,$FFFF,$5555,$AAAA
+	dc.w $AAAA,$FFFF,$AAAA,$5555
+	dc.w $FFFF,$FFFF,$AAAA,$5555
+	dc.w $FFFF,$FFFF,$5555,$AAAA
+	dc.w $5555,$5555,$FFFF,$AAAA
+	dc.w $AAAA,$AAAA,$FFFF,$5555
+	dc.w $0000,$FFFF,$FFFF,$FFFF
+	dc.w $0000,$FFFF,$FFFF,$FFFF
+	dc.w $FFFF,$FFFF,$FFFF,$AAAA
+	dc.w $FFFF,$FFFF,$FFFF,$5555
+	dc.w $5555,$5555,$0000,$FFFF
+	dc.w $AAAA,$AAAA,$0000,$FFFF
+	dc.w $0000,$0000,$AAAA,$FFFF
+	dc.w $0000,$0000,$5555,$FFFF
+	dc.w $FFFF,$0000,$0000,$5555
+	dc.w $FFFF,$0000,$0000,$AAAA
+	dc.w $5555,$AAAA,$0000,$5555
+	dc.w $AAAA,$5555,$0000,$AAAA
+	dc.w $0000,$0000,$0000,$0000
+	dc.w $0000,$0000,$0000,$0000
+	dc.w $AAAA,$5555,$0000,$FFFF
+	dc.w $5555,$AAAA,$0000,$FFFF
+	dc.w $FFFF,$5555,$0000,$FFFF
+	dc.w $FFFF,$AAAA,$0000,$FFFF
+	dc.w $AAAA,$0000,$5555,$FFFF
+	dc.w $5555,$0000,$AAAA,$FFFF
+	dc.w $FFFF,$AAAA,$AAAA,$FFFF
+	dc.w $FFFF,$5555,$5555,$FFFF
+	dc.w $5555,$FFFF,$0000,$FFFF
+	dc.w $AAAA,$FFFF,$0000,$FFFF
+	dc.w $0000,$AAAA,$5555,$FFFF
+	dc.w $0000,$5555,$AAAA,$FFFF
+	dc.w $AAAA,$5555,$0000,$5555
+	dc.w $5555,$AAAA,$0000,$AAAA
+	dc.w $0000,$FFFF,$0000,$5555
+	dc.w $0000,$FFFF,$0000,$AAAA
+	dc.w $0000,$0000,$AAAA,$0000
+	dc.w $0000,$0000,$5555,$0000
+	dc.w $0000,$0000,$FFFF,$0000
+	dc.w $0000,$0000,$FFFF,$0000
+	dc.w $AAAA,$AAAA,$FFFF,$AAAA
+	dc.w $5555,$5555,$FFFF,$5555
+	dc.w $AAAA,$0000,$AAAA,$0000
+	dc.w $5555,$0000,$5555,$0000
+	dc.w $AAAA,$FFFF,$AAAA,$FFFF
+	dc.w $5555,$FFFF,$5555,$FFFF
+	dc.w $AAAA,$AAAA,$5555,$FFFF
+	dc.w $5555,$5555,$AAAA,$FFFF
+	dc.w $AAAA,$0000,$AAAA,$0000
+	dc.w $5555,$0000,$5555,$0000
+	dc.w $FFFF,$0000,$FFFF,$0000
+	dc.w $FFFF,$0000,$FFFF,$0000
+	dc.w $FFFF,$AAAA,$FFFF,$AAAA
+	dc.w $FFFF,$5555,$FFFF,$5555
+	dc.w $0000,$AAAA,$AAAA,$0000
+	dc.w $0000,$5555,$5555,$0000
+	dc.w $AAAA,$AAAA,$0000,$0000
+	dc.w $5555,$5555,$0000,$0000
+	dc.w $0000,$FFFF,$FFFF,$0000
+	dc.w $0000,$FFFF,$FFFF,$0000
+	dc.w $FFFF,$FFFF,$0000,$0000
+	dc.w $FFFF,$FFFF,$0000,$0000
+	dc.w $FFFF,$FFFF,$5555,$5555
+	dc.w $FFFF,$FFFF,$AAAA,$AAAA
+
+* Text messages.
+
+text1:	db 'Missile Locked',0

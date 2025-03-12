@@ -1,0 +1,2 @@
+
+void	Radieren(void);

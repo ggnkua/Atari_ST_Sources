@@ -1,0 +1,286 @@
+*****************************************
+*	THE NIBBLE SCROLL!              *
+*	FEATURING A LOVELY SINE CURVE!  *
+* CODING BY MANIKIN. CONCEPT BY XXX     *
+*****************************************
+
+		CLR.L -(SP)		SET SUPERVISOR
+		MOVE.W #$20,-(SP)
+		TRAP #1
+		ADD.L #6,SP
+		MOVE.L D0,OLDSSP	SAVE OLD STACK
+		MOVE.L #OURSTACK,A7	PUT IN OUR OWN
+		MOVE.L #STRINGOFF,-(SP)
+		MOVE.W #1,-(SP)
+		MOVE.W #25,-(SP)
+		TRAP #14
+		ADD.L #8,SP
+		MOVE.L $118,OLDKEY
+		BCLR #6,$FFFA09			INSTALL NEW KEY VECTOR
+		MOVE.L #KEYVECTOR,$118
+		BSET #6,$FFFA09
+		MOVE.L $FF8200,OLDPHYS
+		MOVE.L $70,OLDVBL
+		MOVE.L #VBL,$70		ADD OUR VBL ROUTINE
+		MOVE.L #$70000,A0	CLEAR TWO SCREENS 
+		MOVE.L #16383,D0
+		MOVEQ #0,D1
+CLEARLOOP	MOVE.L D1,(A0)+
+		DBF D0,CLEARLOOP
+SCROLLOOP
+		MOVE.L #$70000,LOGBASE	SET PHYS
+		MOVE.L #$78000,PHYSBASE	SET LOG
+		CLR.W $FF8240
+		MOVE.L PHYSBASE,D0	SET PHYSBASE
+		LSR.W #8,D0
+		MOVE.L D0,$FF8200
+		MOVE.W VBLPAUSE,D0	WAIT FOR VSYNC
+LOOP		CMP.W VBLPAUSE,D0
+		BEQ LOOP
+		MOVE.W #$7,$FF8240
+		BSR GOSCROLL		DRAW SCROLL
+
+		MOVE.L #$78000,LOGBASE	SET PHYS
+		MOVE.L #$70000,PHYSBASE	SET LOG
+		CLR.W $FF8240
+		MOVE.L PHYSBASE,D0	SET PHYSBASE
+		LSR.W #8,D0	
+		MOVE.L D0,$FF8200
+		MOVE.W VBLPAUSE,D0	WAIT FOR VSYNC
+LOOP1		CMP.W VBLPAUSE,D0
+		BEQ LOOP1
+		MOVE.W #$7,$FF8240
+		BSR GOSCROLL		DRAW SCROLL
+		CMP.B #$39,KBUFF
+		BEQ.S EXIT
+		BRA SCROLLOOP
+				
+EXIT		MOVE.L OLDVBL,$70
+		BCLR #6,$FFFA09			INSTALL NEW KEY VECTOR
+		MOVE.L OLDKEY,$118
+		BSET #6,$FFFA09
+		MOVE.L OLDPHYS,$FF8200
+		MOVE.L #STRINGON,-(SP)
+		MOVE.W #1,-(SP)
+		MOVE.W #25,-(SP)
+		TRAP #14
+		ADD.L #8,SP
+		MOVE.L OLDSSP,-(SP)
+		MOVE.W #$20,-(SP)
+		TRAP #1
+		ADD.L #6,SP
+		CLR.W -(SP)
+		TRAP #1
+
+GOSCROLL
+		SUB.W #1,COUNT1
+		BNE DOSCROLL
+		move.w #16,COUNT1	new letter routine for the 
+MOVLET		move.l STORE,a0		crystal scroll
+		MOVEQ #0,D0
+		MOVE.B (A0)+,D0		GET LETTER
+		CMP.B #$FF,D0		TEST FOR END
+		BEQ WRAP
+		CMP.B #$FE,D0
+		BEQ WAVEFORM
+		SUB.B #$20,D0		ADJUST FOR OUR FONT
+		MOVE.L  A0,STORE
+		LSL.W #6,D0
+		LEA FONT,A0
+		ADD.L D0,A0
+		LEA DATA,A1
+		MOVEM.L (A0)+,D0-D7	MOVE LETTERS TO STORE
+		MOVEM.L D0-D7,(A1)
+		MOVEM.L (A0)+,D0-D7
+		MOVEM.L D0-D7,32(A1)
+
+DOSCROLL
+		MOVE.W #14,D0		16 LINES HIGH
+		LEA DATA(PC),A1		GET LETTER STORE
+		LEA SCROLLBUFFER(PC),A0	GET SCREEN POS
+DOSY1           
+		LSL.W  2(A1)
+                ROXL.W  (A1)   ; the letters are 32 pixels wide
+                ROXL.W  570(A0) ; scroll the screen
+                ROXL.W  540(A0) 
+                ROXL.W  510(A0)
+                ROXL.W  480(A0)
+                ROXL.W  450(A0)
+                ROXL.W  420(A0)
+                ROXL.W  390(A0)
+                ROXL.W  360(A0)
+                ROXL.W  330(A0)
+                ROXL.W  300(A0)
+                ROXL.W  270(A0)
+                ROXL.W  240(A0)
+                ROXL.W  210(A0)
+                ROXL.W  180(A0)
+                ROXL.W  150(A0)
+                ROXL.W  120(A0)
+                ROXL.W  90(A0)
+                ROXL.W  60(A0)
+                ROXL.W  30(A0)
+                ROXL.W  (A0)
+		LSL.W  2(A1)
+                ROXL.W  (A1)   ; the letters are 32 pixels wide
+                ROXL.W  570(A0) ; scroll the screen
+                ROXL.W  540(A0) 
+                ROXL.W  510(A0)
+                ROXL.W  480(A0)
+                ROXL.W  450(A0)
+                ROXL.W  420(A0)
+                ROXL.W  390(A0)
+                ROXL.W  360(A0)
+                ROXL.W  330(A0)
+                ROXL.W  300(A0)
+                ROXL.W  270(A0)
+                ROXL.W  240(A0)
+                ROXL.W  210(A0)
+                ROXL.W  180(A0)
+                ROXL.W  150(A0)
+                ROXL.W  120(A0)
+                ROXL.W  90(A0)
+                ROXL.W  60(A0)
+                ROXL.W  30(A0)
+                ROXL.W  (A0)
+		LEA 4(A1),A1
+		LEA 2(A0),A0
+                DBRA    D0,DOSY1 ; do the next screen line
+
+***********************
+* NIBBLING ROUTINE STARTS
+***********************
+
+		ADD.L #4,TABPOS		ADD ONE TO THE CURVE
+		MOVE.L TABPOS,D0
+		CMP.L CURTABEND,D0	END OF SINE TABLE
+		BNE.S LETSGO		NO THEN GO 
+		MOVE.L CURTAB,TABPOS	YES PUT IT BACK IN
+LETSGO
+		MOVE.L TABPOS,A0	GET TABLE
+		LEA SCROLLBUFFER,A1	SCROLLBUFFER
+		MOVE.L LOGBASE,DRAWPOS	SCREEN ADDRESS
+		ADD.L #$3E80,DRAWPOS	
+		MOVE.L DRAWPOS(PC),A4	GET SCREEN POS
+		MOVEQ #19,D7		DO 20 WORDS
+NIBLOOP1	
+		MOVE.L A4,A2
+		MOVE.L A2,A3
+		LEA 8(A4),A4
+		MOVE.L (A0)+,D4		GET TABLE ADDITIONS
+		ADD.W D4,A3		ADD THEM TO THE 4 REGS
+		SWAP D4
+		ADD.W D4,A2
+
+		MOVEQ #0,D5
+		MOVE.W D5,-800(A2)
+		MOVE.W D5,-640(A2)
+		MOVE.W D5,-480(A2)
+		MOVE.W D5,-320(A2)
+		MOVE.W D5,-160(A2)
+		MOVE.W D5,(A2)
+
+		MOVE.W D5,(A3)
+		MOVE.W D5,160(A3)
+		MOVE.W D5,2560(A3)
+		MOVE.W D5,2400(A3)
+
+		MOVE.W D5,2560(A2)
+		MOVE.W D5,2720(A2)
+		MOVE.W D5,2880(A2)
+		MOVE.W D5,3040(A2)
+		MOVE.W D5,3200(A2)
+		MOVE.W D5,3360(A2)
+
+******************************
+* TO IMPROVE EFFICIENCY A LONG ROUTINE IS USED
+******************************
+
+ADDIT		SET 160
+		REPT 15
+		MOVE.B (A1)+,ADDIT(A2)
+		MOVE.B (A1)+,ADDIT+1(A3)
+ADDIT		SET ADDIT+160
+		ENDR
+
+		DBF D7,NIBLOOP1
+		RTS
+
+
+WRAP 		MOVE.B #$20,D0		PUT SCROLL IN AGAIN
+		LEA SCROLLINE,A0
+		MOVE.L A0,STORE
+		BRA MOVLET
+WAVEFORM
+		MOVEQ #0,D0
+		MOVE.B (A0)+,D0
+HEG		MULU #640,D0
+		LEA TABLE,A1
+		ADD.L D0,A1
+		MOVE.L A1,CURTAB
+		MOVE.L A1,TABPOS
+		LEA 320(A1),A1
+		MOVE.L A1,CURTABEND
+		MOVE.L A0,STORE
+		BRA MOVLET
+
+*****************************
+*	TABLE
+***************************
+
+TABPOS	DC.L TABLE
+CURTAB	DC.L TABLE
+CURTABEND	DC.L TABLEEND
+
+TABLE	
+	INCBIN "\SCROLL\NIBBLE.DAT"		CONSISTS OF 160 WORDS *160
+TABLEEND EQU TABLE+320
+TABLE1	
+	INCBIN "\SCROLL\NIBBLE1.DAT"		CONSISTS OF 160 WORDS *160
+TABLEEND1 EQU TABLE1+320
+
+**************************
+* VARIOUS MFP ROUTINES
+*************************
+
+VBL	ADDQ.W #1,VBLPAUSE
+	RTE
+
+KEYVECTOR			*THE NEW KEY VECTOR
+	MOVE.L D2,-(SP)
+	MOVEQ #0,D2
+	MOVE.B $FFFC00,D2
+	BTST #7,D2
+	BEQ	VECTOREND
+	MOVE.B $FFFC02,D2
+	MOVE.B D2,KBUFF
+	BCLR #6,$FFFA11
+VECTOREND	MOVE.L (SP)+,D2
+	RTE
+KBUFF	DS.W 1
+
+****************************
+* VARIABLES AND SHIT
+****************************
+
+OLDPHYS		DC.L 0
+LOGBASE		DC.L 0
+PHYSBASE	DC.L 0
+VBLPAUSE	DC.W 1
+DRAWPOS		DC.L $70000
+OLDSSP		DC.L 0
+OLDVBL		DC.L 0
+OLDKEY 		DC.L 0
+		DS.L 100
+OURSTACK	DC.L 0
+STRINGOFF		DC.B $12,$1A
+STRINGON	DC.B $8,$16
+STORE		DC.L SCROLLINE
+COUNT1		DC.W 1
+SCROLLINE	DC.B $FE,0,"THIS IS THE NEW ALL SINGING          ",$FE,1,"ALL DANCING......          ",$FE,0," LOST BOYS SCROLLING LINE          ",$FE,$1,"PROGRAMMED BY MANIKIN ON 19-04-89....          ",$FE,1,"GOOD BYE ALL!!!!!           "
+
+		DC.B $FF
+	EVEN
+FONT	INCBIN "\SCROLL\lost16.fon"
+DATA
+SCROLLBUFFER	EQU	DATA+1000

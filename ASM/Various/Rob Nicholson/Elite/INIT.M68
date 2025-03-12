@@ -1,0 +1,906 @@
+* @@@@@@ @@   @@  @@@@@@  @@@@@@
+*	@@	 @@@  @@	@@	  @ @@ @
+*	@@	 @@@@ @@	@@		@@
+*	@@	 @@ @@@@	@@		@@
+*	@@	 @@  @@@	@@		@@
+*	@@	 @@   @@	@@		@@
+* @@@@@@ @@   @@  @@@@@@   @@@@
+
+* Initialisation routines.
+
+* Atari ST Version 1.0 16th March 1988 Copyright (c) 1988 Mr. Micro Ltd.
+* Designed and coded by Rob Nicholson.
+
+	include macros
+	include bitlist
+
+	xref vars,other_screen,amstrad_8x8,vblank,critical_error,texture
+	xref key_midi_irq,display_char,default_game,find_bitmap,novella
+	xref init_dust,traps,rand,monst,checksum,logo
+	xref dust_cos,dust_sin,cockpit,textscr,obj_data,bitmaps
+	xref hyper_buffer,quiet,blank_screen
+
+* ---- LOCAL CONSTANTS ----
+
+hblank_vect:	equ 26*4				hblank exception vector
+mfp_vect:		equ 30*4				MFP 68901 exception vector
+key_vect:		equ (64+6)*4			keyboard/midi exception vector
+normal_click:	equ 10					normal double click rate (1/5th sec)
+
+* ---- OBJECT DATA RECORD ----
+
+	offset 0
+
+d_nodes:			ds.l 1				ptr: node data
+d_surfaces: 		ds.l 1				ptr: surface data
+d_text: 			ds.l 1				ptr: text data
+d_no_surfaces:		ds.w 1				number of surfaces
+d_no_nodes: 		ds.w 1				number of nodes
+d_hits_rad: 		ds.w 1				laser/missile hits radius
+d_energy_max:		ds.w 1				max energy of object
+d_vel_max:			ds.w 1				max energy of object
+d_gun_node: 		ds.w 1				node for gun fire
+d_hidden:			ds.w 1				flag: hidden lines used
+
+* ---- LOCAL STORAGE ----
+
+	vars init
+
+file_size:		ds.l 1					file size in bytes
+first:			ds.w 1					flag: first item
+radar1_buffer:	ds.b 2*5*8
+radar2_buffer:	ds.b 2*5*8
+bytes_left: 	ds.w 1					bytes left in i/o buffer
+io_ptr: 		ds.l 1					ptr: next byte from input buffer
+
+	end_vars init
+
+* ---- LOCAL MACROS ----
+
+load_file: macro
+
+	lea \1,a5
+	lea \2,a0
+	bsr read_file
+
+	endm
+
+* SIZE name
+
+size: macro
+
+	ifnc '\1','INIT'
+		xref.s \1_used
+	endc
+	xdef \1_vars,\1_vsize
+	dc.w \1_vsize*2,\1_used
+	dc.b '\1',0
+	even
+
+	endm
+
+	module init
+
+
+* *************************************
+* **								 **
+* ** INITIALISE - INITIALISE PROGRAM **
+* **								 **
+* *************************************
+
+* Initialises the whole program when 1st run. Note - the variable area
+* can't be cleared immediatley (as usually required) as it overlaps with
+* the default system screen ($78000) on the 520ST.
+
+* Entry:  Must be called from ELITE
+* Exit:   None (well lots really)
+
+* Regs:   All corrupt
+* Subr:   ?
+
+	global initialise
+
+	lea vars,a6 						clear storage
+	loop 1,var_size
+		clr.b 0(a6,d7)
+	next 1
+	pop.l a0							fetch return address
+	lea stack_top(a6),sp				switch to program stack
+	push.l a0							push return address back
+	lea novella-4813,a0 				return via Novella routine
+	lea 4813(a0),a0
+	push.l a0
+	lea var_size(a6),a0 				set top of memory pointer
+	move.l a0,top_memory(a6)
+	lea traps,a0						patch bus and address error traps
+	move.l #$008,a1
+	loop 1,2
+		move.l a0,(a1)+
+		addq.l #4,a0
+	next 1
+	bclr #0,conterm 					disable keyclick
+	clr.l -(sp) 						disable cursor
+	ext_bios cursconf,6
+	load_file cockpit,cockpit_file		load data files
+	load_file textscr,textscr_file
+	load_file texture,texture_file
+	load_file obj_data,obj_data_file
+	bsr read_bitmaps
+	load_file dust_cos,dust_cos_file
+	load_file dust_sin,dust_sin_file
+	load_file logo,logo_file
+	bsr relocate						relocate object data
+	bsr check_vars						check variable areas
+	st stop_cycle(a6)					don't cycle colours yet
+	move.l vblqueue,a0					find slot in VBLANK list
+	repeat
+		tst.l (a0)+
+	until <eq>
+	lea -4(a0),a0
+	move.l a0,vblank_ptr(a6)			save pointer to VBLANK list
+	move.l #vblank,(a0) 				insert our VBLANK routine
+	move.l key_vect,sys_key(a6) 		install keyboard exception
+	move.l #key_midi_irq,key_vect
+	push.l #critical_error				patch our critical error handler
+	push #$101
+	bios setexec,8
+	ext_bios physbase,2 				set pointers to current screen
+	move.l d0,screen1_ptr(a6)
+	move.l d0,scr_base(a6)
+	move.l #other_screen,d1 			set pointers to other screen
+	move.l d1,screen2_ptr(a6)
+	eor.l d1,d0 						calculate eor for flip screen
+	move.l d0,flip_screen(a6)
+	let.l amstrad_8x8-256,charset_ptr	use amstrad 8x8 character set
+	let.l display_char,print_ptr		direct print_char to display_char
+	jsr default_game					setup default game
+	moveq #1,d0 						initialise variables
+	move d0,csr_clk(a6)
+	move d0,csr_speed(a6)
+	move d0,tempo(a6)
+	move d0,recharge_count(a6)
+	move d0,fast_ticker(a6)
+	move d0,pulse_ctr(a6)
+	move d0,reduce_ctr(a6)
+	move d0,count_jiffy(a6)
+	move d0,flare_count(a6)
+	move #32,pad_char(a6)
+	move #normal_click,click_rate(a6)
+	lea checksum-5678,a0				calculate checksum
+	jsr 5678(a0)
+	lea range_spr(a6),a4				initialise range circle sprite
+	bset #clip_me,sp_flags(a4)
+	bset #dont_save,sp_flags(a4)
+	move #text_left,clip_left(a4)
+	move #text_right,clip_right(a4)
+	move #text_top,clip_top(a4)
+	move #text_bottom,clip_bottom(a4)
+	lea cursor_spr(a6),a4				initialise cursor sprite
+	bset #clip_me,sp_flags(a4)
+	move #0,clip_left(a4)
+	move #319,clip_right(a4)
+	move #0,clip_top(a4)
+	move #199,clip_bottom(a4)
+	move #150,sp_xpos(a4)
+	move #92,sp_ypos(a4)
+	lea hyper_spr(a6),a4				initialise hyperspace cursor
+	bset #clip_me,sp_flags(a4)
+	move #text_left,clip_left(a4)
+	move #text_right,clip_right(a4)
+	move #text_top,clip_top(a4)
+	move #text_bottom,clip_bottom(a4)
+	moveq #bit_cursors+3,d0
+	jsr find_bitmap
+	move.l a0,data_ptr(a4)
+	move.l #hyper_buffer,buffer_ptr(a4)
+	lea missile_spr(a6),a4				initialise missile sprite
+	bset #dont_save,sp_flags(a4)
+	lea radar1_spr(a6),a4				initialise radar sprites
+	lea radar1_buffer(a6),a0
+	move.l a0,buffer_ptr(a4)
+	lea radar2_spr(a6),a4
+	lea radar2_buffer(a6),a0
+	move.l a0,buffer_ptr(a4)
+	ext_bios random24,2 				initialise random number seed
+	move.l d0,random_seed(a6)
+	jsr init_dust						initialise dust clouds
+*	 move.l #trace_it,$24
+*	 or #$8000,sr
+
+	ret
+
+
+* ***************************************
+* **								   **
+* ** READ_FILE - READ FILE INTO MEMORY **
+* **								   **
+* ***************************************
+
+* Reads a file into memory from either the COM-LINK or the disk.
+
+* Entry: A0 = ptr: path \1 of file (only required if from disk)
+*		 A5 = ptr: address to load file
+* Exit:  IF D0.L negative THEN
+*			Error during load D0.L = -error
+*		 ELSE
+*			D0.L = no. bytes read from file
+*		 ENDIF
+
+* Regs:  ?
+* Subr:  ?
+
+	subr read_file
+
+	ifeq com_link						from disk
+		clr -(sp)						attempt to open file
+		push.l a0
+		bdos f_open,8
+		tst.l d0						error ?
+		if <pl> then.s					no
+			move d0,d7					D7 = file handle
+			push.l a5					attempt to read all of file
+			push.l #$7fffffff
+			push d7
+			bdos f_read,12
+			push.l d0					save error/no. bytes read
+			push d7 					close file
+			bdos f_close,4
+			pop.l d0					fetch error/no. bytes read
+		endi
+	endc
+	ifne com_link						from com-link
+		repeat							ignore file name from COM-LINK
+			bsr rx_byte
+			tst.b d0
+		until <eq>
+		lea file_size(a6),a0			receive file size
+		loop 1,4
+			bsr rx_byte
+			move.b d0,(a0)+
+		next 1
+		clr d6							clear checksum
+		move.l file_size(a6),d7 		receive file
+		move.l a5,a1
+		repeat
+			bsr rx_byte
+			move.b d0,(a1)+
+			add.b d0,d6
+			subq.l #1,d7
+		until <eq>
+		bsr rx_byte 					receive checksum
+		if.b d0 <ne> d6 then.s			if bad checksum
+			flash
+		endi
+		move.l file_size(a6),d0 		fetch file size
+	endc
+
+	ret
+
+
+* ******************************************
+* **									  **
+* ** READ_BITMAPS - READ AND MASK BITMAPS **
+* **									  **
+* ******************************************
+
+* Reads bitmaps in from disk and builds the masks as it goes along.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr read_bitmaps
+
+	ifne com_link						from com-link
+		repeat							ignore file name
+			bsr rx_byte
+			tst d0
+		until <eq>
+		lea file_size(a6),a0			receive file size
+		loop 1,4
+			bsr rx_byte
+			move.b d0,(a0)+
+		next 1
+		move.l file_size(a6),d5 		D5 = no. bytes in file
+		clr d6							clear checksum
+		lea bitmaps,a0					read table of pointers
+		loop 1,bit_last*4
+			bsr rx_byte
+			move.b d0,(a0)+
+			add.b d0,d6
+			dec.l d5
+		next 1
+		loop 1,bit_last 				loop for each bitmap
+			push d7
+			move.l file_size(a6),d0 	calculate offset into file
+			sub.l d5,d0
+			lea bitmaps,a1				search for reference to offset in
+			repeat						the jump table
+				cmp.l (a1)+,d0
+			until <eq>
+			move.l a0,-4(a1)			store down the real address
+			bsr rx_word 				read and store width
+			move d0,d3
+			move d3,(a0)+
+			bsr rx_word 				read and store depth
+			move d0,d4
+			move d4,(a0)+
+			dec d3						adjust width and depth for DBRA
+			dec d4
+			loop 2						loop for each pixel line
+				push d3 				save width
+				loop 3					loop for each word across
+					clr d2				clear mask
+					addq.l #2,a0		skip word for mask
+					loop 4,4			loop for each plane (x4)
+						bsr rx_word 	read a word
+						move d0,(a0)+
+						or d0,d2		OR with mask
+					next 4				next plane
+					not d2				store mask
+					move d2,-10(a0)
+				next 3,d3				next word across
+				pop d3					next pixel line
+			next 2,d4
+			pop d7						next bitmap
+		next 1
+		tst.l d5						skip any remaining bytes
+		if <ne> then.s
+			repeat
+				bsr rx_byte
+				add.b d0,d6
+				dec.l d5
+			until <eq>
+		endi
+		bsr rx_byte 					check checksum
+		cmp.b d0,d6
+		if <ne> then.s
+			flash
+		endi
+	endc
+	ifeq com_link						from com-link
+		clr -(sp)						open file
+		pea bitmaps_file(pc)
+		bdos f_open,8
+		move d0,d6						D6 = file handle
+		clr bytes_left(a6)				buffer is empty
+		moveq #0,d5 					byte offset = 0
+		lea bitmaps,a0					read table of pointers
+		loop 1,bit_last*4
+			bsr read_byte
+			move.b d0,(a0)+
+			inc.l d5
+		next 1
+		loop 1,bit_last 				loop for each bitmap
+			push d7
+			lea bitmaps,a1				search for reference to offset in
+			repeat						the jump table
+				cmp.l (a1)+,d5
+			until <eq>
+			move.l a0,-4(a1)			store down the real address
+			bsr read_word				read and store width
+			move d0,d3
+			move d3,(a0)+
+			bsr read_word				read and store depth
+			move d0,d4
+			move d4,(a0)+
+			dec d3						adjust width and depth for DBRA
+			dec d4
+			loop 2						loop for each pixel line
+				push d3 				save width
+				loop 3					loop for each word across
+					clr d2				clear mask
+					addq.l #2,a0		skip word for mask
+					loop 4,4			loop for each plane (x4)
+						bsr read_word	read a word
+						move d0,(a0)+
+						or d0,d2		OR with mask
+					next 4				next plane
+					not d2				store mask
+					move d2,-10(a0)
+				next 3,d3				next word across
+				pop d3					next pixel line
+			next 2,d4
+			pop d7						next bitmap
+		next 1
+		push d6 						close file
+		bdos f_close,4
+	endc
+
+	ret
+
+
+* ****************************
+* **						**
+* ** RX_BYTE - RECEIVE BYTE **
+* **						**
+* ****************************
+
+* Receives a byte from the IBM via the COM-LINK.
+
+* Entry: None
+* Exit:  D0 = byte received
+
+* Regs:  D0 and D1 corrupt.
+* Subr:  None
+
+	subr rx_byte
+
+	repeat									wait for strobe
+		btst #0,mfp_io
+	until <ne>
+	move sr,-(sp)							save status register
+	or #$700,sr 							disable interrupts
+	clr d0									read byte
+	move.b #15,psg_select
+	move.b psg_read,d0
+	move.b #14,psg_select					acknowledge
+	move.b psg_read,d1
+	bclr #5,d1
+	move.b d1,psg_write
+	repeat									wait for no strobe
+		btst #0,mfp_io
+	until <eq>
+	bset #5,d1								clear ACK
+	move.b d1,psg_write
+	move (sp)+,sr							restore status register
+
+	ret
+
+
+* ******************************
+* **						  **
+* ** RX_WORD - RECEIVE A WORD **
+* **						  **
+* ******************************
+
+* Receives a 68000 word from the com-link and decrements the byte counter.
+* Adds the bytes to chec checksum.
+
+* Entry: D5.L = byte counter
+*		 D6.B = checksum
+* Exit:  D0.B = byte
+*		 D5.L = D5.L-2
+
+* Regs: D0/D1/D5 corrupt.
+* Subr: ?
+
+	subr rx_word
+
+	bsr rx_byte 						receive high byte
+	add.b d0,d6
+	asl #8,d0
+	push d0
+	bsr rx_byte 						receive low byte
+	add.b d0,d6
+	or (sp)+,d0 						combine bytes
+	subq.l #2,d5						two bytes received
+
+	ret 								return
+
+
+* ***************************************
+* **								   **
+* ** READ_BYTE - READ A BYTE FROM DISK **
+* **								   **
+* ***************************************
+
+* Reads a byte from the current file. Uses screen #2 as a disk buffer.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr read_byte
+
+	tst bytes_left(a6)					anything in the buffer ?
+	if <eq> then.s						no
+		save_all						fill buffer
+		pea other_screen
+		push.l #32768
+		push.w d6
+		bdos f_read,12
+		move d0,bytes_left(a6)			set # bytes left in buffer
+		move.l #other_screen,io_ptr(a6) point to start of buffer
+		restore_all 					restore registers
+	endi
+	push.l a0							read byte from buffer
+	move.l io_ptr(a6),a0
+	move.b (a0)+,d0
+	move.l a0,io_ptr(a6)
+	dec bytes_left(a6)
+	pop.l a0
+
+	ret 								return
+
+
+* ********************************
+* **							**
+* ** READ_WORD - RECEIVE A WORD **
+* **							**
+* ********************************
+
+* Receives a 68000 word from the disk and incrments the byte counter.
+
+* Entry: D5.L = byte counter
+* Exit:  D0.B = byte
+*		 D5.L = D5.L+2
+
+* Regs: D0/D1/D5 corrupt.
+* Subr: ?
+
+	subr read_word
+
+	bsr read_byte						receive high byte
+	asl #8,d0
+	push d0
+	bsr read_byte						receive low byte
+	or (sp)+,d0 						combine bytes
+	addq.l #2,d5						two bytes received
+
+	ret 								return
+
+
+* *************************************
+* **								 **
+* ** RELOCATE - RELOCATE OBJECT DATA **
+* **								 **
+* *************************************
+
+* The object data is assembled at address zero so that all pointers within
+* the data structure are offsets. This routine changes all these offsets to
+* absolute addresses by adding the base address. Each object has a header of
+* which the 1st three entries are pointers to the nodes, surfaces and the
+* text description. The surfaces consists of another list of surfaces.
+
+* Entry: None
+* Exit:  None
+
+* Regs:  ?
+* Subr:  None
+
+	subr relocate
+
+	lea obj_data,a0 					start of object data
+	move.l a0,d1						D1 = offset to add
+	loop 1,max_obj_num					loop for each object
+		move.l (a0),d0					fetch pointer
+		add.l d1,d0 					relocate
+		move.l d0,(a0)+
+		move.l d0,a1					relocate the objects pointers
+		loop 2,d6,3
+			add.l d1,(a1)+
+		next 2,d6
+		move.l d0,a1					fetch pointer to surface list
+		move.l d_surfaces(a1),a2		fetch pointer to surface list
+		move (a2)+,d6					fetch # of surface types
+		dec d6							adjust for DBRA
+		loop 2							loop for each surface type
+			move.l (a2),d0				relocate pointer
+			add.l d1,d0
+			move.l d0,(a2)+
+			tst d_hidden(a1)			hidden surfaces ?
+			if <ne> then.s				yes
+				move.l d0,a3			relocate surfaces
+				repeat
+					addq.l #6,a3		skip surface vector
+					move.l (a3),d0		last surface ?
+					break.s if <eq> 	yes
+					add.l d1,d0 		relocate the pointer
+					move.l d0,(a3)
+					move.l d0,a3		next surface
+				endr
+			endi
+		next 2,d6
+	next 1
+
+	ret
+
+
+* ****************************************
+* **									**
+* ** FIND_NODES - FIND AN OBJECTS NODES **
+* **									**
+* ****************************************
+
+* Returns a pointer to the nodes of an object.
+
+* Entry: D0 = object number
+* Exit:  A0 = ptr: objects nodes
+*		 D0 = no. nodes - 1
+
+* Regs: ?
+* Subr: ?
+
+	subr find_nodes,global
+
+	asl #2,d0							index into vector table
+	lea obj_data,a0
+	move.l (a0,d0),a0					fetch pointer to object
+	move.w d_no_nodes(a0),d0			fetch no. nodes
+	move.l d_nodes(a0),a0				fetch pointer to nodes
+
+	ret 								return
+
+
+* **************************************
+* **								  **
+* ** RESET_SYSTEM - RESET STAR SYSTEM **
+* **								  **
+* **************************************
+
+* Resets all variables for a new planet system.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr reset_system,global
+
+	lea reset_table(pc),a0				reset variables to zero
+	repeat
+		move (a0)+,d0
+		break if <mi>
+		clr (a6,d0)
+	endr
+	lea shuttle_ctr(a6),a0				initialise launch counters
+	move #256,d2
+	loop 1,3
+		jsr rand
+		add #512,d0
+		move d0,(a0)+
+	next 1
+	move splanet+govern(a6),d0
+	addq #2,d0
+	moveq #9,d1
+	asl d1,d0
+	move d0,pirate_ctr(a6)
+	move #max_speed*3/4,speed(a6)		set Cobra's speed
+	move #max_energy,energy(a6) 		maximum energy
+	move #max_shield,front_shield(a6)	shields at full power
+	move #max_shield,aft_shield(a6)
+	move #radar_range,radar_scale+2(a6) radar mag x 1
+	lea lasers(a6),a0					all laser records inactive
+	moveq #laser_len,d0
+	loop 1,max_lasers
+		clr active(a0)
+		add.l d0,a0
+	next 1
+	jmp quiet							silence music/effects
+
+
+* **********************************************
+* **										  **
+* ** CHECK_VARS - CHECK FOR VARIABLE OVERFLOW **
+* **										  **
+* **********************************************
+
+* Checks the no. of words used by each of the local variable areas and
+* displays a message if any are found.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr check_vars
+
+	st first(a6)						print heading first time
+	lea local_vars(pc),a5				point to start of table
+	repeat
+		move (a5)+,d0					fetch start of variables
+		if <eq> then.s					end of list
+			tst first(a6)				any problems ?
+			ret <ne>					no, return
+			repeat						hang!
+			endr
+		endi
+		cmp (a5)+,d0					overflow ?
+		if <lo> then.s					yes
+			tst first(a6)				first entry ?
+			if <ne> then.s				yes
+				pea text1(pc)			print heading
+				bdos c_conws,6
+				clr first(a6)
+			endi
+			push.l a5					print name of module
+			bdos c_conws,6
+			pea text2(pc)				CRLF
+			bdos c_conws,6
+		endi
+		repeat							skip name
+			tst.b (a5)+
+		until <eq>
+		move a5,d0						align on word
+		btst #0,d0
+		if <ne> then.s
+			inc.l a5
+		endi
+	endr
+
+
+* ****************************************
+* **									**
+* ** TRACE_IT - TRACE EXCEPTION HANDLER **
+* **									**
+* ****************************************
+
+* This routine is called every instruction when trace is enabled.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr trace_it
+
+	ifne 0
+	cmp #$2e10,watch_point				changed ?
+	if <ne> then.s						yes
+		tst.l vars+debug_data			already flagged ?
+		if <eq> then.s
+			move.l 2(sp),vars+debug_data
+		endi
+	endi
+	endc
+
+	rte 								return from exception
+
+
+* **** LOCAL DATA ****
+
+* List of variables to reset (clear).
+
+reset_table:
+
+	dc.w station_destroyed,ecm_jammed,cloaking_on,id_trigger,no_entry
+	dc.w controls_locked,launch_count,text_frames,dust_type,torus_on
+	dc.w count_down,computer_on,jump_trigger,just_docked,docked,at_target
+	dc.w missile_state,laser_temp,roll_angle,climb_angle,launch_spin
+	dc.w checkpoint,radar_obj,check_key,retro_count,torus_ctr,-1
+
+* Default game data (1st set is cheat data).
+
+	global new_game
+
+	ifne debug
+	dc.w 0								galaxy no.
+	dc.w $5a4a,$0248,$b753				galactic seed
+	dc.w 7								current planet (Lave)
+	dc.b %100111,0						user flags
+	dc.l 100000 						cash
+	dc.w 0								fluctuation
+	dc.w 70 							fuel
+	dc.w 3								missiles
+	dc.w 0								extra cargo bay
+	dc.w 0								ECM system
+	dc.w $8001							pulse lasers (front)
+	dc.w $8000							beam lasers
+	dc.w 1								fuel scoop
+	dc.w 1								escape capsule
+	dc.w 1								energy bomb
+	dc.w 0								extra energy unit
+	dc.w 1								docking computer
+	dc.w 1								hyperdrive
+	dc.w $8000							mining lasers
+	dc.w $8002							military lasers (back)
+	dc.w 0								retro rockets
+	dc.w 0								ECM jammer
+	dc.w 0								cloaking device
+	ds.l 20 							cargo hold (empty)
+	dc.w 0								police record
+	dc.l 0								score
+	dc.w 0								current rating
+	dc.w 0								mission counter
+	dc.w 0								kill counter
+	dc.w 1								next mission
+	dc.w 0								current mission
+	dc.w 0								mission planet
+	dc.w 64 							hyperspace jump count
+	dc.w 0,0,0,0						game time
+	ds.b 12 							planet name (not needed)
+	dc.w 2								cursor
+	dc.w 0								no. retro's left
+	dc.w 0								logo not shown
+	endc
+
+* Normal default game.
+
+	ifeq debug
+	dc.w 0								galaxy no.
+	dc.w $5a4a,$0248,$b753				galactic seed
+	dc.w 7								current planet (Lave)
+	dc.b %100111,0						user flags
+	dc.l 1000							cash
+	dc.w 0								fluctuation
+	dc.w 70 							fuel
+	dc.w 3								missiles
+	dc.w 0								extra cargo bay
+	dc.w 0								ECM system
+	dc.w $8001							pulse lasers (front)
+	dc.w $8000							beam lasers
+	dc.w 0								fuel scoop
+	dc.w 0								escape capsule
+	dc.w 0								energy bomb
+	dc.w 0								extra energy unit
+	dc.w 0								docking computer
+	dc.w 0								hyperdrive
+	dc.w $8000							mining lasers
+	dc.w $8000							military lasers (back)
+	dc.w 0								retro rockets
+	dc.w 0								ECM jammer
+	dc.w 0								cloaking device
+	ds.l 20 							cargo hold (empty)
+	dc.w 0								police record
+	dc.l 0								score
+	dc.w 0								current rating
+	dc.w 0								mission counter
+	dc.w 0								kill counter
+	dc.w 1								next mission
+	dc.w 0								current mission
+	dc.w 0								mission planet
+	dc.w 64 							hyperspace jump count
+	dc.w 0,0,0,0						game time
+	ds.b 12 							planet name (not needed)
+	dc.w 2								cursor type
+	dc.w 0								no. retro's left
+	dc.w 0								logo not shown
+	endc
+
+	ds.b 256-(*-new_game)				pad out to 256 bytes
+
+* Table of local variable data.
+
+local_vars:
+
+	size VECTOR
+	size INIT
+	size ROTATE
+	size ATTRACT
+	size SOUNDS
+	size EXCEPT
+	size BIOS
+	size SPRITES
+	size DISK
+	size FUNNY
+	size GALAXY
+	size COCKPIT
+	size DUST
+	size GRAPHICS
+	size FLIGHT
+	size ACTION
+	size ORBIT
+	size RADAR
+	size COMBAT
+	size SPECIAL
+	size CARGO
+	size EQUIP
+	size PDATA
+	size OPTIONS
+	size EFFECTS
+	size AUTO
+	dc.w 0
+
+* Text messages.
+
+text1:	db 27,'E',27,'HVARIABLE OVERFLOW:',10,13,10,0
+text2:	db 10,13,0
+
+* Disk file names
+
+cockpit_file:		dz <cockpit.pc1>
+textscr_file:		dz <textscr.pc1>
+texture_file:		dz <texture.pc1>
+obj_data_file:		dz <objects.img>
+bitmaps_file:		dz <bitmaps.img>
+dust_cos_file:		dz <dcos.dat>
+dust_sin_file:		dz <dsin.dat>
+logo_file:			dz <logo.pc1>

@@ -1,0 +1,1953 @@
+* @@@@@@   @@@@@@	@@@ 	@@@@
+*  @@  @@	 @@    @@ @@   @@  @@
+*  @@  @@	 @@   @@   @@  @@
+*  @@@@@	 @@   @@   @@	@@@@
+*  @@  @@	 @@   @@   @@	   @@
+*  @@  @@	 @@    @@ @@   @@  @@
+* @@@@@@   @@@@@@	@@@ 	@@@@
+
+* Atari ST basic input/output routines. Also contains a selection of
+* misc. other routines.
+
+* Version 1.0 16th March 1988 Copyright (c) 1988 Mr. Micro Ltd.
+* Designed and coded by Rob Nicholson.
+
+	include macros
+	include bitlist
+
+	xref dot_to_addr,fx,clear_command,divide_by_10,remove_sprite
+	xref draw_screen,xor,kill_sprites,set_colour,textscr
+	xref find_bitmap,put_bitmap,draw_sprite,monst,blank_screen,random
+
+* ---- LOCAL CONSTANTS ----
+
+icon_xor:		equ lgt_blue^trans		icon xor colour
+error_x:		equ 12*8				position of error box
+error_y:		equ 8*8
+confirm_x:		equ 105 				coordinates for confirm box
+confirm_y:		equ 83
+
+* --- LOCAL VARIABLES ----
+
+	vars bios
+
+capture_ctr:	ds.w 1					no. bytes to capture
+capture_ptr:	ds.l 1					ptr: next free in capture buffer
+capture:		ds.w 4					capture buffer
+saved_ptr:		ds.l 1					ptr: saved value of print_ptr
+control_ptr:	ds.l 1					ptr: routine after capture
+key_buffer: 	ds.b key_size			keyboard buffer
+				ds 0
+key_tail:		ds.w 1					ptr: keyboard tail
+key_head:		ds.w 1					ptr: keyboard head
+key_used:		ds.w 1					no. bytes used in buffer
+last_icon:		ds.w 1					icon # of last icon inverted
+save_idx:		ds.w 1					index into cursor save buffer
+save_buffer:	ds.b 6*4				cursor save buffer
+use_keypad: 	ds.w 1					flag: use numeric keypad
+
+	end_vars bios
+
+	module bios
+
+* **********************************
+* **							  **
+* ** PRINT_CHAR - PRINT CHARACTER **
+* **							  **
+* **********************************
+
+* Print character routine. Vectors via the PRINT_PTR pointer. This usually
+* points to the DISPLAY_CHAR routine but is re-vectored by the control code
+* drivers to capture any data they may require.
+
+* Entry: D0.B = character to print/capture
+* Exit:  None
+
+* Regs:  All preserved.
+* Subr:  As specified by PRINT_PTR
+
+	subr print_char,global
+
+	movem.l d0-d3/d6-d7/a0-a3,-(sp) 	save registers
+	and #$ff,d0 						mask out unwanted bits
+	move.l print_ptr(a6),a0 			execute print routine
+	jsr (a0)
+	movem.l (sp)+,d0-d3/d6-d7/a0-a3 	restore registers
+
+	ret
+
+
+* **************************************
+* **								  **
+* ** DISPLAY_CHAR - DISPLAY CHARACTER **
+* **								  **
+* **************************************
+
+* Action: Displays a character on the screen at the current text print
+*		  position. Advances the print position to the next column and wraps
+*		  to the next line if required. Usual routine for PRINT_CHAR. Control
+*		  codes 0..31 are trapped and vectored via the CONTROL_CODES table.
+
+* Entry:  D0 = character to print (32..127)
+* Exit:   None
+
+* Regs:   D0-D3, D6, D7, A0-A3 corrupt.
+* Subr:   None
+
+	subr display_char,global
+
+	if d0 <lo> #32 then.s				if control code then
+		asl #2,d0						fetch address of routine to process
+		lea control_codes(pc),a0		the control code
+		move.l (a0,d0),a0
+		jmp (a0)						execute routine and exit
+	endi
+	asl #3,d0							index into character set
+	move.l charset_ptr(a6),a0
+	lea 0(a0,d0),a0
+	move.l ink_ptr(a6),a1				get ink and paper pointers
+	move.l paper_ptr(a6),a2
+	move.l text_addr(a6),a3 			fetch text screen address
+	tst.l (a2)							paper #0 ?
+	if <ne> then.s						no
+		loop 1,d7,8 					8 pixel lines deep
+			move.b (a0)+,d0 			get next data byte
+			move d0,d1					build paper mask
+			not d1
+			loop 2,d6,4 				loop for each plane
+				move.b d0,d2			build ink byte
+				and.b (a1)+,d2
+				move.b d1,d3			build paper byte
+				and.b (a2)+,d3
+				or.b d2,d3				combine ink and paper
+				move.b d3,(a3)			store in VRAM
+				addq #2,a3				next plane
+			next 2,d6
+			add #160-2*4,a3 			next pixel line
+			subq.l #4,a1
+			subq.l #4,a2
+		next 1,d7
+	else.s
+		loop 1,d7,8 					8 pixel lines deep
+			move.b (a0)+,d0 			get next data byte
+			move.b d0,d1				build clear mask
+			not.b d1
+			loop 2,d6,4 				loop for each plane
+				and.b d1,(a3)			mask out current setting
+				move.b d0,d2			plot pixels
+				and.b (a1)+,d2
+				or.b d2,(a3)
+				addq #2,a3				next plane
+			next 2,d6
+			add #160-2*4,a3 			next pixel line
+			subq.l #4,a1
+		next 1,d7
+	endi
+	btst.b #0,text_addr+3(a6)			advance to next character
+	if <eq> then
+		addq #1,text_addr+2(a6)
+	else.s
+		addq #7,text_addr+2(a6)
+	endi
+	inc column(a6)						++column
+	cmp #40,column(a6)					end of line ?
+	if <eq> then.s						yes
+		add #160*7,text_addr+2(a6)		next line
+		clr column(a6)
+		addq #8,row(a6)
+	endi
+
+	ret
+
+
+* ******************************************
+* **									  **
+* ** SET_INK - SET INK PEN (CONTROL CODE) **
+* **									  **
+* ******************************************
+
+* Sets the ink pen colour. Captures next byte send to PRINT_CHAR.
+
+* Entry: None
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr set_ink
+
+	lea set_ink2(pc),a0 				capture byte
+	moveq #1,d0
+	bra capture_bytes
+
+	subr set_ink2
+
+	move capture(a6),d0 				set text colour
+	move text_paper(a6),d1
+	bra text_colour
+
+
+* **********************************************
+* **										  **
+* ** SET_PAPER - SET PAPER PEN (CONTROL CODE) **
+* **										  **
+* **********************************************
+
+* Sets the paper pen colour. Captures next byte send to PRINT_CHAR.
+
+* Entry: None
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr set_paper
+
+	lea set_paper2(pc),a0				capture byte
+	moveq #1,d0
+	bra capture_bytes
+
+	subr set_paper2
+
+	move capture(a6),d1 				set text colour
+	move text_ink(a6),d0
+	bra text_colour
+
+
+* *********************************************
+* **										 **
+* ** SET_INKS - SET TEXT PENS (CONTROL CODE) **
+* **										 **
+* *********************************************
+
+* Sets the ink and paper pen colour. Captures next two bytes sent to
+* PRINT_CHAR.
+
+* Entry: None
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr set_inks
+
+	lea set_inks2(pc),a0				capture byte
+	moveq #2,d0
+	bra capture_bytes
+
+	subr set_inks2
+
+	move capture+0(a6),d0				set text colour
+	move capture+2(a6),d1
+	bra text_colour
+
+
+* ***************************************************
+* **											   **
+* ** MOVE_CURSOR - MOVE TEXT CURSOR (CONTROL CODE) **
+* **											   **
+* ***************************************************
+
+* Moves the cursor to a specified column and row. Captures the next two bytes
+* sent to PRINT_CHAR
+
+* Entry: None
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr move_cursor
+
+	lea move_cursor2(pc),a0 			capture next two bytes
+	moveq #2,d0
+	bra capture_bytes
+
+	subr move_cursor2
+
+	move capture+0(a6),d0				position cursor
+	move capture+2(a6),d1
+	bra locate
+
+
+* ***********************************************************
+* **													   **
+* ** REPEAT_CHAR - PRINT REPEATED CHARACTER (CONTROL CODE) **
+* **													   **
+* ***********************************************************
+
+* Prints a repeated character. Captures next two bytes from PRINT_CHAR.
+* First byte in character to repeat, second byte is character to repeat.
+
+* Entry: None
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr repeat_char
+
+	lea repeat_char2(pc),a0 			capture next two bytes
+	moveq #2,d0
+	bra capture_bytes
+
+	subr repeat_char2
+
+	move capture+0(a6),d0				print repeated character
+	move capture+2(a6),d7
+	dec d7
+	loop 1
+		bsr print_char
+	next 1
+
+	ret
+
+
+* **********************************************
+* **										  **
+* ** BACKSPACE - MOVE CURSOR BACK A CHARACTER **
+* **										  **
+* **********************************************
+
+* Moves cursor back a character. No checks are made for line wrap etc.
+
+* Entry: None
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr backspace
+
+	move column(a6),d0					re-position cursor
+	move row(a6),d1
+	dec d0
+	bra locate
+
+
+* **************************************************
+* **											  **
+* ** DO_TAB - MOVE TO TAB POSITION (CONTROL CODE) **
+* **											  **
+* **************************************************
+
+* Moves text cursor to specified column. Captures next byte sent to
+* PRINT_CHAR.
+
+* Entry: None
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr do_tab
+
+	lea tab2(pc),a0 					capture next byte
+	moveq #1,d0
+	bra capture_bytes
+
+	subr tab2
+
+	move capture(a6),d0 				position cursor
+	move row(a6),d1
+	bra locate
+
+
+* ***********************************************
+* **										   **
+* ** CAPTURE_BYTES - CAPTURE BYTES INTO BUFFER **
+* **										   **
+* ***********************************************
+
+* Captures bytes sent to PRINT_CHAR and then executes a control code
+* routine.
+
+* Entry: A0 = ptr: control code routine to execute after bytes have been
+*				   captured.
+*		 D0 = no. of bytes to capture
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr capture_bytes
+
+	move.l a0,control_ptr(a6)			save routine address
+	move.w d0,capture_ctr(a6)			set counter
+	move.l print_ptr(a6),saved_ptr(a6)	save current pointer
+	move.l #store_bytes,print_ptr(a6)	re-vector Print_Char
+	lea capture(a6),a0					point to start of buffer
+	move.l a0,capture_ptr(a6)
+
+	ret
+
+	subr store_bytes
+
+	move.l capture_ptr(a6),a0			store in buffer
+	move d0,(a0)+
+	move.l a0,capture_ptr(a6)
+	dec capture_ctr(a6) 				all data captured ?
+	ret <ne>							no, return
+	move.l saved_ptr(a6),print_ptr(a6)	restore pointer
+	move.l control_ptr(a6),a0			execute control code routine
+	jmp (a0)
+
+
+* ***************************************
+* **								   **
+* ** TAB - MOVE CURSOR TO TAB POSITION **
+* **								   **
+* ***************************************
+
+* Moves cursor to specified tab position.
+
+* Entry: D0 = tab position
+* Exit:  None
+
+* Regs:  D0, D1 and A0 corrupt.
+* Subr:  LOCATE
+
+	subr tab,global
+
+	move row(a6),d1 					get current row
+	bra locate							locate cursor
+
+
+* *********************************
+* **							 **
+* ** LOCATE - SET PRINT POSITION **
+* **							 **
+* *********************************
+
+* Action: Moves the print position to a particular position on the screen.
+
+* Entry:  D0 = column (0..39)
+*		  D1 = pixel row (0..199)
+
+* Regs:   D0 and D1 corrupt
+* Subr:   DOT_TO_ADDR
+
+	subr locate,global
+
+	push.l a0							save registers
+	push.w d2
+	move d0,column(a6)					save column and row
+	move d1,row(a6)
+	asl #3,d0							calculate screen address
+	jsr dot_to_addr
+	btst #0,column+1(a6)
+	if <ne> then
+		inc a0
+	endi
+	move.l a0,text_addr(a6)
+	pop.w d2							restore registers
+	pop.l a0
+
+	ret
+
+
+* ***********************************************
+* **										   **
+* ** PRINT_STRING - PRINT STRING OF CHARACTERS **
+* **										   **
+* ***********************************************
+
+* Action: Prints a string of characters on the screen. The string is
+*		  terminated by a zero byte. If the Slow_Print flag is set, then
+*		  a click is made every time a printable character (not space) is
+*		  passed to Print_Char.
+
+* Entry:  A0.L = ptr: string to print
+* Exit:   A0.L = ptr: byte after the zero byte
+
+* Regs:   ?
+* Subr:   ?
+
+	subr print_string,global
+
+	repeat
+		tst capture_ctr(a6) 			capturing control codes ?
+		if <ne> then.s					yes
+			move.b (a0)+,d0 			get next character (no zero check)
+			bsr print_char
+		else.s
+			move.b (a0)+,d0 			get next character
+			ret <eq>					return if end of string
+			bsr print_char				print character
+			tst slow_print(a6)			real computer ?
+			if <ne> then.s				y	e	s
+				cmp.b #' ',d0			space ?
+				if <ne> then.s			no
+					sfx teletype		trigger teletype effect
+					moveq #2,d0 		delay
+				else.s
+					moveq #4,d0
+				endi
+				bsr wait
+			endi
+		endi
+	endr
+
+
+* *****************************************
+* **									 **
+* ** PRINT_CENTRE - PRINT TEXT IN CENTRE **
+* **									 **
+* *****************************************
+
+* Prints a string of text in the centre of the screen.
+
+* Entry: A0 = ptr: string to print (ASCIIZ)
+*		 D1 = pixel row to print at
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr print_centre,global
+
+
+	push.l a0							calculate length of string ignoring
+	clr d0								any codes < 32 (i.e. colour control)
+	repeat
+		cmp.b #32,(a0)
+		if <hs> then.s
+			inc d0
+		endi
+		tst.b (a0)+
+	until <eq>
+	pop.l a0							centre the string
+	sub #40,d0
+	neg d0
+	lsr #1,d0
+	bsr locate							locate the cursor
+	bra print_string					print the string
+
+
+* *******************************************
+* **									   **
+* ** PRINT_TABLE - PRINT STRING FROM TABLE **
+* **									   **
+* *******************************************
+
+* Action: Prints the nth string in a list of zero terminated strings.
+
+* Entry:  A0.L = ptr: list of strings
+*		  D0   = string to print (0..no_strings-1)
+* Exit:   A0.L = ptr: byte after final zero
+
+* Regs:   ?
+* Subr:   ?
+
+	subr print_table,global
+
+	bsr find_table						find string in table
+	bra print_string					print it and exit
+
+
+* **************************************
+* **								  **
+* ** FIND_TABLE - FIND ENTRY IN TABLE **
+* **								  **
+* **************************************
+
+* Finds the address of the nth string in a list of zero terminated strings.
+
+* Entry: A0.L = ptr: list of strings
+*		 D0   = string to find (0..no_strings-1)
+
+* Regs: D0/A0 corrupt.
+* Subr: None
+
+	subr find_table,global
+
+	repeat
+		tst d0							found required string ?
+		ret <eq>						yes, return
+		repeat							skip to next string
+			tst.b (a0)+
+		until <eq>
+		dec d0
+	endr
+
+
+* **************************************
+* **								  **
+* ** TEXT_COLOUR - SET COLOUR OF TEXT **
+* **								  **
+* **************************************
+
+* Action: Sets the colour in which text is printed (PRINT_CHAR)
+
+* Entry:  D0 = ink colour (0..15)
+*		  D1 = paper colour (0..15)
+* Exit:   None
+
+* Regs:   D0,D1,A0,A1 corrupt.
+* Subr:   None
+
+	subr text_colour,global
+
+	move d0,text_ink(a6)				save colours
+	move d1,text_paper(a6)
+	asl #2,d0							calculate ink pointer into masks
+	lea char_colour_masks,a0
+	lea 0(a0,d0),a1
+	move.l a1,ink_ptr(a6)
+	asl #2,d1							calculate paper pointer into masks
+	lea 0(a0,d1),a1
+	move.l a1,paper_ptr(a6)
+
+	ret
+
+
+* ****************************************
+* **									**
+* ** BUILD_NUMBER - BUILD 32 BIT NUMBER **
+* **									**
+* ****************************************
+
+* Converts a 32 bit binary number to decimal and stores the ASCII digits in a
+* buffer. The buffer is terminated by a zero byte.
+
+* Entry: D0.L = 32 bit number to print
+*		 D1.W = format of number:
+*				   Bits 0..6: Field width (if required)
+*				   Bit	7:	  Set for floating point
+*				   Bit 15:	  Set for fixed field width
+*		 A0.L = ptr: buffer to build number
+* Exit:  A0.L = ptr: byte after final zero
+
+* Regs: D0-D3, D7 and A0 corrupt.
+* Subr: DIVIDE_BY_10
+
+	subr build_number,global
+
+	clr d2								clear character counter
+	push #-1							push marker on the stack
+	repeat
+		bsr divide_by_10				strip next digit
+		add.b #'0',d3					convert digit to ASCII and stack
+		push d3
+		inc d2							++counter
+		tst.l d0						until number fully stripped
+	until <eq>
+	tst.b d1							floating point ?
+	if <mi> then.s						yes
+		if d2 <eq> #1 then.s			only one digit on the stack
+			move #'0'>>8,-(sp)			put another zero on the stack
+			inc d2						adjust for new digit
+		endi
+		inc d2							adjust length for decimal point
+	endi
+	tst d1								fixed field width ?
+	if <mi> then.s						yes
+		move d1,d7						extract field width
+		and #127,d7
+		sub d2,d7						pad out to required field width
+		if <ne> then.s
+			dec d7
+			move pad_char(a6),d0
+			loop 1
+				move.b d0,(a0)+
+			next 1
+		endi
+	endi
+	tst.b d1							floating point ?
+	if <pl> then.s						no
+		repeat							print number
+			pop d0
+			break.s if <mi>
+			move.b d0,(a0)+
+		endr
+	else.s
+		dec d2							print floating point number
+		repeat
+			if d2 <eq> #1 then.s		if last digit
+				move.b #'.',(a0)+		add decimal point
+			endi
+			pop d0						get next digit
+			break.s if <mi> 			last digit
+			move.b d0,(a0)+
+			dec d2						next digit
+		endr
+	endi
+	clr.b (a0)+ 						terminate buffer
+
+	ret
+
+
+* ******************************************
+* **									  **
+* ** PRINT_NUMBER - PRINT A 32 BIT NUMBER **
+* **									  **
+* ******************************************
+
+* Action: Prints a 32 bit unsigned integer in decimal.
+
+* Entry:  D0.L = number to print
+*		  D1.W = format of number:
+*					Bits 0..6 : field width (if any)
+*					Bit  7	  : floating point
+*					Bit  15   : fixed field width
+* Exit:   None
+
+* Regs:   D0 and D1 corrupt.
+* Subr:   BUILD_NUMBER, PRINT_STRING
+
+	subr print_number,global
+
+	movem.l d2/d3/d7/a0,-(sp)			save registers
+	lea number_buffer(a6),a0			build number
+	bsr build_number
+	lea number_buffer(a6),a0			print number
+	bsr print_string
+	movem.l (sp)+,d2/d3/d7/a0			restore registers
+
+	ret
+
+
+* **************************************
+* **								  **
+* ** WAIT - WAIT FOR A SPECIFIED TIME **
+* **								  **
+* **************************************
+
+* Waits of number of 1/50th second intervals.
+
+* Entry: D0 = time to wait x 1/50th secs
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr wait,global
+
+	hclr d0 							add to current value of clock
+	add.l frclock,d0
+	repeat								wait until clock reaches required
+		cmp.l frclock,d0				value
+	until <eq>
+
+	ret
+
+
+* *****************************
+* **						 **
+* ** STR_COPY - COPY STRINGS **
+* **						 **
+* *****************************
+
+* Copy string from one address to another.
+
+* Entry: A0 = ptr: source string
+*		 A1 = ptr: destination string
+* Exit:  A0 & A1 = ptr: byte after final zero
+
+* Regs:  A0-A1 corrupt.
+* Subr:  None
+
+	subr str_copy,global
+
+	repeat
+		move.b (a0)+,(a1)+
+	until <eq>
+
+	ret
+
+
+* ********************************************
+* **										**
+* ** STR_LEN - CALCULATE LENGTH OF A STRING **
+* **										**
+* ********************************************
+
+* Calculates the length of a string. Note - be careful when using the length
+* of a string containing control codes. The length returned will be the number
+* of characters in the string, not the length when printed.
+
+* Entry: A0 = ptr: string
+* Exit:  D0 = length of string
+
+* Regs:  D0 corrupt.
+* Subr:  None
+
+	subr str_len,global
+
+	push.l a0							save string pointer
+	moveq #-1,d0						initialise length
+	repeat
+		inc d0
+		tst.b (a0)+
+	until <eq>
+	pop.l a0							restore string pointer
+
+	ret
+
+
+* *********************************************
+* **										 **
+* ** STR_CAT - CONCATINATE (ADD) TWO STRINGS **
+* **										 **
+* *********************************************
+
+* Concatinates two strings togther, i.e. copies one string onto the end of
+* another.
+
+* Entry: A0 = ptr: base string
+*		 A1 = ptr: string to add
+* Exit:  A0 & A1 = ptr: byte after final zero byte.
+
+* Regs:  ?
+* Subr:  ?
+
+	subr str_cat,global
+
+	repeat								find end of base string
+		tst.b (a0)+
+	until <eq>
+	dec.l a0
+	repeat								add string
+		move.b (a1)+,(a0)+
+	until <eq>
+
+	ret
+
+
+* ***************************************
+* **								   **
+* ** STR_COMPARE - COMPARE TWO STRINGS **
+* **								   **
+* ***************************************
+
+* Compares two strings together
+
+* Entry: A0 = ptr: string #1
+*		 A1 = ptr: string #2
+* Exit:  IF strings the same THEN
+*			Zero flag set (EQ)
+*			A0 & A1 point to the bytes after the final zero
+*		ELSE
+*			Zero flag reset (NE)
+*			IF string #1 < string #2 THEN
+*				Carry flag set (LO)
+*			ELSE
+*				Carry flag clear (HS)
+*			ENDIF
+*			A0 & A1 point to the differing bytes + 1
+*		ENDIF
+
+* Regs: D0, A0 and A1 corrupt.
+* Subr: None
+
+	subr str_compare,global
+
+	repeat
+		move.b (a0)+,d0 				match ?
+		cmp.b (a1)+,d0
+		ret <ne>						no, return
+		tst.b d0
+	until <eq>
+
+	ret 								return
+
+
+* **********************************
+* **							  **
+* ** GET_KEY - WAIT FOR KEY PRESS **
+* **							  **
+* **********************************
+
+* Displays a flashing cursor and waits for a key press.
+
+* Entry: None
+* Exit:  D0 = character pressed
+
+* Regs:  D0,D1,A0 & A1 corrupt.
+* Subr:  FLASH_CURSOR, PRINT_CHAR
+
+	subr get_key,global
+
+	movem.l d1-d7/a0-a5,-(sp)			save registers
+	bsr hide_cursor 					display text cursor
+	moveq #bit_block_cursor,d0
+	jsr find_bitmap
+	move column(a6),d0
+	asl #3,d0
+	move row(a6),d1
+	jsr put_bitmap
+	bsr restore_cursor
+	repeat
+		tst use_keypad(a6)				using keypad ?
+		if <pl> then.s					yes
+			bsr check_keypad			check for keypad input
+			tst d0						anything ?
+			break.s if <ne> 			yes, exit loop
+		endi
+		bsr read_key					until key pressed
+		tst d0
+	until <ne>
+	push d0
+	bsr hide_cursor 					remove text cursor
+	moveq #bit_rubout,d0
+	jsr find_bitmap
+	move column(a6),d0
+	asl #3,d0
+	move row(a6),d1
+	jsr put_bitmap
+	bsr restore_cursor
+	sfx keyclick						sfx: keyclick
+	pop d0								restore key press
+	movem.l (sp)+,d1-d7/a0-a5			restore registers
+
+	ret
+
+
+* **************************************************
+* **											  **
+* ** CHECK_KEYPAD - CHECK FOR KEYPAD BUTTON PRESS **
+* **											  **
+* **************************************************
+
+* Checks if a key has been pressed on the keypad.
+
+* Entry: None
+* Exit:  D0 = keypress (0=none)
+
+* Regs: ?
+* Subr: ?
+
+	subr check_keypad
+
+	clr d0								assume no button press
+	tst button_pressed(a6)				button pressed ?
+	ret <eq>							no
+	move.l action_ptr(a6),a0			fetch action routine address
+	move.w function(a6),d0				fetch function # (if any)
+	clr button_pressed(a6)				allow more key presses
+	jmp (a0)							execute routine
+
+
+* **************************************
+* **								  **
+* ** ESCAPE_INPUT - ESCAPE FROM INPUT **
+* **								  **
+* **************************************
+
+* Default action routine for input from keypad.
+
+* Entry: None
+* Exit:  D0 = 27 (ESC)
+
+* Regs: ?
+* Subr: ?
+
+	subr escape_input
+
+	moveq #27,d0						set ESC key
+
+	ret 								return
+
+
+* *******************************************
+* **									   **
+* ** STORE_KEY - STORE KEY PRESS IN BUFFER **
+* **									   **
+* *******************************************
+
+* Stores a key press in the circular keyboard buffer.
+
+* Entry: D0.B = key press (ASCII)
+* Exit:  None
+
+* Regs: D2/A1 corrupt.
+* Subr: None
+
+	subr store_key,global
+
+	cmp #key_size,key_used(a6)			buffer full ?
+	if <ne> then.s						no
+		lea key_buffer(a6),a1			store key press in buffer head
+		move key_head(a6),d2
+		move.b d0,(a1,d2)
+		inc d2							move head pointer
+		cmp #key_size,d2
+		if <eq> then.s
+			clr d2
+		endi
+		move d2,key_head(a6)
+		inc key_used(a6)				byte has been used
+	endi
+
+	ret
+
+
+* *******************************************
+* **									   **
+* ** READ_KEY - READ A KEY FROM THE BUFFER **
+* **									   **
+* *******************************************
+
+* Reads a key press (if there is one) from the keyboard buffer.
+
+* Entry: None
+* Exit:  D0 = key press (0=no key)
+
+* Regs: ?
+* Subr: ?
+
+	subr read_key,global
+
+	move key_used(a6),d0				anything in the buffer ?
+	if <ne> then.s						yes
+		push.l a0						save registers
+		push.w d1
+		lea key_buffer(a6),a0			fetch byte from the buffer tail
+		move key_tail(a6),d1
+		move.b (a0,d1),d0
+		inc d1							move the tail pointer
+		cmp #key_size,d1
+		if <eq> then.s
+			clr d1
+		endi
+		move d1,key_tail(a6)
+		dec key_used(a6)				byte removed from buffer
+		pop.w d1						restore registers
+		pop.l a0
+	endi
+
+	ret
+
+
+* *********************************************************
+* **													 **
+* ** FLUSH_KEYBOARD - FLUSH ANY CHARACTERS FROM KEYBOARD **
+* **													 **
+* *********************************************************
+
+* Discards any characters in the keyboard buffer.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr flush_keyboard,global
+
+	repeat								read keys until none left
+		bsr read_key
+		tst d0
+	until <eq>
+	clr button_pressed(a6)				clear any pending mouse button
+	clr move_x(a6)						clear any mouse movements
+	clr move_y(a6)
+
+	ret 								return
+
+
+* *******************************************
+* **									   **
+* ** WAIT_KEY - WAIT FOR KEY TO BE PRESSED **
+* **									   **
+* *******************************************
+
+* Waits for a key to be pressed and then clears the key buffer. Flashing
+* cursor is NOT displayed. Also allows the mouse button to be pressed.
+
+* Entry: None
+* Exit:  D0 = ASCII value of key pressed
+
+* Regs:  D0 corrupt.
+* Subr:  None
+
+	subr wait_key,global
+
+	movem.l d1-d7/a0-a5,-(sp)			save registers
+	bsr save_cursor 					save cursor state
+	lea full_screen(pc),a0				initialise cursor for full screen
+	bsr init_cursor
+	repeat
+		tst button_pressed(a6)			mouse button pressed ?
+		if <ne> then.s					yes
+			clr button_pressed(a6)		clear flag
+			clr d0						key value = 0
+			break.s 					exit loop
+		endi
+		bsr read_key					until key pressed
+		tst d0
+	until <ne>
+	push d0 							restore cursor
+	bsr restore_cursor
+	pop d0
+	movem.l (sp)+,d1-d7/a0-a5			restore registers
+
+	ret
+
+
+* *************************************
+* **								 **
+* ** INPUT_LINE - INPUT LINE OF TEXT **
+* **								 **
+* *************************************
+
+* Inputs a line of text from the keyboard into the input buffer. Only
+* accepts characters between two limits. Buffer is terminated by a zero
+* if return pressed.
+
+* Entry: D0 = lower character limit
+*		 D1 = upper character limit
+*		 D2 = maximum length of line
+*		 D3 = x coord of keypad (-1=no keypad)
+*		 D4 = y coord of keypad (not required if D3=-1)
+* Exit:  D0 = terminating key (ESC or CR)
+
+* Regs:  D0-D7, A0-A4 corrupt.
+* Subr:  GET_KEY, CLEAR_COMMAND, PRINT_CHAR
+
+	subr input_line,global
+
+	move d3,use_keypad(a6)				use keypad ?
+	if <pl> then						yes
+		save_all						save registers
+		bsr hide_cursor 				hide the cursor
+		lea temp_spr(a6),a4 			position keypad
+		movem d3/d4,sp_xpos(a4)
+		move.l scr_base(a6),d0			use 1/2 way down other screen
+		add #16384,d0
+		move.l flip_screen(a6),d1
+		eor.l d1,d0
+		move.l d0,buffer_ptr(a4)
+		moveq #bit_keypad,d0			find keypad bitmap
+		jsr find_bitmap
+		move.l a0,data_ptr(a4)
+		jsr draw_sprite 				display error box
+		lea keypad_offsets(pc),a0		setup click ranges
+		lea keypad_table(pc),a1
+		loop 1,12						loop for each key
+			movem (a0)+,d0/d1			fetch x/y offset
+			add sp_xpos(a4),d0			add to coords of sprite
+			add sp_ypos(a4),d1
+			move d0,(a1)+				store in action table (top left)
+			move d1,(a1)+
+			add #15,d0					calculate bottom right
+			add #14,d1
+			move d0,(a1)+				store in action table
+			move d1,(a1)+
+			lea 10(a1),a1				skip rest of entry
+		next 1							next button
+		move sp_xpos(a4),d0 			setup coords of keypad surround
+		move sp_ypos(a4),d1
+		move d0,(a1)+
+		move d1,(a1)+
+		add #63,d0
+		add #77,d1
+		move d0,(a1)+
+		move d1,(a1)+
+		lea keypad_table(pc),a0 		initialise cursor
+		bsr init_cursor
+		restore_all 					restore registers
+	endi
+	push click_rate(a6) 				save current click rate
+	move #1,click_rate(a6)				high speed response (input)
+	move d0,d5							save limits
+	move d1,d6
+	lea input(a6),a4					start of input buffer
+	clr d4								no. characters in buffer = 0
+	repeat
+		bsr get_key 					get key press
+		if d0 <eq> #13 then.s			if return
+			clr.b (a4)					terminate buffer
+			break						exit loop
+		endi
+		cmp #27,d0						ESC ?
+		break if <eq>					yes, exit loop
+		bsr hide_cursor
+		if d0 <eq> #127 then.s			if delete
+			tst d4						buffer empty ?
+			if <ne> then.s				no
+				lea text1(pc),a0		rubout text
+				bsr print_string
+				dec.l a4				erase character from buffer
+				dec d4
+				inc d2
+			endi
+		else.s
+			if d0 <hs> d5 then.s		check for valid character
+				if d0 <ls> d6 then.s
+					tst d2				buffer full ?
+					if <ne> then.s		no
+						move.b d0,(a4)+ store byte in buffer
+						inc d4
+						dec d2
+						bsr print_char	print character
+					endi
+				endi
+			endi
+		endi
+		bsr restore_cursor
+	endr
+	pop click_rate(a6)					restore click rate
+	tst use_keypad(a6)					remove keypad if required
+	if <pl> then.s
+		save_all
+		bsr hide_cursor
+		lea temp_spr(a6),a4
+		jsr remove_sprite
+		bsr restore_cursor
+		bsr restore_cursor
+		restore_all
+	endi
+	bra clear_input 					clear input line and return
+
+
+* ************************************************
+* **											**
+* ** INPUT_NUMBER - INPUT NUMBER FROM KEYBOARD	**
+* **											**
+* ************************************************
+
+* Display a prompt (?) and input a number from the keyboard in the range
+* (0..65535)
+
+* Entry: (D3,D4) = coords of keypad
+* Exits: IF ESC key pressed THEN
+*			D0.B = 27
+*		 ELSE
+*			IF nothing typed (i.e. just return pressed) THEN
+*				D0 =0
+*			ELSE
+*				D0 = -1
+*				D1 = number entered
+
+* Regr:   ?
+* Subr:   ?
+
+	subr input_number,global
+
+	bsr hide_cursor 					print prompt
+	lea text4(pc),a0
+	bsr print_string
+	bsr restore_cursor
+	moveq #'0'>>8,d0					input number (max 9999)
+	moveq #'9'>>8,d1
+	moveq #3,d2
+	bsr input_line
+	cmp #27,d0							esc pressed ?
+	ret <eq>							yes, return
+	lea input(a6),a0					nothing typed ?
+	move.b (a0),d0
+	ret <eq>							yes, return
+	moveq #0,d1 						convert text to number
+	repeat
+		move.b (a0)+,d0 				get next character
+		break if <eq>					end of string
+		mulu #10,d1 					multiply number by 10
+		sub.b #'0',d0					add digit
+		ext d0
+		add d0,d1
+	endr
+	moveq #-1,d0						number is ok
+
+	ret
+
+
+* **********************************
+* **							  **
+* ** YES_NO - ASK YES/NO QUESTION **
+* **							  **
+* **********************************
+
+* Waits for the user to either press the 'Y' or 'N' key.
+
+* Entry: A0 = prompt
+* Exit:  D0 = key pressed
+
+* Regs: ?
+* Subr: ?
+
+	subr yes_no,global
+
+	bsr clear_input 					clear input line
+	bsr hide_cursor 					print prompt
+	jsr print_string
+	lea text4(pc),a0					print " ? "
+	jsr print_string
+	bsr restore_cursor
+	move #-1,use_keypad(a6) 			not using keypad
+	repeat
+		jsr get_key 					get key press
+		cmp.b #'Y',d0					'Y' ?
+		ret <eq>						yes, return
+		cmp.b #'N',d0					'N' ?
+		ret <eq>						yes, return
+		sfx error						trigger error beep
+	endr
+
+
+* ****************************************
+* **									**
+* ** CONFIRM - CONFIRM REQUESTED ACTION **
+* **									**
+* ****************************************
+
+* Displays a box prompting the user 'Are You Sure'
+
+* Entry: None
+* Exit:  IF yes selected THEN
+*			D0 != 0
+*		 ELSE
+*			D0 = 0
+
+* Regs: ?
+* Subr: ?
+
+	subr confirm,global
+
+	bsr hide_cursor 					hide the cursor
+	lea temp_spr(a6),a4 				use other screen for buffer
+	move.l scr_base(a6),d0
+	add #16384,d0
+	move.l flip_screen(a6),d1
+	eor.l d1,d0
+	move.l d0,buffer_ptr(a4)
+	moveq #bit_confirm,d0				find error box bitmap
+	jsr find_bitmap
+	move.l a0,data_ptr(a4)
+	move #confirm_x,sp_xpos(a4) 		position box
+	move #confirm_y,sp_ypos(a4)
+	jsr draw_sprite 					display error box
+	lea confirm_table(pc),a0			initialise cursor
+	bsr init_cursor
+	repeat								wait for button press
+		tst button_pressed(a6)
+	until <ne>
+	push function(a6)					save function #
+	clr button_pressed(a6)				clear button press
+	bsr hide_cursor 					remove confirm panel
+	lea temp_spr(a6),a4
+	jsr remove_sprite
+	bsr restore_cursor
+	bsr restore_cursor					restore entry cursor state
+	pop d0								fetch yes/no flag
+
+	ret 								return
+
+
+* *******************************************
+* **									   **
+* ** INIT_CURSOR - INITIALISE MOUSE CURSOR **
+* **									   **
+* *******************************************
+
+* Initialises the mouse cursor. The sprite uses the other unused screen to
+* store the data under the mouse.
+
+* Entry: A0 = ptr: mouse action table
+* Exit:  A4 = ptr: cursor sprite record
+
+* Regs: D0 and A4 corrupt.
+* Subr: None
+
+	subr init_cursor,global
+
+	clr csr_on(a6)						disable cursor for now
+	move.l a0,action_table(a6)			save pointer to action table
+	lea cursor_spr(a6),a4				set pointer to sprite record
+	move.l scr_base(a6),d0				use other screen as a buffer
+	move.l flip_screen(a6),d1
+	eor.l d1,d0
+	move.l d0,buffer_ptr(a4)
+	clr move_x(a6)						clear movement counters
+	clr move_y(a6)
+	move #1,csr_clk(a6) 				reset cursor clock
+	move #1,csr_speed(a6)				reset cursor speed
+	clr button_pressed(a6)				clear any flag left behind
+	st csr_on(a6)						turn cursor on
+
+	ret
+
+
+* *****************************************
+* **									 **
+* ** HIDE_CURSOR - HIDE THE MOUSE CURSOR **
+* **									 **
+* *****************************************
+
+* Hides the mouse cursor by removing it from the screen. This routine must
+* be called if you want to access the screen to prevent any problems with
+* the mouse corrupting the background.
+
+* Entry: None
+* Exit:  None
+
+* Regs: All preserved.
+* Subr: REMOVE_SPRITE
+
+	subr hide_cursor,global
+
+	save_all							save all registers
+	move save_idx(a6),d0				save Csr_On and Action_Table
+	lea save_buffer(a6),a0
+	move.w csr_on(a6),0(a0,d0)
+	move.l action_table(a6),2(a0,d0)
+	addq #6,save_idx(a6)				advance index to next entry
+	clr csr_on(a6)						disable cursor
+	lea cursor_spr(a6),a4				remove the sprite
+	jsr remove_sprite
+	restore_all 						restore registers
+
+	ret 								return
+
+
+* ***************************************
+* **								   **
+* ** SAVE_CURSOR - SAVE CURSOR DETAILS **
+* **								   **
+* ***************************************
+
+* Saves the current details about the cursor, i.e. on/off status and action
+* table pointer.
+
+* Entry: None
+* Exit:  None
+
+* Regs: All preserved
+* Subr: ?
+
+	subr save_cursor,global
+
+	movem.l d0/a0,-(sp) 				save registers
+	move save_idx(a6),d0				save Csr_On and Action_Table
+	lea save_buffer(a6),a0
+	move.w csr_on(a6),0(a0,d0)
+	move.l action_table(a6),2(a0,d0)
+	addq #6,save_idx(a6)				advance index to next entry
+	movem.l (sp)+,d0/a0 				restore registers
+
+	ret 								return
+
+
+* *******************************************************
+* **												   **
+* ** RESTORE_CURSOR - RESTORE CURSOR TO PREVIOUS STATE **
+* **												   **
+* *******************************************************
+
+* Restores the cursor state to that saved by Hide_Cursor or Save_Cursor.
+
+* Entry: None
+* Exit:  None
+
+* Regs: All preserved.
+* Subr: ?
+
+	subr restore_cursor,global
+
+	save_all							save all registers
+	clr csr_on(a6)						disable cursor for now
+	clr move_x(a6)						clear movement counters
+	clr move_y(a6)
+	clr button_pressed(a6)				clear any button press
+	subq #6,save_idx(a6)				retreat to previous entry
+	move save_idx(a6),d0				restore Action_Table and Csr_On
+	lea save_buffer(a6),a0
+	move.l 2(a0,d0),action_table(a6)
+	move.w 0(a0,d0),csr_on(a6)
+	if <eq> then.s						cursor off
+		lea cursor_spr(a6),a4
+		jsr remove_sprite
+	endi
+	restore_all 						restore registers
+
+	ret 								return
+
+
+* ************************************************
+* **											**
+* ** SINGLE_CLICK - TAKE ACTION ON SINGLE CLICK **
+* **											**
+* ************************************************
+
+* Checks if the cursor is currently within an action box. If so, a flag
+* is set.
+
+* Entry: None
+* Exit:  None
+
+* Regs: D0-D2/A0/A1 corrupt.
+* Subr: None
+
+	subr single_click,global
+
+	moveq #10,d2						set index register (single entries)
+	bra check_click 					check if within windows
+
+
+* ************************************************
+* **											**
+* ** DOUBLE_CLICK - TAKE ACTION ON DOUBLE CLICK **
+* **											**
+* ************************************************
+
+* Checks if the cursor is currently within an action box. If so, a flag
+* is set.
+
+* Entry: None
+* Exit:  None
+
+* Regs: D0-D2/A0/A1 corrupt.
+* Subr: None
+
+	subr double_click,global
+
+	moveq #14,d2						set index register (single entries)
+	bra check_click 					check if within windows
+
+
+* **************************************************
+* **											  **
+* ** CHECK_CLICK - CHECK IF CLICKED WITHIN WINDOW **
+* **											  **
+* **************************************************
+
+* Checks if the user has just clicked over a defined window. If so, then
+* the action routine pointer is defined and the 'button_pressed' flag is set.
+* The format of the action table is:
+
+*	dc.w x_left,y_top,x_right,y_bottom		limits of the action box
+*	dc.w function_no						passed to action routine in D0
+*	dc.l single_routine,double_routine		routines to call
+
+* The list is terminated by:
+
+*	dc.w -1 								(i.e x_left = -1)
+*	dc.l default_routine					default routines to call (0=none)
+
+* Entry: D2 = index to clicked single/double entry (10 or 14)
+* Exit:  None
+
+* Regs: D0/D1/A0/A1 corrupt.
+* Subr: None
+
+	subr check_click
+
+	tst csr_on(a6)						cursor on ?
+	ret <eq>							no, return
+	tst button_pressed(a6)				last action processed ?
+	ret <ne>							no, return
+	move.l action_table(a6),a0			A0 = ptr: action table
+	lea cursor_spr(a6),a1				fetch cursor coords (centre)
+	movem sp_xpos(a1),d0/d1
+	add #10,d0
+	addq #8,d1
+	repeat
+		tst (a0)						end of data ?
+		break.s if <mi> 				yes, exit loop
+		cmp 0(a0),d0					inside left edge ?
+		blt.s outside					no
+		cmp 4(a0),d0					inside right edge ?
+		bgt.s outside					no
+		cmp 2(a0),d1					inside top edge ?
+		blt.s outside					no
+		cmp 6(a0),d1					inside bottom edge ?
+		bgt.s outside					no
+		move 8(a0),function(a6) 		fetch function #
+		move.l (a0,d2),action_ptr(a6)	set action routine pointer
+		st button_pressed(a6)			button has been pressed
+		ret 							return
+
+outside:
+
+		lea 18(a0),a0					next entry
+	endr
+	move.l 2(a0),d0 					is there a default routine ?
+	ret <eq>							no, return
+	move.l d0,action_ptr(a6)			take default action
+	st button_pressed(a6)
+
+s_0:
+d_0:
+
+	ret 								return
+
+
+* ******************************************
+* **									  **
+* ** PREPARE_TEXT - PREPARES TEXT DISPLAY **
+* **									  **
+* ******************************************
+
+* Prepares the screen for text display.
+
+* Entry:  None
+* Exits:  None
+
+* Regr:   ?
+* Subr:   ?
+
+	subr prepare_text,global
+
+	st stop_cycle(a6)					stop colour cycling
+	tst cockpit_on(a6)					cockpit displayed ?
+	if <ne> then.s						yes
+		jsr blank_screen				blank out the screen
+	endi
+	clr csr_on(a6)						cursor not active
+	clr cockpit_on(a6)					cockpit not displayed
+	clr disp_type(a6)					no display type
+	clr display_clock(a6)				stop clock
+	clr icon_inverted(a6)				icon not inverted
+	clr game_frozen(a6) 				game not frozen
+	move #-1,view(a6)					no view displayed
+	move #1,cycle_type(a6)				flash colours
+	jsr kill_sprites					kill all sprites
+	lea textscr,a0						draw text screen
+	move.l scr_base(a6),a1
+	jsr draw_screen
+	tst docked(a6)						in flight ?
+	if <eq> then.s						yes
+		moveq #bit_icon_front,d0		replace launch with front
+		jsr find_bitmap
+		move #36,d0
+		move #174,d1
+		jsr put_bitmap
+	endi
+	move.b scr_base+1(a6),vram_base+0	set screen base address
+	move.b scr_base+2(a6),vram_base+2
+	pea textscr+2						define palette
+	ext_bios setpalette,6
+	clr stop_cycle(a6)					allow colour cyling
+	moveq #white,d0 					print in white
+	moveq #trans,d1
+	bra text_colour
+
+
+* *************************************
+* **								 **
+* ** INVERT_ICON - INVERT A BAR ICON **
+* **								 **
+* *************************************
+
+* Inverts a icon bar after removing any previous inversion.
+
+* Entry: D0 = icon # (-1 to NOT invert new icon)
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr invert_icon,global
+
+	push d0 							set invert colour
+	moveq #icon_xor,d0
+	jsr set_colour
+	bsr hide_cursor 					hide the cursor
+	tst icon_inverted(a6)				icon currently inverted ?
+	if <ne> then.s						yes
+		move last_icon(a6),d0			remove inversion
+		bsr find_icon
+		jsr xor
+		clr icon_inverted(a6)
+	endi
+	pop d0								invert new icon ?
+	if <pl> then.s						yes
+		move d0,last_icon(a6)
+		bsr find_icon					find icon's coords
+		jsr xor 						invert screen
+		st icon_inverted(a6)			icon is inverted
+	endi
+	bra restore_cursor					restore mouse cursor
+
+
+* *************************************
+* **								 **
+* ** FIND_ICON - FIND COORDS OF ICON **
+* **								 **
+* *************************************
+
+* Finds the coords a size of a selected icon (bottom of screen).
+
+* Entry: D0 = icon #
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr find_icon
+
+	asl #3,d0							index into table
+	lea icon_coords(pc),a0
+	movem (a0,d0),d0-d3 				 fetch coords
+	sub d0,d2							calculate width
+	inc d2
+	sub d1,d3							calculate depth
+	inc d3
+
+	ret 								return
+
+
+* ************************************
+* **								**
+* ** CLEAR_INPUT - CLEAR INPUT LINE **
+* **								**
+* ************************************
+
+* Clears the input line ready for input/display.
+
+* Entry: None
+* Exit:  None
+
+* Regs: All preserved
+* Subr: Hide_Cursor,Find_Bitmap,Put_Bitmap,Print_String,Restore_Cursor
+
+	subr clear_input,global
+
+	save_all							save all registers
+	bsr hide_cursor 					remove cursor from screen
+	moveq #bit_input_panel,d0			find the bit map
+	jsr find_bitmap
+	clr d0								put bit map on the screen
+	move #prompt_y,d1
+	jsr put_bitmap
+	lea text3(pc),a0					position and colour cursor
+	bsr print_string
+	bsr restore_cursor
+	restore_all 						restore registers
+
+	ret 								return
+
+
+* ***********************************
+* **							   **
+* ** ERROR_BOX - DISPLAY ERROR BOX **
+* **							   **
+* ***********************************
+
+* Displays an error box, prints a message and waits for the OK box to be
+* selected.
+
+* Entry: A0 = ptr: error string
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr error_box,global
+
+	push.l a0							save text pointer
+	bsr hide_cursor 					hide the cursor
+	lea temp_spr(a6),a4 				use other screen for buffer
+	move.l scr_base(a6),d0
+	add #16384,d0
+	move.l flip_screen(a6),d1
+	eor.l d1,d0
+	move.l d0,buffer_ptr(a4)
+	moveq #bit_error_box,d0 			find error box bitmap
+	jsr find_bitmap
+	move.l a0,data_ptr(a4)
+	move #error_x,sp_xpos(a4)			position box
+	move #error_y,sp_ypos(a4)
+	jsr draw_sprite 					display error box
+	moveq #white,d0 					print in white
+	moveq #trans,d1
+	bsr text_colour
+	pop.l a0							fetch text pointer
+	lea box_details(pc),a1				details of error box
+	moveq #15,d0						position cursor
+	move 2(a1),d1
+	bsr locate
+	repeat
+		repeat							skip spaces
+			cmp.b #32,(a0)
+			break.s if <ne>
+			inc.l a0
+		endr
+		tst.b (a0)						end of string ?
+		break.s if <eq> 				yes, exit loop
+		move.l a0,a2					find space or end of string
+		repeat
+			tst.b (a2)
+			break.s if <eq>
+			cmp.b #32,(a2)
+			break.s if <eq>
+			inc.l a2
+		endr
+		move.l a2,d0					calculate length of word
+		sub.l a0,d0
+		add column(a6),d0				will the word fit ?
+		cmp (a1),d0
+		if <hi> then.s					no
+			addq.l #4,a1				skip to start of next line
+			moveq #15,d0
+			move 2(a1),d1
+			bsr locate
+		endi
+		repeat							print word
+			move.b (a0),d0
+			break.s if <eq>
+			cmp.b #32,d0
+			break.s if <eq>
+			bsr print_char
+			inc.l a0
+		endr
+		move.b #32,d0					print a space
+		bsr print_char
+	endr
+	sfx error							trigger beep sound effect
+	lea error_table(pc),a0				initialise cursor
+	bsr init_cursor
+	repeat								wait for button press
+		tst button_pressed(a6)
+	until <ne>
+	clr button_pressed(a6)				clear flag
+	bsr hide_cursor 					remove error box
+	lea temp_spr(a6),a4
+	jsr remove_sprite
+	bsr restore_cursor
+	bsr flush_keyboard					remove any pending characters
+	bra restore_cursor					restore cursor to entry state
+
+
+* ---- LOCAL DATA ----
+
+* Control code vector table.
+
+control_codes:
+
+	dc.l return 						00
+	dc.l set_ink						01
+	dc.l set_paper						02
+	dc.l set_inks						03
+	dc.l move_cursor					04
+	dc.l repeat_char					05
+	dc.l return 						06
+	dc.l return 						07
+	dc.l backspace						08
+	dc.l do_tab 						09
+	dc.l return 						10
+	dc.l return 						11
+	dc.l return 						12
+	dc.l return 						13
+	dc.l return 						14
+	dc.l return 						15
+	dc.l return 						16
+	dc.l return 						17
+	dc.l return 						18
+	dc.l return 						19
+	dc.l return 						20
+	dc.l return 						21
+	dc.l return 						22
+	dc.l return 						23
+	dc.l return 						24
+	dc.l return 						25
+	dc.l return 						26
+	dc.l return 						27
+	dc.l return 						28
+	dc.l return 						29
+	dc.l return 						30
+	dc.l return 						31
+
+* Table of colours masks for the character print routine.
+
+char_colour_masks:
+
+	db $00,$00,$00,$00	;0
+	db $ff,$00,$00,$00	;1
+	db $00,$ff,$00,$00	;2
+	db $ff,$ff,$00,$00	;3
+	db $00,$00,$ff,$00	;4
+	db $ff,$00,$ff,$00	;5
+	db $00,$ff,$ff,$00	;6
+	db $ff,$ff,$ff,$00	;7
+	db $00,$00,$00,$ff	;8
+	db $ff,$00,$00,$ff	;9
+	db $00,$ff,$00,$ff	;A
+	db $ff,$ff,$00,$ff	;B
+	db $00,$00,$ff,$ff	;C
+	db $ff,$00,$ff,$ff	;D
+	db $00,$ff,$ff,$ff	;E
+	db $ff,$ff,$ff,$ff	;F
+
+* Icon coords at the bottom of the text screens.
+
+icon_coords:
+
+	dc 36,174,73,180					launch
+	dc 77,174,97,180					buy_cargo
+	dc 101,174,127,180					sell_cargo
+	dc 131,174,163,180					equip_ship
+	dc 167,174,205,180					galactic_chart
+	dc 209,174,240,180					local_chart
+	dc 244,174,282,180					data
+	dc 19,183,57,189					market_prices
+	dc 61,183,116,189					inventory
+	dc 120,183,158,189					status
+	dc 162,183,188,189					disk
+	dc 192,183,218,189					find
+	dc 222,183,248,189					home_cursor
+	dc 252,183,296,189					options
+
+* Cursor action table for keypad.
+
+keypad_table:
+
+	action 0,0,0,0,'7'/256,-1,0
+	action 0,0,0,0,'8'/256,-1,0
+	action 0,0,0,0,'9'/256,-1,0
+	action 0,0,0,0,'4'/256,-1,0
+	action 0,0,0,0,'5'/256,-1,0
+	action 0,0,0,0,'6'/256,-1,0
+	action 0,0,0,0,'1'/256,-1,0
+	action 0,0,0,0,'2'/256,-1,0
+	action 0,0,0,0,'3'/256,-1,0
+	action 0,0,0,0,'0'/256,-1,0
+	action 0,0,0,0,127,-1,0
+	action 0,0,0,0,13,-1,0
+	action 0,0,0,0,0,-1,0
+	dc.w -1
+	dc.l escape_input
+
+* Table of offsets of each key.
+
+keypad_offsets:
+
+	dc 7,7,24,7,41,7,7,23,24,23,41,23,7,39,24,39,41,39,7,55,24,55,41,55
+
+* Error box action table.
+
+error_table:
+
+	action error_x+96,error_y+35,error_x+120,error_y+52,0,0,0
+	dc.w -1
+	dc.l 0
+
+* Confirm box action table.
+
+confirm_table:
+
+	action confirm_x+11,confirm_y+15,confirm_x+41,confirm_y+29,-1,0,0
+	action confirm_x+76,confirm_y+15,confirm_x+98,confirm_y+29,0,0,0
+	dc.w -1
+	dc.l 0
+
+* Full size screen mouse table.
+
+full_screen:
+
+	action 0,0,319,199,0,0,0
+	dc.w -1
+	dc.l 0
+
+* Box details - maximum column and row #
+
+box_details:
+
+	dc 27,9*8,27,10*8,27,11*8,24,12*8,24,13*8,24,14*8
+
+* Text messages.
+
+text1:	db c_backspace,32,c_backspace,0
+text2:	db '? ',0
+text3:	db c_cursor,4,prompt_y,c_colour,white,trans,0
+text4:	db ' ? ',0

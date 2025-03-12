@@ -1,0 +1,14 @@
+VOID main (VOID);
+WORD _m_newvec (VOID);
+VOID mouse_in_menu (VOID);
+WORD rc_inside (GRECT *rect, WORD x, WORD y);
+WORD do_menu (WORD *msg_buff);
+WORD rc_intersect (GRECT *rect1, GRECT *rect2);
+VOID close_window (WORD whandle);
+WORD do_window (WORD *msg_buff);
+VOID move_window (WORD *msg_buff);
+WORD objc_childs (OBJECT *tree, WORD object);
+WORD do_tearoff (WORD mx, WORD my);
+VOID redraw_window (WORD whandle, GRECT *clip);
+VOID tear_off (VOID);
+VOID do_about (VOID);

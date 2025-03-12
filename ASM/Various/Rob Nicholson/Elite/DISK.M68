@@ -1,0 +1,1071 @@
+; @@@@@    @@@@@@	@@@@  @@@  @@
+;  @@ @@	 @@    @@  @@  @@  @@
+;  @@  @@	 @@    @@	   @@ @@
+;  @@  @@	 @@ 	@@@@   @@@@
+;  @@  @@	 @@ 	   @@  @@ @@
+;  @@ @@	 @@    @@  @@  @@  @@
+; @@@@@    @@@@@@	@@@@  @@@  @@
+
+; Routines to save/load games to/from disk.
+
+; Atari Version 1.0 20th April 1988 Copyright (c) 1988 Mr. Micro Ltd.
+; Designed and coded by Rob Nicholson. Adpated from the MSX version.
+
+	include macros
+	include bitlist
+
+; Modification history:
+
+	xref gen_prices,home_cursor,build_name,new_game,jameson,str_copy,str_cat
+	xref check_docked,invert_icon,init_cursor,print_string,input_line,message
+	xref prepare_text,locate,text_colour,print_char,tab,build_time,read_key
+	xref print_number,wait_key,confirm,clear_input,set_colour,hide_cursor,line
+	xref restore_cursor,print_centre,find_bitmap,put_bitmap,status,launch,data
+	xref buy_cargo,sell_cargo,equip_ship,galactic_chart,local_chart,inventory
+	xref market_prices,find_planet,options,error_box
+
+	opt mex
+
+; ---- LOCAL CONSTANTS ----
+
+max_shown:			equ 17				maximum names per catalog screen
+
+; ---- LOCAL VARIABLES ----
+
+	vars disk
+
+no_shown:		ds.w 1					no. commanders shown on screen
+catalog_buffer: ds.b 44 				catalog DTA buffer
+xc1:			ds.w 1					highlight coords
+yc1:			ds.w 1
+xc2:			ds.w 1
+yc2:			ds.w 1
+which_icon: 	ds.w 1					icon #
+redraw: 		ds.w 1					flag: redraw the screen
+
+	end_vars disk
+
+; ---- LOCAL MACROS ----
+
+; draw_line x1,y1,x2,y2 - draw line between coords
+
+draw_line: macro
+
+	move \1(a6),d0
+	move \2(a6),d1
+	move \3(a6),d2
+	move \4(a6),d3
+	jsr line
+
+	endm
+
+	module disk
+
+
+; ****************************************
+; **									**
+; ** RESTORE_STATE - RESTORE GAME STATE **
+; **									**
+; ****************************************
+
+; Restores the game state from the Game_State array.
+
+; Entry: None
+; Exit:  None
+
+; Regs:  ?
+; Subr:  ?
+
+	subr Restore_State,global
+
+	lea var_list(pc),a0 				start of variable list
+	lea game_state(a6),a1				start of game_state arrary
+	repeat
+		move (a0)+,d0					get variable's offset
+		break if <mi>					end of list
+		move (a0)+,d7					get number of words
+		dec d7
+		loop 1							copy data
+			move (a1)+,(a6,d0)
+			addq #2,d0
+		next 1
+	endr
+	move current(a6),req_planet(a6) 	generate system planet and prices
+	jsr gen_prices
+	jmp home_cursor 					home cursor on planet and return
+
+
+; **********************************
+; **							  **
+; ** SAVE_STATE - SAVE GAME STATE **
+; **							  **
+; **********************************
+
+; Restores the game state from the Game_State array.
+
+; Entry: None
+; Exit:  None
+
+; Regs:  ?
+; Subr:  ?
+
+	subr save_state,global
+
+	move current(a6),d0 				get name of current planet
+	jsr build_name
+	lea var_list(pc),a0 				start of variable list
+	lea game_state(a6),a1				start of game_state array
+	repeat
+		move (a0)+,d0					get variable's offset
+		ret <mi>						end of list, return
+		move (a0)+,d7					get number of words
+		dec d7
+		loop 1							copy data
+			move (a6,d0),(a1)+
+			addq #2,d0
+		next 1
+	endr
+
+
+; ******************************************
+; **									  **
+; ** DEFAULT_GAME - USE DEFAULT GAME DATA **
+; **									  **
+; ******************************************
+
+; Copies the new game data array into the Game_State array. Also resets the
+; player's name to Jameson.
+
+; Entry: None
+; Exit:  None
+
+; Regs:  ?
+; Subr:  ?
+
+	subr default_game,global
+
+	lea new_game,a0 					copy array
+	lea game_state(a6),a1
+	loop 1,128
+		move (a0)+,(a1)+
+	next 1
+	lea jameson,a0						set default name and exit
+	lea player_name(a6),a1
+	jmp str_copy
+
+
+; ********************************
+; **							**
+; ** DISK - DISK SAVE/LOAD MENU **
+; **							**
+; ********************************
+
+; Main save/load routine.
+
+; Entry: None
+; Exit:  None
+
+; Regs: All corrupt.
+; Subr: ?
+
+	subr disk,global
+
+	jsr check_docked					check if docked
+	moveq #icon_disk,d0 				invert icon
+	jsr invert_icon
+	bsr draw_screen 					draw the screen
+	tst force_load(a6)					force a load ?
+	if <ne> then.s						yes
+		clr force_load(a6)
+		moveq #1,d0
+		bsr s_load_commander
+	endi
+
+	ret
+
+
+; ****************************************
+; **									**
+; ** INPUT_NAME - INPUT COMMANDERS NAME **
+; **									**
+; ****************************************
+
+; Inputs commander's name from the keyboard. If a name is entered, it is
+; copied from the input buffer into the player's name buffer. If nothing
+; is entered (just return), the current player's name is copied into the
+; input buffer. The extension .CDR is added to the input buffer.
+
+; Entry: None
+; Exit:  IF ESC pressed THEN
+;			D0 = 27
+;		 ELSE
+;			D0 = 0
+
+; Regs: ?
+; Subr: INPUT_LINE
+
+	subr input_name
+
+	jsr clear_input 					clear input line
+	jsr hide_cursor 					print prompt
+	lea text3(pc),a0
+	jsr print_string
+	jsr restore_cursor
+	moveq #'A'>>8,d0					input name (max 8 letters)
+	moveq #'Z'>>8,d1
+	moveq #8,d2
+	moveq #-1,d3						(no keypad)
+	jsr input_line
+	cmp #27,d0							ESC ?
+	ret <eq>							yes, return
+	tst.b input(a6) 					null return ?
+	if <ne> then.s						no
+		lea input(a6),a0				copy name into players name
+		lea player_name(a6),a1
+	else
+		lea player_name(a6),a0			use current players name
+		lea input(a6),a1
+	endi
+	jsr str_copy
+	lea input(a6),a0					add '.CDR' to name
+	lea text12(pc),a1
+	jsr str_cat
+	clr d0								not ESC
+
+	ret
+
+
+; ****************************************
+; **									**
+; ** S_LOAD_COMMANDER - LOAD GAME STATE **
+; **									**
+; ****************************************
+
+; Loads a saved game from disk or tape. Single click routine that asks the
+; player for the name of the commander to load.
+
+; Entry:  None
+; Exit:   None
+
+; Regs:   ?
+; Subr:   ?
+
+	subr s_load_commander
+
+	bsr draw_highlight					highlight icon
+	bsr input_name						input commanders name to load
+	cmp #27,d0							ESC ?
+	beq no_highlight					remove highlight
+	bra load_game						load game from disk
+
+
+; ****************************************
+; **									**
+; ** D_LOAD_COMMANDER - LOAD GAME STATE **
+; **									**
+; ****************************************
+
+; Loads a saved game from disk or tape. Double click routine that uses the
+; current player's name for the disk file name (with .cdr added)
+
+; Entry:  None
+; Exit:   None
+
+; Regs:   ?
+; Subr:   ?
+
+	subr d_load_commander
+
+	bsr draw_highlight					highlight icon
+	lea player_name(a6),a0				build file name
+	lea input(a6),a1
+	jsr str_copy
+	lea input(a6),a0
+	lea text12(pc),a1
+	jsr str_cat
+	bra load_game						load game from disk
+
+
+; ***************************************
+; **								   **
+; ** LOAD_GAME - LOAD A GAME FROM DISK **
+; **								   **
+; ***************************************
+
+; Loads a saved game from disk.
+
+; Entry: INPUT = file name
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr load_game
+
+	jsr clear_input 					print "Loading .. "
+	lea text4(pc),a0
+	jsr print_string
+	lea player_name(a6),a0
+	jsr print_string
+	clr -(sp)							attempt to open file
+	pea input(a6)
+	bdos f_open,8
+	move.l d0,d6						error ?
+	if <mi> then.s						yes
+		cmp #-33,d0 					file not found ?
+		bne disk_error					no, display error message
+		lea text7(pc),a0				build message (not found)
+		lea pad(a6),a1
+		jsr str_copy
+		lea pad(a6),a0
+		lea player_name(a6),a1
+		jsr str_cat
+		lea pad(a6),a0
+		lea text8(pc),a1
+		jsr str_cat
+		lea pad(a6),a0					print error
+		jsr error_box
+		jsr clear_input 				clear input line
+		bra no_highlight				remove highlight and return
+	endi
+	pea io_buffer(a6)					load 256 bytes into buffer
+	push.l #256
+	push.w d6
+	bdos f_read,12
+	tst.l d0							disk error ?
+	bmi disk_error						yes
+	if d0 <ne> #256 then.s				not enough bytes read
+		moveq #-48,d0					issue error
+		bra disk_error
+	endi
+	push d6 							close file
+	bdos f_close,4
+	bsr scramble						unscramble buffer
+	lea io_buffer(a6),a0				copy buffer into game state array
+	lea game_state(a6),a1
+	loop 1,256/4
+		move.l (a0)+,(a1)+
+	next 1
+	bsr restore_state					restore game state
+	bra no_highlight					remove highlight and return
+
+
+; ****************************************
+; **									**
+; ** S_SAVE_COMMANDER - SAVE GAME STATE **
+; **									**
+; ****************************************
+
+; Saves the current game state to disk/tape. Single click routine that
+; asks the player for the name to save.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr s_save_commander
+
+	bsr draw_highlight					highlight the icon
+	jsr save_state						save game state
+	bsr input_name						input players name
+	cmp #27,d0							ESC ?
+	beq no_highlight					yes
+	bra save_game						save the game to disk
+
+
+; ***********************************************
+; **										   **
+; ** D_SAVE_COMMANDER - SAVE COMMANDER TO DISK **
+; **										   **
+; ***********************************************
+
+; Saves the current commander to disk. Double click routine that doesn't
+; ask the player for his name again.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr d_save_commander
+
+	bsr draw_highlight					highlight the icon
+	jsr save_state						save game state
+	lea player_name(a6),a0				copy name into input buffer
+	lea input(a6),a1
+	jsr str_copy
+	lea input(a6),a0					add ".cdr"
+	lea text12(pc),a1
+	jsr str_cat
+	bra save_game						save game to disk
+
+
+; ************************************************
+; **											**
+; ** SAVE_GAME - SAVES THE CURRENT GAME TO DISK **
+; **											**
+; ************************************************
+
+; Saves the game state buffer to disk using the commander's name as the
+; file name (.CDR added).
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr save_game
+
+	jsr clear_input 					print 'Saving .. '
+	lea text6(pc),a0
+	jsr print_string
+	lea player_name(a6),a0
+	jsr print_string
+	lea game_state(a6),a0				copy game state into io_buffer
+	lea io_buffer(a6),a1
+	loop 1,256
+		move.b (a0)+,(a1)+
+	next 1
+	bsr scramble						scramble the buffer
+	clr -(sp)							attempt to create file
+	pea input(a6)
+	bdos f_create,8
+	move.l d0,d6						disk error ?
+	bmi disk_error						yes
+	pea io_buffer(a6)					attempt to write game state array
+	push.l #256
+	push.w d6
+	bdos f_write,12
+	tst.l d0							disk error ?
+	bmi disk_error						yes
+	if d0 <ne> #256 then.s				disk full
+		moveq #-47,d0
+		bra disk_error
+	endi
+	push d6 							close file
+	bdos f_close,4
+	tst.l d0							disk error ?
+	bmi disk_error						yes
+	jsr clear_input 					clear input line
+	bra no_highlight					remove highlight and return
+
+
+; ***************************************
+; **								   **
+; ** CATALOG - PRODUCE CATALOG OF TAPE **
+; **								   **
+; ***************************************
+
+; Produce catalog of saved commanders.
+
+; Entry:  None
+; Exit:   None
+
+; Regs:   All corrupt.
+; Subr:   ?
+
+	subr catalog
+
+	jsr draw_highlight					highlight icon
+	clr no_shown(a6)					clear no. lines shown
+	pea catalog_buffer(a6)				set DTA buffer address
+	bdos f_setdta,6
+	clr -(sp)							search for a .CDR file
+	pea text13(pc)
+	bdos f_sfirst,8
+	tst.l d0							disk error ?
+	if <mi> then.s						yes
+		cmp #-33,d0 					file not found ?
+		bne disk_error					no, display disk error
+		lea text14(pc),a0				display message (no commanders)
+		jsr error_box
+		bra no_highlight				remove highlight and return
+	endi
+	repeat
+		cmp #max_shown,no_shown(a6) 	screen full ?
+		if <eq> then.s					yes
+			bsr continue				wait for a key press
+			cmp #27,d0					ESC ?
+			beq no_highlight			yes, redraw screen
+			clr no_shown(a6)			force new screen
+		endi
+		tst no_shown(a6)				first item ?
+		if <eq> then.s					yes
+			jsr prepare_text			prepare screen
+			lea catalog_text(pc),a0 	print titles
+			jsr print_string
+			st redraw(a6)				set screen redraw flag
+			lea disk_table(pc),a0
+			jsr init_cursor
+		endi
+		jsr hide_cursor 				hide cursor
+		moveq #2,d0 					position cursor
+		move no_shown(a6),d1
+		asl #3,d1
+		add #text_top+16,d1
+		jsr locate
+		moveq #magenta,d0				print commander's name
+		moveq #black,d1
+		jsr text_colour
+		lea catalog_buffer+30(a6),a0
+		repeat
+			move.b (a0)+,d0
+			break if.b d0 <eq> #'.'
+			jsr print_char
+		endr
+		clr -(sp)						open file
+		pea catalog_buffer+30(a6)
+		bdos f_open,8
+		move.l d0,d6					disk error ?
+		bmi disk_error					yes
+		pea io_buffer(a6)				read file into buffer
+		push.l #256
+		push.w d6
+		bdos f_read,12
+		tst.l d0						disk error ?
+		bmi disk_error					yes
+		push d0 						save no. bytes read
+		push d6 						close file
+		bdos f_close,4
+		cmp #256,(sp)+					corrupt file ?
+		if <ne> then.s					yes
+			lea text16(pc),a0			display error
+			jsr print_string
+		else
+			bsr scramble				unscramble buffer
+			moveq #12,d0				print current planet
+			jsr tab
+			moveq #lgt_blue,d0
+			moveq #trans,d1
+			jsr text_colour
+			move #planet_name,d0
+			bsr find_entry
+			jsr print_string
+			moveq #21,d0				position and colour of game time
+			jsr tab
+			moveq #red,d0
+			moveq #black,d1
+			jsr text_colour
+			move #game_time,d0			find game time in record
+			bsr find_entry
+			lea input(a6),a1			build into string
+			bsr build_time
+			lea input(a6),a0			print game time
+			jsr print_string
+			moveq #30,d0				position and colour of score
+			jsr tab
+			moveq #white,d0
+			moveq #black,d1
+			jsr text_colour
+			move #score,d0				find score in record
+			bsr find_entry
+			move.l (a0),d0				print score
+			clr d1
+			jsr print_number
+		endi
+		jsr restore_cursor				restore mouse cursor
+		inc no_shown(a6)				increment no. names shown
+		jsr read_key					key pressed ?
+		tst d0
+		if <ne> then.s					yes
+			cmp #27,d0					ESC ?
+			beq no_highlight			yes, remove highlight
+		endi
+		bdos f_snext,2					search for next match
+		break if.l d0 <eq> #-49 		exit loop if end of catalog
+		tst.l d0						disk error ?
+		bmi disk_error					yes, display error
+	endr
+	bsr continue						wait for key press
+	bra draw_screen 					redraw screen and return
+
+
+; ****************************************
+; **									**
+; ** S_RAM_SAVE - SAVE COMMANDER IN RAM **
+; **									**
+; ****************************************
+
+; Saves the current game state in ram. Single click routine that asks the
+; player for the commander's name before saving.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr s_ram_save
+
+	bsr draw_highlight					highlight icon
+	bsr input_name						input commanders name
+	cmp #27,d0							ESC ?
+	if <ne> then.s						no
+		bsr save_state					save game state
+		lea text23(pc),a0				print message
+		jsr print_string
+	endi
+	bra no_highlight					remove highlight and return
+
+
+; ****************************************
+; **									**
+; ** D_RAM_SAVE - SAVE COMMANDER IN RAM **
+; **									**
+; ****************************************
+
+; Saves the current game state in ram. Double click routine doesn't ask
+; the player to enter his name.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr d_ram_save
+
+	bsr draw_highlight					highlight icon
+	bsr save_state						save game state
+	jsr clear_input 					print message
+	lea text23(pc),a0
+	jsr print_string
+	bra no_highlight					remove highlight and return
+
+
+; ***************************************
+; **								   **
+; ** FIND_ENTRY - FIND ENTRY IN BUFFER **
+; **								   **
+; ***************************************
+
+; Finds the entry of a variable in the IO_BUFFER using the variable list.
+
+; Entry: D0 = offset of variable required
+; Exit:  A0 = ptr: position in IO_BUFFER
+
+; Regs:  ?
+; Subr:  ?
+
+	subr find_entry
+
+	lea io_buffer(a6),a0				start of io_buffer
+	lea var_list(pc),a1 				list of variables
+	repeat
+		cmp (a1)+,d0					variable found ?
+		ret <eq>						yes, return
+		move (a1)+,d1					next entry
+		add d1,d1
+		lea (a0,d1),a0
+	endr
+
+
+; ********************************
+; **							**
+; ** CONTINUE - WAIT FOR PLAYER **
+; **							**
+; ********************************
+
+; Prints 'Press any key to continue' and waits for a key to be pressed.
+
+; Entry: None
+; Exit:  D0 = key pressed
+
+; Regs:  ?
+; Subr:  PRINT_STRING, WAIT_KEY
+
+	subr continue,global
+
+	jsr clear_input 					print message
+	jsr hide_cursor
+	lea text15(pc),a0
+	jsr print_string
+	jsr restore_cursor
+	jmp wait_key						wait to key press and return
+
+
+; ****************************
+; **						**
+; ** DEFAULT - DEFAULT GAME **
+; **						**
+; ****************************
+
+; Resets game back to default state. Asks player if they are sure.
+
+; Entry:  None
+; Exit:   None
+
+; Regs:   ?
+; Subr:   PRINT_STRING, RESTORE_STATE.
+
+	subr default
+
+	bsr draw_highlight					highlight the icon
+	jsr confirm 						sure ?
+	tst d0
+	if <ne> then.s						yes
+		jsr default_game				copy default game data
+		jsr restore_state				restore game state
+	endi
+	bra no_highlight					remove highlight
+
+
+; **********************************************
+; **										  **
+; ** DISK_ERROR - DISK ERROR HANDLING ROUTINE **
+; **										  **
+; **********************************************
+
+; This routine is executed whenever a disk error occurs.
+
+; Entry: D0.L = disk error (GEMDOS)
+; Exit:  None (jumps to DISK)
+
+; Regs: ?
+; Subr: ?
+
+	subr disk_error
+
+	push d0 							save error #
+	tst.l d6							file currently open ?
+	if <pl> then.s						yes
+		push d6 						close it (ignore any error)
+		bdos f_close,4
+	endi
+	pop d0								valid disk error ?
+	neg.l d0
+	if d0 <hi> #49 then.s				no
+		lea err0(pc),a0 				print unknown error message
+	else
+		asl #2,d0						get pointer to error message
+		lea disk_errors(pc),a0
+		move.l (a0,d0),a0
+	endi
+	push.l a0							copy 'Error: ' into buffer
+	lea text11(pc),a0
+	lea pad(a6),a1
+	jsr str_copy
+	lea pad(a6),a0						add error message
+	pop.l a1
+	jsr str_cat
+	lea pad(a6),a0
+	jsr error_box						print error message
+	jsr clear_input
+	bra no_highlight					remove highlight and return
+
+
+; **************************************************
+; **											  **
+; ** CRITICAL_ERROR - CRITICAL DISK ERROR HANDLER **
+; **											  **
+; **************************************************
+
+; This routine is patched into the GEMDOS critical error vector ($101). It
+; is called every time a low level disk error occurs. It's entire function
+; is to set the return code of -1 so the error is passed to the required
+; calling routine.
+
+; Entry: None
+; Exit:  D0.L = -1
+
+; Regs: ?
+; Subr: ?
+
+	subr critical_error,global
+
+	move 4(sp),d0						set return code and abort
+	ext.l d0
+
+	ret
+
+
+; ***********************************************
+; **										   **
+; ** HIGHLIGHT - HIGHLIGHT SELECTED CARGO ITEM **
+; **										   **
+; ***********************************************
+
+; Highlight (or remove) the selected equipment icon. This is a low level
+; routine that does the actual drawing. You should use DRAW_HIGHLIGHT which
+; removes any previous highlight.
+
+; Entry: D0 = colour to draw lines
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr highlight
+
+	jsr set_colour						set line colour
+	jsr hide_cursor 					remove cursor
+	move which_icon(a6),d0				index into coords table
+	asl #3,d0
+	lea icon_coords(pc),a0
+	lea (a0,d0),a0
+	lea xc1(a6),a1						copy into xc1,yc1,xc2,yc2
+	loop 1,4
+		move (a0)+,(a1)+
+	next 1
+	draw_line xc1,yc1,xc2,yc1			top edge
+	draw_line xc2,yc1,xc2,yc2			right edge
+	draw_line xc2,yc2,xc1,yc2			bottom edge
+	draw_line xc1,yc2,xc1,yc1			left edge
+	jmp restore_cursor
+
+
+; *************************************************
+; **											 **
+; ** DRAW_HIGHLIGHT - DRAW HIGHLIGHT AROUND ICON **
+; **											 **
+; *************************************************
+
+; Draws a white box around the current icon.
+
+; Entry: D0 = icon # (see icon_coords table)
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr draw_highlight
+
+	move d0,which_icon(a6)				save icon #
+	moveq #white,d0 					draw highlight
+	bra highlight
+
+
+; *************************************
+; **								 **
+; ** NO_HIGHLIGHT - REMOVE HIGHLIGHT **
+; **								 **
+; *************************************
+
+; Removes highlight from around the current icon.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr no_highlight
+
+	tst redraw(a6)						redraw screen ?
+	if <ne> then.s						yes
+		bsr draw_screen
+	else.s
+		moveq #black,d0 				draw in black
+		bsr highlight
+	endi
+
+	ret 								return
+
+
+; ************************************
+; **								**
+; ** DRAW_SCREEN - DRAW DISK SCREEN **
+; **								**
+; ************************************
+
+; Draws the disk icon screen.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr draw_screen
+
+	jsr prepare_text					prepare display
+	lea text17(pc),a0					print title
+	moveq #title_y,d1
+	jsr print_centre
+	lea icon_draw_data(pc),a5			display icons
+	loop 1,5
+		push d7
+		move (a5)+,d0					find icon bit map
+		jsr find_bitmap
+		move (a5)+,d0					display icon
+		move (a5)+,d1
+		jsr put_bitmap
+		move.l (a5)+,a0 				print label
+		jsr print_string
+		pop d7							next icon
+	next 1
+	clr redraw(a6)						clear redraw flag
+	lea disk_table(pc),a0				initialise cursor
+	jsr init_cursor
+
+	ret 								return
+
+
+; *********************************************
+; **										 **
+; ** SCAMBLE - SCRAMBLE/UNSCRAMBLE IO BUFFER **
+; **										 **
+; *********************************************
+
+; Scrambles or unscambles the disk io buffer by exclusive-oring each byte
+; with the index byte (255..0)
+
+; Entry: None
+; Exit:  None
+
+; Regs: D7/A0 corrupt.
+; Subr: None
+
+	subr scramble
+
+	lea io_buffer(a6),a0				eor each byte
+	loop 1,256
+		eor.b d7,(a0)+
+	next 1
+
+	ret 								return
+
+; ---- LOCAL DATA ----
+
+; List of data to be saved/loaded.
+
+var_list:
+
+	dc.w galaxy_no,1
+	dc.w gal_seed,3
+	dc.w current,1
+	dc.w user,1
+	dc.w cash,2
+	dc.w fluctuation,1
+	dc.w equip,17
+	dc.w hold,max_products*2
+	dc.w police_record,1
+	dc.w score,2
+	dc.w rating,1
+	dc.w mission_count,1
+	dc.w kill_count,1
+	dc.w next_mission,1
+	dc.w mission,1
+	dc.w mission_planet,1
+	dc.w jump_count,1
+	dc.w game_time,4
+	dc.w planet_name,6
+	dc.w cursor_type,1
+	dc.w retro_used,1
+	dc.w logo_shown,1
+	dc.w -1
+
+; Disk icon draw data table.
+
+icon_draw_data:
+
+	dc.w bit_save,44,24
+	dc.l text18
+	dc.w bit_load,201,24
+	dc.l text19
+	dc.w bit_ram_save,25,96
+	dc.l text20
+	dc.w bit_catalog,130,94
+	dc.l text21
+	dc.w bit_default,230,94
+	dc.l text22
+
+; Icon coordinates.
+
+icon_coords:
+
+	dc 42,22,106,70 					save
+	dc 199,22,263,70					load
+	dc 22,94,84,141 					ram save
+	dc 126,90,183,141					catalog
+	dc 228,91,291,141					default
+
+; Disk mouse action table.
+
+disk_table:
+
+	action 25,25,137,80,0,-1,save_commander
+	action 177,25,289,81,1,-1,load_commander
+	action 25,97,90,154,2,-1,ram_save
+	action 121,93,193,154,3,0,catalog
+	action 220,94,298,155,4,0,default
+	include icons
+	dc.w -1
+	dc.l 0
+
+; Disk error messages.
+
+disk_errors:
+
+	dc.l err0,err1,err2,err3,err4,err5,err6,err7,err8,err0
+	dc.l err10,err11,err1,err13,err14,err15,err16,err17,err0,err0,err0
+	dc.l err0,err0,err0,err0,err0,err0,err0,err0,err0,err0,err0
+	dc.l err32,err33,err34,err35,err36,err37,err0,err39,err40,err0
+	dc.l err0,err0,err0,err0,err46,err47,err48,err49
+
+err0:	db 'Unknown error!',0
+err1:	db 'General error!',0
+err2:	db 'Drive not ready!',0
+err3:	db 'Unknown command!',0
+err4:	db 'CRC error!',0
+err5:	db 'Bad request!',0
+err6:	db 'Seek error!',0
+err7:	db 'Unknown media!',0
+err8:	db 'Sector not found!',0
+err10:	db 'Write error!',0
+err11:	db 'Read error!',0
+err13:	db 'Write protected!',0
+err14:	db 'Disk changed!!',0
+err15:	db 'Unknown device!',0
+err16:	db 'Bad sector!',0
+err17:	db 'Insert disk!',0
+err32:	db 'Invalid function!',0
+err33:	db 'File not found!',0
+err34:	db 'Pathname not found!',0
+err35:	db 'Too many open files!',0
+err36:	db 'Access not possible!',0
+err37:	db 'Invalid handle!',0
+err39:	db 'Not enough memory!',0
+err40:	db 'Invalid block!',0
+err46:	db 'Invalid drive!',0
+err47:	db 'Disk full!',0
+err48:	db 'File corrupt!',0
+err49:	db 'No more files!',0
+
+; Headings for catalog.
+
+catalog_text:
+
+	db c_cursor,10,title_y,c_colour,white,trans
+	db 'Catalog Of Commanders'
+	db c_cursor,2,text_top,c_colour,lgt_green,black
+	db 'Name      Docked     Time    Score'
+	db 0
+
+; Misc. messages.
+
+text2:	db 'Are you sure ',0
+text3:	db 'Commander''s name ? ',0
+text6:	db 'Saving Commander ',0
+text4:	db 'Loading Commander ',0
+text5:	db 'Disk I/O error!',0
+text7:	db 'Commander ',0
+text8	db ' not found on this disk',0
+text10: db 'Unknown disk error!',0
+text11: db 'Error: ',0
+text12: db '.CDR',0
+text13: db '*.CDR',0
+text14: db 'There are no commanders on this disk',0
+text15: db 'Press any key to continue.',0
+text16: db c_tab,12,c_ink,lgt_blue,'File corrupt!',0
+text17: db 'Disk Menu',0
+text18: db c_cursor,3,72,'Save Commander',0
+text19: db c_cursor,22,72,'Load Commander',0
+text20: db c_cursor,3,144,'Ram Save',0
+text21: db c_cursor,16,144,'Catalog',0
+text22: db c_cursor,29,144,'Default',c_cursor,29,152,'Jameson',0
+text23: db 'Game saved in RAM',0

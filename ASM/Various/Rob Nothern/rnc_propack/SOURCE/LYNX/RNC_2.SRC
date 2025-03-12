@@ -1,0 +1,467 @@
+; Thursday 12-Mar-92 22:46:00
+* === RNC_2.SRC =================================================================
+*
+* Cartridge File RNC Unpack Routines (Method 2) --  Handy Software
+*
+* Copyright (c) 1992 Rob Northen Computing, Tel: 0428-713635
+*
+* Date      Name        Description
+* --------- ----------- --------------------------------------------------------
+* 12 Mar 92 R.Northen   Created this file!
+*
+* ==============================================================================
+
+; Use PP.EXE to pack a raw data file or Epyx .BIN file using Method 1 or 2
+;
+; Use RNC_1.SRC to unpack Method 1 RNC packed files, OR
+;
+; Use RNC_2.SRC to unpack Method 2 RNC packed files
+;
+; Call READFILERNC macro to unpack a packed file, in the same way as you
+; 
+; would call the READFILE macro to read an unpacked file
+;
+; Use HANDYROM to assemble .BIN or raw data files into a Cart ROM image
+;
+
+
+; define this flag to make the unpack code as small as possible (439 bytes)
+; comment out this flag to make unpack code as fast as possible (585 bytes)
+ 
+; RNC_SMALL	.EQU	1
+
+	BEGIN_ZPAGE
+spos    .DS 2
+slen    .DS 1
+	END_ZPAGE
+
+* read next byte from game cart
+#MACRO GETCARTBYTE
+    #IFNDEF RNC_SMALL
+        lda RCART_0             ; read byte from cart
+        inx                     ; update cart page counter, low byte
+        bne ??.0
+        JSR NextCartPage        ; update cart page counter, high byte
+??.0    .EQ *                   ;  and if on new page update cart page
+    #ELSE
+        jsr getcartbytesub      ; smaller (but slower) version of above
+    #ENDIF
+#ENDMACRO
+
+* read next packed byte from file and move MSBit into carry flag
+#MACRO GETPACKBYTE
+    #IFNDEF RNC_SMALL
+        GETCARTBYTE
+        rol a
+    #ELSE
+        jsr getpackbytesub      ; smaller (but slower) version of above
+    #ENDIF
+#ENDMACRO
+
+* move next bit from packed byte into carry flag
+#MACRO GETPACKBIT
+    #IFNDEF RNC_SMALL
+        asl a
+        beq ?0
+    #ENDIF
+
+    #IFDEF RNC_SMALL
+        asl a
+        bne ??.0
+        JSR getpackbytesub      ; update cart page counter, high byte
+??.0    .EQ *                   ;  and if on new page update cart page
+    #ENDIF
+#ENDMACRO
+
+* copy next byte from packed file into the output buffer
+#MACRO GETPACKRAW
+        GETCARTBYTE
+        sta (sysptr)
+        inc sysptr
+        bne ??.0
+        inc sysptr+1
+??.0    .EQ *
+#ENDMACRO
+
+
+NextCartPage
+* ******************************************************************************
+* update high byte of cart page counter and if zero update cart page
+* ON EXIT:
+*   - A is preserved
+* ******************************************************************************
+#IF ROMPAGESIZE>256
+        inc CartOffsetHigh
+        bne .00
+#ENDIF
+        pha
+        phy
+        inc CartPage
+        lda CartPage
+        JSR SetCartPage
+        ldx #<{-ROMPAGESIZE}
+#IF ROMPAGESIZE>256
+        lda #>{-ROMPAGESIZE}
+        sta CartOffsetHigh
+#ENDIF
+        ply
+        pla
+.00
+        rts
+
+#IFDEF RNC_SMALL
+getcartbytesub
+        lda RCART_0             ; read byte from cart
+        inx                     ; update cart page counter, low byte
+        bne .00
+        JSR NextCartPage        ; update cart page counter, high byte
+.00     .EQ *                   ;  and if on new page update cart page
+	rts
+
+getpackbytesub
+        lda RCART_0             ; read byte from cart
+        inx                     ; update cart page counter, low byte
+        bne .00
+        JSR NextCartPage        ; update cart page counter, high byte
+.00     .EQ *                   ;  and if on new page update cart page
+	rol a
+	rts		
+#ENDIF
+
+ReadFile0RNC
+* ***************************************************************************
+* This routine will unpack into RAM a Packed game cartridge file.  Presumes
+* that the cartridge 0 port is all set up to start reading.  Also presumes
+* that sysptr points to the directory entry of the file to be loaded, that the
+* CartDirectory buffer is filled out, and that CartPage and 
+* CartOffsetLow,High reflect the state of port 0.  
+* 
+* ON ENTRY:
+*    - If you have specified that the file directory has a ROMDIR_DEST field 
+*      which specifies that the directory has a RAM destination field:
+*         If the A register is non-zero, X,Y (low,high) is presumed to have
+*         the RAM destination for the file; if A is zero, then the RAM 
+*         destination is taken from the directory entry
+*    - If you have not specified that the file directory has a ROMDIR_DEST 
+*      field you must specify RAM destination of the file:
+*         X,Y (low,high) has the RAM destination for the file
+*    - The cartridge 0 port is all set up to read the first byte of the file
+* 
+* ON EXIT:
+*    - CartPage and CartOffsetLow,High are advanced to the byte beyond 
+*      the last byte read
+*    - X,Y (low,high) has RAM address of the byte beyond the last written
+
+        #IFDEF ROMDIR_DEST
+        cmp #1
+        bcs .00
+        ldx CartDirectory+ROMDIR_DEST   ; get RAM destination from directory
+        ldy CartDirectory+ROMDIR_DEST+1
+        #ENDIF
+
+.00
+        STX sysptr              ; X,Y has the RAM destination pointer
+        STY sysptr+1
+
+        SET_TO_READ_CART
+
+	ldx CartOffsetLow
+#IF ROMPAGESIZE>256
+        sec                     ; set Y to complement of CartOffsetHigh
+        lda CartOffsetHigh      ;  to facilitate bounds checking
+        sbc #>ROMPAGESIZE
+        sta CartOffsetHigh
+#ENDIF
+
+        ldy #19
+.10
+        GETCARTBYTE             ; skip packed file header
+        dey
+        bne .10
+        sec
+        rol a
+        asl a
+        jmp PackBits2
+
+* ******************************************************************************
+
+fet0
+#IFNDEF RNC_SMALL
+        GETPACKBYTE
+        bra bak0
+#ENDIF
+
+PackRaw
+        ldy #4
+PackRaw2
+        GETPACKBIT fet0
+bak0
+        rol spos+1
+        dey
+        bne PackRaw2
+        pha
+        lda spos+1
+        adc #3
+        asl a
+        asl a
+        sta spos+1
+        ldy #0
+.20
+        GETCARTBYTE
+        sta (sysptr),y
+        iny
+        dec spos+1
+        bne .20
+        tya
+        clc
+        adc sysptr
+        sta sysptr
+        bcc .30
+        inc sysptr+1
+.30
+        pla
+        jmp PackBits2
+
+* ******************************************************************************
+
+fet1
+#IFNDEF RNC_SMALL
+        GETPACKBYTE
+        bra bak1
+#ENDIF
+fet2
+#IFNDEF RNC_SMALL
+        GETPACKBYTE
+        bra bak2
+#ENDIF
+fet3
+#IFNDEF RNC_SMALL
+        GETPACKBYTE
+        bra bak3
+#ENDIF
+fet4
+#IFNDEF RNC_SMALL
+        GETPACKBYTE
+        bra bak4
+#ENDIF
+fet5
+#IFNDEF RNC_SMALL
+        GETPACKBYTE
+        bra bak5
+#ENDIF
+fet6
+#IFNDEF RNC_SMALL
+        GETPACKBYTE
+        bra bak6
+#ENDIF
+fet7
+#IFNDEF RNC_SMALL
+        GETPACKBYTE
+        bra bak7
+#ENDIF
+
+
+PackLen
+        GETPACKBIT fet1
+bak1
+        rol slen
+        GETPACKBIT fet2
+bak2
+        bcc PackCopy
+        GETPACKBIT fet3
+bak3
+        dec slen
+        rol slen
+        ldy slen
+        cpy #9
+        bne PackCopy
+        jmp PackRaw
+
+* ******************************************************************************
+
+
+PackCopy
+        GETPACKBIT fet4
+bak4
+        bcc ByteDisp
+        GETPACKBIT fet5
+bak5
+        rol spos+1
+        GETPACKBIT fet6
+bak6
+        bcc .10
+        jmp PackDisp
+.10
+	ldy #0
+        cpy spos+1
+        bne ByteDisp
+        inc spos+1
+PackCopy2
+        GETPACKBIT fet7
+bak7
+        rol spos+1
+
+* ******************************************************************************
+
+ByteDisp
+        pha
+        GETCARTBYTE
+        sta spos
+        lda sysptr
+        clc
+        sbc spos
+        sta spos
+        lda sysptr+1
+        sbc spos+1
+        sta spos+1
+        ldy #0
+        lda slen
+        lsr a
+        beq .20
+        phx
+        tax
+.10
+        lda (spos),y
+        sta (sysptr),y
+        iny
+        lda (spos),y
+        sta (sysptr),y
+        iny
+        dex
+        bne .10
+        plx
+.20
+        bcc .30
+        lda (spos),y
+        sta (sysptr),y
+.30
+        tya
+        adc sysptr
+        sta sysptr
+        bcc .40
+        inc sysptr+1
+.40
+        pla
+        bra PackBits2
+
+* ******************************************************************************
+
+PackBits
+        GETPACKBYTE
+        bcs PackString
+PackBits1
+        pha
+        GETPACKRAW
+        pla
+PackBits2
+        asl a
+        bcs .10
+        pha
+        GETPACKRAW
+        pla
+        asl a
+        bcc PackBits1
+.10
+        beq PackBits
+
+* ******************************************************************************
+
+PackString
+        stz spos+1          ; init string position
+        ldy #2
+        sty slen
+        GETPACKBIT fet8
+bak8
+        bcs .10
+        jmp PackLen
+.10
+        GETPACKBIT fet9
+bak9
+        bcs .20
+        jmp ByteDisp
+.20
+        inc slen
+        GETPACKBIT fet10
+bak10
+        bcs .30
+        jmp PackCopy
+.30
+        pha
+        GETCARTBYTE
+        cmp #0
+        beq PackEnd
+        adc #7            ; + carry = 8
+        sta slen
+        pla
+        jmp PackCopy
+
+* ******************************************************************************
+
+PackDisp
+        GETPACKBIT fet11
+bak11
+        pha
+        lda spos+1
+        rol a
+        ora #4
+        sta spos+1
+        pla
+        GETPACKBIT fet12
+bak12
+        bcc .10
+        jmp ByteDisp
+.10
+        jmp PackCopy2
+
+fet8
+#IFNDEF RNC_SMALL
+        GETPACKBYTE
+        bra bak8
+#ENDIF
+fet9
+#IFNDEF RNC_SMALL
+        GETPACKBYTE
+        bra bak9
+#ENDIF
+fet10
+#IFNDEF RNC_SMALL
+        GETPACKBYTE
+        bra bak10
+#ENDIF
+fet11
+#IFNDEF RNC_SMALL
+        GETPACKBYTE
+        bra bak11
+#ENDIF
+fet12
+#IFNDEF RNC_SMALL
+        GETPACKBYTE
+        bra bak12
+#ENDIF
+
+* ******************************************************************************
+
+PackEnd
+        pla
+        asl a
+        bne .10
+        GETPACKBYTE
+.10
+        bcc .20
+        jmp PackBits2
+.20
+
+        stx CartOffsetLow
+
+#IF ROMPAGESIZE>256
+        lda CartOffsetHigh
+        adc #>ROMPAGESIZE
+        sta CartOffsetHigh
+#ENDIF
+
+        ldx sysptr
+        ldy sysptr+1
+        jmp RestoreReturn
+
+
+

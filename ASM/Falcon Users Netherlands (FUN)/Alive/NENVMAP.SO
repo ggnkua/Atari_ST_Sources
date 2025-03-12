@@ -1,0 +1,1879 @@
+* Envmap shit (shitmapping & urineshading? =)) 256*256 texturemaps.
+* Make sure normalvectors have length of max 128!
+
+* Mmmhhh... This is about as fast it gets. Maybe by using HUGE offset-
+* buffers or unhandshaked DSP it could be done faster. Ofcourse each highly
+* geometric object can also have it's own specific depthsorting (donuts).
+
+*[T] Techniques used:
+*|1| All egdes are only drawn once!
+*|2| 2 instr/pix texturemap by precalcing offsetline for every triangle.
+*|3| Triangles only! No other shit: makes lookups fast.
+*|4| Combsorting. Near quicksort performance, 100% in instruction-cache.
+*|5| Background clearing with bounding box.
+
+* Object skeleton used by DEMOS1.S or DASTD.S (v1.5)
+* v1.0: * Monitormode selection.
+*       * SET_RES routine vbl-synced.
+*       * Screenaddress-setting optimised.
+
+******** OBJECT EQUATES ********
+
+envlightrot:	EQU	1			* Rotating envmap or still.
+
+envmapxres:	EQU	320			* / the clipwindow
+envmapyres:	EQU	200			* \ dimensions
+
+maxpoints:	EQU	500			* maximum number of points in object
+maxedges:	EQU	1000			* maximum number of edges in object
+maxtriangles:	EQU	500			* maximum number of triangles in object
+avgedgelen:	EQU	50			* maximum average length of edges
+
+* Internal point-structure (with texture-coordinates)
+		RSRESET
+pointx:		RS.W	1
+pointy:		RS.W	1
+pointtx:	RS.W	1
+pointty:	RS.W	1
+pointz:		RS.W	1
+pointsize:	RS.W	1
+
+* Internal triangle format (with color & hiddenedge info)
+		RSRESET
+trianglep1:	RS.W	1
+trianglep2:	RS.W	1
+trianglep3:	RS.W	1
+triangleinfo:	RS.W	1
+trianglesize:	RS.W	1
+
+		RSRESET
+edgelength:	RS.W	1
+edgestarty:	RS.W	1
+edgeslope:	RS.L	1
+edgeheadersize:	RS.W	1
+
+		RSRESET
+edgex:		RS.W	1
+edgetx:		RS.W	1
+edgety:		RS.W	1
+edgeentrysize:	RS.W	1
+
+******** OBJECT TABLE ********
+
+* Must be first in object!!
+envmap_tbl:
+	DC.L	ENVMAPMAINLOOP
+	DC.L	INIT_ENVMAP
+	DC.L	SET_ENVMAPRES
+	DC.L	SET_ENVTORUS
+	DC.L	SET_ENVSPIKES
+	DC.L	SET_ENVDIABLO
+	DC.L	SET_ENVSPIKES2
+	DC.L	SET_ENVINVADER1
+	DC.L	SET_ENVINVADER2
+	DC.L	SET_ENVGROLSCH
+	DC.L	SET_ENVCAN2
+	DC.L	0
+
+******** RESOLUTION SETTING ROUTINE ********
+
+SET_ENVMAPRES:
+	movea.l	scr,a0
+	bsr	CLEAR_320200TSCR
+	movea.l	scr+4,a0
+	bsr	CLEAR_320200TSCR
+	movea.l	scr+8,a0
+	bsr	CLEAR_320200TSCR
+
+	IFEQ	testmode
+	move.l	#rts,vbl_gfx
+
+	clr.l	$ffff9800.w
+
+	move.l	$0466.w,d0
+.ck466:	cmp.l	$0466.w,d0
+	beq.s	.ck466
+	move.w	monitormode,d0
+	cmpi.w	#vga60,d0
+	beq.s	.vga60
+	cmpi.w	#vga100,d0
+	beq.s	.vga100
+	cmpi.w	#rgb50,d0
+	beq	.rgb50
+* Unknown monitormode..
+	rts
+.vga60:	bra	vga60_16bit_320_200
+.vga100:
+	bra	vga100_16bit_320_200
+.rgb50:	bra	rgb50_16bit_320_200
+	ENDC
+	rts
+
+******** INIT SUBROUTINE ********
+
+INIT_ENVMAP:
+	lea	envtexture_txt,a1
+	bsr	LOAD_INCFILE
+	move.l	a0,envtextureadr
+
+	bsr	SET_ENVTORUS
+
+	rts
+
+******** MAINLOOP SUBROUTINE ********
+
+ENVMAPMAINLOOP:
+	IFND	demoos
+	IFEQ	testmode
+	move.w	$468.w,.old468
+	addq.l	#1,frmcnt
+	ENDC
+	ENDC
+
+* First of all, clear the painted object from the current screenbuffer.
+	movem.w	.rect_tbl(pc),d0-d1/d6-d7
+	bsr	CLEAR_RECTANGLE
+
+* Now calculate everything and prepare for painting to the screen.
+	movea.l	envobjadr,a1
+	lea	.rot_tbl(pc),a2
+	move.w	$4bc.w,d0
+	move.w	d0,d1
+	add.w	d0,d0
+;	lsr.w	#2,d0
+	move.w	d0,(a2)
+	mulu.w	#3,d1
+;	lsr.w	#2,d1
+	move.w	d1,2(a2)
+	bsr	ROTATE_OBJECT
+	lea	sine_tbl,a0
+	move.w	$4bc.w,d0
+	move.w	d0,d1
+	move.w	d0,d2
+	mulu.w	#5,d2
+	lsr.l	#1,d2
+	Do_SinModulo	d0
+	Do_SinModulo	d2
+	Get_Sin	a0,d0,d0
+	mulu.w	#7,d1
+	lsr.w	#1,d1
+	Do_SinModulo	d1
+	Get_Sin	a0,d1,d1
+	Get_Sin	a0,d2,d2
+	asr.w	#7,d0
+	asr.w	#8,d1
+	asr.w	#8,d2
+	addi.w	#-300,d2
+;	moveq	#0,d0
+;	moveq	#0,d1
+;	move.w	#-300,d2
+	movem.w	d0-d2,-(sp)
+	bsr	TRANSFORM_OBJECT
+	lea	boundbox_tbl,a1
+	lea	.rot_tbl(pc),a2
+	lea	.rect_tbl(pc),a0
+	bsr	CALC_BOUNDINGWINDOW
+	addq	#6,sp
+
+* Finally paint everything on screen.
+;	lea	.rot_tbl(pc),a1
+;	bsr	PLOT_ROTATION
+	bsr	PLOT_OBJECT
+
+* Do timing and flipping of animationpages.
+	lea	.rect_tbl(pc),a0
+	movem.l	(a0),d0-d5
+	movem.l	d2-d5,(a0)
+	movem.l	d0-d1,4*4(a0)
+
+	IFEQ	testmode
+	lea	scr,a0
+	move.l	(a0)+,d0
+	move.l	(a0)+,d1
+	move.l	(a0),-4(a0)
+	move.l	d0,(a0)
+	move.l	d1,-8(a0)
+	move.l	d0,d1
+	lsr.w	#8,d0
+	move.l	d0,$ffff8200.w
+	move.b	d1,$ffff820d.w
+
+	move.w	.old468(pc),d0
+.test468:
+	cmp.w	$468.w,d0
+	beq.s	.test468
+
+	ENDC
+	rts
+
+.old468:
+	DS.W	1
+
+.rot_tbl:
+	DC.W	0,0,0
+.rect_tbl:
+	DS.W	4*3
+
+******** OBJECT DATA ********
+
+	DATA
+
+envobjadr:
+	DC.L	torusobject_buf
+
+torusobject_buf:
+	INCBIN	TORUS.DAT
+spikesobject_buf:
+	INCBIN	SPIKES.DAT
+diabloobject_buf:
+	INCBIN	DIABLO.DAT
+spikes2object_buf:
+	INCBIN	SPIKES2.DAT
+invader1_buf:
+	INCBIN	INVADER1.DAT
+invader2_buf:
+	INCBIN	INVADER2.DAT
+grolschobject_buf:
+	INCBIN	GROLSCH.DAT
+can2object_buf:
+	INCBIN	CAN2.DAT
+
+envtexture_txt:
+	DC.B	"BLOB2.RAW",0
+	EVEN
+
+******** OBJECT RESERVES ********
+
+	BSS
+
+boundbox_tbl:
+	DS.W	8*3				* 8 points in box
+
+points_tbl:
+	DS.W	1				* number of 3d-points in object
+	DS.W	pointsize*maxpoints		* X,Y,TX,TY,Z
+pnttritbladr:
+	DS.L	1
+edgestbladr:
+	DS.L	1
+tritbladr:
+	DS.L	1
+normaltbladr:
+	DS.L	1
+
+envtextureadr:
+	DS.L	1
+
+******** OBJECT SUBROUTINES ********
+
+	TEXT
+
+SET_ENVTORUS:
+	move.l	#torusobject_buf,envobjadr
+
+	movea.l	envobjadr,a1
+	lea	boundbox_tbl,a0
+	bsr	CALC_BOUNDINGBOX
+	movea.l	envobjadr,a1
+	bsr	INIT_OBJECT
+	rts
+
+SET_ENVSPIKES:
+	move.l	#spikesobject_buf,envobjadr
+
+	movea.l	envobjadr,a1
+	lea	boundbox_tbl,a0
+	bsr	CALC_BOUNDINGBOX
+	movea.l	envobjadr,a1
+	bsr	INIT_OBJECT
+	rts
+
+SET_ENVDIABLO:
+	move.l	#diabloobject_buf,envobjadr
+
+	movea.l	envobjadr,a1
+	lea	boundbox_tbl,a0
+	bsr	CALC_BOUNDINGBOX
+	movea.l	envobjadr,a1
+	bsr	INIT_OBJECT
+	rts
+
+SET_ENVSPIKES2:
+	move.l	#spikes2object_buf,envobjadr
+
+	movea.l	envobjadr,a1
+	lea	boundbox_tbl,a0
+	bsr	CALC_BOUNDINGBOX
+	movea.l	envobjadr,a1
+	bsr	INIT_OBJECT
+	rts
+
+SET_ENVINVADER1:
+	move.l	#invader1_buf,envobjadr
+
+	movea.l	envobjadr,a1
+	lea	boundbox_tbl,a0
+	bsr	CALC_BOUNDINGBOX
+	movea.l	envobjadr,a1
+	bsr	INIT_OBJECT
+	rts
+
+SET_ENVINVADER2:
+	move.l	#invader2_buf,envobjadr
+
+	movea.l	envobjadr,a1
+	lea	boundbox_tbl,a0
+	bsr	CALC_BOUNDINGBOX
+	movea.l	envobjadr,a1
+	bsr	INIT_OBJECT
+	rts
+
+SET_ENVGROLSCH:
+	move.l	#grolschobject_buf,envobjadr
+
+	movea.l	envobjadr,a1
+	lea	boundbox_tbl,a0
+	bsr	CALC_BOUNDINGBOX
+	movea.l	envobjadr,a1
+	bsr	INIT_OBJECT
+	rts
+
+SET_ENVCAN2:
+	move.l	#can2object_buf,envobjadr
+
+	movea.l	envobjadr,a1
+	lea	boundbox_tbl,a0
+	bsr	CALC_BOUNDINGBOX
+	movea.l	envobjadr,a1
+	bsr	INIT_OBJECT
+	rts
+
+* Gets addresses of all tables in the 3d-object.
+* INPUT: a1: objectaddress (EARX envmapped format)
+INIT_OBJECT:
+	move.w	(a1)+,d0
+	cmpi.w	#maxpoints,d0
+	mulu.w	#pointsize,d0
+	adda.l	d0,a1
+	move.l	a1,pnttritbladr			* address of pointtriangles
+	move.w	(a1)+,d0
+	cmpi.w	#maxtriangles,d0
+	lea	(a1,d0.w*trianglesize),a1
+	move.w	d0,d1
+	move.l	a1,edgestbladr			* address of edges
+	move.w	(a1)+,d0
+	cmpi.w	#maxedges,d0
+	lea	(a1,d0.w*4),a1
+	move.l	a1,tritbladr			* address of edgetriangles
+	mulu.w	#6,d1
+	adda.l	d1,a1
+	move.l	a1,normaltbladr			* address of normals
+	rts
+
+* Gets addresses of all tables in the 3d-object.
+* INPUT: a1: objectaddress (EARX envmapped format)
+INIT_OBJECT128:
+	move.w	(a1)+,d0
+	move.w	d0,d7
+	mulu.w	#pointsize,d0
+	adda.l	d0,a1
+	move.l	a1,pnttritbladr			* address of pointtriangles
+	move.w	(a1)+,d0
+	lea	(a1,d0.w*trianglesize),a1
+	move.w	d0,d1
+	move.l	a1,edgestbladr			* address of edges
+	move.w	(a1)+,d0
+	lea	(a1,d0.w*4),a1
+	move.l	a1,tritbladr			* address of edgetriangles
+	mulu.w	#6,d1
+	adda.l	d1,a1
+	move.l	a1,normaltbladr			* address of normals
+
+* Rescale normals for 128*128 texture.
+	subq.w	#1,d7
+.loop:	movem.w	(a1),d0-d2
+	asr.w	#1,d0
+	asr.w	#1,d1
+	asr.w	#1,d2
+	move.w	d0,(a1)+
+	move.w	d1,(a1)+
+	move.w	d2,(a1)+
+	dbra	d7,.loop
+	rts
+
+* INPUT: a0: address of boundingbox-buffer to fill
+*        a1: address of object's pointtable
+CALC_BOUNDINGBOX:
+* First find the highest and lowest x,y,z components..
+	move.w	(a1)+,d7
+	move.w	pointx(a1),d0
+	move.w	pointy(a1),d1
+	move.w	pointz(a1),d2
+	move.w	d0,d3
+	move.w	d1,d4
+	move.w	d2,d5
+	subq.w	#2,d7
+	bmi.s	.endloop
+	lea	pointsize(a1),a1
+
+.loop:	move.w	pointx(a1),d6
+	cmp.w	d6,d0
+	ble.s	.nonewxl
+	move.w	d6,d0
+.nonewxl:
+	cmp.w	d6,d3
+	bge.s	.nonewxh
+	move.w	d6,d3
+.nonewxh:
+	move.w	pointy(a1),d6
+	cmp.w	d6,d1
+	ble.s	.nonewyl
+	move.w	d6,d1
+.nonewyl:
+	cmp.w	d6,d4
+	bge.s	.nonewyh
+	move.w	d6,d4
+.nonewyh:
+	move.w	pointz(a1),d6
+	cmp.w	d6,d2
+	ble.s	.nonewzl
+	move.w	d6,d2
+.nonewzl:
+	cmp.w	d6,d5
+	bge.s	.nonewzh
+	move.w	d6,d5
+.nonewzh:
+	lea	pointsize(a1),a1
+	dbra	d7,.loop
+.endloop:
+
+* Now create a box (8 points) from the 
+	move.w	d0,(a0)+			* / (xl,yl,zl)
+	move.w	d1,(a0)+			* | 
+	move.w	d2,(a0)+			* \
+	move.w	d0,(a0)+			* / (xl,yl,zh)
+	move.w	d1,(a0)+			* | 
+	move.w	d5,(a0)+			* \
+	move.w	d0,(a0)+			* / (xl,yh,zl)
+	move.w	d4,(a0)+			* | 
+	move.w	d2,(a0)+			* \
+	move.w	d0,(a0)+			* / (xl,yh,zh)
+	move.w	d4,(a0)+			* | 
+	move.w	d5,(a0)+			* \
+	move.w	d3,(a0)+			* / (xh,yl,zl)
+	move.w	d1,(a0)+			* | 
+	move.w	d2,(a0)+			* \
+	move.w	d3,(a0)+			* / (xh,yl,zh)
+	move.w	d1,(a0)+			* | 
+	move.w	d5,(a0)+			* \
+	move.w	d3,(a0)+			* / (xh,yh,zl)
+	move.w	d4,(a0)+			* | 
+	move.w	d2,(a0)+			* \
+	move.w	d3,(a0)+			* / (xh,yh,zh)
+	move.w	d4,(a0)+			* | 
+	move.w	d5,(a0)+			* \
+	rts
+
+* INPUT: 8(sp).w: x center
+*        6(sp).w: y center
+*        4(sp).w: z center
+*        a0: address of rectangleinfo
+*        a1: address of boundingbox structure
+*        a2: address of rotationtable
+CALC_BOUNDINGWINDOW:
+	movea.l	a0,a5				* Backup rectinfo address.
+* Get sine-values..
+	lea	sine_tbl,a3
+	move.w	(a2)+,d0
+	Do_SinModulo	d0
+	Get_SinCos	a3,d0,d1,d2
+	move.w	(a2)+,d0
+	Do_SinModulo	d0
+	Get_SinCos	a3,d0,d3,d4
+
+	lea	.box_tbl(pc),a0
+	movea.l	a1,a2
+	movea.l	a0,a6
+
+* Calculate the x-coordinates..
+	moveq	#8-1,d7
+.xloop	move.w	(a1),d0
+	muls.w	d4,d0
+	addq	#4,a1
+	move.w	(a1)+,d5
+	muls.w	d3,d5
+	sub.l	d5,d0
+	add.l	d0,d0
+	swap	d0
+	move.w	d0,(a0)
+	addq	#6,a0
+	dbra	d7,.xloop
+
+* Calculate the y-coordinates..
+	lea	2(a6),a0			* Get address of first y-coord
+	move.l	d3,a3				* Backup
+	move.l	d4,a4				* Backup
+	muls.w	d1,d3
+	muls.w	d1,d4
+	subq.l	#1,d3
+	subq.l	#1,d4
+	add.l	d3,d3
+	add.l	d4,d4
+	swap	d3
+	swap	d4
+	move.l	a2,a1
+	moveq	#8-1,d7
+.yloop:	movem.w	(a1)+,d5-d6
+	muls.w	d3,d5
+	muls.w	d2,d6
+	move.w	(a1)+,d0
+	muls.w	d4,d0
+	add.l	d0,d5
+	add.l	d6,d5
+	add.l	d5,d5
+	swap	d5
+	move.w	d5,(a0)
+	addq	#6,a0
+	dbra	d7,.yloop
+
+* Calculate the z-coordinates..
+	lea	4(a6),a0			* Get address of first z-coord
+	move.l	a3,d3
+	move.l	a4,d4
+	muls.w	d2,d3
+	muls.w	d2,d4
+	subq.l	#1,d3
+	subq.l	#1,d4
+	add.l	d3,d3
+	add.l	d4,d4
+	swap	d3
+	swap	d4
+	move.l	a2,a1
+	moveq	#8-1,d7
+.zloop:	movem.w	(a1)+,d5-d6
+	muls.w	d3,d5
+	muls.w	d1,d6
+	sub.l	d6,d5
+	move.w	(a1)+,d0
+	muls.w	d4,d0
+	add.l	d0,d5
+	add.l	d5,d5
+	swap	d5
+	move.w	d5,(a0)
+	addq	#6,a0
+	dbra	d7,.zloop
+
+* Perspectivate the points.
+	movea.l	a5,a0
+	movem.w	4(sp),a3-a5			* Get center-coordinates.
+	move.l	a0,-(sp)			* Backup rectangleaddress.
+	movea.l	a6,a0
+	moveq	#8-2,d7
+	move.w	#scrxbytes/4,d3
+	move.w	#envmapyres/2,d4
+	move.w	#$0100,d5
+	sub.w	a5,d5
+	move.w	#310,d6
+
+	movem.w	(a0)+,d1-d2
+	move.w	(a0)+,d0
+	neg.w	d0
+	add.w	d5,d0				* d0.w: scalefactor
+	add.l	a3,d1
+	add.l	a4,d2
+	lsl.l	#8,d1
+	muls.w	d6,d2
+	divs.w	d0,d1				* Scale x-coordinate.
+	divs.w	d0,d2				* Scale y-coordinate.
+	add.w	d3,d1				* Center x-coordinate.
+	add.w	d4,d2				* Center y-coordinate.
+	movea.w	d1,a1
+	movea.w	d2,a2
+	movea.w	d1,a5
+	movea.w	d2,a6
+
+.loop:	movem.w	(a0)+,d1-d2
+	move.w	(a0)+,d0
+	neg.w	d0
+	add.w	d5,d0				* d0.w: scalefactor
+	add.l	a3,d1
+	add.l	a4,d2
+	lsl.l	#8,d1
+	muls.w	d6,d2
+	divs.w	d0,d1				* Scale x-coordinate.
+	divs.w	d0,d2				* Scale y-coordinate.
+	add.w	d3,d1				* Center x-coordinate.
+	add.w	d4,d2				* Center y-coordinate.
+	cmpa.w	d1,a1
+	ble.s	.nonewxl
+	movea.w	d1,a1
+	bra.s	.endcmpx
+.nonewxl:
+	cmpa.w	d1,a5
+	bge.s	.nonewxh
+	movea.w	d1,a5
+.nonewxh:
+.endcmpx:
+	cmpa.w	d2,a2
+	ble.s	.nonewyl
+	movea.w	d2,a2
+	bra.s	.endcmpy
+.nonewyl:
+	cmpa.w	d2,a6
+	bge.s	.nonewyh
+	movea.w	d2,a6
+.nonewyh:
+.endcmpy:
+	dbra	d7,.loop
+
+	movea.l	(sp)+,a0			* Get rectangleaddress.
+	subq	#1,a1				* / Make clearwindow
+	subq	#1,a2				* \ a bit wider.
+	movem.w	a1-a2/a5-a6,(a0)		* Store rectangle.
+	rts
+
+.box_tbl:
+	DS.W	8*3
+
+* INPUT: d0.w: left x
+*        d1.w: upper y
+*        d2.w: right x
+*        d3.w: lower y
+CLEAR_RECTANGLE:
+	tst.w	d0
+	bpl.s	.testx0
+	moveq	#0,d0
+.testx0:
+	cmpi.w	#envmapxres,d0
+	blt.s	.endtestx0
+	move.w	#envmapxres-1,d0
+.endtestx0:
+
+	tst.w	d1
+	bpl.s	.testy0
+	moveq	#0,d1
+.testy0:
+	cmpi.w	#envmapyres,d1
+	blt.s	.endtesty0
+	move.w	#envmapyres-1,d1
+.endtesty0:
+
+	tst.w	d6
+	bgt.s	.testx1
+	moveq	#0,d6
+.testx1:
+	cmpi.w	#envmapxres,d6
+	blt.s	.endtestx1
+	move.w	#envmapxres-1,d6
+.endtestx1:
+
+	tst.w	d7
+	bgt.s	.testy1
+	moveq	#0,d7
+.testy1:
+	cmpi.w	#envmapyres,d7
+	blt.s	.endtesty1
+	move.w	#envmapyres-1,d7
+.endtesty1:
+
+	movea.l	scr,a0
+	move.w	d6,d2
+	move.w	d7,d3
+	addq.w	#1,d2
+	andi.w	#$fffe,d2
+	adda.w	d2,a0
+	adda.w	d2,a0
+	mulu.w	#scrxbytes,d3
+	adda.l	d3,a0
+	sub.w	d0,d6
+	addq.w	#1,d6
+	sub.w	d1,d7
+	moveq	#$00000000,d0
+	move.l	d0,d1
+	move.l	d0,d2
+	move.l	d0,d3
+	move.l	d0,d4
+	movea.l	d0,a1
+	movea.l	d0,a2
+	movea.l	d0,a3
+	movea.w	#scrxbytes,a4
+	lsr.w	#1,d6
+	move.w	d6,d5
+	add.w	d6,d5
+	add.w	d5,d5
+	suba.w	d5,a4
+	ext.l	d6
+	move.l	d6,d5
+	andi.w	#$0007,d6
+	lsr.w	#3,d5
+	neg.l	d5
+	neg.l	d6
+	lea	(.endchunks.w,pc,d5.l*4),a5
+	lea	(.endpix.w,pc,d6.l*2),a6
+
+.yloop:	jmp	(a5)
+	REPT	envmapxres/16
+	movem.l	d0-d4/a1-a3,-(a0)
+	ENDR
+.endchunks:
+	jmp	(a6)
+	REPT	7
+	move.l	d0,-(a0)
+	ENDR
+.endpix:
+
+	suba.l	a4,a0
+	dbra	d7,.yloop
+	rts
+
+* INPUT: d0.w: left x
+*        d1.w: upper y
+*        d2.w: right x
+*        d3.w: lower y
+CLEAR_RECTANGLEDBL:
+	tst.w	d0
+	bpl.s	.testx0
+	moveq	#0,d0
+.testx0:
+	cmpi.w	#envmapxres,d0
+	blt.s	.endtestx0
+	move.w	#envmapxres-1,d0
+.endtestx0:
+
+	tst.w	d1
+	bpl.s	.testy0
+	moveq	#0,d1
+.testy0:
+	cmpi.w	#100,d1
+	blt.s	.endtesty0
+	move.w	#100-1,d1
+.endtesty0:
+
+	tst.w	d6
+	bgt.s	.testx1
+	moveq	#0,d6
+.testx1:
+	cmpi.w	#envmapxres,d6
+	blt.s	.endtestx1
+	move.w	#envmapxres,d6
+.endtestx1:
+
+	tst.w	d7
+	bgt.s	.testy1
+	moveq	#0,d7
+.testy1:
+	cmpi.w	#100,d7
+	blt.s	.endtesty1
+	move.w	#100-1,d7
+.endtesty1:
+
+	add.w	d0,d0
+	add.w	d6,d6
+	movea.l	scr,a0
+	move.w	d6,d2
+	move.w	d7,d3
+	adda.w	d2,a0
+	adda.w	d2,a0
+	mulu.w	#scrxbytes,d3
+	adda.l	d3,a0
+	sub.w	d0,d6
+	addq.w	#1,d6
+	sub.w	d1,d7
+	moveq	#$00000000,d0
+	move.l	d0,d1
+	move.l	d0,d2
+	move.l	d0,d3
+	move.l	d0,d4
+	movea.l	d0,a1
+	movea.l	d0,a2
+	movea.l	d0,a3
+	movea.w	#scrxbytes,a4
+	lsr.w	#1,d6
+	move.w	d6,d5
+	add.w	d6,d5
+	add.w	d5,d5
+	suba.w	d5,a4
+	ext.l	d6
+	move.l	d6,d5
+	andi.w	#$0007,d6
+	lsr.w	#3,d5
+	neg.l	d5
+	neg.l	d6
+	add.l	d5,d5
+	add.l	d5,d5
+	add.l	d6,d6
+	lea	(.endchunks.b,pc,d5.l),a5
+	lea	(.endpix.b,pc,d6.l),a6
+
+.yloop:
+
+.xloop:
+	jmp	(a5)
+	REPT	scrxbytes/32
+	movem.l	d0-d4/a1-a3,-(a0)
+	ENDR
+.endchunks:
+	jmp	(a6)
+	REPT	7
+	move.l	d0,-(a0)
+	ENDR
+.endpix:
+
+	suba.l	a4,a0
+	dbra	d7,.yloop
+	rts
+
+* INPUT: a1: address of rotationtable
+PLOT_ROTATION:
+	movea.l	scr,a0
+	move.w	(a1)+,d7
+	Do_SinModulo	d7
+	mulu.w	#((1<<16)*envmapxres)/sintbllen,d7
+	swap	d7
+	move.w	d7,d6
+	subq.w	#1,d7
+	bmi.s	.endplotx
+
+.loop:	move.w	#$f800,(a0)+
+	dbra	d7,.loop
+
+	move.w	#envmapxres-1,d7
+	sub.w	d6,d7
+	bmi.s	.skipclr1
+	moveq	#0,d0
+.clrloop1:
+	move.w	d0,(a0)+
+	dbra	d7,.clrloop1
+.skipclr1:
+.endplotx:
+
+	movea.l	scr,a0
+	adda.l	#envmapxres*2*2,a0
+	move.w	(a1)+,d7
+	Do_SinModulo	d7
+	mulu.w	#((1<<16)*envmapxres)/sintbllen,d7
+	swap	d7
+	move.w	d7,d6
+	subq.w	#1,d7
+	bmi.s	.endploty
+
+.loop2:	move.w	#$03c0,(a0)+
+	dbra	d7,.loop2
+.endloop2:
+
+	move.w	#envmapxres-1,d7
+	sub.w	d6,d7
+	bmi.s	.skipclr2
+	moveq	#0,d0
+.clrloop2:
+	move.w	d0,(a0)+
+	dbra	d7,.clrloop2
+.skipclr2:
+.endploty:
+	rts
+
+* This routine is just a easy to calculate sinus-matrix thingy
+* rotates around the x-axis and then around the y-axis.
+* makes a rotated copy of the original...
+* INPUT: a1: address of source objectbuffer
+*        a2: address of rotation-array
+ROTATE_OBJECT:
+* Get sine-values..
+	lea	sine_tbl,a0
+	move.w	(a2)+,d0
+	Do_SinModulo	d0
+	Get_SinCos	a0,d0,d1,d2
+	move.w	(a2)+,d0
+	Do_SinModulo	d0
+	Get_SinCos	a0,d0,d3,d4
+	lea	points_tbl,a0
+	move.w	(a1)+,d7
+	move.w	d7,(a0)+
+	subq.w	#1,d7
+	movea.w	d7,a5
+	movea.l	a1,a2
+	movea.l	a0,a6
+
+* Calculate the x-coordinates..
+.xloop	move.w	(a1),d0
+	muls.w	d4,d0
+	addq	#pointz,a1
+	move.w	(a1)+,d5
+	muls.w	d3,d5
+	sub.l	d5,d0
+	add.l	d0,d0
+	swap	d0
+	move.w	d0,(a0)
+	lea	pointsize(a0),a0
+	dbra	d7,.xloop
+
+* Calculate the texture x-coordinates..
+	lea	pointtx(a6),a0			* Get address of first texture x-coord
+	movea.l	normaltbladr,a1
+	move.w	a5,d7
+	IFNE	envlightrot
+.normxloop:
+	move.w	(a1)+,d0
+	muls.w	d4,d0
+	addq	#2,a1
+	move.w	(a1)+,d5
+	muls.w	d3,d5
+	sub.l	d5,d0
+	swap	d0
+	move.w	d0,(a0)
+	lea	pointsize(a0),a0
+	dbra	d7,.normxloop
+	ELSE
+.normxloop:
+	move.w	(a1),(a0)
+	addq	#6,a1
+	lea	pointsize(a0),a0
+	dbra	d7,.normxloop
+	ENDC
+
+* Calculate the y-coordinates..
+	lea	pointy(a6),a0			* Get address of first y-coord
+	move.l	d3,a3				* Backup
+	move.l	d4,a4				* Backup
+	muls.w	d1,d3
+	muls.w	d1,d4
+	subq.l	#1,d3
+	subq.l	#1,d4
+	add.l	d3,d3
+	add.l	d4,d4
+	swap	d3
+	swap	d4
+	move.l	a2,a1
+	move.w	a5,d7
+.yloop:	movem.w	(a1),d5-d6
+	muls.w	d3,d5
+	muls.w	d2,d6
+	addq	#pointz,a1
+	move.w	(a1)+,d0
+	muls.w	d4,d0
+	add.l	d0,d5
+	add.l	d6,d5
+	add.l	d5,d5
+	swap	d5
+	move.w	d5,(a0)
+	lea	pointsize(a0),a0
+	dbra	d7,.yloop
+
+* Calculate the texture y-coordinates..
+	lea	pointty(a6),a0			* Get address of first texture y-coord
+	movea.l	normaltbladr,a1
+	move.w	a5,d7
+	IFNE	envlightrot
+.normyloop:
+	movem.w	(a1)+,d5-d6
+	muls.w	d3,d5
+	muls.w	d2,d6
+	move.w	(a1)+,d0
+	muls.w	d4,d0
+	add.l	d0,d5
+	add.l	d6,d5
+	swap	d5
+	move.w	d5,(a0)
+	lea	pointsize(a0),a0
+	dbra	d7,.normyloop
+	ELSE	
+	addq	#2,a1
+.normyloop:
+	move.w	(a1),(a0)
+	addq	#6,a1
+	lea	pointsize(a0),a0
+	dbra	d7,.normyloop
+	ENDC
+
+* Calculate the z-coordinates..
+	lea	pointz(a6),a0			* Get address of first z-coord
+	move.l	a3,d3
+	move.l	a4,d4
+	muls.w	d2,d3
+	muls.w	d2,d4
+	subq.l	#1,d3
+	subq.l	#1,d4
+	add.l	d3,d3
+	add.l	d4,d4
+	swap	d3
+	swap	d4
+	move.l	a2,a1
+	move.w	a5,d7
+.zloop:	movem.w	(a1),d5-d6
+	muls.w	d3,d5
+	muls.w	d1,d6
+	sub.l	d6,d5
+	addq	#pointz,a1
+	move.w	(a1)+,d0
+	muls.w	d4,d0
+	add.l	d0,d5
+	add.l	d5,d5
+	swap	d5
+	move.w	d5,(a0)
+	lea	pointsize(a0),a0
+	dbra	d7,.zloop
+	rts
+
+* Adds x, y, z values to each of the points in the object and
+* transforms 3d -> 2d.
+* INPUT: d0.w: x-offset
+*        d1.w: y-offset
+*        d2.w: z-offset
+TRANSFORM_OBJECT:
+	lea	points_tbl,a0
+	move.w	(a0)+,d7
+	subq.w	#1,d7
+
+	move.w	#scrxbytes/4,d3
+	move.w	#envmapyres/2,d4
+	movea.w	d0,a3
+	movea.w	d1,a4
+	move.w	#$0100,d5
+	sub.w	d2,d5
+	move.w	#310,d6
+
+.loop:	move.w	pointz(a0),d0
+	neg.w	d0
+	add.w	d5,d0			* d0.w: scale factor
+	movem.w	(a0),d1-d2
+	add.l	a3,d1
+	add.l	a4,d2
+	lsl.l	#8,d1
+	muls.w	d6,d2
+	divs.w	d0,d1			* Scale x-coordinate.
+	divs.w	d0,d2			* Scale y-coordinate.
+	add.w	d3,d1			* Center x-coordinate.
+	add.w	d4,d2			* Center y-coordinate.
+	move.w	d1,(a0)+
+	move.w	d2,(a0)+
+	addq	#pointsize-4,a0
+	dbra	d7,.loop
+	rts
+
+* Plots one environment mapped object. Backface culling and painters
+* algorithm depthsorting are used.
+* The object plotting is only suited to objects that have a texture mapped
+* around them. That is: only one texturebitmap.
+PLOT_OBJECT:
+* STEP 0:
+* Set all edges to unused..
+	moveq	#0,d0
+	lea	.edgesdone_tbl,a0
+	movea.l	edgestbladr,a1
+	move.w	(a1),d7
+	lsr.w	#2,d7
+.clredgesdoneloop:
+	move.l	d0,(a0)+
+	dbra	d7,.clredgesdoneloop
+
+* STEP 1:
+* Put all Z-points of triangles in the sorting table and kick out backface
+* triangles. Also mark the used edges.
+.putsortvals:
+	movea.l	pnttritbladr,a5
+	move.w	(a5)+,d7
+	subq.w	#1,d7
+	bmi	.rts
+	moveq	#0,d0
+	lea	points_tbl+2,a3
+	lea	.sort_tbl+2,a6
+	movea.l	tritbladr,a1
+	lea	.edgesdone_tbl,a2
+
+.putsortvalsloop:
+	move.w	(a5)+,d6
+	mulu.w	#pointsize,d6
+	movea.w	pointz(a3,d6.l),a4
+	movem.w	(a3,d6.l),d1-d2
+	move.w	(a5)+,d6
+	mulu.w	#pointsize,d6
+	adda.w	pointz(a3,d6.l),a4
+	movem.w	(a3,d6.l),d3-d4
+	move.w	(a5)+,d6
+	mulu.w	#pointsize,d6
+	adda.w	pointz(a3,d6.l),a4
+	movem.w	(a3,d6.l),d5-d6
+
+	sub.w	d3,d1
+	sub.w	d3,d5
+	sub.w	d4,d2
+	sub.w	d4,d6
+	muls.w	d1,d6
+	muls.w	d2,d5
+	cmp.l	d6,d5
+	bgt.s	.visible
+	addq	#6,a1
+	bra.s	.endputsortvalsloop
+.visible:
+	addq.w	#1,d0					* Increase number of visible triangles.
+	move.w	a4,(a6)+				* Store Z-center of triangle in sortingtable.
+	move.l	a1,(a6)+				* Store address of triangle.
+	movem.w	(a1)+,d1-d3				* Get edgenumbers.
+	moveq	#1,d4
+	move.b	d4,(a2,d1.l)				* Mark edge 0 as visible.
+	move.b	d4,(a2,d2.l)				* Mark edge 1 as visible.
+	move.b	d4,(a2,d3.l)				* mark edge 2 as visible.
+.endputsortvalsloop:
+	addq	#trianglesize-triangleinfo,a5
+	dbra	d7,.putsortvalsloop
+	move.w	d0,.sort_tbl				* Store number of visible triangles.
+
+* STEP 2:
+* Calculate all the visible edges into nice edgetables.
+.calcedges:
+	lea	temp_buf,a4
+	lea	.edgesdone_tbl,a3
+	movea.l	edgestbladr,a2
+	move.w	(a2)+,d7
+	subq.w	#1,d7
+	bmi	.rts
+	lea	points_tbl+2,a1
+	lea	2*2*maxedges(a4),a0
+	movea.l	a0,a6
+
+.calcedgeloop:
+	move.w	d7,-(sp)
+
+	tst.b	(a3)+
+	beq.s	.dontcalcedge
+
+	move.l	a0,(a4)+
+
+	move.w	(a2)+,d0
+	move.w	(a2)+,d4
+
+	mulu.w	#pointsize,d0
+	mulu.w	#pointsize,d4
+	movem.w	(a1,d0.l),d0-d3
+	movem.w	(a1,d4.l),d4-d7
+	bsr	CALCULATE_EDGETABLE
+	bra.s	.calcedgeloopend
+
+.dontcalcedge:
+	addq	#4,a4
+	addq	#4,a2
+
+.calcedgeloopend:
+	move.w	(sp)+,d7
+	dbra	d7,.calcedgeloop
+
+* STEP 3:
+* Now sort all the visible triangles using combsort.
+* Combsort rules!! Thanx to Dynacore/.tSCc. for his great article!
+	lea	.sort_tbl,a1
+	move.w	(a1)+,d7			* d7.w: number of triangles
+	subq.w	#1,d7
+	beq.s	.endcombsort
+	bmi	.rts
+	movea.l	a1,a3
+	move.w	d7,d4
+	lsr.w	#1,d4				* d4.w: gapsize
+	bra.s	.endcalcgap
+.combsortloop:
+	cmpi.w	#2,d4				* / If the gapsize
+	bhi.s	.calcgap			* | is already 1 or
+	moveq	#1,d4				* | 2 then always
+	bra.s	.endcalcgap			* \ set it to 1.
+.calcgap:
+	mulu.w	#((1<<16)*10)/13,d4		* / Resize
+	swap	d4				* \ the gap.
+.endcalcgap:
+	move.w	d7,d6
+	sub.w	d4,d6
+	move.w	d4,d0
+	mulu.w	#2+4,d0
+	lea	(a3,d0.l),a5
+	moveq	#0,d5				* d5.w: number of swaps done in loop
+
+.combsortinloop:
+	move.w	(a1),d0
+	move.w	(a5),d1
+	cmp.w	d1,d0
+	ble.s	.noswap
+	move.w	d1,(a1)+			* / Swap
+	move.w	d0,(a5)+			* \ depth.
+	move.l	(a1),d0				* / Swap the 
+	move.l	(a5),(a1)+			* | triangle
+	move.l	d0,(a5)+			* \ addresses.
+	addq.w	#1,d5
+	dbra	d6,.combsortinloop
+	bra.s	.combsortloopend
+.noswap:	
+	addq	#6,a1
+	addq	#6,a5
+	dbra	d6,.combsortinloop
+.combsortloopend:
+	movea.l	a3,a1
+	move.w	d5,d5
+	bne.s	.combsortloop
+	cmpi.w	#1,d4
+	bne.s	.combsortloop
+.endcombsort:
+
+* STEP 4:
+* Plot all the visible triangles in their Z-order.
+	lea	.sort_tbl,a1
+	move.w	(a1)+,d7
+	subq.w	#1,d7
+	bmi.s	.rts
+	lea	temp_buf,a2
+	movea.l	envtextureadr,a3
+	adda.l	#(256*2*128)+128*2,a3
+
+.plottriangleloop:
+	move.w	d7,-(sp)
+
+	addq	#2,a1
+	movea.l	(a1)+,a0
+	movem.w	(a0),d0-d2
+	movem.l	a1-a3,-(sp)
+	bsr	PLOT_ENVMAPTRIANGLE
+	movem.l	(sp)+,a1-a3
+
+	move.w	(sp)+,d7
+	dbra	d7,.plottriangleloop
+
+.rts:	rts
+
+.edgesdone_tbl:
+	DS.B	maxedges
+.sort_tbl:
+	DS.W	3*maxtriangles
+
+;	lsl.l	#6,d4
+;	movea.l	d4,a6
+;	adda.l	a6,a6
+;	adda.l	d4,a6
+;	adda.l	d5,a6
+;	move.l	(a5,a6.l),d4
+
+* Calculates all scanline points of the edges and puts them in a table.
+* This should also take care of horizontal clipping and of onscreen
+* detection.
+* INPUT: d0.l: X-start
+*        d1.l: Y-start
+*        d2.l: TX-start
+*        d3.l: TY-start
+*        d4.l: X-end
+*        d5.l: Y-end
+*        d6.l: TX-end
+*        d7.l: TY-end
+*        a0: address to write new edgetable to
+* OUTPUT: a0: address of next edgetable
+CALCULATE_EDGETABLE:
+	cmp.w	d5,d1
+	bgt.s	.domirrored
+
+	beq.s	.emptyedge
+	sub.l	d1,d5
+	move.w	d5,(a0)+
+	move.w	d1,(a0)+
+	swap	d0
+	swap	d4
+	sub.w	d0,d0
+	sub.w	d4,d4
+	sub.l	d0,d4
+	lsl.l	#8,d2
+	lsl.l	#8,d3	
+	lsl.l	#8,d6
+	lsl.l	#8,d7
+	sub.l	d2,d6
+	sub.l	d3,d7
+	divs.w	d5,d6
+	divs.w	d5,d7
+	divs.l	d5,d4
+	move.l	d4,(a0)+
+.loop:	move.l	d0,d1
+	swap	d1
+	move.w	d1,(a0)+
+	move.w	d2,(a0)+
+	move.w	d3,(a0)+
+	add.l	d4,d0
+	add.w	d6,d2
+	add.w	d7,d3
+	dbra	d5,.loop
+	rts	
+* Edge is completely horizontal, so it doesn't need to be drawn.
+.emptyedge:
+	clr.w	(a0)+
+	move.w	d1,(a0)+
+	addq	#edgeheadersize-4,a0
+	rts
+
+* Y-start is larger than Y-end, so do everything the other way round.
+.domirrored:
+	sub.l	d5,d1
+	beq.s	.mirroremptyedge
+	move.w	d1,(a0)+
+	move.w	d5,(a0)+
+	swap	d4
+	swap	d0
+	sub.w	d4,d4
+	sub.w	d0,d0
+	sub.l	d4,d0
+	lsl.l	#8,d6
+	lsl.l	#8,d7	
+	lsl.l	#8,d2
+	lsl.l	#8,d3
+	sub.l	d6,d2
+	sub.l	d7,d3
+	divs.w	d1,d2
+	divs.w	d1,d3
+	divs.l	d1,d0
+	move.l	d0,(a0)+
+.mirrorloop:
+	move.l	d4,d5
+	swap	d5
+	move.w	d5,(a0)+
+	move.w	d6,(a0)+
+	move.w	d7,(a0)+
+	add.l	d0,d4
+	add.w	d2,d6
+	add.w	d3,d7
+	dbra	d1,.mirrorloop
+	rts	
+* Edge is completely horizontal, so it doesn't need to be drawn.
+.mirroremptyedge:
+	clr.w	(a0)+
+	move.w	d5,(a0)+
+	addq	#edgeheadersize-4,a0
+	rts
+
+* Plots a texturemapped triangle using the specified edgetables.
+* Does not do clipping whatsoever. The clipping of an object needs
+* to be done by the routine that handles edge-calculations and the
+* one that handles culling and sorting.
+* INPUT: d0.l: edge index 1
+*        d1.l: edge index 2
+*        d2.l: edge index 3
+*        a2: address of edgetable-buffer
+*        a3: address of middle of texture (256*256 highcolor)
+PLOT_ENVMAPTRIANGLE:
+	move.l	a3,.textureadr
+	movea.l	(a2,d0.l*4),a4
+	movea.l	(a2,d1.l*4),a5
+	movea.l	(a2,d2.l*4),a6
+
+* Find out which two edges are first and which one is second.
+.order:	move.w	edgestarty(a4),d0
+	move.w	edgestarty(a5),d1
+	move.w	edgestarty(a6),d2
+	cmp.w	d0,d1
+	beq.s	.endorder
+	cmp.w	d0,d2
+	bne.s	.1_2
+	exg	a6,a5
+	exg	d2,d1
+	bra.s	.endorder
+.1_2:	exg	a6,a4
+	exg	d2,d0
+.endorder:
+
+* Test if all edges start are first => triangle is a dot/scanline or a \/
+.testspecial:
+	cmp.w	d0,d2
+	bne	.calcnormalslope
+	tst.w	(a4)
+	bne.s	.testa5
+	exg	a4,a6
+	bra.s	.testscan
+.testa5:
+	tst.w	(a5)
+	bne.s	.testscan
+	exg	a5,a6
+* Test if the triangle is a dot/scanline
+.testscan:
+	tst.w	(a4)
+	bne.s	.specialslope
+	tst.w	(a5)
+	bne.s	.specialslope
+	tst.w	(a6)
+	bne.s	.specialslope
+	rts
+
+* Calculate slope-offset table for special \/ case.
+.specialslope:
+	lea	.textureoffset_tbl(pc),a1
+	movem.w	edgeheadersize(a4),d0-d2
+	movem.w	edgeheadersize(a5),d3-d5
+	sub.w	d0,d3
+	beq	.endscanplot
+	sub.l	d1,d4
+	sub.l	d2,d5
+	divs.w	d3,d4
+	divs.w	d3,d5
+	tst.w	d3
+	bpl.s	.d3pos
+	neg.w	d3
+.d3pos:	moveq	#0,d1
+	moveq	#0,d2
+	lsl.l	#8,d4
+	swap	d5
+	move.w	d4,d5
+	swap	d5
+	swap	d4
+.specialcalcslopeloop:
+	move.w	d2,d0
+	move.b	d1,d0
+	move.w	d0,(a1)+
+	add.l	d5,d2
+	addx.b	d4,d1
+	dbra	d3,.specialcalcslopeloop
+* Find out which edges are left and which are right.
+	move.w	edgeheadersize(a5),d0
+	cmp.w	edgeheadersize(a4),d0
+	bge.s	.plot
+	exg	a4,a5
+	bra.s	.plot
+
+* Calculate slope-offset table for normal case.
+.calcnormalslope:
+	lea	.textureoffset_tbl(pc),a1
+	move.w	(a4),d6
+	move.w	(a5),d1
+	cmp.w	d1,d6
+	ble.s	.d6smaller
+	move.w	d1,d6
+.d6smaller:
+	mulu.w	#6,d6
+	movem.w	edgeheadersize(a4,d6.l),d0-d2
+	movem.w	edgeheadersize(a5,d6.l),d3-d5
+	sub.w	d0,d3
+	beq	.endscanplot
+	sub.l	d1,d4
+	sub.l	d2,d5
+	divs.w	d3,d4
+	divs.w	d3,d5
+	moveq	#0,d1
+	moveq	#0,d2
+	tst.w	d3
+	bpl.s	.normlengthpos
+	neg.w	d3
+.normlengthpos:
+	lsl.l	#8,d4
+	swap	d5
+	move.w	d4,d5
+	swap	d5
+	swap	d4
+.normalcalcslopeloop:
+	move.w	d2,d0
+	move.b	d1,d0
+	move.w	d0,(a1)+
+	add.l	d5,d2
+	addx.b	d4,d1
+	dbra	d3,.normalcalcslopeloop
+* Find out which edges are left and which are right..
+.leftright:
+	move.l	edgeslope(a5),d0
+	cmp.l	edgeslope(a4),d0
+	bge.s	.noswap
+	exg	a4,a5
+.noswap:
+
+* Prepare for plotting in the screenbuffer.
+.plot:
+.initplot:
+	moveq	#0,d6
+	move.w	(a4),d5
+	move.w	(a5),d6
+	sub.w	d5,d6
+	bgt.s	.endinitplot
+	neg.w	d6
+	move.w	(a5),d5
+	bset	#31,d6				* Edge in a4 is longest.
+.endinitplot:
+
+	movea.l	scr,a3
+	move.l	.textureadr(pc),d7
+	move.l	#.textureoffset_tbl,d4
+
+.yclip:
+	move.w	edgestarty(a4),d0
+	bpl.s	.noylowclip
+	add.w	d0,d5
+	ble.s	.noplotfirst
+	neg.w	d0
+	mulu.w	#6,d0
+	adda.l	d0,a4
+	adda.l	d0,a5
+	moveq	#0,d0
+	bra.s	.endyclip
+.noplotfirst:
+	add.w	d5,d6
+	ble	.rts
+	neg.w	d0
+	neg.w	d5
+	mulu.w	#6,d0
+	mulu.w	#6,d5
+	lea	edgeheadersize(a4,d0.l),a4
+	lea	edgeheadersize(a5,d0.l),a5
+	adda.l	d5,a6
+	bra	.plotsecond
+.noylowclip:
+	cmpi.w	#envmapyres,d0
+	bge	.rts
+	move.w	d6,d1
+	add.w	d5,d1
+	add.w	d0,d1
+	bmi	.rts
+	subi.w	#envmapyres,d1
+	bmi.s	.endyclip
+	sub.w	d1,d6
+	bpl.s	.endyclip
+	add.w	d6,d5
+.endyclip:
+
+.plotfirst:
+	mulu.w	#scrxbytes,d0
+	addq	#edgeheadersize,a4
+	addq	#edgeheadersize,a5
+	adda.l	d0,a3
+	subq.w	#1,d5
+* Plot upper part of triangle.
+.firstloop:
+	movea.l	d4,a2
+	move.w	(a5),d3
+	addq	#6,a5
+	movem.w	(a4)+,d0-d2
+
+	movea.l	d7,a1
+	lsr.w	#8,d1
+	move.b	d1,d2
+	lea	(a1,d2.w*2),a1
+
+	move.l	d0,d1
+	bpl.s	.xpos1
+	neg.l	d1
+	lea	(a2,d1.l*2),a2
+	moveq	#0,d0
+.xpos1:	lea	(a3,d0.l*2),a0
+	cmpi.w	#envmapxres,d3
+	blt.s	.nottoobig
+	move.w	d3,d2
+	subi.w	#envmapxres,d2
+	sub.w	d2,d3
+.nottoobig:
+	sub.w	d0,d3
+	bmi.s	.endfirstline
+
+	move.w	d3,d2
+	lsr.w	#3,d2
+	andi.w	#1<<3-1,d3
+	neg.w	d3
+	add.w	d3,d3
+	move.w	d3,d1
+	add.w	d3,d3
+	add.w	d1,d3
+	jmp	(.endchunkloop.b,pc,d3.w)
+.chunkloop:
+	REPT	1<<3
+	move.w	(a2)+,d1
+	move.w	(a1,d1.w*2),(a0)+
+	ENDR
+.endchunkloop:
+	dbra	d2,.chunkloop
+
+.endfirstline:
+	lea	scrxbytes(a3),a3
+	dbra	d5,.firstloop
+.endplotfirst:
+
+* Plot lower part of triangle..
+.plotsecond:
+	subq.w	#1,d6
+	bmi.s	.endsecond			* Triangle is a /\ or a \/
+* Test if left or right was shorter..
+	btst	#31,d6				* Which edge is longest?
+	bne.s	.noswaplr
+	lea	edgeheadersize(a6),a4
+	move.w	d6,d5
+	sub.w	d6,d6
+	bra	.firstloop
+
+.noswaplr:
+	move.w	d6,d5
+	sub.w	d6,d6
+	lea	edgeheadersize(a6),a5
+	bra	.firstloop
+
+.endsecond:
+
+.endscanplot:
+
+.rts:	rts
+
+.edgestartadr:
+	DS.L	1
+.textureadr:
+	DS.L	1
+.textureoffset_tbl:
+	DS.W	scrxbytes/2
+
+* Plots a texturemapped triangle using the specified edgetables.
+* Does not do clipping whatsoever. The clipping of an object needs
+* to be done by the routine that handles edge-calculations and the
+* one that handles culling and sorting.
+* INPUT: d0.l: edge index 1
+*        d1.l: edge index 2
+*        d2.l: edge index 3
+*        a2: address of edgetable-buffer
+*        a3: address of middle of texture (128*128 highcolor)
+PLOT_MAPTRIANGLE128:
+	move.l	a3,.textureadr
+	movea.l	(a2,d0.l*4),a4
+	movea.l	(a2,d1.l*4),a5
+	movea.l	(a2,d2.l*4),a6
+
+* Find out which two edges are first and which one is second.
+.order:	move.w	edgestarty(a4),d0
+	move.w	edgestarty(a5),d1
+	move.w	edgestarty(a6),d2
+	cmp.w	d0,d1
+	beq.s	.endorder
+	cmp.w	d0,d2
+	bne.s	.1_2
+	exg	a6,a5
+	exg	d2,d1
+	bra.s	.endorder
+.1_2:	exg	a6,a4
+	exg	d2,d0
+.endorder:
+
+* Test if all edges start are first => triangle is a dot/scanline or a \/
+.testspecial:
+	cmp.w	d0,d2
+	bne	.calcnormalslope
+	tst.w	(a4)
+	bne.s	.testa5
+	exg	a4,a6
+	bra.s	.testscan
+.testa5:
+	tst.w	(a5)
+	bne.s	.testscan
+	exg	a5,a6
+* Test if the triangle is a dot/scanline
+.testscan:
+	tst.w	(a4)
+	bne.s	.specialslope
+	tst.w	(a5)
+	bne.s	.specialslope
+	tst.w	(a6)
+	bne.s	.specialslope
+	rts
+
+* Calculate slope-offset table for special \/ case.
+.specialslope:
+	lea	.textureoffset_tbl(pc),a1
+	movem.w	edgeheadersize(a4),d0-d2
+	movem.w	edgeheadersize(a5),d3-d5
+	sub.w	d0,d3
+	beq	.endscanplot
+	sub.l	d1,d4
+	sub.l	d2,d5
+	divs.w	d3,d4
+	divs.w	d3,d5
+	tst.w	d3
+	bpl.s	.d3pos
+	neg.w	d3
+.d3pos:	moveq	#0,d1
+	moveq	#0,d2
+	lsl.l	#8,d4
+	swap	d5
+	move.w	d4,d5
+	swap	d5
+	swap	d4
+	addq.w	#1,d3
+.specialcalcslopeloop:
+	move.w	d2,d0
+	sub.b	d0,d0
+	add.b	d1,d0
+	add.b	d0,d0
+	add.w	d0,d0
+	move.w	d0,(a1)+
+	add.l	d5,d2
+	addx.b	d4,d1
+	dbra	d3,.specialcalcslopeloop
+* Find out which edges are left and which are right.
+	move.w	edgeheadersize(a5),d0
+	cmp.w	edgeheadersize(a4),d0
+	bge.s	.plot
+	exg	a4,a5
+	bra.s	.plot
+
+* Calculate slope-offset table for normal case.
+.calcnormalslope:
+	lea	.textureoffset_tbl(pc),a1
+	move.w	(a4),d6
+	move.w	(a5),d1
+	cmp.w	d1,d6
+	ble.s	.d6smaller
+	move.w	d1,d6
+.d6smaller:
+	mulu.w	#6,d6
+	movem.w	edgeheadersize(a4,d6.l),d0-d2
+	movem.w	edgeheadersize(a5,d6.l),d3-d5
+	sub.w	d0,d3
+	beq	.endscanplot
+	sub.l	d1,d4
+	sub.l	d2,d5
+	divs.w	d3,d4
+	divs.w	d3,d5
+	moveq	#0,d1
+	moveq	#0,d2
+	tst.w	d3
+	bpl.s	.normlengthpos
+	neg.w	d3
+.normlengthpos:
+	lsl.l	#8,d4
+	swap	d5
+	move.w	d4,d5
+	swap	d5
+	swap	d4
+	addq.w	#1,d3
+.normalcalcslopeloop:
+	move.w	d2,d0
+	sub.b	d0,d0
+	add.b	d1,d0
+	add.b	d0,d0
+	add.w	d0,d0
+	move.w	d0,(a1)+
+	add.l	d5,d2
+	addx.b	d4,d1
+	dbra	d3,.normalcalcslopeloop
+* Find out which edges are left and which are right..
+.leftright:
+	move.l	edgeslope(a5),d0
+	cmp.l	edgeslope(a4),d0
+	bge.s	.noswap
+	exg	a4,a5
+.noswap:
+
+* Prepare for plotting in the screenbuffer.
+.plot:
+.initplot:
+	moveq	#0,d6
+	move.w	(a4),d5
+	move.w	(a5),d6
+	sub.w	d5,d6
+	bgt.s	.endinitplot
+	neg.w	d6
+	move.w	(a5),d5
+	bset	#31,d6				* Edge in a4 is longest.
+.endinitplot:
+
+	movea.l	scr,a3
+	move.l	.textureadr(pc),d7
+	move.l	#.textureoffset_tbl,d4
+
+.yclip:
+	move.w	edgestarty(a4),d0
+	bpl.s	.noylowclip
+	add.w	d0,d5
+	ble.s	.noplotfirst
+	neg.w	d0
+	mulu.w	#6,d0
+	adda.l	d0,a4
+	adda.l	d0,a5
+	moveq	#0,d0
+	bra.s	.endyclip
+.noplotfirst:
+	add.w	d5,d6
+	ble	.rts
+	neg.w	d0
+	neg.w	d5
+	mulu.w	#6,d0
+	mulu.w	#6,d5
+	lea	edgeheadersize(a4,d0.l),a4
+	lea	edgeheadersize(a5,d0.l),a5
+	adda.l	d5,a6
+	bra	.plotsecond
+.noylowclip:
+	cmpi.w	#envmapyres,d0
+	bge	.rts
+	move.w	d6,d1
+	add.w	d5,d1
+	add.w	d0,d1
+	bmi	.rts
+	subi.w	#envmapyres,d1
+	bmi.s	.endyclip
+	sub.w	d1,d6
+	bpl.s	.endyclip
+	add.w	d6,d5
+.endyclip:
+
+.plotfirst:
+	mulu.w	#scrxbytes,d0
+	addq	#edgeheadersize,a4
+	addq	#edgeheadersize,a5
+	adda.l	d0,a3
+	subq.w	#1,d5
+* Plot upper part of triangle.
+.firstloop:
+	movea.l	d4,a2
+	move.w	(a5),d3
+	addq	#6,a5
+	movem.w	(a4)+,d0-d2
+
+	movea.l	d7,a1
+	lsr.w	#8,d1
+	move.b	d1,d2
+	add.b	d2,d2	
+	lea	(a1,d2.w*2),a1
+
+	move.l	d0,d1
+	bpl.s	.xpos1
+	neg.l	d1
+	lea	(a2,d1.l*2),a2
+	moveq	#0,d0
+.xpos1:	lea	(a3,d0.l*4),a0
+	cmpi.w	#envmapxres-1,d3
+	blt.s	.nottoobig
+	move.w	d3,d2
+	subi.w	#envmapxres-1,d2
+	sub.w	d2,d3
+.nottoobig:
+	sub.w	d0,d3
+	bmi.s	.endfirstline
+
+.pixloop:
+	move.w	(a2)+,d1
+	move.l	(a1,d1.w),(a0)+
+	dbra	d3,.pixloop
+
+.endfirstline:
+	lea	scrxbytes(a3),a3
+	dbra	d5,.firstloop
+.endplotfirst:
+
+* Plot lower part of triangle..
+.plotsecond:
+	subq.w	#1,d6
+	bmi.s	.endsecond			* Triangle is a /\ or a \/
+* Test if left or right was shorter..
+	btst	#31,d6				* Which edge is longest?
+	bne.s	.noswaplr
+	lea	edgeheadersize(a6),a4
+	move.w	d6,d5
+	sub.w	d6,d6
+	bra	.firstloop
+
+.noswaplr:
+	move.w	d6,d5
+	sub.w	d6,d6
+	lea	edgeheadersize(a6),a5
+	bra	.firstloop
+
+.endsecond:
+
+.endscanplot:
+
+.rts:	rts
+
+.edgestartadr:
+	DS.L	1
+.textureadr:
+	DS.L	1
+.textureoffset_tbl:
+	DS.W	scrxbytes/2
+
+******** END OF DEMO-EFFECT OBJECT ********

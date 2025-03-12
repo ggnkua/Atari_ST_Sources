@@ -1,0 +1,2131 @@
+*	@@@@  @@@@@@	 @@   @@@@@@   @@  @@  @@@@@@	@@@@	@@@@
+*  @@  @@  @@  @@	@@@@   @@  @@  @@  @@	 @@    @@  @@  @@  @@
+* @@	   @@  @@  @@  @@  @@  @@  @@  @@	 @@   @@	   @@
+* @@	   @@@@@   @@  @@  @@@@@   @@@@@@	 @@   @@		@@@@
+* @@  @@@  @@ @@   @@@@@@  @@	   @@  @@	 @@   @@		   @@
+*  @@  @@  @@  @@  @@  @@  @@	   @@  @@	 @@    @@  @@  @@  @@
+*	@@@@@ @@@  @@  @@  @@ @@@@	   @@  @@  @@@@@@	@@@@	@@@@
+
+* Low level primitives for graphics (line draw etc).
+* Atari St Version 1.0 Copyright (c) 1988 Mr. Micro Ltd.
+* Designed and coded by Rob Nicholson. Adapated from MSX.
+
+	include macros
+
+	xref text_colour,locate,print_char,text_colour
+	xref locate,display_char,str_copy,circle_trigs,mult_by_320,wait_key
+	xref left_arm,right_arm,monst,random,bitmaps
+
+* ---- LOCAL CONSTANTS ----
+
+persistance:	equ 30					persistance of text
+rest_phase: 	equ 25					length of rest phase
+max_vert:		equ 15					max # vertices per panel
+
+* ---- LOCAL STORAGE ----
+
+	vars graphics
+
+first_point:	ds.w 1					flag: 1st point of polygon
+last_x: 		ds.w 1					last x,y coords of line
+last_y: 		ds.w 1
+text_offset 	ds.w 1					offset of text into window
+poly_x: 		ds.w 1					coords of polygon centre
+poly_y: 		ds.w 1
+circle_rad: 	ds.w 1					radius of polygon/circle
+seg_count:		ds.w 1					no. segments to draw
+poly_inc:		ds.l 1					increment between segments
+last_coords:	ds.w 4*2				table of last point coords
+judder: 		ds.w 1					amount of screen judder
+top_y:			ds.w 1					y coord of top of polygon
+bottom_y:		ds.w 1					y coord of bottom of polygon
+offset: 		ds.w 1					odd/even line offset (0 or 8)
+line_addr:		ds.l 1					screen address of base of line
+flare:			ds.w 1					flare bits
+vertex_list1:	ds.b node_len*max_vert	vertex list #1
+vertex_list2:	ds.b node_len*max_vert	vertex list #2
+which_list: 	ds.l 1					ptr: which list to use next
+
+	end_vars graphics
+
+
+* *******************************************
+* **									   **
+* ** OUTCODES - DETERMINE OUTCODES (MACRO) **
+* **									   **
+* *******************************************
+
+* This macro builds up the 'outcodes' flags for the 'Cohen-Sutherland' line
+* clipping algorithm. The bits in the outcodes are defined as follows:
+
+*	Bit 0 - outside left edge		$01
+*	Bit 1 - outside right edge		$02
+*	Bit 2 - outside bottom edge 	$04
+*	Bit 3 - outside top edge		$08
+
+* Syntax: OUTCODES xreg,yreg
+* Exit:   \3 = outcodes flags
+
+* Regs:   \3 corrupt.
+* Subr:   None
+
+outcodes: macro
+
+	clr \3								clear flags
+	if \1 <lt> #x_min then.s			left edge check
+		bset #off_left,\3
+	else.s
+		if \1 <gt> #x_max then.s		right edge check
+			bset #off_right,\3
+		endi
+	endi
+	if \2 <lt> #y_min then.s			bottom edge check
+		bset #off_bottom,\3
+	else.s
+		if \2 <gt> #y_max then.s		top edge check
+			bset #off_top,\3
+		endi
+	endi
+
+	endm
+
+	section 0
+
+
+* ********************************************************
+* **													**
+* ** DOT_TO_ADDR - CONVERT DOT COORDS TO SCREEN ADDRESS **
+* **													**
+* ********************************************************
+
+* Converts a x,y dot coordinate to a screen address (word aligned).
+
+* Entry: D0 = x coord
+*		 D1 = y coord
+* Exit:  A0 = screen address (word aligned)
+
+* Regs:  D1 and A0 corrupt.
+* Subr:  None
+
+	subr dot_to_addr,global
+
+	lea mult_by_320,a0
+	add d1,d1
+	move (a0,d1),d1
+	add d0,d1
+	lsr #1,d1
+	and #$fff8,d1
+	move.l scr_base(a6),a0
+	lea 0(a0,d1),a0
+
+	ret
+
+
+* **************************************
+* **								  **
+* ** CLEAR_IMAGE - CLEAR SCREEN IMAGE **
+* **								  **
+* **************************************
+
+* Clears the currently invisible screen to zeros. Due to the nature of the
+* routine, it will have to be changed everytime the screen size is changed.
+
+* Entry: None
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr clear_image,global
+
+	repeat								wait until flyback
+		tst flyback(a6)
+	until <ne>
+	clr frame_count(a6) 				clear frame counter
+	move.l scr_base(a6),a0				get address of window in screen RAM
+	add #(x_size+x_left)/2+y_top*160,a0
+	move #(x_size/2)+160,a1 			offset between lines
+	moveq #0,d0 						clear registers
+	move.l d0,d1
+	move.l d0,d2
+	move.l d0,d3
+	move.l d0,d4
+	move.l d0,d5
+	move.l d0,d6
+	loop 1,y_size						loop for each pixel line
+		movem.l d0-d6,-(a0) 			clear pixel line
+		movem.l d0-d6,-(a0)
+		movem.l d0-d6,-(a0)
+		movem.l d0-d6,-(a0)
+		movem.l d0-d3,-(a0)
+		add a1,a0						next pixel line
+	next 1
+	clr.l next_record(a6)				no objects stored for drawing
+
+	ret
+
+
+* ********************************
+* **							**
+* ** SWAP_SCREEN - SWAP SCREENS **
+* **							**
+* ********************************
+
+* Swaps the screens using hardware. The screen address must fall on a 256
+* byte boundary. The video ram base address register is NOT accessed as a
+* normal 68000 32 bit word!
+
+* Entry: None
+* Exit:  None
+
+* Regs:  ?
+* Subr:  None
+
+	subr swap_screen,global
+
+	move.l scr_base(a6),d0				fetch screen address
+	lsr #8,d0							set screen address
+	move.l d0,vram_base-1
+	clr flyback(a6) 					clear flyback flag
+	move.l scr_base(a6),d0				swap base pointer
+	move.l flip_screen(a6),d1
+	eor.l d1,d0
+	move.l d0,scr_base(a6)
+
+	ret
+
+
+* ************************************
+* **								**
+* ** DISP_MESSAGE - DISPLAY MESSAGE **
+* **								**
+* ************************************
+
+* Displays a message in the central window. Note - message isn't displayed
+* until next screen swap.
+
+* Entry: A0 = ptr: string to display
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr disp_message,global
+
+	lea text_buffer(a6),a1				copy string into buffer
+	jsr str_copy
+	lea text_buffer(a6),a0				calculate length of string
+	moveq #-1,d0
+	repeat
+		inc d0
+		tst.b (a0)+
+	until <eq>
+	sub #no_cols,d0 					centre in window
+	neg d0
+	lsr #1,d0
+	if <cs> then
+		inc d0
+	endi
+	move d0,text_offset(a6)
+	move #-persistance,text_frames(a6)	set persistance counter
+
+	ret
+
+
+* **********************************************
+* **										  **
+* ** FLASH_MESSAGE - DISPLAY FLASHING MESSAGE **
+* **										  **
+* **********************************************
+
+* Display flashing message in window. This routine must be called
+* repeatedly to give the impression of flashing.
+
+* Entry:  A0 = Address of text (zero terminated)
+* Exit:   None
+
+* Regs:   ?
+* Subr:   DISP_MESSAGE
+
+	subr flash_message,global
+
+	tst text_frames(a6) 				ready for message
+	beq disp_message					yes
+
+	ret
+
+
+* ***************************************
+* **								   **
+* ** TEXT_BLATT - BLATT TEXT ON SCREEN **
+* **								   **
+* ***************************************
+
+* Blatts any message onto the current window.
+
+* Entry: D0 = text colour
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr text_blatt,global
+
+	lea text_frames(a6),a0				any message ?
+	tst (a0)
+	if <ne> then.s						yes
+		if <pl> then.s					rest phase
+			dec (a0)
+		else.s
+			inc (a0)					active phase
+			if <eq> then.s				entering rest phase
+				move #rest_phase,(a0)
+			else.s
+				move #trans,d1			set text colour
+				jsr text_colour
+				move text_offset(a6),d0 position cursor
+				add #x_left/8,d0
+				move text_row(a6),d1
+				add #y_top/8,d1
+				asl #3,d1
+				jsr locate
+				lea text_buffer(a6),a4	print text
+				repeat
+					move.b (a4)+,d0
+					break if <eq>
+					and #$ff,d0
+					jsr display_char
+				endr
+			endi
+		endi
+	endi
+
+	ret
+
+
+* **************************************
+* **								  **
+* ** C_LINE - DRAW LINE WITH CLIPPING **
+* **								  **
+* ***************************************
+
+* Draws a line in the invisible screen between two signed coordinates using
+* the 'Cohen-Sutherland' clipping algorithm. The line is drawn in the current
+* colour.
+
+* Entry: (D0,D1) = signed coords of point #1
+*		 (D2,D3) = signed coords of point #2
+* Exit:  None
+
+* Regs:  D0-D7, A0-A2 corrupt.
+* Subr:  I_DRAW_LINE
+
+	subr c_line,global
+
+	outcodes d0,d1,d4					outcodes(P1)
+	outcodes d2,d3,d5					outcodes(P2)
+	move d4,d6							both points visible ?
+	or d5,d6
+	if <eq> then.s						yes
+		add #x_left-x_min,d0			convert to physical screen coords
+		add #x_left-x_min,d2
+		neg d1
+		add #y_top+y_max,d1
+		neg d3
+		add #y_top+y_max,d3
+		bra line						draw the line
+	endi
+	move d4,d6							both points invisible ?
+	and d5,d6
+	ret <ne>							no, return (no line)
+	tst d4								point #1 inside window ?
+	if <eq> then.s						yes
+		exg d0,d2						swap point #1 & #2 to make sure
+		exg d1,d3						point #1 is outside the window
+		exg d4,d5
+	endi
+	btst #3,d4							outside top edge ?
+	if <ne> then.s						yes
+		move d2,d4						(x2-x1)
+		sub d0,d4
+		move #y_max,d5					(y_max-y1)
+		sub d1,d5
+		muls d5,d4						multiply
+		move d3,d5						(y2-y1)
+		sub d1,d5
+		divs d5,d4						divide
+		add d4,d0						+x1
+		move #y_max,d1					y1 = y_max
+		bra c_line						check clipping again
+	endi
+	btst #2,d4							outside bottom edge ?
+	if <ne> then.s						yes
+		move d2,d4						(x2-x1)
+		sub d0,d4
+		move #y_min,d5					(y_min-y1)
+		sub d1,d5
+		muls d5,d4						multiply
+		move d3,d5						(y2-y1)
+		sub d1,d5
+		divs d5,d4						divide
+		add d4,d0						+x1
+		move #y_min,d1					y1 = y_min
+		bra c_line						check clipping again
+	endi
+	btst #1,d4							outside right edge ?
+	if <ne> then.s						yes
+		move d3,d4						(y2-y1)
+		sub d1,d4
+		move #x_max,d5					(x_max-x1)
+		sub d0,d5
+		muls d5,d4						multiply
+		move d2,d5						(x2-x1)
+		sub d0,d5
+		divs d5,d4						divide
+		add d4,d1						+y1
+		move #x_max,d0					x1 = x_max
+		bra c_line						check clipping again
+	endi
+	btst #0,d4							outside left edge ?
+	if <ne> then.s						yes
+		move d3,d4						(y2-y1)
+		sub d1,d4
+		move #x_min,d5					(x_min-x1)
+		sub d0,d5
+		muls d5,d4						multiply
+		move d2,d5						(x2-x1)
+		sub d0,d5
+		divs d5,d4						divide
+		add d4,d1						+y1
+		move #x_min,d0					x1 = x_min
+		bra c_line						check clipping again
+	endi
+
+	ret
+
+
+* *****************************************
+* **									 **
+* ** C_PLOTXY - PLOT PIXEL WITH CLIPPING **
+* **									 **
+* *****************************************
+
+* Plots a pixel only if it lies within the window.
+
+* Entry: (D0,D1) = x,y coordinates
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr c_plotxy,global
+
+	outcodes d0,d1,d2					visible ?
+	tst d2
+	ret <ne>							no, return
+	add #x_left-x_min,d0				convert to physical screen coords
+	neg d1
+	add #y_top+y_max,d1
+	bra plotxy							plot pixel
+
+
+* *******************************
+* **						   **
+* ** POLYGON - DRAWS A POLYGON **
+* **						   **
+* *******************************
+
+* Draws a polygon (outline), e.g. a planet or hexagon.
+
+* Entry: (D0,D1) = coords of centre (view)
+*		 D2 	 = radius of polygon
+*		 D3 	 = no. line segments to draw
+*		 D4 	 = increment between circle trig values-4
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr polygon,global
+
+	movem d0-d3,poly_x(a6)				save parameters
+	move d4,poly_inc+2(a6)
+	st first_point(a6)					this is the first point
+	lea circle_trigs,a4 				start of circle trig data
+	repeat
+		move (a4)+,d0					x = r*cos(a)
+		mulu circle_rad(a6),d0
+		add.l d0,d0
+		swap d0
+		move (a4)+,d1					y = r*sin(a)
+		mulu circle_rad(a6),d1
+		add.l d1,d1
+		swap d1
+		lea last_coords(a6),a3			base of last coords table
+		push d0 						top right quadrant
+		bsr part_polygon
+		neg d0							top left quadrant
+		bsr part_polygon
+		neg d1							bottom left quadrant
+		bsr part_polygon
+		pop d0							bottom right quadrant
+		bsr part_polygon
+		sf first_point(a6)				not first point anymore
+		add.l poly_inc(a6),a4			next segment
+		dec seg_count(a6)
+	until <mi>
+
+	ret
+
+
+* ***************************************************
+* **											   **
+* ** PART_POLYGON - DRAW ONE QUADRANT OF A POLYGON **
+* **											   **
+* ***************************************************
+
+* Draws a line segment of a polygon in one quadrant.
+
+* Entry: (D0,D1) = x,y offset
+*		 A3 	 = ptr: last point coords
+* Exit:  None
+
+* Regs:  ?
+* Subr:  I_CLINE
+
+	subr part_polygon
+
+	movem d0-d1,-(sp)					save offsets
+	add poly_x(a6),d0					add centre coords
+	add poly_y(a6),d1
+	tst first_point(a6) 				first point ?
+	if <ne> then.s						yes
+		movem d0-d1,(a3)				just stack the coords
+	else.s
+		movem (a3),d2-d3				fetch coords of last segment
+		movem d0-d1,(a3)				replace with new coords
+		push.l a3						draw the line (clipped)
+		bsr c_line						draw the line
+		pop.l a3
+	endi
+	addq.l #4,a3						advance pointer
+	movem (sp)+,d0/d1					restore coords
+
+	ret
+
+
+* **********************************
+* **							  **
+* ** CIRCLE - DRAW A SOLID CIRCLE **
+* **							  **
+* **********************************
+
+* Draws a solid circle, used for the sun, planet, small objects etc. This
+* routine generates the x,y coords of the points in the top right hand
+* quadrant. These offsets are passed to CIRCLE_LINE which generates the
+* points between (using a line algorithm). The circle is drawn in the current
+* colour.
+
+* Entry: (D5,D6) = centre coords
+*		 D7 	 = radius of circle
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr circle,global
+
+	movem d5-d6,poly_x(a6)				save parameters
+	st first_point(a6)					this will be the first point
+	lea edge_masks(pc),a4				A4 = ptr: edge masks table
+	clr d5								x = 0
+	move d7,d6							y = radius
+	add d7,d7							d = 3 - 2*radius
+	subq #3,d7
+	neg d7
+	move d5,a1							initialise last y coords
+	repeat
+		exg d5,d6						draw bottom half
+		bsr circle_plotxy
+		exg d5,d6
+		tst d7							d < 0 ?
+		if <mi> then.s					yes
+			move d5,d0					d = d + 4*x + 6
+			asl #2,d0
+			add d0,d7
+			addq #6,d7
+		else.s
+			bsr circle_plotxy			draw horizontal line
+			move d5,d0					d = d + 4*(x - y) + 10
+			sub d6,d0
+			asl #2,d0
+			add d0,d7
+			add #10,d7
+			dec d6						--y
+		endi
+		inc d5							++x
+	until d5 <gt> d6
+
+	ret
+
+
+* ********************************************
+* **										**
+* ** CIRCLE_PLOTXY - PLOT LINE HORIZONTALLY **
+* **										**
+* ********************************************
+
+* Draws a horizontal line from one side of the circle to the other. Draws the
+* line in the upper and lower quadrants. NOTE - the left and right limits of
+* the window (X_MIN and X_MAX) are brought in by one to allow for the flare of
+* the sun (this is added AFTER clipping).
+
+* Entry: (D5,D6) = x,y offset
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr circle_plotxy
+
+	move poly_x(a6),d0					calculate right x
+	add d5,d0
+	cmp #x_min,d0						outside left edge ?
+	ret <lt>							yes, don't draw
+	if d0 <gt> #x_max-1 then.s			clamp on right edge if required
+		move #x_max-1,d0
+	endi
+	move poly_x(a6),d2					calculate left x
+	sub d5,d2
+	cmp #x_max-1,d2 					outside right edge ?
+	ret <gt>							yes, don't draw
+	if d2 <lt> #x_min+1 then.s			clamp on left edge if required
+		move #x_min+1,d2
+	endi
+	move poly_y(a6),d1					calculate top y
+	add d6,d1
+	cmp #y_min,d1						outside bottom edge ?
+	ret <lt>							yes, don't draw
+	if d1 <le> #y_max then.s			if inside top edge
+		movem d0/d2,-(sp)				draw line
+		bsr circle_horiz
+		movem (sp)+,d0/d2
+	endi
+	move poly_y(a6),d1					calculate bottom y
+	sub d6,d1
+	cmp #y_max,d1						outside top edge ?
+	ret <gt>							yes, don't draw
+	cmp #y_min,d1						outside bottom edge ?
+	bge circle_horiz					no, draw line
+
+	ret 								return
+
+
+* *****************************************
+* **									 **
+* ** CIRCLE_HORIZ - DRAW HORIZONTAL LINE **
+* **									 **
+* *****************************************
+
+* Draws a horizontal line between two points.
+
+* Entry: D0 = x coord of right edge
+*		 D2 = x coord of left edge
+*		 D1 = y coord of line
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr circle_horiz
+
+	movem d5-d7,-(sp)					save circle parameters
+	tst sun_flare(a6)					sun flare ?
+	if <ne> then.s						yes
+		dec flare_count(a6) 			need new flare byte ?
+		if <eq> then.s					yes
+			movem d0/d1,-(sp)			generate new flare
+			jsr random
+			move d0,flare(a6)
+			move #4,flare_count(a6)
+			movem (sp)+,d0/d1
+		endi
+		ror flare(a6)
+		if <cs> then.s
+			inc d0
+		endi
+		ror flare(a6)
+		if <cs> then.s
+			dec d2
+		endi
+	endi
+	add #x_left-x_min,d0				convert from view to screen coords
+	add #x_left-x_min,d2
+	neg d1
+	add #y_top+y_max,d1
+	exg d0,d2							exchange x coords
+	bsr dot_to_addr 					calculate screen address
+	move.l colour_ptr(a6),a1			fetch pointer to colour masks
+	bsr horiz_line						draw horizontal line
+	movem (sp)+,d5-d7					restore circle parameters
+
+	ret 								return
+
+
+* **************************************
+* **								  **
+* ** BLOCK - DRAW A RECTANGULAR BLOCK **
+* **								  **
+* **************************************
+
+* Draws a solid rectangular block on the screen.
+
+* Entry: (D0,D1) = x,y coords of top left
+*		 D2 	 = which screen flag: 0 = current, != both
+*		 D3 	 = width (pixels)
+*		 D4 	 = depth (pixels)
+*		 D5 	 = colour (0..15)
+* Exit:  None
+
+* Regs:  D0-D7, A0-A4 corrupt.
+* Subr:  DOT_TO_ADDR, MASK_COLUMN, BLITTER
+
+	subr block,global
+
+	bsr dot_to_addr 					calculate screen address
+	movem.l d0/d3/d4/a0,-(sp)			save parameters
+	dec d4								adjust depth for DBRA
+	asl #3,d5							index into colour masks
+	lea colour_masks(pc),a2
+	lea (a2,d5),a2
+	lea edge_masks(pc),a3				A3 = ptr: edge masks
+	and #15,d0							starting on word edge ?
+	if <ne> then						no
+		add d0,d3						no. pixels left = width-16+bit_pos
+		sub #16,d3
+		if <cs> then					not a full word wide
+			add #16,d3					get mask for right edge
+			asl #2,d3
+			move.l (a3,d3),d3
+			not.l d3
+			asl #2,d0					get mask for middle
+			move.l (a3,d0),d0
+			and.l d3,d0 				mask out right edge
+			clr d3						no more pixels to draw
+		else.s
+			asl #2,d0					get plotting mask
+			move.l (a3,d0),d0
+		endi
+		bsr mask_column 				draw left edge
+	endi
+	move d3,d5							calculate no. full words wide
+	lsr #4,d5
+	if <ne> then						some words
+		movem.l d4/a0,-(sp) 			save depth and addresses
+		and #15,d3						adjust no. pixels left to draw
+		dec d5							adjust counter for DBRA
+		move.l 0(a2),d0 				get line colour
+		move.l 4(a2),d1
+		loop 1							loop for each pixel line
+			move.l a0,a1				fill words
+			move.w d5,d6
+			loop 2
+				move.l d0,(a1)+
+				move.l d1,(a1)+
+			next 2,d6
+			lea 160(a0),a0				next pixel line
+		next 1,d4
+		movem.l (sp)+,d4/a0 			restore depth and addresses
+		inc d5							update addresses
+		mulu #8,d5
+		add d5,a0
+		add d5,a1
+	endi
+	tst d3								any pixels left to draw ?
+	if <ne> then.s						yes
+		asl #2,d3						get plotting mask
+		move.l (a3,d3),d0
+		not.l d0
+		bsr mask_column 				draw masked column
+	endi
+	movem.l (sp)+,d0/d3/d4/a0			restore parameters
+	tst d2								dual screen ?
+	if <ne> then.s						yes
+		move.l a0,d2					calculate address in the other
+		move.l flip_screen(a6),d7
+		eor.l d7,d2
+		move.l d2,a1
+		bsr blitter 					execute blitter
+	endi
+
+	ret
+
+
+* **************************************
+* **								  **
+* ** BLITTER - COPY RECTANGULAR BLOCK **
+* **								  **
+* **************************************
+
+* Copies a rectangular area of the screen from one address to another. The
+* blitter is pixel based.
+
+* Entry: D0.W = x coord (0..319)
+*		 D3.W = no. pixels wide
+*		 D4.W = no. pixels deep
+*		 A0.L = source address
+*		 A1.L = destination address
+* Exit:  None
+
+* Regs: D0-D7, A0-A4 corrupt.
+* Subr: BLT_COLUMN
+
+	subr blitter,global
+
+	dec d4								adjust depth for DBRA
+	lea edge_masks(pc),a2				A2 = ptr: edge masks
+	and #15,d0							starting on word edge ?
+	if <ne> then						no
+		add d0,d3						no. pixels left = width-16+bit_pos
+		sub #16,d3
+		if <cs> then					not a full word wide
+			add #16,d3					get mask for right edge
+			asl #2,d3
+			move.l (a2,d3),d3
+			not.l d3
+			asl #2,d0					get mask for middle
+			move.l (a2,d0),d0
+			and.l d3,d0 				mask out right edge
+			clr d3						no more pixels to draw
+		else.s
+			asl #2,d0					get plotting mask
+			move.l (a2,d0),d0
+		endi
+		bsr blt_column					copy a column
+	endi
+	move d3,d5							calculate no. full words wide
+	lsr #4,d5
+	if <ne> then						some words
+		movem.l d4/a0/a1,-(sp)			save depth, width and addresses
+		and #15,d3						adjust no. pixels left to draw
+		dec d5							adjust counter for DBRA
+		loop 1							loop for each pixel line
+			movem.l a0/a1,-(sp) 		copy data
+			move d5,d6
+			loop 2
+				move.l (a0)+,(a1)+
+				move.l (a0)+,(a1)+
+			next 2,d6
+			movem.l (sp)+,a0/a1 		next pixel line
+			lea 160(a0),a0
+			lea 160(a1),a1
+		next 1,d4
+		movem.l (sp)+,d4/a0/a1			restore width, depth and addresses
+		inc d5							update addresses
+		mulu #8,d5
+		add d5,a0
+		add d5,a1
+	endi
+	tst d3								any pixels left to draw ?
+	if <ne> then.s						yes
+		asl #2,d3						get plotting mask
+		move.l (a2,d3),d0
+		not.l d0
+		bsr blt_column					blit a column
+	endi
+
+	ret
+
+* ***************************************
+* **								   **
+* ** BLT_COLUMN - BLIT A MASKED COLUMN **
+* **								   **
+* ***************************************
+
+* Copies a column of the screen from one address to another with masking.
+
+* Entry: D0 = plot mask
+*		 D4 = depth - 1
+*		 A0 = source screen address
+*		 A1 = destn screen address
+*		 A4 = 160
+* Exit:  A0 = A0+8
+*		 A1 = A1+8
+
+* Regs:  D1/D7/A0-A1 corrupt
+* Subr:  None
+
+	subr blt_column
+
+	movem.l a0/a1,-(sp) 				save parameters
+	move.l d0,d1						build clear mask
+	not.l d1
+	move d4,d6							loop for each pixel line
+	loop 1
+		and.l d1,0(a1)					clear current setting
+		and.l d1,4(a1)
+		move.l 0(a0),d7 				copy pixels
+		and.l d0,d7
+		or.l d7,0(a1)
+		move.l 4(a0),d7
+		and.l d0,d7
+		or.l d7,4(a1)
+		lea 160(a0),a0					next pixel line
+		lea 160(a1),a1
+	next 1,d6
+	movem.l (sp)+,a0/a1 				restore parameters
+	addq #8,a0							next column
+	addq #8,a1
+
+	ret
+
+
+* ****************************************
+* **									**
+* ** MASK_COLUMN - DRAW A MASKED COLUMN **
+* **									**
+* ****************************************
+
+* Draws a column (16 bits wide) on the screen with masking.
+
+* Entry: D0 = plot mask
+*		 D4 = depth - 1
+*		 A0 = screen address
+*		 A2 = ptr: colour masks
+*		 A4 = 160
+* Exit:  A0 = A0+8
+
+* Regs:  D1/D7/A0 corrupt.
+* Subr:  None
+
+	subr mask_column
+
+	move.l d0,d1						build clear mask
+	not.l d1
+	move.l a0,a1						loop for each pixel line
+	move.w d4,d6
+	loop 1
+		and.l d1,0(a1)					clear current setting
+		and.l d1,4(a1)
+		move.l 0(a2),d7 				plot pixels
+		and.l d0,d7
+		or.l d7,0(a1)
+		move.l 4(a2),d7
+		and.l d0,d7
+		or.l d7,4(a1)
+		lea 160(a1),a1					next pixel line
+	next 1,d6
+	addq #8,a0							next column
+
+	ret
+
+
+* ******************************************
+* **									  **
+* ** XOR - EXCLUSIVE-OR RECTANGULAR BLOCK **
+* **									  **
+* ******************************************
+
+* Xors a rectangular pixel area of the screen with the current colour. No
+* checks are made for going off the edge of the screen for beware.
+
+* Entry: D0 = x coord (0..319)
+*		 D1 = y coord (0..199)
+*		 D2 = width (pixels)
+*		 D3 = depth
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr xor,global
+
+	bsr dot_to_addr 					calculate screen address
+	dec d3								adjust depth for DBRA
+	move.l colour_ptr(a6),a1			A1 = ptr: colour mask
+	lea edge_masks(pc),a2				A2 = ptr: edge masks
+	and #15,d0							starting on word edge ?
+	if <ne> then						no
+		add d0,d2						no. pixels left = width-16+bit_pos
+		sub #16,d2
+		if <cs> then					not a full word wide
+			add #16,d2					get mask for right edge
+			asl #2,d2
+			move.l (a2,d2),d2
+			not.l d2
+			asl #2,d0					get mask for middle
+			move.l (a2,d0),d0
+			and.l d2,d0 				mask out right edge
+			clr d2						no more pixels to draw
+		else.s
+			asl #2,d0					get mask
+			move.l (a2,d0),d0
+		endi
+		bsr inv_column					invert a column
+	endi
+	move d2,d5							calculate no. full words wide
+	lsr #4,d5
+	if <ne> then						some words
+		movem.l d3/a0,-(sp) 			save depth and screen address
+		and #15,d2						adjust no. pixels left to draw
+		dec d5							adjust counter for DBRA
+		loop 1							loop for each pixel line
+			push.l a0					save screen address
+			move d5,d6					loop for each 16 bit word
+			loop 2
+				move 0(a1),d0			XOR each plane
+				eor d0,(a0)+
+				move 2(a1),d0
+				eor d0,(a0)+
+				move 4(a1),d0
+				eor d0,(a0)+
+				move 6(a1),d0
+				eor d0,(a0)+
+			next 2,d6					next word
+			pop.l a0					next pixel line
+			lea 160(a0),a0
+		next 1,d3
+		movem.l (sp)+,d3/a0 			restore depth and screen address
+		inc d5							update addresses
+		mulu #8,d5
+		add d5,a0
+	endi
+	tst d2								any pixels left to draw ?
+	if <ne> then.s						yes
+		asl #2,d2						get column mask
+		move.l (a2,d2),d0
+		not.l d0
+		bsr inv_column					invert a column
+	endi
+
+	ret
+
+
+* *****************************************
+* **									 **
+* ** INV_COLUMN - INVERT A MASKED COLUMN **
+* **									 **
+* *****************************************
+
+* Inverts a masked column of the screen
+
+* Entry: D0 = mask, e.g. %000111100000000
+*		 D3 = depth - 1
+*		 A0 = screen address
+* Exit:  A0 = A0+8
+
+* Regs:  D1/D7/A0 corrupt
+* Subr:  None
+
+	subr inv_column
+
+	push.l a0							save screen address
+	move d3,d7							loop for each pixel line
+	loop 1
+		move 0(a1),d1					XOR planes
+		and d0,d1
+		eor d1,(a0)+
+		move 2(a1),d1
+		and d0,d1
+		eor d1,(a0)+
+		move 4(a1),d1
+		and d0,d1
+		eor d1,(a0)+
+		move 6(a1),d1
+		and d0,d1
+		eor d1,(a0)+
+		lea 160-8(a0),a0				next pixel line
+	next 1
+	pop.l a0							restore screen address
+	addq #8,a0							next column
+
+	ret
+
+
+* **************************************
+* **								  **
+* ** SET_COLOUR - SET GRAPHICS COLOUR **
+* **								  **
+* **************************************
+
+* Sets the colour for all subsequent graphic operations, e.g. plot point,
+* draw line (except SOLID_POLYGON)
+
+* Entry: D0 = colour (0..15)
+* Exit:  None
+
+* Regs: D0/A0 corrupt
+* Subr: None
+
+	subr set_colour,global
+
+	asl #3,d0							index into colour masks table
+	lea colour_masks(pc),a0
+	lea (a0,d0),a0
+	move.l a0,colour_ptr(a6)			set colour masks pointer
+
+	ret 								return
+
+
+* ***************************
+* **					   **
+* ** PLOTXY - PLOT A PIXEL **
+* **					   **
+* ***************************
+
+* Plots a pixel in at (x,y) in the current colour. No clipping performed.
+
+* Entry: (D0,D1) = x,y coord
+* Exit:  None
+
+* Regs:  D0-D2 and A0-A1 corrupt.
+* Subr:  DOT_TO_ADDR
+
+	subr plotxy,global
+
+	bsr dot_to_addr 					get screen address
+	and #15,d0							index into bit masks
+	asl #2,d0
+	lea bit_masks(pc),a1
+	move.l (a1,d0),d0					fetch bit mask
+	move.l d0,d1						build clear mask
+	not.l d1
+	move.l colour_ptr(a6),a1			fetch pointer to colour masks
+	and.l d1,(a0)						clear current plane #0 and #1
+	move.l (a1)+,d2 					plot pixel in plane #0 and #1
+	and.l d0,d2
+	or.l d2,(a0)+
+	and.l d1,(a0)						clear current plane #2 and #3
+	move.l (a1),d2						plot pixel in plane #2 and #3
+	and.l d0,d2
+	or.l d2,(a0)
+
+	ret
+
+
+* **********************
+* **				  **
+* ** LINE - DRAW LINE **
+* **				  **
+* **********************
+
+* Draws a line on the screen between two points. No clipping is performed.
+* Uses the current line colour.
+
+* Entry: (D0,D1) = x,y coord of point #1
+*		 (D2,D3) = x,y coord of point #2
+* Exit:  None
+
+* Regs:  D0-D6 and A0-A2 corrupt.
+* Subr:  DOT_TO_ADDR
+
+	subr line,global
+
+	move.l colour_ptr(a6),a1			get pointer to colour masks
+	cmp d1,d3							horizontal line ?
+	if <eq> then.s						yes
+		if d0 <hi> d2 then.s			make D0 x coord of left end
+			exg d0,d2
+		endi
+		jsr dot_to_addr 				calculate screen address
+		bra horiz_line					draw horizontal line
+	endi
+	cmp d0,d2							vertical line ?
+	beq vert_line						draw vertical line
+	if d3 <lo> d1 then.s				make (D0,D1) lowest point
+		exg d0,d2
+		exg d1,d3
+	endi
+	move #1,d4							assume drawing left to right
+	sub d0,d2							calculate x difference
+	if <cs> then.s
+		neg d2
+		neg d4
+	endi
+	sub d1,d3							calculate y difference
+	bsr dot_to_addr 					get screen address
+	and #15,d0							get bit mask
+	asl #2,d0
+	lea bit_masks(pc),a3
+	move.l (a3,d0),d0
+	if d2 <hs> d3 then					if x diff >= y diff
+		move d2,d1						initialise error count
+		lsr #1,d1
+		move d2,d6						loop for each pixel
+		tst d4							drawing left to right ?
+		if <pl> then.s					yes
+			loop 1
+				not.l d0				mask out current setting
+				and.l d0,0(a0)
+				and.l d0,4(a0)
+				not.l d0				plot pixel
+				move.l d0,d5
+				and.l 0(a1),d5
+				or.l d5,0(a0)
+				move.l d0,d5
+				and.l 4(a1),d5
+				or.l d5,4(a0)
+				ror.l #1,d0 			rotate mask right
+				if <cs> then.s			carry, move to new word
+					addq #8,a0
+				endi
+				sub d3,d1				trial subtract
+				if <cs> then.s			failed
+					add d2,d1			add x difference
+					lea 160(a0),a0		move down a line
+				endi
+			next 1,d6					next point
+		else.s
+			loop 1
+				not.l d0				mask out current setting
+				and.l d0,0(a0)
+				and.l d0,4(a0)
+				not.l d0				plot pixel
+				move.l d0,d5
+				and.l 0(a1),d5
+				or.l d5,0(a0)
+				move.l d0,d5
+				and.l 4(a1),d5
+				or.l d5,4(a0)
+				rol.l #1,d0 			rotate mask left
+				if <cs> then.s			carry, move to new word
+					subq #8,a0
+				endi
+				sub d3,d1				trial subtract
+				if <cs> then.s			failed
+					add d2,d1			add x difference
+					lea 160(a0),a0		move down a line
+				endi
+			next 1,d6					next point
+		endi
+	else.s
+		move d3,d1						initialise error count
+		lsr #1,d1
+		move d3,d6						loop for each pixel
+		tst d4							drawing left to right ?
+		if <pl> then.s					yes
+			loop 1						loop for each pixel
+				not.l d0				mask out current setting
+				and.l d0,0(a0)
+				and.l d0,4(a0)
+				not.l d0				plot pixel
+				move.l d0,d5
+				and.l 0(a1),d5
+				or.l d5,0(a0)
+				move.l d0,d5
+				and.l 4(a1),d5
+				or.l d5,4(a0)
+				lea 160(a0),a0			move down a line
+				sub d2,d1				trial subtract
+				if <cs> then.s			failed
+					add d3,d1			add y difference
+					ror.l #1,d0 		rotate mask right
+					if <cs> then.s		carry, move to new word
+						addq #8,a0
+					endi
+				endi
+			next 1,d6					next pixel
+		else.s
+			loop 1						loop for each pixel
+				not.l d0				mask out current setting
+				and.l d0,0(a0)
+				and.l d0,4(a0)
+				not.l d0				plot pixel
+				move.l d0,d5
+				and.l 0(a1),d5
+				or.l d5,0(a0)
+				move.l d0,d5
+				and.l 4(a1),d5
+				or.l d5,4(a0)
+				lea 160(a0),a0			move down a line
+				sub d2,d1				trial subtract
+				if <cs> then.s			failed
+					add d3,d1			add y difference
+					rol.l #1,d0 		rotate mask left
+					if <cs> then.s		carry, move to new word
+						subq #8,a0
+					endi
+				endi
+			next 1,d6					next pixel
+		endi
+	endi
+
+	ret
+
+
+* ***************************************
+* **								   **
+* ** HORIZ_LINE - DRAW HORIZONTAL LINE **
+* **								   **
+* ***************************************
+
+* Draws a horizontal line between two points.
+
+* Entry: D0 = x coord of left end
+*		 D2 = x coord of right end
+*		 A0 = screen address
+* Exit:  None
+
+* Regs: D0-D6, A0 and A2 corrupt.
+* Subr: DOT_TO_ADDR, MASK_PLOT
+
+	subr horiz_line,global
+
+	sub d0,d2							calculate width in pixels
+	inc d2
+	lea edge_masks(pc),a2				A2 = ptr: edge masks
+	and #15,d0							starting on word edge ?
+	if <ne> then						no
+		add d0,d2						no. pixels left = width-16+bit_pos
+		sub #16,d2
+		if <cs> then					not a full word wide
+			add #16,d2					get mask for right edge
+			asl #2,d2
+			move.l (a2,d2),d2
+			not.l d2
+			asl #2,d0					get mask for middle
+			move.l (a2,d0),d0
+			and.l d2,d0 				mask out right edge
+			bra mask_plot				plot pixels and edit
+		endi
+		asl #2,d0						get plotting mask
+		move.l (a2,d0),d0
+		bsr mask_plot					plot pixels
+	endi
+	move d2,d5							calculate no. full words wide
+	lsr #4,d5
+	if <ne> then						some words
+		and #15,d2						adjust no. pixels left to draw
+		dec d5							adjust counter for DBRA
+		move.l 0(a1),d0 				get line colour
+		move.l 4(a1),d1
+		loop 1							fill words
+			move.l d0,(a0)+
+			move.l d1,(a0)+
+		next 1,d5
+	endi
+	tst d2								any pixels left to draw ?
+	ret <eq>							no, return
+	asl #2,d2							get plotting mask
+	move.l (a2,d2),d0
+	not.l d0
+	bra mask_plot						plot pixels
+
+
+* **************************************
+* **								  **
+* ** VERT_LINE - DRAW A VECTICAL LINE **
+* **								  **
+* **************************************
+
+* Draws a vertical line between two points.
+
+* Entry: D0 = x coord
+*		 D1 = y coord of end #1
+*		 D3 = y coord of end #2
+* Exit:  None
+
+* Regs: D0-D5,A0-A2 corrupt.
+* Subr: DOT_TO_ADDR
+
+	subr vert_line
+
+	if d1 <hi> d3 then.s				make D1 y coord of top end
+		exg d1,d3
+	endi
+	sub d1,d3							calculate depth in pixels
+	jsr dot_to_addr 					calculate screen address
+	lea bit_masks(pc),a2				determine bit mask, e.g. $80008000
+	and #15,d0
+	asl #2,d0
+	move.l (a2,d0),d0
+	move.l (a1)+,d4 					build colour plotting masks
+	and.l d0,d4
+	move.l (a1)+,d5
+	and.l d0,d5
+	not.l d0							clear settings mask
+	loop 1								loop for each pixel line
+		and.l d0,(a0)					plot pixels
+		or.l d4,(a0)+
+		and.l d0,(a0)
+		or.l d5,(a0)+
+		lea 160-8(a0),a0				next line
+	next 1,d3
+
+	ret
+
+
+* ***************************************
+* **								   **
+* ** MASK_PLOT - PLOT PIXELS WITH MASK **
+* **								   **
+* ***************************************
+
+* Plots a series of pixels using a mask.
+
+* Entry: D0.L = plotting mask, e.g $80008000
+*		 A0.L = ptr: screen address
+*		 A1.L = ptr: colour masks
+* Exit:  None
+
+* Regs: D1,D5 and A0 corrupt.
+* Subr: ?
+
+	subr mask_plot
+
+	move.l d0,d1						build clear mask
+	not.l d1
+	and.l d1,(a0)						plot pixels in planes #0 and #1
+	move.l d0,d5
+	and.l 0(a1),d5
+	or.l d5,(a0)+
+	and.l d1,(a0)						plot pixels in planes #2 and #3
+	move.l d0,d5
+	and.l 4(a1),d5
+	or.l d5,(a0)+
+
+	ret
+
+
+* **********************************
+* **							  **
+* ** LINES - DRAW A LIST OF LINES **
+* **							  **
+* **********************************
+
+* Draws a sequence of lines from a specified table. E.g. used for drawing
+* the pointer lines on the status screen. Example table:
+
+*		dc 100,100,200,100,200,200,100,200,100,100,-1
+
+* This example would draw a box with limits (100,100) and (200,200). There
+* must be a least two sets of coords in the list.
+
+* Entry: A0 = ptr: table of coords terminated by a -1
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr lines,global
+
+	addq.l #4,a0						skip 1st set of coords
+	repeat
+		move 0(a0),d0					end of list ?
+		ret <mi>						yes, return
+		move 2(a0),d1					(y coord)
+		move -4(a0),d2					fetch previous coords
+		move -2(a0),d3
+		push.l a0						draw line
+		bsr line
+		pop.l a0
+		addq.l #4,a0					next line
+	endr
+
+* *************************************
+* **								 **
+* ** BLANK_SCREEN - BLANK SCREEN OUT **
+* **								 **
+* *************************************
+
+* Blanks the screen out by setting the palette to all black.
+
+* Entry: None
+* Exit:  None
+
+* Regs:  D7 and A0 corrupt.
+* Subr:  None
+
+	subr blank_screen,global
+
+	lea palette,a0						point to start of palette
+	loop 1,16							set all inks to black
+		clr (a0)+
+	next 1
+
+	ret
+
+
+* ****************************************
+* **									**
+* ** SOLID_POLYGON - DRAW SOLID POLYGON **
+* **									**
+* ****************************************
+
+* Mega-routine to draw a solid polygon from a list of linked nodes.
+
+* Entry: POLY_MIN/MAX_Y = y limits of the polygon
+*		 TOP_PTR		= ptr: node at the top
+* Exit:  None
+
+* Regs: ?
+* Subr: HORIZ_LINE
+
+	subr solid_polygon,global
+
+	move poly_min_y(a6),d0				convert y limits to physical screen
+	neg d0								coords
+	add #y_top+y_max,d0
+	move d0,bottom_y(a6)
+	move poly_max_y(a6),d0
+	neg d0
+	add #y_top+y_max,d0
+	move d0,top_y(a6)
+	move.l top_ptr(a6),a3				fetch pointer to top vertex
+	move.l next(a3),a0					decide on left and right arms
+	move.l prev(a3),a1
+	move scr_x(a0),d0
+	cmp scr_x(a1),d0
+	if <lt> then.s
+		move #next,a4
+		push #prev
+	else.s
+		move #prev,a4
+		push #next
+	endi
+	push.l a3							save pointer to top node
+	repeat
+		move.l (a3,a4),a2				get pointer to next node
+		movem scr_x(a3),d0/d1			fetch line coords
+		movem scr_x(a2),d2/d3
+		add #x_left-x_min,d0			convert to physical screen coords
+		neg d1
+		add #y_top+y_max,d1
+		add #x_left-x_min,d2
+		neg d3
+		add #y_top+y_max,d3
+		if d1 <hi> d3 then.s			make sure (D0,D1) is top coord
+			exg d0,d2
+			exg d1,d3
+		endi
+		push d3 						save bottom y coord
+		move.l a2,a3					advance pointer to next node
+		moveq #1,d4 					assume drawing left to right
+		sub d0,d2						calculate x difference
+		if <cs> then.s					drawing right to left
+			neg d2
+			neg d4
+		endi
+		sub d1,d3						calculate y difference
+		sub top_y(a6),d1				index into coords array
+		add d1,d1
+		lea left_arm,a0
+		lea (a0,d1),a0
+		if d2 <hs> d3 then.s			x_diff >= y_diff
+			move d2,d5					initialise error count
+			lsr #1,d5
+			move d2,d7					D7 = no. pixels to draw
+			move d0,d6					initialise left most x coord
+			loop 1						loop for each pixel
+				if d0 <lt> d6 then.s	check for left most x
+					move d0,d6
+				endi
+				add d4,d0				x = x + line_dir
+				sub d3,d5				trial subtract
+				if <cs> then.s			failed
+					add d2,d5			restore remainder
+					move d6,(a0)+		store left most x coord
+					move d0,d6
+				endi
+			next 1						next pixel
+			move d6,(a0)				store left most x
+		else.s
+			move d3,d5					initialise error count
+			lsr #1,d5
+			move d3,d7					D7 = no. pixels in the line
+			loop 1						loop for each pixel
+				move d0,(a0)+			store x coord
+				sub d2,d5				trial subtract
+				if <cs> then.s			failed
+					add d3,d5			restore remainder
+					add d4,d0			x = x + line_dir
+				endi
+			next 1
+		endi
+		pop d0							until bottom of polygon
+	until d0 <ge> bottom_y(a6)
+	pop.l a3							fetch pointer to top node
+	pop.w a4							A4 = index for traversing the nodes
+	repeat
+		move.l (a3,a4),a2				get pointer to next node
+		movem scr_x(a3),d0/d1			fetch line coords
+		movem scr_x(a2),d2/d3
+		add #x_left-x_min,d0			convert to physical screen coords
+		neg d1
+		add #y_top+y_max,d1
+		add #x_left-x_min,d2
+		neg d3
+		add #y_top+y_max,d3
+		if d1 <hi> d3 then.s			make sure (D0,D1) is top coord
+			exg d0,d2
+			exg d1,d3
+		endi
+		push d3 						save y coord of bottom
+		move.l a2,a3					advance pointer to next node
+		moveq #1,d4 					assume drawing left to right
+		sub d0,d2						calculate x difference
+		if <cs> then.s					drawing right to left
+			neg d2
+			neg d4
+		endi
+		sub d1,d3						calculate y difference
+		sub top_y(a6),d1				index into coords array
+		add d1,d1
+		lea right_arm,a0
+		lea (a0,d1),a0
+		if d2 <hs> d3 then.s			x_diff >= y_diff
+			move d2,d5					initialise error count
+			lsr #1,d5
+			move d2,d7					D7 = no. pixels to draw
+			move d0,d6					initialise right most x
+			loop 1						loop for each pixel
+				if d0 <gt> d6 then.s	check for right most x
+					move d0,d6
+				endi
+				add d4,d0				x = x + line_dir
+				sub d3,d5				trial subtract
+				if <cs> then.s			failed
+					add d2,d5			restore remainder
+					move d6,(a0)+		store right most x coord
+					move d0,d6
+				endi
+			next 1						next pixel
+			move d6,(a0)				store right most x
+		else.s
+			move d3,d5					initialise error count
+			lsr #1,d5
+			move d3,d7					D7 = no. pixels in the line
+			loop 1						loop for each pixel
+				move d0,(a0)+			store x coord
+				sub d2,d5				trial subtract
+				if <cs> then.s			failed
+					add d3,d5			restore remainder
+					add d4,d0			x = x + line_dir
+				endi
+			next 1
+		endi
+		pop d0							until bottom of polygon
+	until d0 <ge> bottom_y(a6)
+	move top_y(a6),d7					fetch start y coordinate
+	clr offset(a6)						assume even line
+	btst #0,d7							corrent ?
+	if <ne> then.s						no
+		move #8,offset(a6)
+	endi
+	move d7,d0							calculate start line screen address
+	mulu #160,d0
+	add.l scr_base(a6),d0
+	move.l d0,line_addr(a6)
+	lea left_arm,a3 					start of x coordinate data
+	lea right_arm,a4
+	repeat
+		move (a3)+,d0					fetch left x coord
+		move (a4)+,d2					fetch right x coord
+		if d0 <hi> d2 then.s			make sure about the above
+			exg d0,d2
+		endi
+		move d0,d1						calculate screen address
+		lsr #1,d1
+		and #$7ff8,d1
+		ext.l d1
+		add.l line_addr(a6),d1
+		move.l d1,a0
+		move.l colour_ptr(a6),a1		get pointer to colour data
+		move offset(a6),d1
+		lea (a1,d1),a1
+		bsr horiz_line					draw horizontal line
+		add #160,line_addr+2(a6)		next line
+		eor #8,offset(a6)
+		inc d7
+		cmp bottom_y(a6),d7
+	until <hi>
+
+	ret 								return
+
+
+* ********************************************************
+* **													**
+* ** C_SOLID_POLYGON - DRAW SOLID POLYGON WITH CLIPPING **
+* **													**
+* ********************************************************
+
+* Clips a polygon and then draws the polgon (solid).
+
+* Entry: A4 = ptr: first vertex in the polygon
+*		 A3 = ptr: last vertex in the polygon
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr c_solid_polygon,global
+
+	move #vertex_list1,which_list(a6)	start with list #1
+	lea clip_list(pc),a0				start of clip data list
+	loop 1,4							loop for each edge
+		move (a0)+,d4					edge bit in flags
+		btst d4,clip_panel(a6)			clip this edge ?
+		if <ne> then.s					yes
+			move.l (a0)+,a2 			ptr: intersection subroutine
+			movem.l d7/a0,-(sp) 		use next list
+			move which_list(a6),a0
+			lea (a6,a0),a0
+			bsr clip_edge				clip against edge
+			move which_list(a6),d0		set pointer for next list
+			cmp #vertex_list1,d0
+			if <eq> then.s
+				move #vertex_list2,d0
+			else.s
+				move #vertex_list1,d0
+			endi
+			move d0,which_list(a6)
+			movem.l (sp)+,d7/a0 		restore counter/data pointer
+			tst.l d5					polygon totally clipped ?
+			ret <mi>					yes, return
+		else.s
+			addq.l #4,a0				skip to next entry
+		endi
+	next 1								next edge
+	bra solid_polygon					draw solid polygon
+
+
+* *******************************************
+* **									   **
+* ** CLIP_EDGE - CLIP POLYGON AGAINST EDGE **
+* **									   **
+* *******************************************
+
+* Clips a polygon against an edge. Refer to 'Fundamentals of Computer
+* Graphics' section 11.6 for algorithm details.
+
+* In the main loop, A4 = p and A3 = s. The boundary checks are performed
+* by testing bits in the flags byte of the node record.
+
+* Entry: A4 = ptr: First vertex in polygon
+*		 A3 = ptr: Last vertex in polgon
+*		 A2 = ptr: subroutine to calculate intersection
+*		 A0 = buffer to store output vertices
+*		 D4 = edge bit no, e.g. OFF_LEFT
+* Exit:  A3 = ptr: Last vertex in output list
+*		 A4 = ptr: First vertex in output list
+
+* Regs: ?
+* Subr: ?
+
+	subr clip_edge
+
+	bset #last,nflags(a3)				flag last vertex
+	moveq #-1,d5						flag first vertex
+	move #+32767,poly_min_y(a6) 		initialise polygon limits
+	move #-32768,poly_max_y(a6)
+	repeat
+		btst d4,nflags(a4)				vertex p inside boundary ?
+		if <eq> then.s					yes
+			btst d4,nflags(a3)			vertex s outside boundary ?
+			if <ne> then.s				yes
+				bsr output_intersect	output intersection
+			endi
+			bsr output_vertex			output vertex p
+		else.s
+			btst d4,nflags(a3)			vertex s inside boundary ?
+			if <eq> then.s				yes
+				exg a3,a4				output intersection
+				bsr output_intersect
+				exg a3,a4
+			endi
+		endi
+		move.l a4,a3					vertex s = vertex p
+		move.l next(a4),a4				move to next vertex
+		btst #last,nflags(a3)			until last node
+	until <ne>
+	tst.l d5							totally clipped ?
+	if <pl> then.s						no
+		move.l d5,a4					A4 = ptr: first vertex
+		lea -node_len(a0),a3			find last vertex
+		move.l a3,prev(a4)				link first and last vertices
+		move.l a4,next(a3)
+	endi
+
+	ret 								return
+
+
+* ***************************************************
+* **											   **
+* ** OUTPUT_INTERSECT - OUTPUT INTERSECTION VERTEX **
+* **											   **
+* ***************************************************
+
+* Outputs the vertex intersection between s and p to the output list.
+
+* Entry: A4 = ptr: vertex inside boundary
+*		 A3 = ptr: vertex outside boundary
+*		 A0 = ptr: output list buffer
+*		 A2 = ptr: subroutine to calculate intersection
+*		 D5 = flag: first vertex
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr output_intersect
+
+	movem scr_x(a3),d0/d1				calculate intersection
+	movem scr_x(a4),d2/d3
+	jsr (a2)
+	outcodes d0,d1,d2					build clip flags
+	bra.s add_vertex					add vertex and exit
+
+
+* *************************************
+* **								 **
+* ** OUTPUT_VERTEX - OUTPUT VERTEX P **
+* **								 **
+* *************************************
+
+* Output vertex p to the new list of vertices.
+
+* Entry: A4 = ptr: vertex p
+*		 A0 = ptr: output list
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr output_vertex
+
+	move.b nflags(a4),d2				fetch node flags and coords
+	movem scr_x(a4),d0/d1
+	and.b #15,d2						clear all except clipping bits
+*	 bra add_vertex 					 add vertex and exit
+
+
+* ********************************************
+* **										**
+* ** ADD_VERTEX - ADD VERTEX TO OUTPUT LIST **
+* **										**
+* ********************************************
+
+* Adds a vertex to the output vertex list and (if not first) links the
+* last vertex to the new vertex.
+
+* Entry: (D0,D1) = vertex coords
+*		 D2 	 = vertex flags
+*		 A0 	 = ptr: output vertex list
+*		 D5.L	 = ptr/flag: first vertex
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr add_vertex
+
+	move.b d2,nflags(a0)				store vertex flags
+	movem d0/d1,scr_x(a0)				store intersection point
+	tst.l d5							first vertex ?
+	if <mi> then.s						yes
+		move.l a0,d5					save pointer
+	else.s
+		lea -node_len(a0),a1			last vertex
+		move.l a0,next(a1)				link together
+		move.l a1,prev(a0)
+	endi
+	if d1 <lt> poly_min_y(a6) then.s	check for smallest y coord
+		move d1,poly_min_y(a6)
+	endi
+	if d1 <gt> poly_max_y(a6) then.s	check for largest y coord
+		move d1,poly_max_y(a6)
+		move.l a0,top_ptr(a6)
+	endi
+	lea node_len(a0),a0 				advance pointer
+
+	ret 								return
+
+
+* **********************************************************
+* **													  **
+* ** INTERSECT_TOP - CALCULATE INTERSECTION WITH TOP EDGE **
+* **													  **
+* **********************************************************
+
+* Calculates the intersection with the top edge of the window.
+
+* Entry: (D0,D1) = x1,y1
+*		 (D2,D3) = x2,y2
+* Exit:  (D0,D1) = x,y intersection coords
+
+* Regs: ?
+* Subr: ?
+
+	subr intersect_top
+
+	move d2,d6							(x2-x1)
+	sub d0,d6
+	move #y_max,d7						(y_max-y1)
+	sub d1,d7
+	muls d7,d6							multiply
+	move d3,d7							(y2-y1)
+	sub d1,d7
+	divs d7,d6							divide
+	add d6,d0							+x1
+	move #y_max,d1						y1 =
+
+	ret 								return
+
+
+* ****************************************************************
+* **															**
+* ** INTERSECT_BOTTOM - CALCULATE INTERSECTION WITH BOTTOM EDGE **
+* **															**
+* ****************************************************************
+
+* Calculates the intersection with the bottom edge of the window.
+
+* Entry: (D0,D1) = x1,y1
+*		 (D2,D3) = x2,y2
+* Exit:  (D0,D1) = x,y intersection coords
+
+* Regs: ?
+* Subr: ?
+
+	subr intersect_bottom
+
+	move d2,d6							(x2-x1)
+	sub d0,d6
+	move #y_min,d7						(y_min-y1)
+	sub d1,d7
+	muls d7,d6							multiply
+	move d3,d7							(y2-y1)
+	sub d1,d7
+	divs d7,d6							divide
+	add d6,d0							+x1
+	move #y_min,d1						y1 = y_min
+
+	ret 								return
+
+
+* **************************************************************
+* **														  **
+* ** INTERSECT_RIGHT - CALCULATE INTERSECTION WITH RIGHT EDGE **
+* **														  **
+* **************************************************************
+
+* Calculates the intersection with the right edge of the window.
+
+* Entry: (D0,D1) = x1,y1
+*		 (D2,D3) = x2,y2
+* Exit:  (D0,D1) = x,y intersection coords
+
+* Regs: ?
+* Subr: ?
+
+	subr intersect_right
+
+	move d3,d6							(y2-y1)
+	sub d1,d6
+	move #x_max,d7						(x_max-x1)
+	sub d0,d7
+	muls d7,d6							multiply
+	move d2,d7							(x2-x1)
+	sub d0,d7
+	divs d7,d6							divide
+	add d6,d1							+y1
+	move #x_max,d0						x1 = x_max
+
+	ret 								return
+
+
+* ************************************************************
+* **														**
+* ** INTERSECT_LEFT - CALCULATE INTERSECTION WITH LEFT EDGE **
+* **														**
+* ************************************************************
+
+* Calculates the intersection with the left edge of the window.
+
+* Entry: (D0,D1) = x1,y1
+*		 (D2,D3) = x2,y2
+* Exit:  (D0,D1) = x,y intersection coords
+
+* Regs: ?
+* Subr: ?
+
+	subr intersect_left
+
+	move d3,d6							(y2-y1)
+	sub d1,d6
+	move #x_min,d7						(x_min-x1)
+	sub d0,d7
+	muls d7,d6							multiply
+	move d2,d7							(x2-x1)
+	sub d0,d7
+	divs d7,d6							divide
+	add d6,d1							+y1
+	move #x_min,d0						x1 = x_min
+
+	ret 								return
+
+
+* *************************************
+* **								 **
+* ** DRAW_SCREEN - DRAW DEGAS SCREEN **
+* **								 **
+* *************************************
+
+* Draws a compacted Degas Elite screen. Does NOT set the palette.
+
+* Entry: A0 = ptr: Degas Elite screen
+*		 A1 = ptr: screen address
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr draw_screen,global
+
+	cmp.b #$80,(a0) 					make sure it's a Degas screen
+	ret <ne>							no, ignore draw
+	lea 34(a0),a0						start of compacted data
+	clr d0								pixel line = 0
+	clr d1								plane = 0
+	clr d2								byte = 0
+	moveq #1,d3 						step = 1
+	repeat
+		move.b (a0)+,d4 				fetch next byte
+		if <pl> then.s					positive, copy bytes
+			ext d4
+			add d4,d2
+			loop 1
+				move.b (a0)+,(a1)
+				lea (a1,d3),a1
+				eor #6,d3
+			next 1,d4
+		else.s
+			neg.b d4				 copy duplicated bytes
+			ext d4
+			add d4,d2
+			move.b (a0)+,d5
+			loop 1
+				move.b d5,(a1)
+				lea (a1,d3),a1
+				eor #6,d3
+			next 1,d4
+		endi
+		inc d2
+		cmp #40,d2						reached end of line ?
+		if <eq> then.s					yes
+			clr d2						move to next plane
+			lea -160+2(a1),a1
+			inc d1
+			cmp #4,d1					next pixel line ?
+			if <eq> then.s				yes
+				clr d1					move to next pixel line
+				lea 160-8(a1),a1
+				inc d0
+			endi
+		endi
+	until d0 <eq> #200					until end of data
+
+	ret 								return
+
+
+* *******************************************
+* **									   **
+* ** FIND_BITMAP - FIND A SELECTED BIT MAP **
+* **									   **
+* *******************************************
+
+* Returns a pointer to a selected bit map definition.
+
+* Entry: D0 = bit map # (see bitlist.m68)
+* Exit:  A0 = ptr: bit map data
+
+* Regs: ?
+* Subr: D0/A0 corrupt.
+
+	subr find_bitmap,global
+
+	asl #2,d0							index into pointer table
+	lea bitmaps,a0
+	move.l (a0,d0),a0					fetch address of bit map
+
+	ret 								return
+
+
+* **** LOCAL DATA ****
+
+* Bit masks for pixel plotting.
+
+	global bit_masks
+
+	dc.l $80008000	* Pixel 0
+	dc.l $40004000	* Pixel 1
+	dc.l $20002000	* Pixel 2
+	dc.l $10001000	* Pixel 3
+	dc.l $08000800	* Pixel 4
+	dc.l $04000400	* Pixel 5
+	dc.l $02000200	* Pixel 6
+	dc.l $01000100	* Pixel 7
+	dc.l $00800080	* Pixel 8
+	dc.l $00400040	* Pixel 9
+	dc.l $00200020	* Pixel A
+	dc.l $00100010	* Pixel B
+	dc.l $00080008	* Pixel C
+	dc.l $00040004	* Pixel D
+	dc.l $00020002	* Pixel E
+	dc.l $00010001	* Pixel F
+
+* Line colour masks (four and sixteen colour).
+
+	global colour_masks
+
+	dc.l $00000000,$00000000	Col #0
+	dc.l $ffff0000,$00000000	Col #1
+	dc.l $0000ffff,$00000000	Col #2
+	dc.l $ffffffff,$00000000	Col #3
+	dc.l $00000000,$ffff0000	Col #4
+	dc.l $ffff0000,$ffff0000	Col #5
+	dc.l $0000ffff,$ffff0000	Col #6
+	dc.l $ffffffff,$ffff0000	Col #7
+	dc.l $00000000,$0000ffff	Col #8
+	dc.l $ffff0000,$0000ffff	Col #9
+	dc.l $0000ffff,$0000ffff	Col #A
+	dc.l $ffffffff,$0000ffff	Col #B
+	dc.l $00000000,$ffffffff	Col #C
+	dc.l $ffff0000,$ffffffff	Col #D
+	dc.l $0000ffff,$ffffffff	Col #E
+	dc.l $ffffffff,$ffffffff	Col #F
+
+* Edge masks for horizontal line.
+
+edge_masks:
+
+	dc.l %11111111111111111111111111111111
+	dc.l %01111111111111110111111111111111
+	dc.l %00111111111111110011111111111111
+	dc.l %00011111111111110001111111111111
+	dc.l %00001111111111110000111111111111
+	dc.l %00000111111111110000011111111111
+	dc.l %00000011111111110000001111111111
+	dc.l %00000001111111110000000111111111
+	dc.l %00000000111111110000000011111111
+	dc.l %00000000011111110000000001111111
+	dc.l %00000000001111110000000000111111
+	dc.l %00000000000111110000000000011111
+	dc.l %00000000000011110000000000001111
+	dc.l %00000000000001110000000000000111
+	dc.l %00000000000000110000000000000011
+	dc.l %00000000000000010000000000000001
+
+* List of bits and intersection routines for clipping.
+
+clip_list:
+
+	dc.w off_left
+	dc.l intersect_left
+	dc.w off_right
+	dc.l intersect_right
+	dc.w off_bottom
+	dc.l intersect_bottom
+	dc.w off_top
+	dc.l intersect_top
+

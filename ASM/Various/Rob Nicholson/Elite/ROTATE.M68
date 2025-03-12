@@ -1,0 +1,428 @@
+* @@@@@@	@@@    @@@@@@	 @@    @@@@@@ @@@@@@@
+*  @@  @@  @@ @@   @ @@ @	@@@@   @ @@ @  @@	@
+*  @@  @@ @@   @@	 @@    @@  @@	 @@    @@ @
+*  @@@@@  @@   @@	 @@    @@  @@	 @@    @@@@
+*  @@ @@  @@   @@	 @@    @@@@@@	 @@    @@ @
+*  @@  @@  @@ @@	 @@    @@  @@	 @@    @@	@
+* @@@  @@	@@@ 	@@@@   @@  @@	@@@@  @@@@@@@
+
+* This module performs the rotate of objects in the world and local coords.
+
+* Atari ST Version 1.0 30th March 1988 Copyright (c) 1988 Mr. Micro Ltd.
+* Designed and coded by Rob Nicholson. Adpated from the MSX version.
+
+* Global address register usage:
+
+*		A6 - variables
+*		A5 - current object record
+*		A3 - sine and cosine values
+
+	include macros
+
+	xref trig_table,calc_yvector,monst
+
+* ---- LOCAL CONSTANTS ----
+
+sin:		equ 0						trig offsets
+cos:		equ 4
+
+* ---- LOCAL VARIABLES ----
+
+	vars rotate
+
+sine:		ds.l 1						sine of rotate angle
+cosine: 	ds.l 1						cosine of rotate angle
+
+	end_vars rotate
+
+* ---- LOCAL MACROS ----
+
+* ROTATE v1,c1,t1,op,v2,c2,t2
+
+rotate: macro
+
+	move.l \3(a3),d0					cos(a) or sin(a)
+	move.w \1_vector+\2(a5),d1			vector component
+	bsr trig_mult
+	move.l d0,d5
+	move.l \7(a3),d0					cos(a) or sin(a)
+	move.w \5_vector+\6(a5),d1			vector component
+	bsr trig_mult
+	ifc '\4','+'
+		add.l d0,d5
+	endc
+	ifc '\4','-'
+		sub.l d0,d5
+	endc
+	asr.l #8,d5 						divide by 2^8
+
+	endm
+
+	section 0
+
+
+* **************************************
+* **								  **
+* ** TRIG_MULT - MULTIPLY TRIG VALUES **
+* **								  **
+* **************************************
+
+* Multiply a vector component by a trig value. All entry and exit parameters
+* are in 2's complement.
+
+* Entry: D0.L = trig value (i.e. sine or cosine)
+*		 D1.W = vector component
+* Exit:  D0.L = product
+
+* Regs:  D0-D4 corrupt.
+* Subr:  None
+
+	subr trig_mult
+
+	move.l d0,d3						negate trig if required
+	if <mi> then.s
+		neg.l d0
+	endi
+	move.w d1,d4						negate component if required
+	if <mi> then.s
+		neg.w d1
+	endi
+	move d0,d2							multiply
+	mulu d1,d2
+	swap d0
+	mulu d1,d0
+	clr d2
+	swap d2 							divide by 2^24
+	add.l d2,d0
+	swap d3 							set sign of result
+	eor d3,d4
+	if <mi> then.s
+		neg.l d0
+	endi
+
+	ret
+
+
+* *******************************************************
+* **												   **
+* ** MULTIPLY - MULTIPLY WORLD COORD BY TRIG VALUE	   **
+* **												   **
+* *******************************************************
+
+* Multiplies a world space coord (24 bit) by a trig value. The following is
+* used to perform the multiply:
+
+*	ABCDEFx123456 = (ABx12)<<32+(ABx3456+CDEFx12)<<16+CDEFx3456
+
+* Entry: D0.L = trig value
+*		 D1.L = coordinate (x/y/z)
+* Exit:  D4.L = new coordinate
+
+* Regs: D0-D5 corrupt
+* Subr: ?
+
+	subr multiply
+
+	move.l d0,d2						determine sign of the result
+	eor.l d1,d2
+	abs.l d0							abs(trig)
+	abs.l d1							abs(coord)
+	move d0,d3							D3 = CDEFx3456
+	mulu d1,d3
+	move d0,d4							D4 = CDEFx12
+	swap d1
+	mulu d1,d4
+	move d1,d5							D5 = ABx12
+	swap d0
+	mulu d0,d5
+	swap d1 							D0 = ABx3456
+	mulu d1,d0
+	add.l d0,d4 						D4 = ABx3456+CDEFx12
+	clr d3								add together
+	swap d3
+	add.l d4,d3
+	swap d5
+	clr d5
+	add.l d5,d3
+	add.l #128,d3						(rounding factor)
+	lsr.l #8,d3 						divide by 2^8
+	tst.l d2							set the correct sign
+	if <mi> then.s
+		neg.l d3
+	endi
+
+	ret
+
+
+* ********************************
+* **							**
+* ** GET_TRIG - GET TRIG VALUES **
+* **							**
+* ********************************
+
+* Gets the sine and cosine of an angle in the range -20 to +20 in steps of
+* 0.5 degrees.
+
+* Entry: D0 = angle (-20 to 20)
+* Exit:  D3.L = sin(angle)*2^24
+*		 D4.L = cos(angle)*2^24
+
+* Regs:  ?
+* Subr:  None
+
+	subr get_trig,global
+
+	move d0,d1							negative angle ?
+	if <mi> then.s						yes
+		neg d1
+	endi
+	lea trig_table,a0					index into trig table
+	asl #3,d1
+	lea 0(a0,d1),a0
+	move.l (a0)+,d3 					get sine
+	move.l (a0)+,d4 					get cosine
+	tst d0								adjust sign
+	if <mi> then.s
+		neg.l d3
+	endi
+
+	ret
+
+
+* *****************************************************
+* **												 **
+* ** SET_ROLL_ANGLES - SET TRIG VALUES OF ROLL ANGLE **
+* **												 **
+* *****************************************************
+
+* Sets the trig values of the current roll angle.
+
+* Entry: None (angle in ROLL_ANGLE)
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr set_roll_angles,global
+
+	move roll_angle(a6),d0				take sine and cosine
+	bsr get_trig
+	movem.l d3-d4,roll_sin(a6)			store down
+
+	ret
+
+
+* *******************************************************
+* **												   **
+* ** SET_CLIMB_ANGLES - SET TRIG VALUES OF CLIMB ANGLE **
+* **												   **
+* *******************************************************
+
+* Sets the trig values of the current climb angle.
+
+* Entry: None (angle in CLIMB_ANGLE)
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr set_climb_angles,global
+
+	move climb_angle(a6),d0 			take sine and cosine
+	bsr get_trig
+	movem.l d3-d4,climb_sin(a6) 		store down
+
+	ret
+
+
+* *************************************************
+* **											 **
+* ** LOCAL_X_ROTATE - ROTATE AROUND LOCAL X AXIS **
+* **											 **
+* *************************************************
+
+* Rotates the current object around it's own internal x axis.
+
+* Entry: D0 = angle to rotate (see GET_TRIG)
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr local_x_rotate,global
+
+	bsr get_trig						get trig values
+	lea sine(a6),a3 					store down
+	movem.l d3-d4,(a3)
+	jsr calc_yvector					calculate y vector
+	bclr #yvector_ok,flags(a5)			clobber y vector
+	rotate y,i,sin,+,z,i,cos			rotate z vector
+	move d5,z_vector+i(a5)
+	rotate y,j,sin,+,z,j,cos
+	move d5,z_vector+j(a5)
+	rotate y,k,sin,+,z,k,cos
+	move d5,z_vector+k(a5)
+	inc rot_count(a5)					increment rotate counter
+
+	ret
+
+
+* *************************************************
+* **											 **
+* ** LOCAL_Z_ROTATE - ROTATE AROUND LOCAL Z AXIS **
+* **											 **
+* *************************************************
+
+* Rotates the current object around it's own internal z axis.
+
+* Entry: D0 = angle to rotate (see GET_TRIG)
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr local_z_rotate,global
+
+	bsr get_trig						get trig values
+	lea sine(a6),a3 					store down
+	movem.l d3-d4,(a3)
+	jsr calc_yvector					calculate y vector
+	bclr #yvector_ok,flags(a5)			clobber y vector
+	rotate x,i,cos,-,y,i,sin			rotate x vector
+	move d5,x_vector+i(a5)
+	rotate x,j,cos,-,y,j,sin
+	move d5,x_vector+j(a5)
+	rotate x,k,cos,-,y,k,sin
+	move d5,x_vector+k(a5)
+	inc rot_count(a5)					increment rotate counter
+
+	ret
+
+
+* ****************************
+* **						**
+* ** ROTATE - ROTATE COORDS **
+* **						**
+* ****************************
+
+* Rotates a set of coordinates around the other axis. The comments assume
+* x & y are being used. The 2^8 division factor is required as the trig
+* values as stored x 2^24 (first 16 bits lost by TRIG_MULT). The formula
+* used is:
+
+*		x' = x*cos(a) - y*sin(a)
+*		y' = x*sin(a) + y*cos(a)
+
+* NOTE - CHECK FOR OVERFLOW NEEDS PUTTING IN WHEN I'VE WORKED OUT HOW TO
+*		 TRAP IT!
+
+* Entry: A0 = ptr: trig values
+*		 A1 = ptr: 1st coord, e.g. x
+*		 A2 = ptr: 2nd coord, e.g. y
+* Exit:  Coords rotate and stored back down
+
+* Regs:  ?
+* Subr:  None
+
+	subr rotate
+
+	move.l cos(a3),d0					x*cos(a)
+	move.l (a1),d1
+	bsr multiply
+	move.l d3,d6
+	move.l sin(a3),d0					y*sin(a)
+	move.l (a2),d1
+	bsr multiply
+	sub.l d3,d6 						x' = x*cos(a)-y*sin(a)
+	move.l d6,d7						save x'
+	move.l sin(a3),d0					x*sin(a)
+	move.l (a1),d1
+	bsr multiply
+	move.l d3,d6
+	move.l cos(a3),d0					y*cos(a)
+	move.l (a2),d1
+	bsr multiply
+	add.l d3,d6 						y' = x*sin(a)+y*cos(a)
+	move.l d6,(a2)
+	move.l d7,(a1)						set x'
+
+	ret
+
+
+* *********************************************
+* **										 **
+* ** WORLD_X_ROTATE - ROTATE OBJECT IN WORLD **
+* **										 **
+* *********************************************
+
+* Rotates a ship around the world x axis.
+
+* Entry: SET_CLIMB_ANGLES must have been called 1st
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr world_x_rotate,global
+
+	lea climb_sin(a6),a3				rotate coords
+	lea ypos(a5),a1
+	lea zpos(a5),a2
+	bsr rotate
+	btst #point,flags(a5)				point object ?
+	if <eq> then						no
+		bclr #yvector_ok,flags(a5)		clobber y vector
+		rotate x,j,cos,-,x,k,sin		rotate vectors
+		push d5
+		rotate x,j,sin,+,x,k,cos
+		move d5,x_vector+k(a5)
+		move (sp)+,x_vector+j(a5)
+		rotate z,j,cos,-,z,k,sin
+		push d5
+		rotate z,j,sin,+,z,k,cos
+		move d5,z_vector+k(a5)
+		move (sp)+,z_vector+j(a5)
+		inc rot_count(a5)				increment rotate counter
+	endi
+
+	ret
+
+
+* *********************************************
+* **										 **
+* ** WORLD_Z_ROTATE - ROTATE OBJECT IN WORLD **
+* **										 **
+* *********************************************
+
+* Rotates a ship around the world z axis.
+
+* Entry: SET_ROLL_ANGLES must have been called 1st
+* Exit:  None
+
+* Regs:  ?
+* Subr:  ?
+
+	subr world_z_rotate,global
+
+	lea roll_sin(a6),a3 				rotate coords
+	lea xpos(a5),a1
+	lea ypos(a5),a2
+	bsr rotate
+	btst #point,flags(a5)				point object ?
+	if <eq> then						no
+		bclr #yvector_ok,flags(a5)		clobber y vector
+		rotate x,i,cos,-,x,j,sin		rotate vectors
+		push d5
+		rotate x,i,sin,+,x,j,cos
+		move d5,x_vector+j(a5)
+		move (sp)+,x_vector+i(a5)
+		rotate z,i,cos,-,z,j,sin
+		push d5
+		rotate z,i,sin,+,z,j,cos
+		move d5,z_vector+j(a5)
+		move (sp)+,z_vector+i(a5)
+		inc rot_count(a5)				increment rotate counter
+	endi
+
+	ret
+

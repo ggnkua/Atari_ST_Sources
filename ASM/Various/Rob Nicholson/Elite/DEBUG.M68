@@ -1,0 +1,419 @@
+* @@@@@   @@@@@@@ @@@@@@   @@  @@	@@@@
+*  @@ @@   @@	@  @@  @@  @@  @@  @@  @@
+*  @@  @@  @@ @    @@  @@  @@  @@ @@
+*  @@  @@  @@@@    @@@@@   @@  @@ @@
+*  @@  @@  @@ @    @@  @@  @@  @@ @@  @@@
+*  @@ @@   @@	@  @@  @@  @@  @@  @@  @@
+* @@@@@   @@@@@@@ @@@@@@	@@@@	@@@@@
+
+* Debug routines.
+
+	include macros
+
+	xref text_colour,locate,print_char,elite,check_docked,clear_input
+	xref check_docked,print_string,fx,wait_key,hold_clock,prepare_text
+	xref locate,text_colour,wait_key,print_string,fx,vars,print_centre
+	xref input_line,save_state,restore_state,status
+
+* ---- LOCAL CONSTANTS ----
+
+hblank_vect:	equ 26*4				hblank exception vector
+mfp_vect:		equ 30*4				MFP 68901 exception vector
+key_vect:		equ (64+6)*4			keyboard/midi exception vector
+
+	module debug
+
+	global start
+
+	jmp patch							used for MONST breakpoints
+
+patch:
+
+	jmp elite							patched by DEBUG
+
+	ds.w 128
+
+
+* **************************************
+* **								  **
+* ** DISP_DEBUG - DISPLAY DEBUG TABLE **
+* **								  **
+* **************************************
+
+* Displays a list of debug values across the screen.
+
+* Entry: None
+* Exit:  None
+
+* Regs:  All preserved
+* Subr:  HEX_BYTE
+
+	subr disp_debug,global
+
+	save_all							save all registers
+	jsr hold_clock						hold clock for a while
+	clr d0								position cursor
+	clr d1
+	jsr locate
+	moveq #white,d0 					set text colour
+	moveq #black,d1
+	jsr text_colour
+	lea debug_table(pc),a0				base of debug table
+	moveq #no_entries-1,d7				loop for each entry
+	loop 1
+		move (a0)+,d0					get offset into vars
+		lea (a6,d0),a1					calculate actual address
+		move (a0)+,d6					get no. of bytes
+		dec d6
+		loop 2							loop for each byte
+			move.b (a1)+,d0 			get byte and print
+			bsr hex_byte
+		next 2,d6						next byte
+		tst d7							last entry ?
+		if <ne> then.s					no
+			moveq #','>>8,d0			print a comma
+			jsr print_char
+		endi
+	next 1								next entry
+	pop display_clock(a6)				restore clock
+	restore_all 						restore all registers
+
+	ret
+
+
+* ************************************
+* **								**
+* ** HEX_WORD - PRINT A WORD IN HEX **
+* **								**
+* ************************************
+
+* Prints a 16 bit number in hex.
+
+* Entry: D0 = number to print
+* Exit:  None
+
+* Regs:  D0 corrupt.
+* Subr:  HEX_BYTE
+
+	subr hex_word,global
+
+	push d0 							save low byte
+	lsr #8,d0							print high byte
+	bsr hex_byte
+	pop d0								print low byte
+	bra hex_byte
+
+
+* ************************************
+* **								**
+* ** HEX_BYTE - PRINT A BYTE IN HEX **
+* **								**
+* ************************************
+
+* Prints a 8 bit number in hex.
+
+* Entry: D0.B = Number to print
+* Exit:  None
+
+* Regs:  D0 corrupt.
+* Subr:  HEX_DIGIT
+
+	subr hex_byte,global
+
+	push d0 							save low nibble
+	lsr #4,d0							print high nibble
+	bsr hex_digit
+	pop d0								print low nibble
+	bra hex_digit
+
+
+* ***********************************
+* **							   **
+* ** HEX_DIGIT - PRINT A HEX DIGIT **
+* **							   **
+* ***********************************
+
+* Prints a hex digit, i.e. 0..9 or A..F
+
+* Entry: D0.B = digit (0..15)
+* Exit:  None
+
+* Regs:  D0 corrupt
+* Subr:  PRINT_CHAR
+
+	subr hex_digit
+
+	and #15,d0							mask out unwanted bits
+	add.b #'0',d0						convert to ASCII
+	if.b d0 <gt> #'9' then.s
+		add.b #7,d0
+	endi
+	jmp print_char						print and exit
+
+
+* ********************************
+* **							**
+* ** MONST - EXIT BACK TO MONST **
+* **							**
+* ********************************
+
+* Restores the system and exits to MONST.
+
+	subr monst,global
+
+	move.l (sp)+,patch+2				patch jump address
+	save_all							save all registers
+	move.l sys_key(a6),d0				restore system
+	if <ne> then.s
+		move.l d0,key_vect
+	endi
+	move.l vblank_ptr(a6),d0
+	if <ne> then.s
+		move.l d0,a0
+		clr.l (a0)
+	endi
+	pea monst_palette(pc)				define palette
+	ext_bios setpalette,6
+	bset #0,conterm 					enable keyclick
+	clr -(sp)							screen back to $78000
+	push.l #$78000
+	push.l #$78000
+	ext_bios setscreen,12
+	restore_all 						restore all registers
+	jmp start							jump to MONST
+
+
+* *******************************************
+* **									   **
+* ** TRAPS - 68000 TRAP EXCEPTION HANDLERS **
+* **									   **
+* *******************************************
+
+* These routines are called whenever there is an illegal exception error,
+* e.g. bus error.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	global traps
+
+	bsr dec_trap						bus error
+	bsr dec_trap						address error
+	lea vars,a6 						point to Elite's variables
+	move.b scr_base+1(a6),vram_base+0	set screen base address
+	move.b scr_base+2(a6),vram_base+2
+	clr palette+0						set colour #0 to black
+	move #$777,palette+2				set colour #1 to white
+	lea text2(pc),a0					print trap message
+	jsr print_string
+	move trap_no,d0 					print trap #
+	bsr hex_byte
+	lea text3(pc),a0					print top 7 words of stack
+	jsr print_string
+	loop 1,7
+		pop d0
+		bsr hex_word
+	next 1
+	repeat								hang
+	endr
+
+
+* ********************************************
+* **										**
+* ** DEC_TRAP - COUNT DOWN EXCEPTION NUMBER **
+* **										**
+* ********************************************
+
+* Just decrements the exception number.
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr dec_trap
+
+	dec trap_no
+
+	ret
+
+
+* ******************************************
+* **									  **
+* ** HACKER - LOW-LEVEL GAME STATE HACKER **
+* **									  **
+* ******************************************
+
+* Low-level debug routine to allow the bytes of the ram saved game to be
+* modified!
+
+* Entry: None
+* Exit:  None
+
+* Regs: ?
+* Subr: ?
+
+	subr hacker,global
+
+	ifne use_novella
+		tst allow_hack(a6)				allow hacking ?
+		ret <eq>						no, return
+	endc
+	jsr save_state						restore game state
+	jsr prepare_text					prepare text screen
+	lea text4(pc),a0					print title
+	moveq #title_y,d1
+	jsr print_centre
+	repeat
+		lea game_state(a6),a5			start of saved game
+		clr d4							offset = 0
+		clr d1
+		repeat							loop for each line
+			push d1 					locate cursor
+			asl #3,d1
+			add #text_top+8,d1
+			moveq #2,d0
+			jsr locate
+			moveq #orange,d0
+			moveq #black,d1
+			jsr text_colour
+			move d4,d0					print offset
+			bsr hex_byte
+			moveq #':'>>8,d0			print ": "
+			jsr print_char
+			loop 1,16					print 16 data bytes
+				cmp #7,d7
+				if <eq> then.s
+					moveq #white,d0
+					moveq #black,d1
+					jsr text_colour
+					moveq #':'>>8,d0
+					jsr print_char
+				endi
+				move (sp),d0			determine colour
+				eor d7,d0
+				and #1,d0
+				if <eq> then.s
+					moveq #lgt_green,d0
+				else.s
+					moveq #lgt_blue,d0
+				endi
+				moveq #black,d1
+				jsr text_colour
+				move.b (a5)+,d0
+				bsr hex_byte
+			next 1
+			pop d1						next line
+			add #16,d4
+			inc d1
+		until d1 <eq> #16
+		lea text5(pc),a0				input byte to change
+		bsr input_hex
+		cmp.b #27,d0					ESC ?
+		if <eq> then.s					yes
+			jsr restore_state			restore game state
+			jmp status					display status screen
+		endi
+		push d1 						save hex number
+		lea text6(pc),a0				input new value
+		bsr input_hex
+		pop d2							ESC ?
+		cmp.b #27,d0
+		if <ne> then.s					no
+			lea game_state(a6),a0		change byte
+			move.b d1,(a0,d2)
+		endi
+	endr
+
+	ret 								return
+
+
+* **********************************
+* **							  **
+* ** INPUT_HEX - INPUT HEX NUMBER **
+* **							  **
+* **********************************
+
+* Inputs a hex number in the range 0..255 from the keyboard.
+
+* Entry: A0 = ptr: prompt string
+* Exit:  D0 = terminating key (ESC or CR)
+*		 D1 = number (unless ESC pressed)
+
+* Regs: ?
+* Subr: ?
+
+	subr input_hex
+
+	push.l a0							save prompt pointer
+	repeat
+		jsr clear_input 				print prompt
+		move.l (sp),a0
+		jsr print_string
+		moveq #'0'>>8,d0
+		moveq #'F'>>8,d1
+		moveq #2,d2
+		moveq #-1,d3
+		jsr input_line
+		cmp.b #27,d0					ESC ?
+		if <eq> then.s					yes
+			pop.l a0					clear stack
+			ret 						return
+		endi
+		lea input(a6),a0				null return ?
+		tst.b (a0)
+		if <ne> then.s					no
+			clr d1						accumulator = 0
+			repeat
+				move.b (a0)+,d2 		end of string ?
+				if <eq> then.s			yes
+					pop.l a0			clear stack
+					ret 				return
+				endi
+				cmp.b #'0',d2			convert digit to hex
+				break.s if <lo>
+				cmp.b #'9',d2
+				if <ls> then.s
+					sub.b #48,d2
+				else.s
+					cmp.b #'A',d2
+					break.s if <lo>
+					sub.b #55,d2
+				endi
+				asl #4,d1
+				add.b d2,d1
+			endr
+		endi
+	endr
+
+* **** LOCAL DATA ****
+
+debug_table:
+
+*	 dc debug_data,4
+*	 dc tharg_max+1,1
+	dc prog_checksum,2
+	dc top_memory,4
+
+no_entries: equ (*-debug_table)/4
+
+trap_no:	dc.w 4						trap number of exception
+
+* Palette for debugging.
+
+monst_palette:
+
+	dc.w $000,$777,$777,$777,$777,$777,$777,$777
+	dc.w $777,$777,$777,$777,$777,$777,$777,$777
+
+* Text messages.
+
+text2:	db c_cursor,0,12,c_colour,white,black,'Trap #$',0
+text3:	db ' - ',0
+text4:	db 'Hacker V1.0',0
+text5:	db 'Byte to change ? ',0
+text6:	db 'New value for byte ? ',0

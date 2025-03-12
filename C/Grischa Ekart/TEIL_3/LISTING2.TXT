@@ -1,0 +1,426 @@
+/* (c)1992 by MAXON-Computer  */
+/* Autor: Grischa Ekart       */
+
+#include    <tos.h>
+#include    <stdio.h>
+#include    <string.h>
+#include    "g:\acs\acs.h"
+#include    "struct.h"
+#include    "file.h"
+
+/*      external prototypes            */
+
+int     form_value(int def_button, char *string, ...);
+
+/*      internal prototypes            */
+
+static  Awindow *make_create(void *not_used);
+static  int make_service(Awindow *window, int task, void *in_out);
+static  void term(Awindow *window);
+static  void info_select(Awindow *window);
+static  void delete_select(Awindow *window);
+static  char *file_select(char *path, char *ext, char *label);
+
+static  void do_add(void);
+static  void do_import(void);
+static  void do_export(void);
+static  void do_quit(void);
+static  int cdecl draw_my_pict(PARMBLK *pb);
+static  int add_files(void);
+static  void build_work(Awindow *window);
+
+#include    "makeup.h"
+#include    "makeup.ah"
+
+static  char fname[FILENAME_MAX];
+
+static  OBJECT  parent  = {-1, -1, -1, G_BOX, NONE, AOS_FIXED, 0x00001101L, 0, 0, 100, 100};
+static  AOBJECT Aparent = { A_dummy, A_dummy, AEO, 0, NULL, NULL, 0, 0};
+
+static  OBJECT  file_icon  = {-1, -1, -1, G_ICON, NONE | AO_DRAGABLE, NORMAL, (long)&CICON, 0, 0, AREA_WIDTH, AREA_HEIGHT};
+static  AOBJECT Afile_icon = { A_dummy, A_dummy, AEO, 0, NULL, NULL, 0, 0};
+
+void
+ACSaboutme(void)
+{
+    A_dialog(&INFOBOX);
+}
+
+int
+ACSinit(void)
+{
+    Awindow *window;
+
+    window = Awi_root();     /* root window */
+    if(window == NULL)
+        return(FAIL);        /* lege NEU Icon an */
+
+    window->service(window, AS_NEWCALL, &MAKEWINDOW.create);
+    fname[0] = 'A' + Dgetdrv();
+    fname[1] = ':';
+    Dgetpath(fname + 2, 0);
+    if(fname[2] == 0)
+    {
+        fname[2] = '\\';
+        fname[3] = '\0';
+    }
+    else
+    {
+        int length = (int)strlen(fname);
+
+        fname[length] = '\\';
+        fname[length + 1] = '\0';
+    }
+    return(OK);
+}
+
+static Awindow
+*make_create(void *not_used)
+{
+    MAKEFILE    *makefile;
+    Awindow     *window;
+    int         length;
+    char        *p;
+
+    if(file_select(fname, "MAK", "™ffne Makedatei") == NULL)
+        return(NULL);
+
+    length = (int)strlen(fname);
+    if(fname[length - 1] == '\\')   /* fname ist ein Pfad */
+        return(NULL);
+ 
+    makefile = Ax_malloc(sizeof(MAKEFILE));
+    if(makefile == NULL)
+        return(NULL);
+
+    p = strrchr(fname, '\\');
+    strcpy(MAKEWINDOW.iconblk->ib_ptext, p + 1);
+    window = Awi_create(&MAKEWINDOW);
+    if(window == NULL)
+    {
+        Ax_free(makefile);
+        return(NULL);
+    }
+    makefile->file_number = 0;
+    makefile->files.name = "Head_Of_List";
+    makefile->files.next = NULL;
+    makefile->path[0] = 'A' + Dgetdrv();
+    makefile->path[1] = ':';
+    Dgetpath(makefile->path + 2, 0);
+    if(makefile->path[2] == 0)
+    {
+        makefile->path[2] = '\\';
+        makefile->path[3] = '\0';
+    }
+    else
+    {
+        int length = (int)strlen(fname);
+
+        makefile->path[length] = '\\';
+        makefile->path[length + 1] = '\0';
+    }
+    strncpy(makefile->name, fname, FILENAME_MAX - 1);
+    Ast_delete(window->name);
+    window->name = Ast_create(fname);
+    window->user = makefile;
+    window->open(window);
+    return(window);
+}
+
+static int
+make_service(Awindow *window, int task, void *in_out)
+{
+    switch(task)
+    {
+        case AS_TERM:
+            term(window);
+            break;
+
+        case AS_OPEN:
+            Adr_unselect();
+            break;
+
+        case AS_INFO:
+            info_select(window);
+            break;
+
+        case AS_DELETE:
+            delete_select(window);
+            break;
+    }
+    return(FAIL);
+}
+
+static void
+term(Awindow *window)
+{
+    MAKEFILE    *makefile;
+
+    makefile = window->user;
+    free_link(makefile->files.next);
+    Ax_free(makefile);
+    Awi_delete(window);
+}
+
+static void
+info_select(Awindow *window)
+{
+    MAKEFILE    *makefile;
+    FILE_LINK   *file;
+    AOBJECT     *object;
+    char        *p;
+    int         index;
+
+    makefile = window->user;
+    if(Aselect.actlen == 0)
+        ACSaboutme();
+    else
+    {
+        Aselect.next = 0;
+        while((index = Adr_next()) >= 0)
+        {
+            object = (AOBJECT *)&Aselect.window->work[index + 1];
+            if(object->ob_flags & AEO)
+            {
+                file = get_file(&makefile->files, index / 2);
+                p = strrchr(file->name, '\\');
+                form_value(1, INFO_ALERT, index / 2, p + 1);
+                Adr_del(Aselect.window, index);
+            }
+        }
+    }
+}
+
+static void
+delete_select(Awindow *window)
+{
+    MAKEFILE    *makefile;
+    AOBJECT     *object;
+    int         index;
+
+    makefile = window->user;
+    Aselect.next = 0;
+    while((index = Adr_next()) >= 0)
+    {
+        object = (AOBJECT *)&Aselect.window->work[index + 1];
+        if(object->ob_flags & AEO)
+        {
+            Adr_del(Aselect.window, index);
+            disable_file(&makefile->files, index / 2); /* ist korrekt */
+            makefile->file_number--;
+        }
+    }
+    delete_files(&makefile->files);
+    build_work(window);
+}
+
+static void
+do_add(void)
+{
+    if(add_files())
+        build_work(ev_window);
+}
+
+static void
+do_import(void)
+{
+    FILE    *input;
+    int     length;
+
+again:
+    if(file_select(fname, "PRJ", "Importiere Projektdatei") == NULL)
+        return;
+
+    length = (int)strlen(fname);
+    if(fname[length - 1] == '\\')   /* fname ist ein Pfad */
+    {
+        if(form_alert(2, ERRORPATH) == 2)
+            goto again;
+        else
+            return;
+    }
+    if((input = fopen(fname, "r")) == NULL)
+    {
+        if(form_alert(2, ERROROPEN) == 2)
+            goto again;
+        else
+            return;
+    }
+    /* hier folgt der eigentliche Code */
+    /* ... */
+}
+
+static void
+do_export(void)
+{
+    MAKEFILE    *makefile;
+    FILE_LINK   *file;
+    FILE        *output;
+    int         length, count;
+    char        *p;
+    char        prg[13];
+
+    makefile = ev_window->user;
+again:
+    if(file_select(fname, "PRJ", "Exportiere Projektdatei") == NULL)
+        return;
+
+    length = (int)strlen(fname);
+    if(fname[length - 1] == '\\')   /* fname ist ein Pfad */
+    {
+        if(form_alert(2, ERRORPATH) == 2)
+            goto again;
+        else
+            return;
+    }
+    if((output = fopen(fname, "w")) == NULL)
+    {
+        if(form_alert(2, ERROROPEN) == 2)
+            goto again;
+        else
+            return;
+    }
+    p = strrchr(fname, '\\');
+    strcpy(prg, p + 1);
+    p = strrchr(prg, '.');
+    strcpy(p + 1, "PRG");
+    fprintf(output, ";\t\tProjektdatei erzeugt mit MakeUp V1.0\n\n");
+    fprintf(output, "%s\t;Name des Programs\n=\n", prg);
+    for(count = 0; count < makefile->file_number; count++)
+    {
+        file = get_file(&makefile->files, count + 1);
+        /* p = strrchr(file->name, '\\') + 1; */
+        fprintf(output, "%s\n", file->name); /* immer mit Pfad */
+    }
+    fprintf(output, "\n;\t\tEnde\n");
+    fclose(output);
+}
+
+static void
+do_quit(void)
+{
+    term(ev_window);
+}
+
+static int
+add_files(void)
+{
+    MAKEFILE    *makefile;
+    FILE_LINK   *file;
+    char        *p;
+    int         retval = FALSE;
+
+    makefile = ev_window->user;
+
+again:
+    if(file_select(makefile->path, "*", "Datei hinzufgen") == NULL)
+        return(retval);
+
+    p = strrchr(makefile->path, '\\');
+    if(p[1] == '\0')
+    {
+        if(form_alert(2, ERRORPATH) == 2)
+            goto again;
+        else
+            return(retval);
+    }
+    chain_on(&makefile->files, makefile->path);
+    makefile->file_number++;
+    retval = TRUE;
+    goto again; /* Nochmal */
+}
+
+static void
+build_work(Awindow *window)
+{
+    MAKEFILE    *makefile;
+    OBJECT      *work;
+    ICONBLK     *iconblk;
+    FILE_LINK   *file;
+    int         i, count;
+  
+    makefile = window->user;
+    work = Ax_malloc((makefile->file_number + 1) * sizeof(OBJECT) * 2);
+    if(work == NULL)
+        return;
+    
+    if(window->work != NULL)
+        Aob_delete(window->work);
+    
+    memcpy(work, &parent, sizeof(OBJECT));
+    memcpy(work + 1, &Aparent, sizeof(AOBJECT));
+    window->work = work;
+    work->ob_head = 2;
+    work += 2;
+    i = 4;
+    for(count = 0; count < makefile->file_number; count++)
+    {
+        char    *p;
+    
+        file = get_file(&makefile->files, count + 1);
+        memcpy(work, &file_icon, sizeof(OBJECT));
+        memcpy(work + 1, &Afile_icon, sizeof(AOBJECT));
+        iconblk = Aic_create(file_icon.ob_spec.iconblk);
+        p = strrchr(file->name, '\\');
+        strcpy(iconblk->ib_ptext, p + 1);
+        work->ob_spec.iconblk = iconblk;
+        work->ob_next = i;
+        i += 2;
+        work += 2;
+    }
+    work[-1].ob_flags |= LASTOB;
+    if(makefile->file_number == 0)
+    {
+        window->work->ob_head = -1;
+        window->work->ob_tail = -1;
+        window->work->ob_next = -1;
+    }
+    else
+    {
+        work[-2].ob_next = 0;
+        window->work->ob_tail = i - 4;
+    }
+    (window->sized)(window, &window->wi_act);
+}
+
+static char
+*file_select(char *path, char *ext, char *label)
+{
+    char    *p;
+    int     button;
+    char    file[16];
+
+    p = strrchr (path, '\\');
+    p[1] = '\0';
+    strcat(path, "*.");
+    strcat(path, ext);
+    file[0] = '\0';
+    Aev_unhidepointer ();
+    if(fsel_exinput(path, file, &button, label) == 0 || button == 0)
+        return(NULL);
+
+    if(file[0] == '\0')
+    {
+        p = strrchr(path, '\\');
+        p[1] = '\0';
+        return(path);
+    }
+    if(strlen(file) == 9)
+        if(file[8] == '.')
+            strcat(file, ext);
+
+    if(strchr(file, '.') == NULL)
+    {
+        strcat(file, ".");
+        strcat(file, ext);
+    }
+    p = strrchr(path, '\\');
+    strcpy(p + 1, file);
+    return(path);
+}
+
+static int cdecl
+draw_my_pict(PARMBLK *pb)
+{
+    return(pb->pb_currstate);
+}

@@ -1,0 +1,17 @@
+      LEA       INP2(PC),A0
+      MOVEQ     #0,D0 
+      MOVE.B    NUM,D0 
+      ADDA.W    D0,A0 
+      SUBQ.W    #1,D0 
+      LEA       COIN(PC),A1
+      MOVEQ     #0,D1 
+L0002:MOVEQ     #0,D2 
+      MOVE.B    -(A0),D2
+      SUBI.W    #$30,D2 
+      MOVE.L    (A1)+,D3
+      MOVEQ     #0,D4 
+      BRA.S     L0004 
+L0003:ADD.L     D3,D4 
+L0004:DBF       D2,L0003
+      ADD.L     D4,D1 
+      DBF       D0,L0002

@@ -1,0 +1,613 @@
+;	@@@   @@@@@@  @@@@@@   @@@@@@  @@@@@@
+;  @@ @@   @@  @@  @@  @@	 @@    @ @@ @
+; @@   @@  @@  @@  @@  @@	 @@ 	 @@
+; @@   @@  @@@@@   @@@@@	 @@ 	 @@
+; @@   @@  @@ @@   @@  @@	 @@ 	 @@
+;  @@ @@   @@  @@  @@  @@	 @@ 	 @@
+;	@@@   @@@  @@ @@@@@@   @@@@@@	@@@@
+
+; Routines concerned with placing objects in orbit around another objects.
+; Used for creating the star system, release cargo canisters etc.
+
+; Modification history:
+
+; V1.3	30/03/90	Mining lasers now release random # of platlets.
+
+	include macros
+
+	xref rand,create_object,copy_object,fix_unit,magnitude_table
+	xref clear_objects,alloc_object,random,calc_distance
+
+; ---- LOCAL CONSTANTS ----
+
+station_orbit:	equ 100000				orbit of space station above planet
+planet_orbit:	equ 400000				orbit of planet when entering system
+tolerance:		equ 264357318			angle tolerance: cos(10)*(16384^2)
+planet_rad: 	equ 16384				radius (world) of planet
+sun_rad:		equ 8192				radius (world) of sun
+
+; Maximum distance to space station when entering system.
+
+max_dist:		equ planet_orbit-station_orbit*3/4
+
+; ---- LOCAL VARIABLES ----
+
+	vars orbit
+
+sin_alpha:		ds.w 1					trig values
+cos_alpha:		ds.w 1
+sin_beta:		ds.w 1
+cos_beta:		ds.w 1
+orbit_rad:		ds.l 1					orbit radius
+
+	end_vars orbit
+
+	module orbit
+
+
+; *********************************************
+; **										 **
+; ** CROSS - CALCULATE CROSS PRODUCT (MACRO) **
+; **										 **
+; *********************************************
+
+; Calculates the cross product between two vectors.
+
+; Syntax: CROSS v1,c1,v2,c2,v3,c3,v4,c4,v5,c5
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+cross: macro
+
+	move \3_vector+\4(a4),d0
+	muls \5_vector+\6(a4),d0
+	move \7_vector+\8(a4),d1
+	muls \9_vector+\a(a4),d1
+	sub.l d1,d0
+	asl.l #2,d0
+	swap d0
+	move d0,\1_vector+\2(a4)
+
+	endm
+
+
+; ****************************************
+; **									**
+; ** CREATE_SYSTEM - CREATE STAR SYSTEM **
+; **									**
+; ****************************************
+
+; Creates a new star system after hyperspace. Randomly places the planet,
+; space station and sun.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr create_system,global
+
+	jsr clear_objects					clear all objects
+
+; Create the planet.
+
+	lea planet_rec(a6),a4				point to planet record
+	move.b #%10000111,flags(a4) 		no radar, invincible, point, in use
+	repeat
+		move.l #planet_orbit,d0 		choose random orbit
+		move #360,d1
+		bsr orbit
+	until.l d0 <gt> #7500				until z>7500
+	move #log_none,logic(a4)			doing nothing
+	move #planet,type(a4)				it's a planet
+	move #planet_rad,obj_rad(a4)
+	jsr create_object					create the object
+
+; Create the space station.
+
+	lea station_rec(a6),a4				point to space station record
+	move.b #1,flags(a4) 				in use
+	repeat
+		move.l #station_orbit,d0		choose random orbit
+		move #360,d1
+		bsr orbit
+		bsr vector_pos					point at planet
+		move.l planet_rec+xpos(a6),d0	add coords of planet
+		add.l xpos(a4),d0
+		move.l d0,xpos(a4)
+		if <mi> then.s
+			neg.l d0
+		endi
+		move.l planet_rec+ypos(a6),d1
+		add.l ypos(a4),d1
+		move.l d1,ypos(a4)
+		if <mi> then.s
+			neg.l d1
+		endi
+		move.l planet_rec+zpos(a6),d2
+		add.l zpos(a4),d2
+		move.l d2,zpos(a4)
+		if <mi> then.s
+			neg.l d2
+		endi
+		jsr calc_distance				until not too far away
+		cmp.l #max_dist,d2
+	until <le>
+	move #log_rotating,logic(a4)		it's rotating
+	cmp #$52,mission(a6)				thargoid mission ?
+	if <ne> then.s						no
+		move #spacestn,type(a4) 		it's a space station
+	else.s
+		move #dodec,type(a4)			special alien space station
+	endi
+	jsr create_object					create object
+
+; Create sun.
+
+	lea planet_rec(a6),a5				copy planet record
+	lea sun_rec(a6),a4
+	jsr copy_object
+	lea xpos(a4),a0 					position opposite to planet
+	loop 1,3
+		neg.l (a0)+
+	next 1
+	move #sun,type(a4)					it's a sun
+	move #sun_rad,obj_rad(a4)
+	jmp create_object					create the object and return
+
+
+; ************************************************
+; **											**
+; ** LAUNCH_SYSTEM - CREATE SYSTEM AFTER LAUNCH **
+; **											**
+; ************************************************
+
+; Creates the star system after a launch from the space station.
+
+; Entry: None
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr launch_system,global
+
+	jsr clear_objects				   clear all objects
+
+; Create the planet.
+
+	lea planet_rec(a6),a4				point to planet record
+	move.b #%10000111,flags(a4) 		no radar, invincible, point, in use
+	move.l #station_orbit-2500,zpos(a4) position planet
+	move #log_none,logic(a4)			not doing anything
+	move #planet,type(a4)				it's a planet
+	move #planet_rad,obj_rad(a4)
+	jsr create_object					create the object
+
+; Create the space station.
+
+	lea station_rec(a6),a4				point to the space station record
+	move.b #1,flags(a4) 				in use
+	move.l #-2500,zpos(a4)				position behind us
+	lea spacestn_vectors(pc),a0 		setup vectors
+	lea x_vector(a4),a1
+	loop 1,3*3
+		move (a0)+,(a1)+
+	next 1
+	move #spacestn,type(a4) 			it's a space station
+	move #log_rotating,logic(a4)		and it's rotating
+	jsr create_object					create the object
+
+; Create the sun.
+
+	lea sun_rec(a6),a4					point to sun record
+	move.b #%10000111,flags(a4) 		no radar, invincible, point, in_use
+	move mission(a6),d0 				exploding sun mission ?
+	and #240,d0
+	cmp #$30,d0
+	if <ne> then.s						no
+		move.l #planet_orbit*2,d0		place in orbit around the planet
+		clr d1
+		bsr orbit
+		add.l planet_rec+zpos(a6),d0	add z coord of planet
+		move.l d0,zpos(a4)
+	else.s
+		move.l #-planet_orbit*2,d0		put right behind us
+		move.l d0,zpos(a4)
+		clr.l xpos(a4)
+		clr.l ypos(a4)
+	endi
+	move #log_none,logic(a4)			not doing anything
+	move #sun,type(a4)					and it's a sun
+	move #sun_rad,obj_rad(a4)
+	jsr create_object					create object
+
+	ret
+
+
+; *********************************
+; **							 **
+; ** ORBIT - CHOOSE RANDOM ORBIT **
+; **							 **
+; *********************************
+
+; Chooses a random orbit for an object using the polar formula for a
+; sphere. The resultant coordinates have an error in orbit of about 2%
+; due to the low accuracy of the sines and cosines.
+
+;		x = r*cos(alpha)*cos(beta)		where alpha and beta and two
+;		y = r*sin(beta) 				random angles between 0 and 360
+;		z = r*sin(alpha)*cos(beta)
+
+; Entry: D0.L = orbit radius
+;		 D1.W = range for alpha, i.e. 0..360
+;		 A4.L = ptr: object record
+; Exit:  (XPOS,YPOS,ZPOS) = random orbit
+;		 D0.L			  = ZPOS
+
+; Regs: ?
+; Subr: RAND, MULTIPLY
+
+	subr orbit,global
+
+	move.l d0,orbit_rad(a6) 			save radius
+	move d1,d2							alpha = rand(d1)
+	jsr rand
+	lea orbit_trigs(pc),a0				take sine and cosine of alpha
+	asl #2,d0
+	move 0(a0,d0),sin_alpha(a6)
+	move 2(a0,d0),cos_alpha(a6)
+	move #360,d2						beta = rand(360)
+	jsr rand
+	asl #2,d0							take sine and cosine of beta
+	move 0(a0,d0),sin_beta(a6)
+	move 2(a0,d0),cos_beta(a6)
+	move.l orbit_rad(a6),d0 			x = r*cos(alpha)*cos(beta)
+	move.w cos_alpha(a6),d1
+	bsr multiply
+	move.w cos_beta(a6),d1
+	bsr multiply
+	move.l d0,xpos(a4)
+	move.l orbit_rad(a6),d0 			y = r*sin(beta)
+	move.w sin_beta(a6),d1
+	bsr multiply
+	move.l d0,ypos(a4)
+	move.l orbit_rad(a6),d0 			z = r*sin(alpha)*cos(beta)
+	move.w sin_alpha(a6),d1
+	bsr multiply
+	move.w cos_beta(a6),d1
+	bsr multiply
+	move.l d0,zpos(a4)
+
+	ret
+
+
+; *********************************
+; **							 **
+; ** MULTIPLY - MULTIPLY BY TRIG **
+; **							 **
+; *********************************
+
+; Multiplies a 23 bit number by a 16 bit trig value and divides the result
+; by 256. The multiply is performed by two 16 bit multiplies as follows:
+
+;		ABCDEF x 1234 = ABx1234x10000 + CDEFx1234
+
+; Entry: D0.L = 24 bit number (signed)
+;		 D1.W = trig value (2's complement)
+; Exit:  D0.L = product (2's complement)
+
+; Regs: D0-D3 corrupt.
+; Subr: None
+
+	subr multiply
+
+	move d1,d3							determine sign of the result
+	swap d3
+	eor.l d0,d3
+	abs.l d0							abs(number)
+	abs.w d1							abs(trig)
+	move.l d0,d2						CDEFx1234
+	mulu d1,d0
+	swap d2 							ABx1234
+	mulu d1,d2
+	swap d2 							add together
+	add.l d2,d0 						add together
+	lsr.l #8,d0 						divide by 256
+	tst.l d3							set correct sign
+	if <mi> then.s
+		neg.l d0
+	endi
+
+	ret
+
+
+; **********************************************
+; **										  **
+; ** VECTOR_POS - BUILD VECTORS FROM POSITION **
+; **										  **
+; **********************************************
+
+; Builds the object's vectors from the objects position, i.e. point the
+; object at the current centre (0,0,0).
+
+; Entry: A4 = ptr: objects record (x/y/zpos setup)
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr vector_pos,global
+
+	movem.l xpos(a4),d0-d2				get objects position
+	abs.l d0							determine amount to reduce the
+	abs.l d1							position to fit in 15 bits
+	abs.l d2
+	or.l d1,d0
+	or.l d2,d0
+	add.l d0,d0
+	swap d0
+	add d0,d0
+	lea magnitude_table,a0
+	move (a0,d0),d0
+	lea xpos(a4),a0 					copy position into z vector
+	lea z_vector(a4),a1
+	loop 1,3
+		move.l (a0)+,d1 				reduce and negate
+		asr.l d0,d1
+		neg d1
+		move d1,(a1)+
+	next 1
+	bra build_vector					build x and y vectors
+
+
+; *********************************************
+; **										 **
+; ** BUILD_VECTOR - BUILD X DIRECTION VECTOR **
+; **										 **
+; *********************************************
+
+; This routine builds the x vector from the z direction vector. There are
+; an infinite (lots) of different ways an object can be orientated along
+; the z vector, so a random one is used.
+
+;	Fix z vector to unity
+;	REPEAT
+;		Choose random y vector and fix to unity
+;		Calculate the dot product between the z and y vectors. This produces
+;			the angle between the vectors, which will relate to the magnitude
+;			of the cross product below.
+;	UNTIL dot product is within an acceptable range
+;	Calculate the x vector by taking the cross product between the z and y
+;		vectors. The magnitude will be less than unity.
+;	Fix x vector to unity
+
+; Entry: A4 = ptr: object record
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr build_vector
+
+	lea z_vector(a4),a0 				fix z to a unit vector
+	jsr fix_unit
+	repeat
+		lea y_vector(a4),a0 			choose a random y vector
+		bsr random_vector
+		lea y_vector(a4),a0
+		jsr fix_unit
+		move y_vector+i(a4),d0			calculate dot product
+		muls z_vector+i(a4),d0
+		move y_vector+j(a4),d1
+		muls z_vector+j(a4),d1
+		add.l d1,d0
+		move y_vector+k(a4),d1
+		muls z_vector+k(a4),d1
+		add.l d1,d0
+		if <mi> then.s					abs(product)
+			neg.l d0
+		endi
+	until.l d0 <lo> #tolerance			until within tolerance
+	cross x,i,y,j,z,k,y,k,z,j			Calculate x vector by taking the
+	cross x,j,y,k,z,i,y,i,z,k			cross product of y and z
+	cross x,k,y,i,z,j,y,j,z,i
+	lea x_vector(a4),a0 				force x vector to unity and return
+	jmp fix_unit
+
+
+; ************************************************
+; **											**
+; ** RANDOM_DIRECTION - CHOOSE RANDOM DIRECTION **
+; **											**
+; ************************************************
+
+; Chooses a completely random direction for an object.
+
+; Entry: A4 = ptr: object record
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr random_direction,global
+
+	lea z_vector(a4),a0 				choose random z vector
+	bsr random_vector
+	bra build_vector					build other vectors
+
+
+; ********************************************
+; **										**
+; ** RANDOM_VECTOR - CHOOSE A RANDOM VECTOR **
+; **										**
+; ********************************************
+
+; Creates a random vector. The vector must be passed through FIX_UNIT
+; before using.
+
+; Entry: A0 = ptr: vector to set
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr random_vector
+
+	move #32768,d2						rand(32768)
+	loop 1,3							3 components to set
+		jsr rand						comp = rand(32768)-16384
+		sub #16384,d0
+		move d0,(a0)+
+	next 1
+
+	ret
+
+
+; *********************************************
+; **										 **
+; ** RELEASE_CARGO - RELEASE CARGO CANISTERS **
+; **										 **
+; *********************************************
+
+; Release cargo canisters from the ship just destroyed.
+
+; V1.3	30/03/90	Mining lasers now release random # of platlets.
+
+; Entry: A4 = ptr: object just destroyed
+; Exit:  None
+
+; Regs: ?
+; Subr: ?
+
+	subr release_cargo,global
+
+	move type(a4),d0					cargo canister ?
+	cmp #barrel,d0
+	ret <eq>							yes, no cargo
+	cmp #platlet,d0 					platlet ?
+	ret <eq>							yes, no cargo
+	tst cargo_type(a4)					any cargo ?
+	ret <eq>							no, return
+	if <mi> then.s						cloaking device
+		moveq #1,d0 					release one canister
+	else.s
+		cmp #asteroid,type(a4)			asteroid ?
+		if <eq> then.s					yes
+			cmp #1,laser_type(a6)		shot with mining laser ?
+			ret <ne>					no, don't release anything
+		endi
+		move no_canisters(a4),d2		random canisters/platlets released
+		inc d2
+		jsr rand
+		tst d0							none ?
+		ret <eq>						yes
+	endi
+	push.l a5							save A5 pointer
+	move.l a4,a5						A5 = ptr: mother object record
+	repeat								loop for each canister
+		jsr alloc_object				allocate an object
+		break if <cc>					none left
+		push d0 						save loop counter
+		jsr copy_object 				use mother ship record
+		move.b #%00100001,flags(a4) 	no bounty, in use
+		move #log_twisting,logic(a4)	it's twisting
+		st velocity(a4) 				move at full speed
+		cmp #asteroid,type(a5)			released from asteroid ?
+		if <eq> then.s					yes
+			moveq #12,d0				carry minerals
+			moveq #platlet,d1			in a platlet
+		else.s
+			move cargo_type(a5),d2		cloaking device ?
+			if <mi> then.s				yes
+				move d2,d0				carry cloaking device
+			else.s
+				jsr random				prob. > 0.9 ?
+				cmp #229,d0
+				if <lo> then.s			no
+					move d2,d0			use usual cargo type
+				else.s
+					and #15,d0			random cargo
+				endi
+			endi
+			moveq #barrel,d1			it's a barrel
+		endi
+		move d1,type(a4)				set object type
+		push d0 						random direction
+		bsr random_direction
+		jsr create_object				create the object
+		move (sp)+,cargo_type(a4)		set cargo type
+		pop d0							next canister
+		dec d0
+	until <eq>
+	pop.l a5							restore A5
+
+	ret 								return
+
+
+; ---- LOCAL DATA ----
+
+; Orbit trig table for angles 0..359 (sine,cosine x 32768).
+
+orbit_trigs:
+
+	dc.w 0,256,4,256,9,256,13,256,18,255,22,255,27,255,31,254,36,254,40,253
+	dc.w 44,252,49,251,53,250,58,249,62,248,66,247,71,246,75,245,79,243,83
+	dc.w 242,88,241,92,239,96,237,100,236,104,234,108,232,112,230,116,228
+	dc.w 120,226,124,224,128,222,132,219,136,217,139,215,143,212,147,210,150
+	dc.w 207,154,204,158,202,161,199,165,196,168,193,171,190,175,187,178,184
+	dc.w 181,181,184,178,187,175,190,171,193,168,196,165,199,161,202,158,204
+	dc.w 154,207,150,210,147,212,143,215,139,217,136,219,132,222,128,224,124
+	dc.w 226,120,228,116,230,112,232,108,234,104,236,100,237,96,239,92,241
+	dc.w 88,242,83,243,79,245,75,246,71,247,66,248,62,249,58,250,53,251,49
+	dc.w 252,44,253,40,254,36,254,31,255,27,255,22,255,18,256,13,256,9,256,4
+	dc.w 256,0,256,-4,256,-9,256,-13,255,-18,255,-22,255,-27,254,-31,254,-36
+	dc.w 253,-40,252,-44,251,-49,250,-53,249,-58,248,-62,247,-66,246,-71,245
+	dc.w -75,243,-79,242,-83,241,-88,239,-92,237,-96,236,-100,234,-104,232
+	dc.w -108,230,-112,228,-116,226,-120,224,-124,222,-128,219,-132,217,-136
+	dc.w 215,-139,212,-143,210,-147,207,-150,204,-154,202,-158,199,-161,196
+	dc.w -165,193,-168,190,-171,187,-175,184,-178,181,-181,178,-184,175,-187
+	dc.w 171,-190,168,-193,165,-196,161,-199,158,-202,154,-204,150,-207,147
+	dc.w -210,143,-212,139,-215,136,-217,132,-219,128,-222,124,-224,120,-226
+	dc.w 116,-228,112,-230,108,-232,104,-234,100,-236,96,-237,92,-239,88
+	dc.w -241,83,-242,79,-243,75,-245,71,-246,66,-247,62,-248,58,-249,53
+	dc.w -250,49,-251,44,-252,40,-253,36,-254,31,-254,27,-255,22,-255,18
+	dc.w -255,13,-256,9,-256,4,-256,0,-256,-4,-256,-9,-256,-13,-256,-18,-255
+	dc.w -22,-255,-27,-255,-31,-254,-36,-254,-40,-253,-44,-252,-49,-251,-53
+	dc.w -250,-58,-249,-62,-248,-66,-247,-71,-246,-75,-245,-79,-243,-83,-242
+	dc.w -88,-241,-92,-239,-96,-237,-100,-236,-104,-234,-108,-232,-112,-230
+	dc.w -116,-228,-120,-226,-124,-224,-128,-222,-132,-219,-136,-217,-139
+	dc.w -215,-143,-212,-147,-210,-150,-207,-154,-204,-158,-202,-161,-199
+	dc.w -165,-196,-168,-193,-171,-190,-175,-187,-178,-184,-181,-181,-184
+	dc.w -178,-187,-175,-190,-171,-193,-168,-196,-165,-199,-161,-202,-158
+	dc.w -204,-154,-207,-150,-210,-147,-212,-143,-215,-139,-217,-136,-219
+	dc.w -132,-222,-128,-224,-124,-226,-120,-228,-116,-230,-112,-232,-108
+	dc.w -234,-104,-236,-100,-237,-96,-239,-92,-241,-88,-242,-83,-243,-79
+	dc.w -245,-75,-246,-71,-247,-66,-248,-62,-249,-58,-250,-53,-251,-49,-252
+	dc.w -44,-253,-40,-254,-36,-254,-31,-255,-27,-255,-22,-255,-18,-256,-13
+	dc.w -256,-9,-256,-4,-256,0,-256,4,-256,9,-256,13,-255,18,-255,22,-255
+	dc.w 27,-254,31,-254,36,-253,40,-252,44,-251,49,-250,53,-249,58,-248,62
+	dc.w -247,66,-246,71,-245,75,-243,79,-242,83,-241,88,-239,92,-237,96
+	dc.w -236,100,-234,104,-232,108,-230,112,-228,116,-226,120,-224,124,-222
+	dc.w 128,-219,132,-217,136,-215,139,-212,143,-210,147,-207,150,-204,154
+	dc.w -202,158,-199,161,-196,165,-193,168,-190,171,-187,175,-184,178,-181
+	dc.w 181,-178,184,-175,187,-171,190,-168,193,-165,196,-161,199,-158,202
+	dc.w -154,204,-150,207,-147,210,-143,212,-139,215,-136,217,-132,219,-128
+	dc.w 222,-124,224,-120,226,-116,228,-112,230,-108,232,-104,234,-100,236
+	dc.w -96,237,-92,239,-88,241,-83,242,-79,243,-75,245,-71,246,-66,247,-62
+	dc.w 248,-58,249,-53,250,-49,251,-44,252,-40,253,-36,254,-31,254,-27,255
+	dc.w -22,255,-18,255,-13,256,-9,256,-4,256
+
+; Vectors for space station at launch.
+
+spacestn_vectors:
+
+	dc.w unit,0,0
+	dc.w 0,unit,0
+	dc.w 0,0,unit
+
