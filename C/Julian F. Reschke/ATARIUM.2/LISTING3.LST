@@ -1,0 +1,231 @@
+/*
+    memory.c
+    Atarium Februar 1994
+    (c)1994 by MAXON-Computer
+    Autor: Julian F. Reschke
+    16. Dezember 1993
+*/
+
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <tos.h>
+
+#include "memory.h"
+
+#define MEMMAGIC1   'JURE'
+#define MEMMAGIC2   "MEMGUARD"
+#define GUARDLEN    8
+
+#define phystop   ((unsigned long *) 0x42eL)
+
+static int
+is_physical (void *p)
+{
+    static unsigned long pt = 0L;
+
+    if (! pt) {
+        long oldsp = Super (0L);
+        pt = *phystop;
+        Super ((void *) oldsp);
+    }
+
+    return ((unsigned long) p) < pt;
+}
+
+#ifdef MEMDEBUG
+
+typedef struct memblock
+{
+    long magic;
+    const char *file;
+    long line;
+    size_t amount;
+    struct memblock *next;
+    int is_Malloced;
+    char bla[1];
+};
+
+static struct memblock *memlist = NULL;
+
+void *
+memory_allocate (size_t amount, const char *file,
+    long line, int flag)
+{
+    size_t a = amount + sizeof (struct memblock)
+               + 2 * GUARDLEN;
+    struct memblock *m = malloc (a);
+    boolean malloced = FALSE;
+
+    if (flag)
+    {
+        /* Wenn der Alloc funktioniert hat, aber
+           FastRAM herausgekommen ist */
+
+        if (m && !is_physical(m)) {
+            free (m);
+            m = NULL;
+        }
+
+        /* Mxalloc probieren */
+
+        if (!m) {
+            long ret;
+
+            ret = (long) Mxalloc (a, 0);
+            if (ret == -32L) return NULL;
+            malloced = TRUE;
+            m = (struct memblock *)ret;
+        }
+    }
+
+    if (!m) return NULL;
+
+    m->is_Malloced = malloced;
+    m->magic = MEMMAGIC1;
+    m->file = file; m->line = line;
+    m->next = memlist;
+    m->amount = amount;
+    memlist = m;
+    strncpy (m->bla, MEMMAGIC2, GUARDLEN);
+    strncpy (m->bla + GUARDLEN + amount,
+             MEMMAGIC2, GUARDLEN);
+    memset (m->bla + GUARDLEN, 0, amount);
+
+    return m->bla + GUARDLEN;
+}
+
+void
+memory_release (void **p, const char *file,
+                long line)
+{
+    struct memblock *last = NULL;
+    struct memblock *l;
+
+    for (l = memlist; l; l = l->next)
+    {
+        if (l->magic != MEMMAGIC1)
+        {
+            printf ("Memory block at %p"
+                    " destroyed.\n", l);
+            getchar ();
+            exit (0);
+        }
+
+        if (strncmp (l->bla, MEMMAGIC2,
+            GUARDLEN) || strncmp (&l->bla[GUARDLEN
+            + l->amount], MEMMAGIC2, GUARDLEN))
+        {
+            printf ("Memory block at %p (from file %s,"
+                    " line %ld) destroyed.\n",
+                    l, l->file, l->line);
+            getchar ();
+            exit (0);
+        }
+
+        if (&l->bla[GUARDLEN] == *p)
+        {
+            *p = NULL;
+
+            if (!last)
+                memlist = l->next;
+            else
+                last->next = l->next;
+
+            if (l->is_Malloced)
+                Mfree (l);
+            else
+                free (l);
+            return;
+        }
+
+        last = l;
+    }
+
+    printf ("\nFreeing unallocated memory at %p."
+            " called from file\n%s, line %ld. "
+            "The program will be terminated,\n"
+            "press any key to continue\n",
+            *p, file, line);
+
+    getchar ();
+    exit (0);
+}
+
+void
+memory_exit (void)
+{
+    struct memblock *l;
+    int found = 0;
+
+    for (l = memlist; l; l = l->next)
+    {
+        found = 1;
+
+        printf ("\nUnfreed memory at %p, %ld bytes,"
+            " containing %08lx %08lx,\n"
+            "allocated from %s in line %ld.\n",
+            l, l->amount,
+            *((long *)&l->bla[GUARDLEN]),
+            *((long *)&l->bla[GUARDLEN + sizeof (long)]),
+            l->file, l->line);
+    }
+
+    if (found) {
+        puts ("Press any key to continue.");
+        getchar ();
+    }
+}
+
+#else
+
+void *
+memory_allocate (size_t size, int flag)
+{
+    int *m = malloc (size + sizeof(int));
+    boolean malloced = FALSE;
+
+    if (flag)
+    {
+        /* Wenn der Alloc funktioniert hat, aber
+           FastRAM herausgekommen ist */
+
+        if (m && !is_physical (m)) {
+            free (m);
+            m = NULL;
+        }
+
+        /* Mxalloc probieren */
+        if (!m) {
+            long ret;
+
+            ret = (long) Mxalloc (size + sizeof(int), 0);
+            if (ret == -32L) return NULL;
+            malloced = TRUE;
+            m = (int *)ret;
+        }
+    }
+
+    if (!m) return NULL;
+
+    *m = malloced;
+
+    memset (m + 1, 0, size);
+
+    return m + 1;
+}
+
+void
+memory_release (void **a)
+{
+    int *p = (int *)a;
+
+    if (*p)
+        free (p);
+    else
+        Mfree (p);
+}
+
+#endif
+

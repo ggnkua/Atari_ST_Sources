@@ -1,0 +1,10 @@
+      MENUE = 0;  	(* TREE *)
+      MEINGAB = 16;  	(* OBJECT in TREE #0 *)
+      MQUIT = 17;  	(* OBJECT in TREE #0 *)
+      MABOUT = 7;  	(* OBJECT in TREE #0 *)
+      FINPUT = 1;  	(* TREE *)
+      FEINGAB = 1;  	(* OBJECT in TREE #1 *)
+      FINOK = 3;  	(* OBJECT in TREE #1 *)
+      FINABBR = 4;  	(* OBJECT in TREE #1 *)
+      ABOUT = 2;  	(* TREE *)
+

@@ -1,0 +1,434 @@
+;------------------------;
+;                        ;
+;    S Y N C R O L L     ;
+;                        ;
+;  Das Softscrolling im  ;
+;       Interrupt        ;
+;                        ;
+; von Christoph Hartwich ;
+; mit GFA-Assembler V1.1 ;
+; (c) 1992 MAXON Computer;
+;                        ;
+;     .. LOW RES ..      ;
+;------------------------;
+
+VBL_IR_VEC          equ $70
+TIMER_C_VEC         equ $114
+TIMER_B_VEC         equ $120
+
+_V_BAS_AD           equ $44e
+
+VIDEO_BASE_H        equ $ff8201
+VIDEO_BASE_M        equ $ff8203
+VADR_COUNT_H        equ $ff8205
+VADR_COUNT_M        equ $ff8207
+VADR_COUNT_L        equ $ff8209
+SYNC_MODE           equ $ff820a
+COLOR_REG           equ $ff8240
+
+IR_ENABLE_A         equ $fffa07
+IR_ENABLE_B         equ $fffa09
+IR_SERVICE_A        equ $fffa0f
+IR_MASK_B           equ $fffa15
+TIMER_B_CTRL        equ $fffa1b
+TIMER_B_DATA        equ $fffa21
+
+ACIA_DATA           equ $fffc02
+
+super:    clr.l     -(sp)     ; ab in den
+          move.w    #32,-(sp) ; .
+          trap      #1        ; .
+          addq.l    #6,sp     ; Supervisormodus
+
+main:     bsr       _action_init
+          bsr       _syncroll_init
+          bsr       _action
+          bsr       _syncroll_end
+          bra       _action_end
+
+          ; ------------------------------------
+          ; ---          action_init         ---
+          ; ------------------------------------
+_action_init:       
+          move.w    #2,-(sp)  ; physbase
+          trap      #14       ; .
+          addq.l    #2,sp     ; .
+          move.l    d0,xbios2 ; => xbios2
+
+          move.l    #block,d0 ; nÑchste nach
+          divu      #1280,d0  ; #block kommende
+          addq.l    #1,d0     ; durch 1280 teil-
+          mulu.w    #1280,d0  ; bare Adresse
+          move.l    d0,pic    ; => pic
+
+          ;   Neue VB-Adresse fÅr Bildschirmaus-
+          ;   gaben anmelden :
+          move.w    #-1,-(sp)
+          move.l    pic(pc),-(sp)
+          move.l    pic(pc),-(sp)
+          move.w    #5,-(sp)
+          trap      #14
+          lea.l     12(sp),sp
+
+          ;   Farbregister sichern :
+          movem.l   COLOR_REG,d0-d7
+          movem.l   d0-d7,palsave
+
+          rts       
+
+          ; ------------------------------------
+          ; ---       syncroll_init          ---
+          ; ------------------------------------
+_syncroll_init:     
+          ;   MFP-Register sichern und danach nur
+          ;   TimerB und Tastatur-IR erlauben :
+          move.b    IR_ENABLE_A,old7
+          move.b    IR_ENABLE_B,old9
+          move.b    #1,IR_ENABLE_A
+          move.b    #64,IR_ENABLE_B
+
+          ;   Neuen VBL-Vektor installieren :
+          move.l    VBL_IR_VEC,oldvbl
+          move.l    #vbl_routine,VBL_IR_VEC
+
+          ;   TimerB vorinitialisieren :
+          clr.b     TIMER_B_CTRL
+          pea       tb_routine1(pc)
+          clr.l     -(sp)
+          move.w    #1,-(sp)
+          move.w    #$1f,-(sp)
+          trap      #14
+          lea.l     12(sp),sp
+
+          ;   Damit die gewÅnschte VB-Adresse zu
+          ;   Anfang nicht auf Null zeigt :
+          move.l    _V_BAS_AD,vbadr
+          move.l    _V_BAS_AD,vbadr2
+
+          ;   Die Maus kaltstellen und die beiden
+          ;   JMP-Befehle vervollstÑndigen :
+          move.b    #$12,ACIA_DATA
+          move.l    oldvbl(pc),op_jmp1+2
+          move.l    TIMER_C_VEC,op_jmp2+2
+
+          rts       
+
+          ; ------------------------------------
+          ; ---           action             ---
+          ; ------------------------------------
+          ;   Der Aktionteil ist relativ uninter-
+          ;   issant, aber irgend etwas muû sich
+          ;   ja auf dem Bildschirm tun.
+_action:  
+          ;   Text ausgeben :
+          pea       string(pc)
+          move.w    #9,-(sp)
+          trap      #1
+          addq.l    #6,sp
+
+          ;   Die Bildschirmposition verÑndern
+          ;   und beim Erreichen der Grenzwerte
+          ;   die Richtung umdrehen :
+hz50:     moveq.l   #0,d0
+          move.w    dy(pc),d0
+          add.w     d0,y
+          cmpi.w    #189,y
+          bne.s     not189
+          move.w    #-1,dy
+not189:   tst.w     y
+          bne.s     not0
+          move.w    #1,dy
+not0:     move.w    y(pc),d0
+          mulu.w    #160,d0
+
+          ;   Die gewÅnschte VB-Adresse Åber-
+          ;   geben und vblflag setzen, damit
+          ;   man spÑter merkt, wann es vom
+          ;   VBL-IR wieder gelîscht wird :
+          move.l    pic(pc),vbadr
+          add.l     d0,vbadr
+          move.w    #1,vblflag
+
+          ;   Balkenposition = y*2+50
+          moveq.l   #0,d0
+          move.w    y(pc),d0
+          asl.w     #1,d0
+          addi.w    #50,d0
+
+          ;   Notfalls begrenzen :
+          cmpi.w    #379,d0
+          bls.s     nocut
+          move.w    #379,d0
+
+          ;   Quell- und Zieladresse ermitteln :
+nocut:    lea.l     data(pc),a0
+          movea.l   pic(pc),a1
+          mulu.w    #160,d0
+          adda.l    d0,a1
+          movea.l   a1,a2
+
+          ;   Den Balken darstellen :
+          moveq.l   #18,d3
+box:      move.l    (a0)+,d1
+          move.l    (a0)+,d2
+          moveq.l   #19,d0
+line:     move.l    d1,(a1)+
+          move.l    d2,(a1)+
+          dbra      d0,line
+          dbra      d3,box
+
+          ;   Punkte darstellen, solange noch
+          ;   Zeit Åbrig ist :
+          moveq.l   #0,d0
+          movea.l   pic(pc),a0
+          lea.l     8000(a0),a0
+          suba.l    pic(pc),a2
+          lea.l     -8000(a2),a2
+          lea.l     3200(a2),a3
+plot:     addi.l    #3717,d0
+          add.b     VADR_COUNT_M,d0
+          cmpi.l    #53999,d0
+          bls.s     modify
+          subi.l    #54000,d0
+modify:   move.b    VADR_COUNT_M,d1
+          cmpa.l    d0,a2
+          bgt.s     legal
+          cmpa.l    d0,a3
+          bgt.s     illegal
+legal:    bset      d1,0(a0,d0.l)
+illegal:  tst.w     vblflag
+          bne.s     plot
+
+          ;   Solange weiter, bis 'q' gedrÅckt
+          move.w    #$ff,-(sp)
+          move.w    #6,-(sp)
+          trap      #1
+          addq.l    #4,sp
+          cmpi.w    #113,d0
+          bne       hz50
+          rts       
+
+          ; ------------------------------------
+          ; ---          syncroll_end        ---
+          ; ------------------------------------
+_syncroll_end:      
+          ;   Die Tastatur wiederbeleben und die
+          ;   Maus wecken :
+          bset      #6,IR_MASK_B
+          move.b    #8,ACIA_DATA
+
+          ;   Den alten VBL-Vektor und die Farb-
+          ;   register restaurieren :
+          move.l    oldvbl(pc),VBL_IR_VEC
+
+          ;   Die MFP-Register restaurieren :
+          move.b    old7(pc),IR_ENABLE_A
+          move.b    old9(pc),IR_ENABLE_B
+
+          rts       
+
+          ; ------------------------------------
+          ; ---          action_end          ---
+          ; ------------------------------------
+_action_end:        
+          ;   alte Auflîsung, Physbase und
+          ;   Logbase zurrÅck :
+          move.w    #-1,-(sp)
+          move.l    xbios2(pc),-(sp)
+          move.l    xbios2(pc),-(sp)
+          move.w    #5,-(sp)
+          trap      #14
+          lea.l     12(sp),sp
+
+          ;   Farbregister restaurieren :
+          movem.l   palsave(pc),d0-d7
+          movem.l   d0-d7,COLOR_REG
+
+          clr.w     -(sp)     ; Und damit lebt
+          trap      #1        ; wohl ...
+
+
+          ; ------------------------------------
+          ; ---         VBL-Routine          ---
+          ; ------------------------------------
+vbl_routine:        
+          ;   Register sichern / VBL-Flag lîschen
+          movem.l   d0/d1,regs
+          clr.w     vblflag
+
+          ;   d0 = 8-N
+          move.l    vbadr2(pc),d1
+          move.l    d1,d0
+          divu      #1280,d1
+          mulu.w    #1280,d1
+          sub.l     d1,d0
+          divu      #160,d0
+          addq.w    #1,d0
+
+          ;   TimerB-Vektor auf 1. Routine umbie-
+          ;   gen und TimerB mit 8-N Zeilen vor-
+          ;   belegen ( die Timer-Routine wartet
+          ;   auch noch eine Zeile; = 9-N ) :
+          move.l    #tb_routine1,TIMER_B_VEC
+          move.b    d0,TIMER_B_DATA
+
+          ;   Synchronisation fÅr ca. N*512
+          ;   Taktzyklen auf 'extern' stellen :
+          moveq.l   #8,d1
+          sub.l     d0,d1
+          asl.w     #5,d1
+          bset      #0,SYNC_MODE
+extern:   nop       
+          dbra      d1,extern
+          bclr      #0,SYNC_MODE
+
+          ;   TimerB von der Leine lassen, die
+          ;   Register restaurieren und in die
+          ;   VBL-Systemroutine springen :
+          move.b    #%1000,TIMER_B_CTRL
+          movem.l   regs(pc),d0/d1
+op_jmp1:  jmp       $0
+          rte                 ; ist ÅberflÅssig
+
+          ; ------------------------------------
+          ; ---     erste TimerB-Routine     ---
+          ; ------------------------------------
+tb_routine1:        
+          ;   die zweite TimerB-Routine 191
+          ;   Zeilen spÑter aufrufen :
+          clr.b     TIMER_B_CTRL
+          move.b    #191,TIMER_B_DATA
+          move.b    #%1000,TIMER_B_CTRL
+          move.l    #tb_routine2,TIMER_B_VEC
+
+          ;   Die Register retten und die Farben
+          ;   schon in die Register laden :
+          movem.l   d0-d7/a0/a1,regs
+          movem.l   prgpal(pc),d0-d6/a0
+
+          ;   Auf den rechten Rand warten
+          lea.l     VADR_COUNT_L,a1
+rborder1: move.b    (a1),d7
+          cmp.b     (a1),d7
+          bne.s     rborder1
+
+          ;   Die Pallette 'anknipsen' und die
+          ;   Register restaurieren.
+          movem.l   d1-d6/a0,COLOR_REG+4
+          move.l    d0,COLOR_REG
+          movem.l   regs(pc),d0-d7/a0/a1
+
+          ;   Interrupts freigeben, Tastatur auch
+          ;   wieder erlauben und in die 200Hz-
+          ;   Systemroutine springen :
+          bclr      #0,IR_SERVICE_A
+          bset      #6,IR_MASK_B
+op_jmp2:  jmp       $0
+
+          ; ------------------------------------
+          ; ---    zweite TimerB-Routine     ---
+          ; ------------------------------------
+tb_routine2:        
+          ;   TimerB stoppen und die Tastatur
+          ;   verriegeln. Der Tastatur-IR darf
+          ;   nÑmlich nicht den folgenden VBL-IR
+          ;   verzîgern oder stîren.
+          clr.b     TIMER_B_CTRL
+          bclr      #6,IR_MASK_B
+          movem.l   d0/a0,regs
+
+          ;   Kurz warten :
+          move.l    $23456,$23456
+
+          ;   Auf den rechten Rand warten :
+          lea.l     VADR_COUNT_L,a0
+rborder2: move.b    (a0),d0
+          cmp.b     (a0),d0
+          bne.s     rborder2
+
+          ;   Bildschirm verdunkeln :
+          moveq.l   #0,d0
+          lea.l     COLOR_REG+4,a0
+          move.l    d0,(a0)+
+          move.l    d0,(a0)+
+          move.l    d0,(a0)+
+          move.l    d0,(a0)+
+          move.l    d0,(a0)+
+          move.l    d0,(a0)+
+          move.l    d0,(a0)+
+          move.l    d0,COLOR_REG
+
+          ;   Damit vbadr vom Hauptprogramm wie-
+          ;   der verÑndert werden kann, wird es
+          ;   jetzt gesichert.
+          ;   Von einem Bild wÅrden normalerweise
+          ;   die ersten 2 Zeilen fehlen, deshalb
+          ;   wird vbadr2 um 320 vermindert :
+          move.l    vbadr(pc),d0
+          subi.l    #160*2,d0
+          move.l    d0,vbadr2
+
+          ;   Die Video-Base Register fÅr das
+          ;   nÑchste Bild belegen :
+          divu      #1280,d0
+          mulu.w    #1280,d0
+          lsr.l     #8,d0
+          move.b    d0,VIDEO_BASE_M
+          lsr.l     #8,d0
+          move.b    d0,VIDEO_BASE_H
+          movem.l   regs(pc),d0/a0
+
+          ;   IRs freigeben und raus hier :
+          bclr      #0,IR_SERVICE_A
+          rte       
+
+
+          ; ------------------------------------
+          ; ---         Variablen            ---
+          ; ------------------------------------
+
+          ; von den Scrollingroutinen benutzte
+          ; Variablen :
+old7:     .DC.b 0   ; $fffa07 gesichert
+old9:     .DC.b 0   ; $fffa09 gesichert
+oldvbl:   .DC.l 0   ; alter VBL-Vektor
+regs:     .DS.l 10  ; zum Retten der Register
+vbadr2:   .DC.l 0   ; gew. VB-Adr. intern
+
+          ; von beiden Teilen benutzte Var. :
+vbadr:    .DC.l 0   ; gewÅnschte VB-Adresse
+vblflag:  .DC.w 0   ; Infoflag fÅr das Hauptprg.
+prgpal:   .DC.w 0,1,2,3,4,5,6,7
+          .DC.w $117,$227,$337,$447
+          .DC.w $557,$667,$777,$777
+
+          ; Variablen des Hauptprogramms :
+xbios2:   .DC.l 0
+string:   .DC.b 13,10,'               SYNCROLL',0
+          .EVEN 
+y:        .DC.w 0
+dy:       .DC.w 1
+pic:      .DC.l 0
+data:     .DC.w $0000,$0000,$0000,$0000
+          .DC.w $0000,$0000,$0000,$0000
+          .DC.w $ffff,$0000,$0000,$0000
+          .DC.w $0000,$ffff,$0000,$0000
+          .DC.w $ffff,$ffff,$0000,$0000
+          .DC.w $0000,$0000,$ffff,$0000
+          .DC.w $ffff,$0000,$ffff,$0000
+          .DC.w $0000,$ffff,$ffff,$0000
+          .DC.w $ffff,$ffff,$ffff,$0000
+          .DC.w $0000,$0000,$0000,$ffff
+          .DC.w $ffff,$0000,$0000,$ffff
+          .DC.w $0000,$ffff,$0000,$ffff
+          .DC.w $ffff,$ffff,$0000,$ffff
+          .DC.w $0000,$0000,$ffff,$ffff
+          .DC.w $ffff,$0000,$ffff,$ffff
+          .DC.w $0000,$ffff,$ffff,$ffff
+          .DC.w $ffff,$ffff,$ffff,$ffff
+          .DC.w $0000,$0000,$0000,$0000
+          .DC.w $0000,$0000,$0000,$0000
+          .BSS 
+palsave:  .DS.w 16
+block:    .DS.b 64000+1280
+

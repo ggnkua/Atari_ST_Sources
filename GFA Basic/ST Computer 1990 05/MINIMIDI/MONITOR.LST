@@ -1,0 +1,382 @@
+CLS
+@aufbau_screen
+GET 0,0,400,399,screen$
+' --- Ausgabe Text         Anzahl der Datenbyte ----
+DATA "Note off           ",2
+DATA "Note on            ",2
+DATA "Polypresssure      ",2
+DATA "Control Change     ",2
+DATA "Program Change     ",1
+DATA "After Touch        ",1
+DATA "Pitch Bend         ",2
+DATA "System Exclusive   ",0
+DATA "Song Position      ",2
+DATA "Song Select        ",1
+DATA "Tune Request       ",0
+DATA "Timing Clock       ",0
+DATA "Tape Start         ",0
+DATA "Tape Continue      ",0
+DATA "Tape Stop          ",0
+DATA "Active Sensing     ",0
+DATA "U N D E F I N E D  ",0
+'
+' --------------------------------------------
+' status$()    =  Bedeutung des Statuswortes
+' anz_byte|()  =  Anzahl der Datenworte in Byte
+' ---------------------------------------------
+'
+DIM status$(16),anz_byte|(16)
+DIM buffer|(2),buff%(8192)
+'
+' ----------------- einlesen der Statusworte und DatenlÑngen
+RESTORE
+FOR i|=0 TO 16
+  READ status$(i|)
+  READ anz_byte|(i|)
+NEXT i|
+'
+' ----------------- MIDI - Buffer vergrîûern und auf Null setzen
+'
+@init_buffer
+@clear_midi_buffer
+'
+'
+DEFMOUSE 0
+lang$="  "          ! LÑnge eines Statuswortes in Hexdarstellung
+zaehler&=48         ! ZeilenzÑhler
+SHOWM
+'
+' ------------------ Hauptprogrammschleife
+'
+DO
+  marke1:
+  CLR wert2|
+  '
+  ' ******************* EINLESE SCHLEIFE ****************
+  '
+  DO
+    IF MOUSEK=0
+      maus_button_an!=FALSE          ! damit kommt man ohne REPEAT UNTIL aus
+    ENDIF
+    IF MOUSEK=1 AND maus_button_an!=FALSE             ! Maustaste gedrÅckt?
+      @test_mouse(nummer&)                            ! wenn ja, dann teste
+      IF nummer&>-1 AND nummer&<14                    ! Filter angeklickt
+        @inv_button(nummer&)                          ! invertiere Button
+        filter%=BCHG(filter%,nummer&)                 ! setze Filterbit
+      ELSE IF nummer&>15                              ! Funktion
+        @inv_button(nummer&)
+        IF nummer&=16                                 ! CLEAR angeklickt
+          @clear_midi_buffer                          ! Lîsche MIDI Buffer
+          @inv_button(nummer&)
+        ELSE                                          ! QUIT angeklickt
+          ALERT 2," |  Really QUIT  ",1," NO |YES",dummy%
+          IF dummy%=2
+            @old_buffer                    ! alten MIDI Buffer wiederherstellen
+            END
+          ELSE
+            @inv_button(nummer&)
+          ENDIF
+        ENDIF
+      ENDIF
+    ENDIF
+    EXIT IF BIOS(1,3)             ! Wenn MIDI-Byte anliegt, dann zur Ausgabe
+  LOOP
+  '
+  ' ************ ENDE EINLESE SCHLEIFE ***********************
+  '
+  buffer|=INP(3)                  ! Hole MIDI Byte
+  IF buffer|>&HF0                 ! System Realtime Nachrichten ?
+    buffer|(0)=buffer|
+    @system_realtime
+    help|=0
+    help1$="  "                    ! Nur fÅr Running Status, daher leer
+    CLR help2$
+    GOTO marke2                   ! Ausgabe
+  ELSE IF buffer|=&HF0            ! extra fÅr System Exclusive
+    buffer|(0)=buffer|
+    @system_exclusive
+    GOTO marke3                   ! Ausgabe Text
+  ELSE IF buffer|>=&H80           ! Normale Status Nachrichten
+    buffer|(0)=buffer|
+    r_status|=buffer|             ! Falls Running Status, dann Byte merken
+    CLR help|
+    help1$="  "
+    CLR help2$
+  ELSE
+    IF r_status|<&H80 OR r_status|=>&HF0     ! Fehler abfangen
+      GOTO marke1
+    ENDIF
+    buffer|(0)=r_status|          ! Running Status Byte ergÑnzen
+    buffer|(1)=buffer|            ! erstes Datebyte
+    INC wert2|                    ! nur noch evtl. 2.Datenbyte lesen
+    help|=1                       ! offset fÅr noch zu lesende Bytes (s.u.)
+    help1$=HEX$(buffer|)           ! erstes Datenbyte schon beschreiben
+    help2$="    "
+  ENDIF
+  s_array|=SUB(SHR|(buffer|(0),4),8)    ! welche Pos. im Array status$() ?
+  stelle|=s_array|                      ! Filterposition bei Note Messages
+  marke2:
+  wert|=SUB(anz_byte|(s_array|),help|)  ! wieviele Bytes noch Åbrig ?
+  '
+  ' -------------------Filter testen
+  '
+  IF BTST(filter%,stelle|)
+    DO                                  ! alle Åbrigen Bytes auslesen
+      DEC wert|
+      IF BIOS(1,3)
+        ~INP(3)                         ! und verschlucken
+      ENDIF
+    LOOP UNTIL wert|=0
+    GOTO marke1                         ! zum Anfang der Hauptschleife
+  ENDIF
+  '
+  ' ------------------- Ausgabe vor- und aufbereiten
+  '
+  RSET lang$=help1$
+  status$=status$(s_array|)+HEX$(buffer|(0))+"  "+help2$+lang$+"  "
+  '
+  ' ------------------- restliche Datenbytes holen
+  '
+  WHILE wert|>0
+    DEC wert|
+    INC wert2|
+    buffer|(wert2|)=INP(3)
+    RSET lang$=HEX$(buffer|(wert2|))
+    status$=status$+lang$+"  "
+  WEND
+  ' ---------------------------------------------
+  '
+  marke3:
+  ' ------------------------ Ausgabe Text -------
+  IF status$<>""
+    IF zaehler&>390
+      PUT 0,0,screen$
+      zaehler&=48
+    ENDIF
+    TEXT 20,zaehler&,status$
+    SHOWM
+    ADD zaehler&,8
+  ENDIF
+  ' ----------------------------------------------
+  CLR buffer|
+  buffer|(0)=0
+  buffer|(1)=0
+  buffer|(2)=0
+LOOP
+'
+' +++++ E N D E    H A U P T P R O G R A M M S C H L E I F E ++++++++
+'
+' +++++++++++++++ P R O Z E D U R E N +++++++++++++++++++++++++++++++
+'
+' *******************************************************************
+' >>>>>> invertieren eines Buttons
+'
+> PROCEDURE inv_button(nummer&)
+  i|=nummer& MOD 2
+  j|=nummer& DIV 2
+  x1&=ADD(ADD(MUL(i|,abstand_x&),oben_x&),1)
+  y1&=ADD(ADD(MUL(j|,abstand_y&),oben_y&),1)
+  x2&=SUB(ADD(x1&,breite&),2)
+  y2&=SUB(ADD(y1&,hoehe&),2)
+  DEFFILL 1,1,0
+  GRAPHMODE 3
+  PBOX x1&,y1&,x2&,y2&
+  GRAPHMODE 1
+  SHOWM
+RETURN
+'
+' *******************************************************************
+' >>>>>> Test ob Button angeklickt
+'
+> PROCEDURE test_mouse(VAR nummer&)
+  mx&=MOUSEX
+  my&=MOUSEY
+  IF mx&>oben_x& AND mx&<ADD(oben_x&,180)
+    IF my&>oben_y& AND my&<ADD(MUL(abstand_y&,9),oben_y&)
+      handle_x|=DIV(SUB(mx&,oben_x&),abstand_x&)
+      handle_x2|=DIV(SUB(mx&,SUB(oben_x&,leer_x&)),abstand_x&)
+      handle_y|=DIV(SUB(my&,oben_y&),abstand_y&)
+      handle_y2|=DIV(SUB(my&,SUB(oben_y&,leer_y&)),abstand_y&)
+      IF handle_x|=handle_x2| AND handle_y|=handle_y2|
+        nummer&=ADD(MUL(handle_y|,2),handle_x|)
+      ELSE
+        nummer&=-1
+      ENDIF
+      IF nummer&=14 OR nummer&=15
+        nummer&=-1
+      ENDIF
+    ELSE
+      nummer&=-1
+    ENDIF
+  ELSE
+    nummer&=-1
+  ENDIF
+  maus_button_an!=TRUE
+RETURN
+'
+' *******************************************************************
+' >>>>>> einrichten eines grîûeren MIDI-Buffers
+'
+> PROCEDURE init_buffer
+  buffer%=V:buff%(0)                 ! hole Pointer auf neuen MIDI-Buffer
+  buff_adr%=XBIOS(14,2)              ! hole Adresse der System MIDI-Zeiger
+  buffer_alt%=LPEEK(buff_adr%)       ! alten Bufferzeiger merken
+  buf_len_alt%=DPEEK(buff_adr%+4)    ! alte BufferlÑnge merken
+  LPOKE buff_adr%,buffer%            ! neue MIDI-Bufferadresse
+  DPOKE buff_adr%+4,32768            ! neue MIDI-BufferlÑnge
+RETURN
+'
+' *******************************************************************
+' >>>>>> restaurieren des alten MIDI-Buffers
+'
+> PROCEDURE old_buffer
+  LPOKE buff_adr%,buffer_alt%       ! alten MIDI-Bufferzeiger restaurieren
+  DPOKE buff_adr%+4,buf_len_alt%    ! dto. LÑnge des Buffers
+RETURN
+'
+' *******************************************************************
+' >>>>>> lîschen des MIDI-Buffers
+'
+> PROCEDURE clear_midi_buffer
+  LPOKE buff_adr%+6,0         ! nÑchste Schreib/Leseposition auf Null
+  LPOKE buff_adr%+10,0        ! obere/untere Wassermarke auf Null
+RETURN
+'
+' *******************************************************************
+' >>>>>> Bearbeiten von System Realtime Nachrichten
+'
+> PROCEDURE system_realtime
+  SELECT buffer|
+  CASE &HF2
+    ' ----------------- Song Position Nachricht
+    s_array|=8
+    stelle|=8
+  CASE &HF3
+    ' ----------------- Song Select Nachricht
+    s_array|=9
+    stelle|=9
+  CASE &HF6
+    ' ----------------- Tune Request Nachricht
+    s_array|=10
+    stelle|=10
+  CASE &HF8
+    ' ----------------- Timing Clock Nachricht
+    s_array|=11
+    stelle|=11
+  CASE &HFA TO &HFC
+    ' ----------------- Tape Start/Cont/Stop Nachricht
+    s_array|=SUB(buffer|,238)
+    stelle|=12
+  CASE &HFE
+    ' ----------------- Active Sensing Nachricht
+    s_array|=15
+    stelle|=13
+  DEFAULT
+    ' ----------------- sonstige, nicht Implementierte
+    s_array|=16
+  ENDSELECT
+RETURN
+> PROCEDURE system_exclusive
+  ' ---------- System Exclusive Nachrichten
+  CLR count|
+  t=TIMER
+  DO
+    IF BIOS(1,3)
+      buffer|=INP(3)
+      INC count|
+    ELSE IF SUB(TIMER,t)>200
+      timeout!=TRUE
+      status$="T I M E O U T"
+    ENDIF
+  LOOP UNTIL buffer|=&HF7 OR timeout!=TRUE
+  timeout!=FALSE
+  IF NOT BTST(filter%,7)
+    status$=status$(7)+"    "+STR$(buffer|)+" Bytes lang"
+  ELSE
+    status$=""
+  ENDIF
+RETURN
+'
+' *******************************************************************
+' >>>>>> Aufbau der BedienoberflÑche
+'
+> PROCEDURE aufbau_screen
+  '
+  button_text:
+  '
+  DATA Note off
+  DATA Note on
+  DATA Polypres
+  DATA Ctrl Ch
+  DATA Prog Ch
+  DATA After T
+  DATA Pitch B
+  DATA Sys Excl
+  DATA Song Pos
+  DATA Song Sel
+  DATA Tune Req
+  DATA Clock
+  DATA Tape Fun
+  DATA Active S
+  DATA  Clear
+  DATA   QUIT
+  '
+  '
+  breite&=80       ! Button Breite
+  hoehe&=26        ! Button Hîhe
+  offset|=2
+  oben_x&=424      ! erster Button links oben X-Koordinate
+  oben_y&=78       ! dto. Y-Koordinate
+  abstand_x&=100   ! Abstand zweier linker/rechter Eckpunkte X-Koordinate
+  abstand_y&=34    ! dto. Y-Koordinate
+  offx_text&=10    ! Abstand Text zum linken Rand eines Buttons
+  offy_text&=20    ! Abstand Text zum oberen Rand eines Buttons
+  leer_x&=SUB(abstand_x&,breite&)  ! LÅcke in Pixel X-Koordinate
+  leer_y&=SUB(abstand_y&,hoehe&)   ! LÅcke in Pixel Y-Koordinate
+  '
+  ' ----------------------- Bildschirm mit Desktop Muster fÅllen
+  GRAPHMODE 1
+  DEFFILL 1,2,4
+  PBOX 0,0,639,399
+  DEFFILL 1,2,1
+  PBOX 400,50,630,390     ! Box um Filterbereich
+  DEFFILL 1,0,0
+  PBOX 4,30,380,390       ! Box um Anzeigebereich
+  DEFFILL 1,1,0
+  PBOX 414,11,420,42      ! Box fÅr "Midi Monitor"-Name
+  ' ----------------------- Programmname
+  DEFTEXT ,,,32
+  GRAPHMODE 4
+  TEXT 420,38,"Midi Monitor"
+  GRAPHMODE 3
+  TEXT 418,36,"Midi Monitor"
+  DEFTEXT ,1,,13
+  GRAPHMODE 2
+  ' ----------------------- öberschrift Anzeigebox
+  TEXT 44,20,"Text         Status  Byte1  Byte2"
+  GRAPHMODE 1
+  '
+  TEXT 410,70,"Filter"
+  TEXT 410,342,"Functions"
+  ' ----------------------- zeichne Buttons
+  RESTORE button_text
+  FOR j|=0 TO 8
+    IF j|=7
+      INC j|
+    ENDIF
+    FOR i|=0 TO 1
+      READ button$
+      x1&=ADD(MUL(i|,abstand_x&),oben_x&)
+      y1&=ADD(MUL(j|,abstand_y&),oben_y&)
+      x2&=ADD(x1&,breite&)
+      y2&=ADD(y1&,hoehe&)
+      DEFFILL 1,1,0
+      PBOX ADD(x1&,2),ADD(y1&,2),ADD(x2&,2),ADD(y2&,2)
+      DEFFILL 1,0,0
+      PBOX x1&,y1&,x2&,y2&
+      TEXT ADD(x1&,offx_text&),ADD(y1&,offy_text&),button$
+      @inv_button(ADD(MUL(j|,2),i|))
+    NEXT i|
+  NEXT j|
+  DEFTEXT ,0,,6
+RETURN
