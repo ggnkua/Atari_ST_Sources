@@ -1,0 +1,154 @@
+/*
+   debug.c
+   (c) 1996 MAXON Computer
+    Autor: Julian F. Reschke, 24. Januar 1996
+*/
+
+#include <stddef.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <tos.h>
+
+/* output character string to BIOS device */
+
+int
+Bconws (int device, char *str)
+{
+   int cnt = 0;
+   int odev = device;
+   
+   if (odev == 3)
+      odev = 4;
+   else
+      if (odev == 4)
+         odev = 3;
+   
+   while (*str)
+   {
+      cnt++;
+      
+      while (!Bcostat (odev));
+      
+      if (*str == '\n')
+      {
+         Bconout (device, '\r');
+         cnt++;
+      }
+      
+      Bconout (device, *str++);
+   }
+   
+   return cnt;
+}
+
+/* output debug message */
+
+int
+dprintf (const char *what, ...)
+{
+   va_list argp;
+   static char buffer[512];
+   int cnt;
+   
+   va_start (argp, what);
+   vsprintf (buffer, what, argp);
+   cnt = Bconws (2, buffer);
+   va_end (argp);
+   
+   return cnt;
+}
+
+/* get pointer to current basepage */
+
+const BASPAG **
+_get_run (void)
+{
+    SYSHDR *osheader = *((SYSHDR **) 0x4f2);
+
+    osheader = osheader->os_base;
+
+    if (osheader->os_version >= 0x102)
+      return osheader->_run;
+
+   if ((osheader->os_palmode >> 1) == 4)
+       return (BASPAG **)0x873c;
+   else
+       return (BASPAG **)0x602c;
+}
+
+#define proc_lives   ((unsigned long *) 0x380L)
+#define proc_dregs   ((unsigned long *) 0x384L)
+#define proc_aregs   ((unsigned long *) 0x3a4L)
+#define proc_enum ((unsigned char *) 0x3c4L)
+#define proc_pc      ((unsigned long *) 0x3c4L)
+#define proc_usp  ((unsigned long  *) 0x3c8L)
+#define proc_stk  ((unsigned int *) 0x3ccL)
+
+/* output a crash dump */
+
+void crash_dump (void)
+{
+   const BASPAG **pbp = _get_run ();
+
+   if (*proc_lives == 0x12345678L &&
+      *pbp == _BasPag)
+   {
+      long where = ((long)proc_stk[1] << 16L)
+         | proc_stk[2];
+   
+      dprintf ("\n\n"
+         "********************************\n"
+         "* ABNORMAL PROGRAM TERMINATION *\n"
+         "********************************\n\n");
+   
+      dprintf ("Exception: %d (%06lx)\n"
+         "    Stack: %04x %04x %04x %04x"
+         " %04x %04x %04x %04x\n"
+         "           %04x %04x %04x %04x "
+         " %04x %04x %04x %04x\n"
+         "      TPA: %08lx\n"
+         "  Address: %08lx\n",
+         *proc_enum,
+         *proc_pc & 0xffffffL,
+         proc_stk[0], proc_stk[1], proc_stk[2],
+         proc_stk[3], proc_stk[4], proc_stk[5],
+         proc_stk[6], proc_stk[7], proc_stk[8],
+         proc_stk[9], proc_stk[10], proc_stk[11],
+         proc_stk[12], proc_stk[13], proc_stk[14],
+         proc_stk[15], _BasPag->p_tbase,
+         where);
+      
+      dprintf ("   Offset: %08lx\n", where -
+         (long) _BasPag->p_tbase);
+
+      dprintf ("\nPress RETURN to continue...\n");
+      Bconin (2);
+   }
+}
+
+/* Support for GEMDOS extended vectors */
+typedef void (* void_fun_pointer)(void);
+
+/* set by main program to 0 on normal program
+termination */
+static int normal_termination = -1;
+
+void *old_term;
+
+void new_term (void)
+{
+   void (*terminate)(void) = old_term;
+
+   Setexc (0x102, (void_fun_pointer)old_term);
+
+   if (normal_termination < 0) crash_dump ();
+
+   terminate ();
+}
+
+/* main program... */
+
+/* old_term = Setexc (0x0102, new_term); */
+
