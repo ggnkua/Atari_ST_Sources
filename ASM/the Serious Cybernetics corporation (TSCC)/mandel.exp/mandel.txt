@@ -1,0 +1,187 @@
+
+                                An Approach to
+                                   very fast
+                             Mandelbrot Iterations
+
+
+        Hi once more, it's ray again and here comes my second tech
+        article for this issue of Alive. I've recently been inspired to
+        revisit the Mandelbrot iteration loop after meeting Charon /
+        Escape at the Paracon 7 party where he came up with the idea of
+        implementing a Mandelbrot fractal on his FPGA board using 16
+        hardware-multiplicators to compute 8 pixels in parallel in one
+        pixel clock tick AFAIR (amazing stuff, he can now do a 640x480
+        fractal in 60Hz realtime! A note to Charon: It was really fun
+        chatting with you, trading ideas and learning some VHDL ;).
+
+        You probably know calculating the Mandelbrot set is a rather
+        complex task in terms of the algorithms time consumption on a
+        computer (what else). Hence calculating and drawing Mandelbrot
+        fractals was always (or at least has been) a common benchmark
+        for testing the performance and speed of a machine. Besides the
+        fact that the set's fringe holds an infinite amount of
+        fascinating patterns and shapes only limited by the accuracy of
+        the numbers used to draw the fractal, which is inherently
+        fascinating. It's always fun to tweak algorithms that people
+        claim to know inside out.
+
+        Let me try explaining why calculating the Mandelbrot set is so
+        consumptive in the world of digital computing. Here is the
+        sequence that is being used to decide whether a point (Cx, Cy)
+        is in- or outside the Mandelbrot set, simple math coming up:
+
+        óz(n+1) = z(n)^2 + c , c = (Cx, Cy), z(0) = 0+i*0
+
+        Note: The Julia set is computed in a very similar manner only
+        that c = const., z(0) = (Cx, Cy), so the whole explanation goes
+        for Julia fractals, too basically.
+
+        (Cx, Cy) will usually be the screen coordinates of the pixel to
+        be mapped rescaled to fit the section considered in our fractal.
+        You will start out at n=0 and iterate until |z| rises beyond a
+        maximum value (2 usually) indicating that the sequence diverges
+        at (Cx, Cy), i.e. the point doesn't lie inside the set. It turns
+        out that computing |z|^2 is easier due to the lack of a square
+        root calculation which makes 2^2 = 4 the upper limit to check
+        against. You can use the number of iterations (n) to colour the
+        pixel so it is of course necessary to limit n to your maximum
+        amount of colours.
+
+        Here is a bit of pseudo code of how the set is usually
+        calculated:
+
+        XMIN     =  -2.5;     // the common section
+        XMAX     =  +0.8;
+        YMIN     =  -1.25;
+        YMAX     =  +1.25;
+
+        MAXABSZ  =   2;
+        MAXITER  =  32;       // 32 colours
+
+        XRES     = 320;
+        YRES     = 200;
+
+        float       Cx, Cy = YMIN;
+
+
+        for (int y=0;y<YRES;y++) {
+
+            Cx = XMIN;
+
+            for (int x=0;x<XRES;x++) {
+
+                        float a=0, b=0, a_new;  // z := a + i*b = 0
+                        int n=0;
+
+                        // Enter the costy iteration loop
+                        do {
+                                  a_new = 2*a*b+Cx; // Z(n+1) = z(n)^2+c
+                                  b = a*a-b*b+Cy;
+                                  a = a_new;
+            } while ((n++ < MAXITER-1)&&(a*a+b*b < MAXABSZ*MAXABSZ));
+
+                        *screen++ = n;          // Write out pixel value
+
+                        Cx += (XMAX-XMIN)/XRES;
+            }
+
+            Cy += (YMAX-YMIN)/YRES;
+        }
+
+
+        Now, this is as unoptimized as it gets, 3 multiplications per
+        pixel (assuming we are doing fixed point operations, caching the
+        a^2, b^2 values in data-registers and naturally not counting the
+        2* which equals a shift or an add respectively).
+
+        The next step would be eliminating muls by using |a|+|b| instead
+        of a^2+b^2 to approximate |z|^2 (changing the fractals look a
+        bit) and expressing a^2-b^2 as (a+b)*(a-b) (binomial formula)
+        cutting the calculus to 2 multiplications per iteration. So your
+        loop becomes:
+
+        do {
+                    a_new = 2*a*b+Cx;
+                    b = (a+b)*(a-b)+Cy;
+                    a = a_new;
+            } while ((n++ < MAXITER-1)&&(abs(a)+abs(b) < MAXABSZ*2));
+
+
+        Well here's and now here comes the core idea of my whole
+        article: Completely remove the multiplications replacing them by
+        square lookups. The equations resulting by the complex squaring
+        of z are binomials and thus ideally suited to be used in
+        interconnection with an old trick that was used to accelerate or
+        perform multiplications on machines with slow multiplications
+        (68000) or machines lacking a mul instruction (6502 and so on),
+        some math coming up again:
+
+        I.         ó(a+b)^2 = a^2 + 2*a*b + b^2
+        II.   =>   ó2*a*b = (a+b)^2 - a^2 - b^2
+        III.  =>   óa*b = ((a+b)^2 - a^2 - b^2) / 2
+
+        That is 3 lookups, 1 add, 2 subs and a shift to perform a mul.
+        You can even cut it down to 2 lookups by preceding the method a
+        bit but this isn't the issue here.
+
+        Take a look at formula II and notice the terms 2*a*b and a^2,
+        b^2 which are being reused during the calculations (on the one
+        hand to compute b(n+1) and to compute |z|^2 on the other hand).
+        This idea enables us to make up a pretty tight iteration loop,
+        at least on machines where memory to register reads and
+        adds/subs are faster than multiplications as it is the case on
+        the 68000 and 68030. Working with fixed point arithmetic you can
+        directly renormalize your square tables, I've found that working
+        with 5.11 fixed point tables already gives a neat band to play
+        with and it costs me 64k words, but of course you can always
+        increase accuracy trading memory.
+
+        In a 128x128 window (16 colours) I can almost zoom into the
+        fractal in realtime on my TT with satisfied me enough to write
+        up this little tutorial and release my fractal explorer and its
+        source along with this issue of Alive -> "filez/mandel.exp/", it
+        plots a rather highres set in 48 colours and is supposed to run
+        on both the TT and Falcon (also CT60).
+
+        Note: Computing z' length is now exact again, here's the loop:
+
+        // Fixed point arithmetic from here on
+
+        MAXINT      =  65535;
+        FRACBITS    =     11;               // fractional bits
+
+        // Set up the square table
+
+        unsigned int sqr[MAXINT+1];
+        for (unsigned long i=0;i<=MAXINT;i++) sqr[i] = (i*i) >> FRACBITS;
+
+
+        int a=0, b=0;  // Cx, Cy must be suiting fixed point numbers now
+
+        (...)
+
+            // Enter the optimized innerloop
+            for(n=0;n<MAXITER;n++) {
+
+                  asqr = sqr[a];                      // |z| > MAXABS?
+                  bsqr = sqr[b];
+                  if (asqr+bsqr > MAXABSZ*MAXABSZ) break;
+
+                  // Chose a's and b's range carefully to avoid a carry in a+b
+                  a = sqr[a+b]-asqr-bsqr+Cx;
+                  b = asqr-bsqr+Cy
+            }
+
+            *screen++ = n;
+
+        (...)
+
+
+        Have fun with it; maybe make up a Julia fractal or something. In
+        case you are about to extend the idea or optimize it further
+        please drop me a line via ray@tscc.de, I might be
+        interested ;).
+
+        Keep it real, stay Atari.
+
+                                                   Ray for Alive, 2005-12-22
