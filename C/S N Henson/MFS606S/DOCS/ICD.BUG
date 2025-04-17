@@ -1,0 +1,95 @@
+	I'd better clarify the bug I've described in ICD software. Minixfs and
+friends will *not* trigger this bug if you have the NO_ICD_PHYS option #define'd
+in minixfs/hdio.h (the default). Since the bug is not trigggered you can freely
+use ICD software with its cache on or off with no problems whatsoever.
+	However if you want to use larger partitions (those with sector size
+bigger than 1K) then minixfs/minit/fsck will refuse to access them with ICD
+software because the operations will trigger the bug. If you need to create
+larger partitions then you need to do the following:
+
+1. Comment out the line: "#define NO_ICD_PHYS" in minixfs/hdio.h .
+2. Do a "make clobber" then a "make install" .
+3. Configure ICD software so all caches are permanently off (not just write).
+4. Reboot.
+5. Follow the procedure outlined in the other files to create large partitions.
+
+	If you turn the cache on then minixfs/MiNT *will* be crashed by the
+bug, when any access  is attempted on the large partitions.  Under  certain 
+circumstances the bug can even write data all over a hard disk, trashing it.
+This problem is solely the fault of ICD, so I can't do anything about it: try
+complaining to them. If the bug is fixed in later versions of ICD software then
+I'll ammend minixfs and friends appropriately if I can check it (this is
+unlikely because ICD's ridiculous update policy means that I would have to spend
+a fortune downloading their software from their US bbs from here in the UK).
+
+	Now for the more technically minded (or if anyone who isn't ignored by
+ICD reads this) here is a description of the bug. The standard I/O syscall Rwabs
+when used with it's extra long parameter (sometimes called lrecno) and in 
+physical mode to access a sector number bigger than 0xffff will result in far
+too many sectors being read/written: overflowing any buffer or writing invalid
+data all over the hard disk. Here is a gcc program that tests/triggers the bug.
+Feel free to try other software with this: AHDI/HDD don't have this bug (in
+fact ICD is the only software I know that does).
+
+-----------------------------------------------------------------------------
+/* Short program to trigger ICD hard disk software bug
+ */
+
+#include <osbind.h>
+#include <string.h>
+
+#define XRWABS(a,b,c,d,e,f) \
+trap_13_wwlwwwl((short)(0x04),(short)(a),(long)(b),(short)(c),(short)(d)\
+,(short)(e),(long)(f) )
+
+#define trap_13_wwlwwwl(n, a, b, c, d, e, f)				\
+({									\
+	register long retvalue __asm__("d0");				\
+	volatile short _a = (volatile short)(a);			\
+	volatile long  _b = (volatile long) (b);			\
+	volatile short _c = (volatile short)(c);			\
+	volatile short _d = (volatile short)(d);			\
+	volatile short _e = (volatile short)(e);			\
+	volatile long  _f = (volatile long) (f);			\
+	    								\
+	__asm__ volatile						\
+	("\
+		movl	%5,sp@-; \
+		movw    %4,sp@-; \
+		movw    %3,sp@-; \
+		movw    %2,sp@-; \
+		movl    %1,sp@-; \
+		movw    %0,sp@-	"					\
+	:					      /* outputs */	\
+	: "r"(_a), "r"(_b), "r"(_c), "r"(_d), "r"(_e), "r"(_f) /* inputs  */ \
+	);								\
+									\
+	__asm__ volatile						\
+	("\
+		movw    %1,sp@-; \
+		trap    #13;	\
+		addw    #18,sp " \
+	: "=r"(retvalue)			/* outputs */		\
+	: "g"(n)				/* inputs  */		\
+	: "d0", "d1", "d2", "a0", "a1", "a2"    /* clobbered regs */	\
+	);								\
+	retvalue;							\
+})
+
+unsigned char buf[256000];
+
+main()
+{
+	memset(buf,0xff,256000l);
+
+	printf("Xrwabs returned %ld\n",XRWABS(10,buf,2,-1,2,0x10000l));
+
+	if(buf[1024]!=0xff) printf("Overwritten!!\n");
+	else printf("Probably OK\n");
+
+	printf("Press any key to exit\n");
+	Crawcin();
+
+	return 0;
+}
+-----------------------------------------------------------------------------
