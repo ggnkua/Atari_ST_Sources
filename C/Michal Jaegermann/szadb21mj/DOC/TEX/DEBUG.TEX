@@ -1,0 +1,139 @@
+\section{Bug hunting}
+
+\subsection{Compiling for \szadb{}}
+Lets have a closer look at the C program below.  Its stated purpose is to
+replace, if possible, runs of white space with tabs.  The width of a tab
+is fixed and equal to a constant \name{TABSTOP}.  If a text line is 
+getting too long then substitutions are abandoned and remaining
+characters are copied without modifications.
+\bigskip
+\listing{\exmpskip}{unexpand.c}
+\bigskip
+\noindent
+This program has actually two bugs.
+See if you can find them just examinig the source.
+
+Here is how \szadb\ can help. Compile source as follows
+(these commands are for Sozobon~C)
+\begin{exmpl}
+	{\tt cc -t -O -o unexpand.tos unexpand.c}
+\end{exmpl}
+Flag \name{-O} is not necessary but with this particular compiler
+you will probably find a disassembled code easier to follow.
+You may test the compiled executable on its own source.
+\begin{exmpl}
+	{\tt unexpand.tos <unexpand.c >output }
+\end{exmpl}
+In the first moment the program appears to work, but a closer examination
+of the \name{output} reveals that the indentation is not exactly right.
+Moreover, some lines start with a blank, followed by a tab, which is
+not really what was intended.
+There are also other problems.  Check yourself.
+The likely suspect will be an array \name{tabs} of tabstops filled by
+a function \name{settab()}.
+
+\subsection{The first bug}
+Start the program under \szadb\ control
+\begin{exmpl}
+	{\tt adb.ttp unexpand.tos}
+\end{exmpl}
+and set a breakpoint at \verb|settab+4|, just after {\tt link} instruction.
+Run the program with \verb|:c ; $C|. This will produce the following
+display
+\readexample{bcktrace.exm}
+In the absence of better information all arguments 
+shown in the stack backtrace are assumed to be two bytes wide.  
+We know from the source that \name{settab()} actualy
+expects one pointer.
+Confirm that it got a right one by putting it together from two halfs
+and using the request \verb|68bb4=p| to print it as the symbol.
+You should see \verb|_tabs| in response.
+To continue execution of the current function 
+till it returns to its caller, use {\tt :f} which stands for {\tt :finish}.
+
+It is clear from lines 30 and 35 that the first tabstop in
+\verb|_tabs| is expected to be on a position \hbox{{\tt TABSTOP - 1}}.
+Dumping some initial fragment of the just initialized array 
+we see the following:
+\readexample{tabs.exm}
+This is clearly wrong and one bug becomes obvious.
+To repair it line 59 should be changed to
+\begin{exmpl}
+	\verb|for (i = 1; i <= MAXLIN; i++) {...}|
+\end{exmpl}
+
+\subsection{\ldots{}and the other one}
+
+The second bug is harder to spot, since for most of test inputs our
+program will work correctly.
+This is a typical example of a program broken for boundary conditions.
+To make it easier to track the problem set
+\name{MAXLIN} to some small integer (around 10 should be good),
+recompile the program, restart the debugging session and set a breakpoint
+at \verb|main+28|, just after a character was read.
+Set this breakpoint with a count and a request 
+to show a received character with
+\begin{exmpl}
+	{\tt main+28,5:b <d0=cx}
+\end{exmpl}
+With carefuly chosen input this will show where you are in the
+program and will skip unnecessary stops in the same time.
+You have to provide an input by typing it yourself.
+Remember that to repeat the last command  {\tt :c} it is enough to hit
+\key{Return}.
+For execution defaults \szadb\ will use the most recently typed command
+even if some other requests were executed by breakpoints.
+
+In order to see how the received character is processed you can single step
+with \name{:s}, which will follow program execution.
+The request \name{:n} will single step like \name{:s} but will
+execute function calls at full speed and so have the
+effect of stepping over them. Breakpoints set on skipped
+levels still will be obeyed.
+
+Tracing some tests inputs with the value of the variable \name{col} around
+\name{MAXLIN} should reveal the second error soon enough.  If you
+want to try it yourself, do not read further.
+
+Looking at line 17 we find a sharp less-than inequality in the test. It should
+be replaced by a less-than-equal-to. Otherwise, when the value of col
+equals MAXLIN, and your input is "right", the program is trying to read, in
+lines 28 and 31, from the location \verb|&tabs[col]|,
+which is one past the end of the array.
+The remaining analysis of this bug is left as an exercise to the reader.
+
+
+\subsection{Breaking out}
+
+Another stepping command is the \name{:j} jump request.  Its purpose
+it to short-circuit loops.  It behaves exactly like \name{:n} in that
+it skips-over function calls but unlike the \name{:n} request which
+follows branch instructions, the \name{:j} will place a temporary
+breakpoint at the instruction immediately following the current
+instruction in memory.  Think of \name{:n} as step-next-logical
+instruction and \name{:j} as step-next-physical instruction.  The idea
+is that you only use \name{:j} to step-out of loops where you are
+sitting on the loop-back branch.
+\readexample{jumpone.exm}
+In the example above, if you are sitting on the \name{bnz} instruction and you
+wish to execute the remainder of the loop at full speed then you use the
+\name{:j}, which places a temporary breakpoint at the location \name{.end}.
+However care
+must be taken when using this command because it is possible that the 
+flow-of-control never reaches the temporary breakpoint.
+\readexample{jumptwo.exm}
+This is a case where NOT to use the \name{:j} command. 
+Basically to use the \name{:j}
+request you should know how your C compiler sets up its loops or where your
+assembler code is meant to go. It is sometime a good idea to put a safety
+breakpoint somewhere you know you will end up.
+
+Because of the unusual nature of the \name{:j} request,
+it will not autorepeat if the next command is just a \key{return} key. 
+Instead \name{:n} is performed. Also it is
+also considered a variant of \name{:n} when attaching execution requests to
+stepping commands (see further down).
+
+It should be also mentioned that all stepping commands have upper case
+counterparts, which are noisier. When used they return the a full register
+display after the step (\name{:S} is like doing \verb|:s;$r|).

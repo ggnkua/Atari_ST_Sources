@@ -1,0 +1,43 @@
+
+
+
+
+
+
+
+***************************************
+          M O T E L S O F T
+           TROPIC-FREEWARE
+
+        BREITMAIER & MUNTER GbR
+             MARKUSPLATZ 3
+           7000 STUTTGART 1
+
+***************************************
+
+   DIE AUF DIESER DISK ENTHALTENEN 
+  PROGRAMME SIND REINE HILFSPROGRAMME
+ FšR GFA 3.0 PROGRAMMIERER (ADVENTURE)
+       MIT EINIGER ERFAHRUNG !
+
+    ES HANDELT SICH DABEI UM KEINEN
+          ADVENTURE-CREATOR !
+
+    IHR PROGRAMM MšSSEN SIE SELBST 
+ ERSTELLEN - WOBEI IHNEN DIE EDITOREN
+  (HOFFENTLICH) HILFREICH ZUR SEITE
+               STEHEN
+
+     ALLE EDITOREN SCHREIBEN EINE
+  EINLESEROUTINE FšR IHR PROGRAMM IM
+       LST-FORMAT AUF DISKETTE
+
+      DIE AUSWERTUNG  DER DATEN
+          MšSSEN SIE JEDOCH
+        SELBST PROGRAMMIEREN
+
+**************************************** 
+
+
+
+
