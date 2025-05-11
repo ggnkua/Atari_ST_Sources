@@ -1,0 +1,1070 @@
+
+
+File: internals,  Node: Incompatibilities,  Next: Extensions,  Prev: Trouble,  Up: Top
+
+Incompatibilities of GNU CC
+***************************
+
+There are several noteworthy incompatibilities between GNU C and most
+existing (non-ANSI) versions of C.
+
+Ultimately our intention is that the `-traditional' option will eliminate
+most of these incompatibilities by telling GNU C to behave like the other C
+compilers.
+
+   * GNU CC normally makes string constants read-only.  If several
+     identical-looking string constants are used, GNU CC stores only one
+     copy of the string.
+
+     One consequence is that you cannot call `mktemp' with a string
+     constant argument.  The function `mktemp' always alters the string its
+     argument points to.
+
+     Another consequence is that `sscanf' does not work on some systems
+     when passed a string constant as its format control string.  This is
+     because `sscanf' incorrectly tries to write into the string constant.
+
+     The best solution to these problems is to change the program to use
+     `char'-array variables with initialization strings for these purposes
+     instead of string constants.  But if this is not possible, you can use
+     the `-fwritable-strings' flag, which directs GNU CC to handle string
+     constants the same way most C compilers do.
+
+   * GNU CC does not substitute macro arguments when they appear inside of
+     string constants.  For example, the following macro in GNU CC
+
+          #define foo(a) "a"
+
+     will produce output `"a"' regardless of what the argument A is.
+
+     The `-traditional' option directs GNU CC to handle such cases (among
+     others) in the old-fashioned (non-ANSI) fashion.
+
+   * When you use `setjmp' and `longjmp', the only automatic variables
+     guaranteed to remain valid are those declared `volatile'.  This is a
+     consequence of automatic register allocation.  Consider this function:
+
+          jmp_buf j;
+          
+          foo ()
+          {
+            int a, b;
+          
+            a = fun1 ();
+            if (setjmp (j))
+              return a;
+          
+            a = fun2 ();
+            /* `longjmp (j)' may be occur in `fun3'. */
+            return a + fun3 ();
+          }
+
+     Here `a' may or may not be restored to its first value when the
+     `longjmp' occurs.  If `a' is allocated in a register, then its first
+     value is restored; otherwise, it keeps the last value stored in it.
+
+     If you use the `-W' option with the `-O' option, you will get a
+     warning when GNU CC thinks such a problem might be possible.
+
+   * Declarations of external variables and functions within a block apply
+     only to the block containing the declaration.  In other words, they
+     have the same scope as any other declaration in the same place.
+
+     In some other C compilers, a `extern' declaration affects all the rest
+     of the file even if it happens within a block.
+
+     The `-traditional' option directs GNU C to treat all `extern'
+     declarations as global, like traditional compilers.
+
+   * In traditional C, you can combine `long', etc., with a typedef name,
+     as shown here:
+
+          typedef int foo;
+          typedef long foo bar;
+
+     In ANSI C, this is not allowed: `long' and other type modifiers
+     require an explicit `int'.  Because this criterion is expressed by
+     Bison grammar rules rather than C code, the `-traditional' flag cannot
+     alter it.
+
+   * When compiling functions that return structures or unions, GNU CC
+     output code uses a method different from that used on most versions of
+     Unix.  As a result, code compiled with GNU CC cannot call a
+     structure-returning function compiled with PCC, and vice versa.
+
+     The method used by GCC is as follows: a structure or union which is 1,
+     2, 4 or 8 bytes long is returned like a scalar.  A structure or union
+     with any other size is stored into an address supplied by the caller
+     in a special, fixed register.
+
+     PCC usually handles all sizes of structures and unions by returning
+     the address of a block of static storage containing the value.  This
+     method is not used in GCC because it is slower and nonreentrant.
+
+     On systems where PCC works this way, you may be able to make
+     GCC-compiled code call such functions that were compiled with PCC by
+     declaring them to return a pointer to the structure or union instead
+     of the structure or union itself.  For example, instead of this:
+
+          struct foo nextfoo ();
+
+     write this:
+
+          struct foo *nextfoo ();
+          #define nextfoo *nextfoo
+
+     (Note that this assumes you are using the GNU preprocessor and not
+     `-traditional', so that the ANSI antirecursion rules for macro
+     expansions are effective.)
+
+
+File: internals,  Node: Extensions,  Next: Bugs,  Prev: Incompatibilities,  Up: Top
+
+GNU Extensions to the C Language
+********************************
+
+GNU C provides several language features not found in ANSI standard C. 
+(The `-pedantic' option directs GNU CC to print a warning message if any of
+these features is used.)  To test for the availability of these features in
+conditional compilation, check for a predefined macro `__GNUC__', which is
+always defined under GNU CC.
+
+* Menu:
+
+* Statement Exprs::     Putting statements and declarations inside expressions.
+* Naming Types::        Giving a name to the type of some expression.
+* Typeof::		`typeof': referring to the type of an expression.
+* Lvalues::		Using `?:', `,' and casts in lvalues.
+* Conditionals::	Omitting the middle operand of a `?:' expression.
+* Zero-Length::		Zero-length arrays.
+* Variable-Length::	Arrays whose length is computed at run time.
+* Subscripting::	Any array can be subscripted, even if not an lvalue.
+* Pointer Arith::	Arithmetic on `void'-pointers and function pointers.
+* Constructors::	Constructor expressions give structures, unions
+			 or arrays as values.
+* Dollar Signs::        Dollar sign is allowed in identifiers.
+* Alignment::           Inquiring about the alignment of a type or variable.
+* Inline::              Defining inline functions (as fast as macros).
+* Extended Asm::	Assembler instructions with C expressions as operands.
+			 (With them you can define ``built-in'' functions.)
+* Asm Labels::		Specifying the assembler name to use for a C symbol.
+
+
+
+File: internals,  Node: Statement Exprs,  Next: Naming Types,  Prev: Extensions,  Up: Extensions
+
+Statements and Declarations inside of Expressions
+=================================================
+
+A compound statement in parentheses may appear inside an expression in GNU
+C.  This allows you to declare variables within an expression.  For example:
+
+     ({ int y = foo (); int z;
+        if (y > 0) z = y;
+        else z = - y;
+        z; })
+
+is a valid (though slightly more complex than necessary) expression for the
+absolute value of `foo ()'.
+
+This feature is especially useful in making macro definitions ``safe'' (so
+that they evaluate each operand exactly once).  For example, the
+``maximum'' function is commonly defined as a macro in standard C as follows:
+
+     #define max(a,b) ((a) > (b) ? (a) : (b))
+
+But this definition computes either A or B twice, with bad results if the
+operand has side effects.  In GNU C, if you know the type of the operands
+(here let's assume `int'), you can define the macro safely as follows:
+
+     #define maxint(a,b) \
+       ({int _a = (a), _b = (b); _a > _b ? _a : _b; })
+
+Embedded statements are not allowed in constant expressions, such as the
+value of an enumeration constant, the width of a bit field, or the initial
+value of a static variable.
+
+If you don't know the type of the operand, you can still do this, but you
+must use `typeof' (*Note Typeof::.) or type naming (*Note Naming Types::.).
+
+
+File: internals,  Node: Naming Types,  Next: Typeof,  Prev: Statement Exprs,  Up: Extensions
+
+Naming an Expression's Type
+===========================
+
+You can give a name to the type of an expression using a `typedef'
+declaration with an initializer.  Here is how to define NAME as a type name
+for the type of EXP:
+
+     typedef NAME = EXP;
+
+This is useful in conjunction with the statements-within-expressions
+feature.  Here is how the two together can be used to define a safe
+``maximum'' macro that operates on any arithmetic type:
+
+     #define max(a,b) \
+       ({typedef _ta = (a), _tb = (b);  \
+         _ta _a = (a); _tb _b = (b);     \
+         _a > _b ? _a : _b; })
+
+The reason for using names that start with underscores for the local
+variables is to avoid conflicts with variable names that occur within the
+expressions that are substituted for `a' and `b'.  Eventually we hope to
+design a new form of declaration syntax that allows you to declare
+variables whose scopes start only after their initializers; this will be a
+more reliable way to prevent such conflicts.
+
+
+File: internals,  Node: Typeof,  Next: Lvalues,  Prev: Naming Types,  Up: Extensions
+
+Referring to a Type with `typeof'
+=================================
+
+Another way to refer to the type of an expression is with `typeof'.  The
+syntax of using of this keyword looks like `sizeof', but the construct acts
+semantically like a type name defined with `typedef'.
+
+There are two ways of writing the argument to `typeof': with an expression
+or with a type.  Here is an example with an expression:
+
+     typeof (x[0](1))
+
+This assumes that `x' is an array of functions; the type described is that
+of the values of the functions.
+
+Here is an example with a typename as the argument:
+
+     typeof (int *)
+
+Here the type described is that of pointers to `int'.
+
+A `typeof'-construct can be used anywhere a typedef name could be used. 
+For example, you can use it in a declaration, in a cast, or inside of
+`sizeof' or `typeof'.
+
+   * This declares `y' with the type of what `x' points to.
+
+          typeof (*x) y;
+
+   * This declares `y' as an array of such values.
+
+          typeof (*x) y[4];
+
+   * This declares `y' as an array of pointers to characters:
+
+          typeof (typeof (char *)[4]) y;
+
+     It is equivalent to the following traditional C declaration:
+
+          char *y[4];
+
+     To see the meaning of the declaration using `typeof', and why it might
+     be a useful way to write, let's rewrite it with these macros:
+
+          #define pointer(T)  typeof(T *)
+          #define array(T, N) typeof(T [N])
+
+     Now the declaration can be rewritten this way:
+
+          array (pointer (char), 4) y;
+
+     Thus, `array (pointer (char), 4)' is the type of arrays of 4 pointers
+     to `char'.
+
+
+File: internals,  Node: Lvalues,  Next: Conditionals,  Prev: Typeof,  Up: Extensions
+
+Generalized Lvalues
+===================
+
+Compound expressions, conditional expressions and casts are allowed as
+lvalues provided their operands are lvalues.  This means that you can take
+their addresses or store values into them.
+
+For example, a compound expression can be assigned, provided the last
+expression in the sequence is an lvalue.  These two expressions are
+equivalent:
+
+     (a, b) += 5
+     a, (b += 5)
+
+Similarly, the address of the compound expression can be taken.  These two
+expressions are equivalent:
+
+     &(a, b)
+     a, &b
+
+A conditional expression is a valid lvalue if its type is not void and the
+true and false branches are both valid lvalues.  For example, these two
+expressions are equivalent:
+
+     (a ? b : c) = 5
+     (a ? b = 5 : (c = 5))
+
+A cast is a valid lvalue if its operand is valid.  Taking the address of
+the cast is the same as taking the address without a cast, except for the
+type of the result.  For example, these two expressions are equivalent (but
+the second may be valid when the type of `a' does not permit a cast to `int
+*').
+
+     &(int *)a
+     (int **)&a
+
+A simple assignment whose left-hand side is a cast works by converting the
+right-hand side first to the specified type, then to the type of the inner
+left-hand side expression.  After this is stored, the value is converter
+back to the specified type to become the value of the assignment.  Thus, if
+`a' has type `char *', the following two expressions are equivalent:
+
+     (int)a = 5
+     (int)(a = (char *)5)
+
+An assignment-with-arithmetic operation such as `+=' applied to a cast
+performs the arithmetic using the type resulting from the cast, and then
+continues as in the previous case.  Therefore, these two expressions are
+equivalent:
+
+     (int)a += 5
+     (int)(a = (char *) ((int)a + 5))
+
+
+File: internals,  Node: Conditionals,  Next: Zero-Length,  Prev: Lvalues,  Up: Extensions
+
+Conditional Expressions with Omitted Middle-Operands
+====================================================
+
+The middle operand in a conditional expression may be omitted.  Then if the
+first operand is nonzero, its value is the value of the conditional
+expression.
+
+Therefore, the expression
+
+     x ? : y
+
+has the value of `x' if that is nonzero; otherwise, the value of `y'.
+
+This example is perfectly equivalent to
+
+     x ? x : y
+
+In this simple case, the ability to omit the middle operand is not
+especially useful.  When it becomes useful is when the first operand does,
+or may (if it is a macro argument), contain a side effect.  Then repeating
+the operand in the middle would perform the side effect twice.  Omitting
+the middle operand uses the value already computed without the undesirable
+effects of recomputing it.
+
+
+File: internals,  Node: Zero-Length,  Next: Variable-Length,  Prev: Conditionals,  Up: Extensions
+
+Arrays of Length Zero
+=====================
+
+Zero-length arrays are allowed in GNU C.  They are very useful as the last
+element of a structure which is really a header for a variable-length object:
+
+     struct line {
+       int length;
+       char contents[0];
+     };
+     
+     {
+       struct line *thisline 
+         = (struct line *) malloc (sizeof (struct line) + this_length);
+       thisline->length = thislength;
+     }
+
+In standard C, you would have to give `contents' a length of 1, which means
+either you waste space or complicate the argument to `malloc'.
+
+
+File: internals,  Node: Variable-Length,  Next: Subscripting,  Prev: Zero-Length,  Up: Extensions
+
+Arrays of Variable Length
+=========================
+
+Variable-length automatic arrays are allowed in GNU C.  These arrays are
+declared like any other automatic arrays, but with a length that is not a
+constant expression.  The storage is allocated at that time and deallocated
+when the brace-level is exited.  For example:
+
+     FILE *concat_fopen (char *s1, char *s2, char *mode)
+     {
+       char str[strlen (s1) + strlen (s2) + 1];
+       strcpy (str, s1);
+       strcat (str, s2);
+       return fopen (str, mode);
+     }
+
+You can also define structure types containing variable-length arrays, and
+use them even for arguments or function values, as shown here:
+
+     int foo;
+     
+     struct entry
+     {
+       char data[foo];
+     };
+     
+     struct entry
+     tester (struct entry arg)
+     {
+       struct entry new;
+       int i;
+       for (i = 0; i < foo; i++)
+         new.data[i] = arg.data[i] + 1;
+       return new;
+     }
+
+(Eventually there will be a way to say that the size of the array is
+another member of the same structure.)
+
+The length of an array is computed on entry to the brace-level where the
+array is declared and is remembered for the scope of the array in case you
+access it with `sizeof'.
+
+Jumping or breaking out of the scope of the array name will also deallocate
+the storage.  Jumping into the scope is not allowed; you will get an error
+message for it.
+
+You can use the function `alloca' to get an effect much like
+variable-length arrays.  The function `alloca' is available in many other C
+implementations (but not in all).  On the other hand, variable-length
+arrays are more elegant.
+
+There are other differences between these two methods.  Space allocated
+with `alloca' exists until the containing *function* returns.  The space
+for a variable-length array is deallocated as soon as the array name's
+scope ends.  (If you use both variable-length arrays and `alloca' in the
+same function, deallocation of a variable-length array will also deallocate
+anything more recently allocated with `alloca'.)
+
+
+File: internals,  Node: Subscripting,  Next: Pointer Arith,  Prev: Variable-Length,  Up: Extensions
+
+Non-Lvalue Arrays May Have Subscripts
+=====================================
+
+Subscripting is allowed on arrays that are not lvalues, even though the
+unary `&' operator is not.  For example, this is valid in GNU C though not
+valid in other C dialects:
+
+     struct foo {int a[4];};
+     
+     struct foo f();
+     
+     bar (int index)
+     {
+       return f().a[index];
+     }
+
+
+File: internals,  Node: Pointer Arith,  Next: Initializers,  Prev: Subscripting,  Up: Extensions
+
+Arithmetic on `void'-Pointers and Function Pointers
+===================================================
+
+In GNU C, addition and subtraction operations are supported on pointers to
+`void' and on pointers to functions.  This is done by treating the size of
+a `void' or of a function as 1.
+
+A consequence of this is that `sizeof' is also allowed on `void' and on
+function types, and returns 1.
+
+
+File: internals,  Node: Initializers,  Next: Constructors,  Prev: Pointer Arith,  Up: Extensions
+
+Non-Constant Initializers
+=========================
+
+The elements of an aggregate initializer are not required to be constant
+expressions in GNU C.  Here is an example of an initializer with run-time
+varying elements:
+
+     foo (float f, float g)
+     {
+       float beat_freqs[2] = { f-g, f+g };
+       ...
+     }
+
+
+File: internals,  Node: Constructors,  Next: Dollar Signs,  Prev: Initializers,  Up: Extensions
+
+Constructor Expressions
+=======================
+
+GNU C supports constructor expressions.  A constructor looks like a cast
+containing an initializer.  Its value is an object of the type specified in
+the cast, containing the elements specified in the initializer.  The type
+must be a structure, union or array type.
+
+Assume that `struct foo' and `structure' are declared as shown:
+
+     struct foo {int a; char b[2];} structure;
+
+Here is an example of constructing a `struct foo' with a constructor:
+
+     structure = ((struct foo) {x + y, 'a', 0});
+
+This is equivalent to writing the following:
+
+     {
+       struct foo temp = {x + y, 'a', 0};
+       structure = temp;
+     }
+
+You can also construct an array.  If all the elements of the constructor
+are (made up of) simple constant expressions, suitable for use in
+initializers, then the constructor is an lvalue and can be coerced to a
+pointer to its first element, as shown here:
+
+     char **foo = (char *[]) { "x", "y", "z" };
+
+Array constructors whose elements are not simple constants are not very
+useful, because the constructor is not an lvalue.  There are only two valid
+ways to use it: to subscript it, or initialize an array variable with it. 
+The former is probably slower than a `switch' statement, while the latter
+does the same thing an ordinary C initializer would do.
+
+     output = ((int[]) { 2, x, 28 }) [input];
+
+
+File: internals,  Node: Dollar Signs,  Next: Alignment,  Prev: Constructors,  Up: Extensions
+
+Dollar Signs in Identifier Names
+================================
+
+In GNU C, you may use dollar signs in identifier names.  This is because
+many traditional C implementations allow such identifiers.
+
+
+File: internals,  Node: Alignment,  Next: Inline,  Prev: Dollar Signs,  Up: Extensions
+
+Inquiring about the Alignment of a Type or Variable
+===================================================
+
+The keyword `__alignof' allows you to inquire about how an object is
+aligned, or the minimum alignment usually required by a type.  Its syntax
+is just like `sizeof'.
+
+For example, if the target machine requires a `double' value to be aligned
+on an 8-byte boundary, then `__alignof (double)' is 8.  This is true on
+many RISC machines.  On more traditional machine designs, `__alignof
+(double)' is 4 or even 2.
+
+Some machines never actually require alignment; they allow reference to any
+data type even at an odd addresses.  For these machines, `__alignof'
+reports the *recommended* alignment of a type.
+
+When the operand of `__alignof' is an lvalue rather than a type, the value
+is the largest alignment that the lvalue is known to have.  It may have
+this alignment as a result of its data type, or because it is part of a
+structure and inherits alignment from that structure. For example, after
+this declaration:
+
+     struct foo { int x; char y; } foo1;
+
+the value of `__alignof (foo1.y)' is probably 2 or 4, the same as
+`__alignof (int)', even though the data type of `foo1.y' does not itself
+demand any alignment.
+
+
+File: internals,  Node: Inline,  Next: Extended Asm,  Prev: Alignment,  Up: Extensions
+
+An Inline Function is As Fast As a Macro
+========================================
+
+By declaring a function `inline', you can direct GNU CC to integrate that
+function's code into the code for its callers.  This makes execution faster
+by eliminating the function-call overhead; in addition, if any of the
+actual argument values are constant, their known values may permit
+simplifications at compile time so that not all of the inline function's
+code needs to be included.
+
+To declare a function inline, use the `inline' keyword in its declaration,
+like this:
+
+     inline int
+     inc (int *a)
+     {
+       (*a)++;
+     }
+
+You can also make all ``simple enough'' functions inline with the option
+`-finline-functions'.  Note that certain usages in a function definition
+can make it unsuitable for inline substitution.
+
+When a function is both inline and `static', if all calls to the function
+are integrated into the caller, then the function's own assembler code is
+never referenced.  In this case, GNU CC does not actually output assembler
+code for the function, unless you specify the option
+`-fkeep-inline-functions'.  Some calls cannot be integrated for various
+reasons (in particular, calls that precede the function's definition cannot
+be integrated, and neither can recursive calls within the definition).  If
+there is a nonintegrated call, then the function is compiled to assembler
+code as usual.
+
+When an inline function is not `static', then the compiler must assume that
+there may be calls from other source files; since a global symbol can be
+defined only once in any program, the function must not be defined in the
+other source files, so the calls therein cannot be integrated.  Therefore,
+a non-`static' inline function is always compiled on its own in the usual
+fashion.
+
+
+File: internals,  Node: Extended Asm,  Next: Asm Labels,  Prev: Inline,  Up: Extensions
+
+Assembler Instructions with C Expression Operands
+=================================================
+
+In an assembler instruction using `asm', you can now specify the operands
+of the instruction using C expressions.  This means no more guessing which
+registers or memory locations will contain the data you want to use.
+
+You must specify an assembler instruction template much like what appears
+in a machine description, plus an operand constraint string for each operand.
+
+For example, here is how to use the 68881's `fsinx' instruction:
+
+     asm ("fsinx %1,%0" : "=f" (result) : "f" (angle));
+
+Here `angle' is the C expression for the input operand while `result' is
+that of the output operand.  Each has `"f"' as its operand constraint,
+saying that a floating-point register is required.  The constraints use the
+same language used in the machine description (*Note Constraints::.).
+
+Each operand is described by an operand-constraint string followed by the C
+expression in parentheses.  A colon separates the assembler template from
+the first output operand, and another separates the last output operand
+from the first input, if any.  Commas separate output operands and separate
+inputs.  The number of operands is limited to the maximum number of
+operands in any instruction pattern in the machine description.
+
+Output operand expressions must be lvalues, and there must be at least one
+of them.  The compiler can check this.  The input operands need not be
+lvalues, and there need not be any.  The compiler cannot check whether the
+operands have data types that are reasonable for the instruction being
+executed.
+
+The output operands must be write-only; GNU CC will assume that the values
+in these operands before the instruction are dead and need not be
+generated.  For an operand that is read-write, you must logically split its
+function into two separate operands, one input operand and one write-only
+output operand.  The connection between them is expressed by constraints
+which say they need to be in the same location when the instruction
+executes.  You can use the same C expression for both operands, or
+different expressions.  For example, here we write the (fictitious)
+`combine' instruction with `bar' as its read-only source operand and `foo'
+as its read-write destination:
+
+     asm ("combine %2,%0" : "=r" (foo) : "0" (foo), "g" (bar));
+
+The constraint `"0"' for operand 1 says that it must occupy the same
+location as operand 0.  Therefore it is not necessary to substitute operand
+1 into the assembler code output.
+
+Usually the most convenient way to use these `asm' instructions is to
+encapsulate them in macros that look like functions.  For example,
+
+     #define sin(x)       \
+     ({ double __value, __arg = (x);   \
+        asm ("fsinx %1,%0": "=f" (__value): "f" (__arg));  \
+        __value; })
+
+Here the variable `__arg' is used to make sure that the instruction
+operates on a proper `double' value, and to accept only those arguments `x'
+which can convert automatically to a `double'.
+
+Another way to make sure the instruction operates on the correct data type
+is to use a cast in the `asm'.  This is different from using a variable
+`__arg' in that it converts more different types.  For example, if the
+desired type were `int', casting the argument to `int' would accept a
+pointer with no complaint, while assigning the argument to an `int'
+variable named `__arg' would warn about using a pointer unless the caller
+explicitly casts it.
+
+GNU CC assumes for optimization purposes that these instructions have no
+side effects except to change the output operands.  This does not mean that
+instructions with a side effect cannot be used, but you must be careful,
+because the compiler may eliminate them if the output operands aren't used,
+or move them out of loops, or replace two with one if they constitute a
+common subexpression.  Also, if your instruction does have a side effect on
+a variable that otherwise appears not to change, the old value of the
+variable may be reused later if it happens to be found in a register.
+
+You can prevent an `asm' instruction from being deleted, moved or combined
+by writing the keyword `volatile' after the `asm'.  For example:
+
+     #define set_priority(x)  \
+     asm volatile ("set_priority %1":    \
+                   "=m" (*(char *)0): "g" (x))
+
+Note that we have supplied an output operand which is not actually used in
+the instruction.  This is because `asm' requires at least one output
+operand.  This requirement exists for internal implementation reasons and
+we might be able to relax it in the future.
+
+In this case output operand has the additional benefit effect of giving the
+appearance of writing in memory.  As a result, GNU CC will assume that data
+previously fetched from memory must be fetched again if needed again later.
+ This may be desirable if you have not employed the `volatile' keyword on
+all the variable declarations that ought to have it.
+
+
+File: internals,  Node: Asm Labels,  Prev: Extended Asm,  Up: Extensions
+
+Controlling Names Used in Assembler Code
+========================================
+
+You can specify the name to be used in the assembler code for a C function
+or variable by writing the `asm' keyword after the declarator as follows:
+
+     int foo asm ("myfoo") = 2;
+
+This specifies that the name to be used for the variable `foo' in the
+assembler code should be `myfoo' rather than the usual `_foo'.
+
+On systems where an underscore is normally prepended to the name of a C
+function or variable, this feature allows you to define names for the
+linker that do not start with an underscore.
+
+You cannot use `asm' in this way in a function *definition*; but you can
+get the same effect by writing a declaration for the function before its
+definition and putting `asm' there, like this:
+
+     extern func () asm ("FUNC");
+     
+     func (x, y)
+          int x, y;
+     ...
+
+ It is up to you to make sure that the assembler names you choose do not
+conflict with any other assembler symbols.  Also, you must not use a
+register name; that would produce completely invalid assembler code.  GNU
+CC does not as yet have the ability to store static variables in registers.
+ Perhaps that will be added.
+
+
+File: internals,  Node: Bugs,  Next: Portability,  Prev: Extensions,  Up: Top
+
+Reporting Bugs
+**************
+
+Your bug reports play an essential role in making GNU CC reliable.
+
+Reporting a bug may help you by bringing a solution to your problem, or it
+may not.  But in any case the important function of a bug report is to help
+the entire community by making the next version of GNU CC work better.  Bug
+reports are your contribution to the maintenance of GNU CC.
+
+In order for a bug report to serve its purpose, you must include the
+information that makes for fixing the bug.
+
+* Menu:
+
+* Criteria:  Bug Criteria.   Have you really found a bug?
+* Reporting: Bug Reporting.  How to report a bug effectively.
+
+
+
+File: internals,  Node: Bug Criteria,  Next: Bug Reporting,  Prev: Bugs,  Up: Bugs
+
+Have You Found a Bug?
+=====================
+
+If you are not sure whether you have found a bug, here are some guidelines:
+
+   * If the compiler gets a fatal signal, for any input whatever, that is a
+     compiler bug.  Reliable compilers never crash.
+
+   * If the compiler produces invalid assembly code, for any input whatever
+     (except an `asm' statement), that is a compiler bug, unless the
+     compiler reports errors (not just warnings) which would ordinarily
+     prevent the assembler from being run.
+
+   * If the compiler produces valid assembly code that does not correctly
+     execute the input source code, that is a compiler bug.
+
+     However, you must double-check to make sure, because you may have run
+     into an incompatibility between GNU C and traditional C (*Note
+     Incompatibilities::.).  These incompatibilities might be considered
+     bugs, but they are inescapable consequences of valuable features.
+
+     Or you may have a program whose behavior is undefined, which happened
+     by chance to give the desired results with another C compiler.
+
+     For example, in many nonoptimizing compilers, you can write `x;' at
+     the end of a function instead of `return x;', with the same results. 
+     But the value of the function is undefined if `return' is omitted; it
+     is not a bug when GNU CC produces different results.
+
+     Problems often result from expressions with two increment operators,
+     as in `f (*p++, *p++)'.  Your previous compiler might have interpreted
+     that expression the way you intended; GNU CC might interpret it
+     another way; neither compiler is wrong.
+
+     After you have localized the error to a single source line, it should
+     be easy to check for these things.  If your program is correct and
+     well defined, you have found a compiler bug.
+
+   * If the compiler produces an error message for valid input, that is a
+     compiler bug.
+
+     Note that the following is not valid input, and the error message for
+     it is not a bug:
+
+          int foo (char);
+          
+          int
+          foo (x)
+               char x;
+          { ... }
+
+     The prototype says to pass a `char', while the definition says to pass
+     an `int' and treat the value as a `char'.  This is what the ANSI
+     standard says, and it makes sense.
+
+   * If the compiler does not produce an error message for invalid input,
+     that is a compiler bug.  However, you should note that your idea of
+     ``invalid input'' might be my idea of ``an extension'' or ``support
+     for traditional practice''.
+
+   * If you are an experienced user of C compilers, your suggestions for
+     improvement of GNU CC are welcome in any case.
+
+
+File: internals,  Node: Bug Reporting,  Prev: Bug Criteria,  Up: Bugs
+
+How to Report Bugs
+==================
+
+Send bug reports for GNU C to one of these addresses:
+
+     bug-gcc@prep.ai.mit.edu
+     {ucbvax|mit-eddie|uunet}!prep.ai.mit.edu!bug-gcc
+
+As a last resort, snail them to:
+
+     GNU Compiler Bugs
+     545 Tech Sq
+     Cambridge, MA 02139
+
+The fundamental principle of reporting bugs usefully is this: *report all
+the facts*.  If you are not sure whether to mention a fact or leave it out,
+mention it!
+
+Often people omit facts because they think they know what causes the
+problem and they conclude that some details don't matter.  Thus, you might
+assume that the name of the variable you use in an example does not matter.
+ Well, probably it doesn't, but one cannot be sure.  Perhaps the bug is a
+stray memory reference which happens to fetch from the location where that
+name is stored in memory; perhaps, if the name were different, the contents
+of that location would fool the compiler into doing the right thing despite
+the bug.  Play it safe and give an exact example.
+
+If you want to enable me to fix the bug, you should include all these things:
+
+   * The version of GNU CC.  You can get this by running it with the `-v'
+     option.
+
+     Without this, I won't know whether there is any point in looking for
+     the bug in the current version of GNU CC.
+
+   * A complete input file that will reproduce the bug.  If the bug is in
+     the C preprocessor, send me a source file and any header files that it
+     requires.  If the bug is in the compiler proper (`cc1'), run your
+     source file through the C preprocessor by doing `gcc -E SOURCEFILE >
+     OUTFILE', then include the contents of OUTFILE in the bug report. 
+     (Any `-I', `-D' or `-U' options that you used in actual compilation
+     should also be used when doing this.)
+
+     A single statement is not enough of an example.  In order to compile
+     it, it must be embedded in a function definition; and the bug might
+     depend on the details of how this is done.
+
+     Without a real example I can compile, all I can do about your bug
+     report is wish you luck.  It would be futile to try to guess how to
+     provoke the bug.  For example, bugs in register allocation and
+     reloading frequently depend on every little detail of the function
+     they happen in.
+
+   * The command arguments you gave GNU CC to compile that example and
+     observe the bug.  For example, did you use `-O'?  To guarantee you
+     won't omit something important, list them all.
+
+     If I were to try to guess the arguments, I would probably guess wrong
+     and then I would not encounter the bug.
+
+   * The names of the files that you used for `tm.h' and `md' when you
+     installed the compiler.
+
+   * The type of machine you are using, and the operating system name and
+     version number.
+
+   * A description of what behavior you observe that you believe is
+     incorrect.  For example, ``It gets a fatal signal,'' or, ``There is an
+     incorrect assembler instruction in the output.''
+
+     Of course, if the bug is that the compiler gets a fatal signal, then I
+     will certainly notice it.  But if the bug is incorrect output, I might
+     not notice unless it is glaringly wrong.  I won't study all the
+     assembler code from a 50-line C program just on the off chance that it
+     might be wrong.
+
+     Even if the problem you experience is a fatal signal, you should still
+     say so explicitly.  Suppose something strange is going on, such as,
+     your copy of the compiler is out of synch, or you have encountered a
+     bug in the C library on your system.  (This has happened!)  Your copy
+     might crash and mine would not.  If you told me to expect a crash,
+     then when mine fails to crash, I would know that the bug was not
+     happening for me.  If you had not told me to expect a crash, then I
+     would not be able to draw any conclusion from my observations.
+
+     In cases where GNU CC generates incorrect code, if you send me a small
+     complete sample program I will find the error myself by running the
+     program under a debugger.  If you send me a large example or a part of
+     a larger program, I cannot do this; you must debug the compiled
+     program and narrow the problem down to one source line.  Tell me which
+     source line it is, and what you believe is incorrect about the code
+     generated for that line.
+
+   * If you send me examples of output from GNU CC, please use `-g' when
+     you make them.  The debugging information includes source line numbers
+     which are essential for correlating the output with the input.
+
+   * If you wish to suggest changes to the GNU CC source, send me context
+     diffs.  If you even discuss something in the GNU CC source, refer to
+     it by context, not by line number.
+
+     The line numbers in my development sources don't match those in your
+     sources.  They won't tell me anything.
+
+Here are some things that are not necessary:
+
+   * A description of the envelope of the bug.
+
+     Often people who encounter a bug spend a lot of time investigating
+     which changes to the input file will make the bug go away and which
+     changes will not affect it.
+
+     This is often time consuming and not very useful, because the way I
+     will find the bug is by running a single example under the debugger
+     with breakpoints, not by pure deduction from a series of examples.
+
+     Of course, it can't hurt if you can find a simpler example that
+     triggers the same bug.  Errors in the output will be easier to spot,
+     running under the debugger will take less time, etc.  An easy way to
+     simplify an example is to delete all the function definitions except
+     the one where the bug occurs.  Those earlier in the file may be
+     replaced by external declarations.
+
+     However, simplification is not necessary; if you don't want to do
+     this, report the bug anyway.
+
+   * A patch for the bug.
+
+     A patch for the bug does help me if it is a good one.  But don't omit
+     the necessary information, such as the test case, because I might see
+     problems with your patch and decide to fix the problem another way.
+
+     Sometimes with a program as complicated as GNU CC it is very hard to
+     construct an example that will make the program go through a certain
+     point in the code.  If you don't send me the example, I won't be able
+     to verify that the bug is fixed.
+
+   * A guess about what the bug is or what it depends on.
+
+     Such guesses are usually wrong.  Even I can't guess right about such
+     things without using the debugger to find the facts.  They also don't
+     serve a useful purpose.
+
+
+File: internals,  Node: Portability,  Next: Interface,  Prev: Bugs,  Up: Top
+
+GNU CC and Portability
+**********************
+
+The main goal of GNU CC was to make a good, fast compiler for machines in
+the class that the GNU system aims to run on: 32-bit machines that address
+8-bit bytes and have several general registers.  Elegance, theoretical
+power and simplicity are only secondary.
+
+GNU CC gets most of the information about the target machine from a machine
+description which gives an algebraic formula for each of the machine's
+instructions.  This is a very clean way to describe the target.  But when
+the compiler needs information that is difficult to express in this
+fashion, I have not hesitated to define an ad-hoc parameter to the machine
+description.  The purpose of portability is to reduce the total work needed
+on the compiler; it was not of interest for its own sake.
+
+GNU CC does not contain machine dependent code, but it does contain code
+that depends on machine parameters such as endianness (whether the most
+significant byte has the highest or lowest address of the bytes in a word)
+and the availability of autoincrement addressing.  In the RTL-generation
+pass, it is often necessary to have multiple strategies for generating code
+for a particular kind of syntax tree, strategies that are usable for
+different combinations of parameters.  Often I have not tried to address
+all possible cases, but only the common ones or only the ones that I have
+encountered.  As a result, a new target may require additional strategies. 
+You will know if this happens because the compiler will call `abort'. 
+Fortunately, the new strategies can be added in a machine-independent
+fashion, and will affect only the target machines that need them.
+
+
+File: internals,  Node: Interface,  Next: Passes,  Prev: Portability,  Up: Top
+
+Interfacing to GNU CC Output
+****************************
+
+GNU CC is normally configured to use the same function calling convention
+normally in use on the target system.  This is done with the
+machine-description macros described (*Note Machine Macros::.).
+
+However, returning of structure and union values is done differently.  As a
+result, functions compiled with PCC returning such types cannot be called
+from code compiled with GNU CC, and vice versa.  This usually does not
+cause trouble because the Unix library routines don't return structures and
+unions.
+
+Structures and unions that are 1, 2, 4 or 8 bytes long are returned in the
+same registers used for `int' or `double' return values.  (GNU CC typically
+allocates variables of such types in registers also.)  Structures and
+unions of other sizes are returned by storing them into an address passed
+by the caller in a register.  This method is faster than the one normally
+used by PCC and is also reentrant.  The register used for passing the
+address is specified by the machine-description macro `STRUCT_VALUE_REGNUM'.
+
+GNU CC always passes arguments on the stack.  At some point it will be
+extended to pass arguments in registers, for machines which use that as the
+standard calling convention.  This will make it possible to use such a
+convention on other machines as well.  However, that would render it
+completely incompatible with PCC.  We will probably do this once we have a
+complete GNU system so we can compile the libraries with GNU CC.
+
+If you use `longjmp', beware of automatic variables.  ANSI C says that
+automatic variables that are not declared `volatile' have undefined values
+after a `longjmp'.  And this is all GNU CC promises to do, because it is
+very difficult to restore register variables correctly, and one of GNU CC's
+features is that it can put variables in registers without your asking it to.
+
+If you want a variable to be unaltered by `longjmp', and you don't want to
+write `volatile' because old C compilers don't accept it, just take the
+address of the variable.  If a variable's address is ever taken, even if
+just to compute it and ignore it, then the variable cannot go in a register:
+
+     {
+       int careful;
+       &careful;
+       ...
+     }
+
+Code compiled with GNU CC may call certain library routines.  The routines
+needed on the Vax and 68000 are in the file `gnulib.c'.  You must compile
+this file with the standard C compiler, not with GNU CC, and then link it
+with each program you compile with GNU CC.  (In actuality, many programs
+will not need it.)  The usual function call interface is used for calling
+the library routines.  Some standard parts of the C library, such as
+`bcopy', are also called automatically.
+
+

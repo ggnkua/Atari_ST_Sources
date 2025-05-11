@@ -1,0 +1,1184 @@
+$M 128000 $S> $F< $P< $%0 $*% $O3 $A2 $E$
+'
+REM #KEY ColdFire v4e|Classic 68K
+REM #IFK 0
+REM #BRK MA
+REM #EIK 1 ! ColdFire v4e
+REM #LIB ColdFire
+REM #EXT prx
+REM #EIK 2 ! Classic 68K
+REM #LIB 68000
+REM #EXT prg
+REM #FIK
+'
+IF FATAL
+  ~FORM_ALERT(1,"[1][ This version is not suited |for this CPU. Please get |the correct archive. ][ Ok ]")
+  @leave
+ENDIF
+IF ERR=8
+  ~FORM_ALERT(1,"[1][ Insuffisant or fragmented | memory ][ Ok ]")
+  @leave
+ELSE
+  init1
+  init2
+  main
+ENDIF
+'
+> PROCEDURE leave
+  @snd_stop
+  @snd_exit
+  @restore_colors
+  @close_win
+  @mxfree(palette_save%)
+  @mxfree(palette_work%)
+  FOR i&=1 TO img_nb_slots&
+    IF LONG{img_mfdb%(i&)}>0
+      @mxfree(LONG{img_mfdb%(i&)})
+    ENDIF
+  NEXT i&
+  @mxfree(mfdb_structure%)
+  IF ressource!
+    ~MENU_BAR(ressource_menu%,0)
+    ~RSRC_FREE()
+  ENDIF
+  QUIT
+RETURN
+'
+> PROCEDURE init1
+  '
+  IF A~I<0 ! appl_init() failed?
+    @leave
+  ENDIF
+  '
+  IF _B<8
+    ~FORM_ALERT(1,"[1][ Need at least 256 colors ][ Quit ]")
+    @leave
+  ENDIF
+  '
+  mx_mask%=@mx_mask
+  mxalloc!=(_GEMDOS>=&H19)
+  '
+  magic!=GETCOOKIE(CVL("MagX"))
+  mint!=(_MINT<>0) ! GETCOOKIE(CVL("MiNT"))
+  '
+  IF magic! OR mint!
+    naes!=TRUE
+  ELSE IF _AES>=&H399
+    naes!=TRUE
+  ELSE
+    naes!=FALSE
+  ENDIF
+  '
+  multi!=MULTITASK?
+  '
+  @declare
+  @declare_effect
+  IF mint!=FALSE
+    RESERVE 32000
+  ENDIF
+  @allocate
+  '
+  ~RSRC_FREE()
+  IF EXIST(ressource_file$)
+    IF RSRC_LOAD(ressource_file$)<>0
+      ~RSRC_GADDR(0,0,ressource_menu%)
+      ressource!=TRUE
+    ENDIF
+  ENDIF
+  '
+RETURN
+> PROCEDURE declare
+  general_path$=CURDIR$
+  '
+  application_path$=general_path$+"ALLGLORY.DAT\"
+  '
+  ressource_file$=general_path$+"ALLGLORY.RSC"
+  ressource!=FALSE
+  ressource_menu%=0
+  '
+  preferences_file$=general_path$+"VDI_FX.INF"
+  '
+  DIM boolean$(2)
+  boolean$(0)="FALSE"
+  boolean$(1)="TRUE"
+  '
+  bitplane_number&=_B
+  '
+  hand_win&=0
+  xd&=0
+  yd&=0
+  wd&=0
+  hd&=0
+  wx&=_DX
+  wy&=_DY
+  wl&=_DW
+  wh&=_DH
+  win!=FALSE
+  aff!=FALSE
+  '
+  ' number of slots for images pool
+  img_nb_slots&=40
+  '
+  ' MFDB and coord of the images
+  DIM img_mfdb%(img_nb_slots&)
+  DIM img_x&(img_nb_slots&),img_y&(img_nb_slots&)
+  DIM img_w&(img_nb_slots&),img_h&(img_nb_slots&)
+  '
+  ' pointer to loaded DGX file (group of DGI) or DGI file if not existing
+  dgx_adr%=0
+  dgx_buffer_len%=400000
+  old_dgx_filename$=""
+  '
+  ' number of slots for sounds pool
+  snd_nb_slots&=2
+  '
+  ' RAW sounds adresses
+  DIM snd_start%(snd_nb_slots&)
+  DIM snd_end%(snd_nb_slots&)
+  '
+  ' pixel<->palette index in 16 and 256 color mode
+  DIM pixorg_col|(256)
+  '
+  ' bit organization for true color mode
+  DIM bitorg_r|(16),bitorg_g|(16),bitorg_b|(16)
+  ' number of red, green, blue for a pixel
+  nb_bit_r|=0
+  nb_bit_g|=0
+  nb_bit_b|=0
+  '
+  ' 32bit value for palette mode to TC mode transformation
+  DIM color(255)
+  '
+  ' transcodage table for pixel value<->color of the palette
+  DIM trans_pal|(255)
+  trans_pal|(0)=0
+  trans_pal|(1)=2
+  trans_pal|(2)=3
+  trans_pal|(3)=6
+  trans_pal|(4)=4
+  trans_pal|(5)=7
+  trans_pal|(6)=5
+  trans_pal|(7)=8
+  trans_pal|(8)=9
+  trans_pal|(9)=10
+  trans_pal|(10)=11
+  trans_pal|(11)=14
+  trans_pal|(12)=12
+  trans_pal|(13)=15
+  trans_pal|(14)=13
+  trans_pal|(15)=255
+  FOR i&=16 TO 254
+    trans_pal|(i&)=i&
+  NEXT i&
+  trans_pal|(255)=1
+  '
+RETURN
+> PROCEDURE allocate
+  '
+  palette_save%=@mxalloc(1536,3)
+  palette_work%=@mxalloc(1536,3)
+  '
+  ' pxy array and MFDB strutures
+  mfdb_structure%=@mxalloc(SHL(SHR(ADD(MUL(20,SUCC(img_nb_slots&)),31),4),4),3)
+  IF mfdb_structure%>0
+    FOR i&=0 TO img_nb_slots&
+      img_mfdb%(i&)=ADD(ADD(mfdb_structure%,16),MUL(i&,20))
+      '
+      LONG{img_mfdb%(i&)}=0
+      LONG{ADD(img_mfdb%(i&),4)}=0
+      LONG{ADD(img_mfdb%(i&),8)}=0
+      LONG{ADD(img_mfdb%(i&),12)}=0
+      LONG{ADD(img_mfdb%(i&),16)}=0
+    NEXT i&
+  ELSE
+    leave
+  ENDIF
+  '
+  scr_mfdb%=img_mfdb%(0)
+  off_mdfb%=img_mfdb%(1)
+  '
+  ' screen structure
+  IF GETCOOKIE(CVL("EdDI"))
+    '
+    DIM work_out&(272)
+    '
+    ~VQ_SCRNINFO(V:work_out&(0))
+    '
+    bitplane_number&=work_out&(2)
+    IF bitplane_number&=15
+      bitplane_number&=16
+      mode_32k!=TRUE
+    ELSE
+      mode_32k!=FALSE
+    ENDIF
+    '
+    SELECT work_out&(1)! clut_mode&
+    CASE 1 ! palette mode: get pixel index<->palette color
+      FOR i&=16 TO 271
+        pixorg_col|(SUB(i&,16))=BYTE(work_out&(i&))
+      NEXT i&
+    CASE 2 ! true color mode: get RGB structure for the pixel
+      nb_bit_r|=BYTE(work_out&(8))
+      nb_bit_g|=BYTE(work_out&(9))
+      nb_bit_b|=BYTE(work_out&(10))
+      FOR i&=1 TO nb_bit_r|
+        bitorg_r|(i&)=BYTE(SUB(bitplane_number&,work_out&(ADD(15,i&))))
+      NEXT i&
+      FOR i&=1 TO nb_bit_g|
+        bitorg_g|(i&)=BYTE(SUB(bitplane_number&,work_out&(ADD(31,i&))))
+      NEXT i&
+      FOR i&=1 TO nb_bit_b|
+        bitorg_b|(i&)=BYTE(SUB(bitplane_number&,work_out&(ADD(47,i&))))
+      NEXT i&
+    ENDSELECT
+  ENDIF
+  '
+  IF bitplane_number&=8
+    raster_mask_mode&=2
+    raster_mask_color_0&=0
+    raster_mask_color_1&=1
+    '
+    raster_sprite_mode&=7
+  ELSE
+    raster_mask_mode&=2
+    raster_mask_color_0&=0
+    raster_mask_color_1&=1
+    '
+    raster_sprite_mode&=1
+  ENDIF
+  '
+RETURN
+> PROCEDURE init2
+  '
+  ~VSF_INTERIOR(1)
+  ~VSF_STYLE(0)
+  ~VSF_COLOR(1)
+  ~VSF_PERIMETER(0)
+  '
+  IF ressource!
+    ~MENU_IENABLE(ressource_menu%,3,0)
+    ~MENU_BAR(ressource_menu%,1)
+  ENDIF
+  IF multi!=FALSE
+    ~FORM_DIAL(3,0,0,0,0,_DX,_DY,_DW,_DH)
+  ENDIF
+  '
+RETURN
+'
+> PROCEDURE declare_effect
+  LOCAL pref_len%
+  '
+  IF EXIST(preferences_file$)
+    '
+    mem_pos%=0
+    '
+    file_handle&=FOPEN(preferences_file$,0)
+    IF file_handle&>0
+      '
+      pref_len%=FSEEK(0,file_handle&,2)
+      ~FSEEK(0,file_handle&,0)
+      '
+      IF pref_len%>0
+        mem_pos%=@mem_init(pref_len%)
+        '
+        IF mem_pos%>0
+          IF FREAD(file_handle&,pref_len%,mem_pos%)<>pref_len%
+            mem_pos%=@mem_close
+          ENDIF
+        ENDIF
+      ENDIF
+      ~FCLOSE(file_handle&)
+    ENDIF
+    '
+    IF mem_pos%>0
+      '
+      mem_start_ptr%=mem_pos%
+      mem_end_ptr%=ADD(mem_pos%,pref_len%)
+      DO
+        IF BYTE{mem_start_ptr%}=13 OR BYTE{mem_start_ptr%}=10
+          BYTE{mem_start_ptr%}=0
+        ENDIF
+        INC mem_start_ptr%
+      LOOP UNTIL mem_start_ptr%>mem_end_ptr%
+      mem_start_ptr%=mem_pos%
+      '
+      allglory_delay&=MAX(0,MIN(VAL(@mem_find$("ALLGLORY_DELAY")),200))
+      '
+    ENDIF
+    '
+    ~@mem_close
+    '
+  ELSE
+    '
+    allglory_delay&=200
+    '
+  ENDIF
+  '
+  allglory_left_eye_cpt&=1
+  allglory_right_eye_cpt&=7
+  allglory_auto_exit&=0
+  '
+RETURN
+'
+> FUNCTION mem_init(mem_wished_len%)
+  $F%
+  ~@mem_close
+  mem_len%=MAX(16000,SHL(SHR(ADD(mem_wished_len%,31),4),4))
+  mem_start_adr%=@mxalloc(mem_len%,3)
+  IF mem_start_adr%<0
+    ' alert ?
+    mem_start_adr%=0
+  ENDIF
+  RETURN mem_start_adr%
+ENDFUNC
+> FUNCTION mem_close
+  $F%
+  IF mem_start_adr%>0
+    @mxfree(mem_start_adr%)
+    mem_start_adr%=0
+    mem_len%=0
+  ENDIF
+  RETURN 0
+ENDFUNC
+> FUNCTION mem_find$(mem_key$)
+  LOCAL mem_find_line$,mem_find_ptr%
+  IF mem_start_ptr%>0 AND mem_end_ptr%>mem_start_ptr%
+    mem_find_ptr%=mem_start_ptr%
+    DO
+      mem_find_line$=CHAR{mem_find_ptr%}
+      ADD mem_find_ptr%,SUCC(LEN(mem_find_line$))
+      '
+      IF INSTR(mem_find_line$,mem_key$+"=")=1
+        mem_str$=MID$(mem_find_line$,ADD(LEN(mem_key$),2))
+        mem_pos&=INSTR(mem_str$,"#")
+        IF mem_pos&>0
+          RETURN TRIM$(LEFT$(mem_str$,PRED(mem_pos&)))
+        ENDIF
+        RETURN TRIM$(mem_str$)
+      ENDIF
+      '
+    LOOP UNTIL mem_find_ptr%>=mem_end_ptr%
+  ENDIF
+  RETURN ""
+ENDFUNC
+> FUNCTION mem_get_flag(find_str$,default_flag!)
+  $F%
+  '
+  IF @mem_find$(find_str$)=boolean$(ABS(NOT default_flag!))
+    RETURN NOT default_flag!
+  ENDIF
+  RETURN default_flag!
+ENDFUNC
+'
+> PROCEDURE load_images
+  LOCAL dgx_i&,dgx_j&,dgx_k$
+  '
+  IF EXIST(application_path$+"TOAD.DGX")=FALSE
+    ~FORM_ALERT(1,"[1][ Need ALLGLORY\TOAD.DGX file ][ Quit ]")
+    leave
+  ENDIF
+  '
+  mouse_busy
+  '
+  img_x&(1)=0
+  img_y&(1)=0
+  img_w&(1)=368
+  img_h&(1)=299
+  '
+  LONG{off_mdfb%}=@mxalloc(ADD(MUL(MUL(img_h&(1),SHR&(img_w&(1),4)),SHL&(bitplane_number&,1)),16),3)
+  INT{ADD(off_mdfb%,4)}=img_w&(1)
+  INT{ADD(off_mdfb%,6)}=img_h&(1)
+  INT{ADD(off_mdfb%,8)}=SHR&(img_w&(1),4)
+  INT{ADD(off_mdfb%,10)}=0
+  IF mode_32k!
+    INT{ADD(off_mdfb%,12)}=15
+  ELSE
+    INT{ADD(off_mdfb%,12)}=bitplane_number&
+  ENDIF
+  INT{ADD(off_mdfb%,14)}=0
+  INT{ADD(off_mdfb%,16)}=0
+  INT{ADD(off_mdfb%,18)}=0
+  '
+  img_x&(2)=0
+  img_y&(2)=0
+  img_w&(2)=368
+  img_h&(2)=299
+  '
+  LONG{img_mfdb%(2)}=@mxalloc(ADD(MUL(MUL(img_h&(2),SHR&(img_w&(2),4)),SHL&(bitplane_number&,1)),16),3)
+  INT{ADD(img_mfdb%(2),4)}=img_w&(2)
+  INT{ADD(img_mfdb%(2),6)}=img_h&(2)
+  INT{ADD(img_mfdb%(2),8)}=SHR&(img_w&(2),4)
+  INT{ADD(img_mfdb%(2),10)}=0
+  IF mode_32k!
+    INT{ADD(img_mfdb%(2),12)}=15
+  ELSE
+    INT{ADD(img_mfdb%(2),12)}=bitplane_number&
+  ENDIF
+  INT{ADD(img_mfdb%(2),14)}=0
+  INT{ADD(img_mfdb%(2),16)}=0
+  INT{ADD(img_mfdb%(2),18)}=0
+  '
+  ~@load_image(10,"TOAD\BLIND",FALSE,0,0,368,299)
+  ~@load_image(11,"TOAD\BLINDM",TRUE,0,0,368,299)
+  '
+  FOR dgx_i&=1 TO 13
+    '
+    dgx_j&=ADD(10,MUL(dgx_i&,2))
+    dgx_k$=STR$(dgx_i&)
+    IF LEN(dgx_k$)=1
+      dgx_k$="0"+dgx_k$
+    ENDIF
+    '
+    ~@load_image(dgx_j&,"TOAD\EYE"+dgx_k$,FALSE,0,0,48,25)
+    '
+    INC dgx_j&
+    '
+    ~@load_image(dgx_j&,"TOAD\EYE"+dgx_k$+"M",TRUE,0,0,48,25)
+    '
+  NEXT dgx_i&
+  '
+  mouse_free
+  '
+  @mxfree(dgx_adr%)
+  dgx_adr%=0
+  '
+RETURN
+> FUNCTION load_image(pimg_id&,pimg_name$,pimg_mask!,pimg_x&,pimg_y&,pimg_w&,pimg_h&)
+  $F%
+  LOCAL file_adr%,mfdb_adr%,dummy_adr%,dummy_size%
+  ~FRE(0)
+  '
+  img_x&(pimg_id&)=pimg_x&
+  img_y&(pimg_id&)=pimg_y&
+  img_w&(pimg_id&)=pimg_w&
+  img_h&(pimg_id&)=pimg_h&
+  '
+  good!=FALSE
+  '
+  pimg_name$=application_path$+pimg_name$+".DGI"
+  '
+  file_adr%=@load_dgx(pimg_name$)
+  IF file_adr%>0
+    IF (INT{ADD(file_adr%,12)}=8 OR INT{ADD(file_adr%,12)}=1) AND MKL$(LONG{file_adr%})="_DGI"
+      LONG{file_adr%}=ADD(file_adr%,20)
+      '
+      IF pimg_mask!
+        '
+        dummy_size%=MUL(MUL(INT{ADD(file_adr%,6)},INT{ADD(file_adr%,8)}),2)
+        '
+        mfdb_adr%=img_mfdb%(pimg_id&)
+        LONG{mfdb_adr%}=@mxalloc(ADD(dummy_size%,16),3)
+        INT{ADD(mfdb_adr%,4)}=INT{ADD(file_adr%,4)}
+        INT{ADD(mfdb_adr%,6)}=INT{ADD(file_adr%,6)}
+        INT{ADD(mfdb_adr%,8)}=INT{ADD(file_adr%,8)}
+        INT{ADD(mfdb_adr%,10)}=0
+        INT{ADD(mfdb_adr%,12)}=1
+        INT{ADD(mfdb_adr%,14)}=0
+        INT{ADD(mfdb_adr%,16)}=0
+        INT{ADD(mfdb_adr%,18)}=0
+        '
+        BMOVE ADD(file_adr%,20),LONG{mfdb_adr%},dummy_size%
+        '
+      ELSE
+        '
+        mfdb_adr%=img_mfdb%(pimg_id&)
+        LONG{mfdb_adr%}=@mxalloc(ADD(MUL(MUL(INT{ADD(file_adr%,6)},INT{ADD(file_adr%,8)}),SHL&(bitplane_number&,1)),16),3)
+        INT{ADD(mfdb_adr%,4)}=INT{ADD(file_adr%,4)}
+        INT{ADD(mfdb_adr%,6)}=INT{ADD(file_adr%,6)}
+        INT{ADD(mfdb_adr%,8)}=INT{ADD(file_adr%,8)}
+        INT{ADD(mfdb_adr%,10)}=0
+        IF mode_32k!
+          INT{ADD(mfdb_adr%,12)}=15
+        ELSE
+          INT{ADD(mfdb_adr%,12)}=bitplane_number&
+        ENDIF
+        INT{ADD(mfdb_adr%,14)}=0
+        INT{ADD(mfdb_adr%,16)}=0
+        INT{ADD(mfdb_adr%,18)}=0
+        '
+        SELECT bitplane_number&
+        CASE 8
+          ~VR_TRNFM(file_adr%,mfdb_adr%)
+          good!=TRUE
+        CASE 15,16
+          dummy_size%=SHL&(MUL(INT{ADD(file_adr%,6)},INT{ADD(file_adr%,8)}),1)
+          ADD file_adr%,20
+          dummy_cale%=SUB(ADD(file_adr%,dummy_size%),2)
+          ktrans%=LONG{mfdb_adr%}
+          FOR itrans%=file_adr% TO dummy_cale% STEP 2
+            '
+            trns_0&=INT{itrans%}
+            trns_1&=INT{ADD(itrans%,dummy_size%)}
+            trns_2&=INT{ADD(itrans%,MUL(dummy_size%,2))}
+            trns_3&=INT{ADD(itrans%,MUL(dummy_size%,3))}
+            trns_4&=INT{ADD(itrans%,MUL(dummy_size%,4))}
+            trns_5&=INT{ADD(itrans%,MUL(dummy_size%,5))}
+            trns_6&=INT{ADD(itrans%,MUL(dummy_size%,6))}
+            trns_7&=INT{ADD(itrans%,MUL(dummy_size%,7))}
+            '
+            FOR jtrans&=1 TO 16
+              '
+              trns_8&=SHR&(trns_0&,15)
+              ADD trns_8&,SHL&(SHR&(trns_1&,15),1)
+              ADD trns_8&,SHL&(SHR&(trns_2&,15),2)
+              ADD trns_8&,SHL&(SHR&(trns_3&,15),3)
+              ADD trns_8&,SHL&(SHR&(trns_4&,15),4)
+              ADD trns_8&,SHL&(SHR&(trns_5&,15),5)
+              ADD trns_8&,SHL&(SHR&(trns_6&,15),6)
+              ADD trns_8&,SHL&(SHR&(trns_7&,15),7)
+              '
+              trns_0&=SHL&(trns_0&,1)
+              trns_1&=SHL&(trns_1&,1)
+              trns_2&=SHL&(trns_2&,1)
+              trns_3&=SHL&(trns_3&,1)
+              trns_4&=SHL&(trns_4&,1)
+              trns_5&=SHL&(trns_5&,1)
+              trns_6&=SHL&(trns_6&,1)
+              trns_7&=SHL&(trns_7&,1)
+              '
+              INT{ktrans%}=CARD(color(trans_pal|(trns_8&)))
+              ADD ktrans%,2
+              '
+            NEXT jtrans&
+          NEXT itrans%
+          SUB file_adr%,20
+          good!=TRUE
+        CASE 24
+          dummy_size%=SHL&(MUL(INT{ADD(file_adr%,6)},INT{ADD(file_adr%,8)}),1)
+          ADD file_adr%,20
+          dummy_cale%=SUB(ADD(file_adr%,dummy_size%),2)
+          ktrans%=LONG{mfdb_adr%}
+          FOR itrans%=file_adr% TO dummy_cale% STEP 2
+            '
+            trns_0&=INT{itrans%}
+            trns_1&=INT{ADD(itrans%,dummy_size%)}
+            trns_2&=INT{ADD(itrans%,MUL(dummy_size%,2))}
+            trns_3&=INT{ADD(itrans%,MUL(dummy_size%,3))}
+            trns_4&=INT{ADD(itrans%,MUL(dummy_size%,4))}
+            trns_5&=INT{ADD(itrans%,MUL(dummy_size%,5))}
+            trns_6&=INT{ADD(itrans%,MUL(dummy_size%,6))}
+            trns_7&=INT{ADD(itrans%,MUL(dummy_size%,7))}
+            '
+            FOR jtrans&=1 TO 16
+              '
+              trns_8&=SHR&(trns_0&,15)
+              ADD trns_8&,SHL&(SHR&(trns_1&,15),1)
+              ADD trns_8&,SHL&(SHR&(trns_2&,15),2)
+              ADD trns_8&,SHL&(SHR&(trns_3&,15),3)
+              ADD trns_8&,SHL&(SHR&(trns_4&,15),4)
+              ADD trns_8&,SHL&(SHR&(trns_5&,15),5)
+              ADD trns_8&,SHL&(SHR&(trns_6&,15),6)
+              ADD trns_8&,SHL&(SHR&(trns_7&,15),7)
+              '
+              trns_0&=SHL&(trns_0&,1)
+              trns_1&=SHL&(trns_1&,1)
+              trns_2&=SHL&(trns_2&,1)
+              trns_3&=SHL&(trns_3&,1)
+              trns_4&=SHL&(trns_4&,1)
+              trns_5&=SHL&(trns_5&,1)
+              trns_6&=SHL&(trns_6&,1)
+              trns_7&=SHL&(trns_7&,1)
+              '
+              dummy%=color(trans_pal|(trns_8&))
+              BYTE{ktrans%}=BYTE(SHR(dummy%,15))
+              INC ktrans%
+              BYTE{ktrans%}=BYTE(SHR(dummy%,7))
+              INC ktrans%
+              BYTE{ktrans%}=BYTE(dummy%)
+              INC ktrans%
+              '
+            NEXT jtrans&
+          NEXT itrans%
+          SUB file_adr%,20
+          good!=TRUE
+        CASE 32
+          dummy_size%=SHL&(MUL(INT{ADD(file_adr%,6)},INT{ADD(file_adr%,8)}),1)
+          ADD file_adr%,20
+          dummy_cale%=SUB(ADD(file_adr%,dummy_size%),2)
+          ktrans%=LONG{mfdb_adr%}
+          FOR itrans%=file_adr% TO dummy_cale% STEP 2
+            '
+            trns_0&=INT{itrans%}
+            trns_1&=INT{ADD(itrans%,dummy_size%)}
+            trns_2&=INT{ADD(itrans%,MUL(dummy_size%,2))}
+            trns_3&=INT{ADD(itrans%,MUL(dummy_size%,3))}
+            trns_4&=INT{ADD(itrans%,MUL(dummy_size%,4))}
+            trns_5&=INT{ADD(itrans%,MUL(dummy_size%,5))}
+            trns_6&=INT{ADD(itrans%,MUL(dummy_size%,6))}
+            trns_7&=INT{ADD(itrans%,MUL(dummy_size%,7))}
+            '
+            FOR jtrans&=1 TO 16
+              '
+              trns_8&=SHR&(trns_0&,15)
+              ADD trns_8&,SHL&(SHR&(trns_1&,15),1)
+              ADD trns_8&,SHL&(SHR&(trns_2&,15),2)
+              ADD trns_8&,SHL&(SHR&(trns_3&,15),3)
+              ADD trns_8&,SHL&(SHR&(trns_4&,15),4)
+              ADD trns_8&,SHL&(SHR&(trns_5&,15),5)
+              ADD trns_8&,SHL&(SHR&(trns_6&,15),6)
+              ADD trns_8&,SHL&(SHR&(trns_7&,15),7)
+              '
+              trns_0&=SHL&(trns_0&,1)
+              trns_1&=SHL&(trns_1&,1)
+              trns_2&=SHL&(trns_2&,1)
+              trns_3&=SHL&(trns_3&,1)
+              trns_4&=SHL&(trns_4&,1)
+              trns_5&=SHL&(trns_5&,1)
+              trns_6&=SHL&(trns_6&,1)
+              trns_7&=SHL&(trns_7&,1)
+              '
+              LONG{ktrans%}=color(trans_pal|(trns_8&))
+              ADD ktrans%,4
+              '
+            NEXT jtrans&
+          NEXT itrans%
+          SUB file_adr%,20
+          good!=TRUE
+        ENDSELECT
+        @mxfree(file_adr%)
+      ENDIF
+    ENDIF
+  ENDIF
+  '
+  RETURN good!
+ENDFUNC
+> FUNCTION load_dgx(pdgx_name$)
+  $F%
+  LOCAL dgx_handle&,dgx_len%,dgx_filename$,dgx_pos&
+  ~FRE(0)
+  dgx_ptr%=0
+  '
+  dgx_pos&=RINSTR(pdgx_name$,"\")
+  dgx_filename$=LEFT$(pdgx_name$,PRED(dgx_pos&))+".DGX"
+  dgi_filename$=MID$(pdgx_name$,SUCC(dgx_pos&))
+  dgi_filename$=LEFT$(dgi_filename$,PRED(INSTR(dgi_filename$,".")))
+  IF LEN(dgi_filename$)<8
+    dgi_filename$=dgi_filename$+SPACE$(MAX(SUB(8,LEN(dgi_filename$))))
+  ENDIF
+  '
+  IF EXIST(dgx_filename$)
+    IF dgx_filename$=old_dgx_filename$
+      dgx_ptr%=@search_into_dgx(dgi_filename$)
+    ENDIF
+    '
+    IF dgx_ptr%=0
+      '
+      dgx_handle&=FOPEN(dgx_filename$,0)
+      IF dgx_handle&>0
+        dgx_len%=FSEEK(0,dgx_handle&,2)
+        ~FSEEK(0,dgx_handle&,0)
+        IF dgx_buffer_len%<SHL(SHR(ADD(dgx_len%,32),4),4)
+          @mxfree(dgx_adr%)
+          dgx_adr%=0
+          dgx_buffer_len%=SHL(SHR(ADD(dgx_len%,32),4),4)
+        ENDIF
+        IF dgx_adr%<1
+          dgx_adr%=@mxalloc(dgx_buffer_len%,3)
+        ENDIF
+        IF dgx_adr%>0
+          ~FREAD(dgx_handle&,dgx_len%,dgx_adr%)
+          '
+          old_dgx_filename$=dgx_filename$
+          dgx_ptr%=@search_into_dgx(dgi_filename$)
+          '
+        ENDIF
+        ~FCLOSE(dgx_handle&)
+      ENDIF
+      '
+    ENDIF
+  ELSE
+    '
+    @mxfree(dgx_adr%)
+    dgx_adr%=0
+    '
+    dgx_handle&=FOPEN(pdgx_name$,0)
+    IF dgx_handle&>0
+      dgx_len%=FSEEK(0,dgx_handle&,2)
+      ~FSEEK(0,dgx_handle&,0)
+      IF dgx_buffer_len%<SHL(SHR(ADD(dgx_len%,32),4),4)
+        @mxfree(dgx_adr%)
+        dgx_adr%=0
+        dgx_buffer_len%=SHL(SHR(ADD(dgx_len%,32),4),4)
+      ENDIF
+      IF dgx_adr%<1
+        dgx_adr%=@mxalloc(dgx_buffer_len%,3)
+      ENDIF
+      IF dgx_adr%>0
+        ~FREAD(dgx_handle&,dgx_len%,dgx_adr%)
+        '
+        dgx_ptr%=dgx_adr%
+        '
+      ENDIF
+      ~FCLOSE(dgx_handle&)
+    ENDIF
+  ENDIF
+  '
+  RETURN dgx_ptr%
+ENDFUNC
+> FUNCTION search_into_dgx(pdgi_name$)
+  $F%
+  LOCAL sdgx_ptr%,sdgx_name$,sdgx_len&,sdgx_cpt&
+  sdgx_adr%=0
+  sdgx_cpt&=0
+  '
+  IF dgx_adr%>0
+    IF MKL$(LONG{dgx_adr%})="_DGX"
+      sdgx_len&=INT{ADD(dgx_adr%,4)}
+      IF sdgx_len&>0
+        sdgx_ptr%=ADD(dgx_adr%,6)
+        DO
+          sdgx_name$=MKL$(LONG{sdgx_ptr%})+MKL$(LONG{ADD(sdgx_ptr%,4)})
+          IF sdgx_name$=pdgi_name$
+            sdgx_adr%=ADD(dgx_adr%,LONG{ADD(sdgx_ptr%,8)})
+            sdgx_cpt&=sdgx_len&
+          ENDIF
+          INC sdgx_cpt&
+          ADD sdgx_ptr%,12
+        LOOP UNTIL sdgx_cpt&>=sdgx_len&
+      ENDIF
+    ENDIF
+  ENDIF
+  '
+  RETURN sdgx_adr%
+ENDFUNC
+> PROCEDURE load_palette
+  LOCAL filename_palette$,file_handle&
+  '
+  filename_palette$=application_path$+"ALLGLORY.P08"
+  '
+  IF EXIST(filename_palette$) AND (palette_work%>0)
+    file_handle&=FOPEN(filename_palette$,0)
+    IF file_handle&>0
+      ~FSEEK(12,file_handle&,0)
+      IF FREAD(file_handle&,1536,palette_work%)=1536
+        IF bitplane_number&>8
+          FOR itrans&=0 TO 255
+            r&=INT{ADD(palette_work%,MUL(itrans&,6))}
+            g&=INT{ADD(ADD(palette_work%,2),MUL(itrans&,6))}
+            b&=INT{ADD(ADD(palette_work%,4),MUL(itrans&,6))}
+            r|=BYTE((r&/1000)*255)
+            g|=BYTE((g&/1000)*255)
+            b|=BYTE((b&/1000)*255)
+            LET color(itrans&)=@trns_pix(r|,g|,b|)
+          NEXT itrans&
+        ENDIF
+      ENDIF
+      ~FCLOSE(file_handle&)
+    ENDIF
+  ELSE
+    ~FORM_ALERT(1,"[1][ Need ALLGLORY.P08 file ][ Quit ]")
+    @leave
+  ENDIF
+  '
+RETURN
+> PROCEDURE load_sound(psnd_id&,psnd_name$)
+  LOCAL file_handle&,file_len%,file_adr%
+  ~FRE(0)
+  '
+  snd_start%(psnd_id&)=0
+  snd_end%(psnd_id&)=0
+  '
+  file_adr%=0
+  '
+  file_handle&=FOPEN(psnd_name$,0)
+  IF file_handle&>0
+    file_len%=FSEEK(0,file_handle&,2)
+    ~FSEEK(0,file_handle&,0)
+    '
+    file_adr%=@mxalloc(SHL(SHR(ADD(file_len%,15),4),4),0)
+    '
+    IF file_adr%>0
+      IF FREAD(file_handle&,file_len%,file_adr%)=file_len%
+        snd_start%(psnd_id&)=file_adr%
+        snd_end%(psnd_id&)=ADD(file_adr%,file_len%)
+      ELSE
+        @mxfree(file_adr%)
+      ENDIF
+    ENDIF
+    ~FCLOSE(file_handle&)
+  ENDIF
+  '
+RETURN
+'
+> PROCEDURE main
+  snd_init
+  set_values1
+  create_win
+  set_values2
+  v_hide_c
+  clear_win
+  exit!=FALSE
+  DO
+    draw_win
+  LOOP UNTIL exit!
+  v_show_c
+  leave
+RETURN
+'
+> PROCEDURE create_win
+  hand_win&=WIND_CREATE(&X0,30,30,30,30)
+  IF hand_win&>0
+    wx&=_DX
+    wy&=_DY
+    wl&=_DW
+    wh&=_DH
+    win!=TRUE
+    IF WIND_OPEN(hand_win&,wx&,wy&,wl&,wh&)=0
+      ~FORM_ALERT(1,"[1][ Can't open window ][ Quit ]")
+      @leave
+    ELSE
+      ~WIND_GET(hand_win&,4,xd&,yd&,wd&,hd&)
+    ENDIF
+  ELSE
+    ~FORM_ALERT(1,"[1][ No window available ][ Quit ]")
+    @leave
+  ENDIF
+  aff!=win!
+RETURN
+> PROCEDURE set_values1
+  '
+  @save_colors
+  @load_palette
+  @load_images
+  @load_sound(0,application_path$+"ALLGLORY.DGW")
+  @set_colors
+  '
+RETURN
+> PROCEDURE set_values2
+  '
+  allglory_first_draw!=TRUE
+  '
+  img_x&(0)=ADD(xd&,MAX(0,SUB(wd&,img_w&(1))/2))
+  img_y&(0)=ADD(yd&,MAX(0,SUB(hd&,img_h&(1))/2))
+  img_w&(0)=MIN(img_w&(1),wd&)
+  img_h&(0)=MIN(img_h&(1),hd&)
+  '
+RETURN
+> PROCEDURE close_win
+  IF win!
+    ~WIND_CLOSE(hand_win&)
+    ~WIND_DELETE(hand_win&)
+    win!=FALSE
+    aff!=FALSE
+  ENDIF
+RETURN
+> PROCEDURE clear_win
+  '
+  ~VSF_COLOR(0)
+  ~VS_CLIP(1,xd&,yd&,ADD(xd&,PRED(wd&)),ADD(yd&,PRED(hd&)))
+  ~V_BAR(xd&,yd&,ADD(xd&,PRED(wd&)),ADD(yd&,PRED(hd&)))
+  ~VS_CLIP(0,xd&,yd&,ADD(xd&,PRED(wd&)),ADD(yd&,PRED(hd&)))
+  '
+  img_get(2)
+  '
+  snd_play(0,TRUE)
+  '
+RETURN
+> PROCEDURE draw_win
+  '
+  allglory_left_i&=ADD(10,MUL(allglory_left_eye_cpt&,2))
+  allglory_right_i&=ADD(10,MUL(allglory_right_eye_cpt&,2))
+  '
+  IF allglory_first_draw!
+    img_put(3,2,0,0,off_mdfb%) ! white background
+    '
+    img_put(4,11,0,0,off_mdfb%)
+    img_put(7,10,0,0,off_mdfb%) ! blind
+  ELSE
+    img_put(4,11,33,63,off_mdfb%)
+    img_put(7,10,33,63,off_mdfb%) ! blind
+  ENDIF
+  '
+  img_put(4,SUCC(allglory_left_i&),29,37,off_mdfb%)
+  img_put(7,allglory_left_i&,29,37,off_mdfb%) ! left eye
+  '
+  img_put(4,SUCC(allglory_right_i&),118,33,off_mdfb%)
+  img_put(7,allglory_right_i&,118,33,off_mdfb%) ! right eye
+  '
+  IF allglory_first_draw!
+    img_put(0,0,0,0,scr_mfdb%) ! offscreen to screen
+  ELSE
+    img_put(0,0,166,63,scr_mfdb%) ! partial redraw
+  ENDIF
+  '
+  INC allglory_left_eye_cpt&
+  IF allglory_left_eye_cpt&>13
+    allglory_left_eye_cpt&=1
+    INC allglory_auto_exit&
+  ENDIF
+  INC allglory_right_eye_cpt&
+  IF allglory_right_eye_cpt&>13
+    allglory_right_eye_cpt&=1
+  ENDIF
+  allglory_first_draw!=FALSE
+  '
+  ~EVNT_TIMER(MAX(10,allglory_delay&))
+  '
+  ~GRAF_MKSTATE(gm_x&,gm_y&,gm_s&,gk_s&)
+  IF BCONSTAT(2) OR gm_s&>0 OR gk_s&>0
+    exit!=TRUE
+  ENDIF
+  ' IF allglory_auto_exit&>1000
+  ' exit!=TRUE
+  ' ENDIF
+  '
+RETURN
+'
+> PROCEDURE restore_colors
+  LOCAL tmp_c&,tmp_d&,col_r&,col_g&,col_b&
+  '
+  IF palette_save%>0
+    FOR tmp_c&=0 TO 255
+      tmp_d&=MUL(tmp_c&,6)
+      col_r&=INT{ADD(palette_save%,tmp_d&)}
+      col_g&=INT{ADD(palette_save%,ADD(tmp_d&,2))}
+      col_b&=INT{ADD(palette_save%,ADD(tmp_d&,4))}
+      ~VS_COLOR(tmp_c&,col_r&,col_g&,col_b&)
+    NEXT tmp_c&
+  ENDIF
+RETURN
+> PROCEDURE save_colors
+  LOCAL tmp_c&,tmp_d&,col_r&,col_g&,col_b&
+  '
+  IF palette_save%>0
+    FOR tmp_c&=0 TO 255
+      ~VQ_COLOR(tmp_c&,0,col_r&,col_g&,col_b&)
+      tmp_d&=MUL(tmp_c&,6)
+      INT{ADD(palette_save%,tmp_d&)}=col_r&
+      INT{ADD(palette_save%,ADD(tmp_d&,2))}=col_g&
+      INT{ADD(palette_save%,ADD(tmp_d&,4))}=col_b&
+    NEXT tmp_c&
+  ENDIF
+RETURN
+> PROCEDURE set_colors
+  LOCAL tmp_c&,tmp_d&,col_r&,col_g&,col_b&
+  '
+  IF palette_work%>0
+    FOR tmp_c&=0 TO 255
+      tmp_d&=MUL(tmp_c&,6)
+      col_r&=INT{ADD(palette_work%,tmp_d&)}
+      col_g&=INT{ADD(palette_work%,ADD(tmp_d&,2))}
+      col_b&=INT{ADD(palette_work%,ADD(tmp_d&,4))}
+      ~VS_COLOR(tmp_c&,col_r&,col_g&,col_b&)
+    NEXT tmp_c&
+  ENDIF
+RETURN
+'
+> PROCEDURE snd_init
+  LOCAL snd_value%
+  '
+  snd_enabled!=TRUE
+  snd_capable!=FALSE
+  '
+  IF GETCOOKIE(CVL("_SND"),snd_value%)
+    IF BTST(snd_value%,2) OR BTST(snd_value%,5)
+      snd_capable!=TRUE
+    ELSE
+      snd_capable!=FALSE
+    ENDIF
+  ELSE IF GETCOOKIE(CVL("McSn"),snd_value%)
+    snd_capable!=TRUE
+  ELSE
+    snd_capable!=FALSE
+  ENDIF
+  '
+  snd_active!=FALSE
+  IF snd_enabled! AND snd_capable!
+    IF LOCKSND()<>1
+      IF snd_locked!
+        snd_active!=TRUE
+      ELSE
+        IF FORM_ALERT(1,"[2][ Sound system locked ][ Force | Quit ]")=1
+          snd_active!=TRUE
+        ENDIF
+      ENDIF
+    ELSE
+      snd_active!=TRUE
+    ENDIF
+  ENDIF
+  '
+  IF snd_active!
+    ~UNLOCKSND()
+    ~LOCKSND()
+    snd_locked!=TRUE
+    '
+    ~SNDSTATUS(1)
+    ~DEVCONNECT(0,8,0,7,1)
+    ~SOUNDCMD(0,0)
+    ~SOUNDCMD(1,0)
+    ~SETMODE(0)
+    '
+    IF GETCOOKIE(CVL("_SND"),snd_value%)
+      IF BTST(snd_value%,4)
+        ~SOUNDCMD(4,2)
+      ENDIF
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE snd_exit
+  IF snd_active! AND snd_locked!
+    snd_stop
+    ~UNLOCKSND()
+    snd_locked!=FALSE
+    snd_active!=FALSE
+    '
+    IF snd_start%(0)>0
+      @mxfree(snd_start%(0))
+      snd_start%(0)=0
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE snd_play(psnd_id&,repeat!)
+  IF snd_active!
+    IF snd_start%(psnd_id&)>0
+      ~BUFFOPER(0)
+      ~SETBUFFER(0,ADD(snd_start%(psnd_id&),44),snd_end%(psnd_id&))
+      IF repeat!
+        ~BUFFOPER(3)
+      ELSE
+        ~BUFFOPER(1)
+      ENDIF
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE snd_stop
+  IF snd_active!
+    ~BUFFOPER(0)
+  ENDIF
+RETURN
+'
+> PROCEDURE mouse_busy
+  ~GRAF_MOUSE(2,0)
+RETURN
+> PROCEDURE mouse_free
+  ~GRAF_MOUSE(0,0)
+RETURN
+'
+> PROCEDURE img_put(mode&,pimg_id&,pimg_x&,pimg_y&,pmfdb%)
+  SELECT pimg_id&
+  CASE 0
+    '
+    IF pimg_x&>0 AND pimg_y&>0
+      SET.SXYWH 0,0,pimg_x&,pimg_y&
+      SET.DXYWH img_x&(0),img_y&(0),pimg_x&,pimg_y&
+    ELSE
+      SET.SXYWH 0,0,img_w&(0),img_h&(0)
+      SET.DXYWH img_x&(0),img_y&(0),img_w&(0),img_h&(0)
+    ENDIF
+    ~VRO_CPYFM(3,off_mdfb%,pmfdb%)
+    '
+  CASE 2
+    '
+    SET.SXYWH 0,0,img_w&(2),img_h&(2)
+    SET.DXYWH 0,0,img_w&(2),img_h&(2)
+    ~VRO_CPYFM(3,img_mfdb%(2),off_mdfb%)
+    '
+  CASE 11
+    '
+    IF pimg_x&>0 AND pimg_y&>0
+      SET.SXYXY 0,pimg_x&,PRED(img_w&(11)),PRED(pimg_y&)
+      SET.DXYXY 0,pimg_x&,PRED(img_w&(11)),PRED(pimg_y&)
+    ELSE
+      SET.SXYWH 0,0,img_w&(11),img_h&(11)
+      SET.DXYWH pimg_x&,pimg_y&,img_w&(11),img_h&(11)
+    ENDIF
+    ~VRT_CPYFM(raster_mask_mode&,img_mfdb%(11),pmfdb%,raster_mask_color_0&,raster_mask_color_1&)
+    '
+  CASE 10
+    '
+    IF pimg_x&>0 AND pimg_y&>0
+      SET.SXYXY 0,pimg_x&,PRED(img_w&(10)),PRED(pimg_y&)
+      SET.DXYXY 0,pimg_x&,PRED(img_w&(10)),PRED(pimg_y&)
+    ELSE
+      SET.SXYWH 0,0,img_w&(10),img_h&(10)
+      SET.DXYWH pimg_x&,pimg_y&,img_w&(10),img_h&(10)
+    ENDIF
+    ~VRO_CPYFM(raster_sprite_mode&,img_mfdb%(10),pmfdb%)
+    '
+  DEFAULT
+    '
+    SET.SXYWH 0,0,img_w&(pimg_id&),img_h&(pimg_id&)
+    SET.DXYWH pimg_x&,pimg_y&,img_w&(pimg_id&),img_h&(pimg_id&)
+    '
+    IF mode&=4
+      ~VRT_CPYFM(raster_mask_mode&,img_mfdb%(pimg_id&),pmfdb%,raster_mask_color_0&,raster_mask_color_1&)
+    ELSE IF mode&=7
+      ~VRO_CPYFM(raster_sprite_mode&,img_mfdb%(pimg_id&),pmfdb%)
+    ELSE
+      ~VRO_CPYFM(3,img_mfdb%(pimg_id&),pmfdb%)
+    ENDIF
+    '
+  ENDSELECT
+RETURN
+> PROCEDURE img_get(pimg_id&)
+  IF pimg_id&=2
+    '
+    SET.SXYWH img_x&(0),img_y&(0),img_w&(2),img_h&(2)
+    SET.DXYWH 0,0,img_w&(2),img_h&(2)
+    ~VRO_CPYFM(3,scr_mfdb%,img_mfdb%(2))
+    '
+  ENDIF
+RETURN
+> FUNCTION trns_pix(trns_r|,trns_g|,trns_b|)
+  $F%
+  LOCAL trns_r$,trns_g$,trns_b$,trns_dummy$
+  ~FRE()
+  ~FRE(0)
+  '
+  trns_dummy$=STRING$(bitplane_number&,"0")
+  '
+  trns_r$=LEFT$(BIN$(trns_r|,8),nb_bit_r|)
+  FOR trns_i|=1 TO nb_bit_r|
+    MID$(trns_dummy$,bitorg_r|(trns_i|))=MID$(trns_r$,SUB(SUCC(nb_bit_r|),trns_i|),1)
+  NEXT trns_i|
+  '
+  trns_g$=LEFT$(BIN$(trns_g|,8),nb_bit_g|)
+  FOR trns_i|=1 TO nb_bit_g|
+    MID$(trns_dummy$,bitorg_g|(trns_i|))=MID$(trns_g$,SUB(SUCC(nb_bit_g|),trns_i|),1)
+  NEXT trns_i|
+  '
+  trns_b$=LEFT$(BIN$(trns_b|,8),nb_bit_b|)
+  FOR trns_i|=1 TO nb_bit_b|
+    MID$(trns_dummy$,bitorg_b|(trns_i|))=MID$(trns_b$,SUB(SUCC(nb_bit_b|),trns_i|),1)
+  NEXT trns_i|
+  '
+  RETURN VAL("&X"+trns_dummy$)
+ENDFUNC
+'
+> PROCEDURE v_hide_c
+  IF naes!
+    GHIDEM
+  ELSE
+    ~V_HIDE_C()
+  ENDIF
+RETURN
+> PROCEDURE v_show_c
+  IF naes!
+    GSHOWM
+  ELSE
+    ~V_SHOW_C()
+  ENDIF
+RETURN
+'
+> FUNCTION mx_mask
+  $F%
+  IF MXALLOC(-1,0)=-32
+    RETURN 0
+  ELSE IF SYSCONF(-1)=-32
+    RETURN 3
+  ELSE
+    RETURN -1
+  ENDIF
+ENDFUNC
+> FUNCTION mxalloc(mxlen%,mxmode&)
+  $F%
+  IF mxalloc!
+    RETURN MXALLOC(mxlen%,mxmode&)
+  ENDIF
+  RETURN MALLOC(mxlen%)
+ENDFUNC
+> PROCEDURE mxfree(mx_adr%)
+  IF mx_adr%>0
+    ~MFREE(mx_adr%)
+  ENDIF
+RETURN
