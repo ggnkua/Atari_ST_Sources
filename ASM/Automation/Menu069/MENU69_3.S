@@ -1,4 +1,5 @@
 		opt c+,d-,o+
+		opt	W-
 		ttl	"LSD DEPACKER V2.0"
 
 ;SET TABS TO 10 FOR DISASSEMBLY
@@ -505,6 +506,6 @@ g1		dc.b	"BARB.LSD",0,0,0,0,0	;MUST BE 13 BYTES
 g2		dc.b 	"DUEL.LSD",0
 		even
 		
-l_030		INCBIN	"A:\FONT_69.DAT"
-l_020		INCBIN	"A:\MENU_69B.DAT"
-music		INCBIN	"A:\ROADMUS.DAT"
+l_030		INCBIN	"FONT_69.DAT"
+l_020		INCBIN	"MENU_69B.DAT"
+music		INCBIN	"ROADMUS.DAT"

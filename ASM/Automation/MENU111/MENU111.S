@@ -139,4 +139,4 @@ defpal	dc.w	0,0,0,0,0,0,0,0
 deadpal	dc.w	$777,$777,$777,$777,$777,$777,$777,$777
 	dc.w	$777,$777,$777,$777,$777,$777,$777,$777
 		
-pic	incbin	"menu111\INFOCOM2.PI1"
+pic	incbin	"INFOCOM2.PI1"

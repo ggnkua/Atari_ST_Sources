@@ -1,4 +1,5 @@
 		opt c+,d-,o+
+		opt	W-
 		ttl	"LSD DEPACKER V1.0"
 
 ;SET TABS TO 10 FOR DISASSEMBLY
@@ -390,6 +391,6 @@ g3		dc.b "brattacs.lsd",0
 g4		dc.b "sidearm.jek",0
 		even
 		
-l_030		INCBIN	"A:\FNT_55.PI1"
-l_020		INCBIN	"A:\LSD_55.PI1"
-music		INCBIN	"A:\7E000.MUS"
+l_030		INCBIN	"FNT_55.PI1"
+l_020		INCBIN	"LSD_55.PI1"
+music		INCBIN	"7E000.MUS"

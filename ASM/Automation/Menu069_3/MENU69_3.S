@@ -461,4 +461,4 @@ defcols	dc.w	0,0,0,0,0,0,0,0
 	dc.w	0,0,0,0,0,0,0,0
 piccols	dc.w	0,0,0,0,0,0,0,0
 	dc.w	0,0,0,0,0,0,0,0
-pic	incbin	B:\MENU21.PI1
+pic	incbin	MENU69_3.PI1

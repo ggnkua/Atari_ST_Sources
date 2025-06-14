@@ -1,4 +1,5 @@
 		opt c+,d-,o+
+		opt	W-
 		ttl	"LSD DEPACKER V1.0"
 
 ;SET TABS TO 10 FOR DISASSEMBLY

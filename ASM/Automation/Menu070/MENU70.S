@@ -1,4 +1,5 @@
 		opt c+,d-,o+
+		opt	W-
 		ttl	"LSD DEPACKER V2.0"
 
 ;SET TABS TO 10 FOR DISASSEMBLY
@@ -361,7 +362,7 @@ g3		dc.b	"QUEST.LSD",0,0,0,0
 g4		dc.b	"INFO.AUT",0
 		even
 		
-DATA2		INCBIN	"A:\FONT_70.PI1"
-DATA1		INCBIN	"A:\MENU_70.PI1"
-music		INCBIN	"A:\140AC.RAW"
+DATA2		INCBIN	"FONT_70.PI1"
+DATA1		INCBIN	"MENU_70.PI1"
+music		INCBIN	"140AC.RAW"
 nomore

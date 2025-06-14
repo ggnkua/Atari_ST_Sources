@@ -1,4 +1,5 @@
 		opt c+,d-,o+
+		opt	W-
 		ttl	"LSD DEPACKER V2.0"
 
 ;SET TABS TO 10 FOR DISASSEMBLY
@@ -385,6 +386,6 @@ g4		dc.b	"TAUCETI.JEK",0,0
 g5		dc.b	"IBALL.JEK",0
 		even
 		
-l_030		INCBIN	"A:\FONT51.DAT"
-l_020		INCBIN	"A:\MENU51.DAT"
-music		INCBIN	"A:\MUS.DAT"
+l_030		INCBIN	"FONT51.DAT"
+l_020		INCBIN	"MENU51.pi1"
+music		INCBIN	"MUS.DAT"

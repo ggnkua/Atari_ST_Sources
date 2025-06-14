@@ -418,8 +418,8 @@ text2	DC.B	"HELLO TO      HAL , SERVO , THE PRESIDENT , EDITMAN , THE REPLICANTS
 
 	even
 
-music	incbin	"MENU91\cybernd2.mus"
-font	incbin	"MENU91\charset.nel"
+music	incbin	"cybernd2.mus"
+font	incbin	"charset.nel"
 piccols	dc.w	$777,$666,$555,$444,$333,$222,$402,$613
 	dc.w	$010,$121,$131,$242,$577,$363,$474,$000
-pic	incbin	"MENU91\testmenu.pic"
+pic	incbin	"testmenu.pic"

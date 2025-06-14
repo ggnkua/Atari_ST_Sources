@@ -1,4 +1,5 @@
 		opt c+,d-,o+
+		opt	W-
 		ttl	"LSD DEPACKER V1.0"
 
 ;SET TABS TO 10 FOR DISASSEMBLY
@@ -403,6 +404,6 @@ g4		dc.b "mafdet.jek",0,0,0
 g5		dc.b "hades.was",0
 		even
 		
-l_030		INCBIN	"A:\MENU54\FNT54_16.PI1"
-l_020		INCBIN	"A:\MENU54\LSD_54.PI1"
-music		INCBIN	"A:\MENU54\7E000.MUS"
+l_030		INCBIN	"FNT54_16.PI1"
+l_020		INCBIN	"LSD_54.PI1"
+music		INCBIN	"7E000.MUS"

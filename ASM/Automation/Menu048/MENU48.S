@@ -354,7 +354,7 @@ message	DC.B "   "
 	dc.b $ff,$FF
 	even
 
-MUS1		INCBIN	"A:\2c000.DAT"
-font1		INCBIN	"A:\OZZ.FNT"
-piv		INCBIN	"A:\MENPIC.DAT"
+MUS1		INCBIN	"2c000.DAT"
+font1		INCBIN	"OZZ.FNT"
+piv		INCBIN	"MENPIC.DAT"
 

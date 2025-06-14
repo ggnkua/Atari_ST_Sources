@@ -543,5 +543,5 @@ font	incbin	"charset.nel"
 piccols	dc.w	0,0,0,0,0,0,0,0
 	dc.w	0,0,0,0,0,0,0,0
 	
-pic	incbin	"B:\505.PI1"
+pic	incbin	"menu103.PI1"
 pic2	incbin	"MENUPT_2.PI1"

@@ -1,4 +1,5 @@
 		opt c+,d-,o+
+		opt	W-
 		ttl	"LSD DEPACKER V1.0"
 
 ;SET TABS TO 10 FOR DISASSEMBLY
@@ -385,6 +386,6 @@ g3		dc.b "FUSION.LSD",0,0,0
 g4		dc.b "TERRA.LSD",0
 		even
 		
-l_030		INCBIN	"A:\FNT_66.DAT"
-l_020		INCBIN	"A:\TIME.DAT"
-music		INCBIN	"A:\20000.DAT"
+l_030		INCBIN	"FNT_66.DAT"
+l_020		INCBIN	"TIME.DAT"
+music		INCBIN	"20000.DAT"

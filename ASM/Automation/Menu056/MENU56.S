@@ -1,4 +1,5 @@
 		opt c+,d-,o+
+		opt	W-
 		ttl	"LSD DEPACKER V1.0"
 
 ;SET TABS TO 10 FOR DISASSEMBLY
@@ -346,5 +347,5 @@ g1		dc.b "BERMUDA.WAS",0,0
 g2		dc.b "TRAP.LSD",0
 		even
 		
-l_030		INCBIN	"A:\FNT_56.PI1"
-l_020		INCBIN	"A:\LSD_56.PI1"
+l_030		INCBIN	"FNT_56.PI1"
+l_020		INCBIN	"LSD_56.PI1"

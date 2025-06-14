@@ -382,7 +382,7 @@ message	DC.B "   ----->     "
 	dc.b $ff,$FF
 	even
 
-MUS1		INCBIN	"A:\out.DAT"
-font1		INCBIN	"A:\OZZ.FNT"
-piv		INCBIN	"A:\LSD50C.DAT"
+MUS1		INCBIN	"out.DAT"
+font1		INCBIN	"OZZ.FNT"
+piv		INCBIN	"LSD50C.DAT"
 

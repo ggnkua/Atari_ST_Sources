@@ -1,4 +1,5 @@
 		opt c+,d-,o+
+		opt	W-
 		ttl	"LSD DEPACKER V1.0"
 
 ;SET TABS TO 10 FOR DISASSEMBLY
@@ -419,6 +420,6 @@ g2		dc.b "luxor.jek",0,0,0,0
 g3		dc.b "hustler.lsd",0
 		even
 		
-l_030		INCBIN	"A:\FNT_57_2.PI1"
-l_020		INCBIN	"A:\LSD_57.PI1"
-music		INCBIN	"A:\17438.dat"
+l_030		INCBIN	"FNT_57_2.PI1"
+l_020		INCBIN	"LSD_57.PI1"
+music		INCBIN	"17438.dat"
