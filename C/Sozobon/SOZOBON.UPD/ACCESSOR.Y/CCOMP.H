@@ -1,0 +1,31 @@
+#define CCOMPILE 0  	/* TREE */
+#define SOURCE 3  	/* OBJECT in TREE #0 */
+#define OUTFILE 14  	/* OBJECT in TREE #0 */
+#define EXTTOS 5  	/* OBJECT in TREE #0 */
+#define EXTTTP 7  	/* OBJECT in TREE #0 */
+#define EXTPRG 9  	/* OBJECT in TREE #0 */
+#define EXTACC 11  	/* OBJECT in TREE #0 */
+#define OPTIMIZE 15  	/* OBJECT in TREE #0 */
+#define ASSEMBLE 17  	/* OBJECT in TREE #0 */
+#define LINKER 19  	/* OBJECT in TREE #0 */
+#define LINKVDI 21  	/* OBJECT in TREE #0 */
+#define LINKAES 23  	/* OBJECT in TREE #0 */
+#define INCLLIB1 26  	/* OBJECT in TREE #0 */
+#define INCLLIB2 27  	/* OBJECT in TREE #0 */
+#define INCLLIB3 28  	/* OBJECT in TREE #0 */
+#define INCLLIB4 29  	/* OBJECT in TREE #0 */
+#define DEFINE1 32  	/* OBJECT in TREE #0 */
+#define DEFINE2 33  	/* OBJECT in TREE #0 */
+#define DEFINE3 36  	/* OBJECT in TREE #0 */
+#define DEFINE4 37  	/* OBJECT in TREE #0 */
+#define UNDEF1 34  	/* OBJECT in TREE #0 */
+#define UNDEF2 35  	/* OBJECT in TREE #0 */
+#define UNDEF3 38  	/* OBJECT in TREE #0 */
+#define UNDEF4 39  	/* OBJECT in TREE #0 */
+#define FPBIB 40  	/* OBJECT in TREE #0 */
+#define LOADMAP 42  	/* OBJECT in TREE #0 */
+#define FULLINFO 45  	/* OBJECT in TREE #0 */
+#define SYMBTAB 47  	/* OBJECT in TREE #0 */
+#define ABBRUCH 44  	/* OBJECT in TREE #0 */
+#define OK 49  	/* OBJECT in TREE #0 */
+
