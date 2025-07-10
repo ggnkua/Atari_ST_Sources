@@ -29,6 +29,7 @@ TODO (tl;dr: get some dev tools and dig in!)
 |`C/Alan Pratt/Gulam`|Compiles with Mark Williams C 3.0.5|
 |`C/Michael Thänitz/7UP_PD`|Compiles with Pure C|
 |`C/Markus Kohm/7UP_PD`|Compiles with Pure C|
+|`C/Paradox/X-Debug`|Builds with Lattice C 5.6 and DevPac 3.1|
 
 ## GFA Basic
 
