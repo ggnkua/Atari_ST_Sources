@@ -1,0 +1,1785 @@
+* ein 8048_assembler.
+
+.text
+
+* def,die via xx(a6) gebraucht:
+fianf: equ 20  .L anfang des ersten zwischenergebniss
+fiend: equ 28  .L =(fianf)+(filng), zeigt auf byte hinter erstem zwErgebn
+pranf: equ 32  .L zeigt erstes asciiByte(zB.Label) des 8048programms
+pcofs: equ 36  .L vierAscii: hexdigits des offsets fÅr pc8084 (siehe .o)
+pcsch: equ 40  .L letzterStand des pc8048
+labde: equ 44  .L LabelDefEnd, ab diesrAdr keine witeren LabelDefs
+fmend: equ 48  .L fehlrMeldgEnd, ab hier keine weiteren Fehlermeldungen
+biend: equ 52  .L abHier keinWeitrer binÑrCode
+pcorg: equ 56  .L wie pcofs, aber zwischendurch (nicht am pAnfang)
+orbin: equ 60  .w der binÑrcode zu pcorg
+afanf: equ 64  .L anfgAdr 8048assemblertext
+
+
+stliesna:
+ suba.w #100,a7
+liesna:
+ bsr  newline
+ lea  _filenam(pc),a0
+ bsr  textbsch
+ lea  (a7),a0
+ bsr  lieszeil
+ bne  liesna   wenn nicht mit carRet abgeschlossen: nochmal einlesen
+
+stholfi:
+lea LLAST(pc),a6  ab hier platz im RAM, ca600Byte: diverseParametr,dann file
+lea  600(a6), a1
+bsr holfile
+bsr newline
+
+move.w #$2000,-(a7)
+move.w a0,-(a7)   evtl kodierung fÅr fehler
+tst.L  d0
+bmi    realhas
+clr.w      (a7)
+realhas:
+bsr    txofstac
+addq.L #4,  a7
+
+lea _biosmel(pc),a0
+bsr textbsch
+bsr hxbsch        denn d0 evtl fehlrCode,sonst =ByteZahl
+
+
+move.L a1,afanf(a6)
+tst.L  d0            merk file-Anfang und teste die LÑnge
+bmi    filwkerr
+add.L  a1,d0
+move.L d0,fianf(a6)  merk AdrErstesByteHinterEingelesnem
+
+
+*nun sollte ab a1 ein asciiText im RAM stehen in Åblicher 8048 assemblerSprache
+
+move.L afanf(a6),a0
+move.b #10,    -(a0)
+move.b #13,    -(a0)
+move.L a0, afanf(a6)
+move.L fianf(a6),a2
+move.w a2,     d0
+lsr.w  #1,     d0
+bcc    grada2
+clr.b         (a2)+
+grada2:
+clr.L         (a2)+  nun a0=anfangAssTxt, a2 zeigt hinter den text
+move.L a2,fianf(a6)
+bra    aseinsti
+
+pXCH:
+bne    w1stop0   denn hier muû 'A,...' folgen
+move.w #'20',d0
+bra    guckro_R
+
+pMOVP_X:
+bne    MOVXroA
+move.w #'A3',d0   MOVP='A3'
+btst   #3, 3(a0)  ne=X(movx) eq=P(movp)
+beq    hxzige
+*                 also movx a,@  =80/81
+move.w #'80',d0   
+bra    guckro
+
+MOVXroA:
+move.w #'90',d0  90=movx @R0,A
+cmp.b  #'0',(a1)
+beq    hxzige
+addq.w #1,   d0  91=movx @R1,A
+cmp.b  #'1',(a1)
+beq    hxzige
+bra    w1stop0
+
+pJNI_F1:
+subq.L #2,    a1  zeig labelString
+move.w #$37B6,d0  '76'(setBit7!)=JF1
+cmp.b  #'1',2(a0)
+beq    hxzige
+move.w #$38B6,d0  '86' mit set_bit7
+bra    hxzige
+
+pCPL:
+ move.w #'95',d0  = cpl F0
+ bra    pCLR1
+pCLR:
+ move.w #'85',d0  = clr F0
+pCLR1:
+ cmp.b  #'0',-(a1)  zeigt 2ndByteOf operandString; clr/cpl F0 ?
+ beq    hxzige
+ add.w  #$900,d0   mach '85' zu 'A5', '95' zu 'B5', also F0 zu F1
+ cmp.b  #'1',(a1)
+ beq    hxzige
+ sub.w  #$EFE,d0   erzeuge '27' bzw '37', clr/cpl A
+ moveq  #$20, d3
+ or.b   -(a1),d3
+ cmp.b  #'a', d3
+ beq    hxzige
+ add.w  #$700,d0  mach clr/cplA zu clr/cplC, also 27/37 zu 97/A7
+ cmp.w  #'97',d0
+ beq    incccok
+ add.w  #$700,d0
+incccok:
+ cmp.b  #'c', d3
+ bne    w1stoper
+ bra    hxzige
+
+pEN:
+ move.w #'05',d0
+pEN1:
+ subq.L #2,  a1
+ moveq  #$20,d3
+ or.b  (a1), d3  erstenChar des operanden als KleinBuchstabe
+ cmp.b  #'i',d3
+ beq    hxzige
+ add.w #$200,d0  erhîhe um #$200, ENtcnti statt ENi, DIStcnti statt DISi
+ cmp.b  #'t',d3
+ beq    hxzige
+ bra    w1stoper
+
+pDIS:
+ move.w #'15',d0
+ bra    pEN1
+
+pA_S:
+*             ADD oder STRT oder RL
+ beq   pADD    denn nur diesem folgt 'A,...'
+move.w #'45',d0
+ moveq #$20,d3  also  STRT T oder STRT CNT oder RL A
+ or.b -(a1),d3
+ cmp.b #'n',d3
+ beq   hxzige
+move.w #'55',d0  strt T
+ moveq #$20,d3
+ or.b -(a1),d3  nun zeigt a1 anfng 1st operand
+ cmp.b #'t',d3
+ beq   hxzige
+move.w #'E7',d0  RL A
+ cmp.b #'a',d3
+ beq   hxzige
+ bra   w1stoper
+
+pADD:
+ move.w #'60',d0
+ bra    pADDC1
+
+pADDC:
+ bne    unknown    ne= kein 'A,'
+ move.w #'70',d0   addc A,@R0 
+pADDC1:
+ bsr   hol2nd4    liefert max 4byte(ascii) des zweiten operanden in d3
+ beq   w2ndoper
+ addq.L #1, a1   zeig hinter 'A,'
+ swap       d3
+ cmp.w #$40,d3   beginnt zweiter opernd mit @?
+ beq   guckro
+ rol.L #8,  d3
+ cmp.w #$52,d3   oder mit R?
+ beq   guckro_R
+*                also folgt ein immediate_wert
+ sub.w #$57D,d0  erzeuge '03' bzw '13' mit gesetztem bit7
+ bra   hxzige2
+
+pDEC:
+ move.w #'07',d0   DEC A
+ subq.L #2,   a1   zeig erstnChar operand
+ moveq  #30,  d3
+ and.b  (a1), d3   gibt 0, wenns 'a' oder 'A' ist
+ beq    hxzige
+ move.w #'C0',d0
+ cmp.b  #$12, d3   oder ists zB 'R'?
+ beq    g1ro_R
+ bra    w1stoper
+
+pINS_C:
+ beq    pINS
+ move.w #'10',d0   INC @R0
+ subq.L #2,   a1   zeig erstnChar operand
+ moveq  #$9F, d3
+ and.b  (a1), d3   gibt 0, wenns '@' ist;  $12 bei R oder r;  1 bei A/a
+ beq    g1ro_R
+ cmp.b  #$12, d3
+ beq    g1ro_R
+ move.w #'17',d0   INC A
+ subq.b #1,   d3
+ beq    hxzige
+ bra    w1stoper
+ 
+pINS:
+ move.w #'08',d0
+ bra    hxzige
+
+pXRL:
+ bne   unknown
+move.w #'D0',d0    XRL A,@R0
+pXRL1:
+ bsr   hol2nd4     gibt in d3 vier letzteAsciOf2ndOp, eq wenn keine
+ beq   w2ndoper
+ addq.L #1,  a1    zeig hinter 'A,'
+ swap        d3
+ cmp.w #$40, d3
+ beq   guckro
+ rol.L #8,   d3
+ cmp.w #$52, d3  'R'
+ beq   guckro_R
+*                also folgt immediateWert
+ add.b #$83,d0   '3' mit gesetztem bit7
+ bra   hxzige2
+
+pANL:
+ bne    pANLp
+ move.w #'50',d0
+ bra    pXRL1
+
+pANLp:
+*                 ANL BUS/P1/P2
+ move.w #$39B8,d0 '98' mit gesetztem bit7
+ bra    pO1
+
+pXCHD:
+ move.w #'30',d0
+ bra    guckro
+
+pORL:
+ bne    pORLp
+*                  ORL A,...
+ move.w #'40',d0
+ bra    pXRL1
+pORLp:
+*                  ORL BUS/P1/P2
+ move.w #$38B8,d0  '88' mit bit7set
+pO1:
+ moveq  #$20, d3
+ or.b   -1(a1),d3  hol 2ndCharOf1stOperand so, daû stets Kleinbuchstabe
+ cmp.b  #'u', d3
+ beq    hxzige3
+ addq.b #1,   d0
+ cmp.b  #'1', d3
+ beq    hxzige3
+ addq.b #8,   d0
+ cmp.b  #'2', d3
+ beq    hxzige3
+ bra    w1stop0
+
+pS_R:
+ move.w #'83',d0   RET
+ moveq  #$D, d3
+ and.b  (a0),d3
+ beq   hxzige
+*                 also wohl SEL
+ move.w #'C5',d0  SEL RB0
+ subq.L #2,  a1
+ moveq  #$20,d3
+ or.b   (a1),d3
+ cmp.b  #'r',d3
+ beq    pRB01
+ cmp.b  #'m',d3
+ bne    w1stoper
+ add.w  #$200,d0
+pRB01:
+ cmp.b  #'0',2(a1)
+ beq    hxzige
+ add.w  #$100,d0
+ cmp.b  #'1',2(a1)
+ beq    hxzige
+ bra    w1stoper
+
+pOUTL:
+ move.w #'38',d0   OUTL BUS,A
+ bra    pO1
+
+pANLD:
+ beq    w1stop0
+ move.w #'9C',d0
+ bra    pMOVD1
+
+pORLD:
+ beq    w1stop0
+ move.w #'8C',d0
+ bra    pMOVD1
+
+pMOVD:
+ beq    pMOVDa
+ move.w #'3C',d0   MOVD P4,A
+pMOVD1:
+ move.b -(a1),d3
+ subq.L #1,   a1
+ cmp.b  #'4', d3
+ beq    hxzige
+ addq.b #1,   d0        P5,A
+ cmp.b  #'5', d3
+ beq    hxzige
+ addq.b #1,   d0        P6,A
+ cmp.b  #'6', d3
+ beq    hxzige
+ addq.b #1,   d0        P7,A
+ cmp.b  #'7', d3
+ beq    hxzige
+ bra    w1stoper
+
+pMOVDa:
+ bsr    hol2nd4
+ beq    w2ndoper
+ move.w #'0C',d0   MOVD A,P4
+ cmp.L  #$5034,d3
+ beq    hxzige
+ addq.b #1,   d0   MOVD A,P5
+ cmp.L  #$5035,d3
+ beq    hxzige
+ addq.b #1,   d0
+ cmp.L  #$5036,d3
+ beq    hxzige
+ addq.b #1,   d0
+ cmp.L  #$5037,d3
+ beq    hxzige
+ bra    w2ndoper
+
+pDJNZ:
+ beq    w1stop0
+ move.b -(a1),d3
+ subq.L #1,   a1
+ move.w #$45B8,d0  'E8' mit bit7 gesetzt
+ cmp.b  #'0', d3
+ beq    hxzige3
+ addq.b #1,   d0   ˜'E9'= DJNZ R1,...
+ cmp.b  #'1', d3
+ beq    hxzige3
+ addq.b #8,   d0
+ cmp.b  #'2', d3
+ beq    hxzige3
+ addq.b #1,   d0
+ cmp.b  #'3', d3
+ beq    hxzige3
+ addq.b #1,   d0
+ cmp.b  #'4', d3
+ beq    hxzige3
+ addq.b #1,   d0
+ cmp.b  #'5', d3
+ beq    hxzige3
+ addq.b #1,   d0
+ cmp.b  #'6', d3
+ beq    hxzige3
+ addq.b #1,   d0
+ cmp.b  #'7', d3
+ beq    hxzige3
+ bra    w1stoper
+
+pIN:
+ bne    w1stop0
+ bsr    hol2nd4
+ beq    w2ndoper
+ move.w #'08',d0
+ cmp.L  #$425553,d3  'BUS'
+ beq    hxzige
+ addq.b #1,   d0
+ cmp.L  #$5031,d3    'P1'
+ beq    hxzige
+ addq.b #8,   d0
+ cmp.L  #$5032,d3     'P2'
+ beq    hxzige
+ bra    w2ndoper
+
+pMOV:
+ beq    MOVa
+ bsr    hol2nd4
+ beq    w2ndoper
+ subq.L #1,   a1    zeig erstesByteOf1stOperand
+ move.w #$42B0,d0   MOV @R0,#...  'B0' mit bit7_set
+ cmp.w  #$41, d3    'A'
+ bne    g1ro_R
+ moveq  #$20, d3
+ or.b   (a1), d3
+ move.w #'D7',d0   MOV PSW,A
+ cmp.b  #'p', d3
+ beq    hxzige
+ move.w #'A0',d0   MOV @R0,A
+ bra    g1ro_R
+
+MOVa:
+*                MOV a,...  oder MOV T,A
+ bsr    hol2nd4
+ beq    w2ndoper
+ addq.L #1,   a1  zeig hinter 'A,'
+ move.w #'42',d0
+ cmp.w  #$54, d3  'T'
+ beq    hxzige
+ move.w #'62',d0  MOV T,A
+ cmp.w  #$41, d3  'A'
+ beq    hxzige
+ move.w #'C7',d0
+ cmp.L  #$505357,d3  'PSW'
+ beq    hxzige
+ 
+ move.w #'F0',d0   mov A,@R0 
+ swap       d3
+ cmp.w d1,  d3   beginnt zweiter opernd mit @?
+ beq   guckro
+ rol.L #8,  d3
+ cmp.w #$52,d3   oder mit R?
+ beq   guckro_R
+*                 also folgt ein immediate_wert
+ move.w #$32B3,d0  erzeuge '23' mit gesetztem bit7
+ bra   hxzige2
+
+pJB7:
+ cmp.b  #'7',2(a0)  kînnts wirklich JB7 gewesen sein?
+ bne    pORG
+ move.w #$46B2,d0   'F2' mit bit7_set
+ bra    hxzige
+
+* org  assemblrStatement: hier wird spÑter mit nops gefÅ bis pc_soll erreicht
+pORG:
+ cmp.b  #'.', (a0)  denn .org muû es heiûen
+ bne    unknown
+ bsr    hol0nd4    Ñhnlich hol2nd4,quasi hol1st4: in d3 die letztn 4Byte des string,der auf .org folgt
+ beq    unknown
+ move.w #' .',(a2)+
+ swap          d3   davon interesieren nur das drittletz/zweitlet/letzte
+ move.b d3,   (a2)+
+ bne    zwa2p:
+ move.b #48,-1(a2)  0byte durch '0' ersetzn
+zwa2p:
+ rol.L  #8,    d3
+ move.b d3,   (a2)+
+ bne    zwa3p:
+ move.b #48,-1(a2)
+zwa3p:
+ rol.L  #8,    d3
+ move.b d3,   (a2)+
+ bne    zwa4p
+ move.b #48,-1(a2)
+zwa4p:
+ move.b d2,    (a2)+  nun also ' .HHH '
+ move.L #'  \\',(a2)+  und nun ' .HHH   \\'
+ move.w #'  ', (a2)+
+ moveq  #13,   d3
+ bra    hstulo
+
+* dcb = dc  assemblerStatement: fÅg einfach die folgende Hexzahl ein
+pDC:
+pDCB:
+ subq.L #2,a1  zeig anfangString
+ bra    hxzblweg
+
+g1ro0:
+ subq.L #2, a1
+g1ro1:
+*                 kriegt a1: zeig 1stOprnd, guck ob=@R0/@R1
+ cmp.b #'@',(a1)
+ bne   w1stoper
+ moveq #$20, d3
+ or.b  1(a1),d3  hol nÑchstChar so, daû auf jedenfall KleinBuchstabe
+ cmp.b #'r', d3
+ bne   w1stoper
+ cmp.b #'0',2(a1)
+ beq   hxzige3
+ addq.b #1,   d0
+ cmp.b #'1',2(a1)
+ beq   hxzige3
+ bra   w1stoper
+
+g1ro_R:
+*                 kriegt a1 auf 1stOperand zeigend, =@/R: d0.b beeinflussen
+ cmp.b  #'R',(a1)  nur R0...R7 und @R0/@R1 erlaubt
+ beq    guckkr
+ cmp.b  #'r',(a1)
+ bne    g1ro1
+guckkr:
+ move.b 1(a1),d3
+ cmp.b  #'0',d3  folgt dem R ein ascii unterhalb 0?
+ bcs    w1stoper
+ cmp.b  #'7',d3  oder folgt einer oberhalb 7?
+ bhi    w1stoper
+ addq.b #8,  d3  die codierung fÅr R0 ist ascii8, fÅr R1 ists ascii9
+ cmp.b  #'9',d3  die weiteren Register werden asciiA bis asciiF codiert
+ bls    zxzige3
+ addq.b #7,  d3  diese `A` ... `F` codes hiermit hergestellt
+zxzige3:
+ and.b  #$80,d0
+ or.b   d3,  d0  evtl gesetztes bit7 erhalten
+ bra    hxzige3
+
+w1stop0:
+ subq.L #2, a1
+w1stoper:
+ addq.L #1,    a1    zeige 2ndByteOf1stOperand
+ move.L #'?1st',(a2)+
+ bra    opmissng
+
+w2ndoper:
+*                     kriegt a0=opcodString a1=2ndByteOfOperand
+move.L #'?2nd',(a2)+  protokolliere, daû unpassender zweiter Operand
+ moveq #$2C,   d3     ','
+kommasc:
+ cmp.b (a1), d2       ' '
+ bhi   no2ndf
+ cmp.b (a1)+,d3
+ bne   kommasc
+kommaf:
+ cmp.b (a1)+,d2 laû Blanks weg
+ beq   kommaf
+no2ndf:
+opmissng:
+ move.L #'    ',d3   '    ';  hier einsprung von w1stoper
+ move.b -1(a1),d3
+ cmp.b  d2,    d3
+ bcs    no2ndopr
+ LSL.w  #8,    d3
+ move.b (a1),  d3
+ cmp.b  d2,    d3
+ bcs    n1a2nd
+ LSL.L  #8,    d3
+ move.b 1(a1), d3
+ cmp.b  d2,    d3   nun also drei druckbareChar und Blank davor in d3?
+ bcc    n0a2nd
+no2ndopr:
+n1a2nd:
+n2a2nd:
+ move.b d2,d3
+n0a2nd:
+ move.L d3,(a2)+
+ bra    qmissing
+
+guckro:
+ cmp.b  (a1)+,d2  laû Blanks weg
+ beq    guckro
+ subq.L #1, a1
+guckro1:
+ cmp.b  (a1)+,d1  hier nur noch @R1 oder @R2 erlaubt
+ bne    w2ndoper
+ moveq  #$20, d3
+ or.b   (a1), d3  hol nÑchstChar so, daû auf jedenfall KleinBuchstabe
+ cmp.b  #'r', d3
+ bne    w2ndoper
+ cmp.b  #'0',1(a1)
+ beq    hxzige
+ addq.b #1,   d0
+ cmp.b  #'1',1(a1)
+ beq    hxzige
+ bra    w2ndoper
+
+guckro_R:
+*                kriegt a1: zeig hinter 1stOperand, guck ob 2ndOpernd=@/R
+ cmp.b  (a1)+,d2  laû Blanks weg
+ beq    guckro_R
+ cmp.b  #'R',-(a1)  nur R0...R7 und @R0/@R1 erlaubt
+ beq    guckklr
+ cmp.b  #'r',(a1)
+ bne    guckro1
+guckklr:
+ addq.L #1,  a1
+ move.b (a1),d0
+ cmp.b  #'0',d0  folgt dem R ein ascii unterhalb 0?
+ bcs    w2ndoper
+ cmp.b  #'7',d0  oder folgt einer oberhalb 7?
+ bhi    w2ndoper
+ addq.b #8,  d0  die codierung fÅr R0 ist ascii8, fÅr R1 ists ascii9
+ cmp.b  #'9',d0  die weiteren Register werden asciiA bis asciiF codiert
+ bls    hxzige
+ addq.b #7,  d0  diese `A` ... `F` codes hiermit hergestellt
+ bra    hxzige
+
+hxzige2:
+ subq.L #1, a1
+hxzige3:
+ subq.L #1, a1  hier landen die, die statt 2ndOperand ev ImmedString habn
+hxz3lo:
+ addq.L #1, a1     a1 zeigte bisher irgendwo mitten in 1stOperand
+ cmp.b  #',',(a1)  such nÑchsten blank odr Komma (odr kleiner)
+ bhi    hxz3lo
+ bne    hxzige
+ addq.L #1, a1
+ bra    hxzige   zeig hinter Komma
+hxzifgen:
+ beq    unknown
+hxzige:
+*      a1 soll auf potentiellnImediateString zeigen odr auf dieBlanksDavor
+ bsr    genhxzei   ne= es folgt datByte (als string oder Zahl)
+ beq    nxazeil
+*                 nun noch evt anschlieûendenString Åbernehmen (=datByte)
+hxzblweg:
+ cmp.b (a1)+,d2   laû Blanks weg
+ beq    hxzblweg
+ move.b -(a1),d0   ersterChar
+ cmp.b  #'$', d0
+ beq    wegfido
+ cmp.b  #'#', d0   falls #: nimm erst nÑchstn char
+ bne    keinfis
+wegfido:
+ addq.L #1,   a1
+ move.b (a1), d0
+keinfis:
+ cmp.b  d2,   d0   >' '?
+ bls    wsprziel
+ cmp.b  d1,   d0   <'@'?
+ bcs    hxexpliz
+*                 nun steht fest: string als sprungziel oder so Åbernehmn
+ moveq  #7,   d3   hîchstns 8byte Åbernehmn
+hxstulo:
+ move.b (a1)+,(a2)+
+ cmp.b  (a1), d2
+ dbcc   d3,   hxstulo  decrNUR,wenn NOTcc. bei cc also ein decr zuwenig
+ bcs    tu20dazu       bei cc deshalb 1abziehen; 20add immer sowieso
+ subq.w #1,   d3
+tu20dazu:
+ add.w  #20,  d3
+hxst2lo:
+ move.b d2,     (a2)+
+ dbra   d3,       hxst2lo  nun aufJedenFall 30byte
+ move.L #$207E0D0A,(a2)+    und nun noch caRetLinFeed dahinter
+ bra    nxazeil
+
+*auf wsprziel gelandet: nix folgt, obwohl ein datbyte(zB.sprungZiel) erwartet
+wsprziel:
+ move.L #'?mis',(a2)+
+ move.L #'sing',(a2)+
+qmissing:
+ move.w #'  ',(a2)+  so wird vorstehndrTxt spÑter als fehlerhaftrLabel interpr.
+ moveq  #15,   d3     hîchstns 16byte aus assTxt Åbernehmn
+hstulo:
+ move.b (a0)+,(a2)+
+ cmp.b  (a0), d2
+ dbhi   d3,   hstulo  decrNUR,wenn NOThi. bei hi also ein decr zuwenig
+ bls    tu2dazu       bei hi deshalb 1abziehen; 2 add immer sowieso
+ subq.w #1,   d3
+tu2dazu:
+ addq.w  #2,  d3
+hst2lo:
+ move.b d2,     (a2)+
+ dbra   d3,       hst2lo  nun aufJedenFall 30byte
+ move.L #$207E0D0A,(a2)+    und nun noch caRetLinFeed dahinter
+bra    nxazeil
+
+hxexpliz:
+move.L #'0000',d0
+hexpllo:
+LSL.L  #8,   d0
+move.b (a1)+,d0
+cmp.b  d1,   d0  >dez_ziffern?
+bls    zifok
+and.b  #$DF, d0  erzeug Groûbuchstab aus kleinen
+zifok:
+cmp.b  d2,   d0
+bhi    hexpllo
+LSR.L  #8,   d0  letztChar war nicht druckbar: wieder rausschmeiûen
+bsr    genhxzei
+move.b #'#',-22(a2)  setz # hinter datbyte
+cmp.b  #'#',-54(a2)  war zuvor auch datbyte?
+beq    nxazeil
+cmp.b  #'4',-55(a2)  war zuvor JMP/CALL?
+bne    nxazeil
+*               also wars JMP/CALL, dann auch drittletztesDatByte wichtg!
+ swap        d0  drittletztes DatByte nun in d0.b
+ moveq  #$1F,d3
+*               in d0.b=' A B C D E F    0  1  2  3  4  5  6  7  8  9'
+ and.b  d0,   d3         $1 2 3 4 5 6.. 10 11 12 13 14 15 16 17 18 19
+ move.b -56(a2),d0
+ move.L a0,   -(a7)
+ lea    hctb(pc),a0
+ move.b 0(a0,d3.w),d3    '4 6 8 A C E..  0  2  4  6  8  A  C  E  0  2'
+ move.L (a7)+,  a0
+ cmp.b  #'A',   d0
+ bcs    nhcop
+ addq.b #1,     d0  so auch >'9': grade Zahlen haben bit0=0
+nhcop:
+ lsr.b  #1,     d0
+ bcc    jucok      falls es call war(cs): ungradeDigit erzeugen (ascii)
+ addq.b #1,     d3
+jucok:
+ move.b d3, -56(a2)
+
+*s.unten: hctb: dc.b '~468ACE~~~~~~~~~02468ACE02~~~~~~'
+
+bra    nxazeil
+
+
+tooshort:
+*       hier gelandet, wenn opcodestring nur ein byte lang
+move.L #'?sho',(a2)+
+move.w #'rt', (a2)+
+move.b #32, (a2)+
+move.b (a0),(a2)+
+bra    qmissing
+evkommnt:
+*       hier gelandet, wenn ersterString ohne ':' aber zuLang fÅr opcode
+move.L #'?kom',(a2)+
+q0missng:
+move.b #32, (a2)+
+move.b (a0),(a2)+
+move.b 1(a0),(a2)+
+move.b 2(a0),(a2)+
+bra    qmissing
+unknown:
+*       hier gelandet, wenn jmpTabellenWert=0 war
+move.L #'?unk',(a2)+
+bra    q0missng
+
+evlabel:
+moveq #$3A, d3  3A=':'
+lea   1(a0),a1  zeig 2ndByteOfString
+evlaloo:
+move.b (a1)+,d0
+cmp.b  d0,   d2
+bcc    evkommnt
+cmp.b  d0,   d3
+bne    evlaloo
+jalabel:
+moveq  #7,   d3    hîchstns 8 char pro label
+subq.L #1,   a1    damit im nachfolgndn loop der ':' weggelassen
+jalloo:
+move.b (a0)+,(a2)+  a2 zeige zu erzeugendes zwischenErgebnis
+cmp.L  a1,   a0
+dbcc   d3,  jalloo  decr (and branch) only until cc
+subq.w #1,   d3     damit letzter decrement auch bei cc stattfindet
+jaltd3:
+tst.w  d3
+bmi    jalcrlf
+move.b d2,  (a2)+
+subq.w #1,  d3
+bra    jaltd3
+jalcrlf:
+move.w #'\\',(a2)+  imZwiErgebnis ist dies Kennzeichn fÅr Label ohne opcod
+move.L #'    ',d3
+move.L d3,   (a2)+
+move.L d3,   (a2)+
+move.L d3,   (a2)+
+move.L d3,   (a2)+
+move.L #'   ~',(a2)+
+move.w #$D0A,(a2)+
+addq.L #1,   a0    zeig hinter ':'
+bra    blwegla
+
+aseinsti:
+* a0 wird hinter CarRet_LinFeed zeigend: s.nxazeil
+moveq  #$40,d1 '@'
+moveq  #$20,d2 ' '
+
+nxazeil:
+moveq  #10,d3  LinFeed
+
+nxaloop:
+move.b (a0)+,d0
+beq    afileend
+cmp.b  d0,   d3  such LineFeed
+bne    nxaloop
+
+blwegla:
+cmp.b  (a0)+,d2  laû Blanks weg
+beq    blwegla
+move.L a0,   a1  so in a1 2ndByteOfString
+cmp.b  -(a0),d1  merk in a0 1stByteOfString.  dieses=Buchstabe(ls)?
+bls    buchsfou
+cmp.b  #'.',(a0)  unterhalb '@' ist als ersterChar nur '.' gÅltig. sonst:Kommentarzeile
+bne    nxazeil
+
+buchsfou:
+moveq  #4, d3   spÑtestns 6.Char muû ' '{odrKleinr} sein, beginn bei 2.Char
+sustrie:
+cmp.b (a1)+,d2     such stringEnde, also nichtDruckbarenChar
+dbcc  d3,  sustrie
+bcs   evlabel
+subq.L #2, a1
+cmp.b #':',(a1)+  letzChar=:?  a1 zeigt nun erstesByte HINTER string
+beq   jalabel
+subq.w #4, d3    d3= 0/-1/-2/-3/-4   stringLÑnge= 1/2/3/4/5
+beq    tooshort
+
+move.b (a0), d0
+ror.w  #4,   d0  untre4bit des ersten char aufheben (nachher nur b321 verwenden)
+move.b 1(a0),d0
+ror.w  #3,   d0  untre3bit des zweitn char
+move.b -1(a1),d0  letzter character
+rol.w  #7,   d0
+and.w  #$3FE,d0  also bit210ofLastChar bit210of2ndChar bit321of1stChar
+addq.w #2,   d3  war stringLÑnge=3?
+beq    lkorrok
+subq.w #2,   d0
+lkorrok:
+cmp.w  #$380,d0
+bcc    pJB7
+move.w opcodtab(pc,d0.w),d0
+bpl    hxzifgen
+noblll:
+cmp.b (a1)+,d2
+beq    noblll
+*                   a1 zeigt zweitesByte des nÑchstnString
+cmp.b  #',',(a1)+   a1 zeigt drittesByteOfNxtString, flaq_eq wenn 2ndBy=Komma
+q: jmp -2(pc,d0.w)
+
+opcodtab:
+dc.w 0,0,0,0,0,0,0,0
+dc.w 0,0,0,0,0,0,0,0
+dc.w 0,0,0,0,0,'12'+128,0,0           12=JB0
+dc.w 0,0,0,0,pXCH-q,0,0,0
+dc.w '65',0,0,0,0,'36'+128,0,0        65=STOPtcnt 36=JNT0
+dc.w 0,0,0,0,'B3','04'+128,0,0        B3=JMPP     04=JMP
+dc.w 0,'75',0,0,'26'+128,'B6'+128,0,0 75=ENT0clk  26=JT0  B6=JF0
+dc.w '47',0,0,0,0,pMOVP_X-q,0,'00'    47=SWAPa    00=NOP
+
+dc.w 0,0,0,0,0,0,0,0
+dc.w 0,'57',0,0,0,0,0,0               57=DAa
+dc.w 0,0,0,0,0,'32'+128,0,0           32=JB1
+dc.w 0,0,0,0,0,0,0,0
+dc.w 0,0,0,0,0,'56'+128,0,0           56=JT1
+dc.w 0,0,0,0,0,0,0,0
+dc.w 0,0,0,0,'46'+128,pJNI_F1-q,0,0   46=JNT1
+dc.w 0,0,0,0,0,0,0,0
+
+dc.w 0,0,0,0,0,0,0,0
+dc.w 0,0,0,0,0,0,0,0
+dc.w '77',pDJNZ-q,0,0,'C6'+128,'52'+128,0,0 77=RRa  C6=JZ  52=JB2
+dc.w 0,0,0,0,0,0,0,0
+dc.w 0,pCLR-q,0,0,0,0,pDCB-q,0
+dc.w '93',0,0,0,0,0,0,0                     93=RETR
+dc.w 0,0,0,0,0,'96'+128,0,0                 96=JNZ
+dc.w 0,0,0,0,0,0,0,0
+
+dc.w 0,0,0,0,0,0,0,0
+dc.w 0,0,pDIS-q,0,0,0,0,0
+dc.w 0,'67',0,0,0,'72'+128,0,0       67=RRC     72=JB3
+dc.w 0,0,0,0,'F6'+128,0,0,pADDC-q    F6=JC
+dc.w 0,'F7',0,0,0,0,0,pDC-q          F7=RLC
+dc.w 0,0,pDEC-q,0,0,0,0,0
+dc.w 0,0,0,0,pINS_C-q,'E6'+128,0,0    E6=JNC
+dc.w 0,0,0,0,0,'E3',0,0               E3=MOVP3
+
+dc.w 0,pCPL-q,0,0,0,0,0,0
+dc.w '14'+128,0,0,0,0,0,0,0                   14=CALL
+dc.w 0,0,0,0,pXRL-q,'92'+128,pORLD-q,pORL-q   92=JB4
+dc.w 0,0,0,pXCHD-q,0,0,0,0
+dc.w pA_S-q,0,0,0,0,0,0,0
+dc.w 0,pS_R-q,0,0,0,0,pOUTL-q,pANLD-q
+dc.w pANL-q,0,0,0,0,0,0,0
+dc.w 0,0,0,0,0,pMOVD-q,0,0
+
+dc.w 0,0,0,0,0,0,0,0
+dc.w 0,0,0,0,0,0,0,0
+dc.w 0,0,0,0,0,'B2'+128,0,0   B2=JB5
+dc.w 0,0,0,0,0,0,0,0
+dc.w 0,0,0,0,0,0,0,0
+dc.w 0,0,0,0,0,0,0,0
+dc.w 0,0,0,0,0,0,0,0
+dc.w 0,0,0,0,0,0,0,0
+
+dc.w 0,0,0,0,0,0,0,0
+dc.w 0,0,0,0,0,0,0,0
+dc.w 0,0,0,0,0,'D2'+128,0,0          D2=JB6
+dc.w 0,0,0,0,0,0,0,0
+dc.w 0,0,0,0,0,'16'+128,0,0          16=JTF
+dc.w 0,0,0,0,0,0,0,0
+dc.w 0,pEN-q,0,pIN-q,0,0,0,0
+dc.w 0,0,0,0,0,0,pMOV-q,0
+
+
+afileend:
+****+++++
+ move.L #'____', d0
+ moveq  #15,     d1
+s8: move.L d0,  (a2)+  64mal _ als endOfProgrMarke
+ dbra   d1,     s8
+ move.w #$D0A,  (a2)+
+ move.L a2, fiend(a6)  carRt_LinFee hinter bisherigenText, adr merk
+ clr.w          (a2)   vorlÑufige TxtEndMarke, falls bisherigs auf BSchirm
+
+bsr newline
+lea _wan1dur(pc),a0
+bsr textbsch
+bsr newline
+lea (a7),a0
+bsr lieszeil
+beq no1zbs
+move.L fianf(a6),a0
+bsr textbsch
+no1zbs:
+
+*nun sollte ab a1 ein asciiText im RAM stehen:
+*
+* eventl diverse Definitionen
+* dann:
+*
+* 
+*
+*ttttttttHHkkkkkkkkkkkkkkkkkkkkkk<|
+*ttttttttHHkkkkkkkkkkkkkkkkkkkkkk<|
+*ttttttttHHkkkkkkkkkkkkkkkkkkkkkk<|
+*
+* die letzte Zeile wiederholt sich, hîchstens ca4096 derartige Zeilen gibts.
+*
+* dabei ist H=hexdigit, t=label in Form von 8druckbaren ascii, k=Kommnt(20ascii).
+* wenn HH='  ', so ist t=anwendung,alsoZahl,dieAusLabelEtcBerechnet.
+* wenn HH='\\', so enthÑlt dieZeile nur Label u/odr kommentr ODER:
+*
+* wenn HH='\\' und tttttttt=' .HHH    ', dann entspricht dies der
+* orgAnweisung: fÅlle soviele nops ein, bis pc=HHH
+*
+* statt < muû stehen carrRet, statt | LineFeed
+*
+* .oHHH kan zB so aussehn: .o02A  dann kriegt das drunterstehende Programm,
+*                                 also auch die Labels, einen offset=42
+*
+* als Abschluû empfiehlt sich eine Zeile aus 32mal'_'.
+
+
+* erster Durchlauf durch den ProgrammText (also ab '.p'):
+*
+* suche alle LabelDefinitionen und liste sie auf im Anschluû ans file.
+* erkenne die Def daran, daû HH=hexhex, notiere pc in den letzten drei kkk.
+*
+
+ move.L fianf(a6),a0
+ move.L fiend(a6),d0
+ sub.L  a0,       d0
+* move.b #'.',     d1
+*sucho:
+* bsr    suchd1        eq,wenn gefunden; a0 zeigt byte danach
+* bne    falschfi
+* cmp.b  #'o',  (a0)   kommt gleich danach o?
+* bne    sucho
+* cmp.b  #'p', 7(a0)   kommt bald danach .p carRt LinFee ?
+* bne    sucho
+*
+* subq.L #3,       d0
+* addq.L #1,       a0
+* lea    pcofs(a6),a1
+* move.b #' ',    (a1)+
+* move.b (a0)+,   (a1)+
+* move.b (a0)+,   (a1)+
+* move.b (a0),    (a1)  merk hexdigits des offsets
+*
+* move.b #10,d1  LinFeed
+* bsr    suchd1
+* bne    fal__fi
+* bsr    suchd1
+* fal__fi:
+* bne    falschfi   such also zweites LineFeed, a0 zeigt dann byte dahinter
+*
+* move.L a0,d0        so zeigt d0 auf erstes tttttttt: 8048programmAnfang
+* move.L d0,pranf(a6)
+* btst   #0,d0
+* beq    okgradpr     ne: erst alles folgende um ein byte verschieben: gradAdr
+* move.L fiend(a6),a0
+* lea    1(a0),a1
+* move.L a0,       d0
+* sub.L  pranf(a6),d0  AnzahlRestlicheBytes, soZÑhler 1mehr als nîtig,istOK
+* addq.L #1, pranf(a6)
+*grprlo:
+* move.b -(a0),-(a1)
+* dbra   d0,  grprlo
+* sub.L  #$10000,d0
+* bcc    grprlo
+* addq.L #1,fiend(a6)
+*
+*okgradpr:
+* move.L fiend(a6),d0  nun noch fiend ebenfalls auf grade Adresse richten
+* btst   #0,       d0
+* beq    okgradan
+* addq.L #1,       d0
+* move.L d0,fiend(a6)
+* move.L d0,    a0
+* move.b #10, -(a0)   LineFeed in entstandne LÅcke
+*okgradan:
+* move.L d0,      a0
+** jetzt erst LabelSuche
+
+****+++
+move.L fianf(a6),pranf(a6)
+move.L #' 000',pcofs(a6)
+
+
+ move.L fiend(a6),a0
+ move.L pranf(a6),a1  anfang des groûzÅgigCodierten 8048progr, end in a0
+ move.w #'FF',    d3
+ moveq  #32,      d2  ' ' &zugleich summand zu a1 (pAdressor)
+ move.L pcofs(a6),d1
+ bra    okhi_ad
+
+lsloop:
+     cmp.b  #'9',d1   diese eingerÅcktnZeilen: incr hexZÑhler(asciiCodiert)
+     bcc    b9F
+     addq.b #1,  d1
+     bra    okhxincr
+b9F: beq    b9e
+     cmp.b  d3,  d1  d3.w='FF'
+     bcc    bwo
+     addq.b #1,  d1
+     bra    okhxincr
+b9e: addq.b #8,  d1
+     bra    okhxincr
+bwo: cmp.w  #'9F',d1
+     bcc    b9G
+     add.w  #$EA,d1
+     bra    okhxincr
+b9G: beq    b9i
+     cmp.w  d3,  d1  d3.w='FF'
+     bcc    bsw
+     add.w  #$EA,d1
+     bra    okhxincr
+b9i: move.w #'A0',d1
+     bra    okhxincr
+bsw: move.w #'00',d1
+     swap        d1
+     cmp.b  #'9',d1
+     beq    b9s
+     addq.w #1,  d1
+     swap        d1
+     bra    okhxincr
+b9s: addq.w #8,  d1
+     swap        d1
+okhxincr:
+
+ add.L  d2,a1  zeig auf nÑchste 8048CodeZeile
+okhi_ad:
+ move.L d1,  26(a1)  den (soeben erhîhten) hexZÑhler notieren hintn in pZeile
+ move.w 8(a1), d0   hier sollten zwei blanks oder zwei hexDigits stehen
+ cmp.b  d0,    d2  ' ': ascii unterhalb/gleich blank(cc)?
+ bcc    klglblbl
+ cmp.w  d0,    d3  'FF': ascii oberhalb hexDigit(cs)? 
+ bcs    notokasc
+*                  also kînnten die acht ascii davor ein Label sein (der nie mit ' ' beginnt)
+ cmp.b  (a1),  d2  ' ': Label beginnt nie mit ' '
+ beq    lsloop
+ move.L (a1), (a0)+
+ move.L 4(a1),(a0)+  merk Label im Anhang ans 8048programm
+ move.w #':=',(a0)+  :=  dahinter
+ move.L d1,   (a0)+  hexZÑhler dahinter
+ move.w #$D0A,(a0)+  und noch carRet_LineFeed
+ bra    lsloop
+klglblbl:
+ beq    lsloop
+notokasc:
+ cmp.w  #'\\',d0   kommentarZeile?
+ bne    endcode
+*                  also kînnten die acht ascii davor ein Label sein (der nie mit ' ' beginnt)
+ cmp.b  (a1), d2  ' ': Label beginnt nie mit ' '
+ bne    labinkom
+ cmp.b  #'.',1(a1)   ein ' .HHH' hier hieûe: neuOrg des pc, also nops bis HHH
+ bne    okhxincr
+
+ move.L 2(a1),d0  drei HexDigits(asciiCodiert) in obreBytes: bis hier hxZÑ
+ move.b d2,   d0  blank dazu
+ ror.L  #8,   d0    in richtgeReihenfolge
+ move.L d0,pcorg(a6)
+ bsr    hxwand_3
+ move.w d0,orbin(a6)
+ move.L d1,   d0  aktueller hxZÑ
+ bsr    hxwand_3
+ sub.w  orbin(a6),d0
+ neg.w          d0   soviel nop_opcodeZeilen einschieben bzw
+ ext.L         d0
+ lsl.L  #5,   d0    soviele bytes einschieben
+ bmi    okhxincr
+ beq    okhxincr
+ add.L  d0,fiend(a6)  pFile wird grîûer
+ move.L a0,  -(a7)
+ move.L a1,-(a7)  zeigt aktuelle pZeile, a0 zeigt ende bishrgEintrÑge
+ move.L a0, a1
+ add.L  d0, a0  bisNachHier bisherigesRAM verschiebn
+ move.L a0,4(a7)
+vrlaloo:
+ move.L -(a1),-(a0)
+ cmp.L  (a7), a1
+ bhi    vrlaloo
+
+ move.L (a7)+,a1
+ move.L (a7)+,a0
+ add.L  d2,  a1  zeig, wo erste nopZeile einzufÅgen
+ lsr.L  #5,  d0
+nopeinf:
+ move.L #'    ',(a1)+
+ move.L #'    ',(a1)+
+ move.L #'00  ',(a1)+
+ move.L #'nop ',(a1)+
+ move.L #' fil',(a1)+
+ move.L #'ler ',(a1)+
+ move.L #'    ',(a1)+
+ move.L #$207E0D0A,(a1)+
+ subq.L #1,     d0
+ bhi    nopeinf
+
+ move.L pcorg(a6),d1
+ bra    okhi_ad
+
+labinkom:
+ move.L (a1), (a0)+
+ move.L 4(a1),(a0)+  merk Label im Anhang ans 8048programm
+ move.w #':=',(a0)+  :=  dahinter
+ move.L d1,   (a0)+  hexZÑhler dahinter
+ move.w #$D0A,(a0)+  und noch carRet_LineFeed
+ bra    okhxincr    Loop ohne incHxZÑhlr, weil hier kein opcode
+
+endcode:
+ move.L a0,labde(a6)  merk, bis wo die LabelDefs stehen
+ move.L d1,pcsch(a6)  und wie der hxZÑhler aussieht
+ bsr    newline
+ lea    _mpzeiln(pc),a0
+ bsr    textbsch
+ clr.w            (a7)   darf hier ohne -(ax) gemacht werden, weil ab a7 buffer
+ move.L pcsch(a6),-(a7)
+ move.L pcofs(a6),-(a7)
+ bsr    txofstac
+ addq.L #8,      a7
+
+* nun ist also ans ursprÅngliche file ab (fiend(a6)) angehÑngt_
+*
+*labelnr1:= HHH<|
+*labelnr2:= HHH<|
+*
+* usw, natÅrlich steht statt labelnr~  ein echter Name aus dem durchsuchten pText
+
+
+* der nÑchste Durchlauf guckt, wo LabelDefinitionen ins 8048programm einzusetzen sind
+* Dies ist zu erkennen an '  ' stat 'HH' (H=echtHex)
+* Darum nochmal pText durchsuchen, Def_Anwendung erkennen, in soeben
+* erstellter Tabelle dazugehî hexAscii finden und statt '  ' einsetzen;
+* nach '  ' ein # setzen.
+* Wenn der opcode davor ein call oder jmpUNCOND war: auch dessen drei
+* adrBits bestimmen. Wenn condJump oder djnz:
+* prÅfe, ob in_page, nein: melde im Anhang
+
+ move.L labde(a6),a0
+ move.L pranf(a6),a1  anfang des groûzÅgigCodierten 8048progr, anhang in a0
+ move.L fiend(a6),d1
+ moveq  #32,      d2  ' ' &zugleich summand zu a1 (pAdressor)
+ addq.L #8,       a1  so zeigt pAdressor direkt auf HH
+ sub.L  d2,       a1  adressor der aktuellen pZeile
+asloop:
+ add.L  d2,a1        zeig auf nÑchste 8048CodeZeile
+ cmp.L  d1,a1
+ bcc    allanwla
+ cmp.b  (a1), d2   hier sollten zwei blanks oder zwei hexDigits stehen
+ bne    asloop 
+
+ move.L -8(a1),d0
+ move.L -4(a1),d3
+ rol.L  #8,    d0
+ cmp.b  d0,    d2  blank vornweg(eq)?
+ bne    strd0d3
+ rol.L  #8,    d0
+ cmp.b  d0,    d2  zwei blank vornweg(eq)?
+ bne    vorn1bl
+ rol.L  #8,    d0
+ cmp.b  d0,    d2  drei blank vornweg(eq)?
+ bne    vorn2bl
+ rol.L  #8,    d0
+ cmp.b  d0,    d2  vier blank vornweg(eq)?
+ bne    vorn3bl
+ exg    d3,    d0
+ rol.L  #8,    d0
+ cmp.b  d0,    d2  fÅnf blank vornweg(eq)?
+ bne    strd0d3
+ rol.L  #8,    d0
+ cmp.b  d0,    d2  sechs blank vornweg(eq)?
+ bne    strd0d3
+ rol.L  #8,    d0
+ cmp.b  d0,    d2  sieben blank vornweg(eq)?
+ bne    strd0d3
+ rol.L  #8,    d0
+ cmp.b  d0,    d2  string nur aus blanks(eq)?
+ bne    strd0d3
+
+* fehlermeld!
+bra nolabf
+
+vorn1bl:
+ ror.L  #8,d0  einen der ZWEI vorangegangnen rol#8 rÅckgÑng
+ rol.L  #8,d3  vorderstesByte zugÑnglich
+ move.b d3,d0  hÑng vorderstes d3 an d0 an
+ move.b d2,d3  blank auffÅllen
+ bra    strid0d3
+vorn2bl:
+ ror.L  #8,d0  einen der DREI vorangegangnen rol#8 rÅckgÑng
+ swap      d3   vorderstesWord zugÑnglich
+ move.w d3,d0    hÑng vorderstes d3 an d0 an
+ move.w #'  ',d3  blank auffÅllen
+ bra    strid0d3
+vorn3bl:
+ exg    d3,d0  bisher in d0, nun in d3: '   X'. in d0 nun bytes 5,6,7,8
+ rol.L  #8,d3  vorÅbrgehnd platz fÅr d0.b, also das letzte des strings
+ move.b d0,d3
+ ror.L  #8,d3  nun ists letzte stringByte(byte8) im hiByt des d3.L
+ move.b d3,d0  im d3.b wieder erstes not_blank_Byte(4), an bytes 5,6,7 anghÑngt
+ ror.L  #8,d0  und in richtge Reihenfolge: by4 by5 by6 by7
+ move.b d2,d3  nun = by8 bla bla bla
+ bra    strid0d3
+
+strd0d3:
+ ror.L  #8,       d0  string in richtger Reihenfolge
+strid0d3:
+ lsr.w   #1,      d2  =16, denn bisher 32
+ movem.L a0-a1, -(a7)
+ move.L labde(a6),a1  bis hier labelDef
+ move.L fiend(a6),a0  ab hier labels definiert
+ sub.L  d2,       a0
+
+std0d3lo:
+ add.L  d2,       a0
+ cmp.L  a1,       a0  a1: adr ab wo keine labeldef mehr
+ bcc    nolabfou
+ cmp.L  (a0),     d0
+ bne    std0d3lo
+ cmp.L  4(a0),    d3
+ bne    std0d3lo
+
+* nun also die DEF des labels(string) gefunden
+*labelnr~:= HHH<|
+
+ move.L 10(a0),  d0
+ lsl.w  #1,      d2   wieder 32 in d2
+ movem.L (a7)+,a0-a1  a1=adrDesEinzusetzenden HH im pText, a0=anhangAnP
+ move.w d0,    (a1)  untre beide hexdigits stets Åbernehmen
+ move.b #'#', 2(a1)  und # dahintr setzen
+ cmp.b  #'#',-30(a1) war codeDavor auch sicher kein datbyte?
+ beq    asloop
+ cmp.b  #'4',-31(a1) war vorherg opcode =JMP/call?
+ bne    ok1ladat
+ moveq  #$1F, d3
+ swap         d0     .b=' A B C D E F    0  1  2  3  4  5  6  7  8  9'
+ and.b  d0,   d3         $1 2 3 4 5 6.. 10 11 12 13 14 15 16 17 18 19
+ move.b -32(a1),d0
+ move.b hctb(pc,d3.w),d3 '4 6 8 A C E..  0  2  4  6  8  A  C  E  0  2'
+ cmp.b  #'A',   d0
+ bcs    nhcomp
+ addq.b #1,     d0  so auch >'9': grade Zahlen haben bit0=0
+nhcomp:
+ lsr.b  #1,     d0
+ bcc    jucaok      falls es call war(cs): ungradeDigit erzeugen (ascii)
+ addq.b #1,     d3
+jucaok:
+ move.b d3, -32(a1)
+ bra    asloop
+
+hctb: dc.b '~468ACE~~~~~~~~~02468ACE02~~~~~~'
+.even
+
+nolabfou:
+ lsl.w   #1,      d2     wieder 32 in d2
+ movem.L (a7)+,   a0-a1
+nolabf:
+ move.L #$D0A3F20,(a0)+  a0 zeigt anhang an pText und LabDef: fehlermeld etc
+ move.L d0,       (a0)+
+ move.L d3,       (a0)+
+ move.L 18(a1),  (a0)+  die opcodeAdresse auch notieren
+ bra    asloop
+
+ok1ladat:
+ cmp.b  #'2',-31(a1)  war vorherghndr opcod evtl ein JB ?
+ bne    obdjnz
+ cmp.b  #'9',-32(a1)
+ bhi    hxaba
+ btst   #0,  -32(a1)  ungrade(ne) und H < 'A' ?
+ bne    guckpage
+ bra    asloop
+hxaba:
+ btst   #0,  -32(a1)
+ beq    guckpage
+obdjnz:
+ cmp.b  #'E',-32(a1)  war vorherghndr opcod evtl ein djnz?
+ bne    obcondj
+ cmp.b  #'8',-31(a1)  wars sicher ein djnz(cc)?
+ bcc    guckpage
+obcondj:
+ cmp.b  #'6',-31(a1)  war vorherghndr opcod ein condJump?
+ bne    asloop
+guckpage:
+ cmp.b  #'#',-30(a1) war vorherghnd gar kein opcode sondern daten?
+ beq    asloop
+ swap         d0     nun im .b die page des sprungziels
+ cmp.b  19(a1),d0   vgl mit aktueller page
+ beq    asloop 
+ move.w #$D0A,(a0)+  a0 zeigt anhang an pText und LabDef: fehlermeld etc
+*move.L d0,   (a0)+
+*swap          d3
+*move.w d3,    (a0)+
+ move.L #'    ',(a0)+
+ move.w #' ?',  (a0)+
+ move.L #'?pag',(a0)+
+ move.L 18(a1), (a0)+  die opcodeAdresse auch notieren
+ bra    asloop
+
+allanwla:
+move.L a0,fmend(a6)  ab hier keine weiteren fehlrMeldungen
+clr.b          (a0)
+sub.L  labde(a6),a0
+move.L a0,        d0
+lsr.L  #4,         d0  denn 16byt pro FehlrMeldg
+bsr    newline
+lea    _mfehanz(pc),a0
+bsr    textbsch
+bsr    hxbsch
+
+bsr   newline
+lea   _obanbsc(pc),a0
+bsr   textbsch
+bsr   newline
+lea   (a7),     a0
+bsr   lieszeil
+beq   frgobgb        ne= keine RETURNtaste
+move.L labde(a6),a0
+bsr   textbsch
+
+frgobgb:
+bsr   newline
+lea   _obzwbsc(pc),a0
+bsr   textbsch
+bsr   newline
+lea   (a7),    a0
+bsr   lieszeil
+beq   frgobfi
+move.L fianf(a6),a0
+bsr   textbsch
+frgobfi:
+lea   _genfile(pc),a0
+move.L fianf(a6),a1
+move.L fmend(a6),d1
+move.L a7,       d2
+bsr    liegenfi     liefert eq, wenn bei fileErzeugung alles OK
+
+* nun erstelle binÑrFile: nur noch binÑrerCode, wie es 8048 braucht
+* deshalb: wandle die HH aus pFile.
+
+move.L pranf(a6),a1
+move.L fiend(a6),d1
+addq.L #8,       a1
+move.L a1,       a0
+moveq  #32,      d2
+
+binwaloo:
+move.w (a1),d0
+cmp.b  #'F',d0
+bhi    nothxf
+sub.b  #'0',d0
+bcc    kmphxb
+cmp.b  #$F0,d0  wars ' '?
+bne    nothxf
+clr.b       d0
+kmphxb:
+cmp.b  #$11,d0  wars 'A' oder drÅber(cc)?
+bcs    okhxwb
+subq.b #7, d0
+okhxwb:
+lsl.b  #4,d0
+ror.w  #8,d0  so binÑrCode in oberen 4bit von d0.w und nÑcASCII in d0.b
+cmp.b  #'F',d0
+bhi    nothxf
+sub.b  #'0',d0
+bcc    kmphxw
+cmp.b  #$F0,d0  wars ' '? dann 0 einsetzen
+bne    nothxf
+clr.b       d0
+kmphxw:
+cmp.b  #$11,d0  wars 'A' oder drÅber(cc)?
+bcs    okhxww
+
+subq.b #7, d0
+okhxww:
+rol.w  #4, d0   die beiden 4bit_portionen in richtiger Reihenfolge in d0.b
+move.b d0,(a0)+  abspeichern
+binwal_:
+add.L  d2, a1    nÑchste pZeile
+cmp.L  d1, a1    wars die letzte?
+bcs    binwaloo
+bra    endhxw
+
+nothxf:
+cmp.w  #'\\',d0     wars kommntrZeile?
+beq    binwal_
+endhxw:
+move.L a0,biend(a6)  abHier kein weitrer 8048binÑrcode mehr
+
+lea   _ge2file(pc),a0
+move.L pranf(a6),a1
+addq.L #8,       a1  ab hier binÑrfile
+move.L biend(a6),d1
+move.L a7,       d2
+bsr    liegenfi     liefert eq, wenn alles OK
+
+frgobrom:
+bsr   newline
+lea   _wrromsi(pc),a0
+bsr   textbsch
+bsr   newline
+lea   (a7),     a0
+bsr   lieszeil
+beq   beende
+
+move.L pcofs(a6),d0
+bsr    hxwandl3
+
+move.L pranf(a6),a1
+addq.L #8,       a1  ab hier binÑrfile
+move.L biend(a6),d1
+
+*        in d2 nun simROMstart, a1 quellstart, d1 quellend:abHierNoMoreCode
+ LEA  $FA0000,a0
+ clr.L       d0
+rlo:
+ move.w d2,    d0
+ LSR.w  #8,    d0  somit obere 8bit der ROMadr fast an richtiger Position
+ LSL.w  #1,    d0  nun ganz an richtgPosition und 0 im bit0
+ or.w   #$7E00,d0  code fÅr 'MERKdirADRobererTEIL'
+ tst.w  0(a0,d0.L) somit merkt sich cartridge die 8oberen adrBits
+ move.b d2,    d0
+ LSL.w  #1,    d0
+ and.w  #$BFFF,d0  ereugt code fÅr 'MerkDirAdrUntrerTeil'
+ tst.w  0(a0,d0.L)
+ addq.w #1,    d2
+ clr.w        d0
+ move.b (a1)+, d0
+ LSL.w  #1,    d0
+ or.w   #$EE00,d0
+ tst.w  0(a0,d0.L)
+ cmp.L  d1,    a1
+ bcs    rlo
+
+beende:
+lea  _aufhorn(pc),a0
+bsr  textbsch
+lea  (a7),a0
+bsr  lieszeil
+clr.w   -(a7)
+trap #1
+
+filwkerr:
+lea _fiwkerr(pc),a0
+bra femeld
+falschfi:
+bsr    hxbsch
+move.L fianf(a6),d0
+bsr    hxbsch
+move.L a0,       d0
+bsr    hxbsch
+
+lea _falscfi(pc),a0
+femeld:
+bsr newline
+bsr textbsch
+bra beende
+
+* subr hol2nd4 kriegt in (a1) drittes byteOf1stOperand, guckt ob 2ndOp
+*     =@R./R./#.../sonstig: dann ne_flag. nichtExist: eq_flag         !a1d3
+* gibt d3.L = letzte vier byte des strings. zB. ', A ':d3=$00000041  dec a1
+hol0nd4:
+ move.L a1,-(a7)
+ bra    kommafou
+hol2nd4:
+ subq.L #1, a1    zeig zweitesByteOf1stOperand
+ move.L a1,-(a7)
+ moveq #$2C,d3  ','
+kommasuc:
+ cmp.b (a1), d2 ' '
+ bhi   no2ndfou
+ cmp.b (a1)+,d3
+ bne   kommasuc
+kommafou:
+ cmp.b (a1)+,d2 laû Blanks weg
+ beq   kommafou
+ subq.L #1,  a1 zeig erstes Byte of 2nd operand
+ moveq  #0,  d3
+d3o2nd:
+ cmp.b (a1), d2  ende des strings(=zweitrOperand)?
+ bcc   en2ndo
+ lsl.L #8,   d3  nochn asciiByte
+ move.b (a1)+,d3
+ cmp.b  d1,  d3
+ bls   d3o2nd
+ and.b #$DF, d3  Groûbuchstaben erzeugen
+ bra   d3o2nd
+no2ndfou:
+ moveq  #0, d3
+en2ndo:
+ move.L (a7)+,a1
+ tst.L  d3
+rts              hier also flag_ne, wenn 2ndOperand gefunden
+
+
+* subr genhxzei erzeugt 32ByteZeile im zwischenErgebnis  ! d2d3 a0a2 !
+*     kriegt d0= zwei ascii   setzt d2=' '
+* fÅgt ab a2 32byte an, 8malBlank & d0.w & 16byt blank odr(a0)+ & '   ~' &caRtLiFee
+*         gibt ne_flag, wenn bit7_d0_gesetzt
+genhxzei:
+moveq  #$20,  d2 ' '
+moveq  #7,    d3
+bl8auf:
+move.b d2,   (a2)+
+dbra   d3,   bl8auf
+move.w d0,   (a2)+  also zB. d0= einer der jumpCodes, ascii_codiert
+moveq  #15,   d3    hîchstns 16Byte aus asText Åbernehmn
+sgenhxzl:
+move.b (a0)+,(a2)+
+cmp.b  (a0), d2   <' '?
+dbhi   d3,   sgenhxzl
+bls    tu4dazu
+subq.w #1,   d3        wenn hi: ein decr zuwenig
+tu4dazu:
+addq.w #2,   d3        immer auf 18byte fÅllen
+subq.L #1,   a0
+sge2hxzl:
+move.b d2,   (a2)+
+dbra   d3,   sge2hxzl
+ok1ghxz:
+move.L #$207E0D0A,(a2)+
+bclr   #7,    -23(a2)  gibt also ne,wenn bit7d0 set(=wenn d0.b mi)
+rts
+
+* subr hxwandl3 will drei ascii in d0.L,macht binÑrZ in d2.w,ruft hxwandl !d0d2
+* hxwand_3 dto, aber erhÑlt d2
+hxwandl3:
+swap             d0  MSDigit in d0.b
+moveq  #0,       d2
+bsr    hxwandl
+or.b   d0,       d2
+lsl.w  #4,       d2
+rol.L  #8,       d0  nÑchst Digit
+bsr    hxwandl
+or.b   d0,       d2
+lsl.w  #4,       d2
+rol.L  #8,       d0  letz Digit
+bsr    hxwandl
+or.b   d0,       d2
+rts
+hxwand_3:
+move.L d2,-(a7)
+bsr    hxwandl3
+moveq  #0,   d0
+move.w d2,   d0
+move.L (a7)+,d2
+rts
+
+* subr hxwandl will ascii in d0.b '0'..'F', macht eine binÑrZahl 0..F
+hxwandl:
+sub.b  #'0',d0
+cmp.b  #$11,d0  wars 'A' oder drÅber(cc)?
+bcs    okhx
+subq.b #7, d0
+okhx:
+and.b  #15,d0
+rts
+
+* subr suchd1 guckt via (a0)+, bis =d1.b, hîchstens d0.L_mal. found=eq_flag
+*        ! a0d0 !
+suchd1:
+such0:
+ cmp.b (a0)+,d1
+ dbeq  d0,   such0
+ beq   foundd1
+ sub.L #$10000,d0
+ bpl   such0 
+foundd1:
+ rts               flag also eq, wenn gefunden
+
+* subr hxbsch schreibt d0 als acht HexZiffern auf BildSchirm
+*     ruft textbsch
+hxbsch:
+ movem.L a0/d1,-(a7)
+ clr.w        -(a7)  als EndOfTextMarke
+ subq.L #8, a7      platz fÅr acht ascii
+ move.L a7,a0
+ move.w #8,-(a7)  zÑhler
+hx_asc:
+ rol.L  #4, d0
+ moveq  #15,d1
+ and.b  d0, d1
+ add.b  #'0',d1
+ cmp.b  #'9',d1
+ bls    hxbok
+ addq.b #7, d1  so ascii A...F
+hxbok:
+ move.b d1,(a0)+
+ subq.w #1,(a7)
+ bne    hx_asc
+ addq.L #2, a7
+ bsr    txofstac
+ adda.w #10,a7
+movem.L (a7)+,a0/d1
+rts
+
+* subr txofstac gibt text(aufStack,mit0endend) auf BildSch, ruft textbsch
+txofstac:
+ move.L a0, -(a7)
+ lea    8(a7),a0
+ bsr    textbsch
+ move.L (a7)+,a0
+rts
+
+* subr textbsch gibt text(derMit0ByteEndet) ab a0 auf BildSchirm
+textbsch:
+ move.L d0,-(a7)
+ move.L a0,-(a7)
+ move.w #9,-(a7)  PrintLineCode
+ trap   #1
+ addq.L #2,   a7
+ move.L (a7)+,a0
+ move.L (a7)+,d0
+rts
+
+* subr newline ruft txofstac so, daû carRt_LFeed
+newline:
+ move.L #$D0A0000,-(a7) dadurch neue Zeile
+ bsr    txofstac
+ addq.L #4,      a7
+rts
+
+* subr lieszeil kriegt in a0 adr, ab wo asciiZeile ins RAM   ! d0 !
+*     bricht einlesen ab, wenn ascii<' ', setzt flag eq, wenn letztes=carRT
+*fÅg ein 0byte hinter eingelesnes, gib d0.hiW=byteZahl d0.b=letz(<' ')
+lieszeil:
+ move.L a0,-(a7)
+ move.L a0,-(a7)
+lieszloo:
+ move.w #1, -(a7)  CONIN + echo
+ trap   #1
+ addq.L #2,  a7
+ move.L (a7)+,a0
+ move.b d0, (a0)+
+ move.L a0,-(a7)
+ cmp.b  #' ',d0   stringEnde, sobald kein druckbarer ascii
+ bcc    lieszloo
+ clr.b     -(a0)  0 anfÅgen (statt des nichtdruckbaren)
+ addq.L #4,  a7
+ sub.L  (a7),a0
+ swap       d0
+ move.w a0, d0  merk byteZahl...
+ swap       d0    ...im hiWord
+ move.L (a7)+,a0
+ cmp.b  #13,d0   setz eq_flag, wenn stringEnde via carrRet
+rts
+
+* subr holfile kriegt filename(odr path) und tut dann file îffnen,lesen,schlieûen
+*     kriegt a0: ab dort filename  a1: ab dort file ins RAM        ! a0d0 !
+*gibt d0: byteZahl oder fehlercode(mi), dann auch a0.w='op'/'rd'/'cl'
+* schafftErstmalPlatzAufStack:
+* 8_L=Buff 4_L=byteZahl 2_w=handl 0_w=readCod
+
+holfile:
+ subq.L #4,  a7   platz fÅr readTrap und seine parameter (weitre8byte via open ohne stackKorrektur)
+
+ clr.w      -(a7)  îffne nur zum Lesen
+ move.L a0, -(a7)
+ move.w #61,-(a7)  openCODE
+ trap   #1         nun 12byte-stack!
+ move.w #'op',a0   falls Fehler: zumZeichenDaûBeiOPEN
+ tst.w  d0
+ bmi    errhof      falls pl: keinFehler, d0.w=handleNr
+ move.w d0,   2(a7)
+ move.L a1,   8(a7)  ab hier file ins RAM
+ lea    -98(a7),a0   bis hier RAM nutzbar
+ sub.L  a1,     a0   umrechnen in nutzbare byteZahl
+ move.L a0,   4(a7)
+ move.w #63,   (a7)  readCODE
+ trap   #1
+ move.w #'rd',a0   falls Fehler: zumZeichenDaûBeiREAD
+ tst.L  d0
+ bmi    errhof     falls pl: gelesne byteZahl
+ move.L d0,  8(a7) aufheben
+
+* move.w #62, (a7)  closeCODE (handleNr noch auf stack, s. read)
+* trap   #1
+* move.w #'cl',a0  falls Fehler: zumZeichenDaûBeiCLOSE
+* tst.L  d0
+* bmi    errhof
+ addq.L #8,   a7
+ move.L (a7)+,d0  Zahl gelesner Bytes
+ rts
+
+errhof:
+ adda.w #12,  a7
+ rts
+
+
+* subr liegenfi liest filename ein, erzeugt file (wenn nicht Leerstring)
+*     kriegt a0= text, der zuvor auf BSch muû  a1=fileAnfang d1=end+1
+*  kriegt d2=startAdrTextBuffrZumFilnamEinlesn
+* liefert ne, wenn nix erzeugt
+liegenfi:
+move.L a0,-(a7)
+liegenf:
+bsr   newline
+move.L (a7),a0
+bsr   textbsch
+move.L d2,  a0
+bsr   lieszeil
+bne   liegenf   eq: Name des zu erzeugenden files nun ab a0
+addq.L #4,a7
+tst.b  (a0)
+seq       d0    zumZeichen,daû nix erzeugt
+beq    nogenfi
+
+sub.L  a1,d1   so byteAnzahl
+move.L d1,d0
+bsr    genfile
+bsr newline
+
+move.w #$2000,-(a7)
+move.w a0,-(a7)   evtl kodierung fÅr fehler
+tst.L  d0
+bmi    realgasc
+clr.w      (a7)
+realgasc:
+bsr    txofstac
+addq.L #4,  a7
+
+lea _biosmel(pc),a0
+bsr textbsch
+bsr hxbsch        denn d0 evtl fehlrCode,sonst =ByteZahl
+nogenfi:
+tst.b d0
+rts
+
+* subr genfile kriegt filename(odr path) und tut dann file creir,schrei,schlieû
+*     kriegt a0: ab dort filename  a1: ab dort file aus RAM        ! a0d0 !
+*kriegt d0: byteZahl   gibt evtl d0 minus:fehlr,dann a0.w=cr/wr/cl
+* schafftErstmalPlatzAufStack:
+* 8_L=Buff 4_L=byteZahl 2_w=handl 0_w=writeCod
+
+genfile:
+ move.L d0, -(a7)  byteZahl merkn &platz fÅr writeTrap und seine parameter (weitre8byte via create ohne stackKorrektur)
+
+ clr.w      -(a7)  creiere zum Lesen und Schreiben
+ move.L a0, -(a7)
+ move.w #60,-(a7)  createCODE
+ trap   #1         nun 12byte-stack!
+ move.w #'cr',a0   falls Fehler: zumZeichenDaûBeiCREATE
+ tst.w  d0
+ bmi    errgef      falls pl: keinFehler, d0.w=handleNr
+ move.w d0,   2(a7)
+ move.L 8(a7),4(a7)  byteZahl
+ move.L a1,   8(a7)  ab hier file aus RAM holen
+ move.w #64,   (a7)  writeCODE
+ trap   #1
+ move.w #'wr',a0   falls Fehler: zumZeichenDaûBeiWRITE
+ tst.L  d0
+ bmi    errgef     falls pl: geschriebne byteZahl
+ move.L d0,  8(a7) aufheben
+
+ move.w #62, (a7)  closeCODE (handleNr noch auf stack, s. read)
+ trap   #1
+ move.w #'cl',a0  falls Fehler: zumZeichenDaûBeiCLOSE
+ tst.L  d0
+ bmi    errgef
+ addq.L #8,   a7
+ move.L (a7)+,d0  Zahl gelesner Bytes
+ rts
+
+errgef:
+ adda.w #12,  a7
+ rts
+
+_filenam: dc.b 'um 8048code zuErstelln lies vonFlp folgndesFile: ',0
+_biosmel: dc.b 'bios meldet: ',0
+_genfile: dc.b 'zwischnergebnis abspeichrn unter filename: ',0
+_ge2file: dc.b 'endergebnis(binÑr) abspeichern unterm namen: ',0
+_fiwkerr: dc.b 'fileworkERROR',0
+_falscfi: dc.b 'das eingelesene File hat falsche textAufteilung',0
+_mfehanz: dc.b 'entdeckte Fehler (hex): ',0
+_mpzeiln: dc.b 'opcode adressen behandelt von.. bis.. (je hex): ',0
+_aufhorn: dc.b ' __ programmENDE __ ',0
+_wrromsi: dc.b 'ROMsimulator beschriften? (nein = RETURN,  ja = INS): ',0
+_obanbsc: dc.b 'die FehlerListe auf BildSchirm? (nein=RETURN,ja=INS): ',0
+_obzwbsc: dc.b 'ganzes zwischnergebnis auf BSchirm?(n=RETURN,ja=INS): ',0
+_wan1dur: dc.b 'erstes ASS-zwischenergbn auf BSchirm? (n=RET,ja=INS): ',0
+_prnodas: dc.b 'drucken(INS) oder 8048assemblieren(RET)? {a RET = abb}',0
+.even
+
+LLAST: dc.w 0
+.end
