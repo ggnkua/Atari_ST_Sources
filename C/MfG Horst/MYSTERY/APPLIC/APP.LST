@@ -1,0 +1,445 @@
+' ****************************************************************************
+'
+'               Header fuer Mystery-Applikationen unter Gfa-Basic (2.02)
+'                          Copyright PARROT-BERLIN
+'
+'                             Version 13.08.88
+'
+' Dieser Header stellt einfache I/O-Routinen fÅr Gfa-Basic , sowie einige
+' Systemvariablen von Mystery-Systems zur VerfÅgung.
+' Es sind ausschlieûlich die angebotenen I/O-Routinen zu verwenden, die
+' RS232C-Schnittstelle darf nicht umkonfiguriert werden.
+'
+' Die compilierten Programme mÅssen die Extension .APP haben!!
+'
+' Die I/O-Routinen prÅfen auf öberschreitung der maximalen Benutzerzeit,
+' Timeout und Carrierverlust. Tritt einer dieser FÑlle auf, wird das Pro-
+' gramm automatisch abgebrochen.
+'
+' Bei der Ausgabe wird auf CTRL_S, CTRL_X und CTRL_C geprÅft. Beim Auftreten
+' von CTRL_S wird die Ausgabe bis zum Empfang eines beliebigen Zeichens
+' (auûer CTRL_S) oder bis zum Timeout angehalten. Ein Timeout nach CTRL_S
+' fÅhrt nicht zum Abbruch des Programms, die Ausgabe wird nur wieder aufge-
+' nommen. Nach CTRL_X oder CTRL_C wird die Ausgabe abgebrochen, der letzte
+' Kontrollcode wird in Last_ctrl gespeichert. Stringausgaben sind erst wieder
+' mîglich, nachdem Last_ctrl vom Programm auf 0 gesetzt wurde.
+' Bei der Stringausgabe kann bestimmt werden, ob nach dem String CRLF gesendet
+' werden soll. Weiterhin kann festgelegt werden, ob die Ausgabe durch CTRL_X
+' oder CTRL_C abbrechbar sein soll.
+'
+' Aufbau der Parameterstruktur (C-Style), deren Adresse beim Start der Appli-
+' kation Åbergeben wird:
+'
+'
+'  typedef struct
+'  {
+'         FLAG    *APP_FLAG;        /* Pointer auf Systemflags1           */
+'         FLAG2   *APP_FLAG2;       /* Pointer auf Systemflags2           */
+'         USER    *APP_USER;        /* Pointer auf Userdaten              */
+'         char    *APP_SYSPATH;     /* Pfad ins Systemdirectory           */
+'         char    *APP_CATBUFF;     /* Pointer auf Catalogbuffer          */
+'         long    *APP_CATCOUNT;    /* LÑnge des Catalogs                 */
+'         long    APP_CALLS;        /* aktuelle Zahl der Anrufe           */
+'         int     APP_TMAX;         /* maximale Benutzerzeit in min.      */
+'         long    APP_LOGINTIME;    /* Einlogzeit in s (24:00=0s)         */
+'         int     APP_BAUD;         /* aktuelle Baudrate                  */
+'         int     APP_SCREENSIZE;   /* Bildschirmgroesse des Users        */
+'         char    *APP_ICNVRT;      /* Pointer auf Inputwandlungstabelle  */
+'         char    *APP_OCNVRT;      /* Pointer auf Outputwandlungstabelle */
+'  } APP_PAR;
+'
+' Sofern die folgenden Funktionen nicht ausreichend sein sollten oder
+' Unklarheiten bestehen, bitte die PARROT unter (030) 724467 anrufen und
+' eine PM an den Syop senden, bzw. eine Nachricht ins Visitors.brd setzen.
+'
+' Ich bitte meinen Programmierstil zu entschuldigen, normalerweise program-
+' miere ich in C. sofern dieser Header verbessert wird, den verÑnderten Hea-
+' der bitte in der PARROT ablegen.
+'
+'            Vielen Dank und viele GrÅûe
+'
+'                     Horst
+'
+'
+'
+' ****************************************************************************
+'
+'
+' *** fÅr den Programmierer der Applikation interessante Variablen ***
+'
+Dim Arg$(8)       ! Argumente beim Programmstart
+Argc%=0           ! Anzahl der Argumente, Argument 1 (Arg$(0)) ist Appbase
+Appbase%=0        ! Zeiger auf Array der Mailboxparameter
+Username$=""      ! Name des Users
+Syspath$=""       ! Pfad ins Systemdirectory
+Catbuffer%=0      ! Adresse des Catalogs
+Catcount%=0       ! LÑnge des Catalogs
+Tmax%=0           ! maximale Benutzerzeit in min.
+Logintime%=0      ! Einlogzeit in s
+Calls%=0          ! Anzahl der Anrufe
+Inchar=0          ! Inputzeichen von Mbgetchar
+Input$=""         ! Inputstring
+Icnvrt%=0         ! Pointer auf Inputkonvertierungstabelle
+Ocnvrt%=0         ! Pointer auf Outputkonvertierungstabelle
+'
+' *** von Procedures benutzte Variablen oder Definitionen ***
+'
+Back=0            ! Returnwert fÅr diverse Procedures
+Time=0            ! Zwischenspeicher fÅr Zeiten
+Tout_time=0       ! Initialtime fÅr Tout
+Flag_local!=False ! True, wenn Applikation von der Console gestartet wurde
+Flag_tout!=False  ! True bei Timeout
+Flag_clost!=False ! True bei Carrierverlust
+Flag_exc!=False   ! True bei öberschreitung der maximalen Benutzerzeit
+Flag_slow!=False  ! True bewirkt verlangsamte Ausgabe bei 1200 und 2400 Baud
+Ibuff_hd%=0       ! Pointer fÅr RS232C
+Ibuff_tl%=0       ! Pointer fÅr RS232C
+Obuff_hd%=0       ! Pointer fÅr RS232C
+Obuff_tl%=0       ! Pointer fÅr RS232C
+Last_ctrl=0       ! letzter Kontrollinput
+Baud%=0           ! aktuelle Baudrate
+Brk=1             ! Definition fÅr Mbstringout
+Nbrk=0            ! Definition fÅr Mbstringout
+Cr=1              ! Definition fÅr Mbstringout
+Ncr=0             ! Definition fÅr Mbstringout
+'
+Goto Main
+'
+' *** vom Programmierer der Applikation zu benutzende I/O-Routinen ***
+'
+'
+Procedure Mbgetchar ! holt Zeichen von RS232C oder Tastatur, bricht
+  '                   bei Tout, Carrierverlust oder Tmax-exceeded ab,
+  '                   liefert kein Echo. das Zeichen wird in Inchar ab-
+  '                   gelegt
+  @Ti
+  Tout_time=Time
+  Inchar=0
+  While Inchar=0 And Flag_tout!=False
+    @Carrier_lost
+    @Maxtime_exceeded
+    @Tout
+    @Terminal
+    @Is_legal
+    If Inchar=0
+      @Sterminal
+      @Is_legal
+    Endif
+  Wend
+  If Flag_tout!=True
+    Dpoke Lpeek(Appbase%),Dpeek(Lpeek(Appbase%)) Or &H10 ! Toutflag im System setzen
+    Quit
+  Endif
+Return
+'
+Procedure Mbstringin(Count)  ! Routine holt Count Zeichen von der Console oder
+  '                            oder von RS232C und legt sie in Input$ ab
+  Inchar=0
+  Input$=""
+  While Len(Input$)<Count And Inchar<>13
+    @Mbgetchar
+    If Inchar=8
+      If Len(Input$)>0
+        Input$=Left$(Input$,Len(Input$)-1)
+        @Backspace
+      Endif
+      Inchar=0
+    Endif
+    If Inchar<>13 And Inchar<>0
+      Input$=Input$+Chr$(Inchar)
+      @Mbputchar(Inchar)
+    Endif
+  Wend
+  @Crlf
+Return
+'
+Procedure Mbstringout(Out$,Nl,Mode)    ! Stringausgabe auf Schirm und RS232C
+  ' Nl Cr     -> Ausgabe von CRLF im Anschluss an den String
+  ' Nl Ncr    -> nur der String wird ausgegeben
+  ' Mode Nbrk -> Ausgabe kann nicht durch CTRL_C oder CTRL_X abgebrochen werden
+  ' Mode Brk  -> Ausgabe kann durch CTRL_C oder CTRL_X abgebrochen werden
+  Local Counter
+  Counter=1
+  While (Last_ctrl=0 Or Mode=Nbrk) And Counter<=Len(Out$)
+    @Control
+    While Dpeek(Obuff_hd%)<>Dpeek(Obuff_tl%) ! warten auf leeren Puffer
+    Wend
+    @Mbputchar(Asc(Mid$(Out$,Counter,1)))
+    Counter=Counter+1
+    If Flag_slow!
+      Pause 1
+    Endif
+  Wend
+  If Last_ctrl Or Nl
+    @Crlf
+  Endif
+Return
+'
+' *** Procedures der Applikation ***
+'
+Procedure C_to_bas(Source%,Pointer) ! wandelt C-String in Basicstring
+  ' Source ist Adresse des C-Strings
+  ' Ergebnis wird in Pointer abgelegt
+  Local W$
+  W$=""
+  While Peek(Source%)
+    W$=W$+Chr$(Peek(Source%))
+    Inc Source%
+  Wend
+  *Pointer=W$
+Return
+'
+Procedure Getargs ! holt Argumente der Kommandozeile
+  Local Count%,Pos%,Work$
+  Count%=0
+  @C_to_bas(Basepage+129,*Work$)
+  If (Len(Work$)=0)
+    Quit  ! Fehler, keine Argumente
+  Endif
+  While (Len(Work$) And Count%<8)
+    Pos%=Instr(Work$," ")
+    If (Pos%=1)     ! fÅhrende Spaces entfernen
+      Work$=Mid$(Work$,Pos%+1)
+    Else
+      If (Pos%>0)   ! Argument Åbernehmen
+        Arg$(Count%)=Left$(Work$,Pos%-1)
+        Work$=Mid$(Work$,Pos%+1)
+      Else          ! letztes Argument
+        Arg$(Count%)=Work$
+        Work$=""
+      Endif
+      Inc Count%
+    Endif
+  Wend
+  Argc%=Count%
+  Appbase%=Val(Arg$(0))
+Return
+'
+Procedure Get_uname  ! holt Namen des Users
+  @C_to_bas(Lpeek(Appbase%+8),*Username$)
+Return
+'
+Procedure Get_syspath ! holt Systempfad
+  @C_to_bas(Lpeek(Appbase%+12),*Syspath$)
+Return
+'
+Procedure Init ! holt Systemvariablen
+  Local Iorec%,Dummy
+  Dummy=Xbios(21,W:1)      ! der Sysop moechte gerne einen blinkenden Cursor...
+  Dummy=Xbios(21,W:2)
+  Iorec%=Xbios(14,W:0)
+  Ibuff_tl%=Iorec%+6       ! saemtliche Dokumentationen sind falsch!!
+  Ibuff_hd%=Iorec%+8       ! DANKE ANSON...
+  Obuff_tl%=Iorec%+20
+  Obuff_hd%=Iorec%+22
+  @Getargs
+  @Get_uname
+  @Get_syspath
+  Catbuffer%=Lpeek(Appbase%+16)
+  Catcount%=Lpeek(Lpeek(Appbase%+20))
+  Calls%=Lpeek(Appbase%+24)
+  Tmax%=Dpeek(Appbase%+28)
+  Logintime%=Lpeek(Appbase%+30)
+  Baud%=Dpeek(Appbase%+34)
+  Flag_local!=(Dpeek(Lpeek(Appbase%)) And &H80)
+  Icnvrt%=Lpeek(Appbase%+38)
+  Ocnvrt%=Lpeek(Appbase%+42)
+Return
+'
+Procedure Carrier  ! prÅft, ob Carrier anliegt
+  Back=(Not Peek(&HFFFA01)) And &H2
+Return
+'
+Procedure Carrier_lost ! prÅft, ob Carrier verloren ging
+  @Carrier
+  Flag_clost!=(Back=0 And Flag_local!=0)
+  If Flag_clost!=True   ! Programm wird bei Carrierverlust beendet
+    Quit
+  Endif
+Return
+'
+Procedure Ti     ! Systemzeit in s
+  Time=Val(Left$(Time$,2))*3600+Val(Mid$(Time$,4,2))*60+Val(Right$(Time$,2))
+Return
+'
+Procedure Tout  ! setzt Flag_tout! bei Timeout auf true
+  Local X
+  @Ti
+  X=Time-Tout_time
+  If X<0
+    X=X+86400
+  Endif
+  If X>60
+    Flag_tout!=True
+  Endif
+Return
+'
+Procedure Maxtime_exceeded ! setzt Flag_exc! bei öberschreitung der maximalen
+  '                          Benutzerzeit auf true und beendet Applikation
+  Local Zeit
+  @Ti
+  Zeit=Time-Logintime%
+  If Zeit<0
+    Zeit=Zeit+86400
+  Endif
+  If Zeit>Tmax%*60
+    Flag_exc!=True
+    Quit
+  Endif
+Return
+'
+Procedure Is_legal ! prÅft, ob Inchar ein legales Zeichen darstellt
+  Local X
+  If Inchar=27
+    Inchar=0
+  Endif
+  Inchar=Peek(Icnvrt%+Inchar)
+Return
+'
+Procedure Empty_rsbuf   ! lîscht RS232C-Inputbuffer
+  Dpoke Ibuff_hd%,0
+  Dpoke Ibuff_tl%,0
+Return
+'
+Procedure Sterminal    ! holt Zeichen von RS232C
+  Local X
+  X=Bios(1,W:1)        ! bconstat(aux)
+  @Carrier
+  If Back And X
+    Inchar=Bios(2,W:1) ! bconin(aux)
+  Else
+    Inchar=0
+  Endif
+Return
+'
+Procedure Terminal    ! holt Zeichen von der Console
+  Local X
+  X=Bios(1,W:2)        ! bconstat(con)
+  If X
+    Inchar=Bios(2,W:2) ! bconin(con)
+    Inchar=Inchar And &HFF
+  Else
+    Inchar=0
+  Endif
+Return
+'
+Procedure Mbputchar(Char)        ! Einzelzeichenausgabe auf Schirm und RS232C
+  Local Dummy,Auxout1,Auxout2,Conout1
+  If (Flag_local!=True)
+    Conout1=Peek(Ocnvrt%+2*Char)
+  Else
+    Auxout1=Peek(Ocnvrt%+2*Char)
+    Auxout2=Peek(Ocnvrt%+2*Char+1)
+    Conout1=Char
+  Endif
+  @Carrier_lost
+  @Maxtime_exceeded
+  Dummy=Bios(3,W:2,W:Conout1)       ! Bconout(CON,c)
+  @Carrier
+  If Back<>0
+    Dummy=Bios(3,W:1,W:Auxout1)     ! Bconout(AUX,c);
+  Endif
+  @Carrier
+  If Back<>0
+    Dummy=Bios(3,W:1,W:Auxout2)
+  Endif
+Return
+'
+Procedure Control ! fragt EingabekanÑle auf CTRL ab
+  Local Store
+  Store=Inchar
+  @Terminal
+  If Inchar=0
+    @Sterminal
+  Endif
+  If Inchar<>0
+    If Inchar=19    ! Input ist CTRL_S
+      @Halt
+    Endif
+    @Empty_rsbuf
+    If Inchar=3 Or Inchar=24
+      Last_ctrl=Inchar
+    Else
+      Last_ctrl=0
+    Endif
+    Inchar=Store
+  Endif
+Return
+'
+Procedure Halt ! wartet auf auf nÑchste Eingabe des Users nach CTRL_S
+  @Ti
+  Tout_time=Time
+  Repeat
+    @Terminal
+    If Inchar=0
+      @Sterminal
+    Endif
+    If Inchar=19
+      Inchar=0
+    Endif
+    @Carrier_lost
+    @Tout
+  Until Inchar<>0 Or Flag_tout!=True
+  Flag_tout!=False
+Return
+'
+Procedure Crlf        ! gibt CR und LF aus
+  @Mbputchar(13)
+  @Mbputchar(10)
+Return
+'
+Procedure Backspace   ! letztes Zeichen lîschen
+  @Mbputchar(8)
+  @Mbputchar(32)
+  @Mbputchar(8)
+Return
+'
+' ******** Start des Hauptprogramms mit einigen Beispielen ********
+'
+Main:
+@Init                               ! Init muû auf jeden Fall aufgerufen werden !
+If Baud%>300 Or Flag_local!=True    ! Wenn gewÅnscht, kann die Ausgabe gebremst werden.
+  Flag_slow!=True
+Endif
+' Ausgaben lassen sich nicht abbrechen, Last_ctrl braucht nicht auf 0 gesetzt
+' zu werden
+@Crlf            ! Leerzeilen nach Programmstart
+@Crlf
+@Mbstringout("         TESTAPPLIKATION",Cr,Nbrk)
+@Mbstringout("         ===============",Cr,Nbrk)
+@Crlf
+@Crlf
+' Ausgabe ohne CRLF
+@Mbstringout("Moechtest Du eine Anleitung (J/N)?",Ncr,Nbrk)
+' Antwort des Users holen
+@Mbgetchar
+' Antwort echoen und CRLF senden
+@Mbputchar(Inchar)
+@Crlf
+@Crlf
+' Antwort auswerten
+If Chr$(Inchar)="J" Or Chr$(Inchar)="j"
+  Last_ctrl=0    ! die folgenden Ausgaben kînnen abgebrochen werden, daher muû
+  '                  Last_ctrl auf 0 gesetzt werden
+  @Mbstringout("Das ist ein Beispiel fÅr eine Gebrauchsanweisung, die natuerlich",Cr,Brk)
+  @Mbstringout("hier nur einen totalen Unsinnstext bringt. Es wird aber gezeigt",Cr,Brk)
+  @Mbstringout("dass hier ein Text ausgegeben wird, der sich abbrechen laesst.",Cr,Brk)
+Endif
+While Input$<>"ENDE"
+  @Crlf
+  O$="Was nun "+Username$+" (Spiel,Ende)?>"
+  @Mbstringout(O$,Ncr,Nbrk)
+  ' Antwort holen
+  @Mbstringin(20)
+  Input$=Upper$(Input$)
+  @Crlf
+  ' Antwort auswerten
+  If Input$="SPIEL"
+    @Mbstringout("Das waere das Spiel....",Cr,Nbrk)
+  Else
+    If Input$<>"ENDE"
+      @Mbstringout("Eingabefehler!!!",Cr,Nbrk)
+    Endif
+  Endif
+Wend
+Quit

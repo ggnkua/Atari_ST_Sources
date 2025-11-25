@@ -1,0 +1,247 @@
+              ; Originally taken from came from Motorola's Dr. BuB DSP board.
+              ; Obtained from Todd Day's FTP archive as sloader.asm
+              ; Modified for TDSG56 project by Quinn Jensen (jensenq@qcj.icon.com)
+              ;
+              ; Text from original:
+              ;       Serial Loader for the DSP56000.
+              ;       This loader initializes the serial communications interface (SCI)
+              ;       on the DSP56001 for 9600 baud and then loads OMF records (output
+              ;       by the DSP56000 assembler) into internal memory.  The loader takes
+              ;       the upper 128 bytes of P memory allowing the lower memory from
+              ;       $0000-(LDRMEM-1) to be used by the user.  The following records are
+              ;       interpreted:
+              ;           _DATA X ADDR
+              ;           _DATA Y ADDR
+              ;           _DATA P ADDR
+              ;           _END ADDR
+              ;       After the END record is encountered, the loader jumps to the address
+              ;       in the END record.  Note that an address MUST be present in the
+              ;       END record (the program must contain at least one P segment).
+              ;
+              ;       To generate a EPROM of this loader (8Kx8), perform the following:
+              ;       $ asm56000 -b -l -a sloader
+              ;       $ srec sloader
+              ;
+              ;       The EPROM is in file SLOADER.P.  To program the EPROM, set the
+              ;       programmer to MOTOROLA S record format, download the file with
+              ;       a zero address offset and program the part.
+              ;
+              ;       BTW, S record format is LSB MidSB MSB (what! Intel format? :-)
+              ;       Took me a few hours to figure this one out!  [Not really.  S records
+              ;       are big-endian, its just the 56001 boot loader that wants LSB first.
+              ;       -QJ]
+              ;
+              ;       If you don't have the program srec (where can I get this?),
+              ;       you have to do some gnarly contortions on the .LOD file.
+              ;
+              ;       So, if your .LOD file resulting from compiling this program
+              ;       looks like this:
+              ;
+              ;       _START SLOADER 0000 0000
+              ;
+              ;       _DATA P 0020
+              ;       010203 040506 070809
+              ;       _END 0020
+              ;
+              ;       then, program your PROM with this sequence:
+              ;       $0020   0302  0106  0504  0908  07..... etc. (Fun, eh? :)
+              ;
+              ;
+              ;       The loader loads the following memory spaces:
+              ;           X - 0 to FF
+              ;           Y - 0 to FF
+              ;           P - 0 to LDRMEM-1
+              ;
+                      PAGE    68,66,1,1
+              
+00FFF0        SCR     EQU     $FFF0           ;SCI CONTROL REGISTER
+00FFF2        SCCR    EQU     $FFF2           ;SCI CLOCK CONTROL REGISTER
+00FFE1        PCC     EQU     $FFE1           ;PORT C CONTROL REGISTER
+000002        RDRF    EQU     $2              ;RECEIVE DATA REGISTER FULL FLAG
+00FFF1        SSR     EQU     $FFF1           ;SCI STATUS REGISTER
+00FFF6        SRXH    EQU     $FFF6           ;SCI RECEIVE IN HIGH BYTE
+00FFE0        PBC     equ     $FFE0           ;port B control
+00FFE2        PBDDR   equ     $FFE2           ;port B data direction
+00FFE4        PBD     equ     $FFE4           ;port B data
+00FFFE        BCR     equ     $FFFE           ;port a bus control reg
+              
+              
+000080        LDRMEM  EQU     $80             ;START OF LOADER IN P MEMORY
+              
+              
+              
+P:0000                ORG     P:$0000         ;RESET VECTOR FOR BOOTING
+P:0000        RVEC
+P:0000 0C0080         JMP     <LOAD           ;GO EXECUTE LOADER
+              
+P:0080                ORG     P:LDRMEM,P:3*LDRMEM
+P:0080        LOAD
+P:0080 08F4B0         MOVEP   #$0302,X:SCR    ;ENABLE TX,RX: 8 BIT 1 START, 1 STOP
+P:0081 000302
+              
+                                              ; *** You will probably have to
+                                              ; *** change the line below!
+P:0082 08F4B2         movep   #12,x:SCCR      ;CD=12 (/13), int clk @ 31.25 Kbaud-4%
+P:0083 00000C
+P:0084 08F4A1         MOVEP   #$0007,X:PCC    ;ENABLE SCI
+P:0085 000007
+              
+              
+              
+P:0086 08F4A4          movep  #0<<7,x:PBD
+P:0087 000000
+P:0088 08F4A0         movep   #0,x:PBC        ;port B: parallel I/O
+P:0089 000000
+P:008A 08F4A2         movep   #-1,x:PBDDR     ;port B: all output
+P:008B FFFFFF
+P:008C 0A7023         bset    #3,x:PBD        ;assert "ROM"; allows RAM to respond in P space
+P:008D 00FFE4
+P:008E 08F4BE         movep   #$2f2f,x:BCR    ;wait states: 0 for RAM, 15 for ROM and I/O
+P:008F 002F2F
+P:0090 08F4A4          movep  #$c<<7,x:PBD
+P:0091 000600
+P:0092 08F4A4          movep  #$c|3<<4<<7,x:PBD               ;clear strobes
+P:0093 00180C
+              
+P:0094        WTUS
+P:0094 0D00C2         JSR     <GETCH          ;INPUT CHARACTER
+P:0095 245F00         MOVE    #'_',X0         ;GET UNDERSCORE CHARACTER
+P:0096 200045         CMP     X0,A            ;SEE IF "_" YET
+P:0097 0E2094         JNE     <WTUS           ;NO
+P:0098        GOTUS
+P:0098 0D00C2         JSR     <GETCH          ;GET A CHARACTER
+P:0099 244400         MOVE    #'D',X0         ;GET A D FOR DATA
+P:009A 244545         CMP     X0,A    #'E',X0 ;COMPARE TO D, GET E
+P:009B 0EA0AA         JEQ     <DATAREC        ;IF "D", THEN DATA RECORD
+P:009C 200045         CMP     X0,A            ;SEE IF END RECORD
+P:009D 0E2094         JNE     <WTUS           ;NO, GO WAIT FOR ANOTHER UNDERSCORE
+P:009E        _WTSPC
+P:009E 08F4A4          movep  #$e<<7,x:PBD
+P:009F 000700
+P:00A0 0D00C2         JSR     <GETCH          ;GET CHARACTER
+P:00A1 242000         MOVE    #$20,X0         ;GET SPACE
+P:00A2 200045         CMP     X0,A            ;WAIT FOR SPACE AFTER "END"
+P:00A3 0E209E         JNE     <_WTSPC         ;WAIT FOR SPACE
+P:00A4 0D00CA         JSR     <IN4            ;GET TRANSFER ADDRESS
+P:00A5 21B000         MOVE    B1,R0           ;MOVE TRANSFER ADDRESS
+P:00A6 000000         NOP                     ;CLEAR ADDRESS PIPE
+P:00A7 08F4A4          movep  #$a<<7,x:PBD
+P:00A8 000500
+P:00A9 0AE080         JMP     (R0)            ;GO EXECUTE USER CODE
+P:00AA        DATAREC
+P:00AA 08F4A4          movep  #$d<<7,x:PBD
+P:00AB 000680
+P:00AC 0D00C2         JSR     <GETCH          ;GET CHARACTER
+P:00AD 242000         MOVE    #$20,X0         ;GET SPACE
+P:00AE 200045         CMP     X0,A            ;SEE IF SPACE
+P:00AF 0E20AA         JNE     <DATAREC        ;NO
+P:00B0 0D00C2         JSR     <GETCH          ;GET [P,X,Y]
+P:00B1 218600         MOVE    A1,Y0           ;SAVE CHARACTER
+P:00B2 0D00CA         JSR     <IN4            ;GET ADDRESS OF DATA RECORD
+P:00B3 21B000         MOVE    B1,R0           ;SAVE ADDRESS
+P:00B4 2E5800         MOVE            #'X',A  ;GET X
+P:00B5 2E5955         CMP     Y0,A    #'Y',A  ;SEE IF X, GET Y
+P:00B6 0EA0BC         JEQ     <_LDX           ;LOAD DATA INTO X MEMORY
+P:00B7 200055         CMP     Y0,A            ;SEE IF Y
+P:00B8 0EA0BF         JEQ     <_LDY           ;LOAD DATA INTO Y MEMORY
+P:00B9        _LDP
+P:00B9 0D00CF         JSR     <IN6            ;GET DATA
+P:00BA 07588D         MOVEM   B1,P:(R0)+      ;LOAD P MEMORY
+P:00BB 0C00B9         JMP     <_LDP
+P:00BC        _LDX
+P:00BC 0D00CF         JSR     <IN6            ;GET DATA
+P:00BD 555800         MOVE    B1,X:(R0)+      ;LOAD X MEMORY
+P:00BE 0C00BC         JMP     <_LDX
+P:00BF        _LDY
+P:00BF 0D00CF         JSR     <IN6            ;GET DATA
+P:00C0 5D5800         MOVE    B1,Y:(R0)+      ;LOAD Y MEMORY
+P:00C1 0C00BF         JMP     <_LDY
+              
+P:00C2        GETCH
+P:00C2 0AB182         JCLR    #RDRF,X:SSR,*   ;WAIT FOR DATA IN SCI
+P:00C3 0000C2
+P:00C4 084E36         MOVEP   X:SRXH,A        ;GET SCI DATA IN HIGH BYTE
+P:00C5 200033         LSL     A               ;SHIFT OUT PARITY
+P:00C6 200023         LSR     A               ;clear parity bit
+P:00C7 218E00         MOVE    A1,A            ;SIGN EXTEND AND ZERO
+P:00C8 08CE36         MOVEP   A,X:SRXH        ;put sci data in high byte
+P:00C9 00000C         RTS
+P:00CA        IN4
+P:00CA 08F4A4          movep  #$4<<7,x:PBD
+P:00CB 000200
+P:00CC 44F41B         CLR     B       #>4,X0  ;CLEAR VALUE, GET 4
+P:00CD 000004
+P:00CE 0C00D3         JMP     <READHEX        ;READ 4 HEX CHARACTERS
+P:00CF        IN6
+P:00CF 08F4A4          movep  #$6<<7,x:PBD
+P:00D0 000300
+P:00D1 44F41B         CLR     B       #>6,X0  ;CLEAR VALUE, GET 6
+P:00D2 000006
+P:00D3        READHEX
+P:00D3 06C400         DO      X0,_READHEX     ;READ ASCII HEX AND CONVERT TO BINARY
+P:00D4 0000E8
+P:00D5        _GET
+P:00D5 0D00C2         JSR     <GETCH          ;GET A CHARACTER
+P:00D6 245F00         MOVE    #'_',X0         ;GET UNDERSCORE
+P:00D7 244645         CMP     X0,A    #'F',X0 ;SEE IF UNDERSCORE
+P:00D8 0E20DC         JNE     <_NOTUS         ;NO
+P:00D9 00008C         ENDDO                   ;EXIT LOOP
+P:00DA 0444BC         MOVEC   SSH,X0          ;POP RETURN ADDRESS
+P:00DB 0C0098         JMP     <GOTUS          ;GO PROCESS NEW INPUT RECORD
+P:00DC        _NOTUS
+P:00DC 243045         CMP     X0,A    #'0',X0 ;SEE IF GREATER THAN F
+P:00DD 0E70D5         JGT     <_GET           ;YES, IGNORE
+P:00DE 200045         CMP     X0,A            ;SEE IF LESS THAN 0
+P:00DF 0E90D5         JLT     <_GET           ;YES, IGNORE
+P:00E0 240A44         SUB     X0,A    #10,X0  ;ADJUST FOR ASCII TO BINARY
+P:00E1 240745         CMP     X0,A    #7,X0   ;SEE IF A-F
+P:00E2 0E90E4         JLT     <_NOTALPHA      ;NO
+P:00E3 200044         SUB     X0,A            ;ADJUST FOR 1-F
+P:00E4        _NOTALPHA
+P:00E4 0604A0         REP     #4              ;SHIFT OLD VALUE LEFT 1 NIBBLE
+P:00E5 20003B         LSL     B
+P:00E6 0610A0         REP     #16             ;SHIFT NEW NIBBLE DOWN TO LSB
+P:00E7 200023         LSR     A
+P:00E8 200018         ADD     A,B             ;ADD NEW NIBBLE IN
+P:00E9        _READHEX
+P:00E9 00000C         RTS
+                      END
+              
+
+Summary of psect usage
+
+                 section seg base last top      used       avail    total
+-------------------------------------------------------------------------
+
+
+Symbol Table
+-------------------------------------
+             SSR 00FFF1
+             BCR 00FFFE
+            SRXH 00FFF6
+           GETCH 0000C2
+            WTUS 000094
+            LOAD 000080
+            RVEC 000000
+         DATAREC 0000AA
+             IN6 0000CF
+             IN4 0000CA
+          _WTSPC 00009E
+           GOTUS 000098
+          LDRMEM 000080
+        _READHEX 0000E9
+            SCCR 00FFF2
+             SCR 00FFF0
+       _NOTALPHA 0000E4
+          _NOTUS 0000DC
+             PBD 00FFE4
+           PBDDR 00FFE2
+             PBC 00FFE0
+            _LDY 0000BF
+            _LDX 0000BC
+            _LDP 0000B9
+             PCC 00FFE1
+            RDRF 000002
+         READHEX 0000D3
+            _GET 0000D5
+errors=0

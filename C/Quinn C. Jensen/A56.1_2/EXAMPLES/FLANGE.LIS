@@ -1,0 +1,326 @@
+              ;***************************************************************
+              ;
+              ;       Stereo Flange for the DSP56001 processor
+              ;       Developed by Quinn Jensen (jensenq@qcj.icon.com)
+              ;
+              ;***************************************************************
+              include "tdsg.a56"
+              
+P:0076        dot
+X:0020                org     x:$20
+              
+              ; Sample rate              32.5500 kc         
+              ; 
+              ; Delay time (1-12)         6.0000 ms         
+              ; Depth (1-10)             10.0000
+              ; Speed (1-10)              1.0000
+              ; Regen (1-10)              9.0000
+              ; 
+              ; max depth +/-             6.0000 ms         
+              ; min delay                 1.0000 ms         
+              ; max delay                12.0000 ms         
+              ; 1/2 cycle period          4.5100 s          
+              ; samples per 1/2 cyc  146800.5000
+              ; time delta/samp           0.0817 us         
+              ; offset samp/samp          0.0027
+              ; 
+FFFFDF          doff_i equ                               -33
+0.00266075      ddeltaf equ                     0.0026607539
+023D70          dspeed_i equ                          146800
+  0.888889      dregen equ                      0.8888888889
+              
+002000        delay   equ     $2000
+001000        dmax    equ     4096            ;125 ms
+X:0020 FFFFDF doff    dc      doff_i          ;current delay distance
+Y:0020                org     y:doff
+Y:0020 000000         dc      0
+              
+X:0021                org     x:doff+1
+X:0021 000000 ddelta  dc      0               ;
+Y:0021                org     y:ddelta
+Y:0021 005730         dc      ddeltaf
+              
+X:0022                org     x:ddelta+1
+              
+X:0022 023D70 dspeed  dc      dspeed_i
+X:0023 000000 dtoggle dc      0               ;
+X:0024        delayout
+X:0024 000000         dc      0
+              
+Y:0000                org     y:$0
+              
+P:0076                org     p:dot           ;go back to P-space
+              ;
+              ; non-interrupt code
+              ;
+              
+P:0076        hf_init
+P:0076 61F400         move    #delay,r1                       ;delay line input
+P:0077 002000
+P:0078 05F421         movec   #dmax-1,m1                      ;
+P:0079 000FFF
+P:007A 71F400         move    #doff_i,n1                      ;distance to output
+P:007B FFFFDF
+P:007C 00000C         rts
+              
+              ;
+              ; fs = 32.552083 kHz
+              ;
+              
+P:007D        hf_comp
+P:007D 0D0066         jsr     <saveregs
+              ;
+              ;       output and input mix
+              ;
+P:007E 253813         clr     a       #.4375,x1               ;clr a, get input scale
+P:007F 27401B         clr     b       #.5,y1                  ;clr b, get output scaler
+              
+P:0080 46A400         move            x:<delayout,y0          ;get delay out
+              
+P:0081 44F400         move            #.70,x0                 ;do regen term
+P:0082 59999A
+P:0083 2000D3         macr    x0,y0,a
+P:0084 2000D3         macr    x0,y0,a
+              
+P:0085 246000         move            #.75,x0
+              
+P:0086 4480DB         macr    y0,x0,b x:<in_l,x0              ;b = .5 * delay, x0=in_l
+P:0087 21E6CB         macr    x0,y1,b         b,y0            ;b += .5 * in_l, y0=b
+P:0088 5704A3         macr    x0,x1,a b,x:<out_l              ;a += x1 * in_l, L = b
+P:0089 20CF00         move                    y0,b            ;b = -y0
+P:008A 44813E         neg     b       x:<in_r,x0              ;x0 = in_r
+P:008B 2000CB         macr    x0,y1,b                         ;b += .5 * in_r
+P:008C 5705A3         macr    x0,x1,a b,x:<out_r              ;R = b, a += x1 * in_r
+              ;
+              ;       delay line in
+              ;
+P:008D 565900         move            a,x:(r1)+
+              ;
+              ;       delay line length modulation
+              ;
+P:008E 48A000         move            l:<doff,a               ;a = current offset
+P:008F 42A100         move            l:<ddelta,x             ;x = current delta
+P:0090 200020         add     x,a
+P:0091 482000         move            a,l:<doff               ;new offset = a + x
+P:0092 219900         move            a1,n1
+              
+P:0093 20AF00         move            x1,b                    ;save delta for later use
+              
+              ; smoothly transition between delay-line offsets by
+              ; interpolating the current sample with the previous or next
+              ; one depending on whether the delay is currently getting longer or
+              ; shorter.  Otherwise, an obnoxious click results when the offset snaps
+              ; to the next integral value.
+              
+P:0094 5EA000         move                    y:<doff,a       ;compute |frac(doff)|
+P:0095 44F423         lsr     a       #$800000,x0
+P:0096 800000
+P:0097 254042         or      x0,a    #.5,x1
+P:0098 218400         move            a1,x0
+P:0099 2000A4         mpy     -x0,x1,a
+P:009A 21C60B         tst     b               a,y0            ;y0 = 0.5 * |frac(doff)|
+P:009B 0AF0A3         jpl     shorter                         ;on positive delta, the
+P:009C 0000A6
+                                                              ;delay is shortening
+              
+P:009D 205100         move            (r1)-                   ;get previous sample
+P:009E 44E900         move            x:(r1+n1),x0
+P:009F 2F40D0         mpy     y0,x0,a #.5,b                   ;scale
+P:00A0 20595C         sub     y0,b    (r1)+                   ;compute scale for cur sample
+P:00A1 21E600         move                    b,y0
+P:00A2 44E900         move            x:(r1+n1),x0            ;get cur sample
+P:00A3 2000D2         mac     x0,y0,a                         ;scale and sum
+P:00A4 0AF080         jmp     endpan
+P:00A5 0000AC
+              
+P:00A6        shorter
+P:00A6 44E900         move            x:(r1+n1),x0            ;get cur sample
+P:00A7 2F40D0         mpy     y0,x0,a #.5,b                   ;scale
+P:00A8 20595C         sub     y0,b    (r1)+                   ;compute scale for next sample
+P:00A9 21E600         move                    b,y0
+P:00AA 44E900         move            x:(r1+n1),x0            ;get next sample
+P:00AB 2051D2         mac     x0,y0,a (r1)-                   ;scale and sum
+P:00AC        endpan
+P:00AC 562400         move            a,x:<delayout           ;store resulting output
+              
+              ; update the triangle wave modulation
+              
+P:00AD 56A300         move            x:<dtoggle,a            ;decrement toggle count
+P:00AE 44F400         move            #>1,x0
+P:00AF 000001
+P:00B0 200044         sub     x0,a
+P:00B1 562300         move            a,x:<dtoggle
+P:00B2 0AF0A7         jgt     notogg                          ;time to toggle?
+P:00B3 0000B8
+P:00B4 44A200         move            x:<dspeed,x0            ;yes, negate delta and reset
+P:00B5 48A100         move            l:<ddelta,a
+P:00B6 442336         neg     a       x0,x:<dtoggle
+P:00B7 482100         move            a,l:<ddelta
+P:00B8        notogg
+P:00B8        bypass
+P:00B8 0D006F         jsr     <restregs
+P:00B9 00000C         rts
+              
+                      end
+
+Summary of psect usage
+
+                 section seg base last top      used       avail    total
+-------------------------------------------------------------------------
+
+
+Symbol Table
+-------------------------------------
+          ddelta 000021
+         ddeltaf 0.0026607539
+         ssi_int 000061
+            ssix 000010
+          notogg 0000B8
+        delayout 000024
+           delay 002000
+     init_stereo 000059
+           start 000040
+           in_rs 000003
+           in_ls 000002
+            in_r 000001
+            in_l 000000
+            dmax 001000
+          endpan 0000AC
+            doff 000020
+          doff_i FFFFDF
+             dot 000076
+        mainloop 000060
+         hf_comp 00007D
+         hf_init 000076
+         dtoggle 000023
+        saveregs 000066
+           savey 00000B
+           savex 00000A
+          saveb2 000009
+         saveb10 000008
+          savea2 000007
+         savea10 000006
+          dregen 0.8888888889
+          dspeed 000022
+        dspeed_i 023D70
+        restregs 00006F
+           out_r 000005
+           out_l 000004
+          bypass 0000B8
+         shorter 0000A6
+          m_scl1 00000F
+          m_scl0 00000E
+           m_scl 00C000
+          m_ssl1 00000D
+          m_ssl0 00000C
+           m_ssl 003000
+          m_hpl1 00000B
+          m_hpl0 00000A
+           m_hpl 000C00
+          m_ibl2 000005
+          m_ibl1 000004
+          m_ibl0 000003
+           m_ibl 000038
+          m_ial2 000002
+          m_ial1 000001
+          m_ial0 000000
+           m_ial 000007
+           m_ipr 00FFFF
+           m_rdf 000007
+           m_tde 000006
+           m_roe 000005
+           m_tue 000004
+           m_rfs 000003
+           m_tfs 000002
+           m_if1 000001
+           m_if0 000000
+            m_if 000002
+          m_srie 00000F
+          m_stie 00000E
+           m_sre 00000D
+           m_ste 00000C
+           m_mod 00000B
+           m_gck 00000A
+           m_syn 000009
+           m_fsl 000008
+          m_sckd 000005
+          m_scd2 000004
+          m_scd1 000003
+          m_scd0 000002
+           m_scd 00001C
+           m_of1 000001
+           m_of0 000000
+            m_of 000003
+           m_psr 00000F
+           m_wl1 00000E
+           m_wl0 00000D
+            m_wl 006000
+            m_dc 001F00
+            m_pm 0000FF
+           m_tsr 00FFEE
+            m_sr 00FFEE
+           m_crb 00FFED
+           m_cra 00FFEC
+            m_tx 00FFEF
+            m_rx 00FFEF
+           m_tcm 00000F
+           m_rcm 00000E
+           m_scp 00000D
+           m_cod 00000C
+            m_cd 000FFF
+            m_r8 000007
+            m_fe 000006
+            m_pe 000005
+            m_or 000004
+          m_idle 000003
+          m_rdrf 000002
+          m_tdre 000001
+          m_trne 000000
+          m_tmie 00000D
+           m_tie 00000C
+           m_rie 00000B
+          m_ilie 00000A
+            m_te 000009
+            m_re 000008
+          m_woms 000007
+           m_rwi 000006
+          m_wake 000005
+           m_sbk 000004
+          m_wds2 000002
+          m_wds1 000001
+          m_wds0 000000
+           m_wds 000003
+          m_sccr 00FFF2
+           m_ssr 00FFF1
+           m_scr 00FFF0
+          m_stxa 00FFF3
+          m_stxh 00FFF6
+          m_stxm 00FFF5
+          m_stxl 00FFF4
+          m_srxh 00FFF6
+          m_srxm 00FFF5
+          m_srxl 00FFF4
+           m_dma 000007
+           m_hf1 000004
+           m_hf0 000003
+            m_hf 000018
+           m_hcp 000002
+          m_htde 000001
+          m_hrdf 000000
+           m_hf3 000004
+           m_hf2 000003
+          m_hcie 000002
+          m_htie 000001
+          m_hrie 000000
+           m_htx 00FFEB
+           m_hrx 00FFEB
+           m_hsr 00FFE9
+           m_hcr 00FFE8
+           m_pcd 00FFE5
+         m_pcddr 00FFE3
+           m_pcc 00FFE1
+           m_pbd 00FFE4
+         m_pbddr 00FFE2
+           m_pbc 00FFE0
+           m_bcr 00FFFE
+errors=0

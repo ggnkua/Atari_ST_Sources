@@ -1,0 +1,217 @@
+' ***********************************************************
+' ** Demo fÅr Unterprogramm-Einbindung in A4_GRAF ab V2.00 **
+' ***********************************************************
+' Copyright (c) 1990 by JÅrgen Luers
+'
+' ************************ Unterprogramm-Parameter ****************************
+' * Parameterdatei hat keine feste GesamtlÑnge (in V2.00 bis 4KByte!),
+'   die max. LÑnge wird vom A4_GRAF.PRG bestimmt (steht in par_len%').
+' * In Wort 0 der Parameterdatei steht die LÑnge derselben (in Words!),
+'   danach folgen die Parameterblîcke der einzelnen Unterprogramme.
+' * In Wort 0 eines Parameterblocks steht die LÑnge desselben (in Words!).
+' * In Wort 1 bis 4 steht die Identifikation des Parameterblocks;
+'   im Allgemeinen wird hier der Unterprogrammname eingetragen.
+' * Vorgehen:
+'   - das Unterprogramm sucht in der Parameterdatei seine Kennung.
+'   - wird die Kennung gefunden, so werden die Parameter ausgelesen.
+'   - wird die Kennung nicht gefunden, so wird ein neuer Parameterblock
+'     erzeugt und mit den Standard-Werten gefÅllt.
+'   - weicht die Parameterblock-LÑnge von der LÑnge des bisherigen
+'     Parameterblocks ab, so wird der Rest der Parameterdatei entsprechend
+'     verschoben.
+'   - paût der Parameterblock nicht mehr in die Parameterdatei, so
+'     wird der Parameterblock ganz entfernt ( nur bei variabler Parameter-
+'     blocklÑnge nîtig! )
+'     (Dieses Feature bleibt in diesem Demo-Unterprogramm unberÅcksichtigt,
+'     und muû bei nicht fester ParameterblocklÑnge vom programmierenden
+'     Benutzer selbst implementiert werden!!!!!!!!! )
+' * Bemerkungen:
+'   - A4_GRAF lîscht die Parameter, wenn es seine Kennung nicht findet !
+'   - A4_GRAF lîscht wenn nîtig genÅgend Parameterblîcke, so daû sein
+'     Parameterblock in die Parameterdatei hineinpaût! Dabei beginnt
+'     A4_GRAF den Lîschvorgang mit dem letzten Parameterblock.
+'   - die minimale ParameterblocklÑnge ist 10 Bytes.
+'   - jeder Parameterblock hat aus dem Prinzip heraus eine gerade LÑnge.
+'
+'
+' ******************* DatenÅbergabe an ein Unterprogramm **********************
+' * Bestimmte Daten werden direkt Åber einen DatenÅbertragungs-Puffer
+' * an das Unterprogramm Åbergeben (siehe dazu 'PROCEDURE daten_lesen')
+'
+' ********************* RÅckgabe an das Hauptprogramm *************************
+' * öber verschiedene RÅckgabewerte kann die Reaktion des Hauptprogramms
+'   auf die Beendigung des Unterprogramms gesteuert werden.
+' * Negative RÅckmeldungen werden als anzuzeigende Fehlernummern aufgefaût.
+'   Der Bildschirm wird restauriert, der eventuell verÑnderte Parameterblock
+'   des Hauptprogramms nicht neu interpretiert.
+' * Bei 0 als RÅckmeldung wird keine Fehlernummer angezeigt.
+'   Der Bildschirm wird restauriert, der eventuell verÑnderte Parameterblock
+'   des Hauptprogramms nicht neu interpretiert.
+' * Bei positiver RÅckmeldung wird keine Fehlernummer angezeigt.
+'   Wenn Bit 0 gesetzt ist, dann wird der eventuell verÑnderte Parameterblock
+'   des Hauptprogramms neu interpretiert.
+'   Wenn Bit 1 gesetzt ist, dann wird das Neuzeichnen des Bildschirmes
+'   unterbunden.
+'   Den restlichen Bit's kommt keine Bedeutung zu.
+'
+' ******************** Kochrezept fÅr ein Unterprogramm ***********************
+IF MALLOC(-1)>=16384
+  a%={BASEPAGE+&H2C}              !Adr. des Environment-Strings
+  a$=CHAR{a%}                     !1. String lesen
+  dat_error!=TRUE       !von Fehler ausgehen
+  IF LEFT$(a$,15)="A4GRAF_VAR.ADR="
+    ext_buf_adr%=VAL(MID$(a$,16,8)) !Adr. des DatenÅbergabe-Bereichs
+    ADD a%,SUCC(LEN(a$))
+    a$=CHAR{a%}
+    IF ext_buf_adr%>2047 AND LEFT$(a$,15)="A4GRAF_VAR.LEN="
+      ext_buf_len%=VAL(MID$(a$,16,6)) !LÑnge des DatenÅbergabe-Bereichs
+      IF ext_buf_len%>=40
+        @daten_lesen
+        IF fehler!=FALSE
+          ADD a%,SUCC(LEN(a$))
+          a$=CHAR{a%}
+          IF LEFT$(a$,15)="A4GRAF_PAR.ADR="
+            par_adr%=VAL(MID$(a$,16,8))   !Adr. des Par-Bereichs
+            ADD a%,SUCC(LEN(a$))
+            a$=CHAR{a%}
+            IF par_adr%>2047 AND LEFT$(a$,15)="A4GRAF_PAR.LEN="
+              par_len%=VAL(MID$(a$,16,6)) !max. verfÅgbarer Par-Bereich
+              IF par_len%>=4096
+                @par_lesen
+                dat_error!=FALSE
+                @hauptprogramm      !Parameter anzeigen
+                @par_schreiben
+              ENDIF
+            ENDIF
+          ENDIF
+        ENDIF
+      ENDIF
+    ENDIF
+  ELSE
+    ~FORM_ALERT(1,"[1][ | Dieses Programm benîtigt |  Environment-String vom|    A4_GRAF.PRG !!][  OK  ]")
+    SYSTEM 2    !Programmfehler --> Parameter ignorieren/Bildschirm nicht redraw'n
+  ENDIF
+  IF dat_error!
+    ~FORM_ALERT(1,"[0][ | DatenÅbergabe falsch !  ][  OK  ]")
+    SYSTEM 0 !<=> Parameter ignorieren/Bildschirm redraw'n/keine Fehleranzeige
+  ENDIF
+  SYSTEM 1  !Programm fehlerfrei beendet, Parameter auswerten, Bildschirm redraw'n
+ENDIF
+SYSTEM -39  !Speicher voll
+'
+'
+PROCEDURE daten_lesen
+  LOCAL i&
+  ' liest die Daten aus dem DatenÅbertragungs-Puffer
+  bild_adr%=LPEEK(ext_buf_adr%)           !Adr. des Hauptbildbereiches
+  bild_rb&=DPEEK(ADD(ext_buf_adr%,4))     !Rasterbreite des Hauptbildbereiches
+  bild_rh&=DPEEK(ADD(ext_buf_adr%,6))     !Rasterhîhe des Hauptbildbereiches
+  bild_x&=DPEEK(ADD(ext_buf_adr%,8))      !Bild-x-Koordinate des Bildes
+  bild_y&=DPEEK(ADD(ext_buf_adr%,10))     !Bild-y-Koordinate des Bildes
+  bild_w&=DPEEK(ADD(ext_buf_adr%,12))     !Bild-w-Koordinate des Bildes
+  bild_h&=DPEEK(ADD(ext_buf_adr%,14))     !Bild-h-Koordinate des Bildes
+  basis_adr1%=LPEEK(ADD(ext_buf_adr%,16)) !Adr. des 1. Hilfsbildschirmes
+  basis_adr2%=LPEEK(ADD(ext_buf_adr%,20)) !Adr. des 2. Hilfsbildschirmes
+  basis_adr3%=LPEEK(ADD(ext_buf_adr%,24)) !Adr. des 3. Hilfsbildschirmes
+  symbol_adr%=LPEEK(ADD(ext_buf_adr%,28)) !Adr. des Symbolbildschirmes
+  font_adr%=LPEEK(ADD(ext_buf_adr%,32))   !Adr. des Zeichensatzes
+  i&=PEEK(ADD(ext_buf_adr%,36))
+  akt_pic&=AND(i&,&X111)                  !Aktuelles Bild
+  hochkant!=BTST(i&,7)                    !Bild-Format
+RETURN
+'
+PROCEDURE par_lesen
+  LOCAL i&,j&,found!,id$,l%
+  '
+  ' weitere global benutzte Variablen:
+  ' 1. a4_par% <=> Basisadresse des Unterprogramm-Parameterblocks
+  ' 2. a4_len% <=> LÑnge des Unterprogramm-Parameterblocks
+  '
+  id$="A4_DEMO "
+  l%=MUL(DPEEK(par_adr%),2)    !LÑnge der Parameterdatei auslesen
+  ' Identifikation suchen
+  a4_par%=par_adr%
+  j%=SUB(ADD(par_adr%,l%),10)
+  found!=FALSE
+  REPEAT
+    ADD a4_par%,2
+    IF PEEK(a4_par%)=65                       !'A'
+      IF PEEK(ADD(a4_par%,1))=52              !'4'
+        IF PEEK(ADD(a4_par%,2))=95            !'_'
+          IF PEEK(ADD(a4_par%,3))=68          !'D'
+            IF PEEK(ADD(a4_par%,4))=69        !'E'
+              IF PEEK(ADD(a4_par%,5))=77      !'M'
+                IF PEEK(ADD(a4_par%,6))=79    !'O'
+                  IF PEEK(ADD(a4_par%,7))=32  !' '
+                    found!=TRUE               !Identifikation gefunden
+                    SUB a4_par%,2             !Zeiger auf A4_DEMO-Par-Anfang
+                  ENDIF
+                ENDIF
+              ENDIF
+            ENDIF
+          ENDIF
+        ENDIF
+      ENDIF
+    ENDIF
+  UNTIL found!=TRUE OR a4_par%>=j%
+  '
+  a4_len%=10          !Parameterblock-LÑnge (falls feste LÑnge)
+  '
+  IF found!=FALSE       !falls nicht gefunden
+    IF ADD(MUL(DPEEK(par_adr%),2),a4_len%)<par_len% !falls nicht zu lang
+      ' Parameterteil aufbauen und Standardeinstellungen
+      a4_par%=ADD(par_adr%,l%)         !hinten an Parameterdatei anhÑngen
+      DPOKE par_adr%,DIV(ADD(l%,a4_len%),2) !GesamtlÑnge erhîhen
+      DPOKE a4_par%,DIV(a4_len%,2)     !LÑnge eintragen
+      BMOVE V:id$,ADD(a4_par%,2),8     !Identifikation eintragen
+      @par_schreiben
+    ENDIF
+  ELSE
+    ' Unterprogramm-Parameter auslesen relativ zu 'a4_par%'
+    ' ( also ab ADD(a4_par%,10) ! )
+    ' hier nicht benîtigt
+  ENDIF
+RETURN
+'
+PROCEDURE par_schreiben
+  IF MUL(DPEEK(a4_par%),2)>=a4_len%     !falls Platz ausreicht
+    ' legt Unterprogramm-Parameter relativ zu 'a4_par%' ab
+    ' ( also ab ADD(a4_par%,10) ! )
+    ' hier nicht benîtigt
+  ENDIF
+RETURN
+'
+PROCEDURE hauptprogramm
+  CLS
+  PRINT "Freier Programminterner Speicher:    ";FRE(0)
+  PRINT "Freier System-Speicher:              ";MALLOC(-1)
+  PRINT
+  PRINT "Adr. des DatenÅbergabe-Bereichs:     ";ext_buf_adr%
+  PRINT "LÑnge des DatenÅbergabe-Bereichs:    ";ext_buf_len%
+  PRINT "Adr. des Parameter-Bereichs:         ";par_adr%
+  PRINT "Max. LÑnge des Parameter-Bereichs:   ";par_len%
+  PRINT
+  PRINT "Adr. des Hauptbildbereiches:         ";bild_adr%
+  PRINT "Rasterbreite des Hauptbildbereiches: ";bild_rb&
+  PRINT "Rasterhîhe des Hauptbildbereiches:   ";bild_rh&
+  PRINT "Bild-x-Koordinate im Hauptbild:      ";bild_x&
+  PRINT "Bild-y-Koordinate im Hauptbild:      ";bild_y&
+  PRINT "Bild-w-Koordinate im Hauptbild:      ";bild_w&
+  PRINT "Bild-h-Koordinate im Hauptbild:      ";bild_h&
+  PRINT "Adr. des 1. Hilfsbildschirmes:       ";basis_adr1%
+  PRINT "Adr. des 2. Hilfsbildschirmes:       ";basis_adr2%
+  PRINT "Adr. des 3. Hilfsbildschirmes:       ";basis_adr3%
+  PRINT "Adr. des Symbolbildschirmes:         ";symbol_adr%
+  PRINT "Adr. des benutzten Zeichensatzes:    ";font_adr%
+  PRINT "Benutztes aktuelles Bild:            ";akt_pic&
+  PRINT "Benutztes Format des Bildes:         ";
+  IF hochkant!
+    PRINT "Hochkant"
+  ELSE
+    PRINT "Quer"
+  ENDIF
+  PRINT
+  PRINT "Taste ..."
+  ~INP(2)
+RETURN
+'
