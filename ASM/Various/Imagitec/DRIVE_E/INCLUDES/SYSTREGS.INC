@@ -1,0 +1,44 @@
+; ATARI FALCON SYSTEM REGISTERS
+; V1.0  (C)FREDDY!
+
+Blitterstuff 	Equ $ff8a00
+Halftone	Equ $000000
+Src_Xinc	Equ $000020
+Src_Yinc	Equ $000022
+Src_Addr	Equ $000024
+Endmask1	Equ $000028
+Endmask2	Equ $00002a
+Endmask3	Equ $00002c
+Dst_Xinc	Equ $00002e
+Dst_Yinc	Equ $000030
+Dst_Addr	Equ $000032
+X_Count		Equ $000036
+Y_Count		Equ $000038
+Hop		Equ $00003a
+Op		Equ $00003b
+Line_Num	Equ $00003c
+Skew		Equ $00003d
+Procswitch	Equ $ff8007
+Pal256		Equ $ff9800
+Scr_mod		Equ $ff820e
+Scr_del		Equ $ff8264
+Bp_Hi		Equ $ff8201
+Bp_Md		Equ $ff8203
+Bp_Lo		Equ $ff820c
+Vd_Hi		Equ $ff8204
+Vd_Md		Equ $ff8206
+Vd_Lo		Equ $ff8208
+
+vertflag	equ	$100
+stmodes		equ	$80
+overscan	equ	$40
+pall		equ	$20
+vga		equ	$10
+tv		equ	$00
+col80		equ	$08
+col40		equ	$00
+bps16		equ	4
+bps8		equ	3
+bps4		equ	2
+bps2		equ	1
+bps1		equ	0

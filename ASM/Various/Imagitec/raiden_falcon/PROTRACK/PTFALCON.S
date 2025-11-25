@@ -1,0 +1,9 @@
+PTSTUFF
+	*Incbin	E:\TREV\DSP.BIN
+
+Pt_Mod_On=PTSTUFF+0
+Pt_mod_Off=PTSTUFF+8
+Pt_Vbl=PTSTUFF+4
+Pt_Vol_On=PTSTUFF+12
+Pt_Vol_Slide_Up=PTSTUFF+16
+Pt_Vol_Slide_DN=PTSTUFF+20
