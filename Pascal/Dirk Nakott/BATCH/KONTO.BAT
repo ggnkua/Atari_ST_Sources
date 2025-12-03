@@ -1,0 +1,3 @@
+A:\KONTO\
+KONTO.PRG
+

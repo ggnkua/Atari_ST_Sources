@@ -1,0 +1,17 @@
+R_TREE		equ	0
+SAMPLE		equ	0
+OK		equ	4
+CANCEL		equ	3
+RADIO2		equ	6
+RADIO1		equ	8
+RADIO4		equ	7
+RADIO3		equ	9
+RADIO5		equ	10
+RADIO6		equ	11
+NAME		equ	17
+AGE		equ	18
+OPTION2		equ	14
+OPTION1		equ	13
+NUMBERS		equ	19
+DWNARROW	equ	16
+UPARROW		equ	15

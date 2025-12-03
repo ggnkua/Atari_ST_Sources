@@ -1,0 +1,569 @@
+
+
+
+
+
+
+
+
+CHAPTER 1: INITIALIZING A GEM PROGRAM
+--------------------------------------
+
+[NOTE: Words enclosed in asterisks (i.e. *word*) should be 
+read as italicized text. This text file is copyright 1993 by
+Clayton Walnum. All rights reserved.]
+
+In volume 1 of the *Assembly Language Workshop* we learned 
+to write TOS programs--that is, programs that use the ST's 
+operating system, yet don't contain any calls to GEM, the 
+ST's graphical user interface. We delayed learning about GEM 
+because a GEM program is much more complex than a straight 
+TOS program. For one thing, a GEM program requires some 
+tricky initialization, as well as some data structures we 
+weren't prepared to discuss previously. However, now that we 
+understand the basics of assembly language programming on 
+the ST, we can press forward and learn how to write GEM 
+programs.
+	In this chapter, we'll see what initialization is 
+required to get a GEM program up and running, including 
+setting up our own stack, returning unused memory to the 
+system, and defining the various data arrays that GEM 
+requires in order to pass information between our programs 
+and the operating system. We'll also see how to call AES 
+functions.
+
+--The Components of GEM--
+
+We previously learned that TOS, the ST's operating system, 
+is made up of several components: GEMDOS, BIOS, and the 
+XBIOS. Likewise, GEM, the interface that isolates the user 
+from the complexities of TOS, is divided into different 
+components: the AES (Application Environment Services) and 
+the VDI (Virtual Device Interface).
+	The AES is the part of GEM that handles menus, dialog 
+boxes, and windows. The VDI is the part of GEM that the AES 
+uses to construct those menus, dialog boxes, and windows.  
+In short, the VDI is a collection of graphics primitives 
+(low-level graphics functions) that do things such as draw 
+lines, rectangles, and circles. The VDI also provides 
+functions for reading the mouse buttons and mouse position, 
+among other things.
+
+--The Program--
+
+In this chapter, we'll see how to initialize a GEM 
+application and how to call the AES. In the CHAP1 folder of 
+your *ST Assembly Language Workshop* disk, you'll find two 
+files. PROG1.S is the source code for this chapter's sample 
+program, which is reprinted at the end of this chapter. 
+PROG1.PRG is the assembled, runnable program file. If you 
+would like to assemble the program yourself, please consult 
+your assembler's manual or refer to this book's Appendix A.
+	To run the program, double-click the PROG1.PRG file. 
+When you do, an alert box will appear on the screen with the 
+message "My first alert box!" To exit the program, click the 
+alert box's button.
+
+--Initializing GEM--
+
+Considering the size of the source code, this chapter's 
+program sure doesn't do much, does it? The fact is, most of 
+the source code does nothing more than initialize the 
+program. Only about half a dozen lines do anything that we 
+can actually see on the screen.
+	To initialize, run, and terminate a GEM application 
+program, we must perform at least six main steps:
+
+1) Set up a stack.
+2) Calculate the size of our program and return unused 
+memory back to the system.
+3) Call *appl_init* to initialize the application.
+4) Perform our main program code.
+5) Call *appl_exit* to close down our application.
+6) Call *pterm0* to return to the desktop (or the calling 
+program).
+
+	If we are going to use the VDI, there are also a couple 
+of other steps that we must perform. However, because we are 
+currently concerned only with a minimum GEM application--one 
+that makes no calls to the VDI (except through the AES)--we 
+can save those details until later.
+
+--Setting Up Our Own Stack--
+
+When we were writing simple TOS programs, we didn't worry 
+too much about where our stack was located. We just let the 
+system take care of it. However, because GEM allows several 
+programs to be loaded at once (desk accessories), as well as 
+allows one program to load another, we need a stack for each 
+program. Obviously, we can't have one program using another 
+program's stack. The result would almost certainly be a line 
+of bombs on the screen.
+	So, the first step in initiaizing a GEM program is to 
+set up our own stack. In this chapter's sample program, the 
+first two lines perform this important step.  They look like 
+this:
+
+move.l  a7,a5
+lea     stack,sp
+
+Here, the first line saves the contents of a7. (Remember, a7 
+is the stack pointer; at the start of the program it 
+contains an important address that we'll soon learn about.) 
+In the second line, we load the address of our own stack 
+into the stack pointer (a7), which is all we need to do to 
+tell the system where our stack is located.
+	But where is our stack? Take a look at the *bss* 
+section of our program. You'll see these lines:
+
+	ds.l    255
+stack:  ds.l    1
+
+These two lines reserve 256 longwords of storage (1K) for 
+our stack. In most cases, a 1K stack is plenty large enough. 
+(If your program uses a lot of recursion or other stack-
+intensive operations, your stack may need to be larger.)
+	But wait a minute! Why is our address label *stack* at 
+the end of this area? Don't we normally put a label on the 
+starting address of a block rather than at the ending 
+address? We sure do. And in the case of a stack, the block's 
+ending address is actually the stack's starting address. (Is 
+your head spinning yet?) Remember: A stack stores values 
+backward through memory, not forward. If we were to label 
+the first byte of our stack area, the first time we came 
+across an instruction like *move.w #1,-(sp)*, we'd end up 
+tromping all over our program's other data. This can yield 
+some hard-to-find bugs, believe me.
+
+--Finding the Size of a Program--
+
+When the ST runs a program, it allocates all of the 
+available memory to that program. When we were running non-
+GEM programs, that wasn't a problem. Then, we weren't 
+concerned with memory considersations such loading resource 
+files and dealing with desk accessories. With a GEM program, 
+however, we must be concerned with these issues. For 
+example, most GEM programs use menus and dialog boxes. The 
+data that defines these graphical objects are usually 
+contained in a resource file that must be loaded by the 
+program at run time. If the ST gives our program all the 
+memory in the system, and we don't bother to return what we 
+don't need, where are we going to put our resources?
+	The second step in initializing a GEM application, 
+then, is to calculate the size of our program and return all 
+unused memory to the heap (a strange word that's used to 
+describe unallocated system memory). To calculate the size 
+of a program, we need to know a little about how the ST 
+loads a program into memory.
+
+--The Transient Program Area--
+
+A program is loaded into what is called a Transient Program 
+Area (TPA). Upon a program's start-up, the TPA contains 
+three main sections (see Figure 1.1): the base page, the 
+program code (including its data), and the heap. The base 
+page contains important information about the program, 
+including the starting and ending addresses of the TPA, and 
+the addresses and lengths of each of the program segments. 
+The program section contains the program's text segment (the 
+code), the data segment (initialized data), the BSS segment 
+(uninitialized storage), and the stack. The heap, of course, 
+contains all the system's remaining memory. It is this 
+portion of the TPA that we must return to the system.
+
+[INSERT FIGURE 1.1 HERE]
+
+	In order to know how much memory we can return to the 
+system, we need to calculate how much we need. The amount of 
+memory we need is the memory that comprises the TPA minus 
+the size of the heap. It would have been nice if the ST's 
+designers had calculated this value for us. Unfortunately, 
+we need to calculate it ourselves, by adding together the 
+sizes of each section of the TPA.
+	Look at the sample program. Right after we initialize 
+our stack, you'll see these lines:
+
+move.l  4(a5),a5
+move.l  12(a5),d0
+add.l   20(a5),d0
+add.l   28(a5),d0
+add.l   #$100,d0
+
+These instructions calculate the size of our program. In the 
+first line, we change A5 to the address of our TPA, which is 
+also the address of the base page. This weird-looking 
+instruction probably requires a little explanation.
+	If you recall, we previously loaded the address of the 
+old stack into A5, right before we changed A7 to point to 
+our own stack. At this point, we actually have two stack 
+pointers. A5 points to the old stack, and A7 points to the 
+new stack. When we ran our program, the system placed the 
+address of the TPA into the second word of the system stack, 
+the stack now pointed to by A5. So, to load A5 with the 
+address of the TPA, we need to load it with the second word 
+of the old stack. To get to the second word of the stack, we 
+use address register indirect addressing with displacement, 
+using the stack pointer as the address register. Don't let 
+it bother you that the source and destination registers are 
+the same. In the first line above, all we're doing is moving 
+the second word pointed to by A5 into A5. This makes A5 
+point to our TPA.
+	Now that A5 is pointing to the start of the base page, 
+we can start to figure out the size of our program space. At 
+an offset of 12 bytes from the start of the TPA, we'll find 
+the length of our program's text segment. The second line 
+above loads that value into D0. Now, we need to add the 
+sizes of the data and BSS segments. Those values are found 
+at offsets of 20 and 28, respectively. The third and fourth 
+lines above add those values to D0. Finally, we need only 
+add the size of the base page, which is 256 bytes or $100 in 
+hexadecimal. The last line above takes care of that.
+
+--Returning Unused Memory to the System--
+
+With the size of our program area safely tucked away in D0, 
+we're ready to call the GEMDOS function *Mshrink* (opcode 
+#74), which returns the memory we don't need back to the 
+system. We do this with the following lines:
+
+move.l  d0,-(sp)
+move.l  a5,-(sp)
+clr.w   -(sp)
+move.w  #MSHRINK,-(sp)
+trap    #1
+add.l   #12,sp
+
+As you can see, the *Mshrink* function requires three 
+parameters on the stack: the size of our program area, the 
+address of the TPA, and a dummy word. After this system 
+call, the ST will again have access to any unused memory.
+
+--Getting Ready for the AES--
+
+In our sample program, we call the AES in order to display 
+an alert box. Before we can call the AES, though, we need to 
+do some further initialization. Specifically, we must supply 
+the AES with seven arrays: the global array, the control 
+array, the int_in array, the int_out array, the addr_in 
+array, the addr_out array, and the AES parameter block. 
+Yikes!
+
+--The Global Array--
+
+The global array, which comprises nine elements, contains 
+important information required by the AES library. The first 
+three elements are words (two bytes). The rest are longwords 
+(four bytes). How do we initialize the global array? We need 
+do nothing more than provide space for it in our BSS 
+segment. Look the the sample program's BSS segment. At the 
+top of this area, you'll see the label *global*, which marks 
+the beginning of the global array. After that label, you'll 
+see each of the nine elements defined, three words and six 
+longwords. Note that, for documentation's sake at least, 
+each of the array's elements has an appropriate label.
+	After we define the global array, we can forget it. The 
+AES will deal with it as it sees fit, all behind our back, 
+as it were.
+
+--The Control Array--
+
+The control array comprises five two-byte (word) elements. 
+We must use the control array to pass information to AES 
+when we call its functions, rather than using the stack as 
+we do when calling TOS functions. In turn, the AES uses the 
+control array to pass information back to us, after a 
+particular function has executed.
+	We define the control array similarly to how we defined 
+the global array, by creating space for it in our BSS 
+segment. If you look in this chapter's program listing, 
+you'll see the control array defined right after the global 
+array. The label *control* marks the beginning of the array, 
+while the labels *control0* through *control4* hold the 
+adresses of each element of the array. By using these 
+labels, we can easily access any of the five elements.
+
+--The Input and Output Arrays--
+
+The int_in, int_out, addr_in, and addr_out arrays are used 
+in conjunction with the control array to pass information 
+from our program to the AES and from the AES back to our 
+program. We use the "in" arrays to send information to the 
+AES. The AES uses the "out" arrays to return function 
+results to us.
+	The number of elements in the arrays vary, depending on 
+the AES functions we plan to call. This is because different 
+functions have different numbers of parameters. In our 
+sample program, right after the control array, we've 
+reserved only one element for each of the arrays. That's all 
+we need for the function we'll be calling.
+	Because the int_in and int_out arrays are for storing 
+integers, their elements need to be word sized. The addr_in 
+and addr_out arrays, however, hold addresses, so their 
+elements must be longwords.
+
+--The AES Parameter Block--
+
+Of course, before the AES can use any of the arrays we've 
+set up for it, it must know where they are. We communicate 
+this information with the AES parameter block (APB). The APB 
+is nothing more than a table of addresses. Specifically, it 
+contains the addresses of the control, global, int_in, 
+int_out, addr_in, and addr_out arrays, in that order. You'll 
+find our sample program's APB in the data segment, above the 
+global array.
+
+--Calling an AES Function--
+
+Now that we know all about the AES's arrays, we're ready to 
+learn to call the AES. To call the AES, we must follow the 
+steps below:
+
+1) Place the appropriate values into the control array.
+2) If required, place the appropriate parameters into the 
+int_in and addr_in arrays.
+3) Load the address of the APB into D1.
+4) Load the AES ID into D0.
+5) Perform a *trap #2*.
+
+	Let's take a look at the sample program to see how all 
+this works. Look at the section of code following the 
+*MShrink* call. You'll see the following instructions:
+
+clr.l   ap_ptree
+clr.l   ap_1resv
+clr.l   ap_2resv
+clr.l   ap_3resv
+clr.l   ap_4resv
+
+Here, we're clearing five elements of the global array, as 
+is suggested by Atari's OS documentation. If we didn't clear 
+these fields, probably nothing bad would happen to our 
+program. But Atari says to do it. That's good enough for me.
+	After initializing the global array, we make our first 
+AES function call with the following code:
+
+move.w  #APPL_INIT,control0
+clr.w   control1
+move.w  #1,control2
+clr.w   control3
+clr.w   control4
+jsr     aes
+cmpi    #$FFFF,ap_id
+beq     end
+
+This is a call to the AES function *appl_init* (opcode #10), 
+which initializes a new GEM application. Every GEM program 
+must call this function before making any other GEM calls. 
+The *appl_init* function notifies the OS of our program, so 
+that it can set up the required resources. This call also 
+stores important information into some elements of the 
+global array, the most important of which is our 
+application's ID.
+	In the first line, we place the *appl_init* opcode into 
+*control0*. The opcode of the AES function we're calling 
+always goes into this array element. Next, we place a zero 
+in *control1*, which tells the AES that we are passing no 
+values in the int_in array. Then, we place a 1 in 
+*control2*, telling the AES that we expect one value (the 
+application's ID) to be returned in the int_out array. 
+Because we are passing no addresses in the addr_in array, 
+and because we expect no addresses returned to us in the 
+addr_out array, we place zeros in *control3* and *control4*.
+	After the appropriate arrays are initialized, a call to 
+the AES is always done the same way, so in our sample 
+program, we've placed the necessary code into a subroutine. 
+The instruction *jsr aes* above calls this subroutine, which 
+is located at the end of the program, right above our data 
+segment. The subroutine looks like this:
+
+movem.l a0-a7/d0-d7,-(sp)
+move.l  #apb,d1
+move.l  #AES_OPCODE,d0
+trap    #2
+movem.l (sp)+,a0-a7/d0-d7
+rts
+
+First, we save the contents of the registers. Then we move the
+address of our APB into D1 and the AES opcode into D0. Finally,
+we call the AES with a *trap #2*. The AES then uses the APB to
+find the addresses of the arrays it needs, and it performs the
+instructions in finds in those arrays.
+
+--Displaying an Alert Box--
+
+After we've called *appl_init*, we're all ready to take full 
+advantage of some of the great stuff that GEM has to offer. 
+(We can't yet call the VDI directly, however; further 
+initialization is required for that.) One of the easiest 
+things we can do with GEM is call up an alert box. And in 
+the next section of code, we do just that. But before we 
+look at the code, let's talk a bit about alert boxes.
+	As you probably know, GEM supports a special input 
+window called a dialog box. Dialog boxes come in many, many 
+types, most of which are designed by the application's 
+programmer. The AES, however, supplies a couple of ready-
+made dialog boxes that we can use without having to create 
+it in a resource file. The simplest of these ready-made 
+dialog boxes is the alert box.
+	An alert box may contain several elements: an icon, up 
+to five lines of text (maximum of 32 characters per line), 
+and up to three labeled buttons. One of the three buttons 
+may be a default button, which is automatically chosen when 
+the user presses Return. The default button always has a 
+darker border than the other buttons.
+	When we tell the AES to construct an alert box for us, 
+we must tell it what icon and text to display. We must also 
+tell it how many buttons we want in the box, and which of 
+the buttons, if any, is to be the default. All of this 
+information is transferred to the AES via the control, 
+int_in, and int_out arrays.
+	Take a look at the sample program. Right below our call 
+to *appl_init*, you'll see the following code:
+
+move.w  #FORM_ALERT,control0
+move.w  #1,control1
+move.w  #1,control2
+move.w  #1,control3
+move.w  #0,control4
+move.w  #1,int_in
+move.l  #string,addr_in
+jsr     aes
+
+This is the code that creates and displays the alert box. In 
+the first line, we move the opcode for the AES function, 
+*form_alert* (opcode #52), into *control1*. In the next four 
+lines, we tell the AES that the int_in, int_out, and addr_in 
+arrays are each one element long, and that the addr_out 
+array is zero elements long. We then place a 1 in the first 
+element of int_in, which tells the AES that we want the 
+first button to be the default button. This value can be any 
+of the following:
+
+0 -- no default button
+1 -- first button is the default
+2 -- second button is the default
+3 -- third button is the default
+
+After setting the default button, we load the address of a 
+string into the first element of addr_in. What string, you 
+ask? The string that tells *form_alert* what icon, text, and 
+buttons to display. The string is made up of three parts, 
+each part surrounded by square brackets:
+
+[ICON #][BOX TEXT][BUTTON TEXT]
+
+ICON # tells *form_alert* which icon to display. BOX TEXT is 
+the text that we want to appear in the alert box. Each line 
+of text must be separated by the OR character (|), like 
+this:
+
+[LINE1|LINE2|LINE3|LINE 4|LINE5]
+
+BUTTON TEXT tells *form_alert* what text to put into the 
+buttons. Again, if there is more than one button, the text 
+for each must be separated by the OR character, like this:
+
+[BUTTON1|BUTTON2|BUTTON3]
+
+So, a string used to create a typical alert box might look 
+something like this:
+
+[1][Your File has been changed.|Do you want to save 
+it?][YES|NO]
+
+You can find the string used in the sample program to create 
+the alert box, in the data section of the program listing.
+	Getting back to our program, after we load the address 
+of the alert-box text string into addr_in, we call our *aes* 
+subroutine, and the alert box is displayed on the screen. 
+The user can exit the alert box onLy by clicking one of its 
+buttons. The number of the button the user clicks is 
+returned in the first element of the int_out array. The 
+alert box in our sample program has only one button, so we 
+don't need to use the information stored in the int_out 
+array, but if we had had more than one choice, we would have 
+used the value from int_out to decide what to do next.
+
+--Shutting Down a GEM Application--
+
+The complement of the *appl_init* function is *appl_exit* 
+(opcode #19). Before returning to the desktop from a GEM 
+program, we must be sure to call this function, because it 
+tells the AES that the program is terminating and that the 
+AES should return to the system whatever resources were 
+allocated. We call the *appl_exit* function like this:
+
+move.w  #APPL_EXIT,control0
+move.w  #0,control1
+move.w  #1,control2
+move.w  #0,control3
+move.w  #0,control4
+jsr     aes
+
+After a call to *appl_exit*, the first element of int_out 
+will contain a zero if an error occurred or a number greater 
+than zero if no error occurred.
+	Once we've terminated the GEM program, all we must do 
+to end the program is return to the desktop. We do this just 
+as we did before, with a call to *Pterm0*.
+
+--Conclusion--
+
+Now you know why we saved GEM programming for volume 2 of 
+the workshop. Just doing something simple like bringing an 
+alert box up on the screen takes many lines of code and 
+requires much knowledge of the way GEM works. Take your time 
+with this chapter and be sure you understand it all. It's 
+the basis for all to follow.
+
+--Summary--
+
+* GEM comprises two main components: the AES and the VDI.
+
+* The AES handles menus, dialog, boxes, and windows. The AES 
+calls upon the VDI, which contains a library of graphics 
+primitives, as well as functions for handling the mouse, 
+among other things.
+
+* To initialize, run, and terminate a GEM application, we 
+must perform six main steps: Set up a stack, return unused 
+memory to the system, call *appl_init*, perform the main 
+program code, call *appl_exit*, and call *Pterm0*.
+
+* We set up a stack by allocating space for it in our BSS, 
+and then setting the stack pointer to that space.
+
+* To return unused memory to the system, we must first 
+calculate the size of our program. We use the information 
+found in the Trasient Program Area (TPA) to do this.
+
+* The address of the TPA can be found in the second word of 
+the system's stack upon program startup.
+
+* The GEMDOS function #74, *Mshrink*, returns unused memory 
+to the system.
+
+* In order to function properly, the AES requires seven 
+arrays to receive information from and to send information 
+to our program. They are the global array, the control 
+array, the int_in array, the int_out array, the addr_in 
+array, the addr_out array, and the AES parameter block.
+
+* To call an AES routine, we must perform five main steps: 
+Place the appropriate values into the control array, place 
+the appropriate parameters into the int_in and addr_in 
+arrays, load the address of the APB into D1, load the AES ID 
+into D0, and perform a *trap #2*.
+
+* The AES function #10, *appl_init* initializes a new GEM 
+application.
+
+* An alert box is one of the ready-made dialog boxes that 
+GEM provides.
+
+* The AES function #52, *form_alert*, creates an alert box 
+on the screen.
+
+* The AES function #19, *appl_exit*, terminates a GEM 
+application, returning all its resources to the system.
+
