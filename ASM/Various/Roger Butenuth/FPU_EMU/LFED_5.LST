@@ -1,0 +1,730 @@
+PASM 68040 Macro Assembler  Version Feb  3 1992  (C) 91 Pure Software  Page   1
+Source File: D:\PC\FPU_EMU\LFED_5.S
+
+   1                                    ;---------------------------------------------------------------------
+   2                                    ;Programm-/Routinen-Name:	Line-F Emulation Driver / LFED
+   3                                    ;						 Version 2.00
+   4                                    ;Datum: 27.07.92
+   5  
+   6                                    ;Aufgabe/Kurzdoku: Line-F-Emulator fÅr die Benutzung eines MC68881
+   7                                    ;in einem Atari ST/STE mit MC68000 (also auch der SFP004-Karte).
+   8                                    ;Mit LFED ist die Nutzung der FPU in vollem Umfang gewÑhrleistet und
+   9                                    ;kann von jedem Programm angesprochen werden, welches FPU-UnterstÅtzung
+  10                                    ;verlangt. MC68030 (TT) optimierte Programme sind hiervon natÅrlich
+  11                                    ;ausgenommen, da der MC68000 dessen InstructionSet nicht versteht!
+  12  
+  13                                    ;Wird ein MC68882 als FPU genutzt, mÅssen einige kleinere Anpassungen
+  14                                    ;vorgenommen werden, da dieser an verschiedenen Stellen öbertragungen
+  15                                    ;des PC's erwartet.
+  16  
+  17                                    ;Author: Roger Butenuth (c't 04/90 Seite 430 ff.)
+  18                                    ;		 Michael Hauschild (XBRA-Erweiterungen und alle folgenden
+  19                                    ;		 Versionen)  
+  20  
+  21                                    ;	(c)	Smart Systems '92
+  22                                    ;		Windhornstraûe 2 / 3016 Seelze 1
+  23                                    ;		Telefon (05137) 9 20 09
+  24                                    ;---------------------------------------------------------------------
+  25                                    ;Dokumentation: 
+  26                                    ;---------------------------------------------------------------------
+  27                                    ;Der Treiber installiert sich unter Beachtung des XBRA-Protokolls, 
+  28                                    ;d.h. er erkennt sein Vorhandensein und gibt eine Meldung aus, falls
+  29                                    ;versucht wird, ihn erneut zu installieren.
+  30  
+  31                                    ;Nicht unterstÅtzte FPU-Befehle:
+  32  
+  33                                    ;	FTRAP, FSAVE, FRESTORE
+  34  
+  35                                    ;Erkannte BUGS in Version 1.00:
+  36  
+  37                                    ;	FMOVEM (An),FP0-FPn  ... dieser ist eigentlich kein BUG !
+  38  
+  39                                    ;	Es tritt ein BUS-Error beim Terminieren von Programmen auf, die
+  40                                    ;	die FPU nutzen und fÅr das Terminieren die C-Funktion return() 
+  41                                    ;	verwenden. Der Grund hierfÅr ist ein Restore der FPU-Register
+  42                                    ;	mit FMOVEM (diese werden am Programmbegin gesichert). Man kann
+  43                                    ;	dieses SAUBER umgehen, indem man aus FPU-nutzenden Funktionen
+  44                                    ;	mit exit() zurÅckkehrt (sofern man kein Funktionsergebnis
+  45                                    ;	erwartet!) - dann sollte auch kein Bus-Error mehr auftreten 
+  46                                    ;	(siehe FPU_TST2.C oder auch BGIDEMO.C)
+  47  
+  48                                    ;Letzte énderung:
+  49                                    ;	19.05.92	Freigabe der Version 1.00, da der BUG mit FMOVEM und
+  50                                    ;				return(0) "gefixt" ist!
+  51                                    ;	27.07.92	Version 2.00 fÅr neuere TOS-Versionen (ab TOS-Version
+  52                                    ;				1.06), in denen die	LineF nicht mehr "miûbraucht" wird.
+  53                                    ;				In dieser Version wird keine PrÅfung mehr gemacht, ob 
+  54                                    ;				der Trap-Aufruf aus	dem ROM oder RAM kam. Es wird 
+  55                                    ;				grundsÑtzlich davon ausgegangen, daû dieser von einer
+  56                                    ;				Applikation gemacht wurde!
+PASM 68040 Macro Assembler  Version Feb  3 1992  (C) 91 Pure Software  Page   2
+Source File: D:\PC\FPU_EMU\LFED_5.S
+
+  57  
+  58                                    ;---------------------------------------------------------------------
+  59                                    ;ACHTUNG: bei den Assembler-Options muû -S Flag gesetzt werden 
+  60                                    ;(wegen ReTurn from Exception / RTE) ! 
+  61  
+  62                                    	.IMPORT	__DATE__
+  63                                    	.IMPORT __PUREC__
+  64                                    	
+  65                                    ;-------------- macro - definitions ----------------------------------
+  66  
+  67                                    .MACRO Supexec
+  68                                    	move.w		#38,-(sp)		;Supexec()
+  69                                    	trap		#14				;XBIOS
+  70                                    	addq.l		#6,sp			;Stack aufrÑumen
+  71                                    .ENDM			
+  72                                    		
+  73                                    ;-------------- set FPU-register-addresses ---------------------------
+  74                                    	
+  75                                    response 	equ 	$fffa40	;in a6 (Coprozessor-Basisregister)
+  76                                    control		equ		$02		;Alle weiteren Register relativ zu
+  77                                    save		equ		$04		;response
+  78                                    restore		equ		$06		
+  79                                    command		equ		$0a		;in a5
+  80                                    condition	equ		$0e
+  81                                    operand		equ		$10		;in a4
+  82                                    reg_selec	equ		$14
+  83                                    ins_add		equ		$18
+  84                                    lineF		equ		$2c		;Line-F / TRAP #11
+  85  
+  86                                    ;-------------- start of code ----------------------------------------
+  87  
+  88                                    			.TEXT
+  89 00000000' 4879 00000000'           			pea.l		Install			;Installations-Routine
+  90                                    			Supexec						;SVC
+  68 00000006' 3F3C 0026               +	move.w		#38,-(sp)		;Supexec()
+  69 0000000A' 4E4E                    +	trap		#14				;XBIOS
+  70 0000000C' 5C8F                    +	addq.l		#6,sp			;Stack aufrÑumen
+  91 0000000E' B2BC 4C46 4544           			cmp.l		#"LFED",d1		;ist "LFED" ?
+  92 00000014' 6700 040A                			beq			Terminate		;ja -> dann terminieren
+  93                                    			
+  94 00000018' 4879 00000000`           start:		pea.l		titel			;Titel-Daten holen
+  95 0000001E' 4879 00000000*           			pea.l		__DATE__
+  96 00000024' 3F3C 0009                			move.w		#9,-(sp)		;Cconws 
+  97 00000028' 4E41                     			trap		#1				;GEMDOS-Call
+  98 0000002A' 5C8F                     			addq.l		#6,sp			;Stack-Korrektur
+  99                                    	
+ 100 0000002C' 4879 00000000'           			pea			setvec			;Im Supervisormodus Vektor setzen
+ 101                                    			Supexec						;SVC
+  68 00000032' 3F3C 0026               +	move.w		#38,-(sp)		;Supexec()
+  69 00000036' 4E4E                    +	trap		#14				;XBIOS
+  70 00000038' 5C8F                    +	addq.l		#6,sp			;Stack aufrÑumen
+ 102                                    						
+ 103 0000003A' 206F 0004                			movea.l		4(sp),a0		;Basepageadresse holen
+ 104 0000003E' 223C 0000 0100           			move.l		#$100,d1		;BasepagelÑnge
+ 105 00000044' D2A8 000C                			add.l		$0c(a0),d1		;+TextlÑnge
+ 106 00000048' D2A8 0014                			add.l		$14(a0),d1		;+DatenlÑnge
+PASM 68040 Macro Assembler  Version Feb  3 1992  (C) 91 Pure Software  Page   3
+Source File: D:\PC\FPU_EMU\LFED_5.S
+
+ 107 0000004C' D2A8 001C                			add.l		$1c(a0),d1		;+BSS-LÑnge
+ 108 00000050' 2F01                     			move.l		d1,-(sp)		;LÑnge des belegten Speichers
+ 109 00000052' 3F3C 0031                			move.w		#$31,-(sp)		;an GEMDOS melden
+ 110 00000056' 4E41                     			trap		#1
+ 111                                    			
+ 112 00000058' 23F8 002C 00000000'      setvec:		move.l		lineF,oldtrap	;Alten Line-F-Vektor retten
+ 113 00000060' 21FC 00000000'002C       			move.l		#my_trap,lineF	;Neuen Line-F-Vektor setzen
+ 114 00000068' 4E75                     			rts
+ 115  
+ 116                                    ;-------------- XBRA-structure ---------------------------------------
+ 117                                    			
+ 118 0000006A' 5842 5241                xb_magic:	.dc.b		"XBRA"			;XBRA-Struktur vor neuem Trap
+ 119 0000006E' 4C46 4544                xb_id:		.dc.b		"LFED"			;XBRA-Kennung
+ 120  
+ 121 00000072' 0000 0000                oldtrap:	.dc.l		0				;Platz fÅr alten Line-F-Vektor
+ 122  
+ 123                                    ;-------------- lineF-handler -----------------------------------------
+ 124  
+ 125 00000076' 48F9 7FFF 00000000"      my_trap:	movem.l		d0-a6,dregs		;Register retten
+ 126 0000007E' 4E68                     			move.l		usp,a0			;USP retten
+ 127 00000080' 23C8 00000000"           			move.l		a0,rusp			;Åber Umweg
+ 128 00000086' 4DF9 00FF FA40           			lea			response,a6		;#response nach A6
+ 129 0000008C' 4BEE 000A                			lea			command(a6),a5	;#command  nach A5
+ 130 00000090' 49EE 0010                			lea			operand(a6),a4	;#operand  nach A4
+ 131 00000094' 47F9 00000000"           			lea			dregs,a3		;#dregs    nach A3
+ 132 0000009A' 206F 0002                			movea.l		2(sp),a0		;PC nach A0
+ 133 0000009E' 3210                     			move.w		(a0),d1			;Kommando nach D1
+ 134 000000A0'                          again:				;-------- Einsprung fÅr weitere FPU-Befehle
+ 135 000000A0' C27C 01C0                			and.w		#%0000000111000000,d1	;Spezialteil ausmaskieren
+ 136 000000A4' 6600 012C                			bne			spezial			;Ein Bit gesetzt->Spezialbefehl
+ 137 000000A8' 3228 0002                			move.w		2(a0),d1		;zweiten Befehlsteil in D1 merken
+ 138 000000AC' 3A81                     			move.w		d1,(a5)			;Befehl in FPU schreiben (A3==#command)
+ 139 000000AE'                          do_ca:				;-------- Einsprung fÅr weiter Nachfragen an FPU
+ 140 000000AE' 3016                     			move.w		(a6),d0			;Response lesen
+ 141 000000B0' 0800 000C                			btst		#12,d0			;erstes Modusbit testen
+ 142 000000B4' 6600 00C0                			bne			rw_1x			;==1 -> springen
+ 143 000000B8' 0800 000B                			btst		#11,d0			;zweites Modusbit testen
+ 144 000000BC' 67 3A                    			beq.s		rw_00			;==0 -> springen
+ 145                                    			;-------- %xxx01, Null-Primitive/Transfer Single CPU-Register
+ 146 000000BE' 0800 000A                			btst		#10,d0			;Register Åbertragen?
+ 147 000000C2' 66 28                    			bne.s		rw_sngl			;JA -> Transfer Single CPU-Register
+ 148 000000C4' 0800 000F                			btst		#15,d0			;CA (Come Again) gesetzt?
+ 149 000000C8' 66 E4                    			bne.s		do_ca			;JA -> weiter fragen, sonst fertig
+ 150 000000CA' 5888                     			addq.l		#4,a0			;A0 um reine BefehlslÑnge weiter
+ 151                                    					;(Alles andere wurde in calc_add erledigt)
+ 152 000000CC' 3210                     			move.w		(a0),d1			;erstes Befehlswort holen
+ 153 000000CE' 3001                     			move.w		d1,d0			;und nach D0
+ 154 000000D0' C07C F000                			and.w		#$f000,d0		;wieder COP-Befehl?
+ 155 000000D4' 0A40 F000                			eor.w		#$f000,d0
+ 156 000000D8' 67 C6                    			beq.s		again			;JA -> direkt weiter machen
+ 157 000000DA' 2F48 0002                			move.l		a0,2(sp)		;neuen PC eintragen
+ 158 000000DE' 2079 00000000"           			movea.l		rusp,a0			;USP wieder restaurieren
+ 159 000000E4' 4E60                     			move.l		a0,usp			;wieder Åber Umweg
+ 160 000000E6' 4CD3 7FFF                			movem.l		(a3),d0-a6		;Register restaurieren
+ 161 000000EA' 4E73                     			rte							;Trap beenden
+ 162  
+PASM 68040 Macro Assembler  Version Feb  3 1992  (C) 91 Pure Software  Page   4
+Source File: D:\PC\FPU_EMU\LFED_5.S
+
+ 163 000000EC' C27C 0070                rw_sngl:	and.w		#%1110000,d1	;Registernummer ausmaskieren (nur Dn)
+ 164 000000F0' E449                     			lsr.w		#2,d1			;D1=Nummer*4
+ 165 000000F2' 28B3 1000                			move.l		(a3,d1.w),(a4)	;Register Åbertragen (a4==#operand,a3==#dregs)
+ 166 000000F6' 60 B6                    			bra.s		do_ca			;danach kommt immer noch etwas
+ 167                                    			
+ 168 000000F8'                          rw_00:		;-------- %xxx00, Transfer multiple coprocessor registers
+ 169 000000F8' 6100 01DE                			bsr 		calc_add		;Operandenadresse nach A1 holen
+ 170 000000FC' 382E 0014                			move.w		reg_selec(a6),d4	;Registerliste nach D4 holen
+ 171 00000100' 0800 000D                			btst		#13,d0			;Dr-Bit testen
+ 172 00000104' 67 36                    			beq.s		w_00			;==0 -> Daten in FPU schreiben
+ 173                                    						
+ 174 00000106' 0800 000C                			btst		#12,d0			;Predekrementmodus?
+ 175 0000010A' 67 12                    			beq.s		r_pred			;==0 -> ja, springen
+ 176                                    			
+ 177 0000010C' 7007                     			moveq		#7,d0			;SchleifenzÑhler fÅr 8 Bits
+ 178                                    			
+ 179 0000010E' E34C                     .l_1:		lsl.w		#1,d4			;ein Bit ins Carry
+ 180 00000110' 64 06                    			bcc.s		.l_2 			;nur bei Bit==1 etwas machen
+ 181 00000112' 22D4                     			move.l		(a4),(a1)+		;1 (A4==#operand)
+ 182 00000114' 22D4                     			move.l		(a4),(a1)+		;2
+ 183 00000116' 22D4                     			move.l		(a4),(a1)+		;3 Langworte fÅr jedes Register
+ 184 00000118' 51C8 FFF4                .l_2:		dbra		d0,.l_1			;fÅr alle 8 Bits
+ 185  
+ 186 0000011C' 6090                     			bra			do_ca			;nochmal FPU befragen
+ 187                                    			
+ 188 0000011E' 7007                     r_pred:		moveq		#7,d0			;SchleifenzÑhler fÅr 8 Bits
+ 189  
+ 190 00000120' E34C                     .l_1:		lsl.w		#1,d4			;ein Bit ins Carry
+ 191 00000122' 64 0A                    			bcc.s		.l_2			;nur bei Bit==1 etwas machen
+ 192 00000124' 22D4                     			move.l		(a4),(a1)+		;1 (A4==#operand)
+ 193 00000126' 22D4                     			move.l		(a4),(a1)+		;2
+ 194 00000128' 22D4                     			move.l		(a4),(a1)+		;3 Langworte fÅr jedes Register
+ 195 0000012A' 92FC 0018                			suba.w		#24,a1			;Dekrement durchfÅhren
+ 196 0000012E' 51C8 FFF0                .l_2:		dbra		d0,.l_1			;fÅr alle 8 Bits
+ 197  
+ 198 00000132' D2FC 000C                			adda.w		#12,a1			;A1 wieder auf letztes Register
+ 199 00000136' 2489                     			move.l		a1,(a2)			;A1 als Registerinhalt abspeichern
+ 200  
+ 201 00000138' 6000 FF74                			bra			do_ca			;Nochmal FPU fragen
+ 202                                    			
+ 203 0000013C' 3010                     w_00:		move.w		(a0),d0			;erstes Befehlswort holen
+ 204 0000013E' C038 0038                			and.b		%111000,d0		;Adressierungsart maskieren
+ 205 00000142' B038 0018                			cmp.b		%011000,d0		;Gleich (An)+ ?
+ 206 00000146' 67 14                    			beq.s		w_post			;JA -> Postinkrementmodus
+ 207  
+ 208 00000148' 7007                     			moveq		#7,d0			;SchleifenzÑhler fÅr 8 Bits
+ 209  
+ 210 0000014A' E34C                     .l_1:		lsl.w		#1,d4			;ein Bit ins Carry
+ 211 0000014C' 64 06                    			bcc.s		.l_2			;nur bei Bit==1 etwas machen
+ 212 0000014E' 2899                     			move.l		(a1)+,(a4)		;1 (A4==#operand)
+ 213 00000150' 2899                     			move.l		(a1)+,(a4)		;2
+ 214 00000152' 2899                     			move.l		(a1)+,(a4)		;3 Langworte fÅr jedes Register
+ 215 00000154' 51C8 FFF4                .l_2:		dbra		d0,.l_1			;fÅr alle 8 Bits
+ 216  
+ 217 00000158' 6000 FF54                			bra			do_ca			;Nochmal FPU fragen
+ 218                                    			
+PASM 68040 Macro Assembler  Version Feb  3 1992  (C) 91 Pure Software  Page   5
+Source File: D:\PC\FPU_EMU\LFED_5.S
+
+ 219 0000015C' 92FC 000C                w_post:		suba.w		#12,a1			;Inkrement von calc_add aufheben
+ 220  
+ 221 00000160' 7007                     			moveq		#7,d0			;SchleifenzÑhler fÅr 8 Bits
+ 222  
+ 223 00000162' E34C                     .l_1:		lsl.w		#1,d4			;ein Bit ins Carry
+ 224 00000164' 64 06                    			bcc.s		.l_2			;nur bei Bit==1 etwas machen
+ 225 00000166' 2899                     			move.l		(a1)+,(a4)		;1 (A4==#operand)
+ 226 00000168' 2899                     			move.l		(a1)+,(a4)		;2
+ 227 0000016A' 2899                     			move.l		(a1)+,(a4)		;3 Langworte fÅr jedes Register
+ 228 0000016C' 51C8 FFF4                .l_2:		dbra		d0,.l_1			;fÅr alle 8 Bits
+ 229 00000170' 2489                     			move.l		a1,(a2)			;A1 als Registerinhalt abspeichern
+ 230                                    			
+ 231 00000172' 6000 FF3A                			bra			do_ca			;Nochmal FPU fragen
+ 232                                    			
+ 233 00000176' 0800 000B                rw_1x:		btst		#11,d0			;zweites Modusbit testen
+ 234 0000017A' 66 52                    			bne.s		rw_11			;==1 -> springen (Trap, Error)
+ 235 0000017C' 0800 000D                			btst		#13,d0			;DR-Bit testen
+ 236 00000180' 67 26                    			beq.s		w_10			;==0 -> Daten an FPU schreiben
+ 237                                    			;--------  %xx110, evaluate effective address and transfer data
+ 238 00000182' 6100 0154                			bsr			calc_add		;Operandenadresse berechnen
+ 239                                    										;A1=Operandenadresse, d1.l=OperandenlÑnge
+ 240 00000186' B27C 0002                			cmp.w		#2,d1			;LÑnge-2
+ 241 0000018A' 6F 0A                    			ble.s		r_bw			;<=2 -> Wort- oder Byteoperand
+ 242                                    			
+ 243 0000018C' 22D4                     r_11:		move.l		(a4),(a1)+		;ein Langwort lesen (a4==#operand)
+ 244 0000018E' 5981                     			subq.l		#4,d1			;und runterzÑhlen
+ 245 00000190' 6E FA                    			bgt.s		r_11			;>0 -> weiter Åbertragen
+ 246 00000192' 6000 FF1A                			bra			do_ca			;Nochmal FPU befragen
+ 247                                    			
+ 248 00000196' 0801 0000                r_bw:		btst		#0,d1			;Byte?
+ 249 0000019A' 66 06                    			bne.s		r_byte			;JA!
+ 250 0000019C' 3294                     			move.w		(a4),(a1)		;Word-Operand lesen (A4==#operand)
+ 251 0000019E' 6000 FF0E                			bra			do_ca			;Nochmal FPU befragen
+ 252                                    			
+ 253 000001A2' 1294                     r_byte:		move.b		(a4),(a1)		;Byteoperand lesen (A4==#operand)
+ 254 000001A4' 6000 FF08                			bra			do_ca			;Nochmal FPU befragen
+ 255                                    			
+ 256 000001A8'                          w_10:		;--------  %xx010, evaluate effective address and transfer data
+ 257 000001A8' 6100 012E                			bsr			calc_add		;Operandenadresse berechnen
+ 258                                    										;A1=Operandenadresse, d1.l=OperandenlÑnge
+ 259 000001AC' B27C 0002                			cmp.w		#2,d1			;LÑnge-2
+ 260 000001B0' 6F 0A                    			ble.s		w_bw			;<=2 -> Wort- oder Byteoperan
+ 261                                    			
+ 262 000001B2' 2899                     w_11:		move.l		(a1)+,(a4)		;Langwort schreiben (a4==#operand)
+ 263 000001B4' 5981                     			subq.l		#4,d1			;und runterzÑhlen
+ 264 000001B6' 6E FA                    			bgt.s		w_11			;>0 -> weiter Åbertragen
+ 265 000001B8' 6000 FEF4                			bra			do_ca			;Nochmal FPU befragen
+ 266                                    			
+ 267 000001BC' 0801 0000                w_bw:		btst		#0,d1			;Byte?
+ 268 000001C0' 66 06                    			bne.s		w_byte			;JA!
+ 269 000001C2' 3891                     			move.w		(a1),(a4)		;Word schreiben (A4==#operand)
+ 270 000001C4' 6000 FEE8                			bra			do_ca			;Nochmal FPU befragen
+ 271                                    			
+ 272 000001C8' 1891                     w_byte:		move.b		(a1),(a4)		;Byte schreiben (A4==#operand)
+ 273 000001CA' 6000 FEE2                			bra			do_ca			;Nochmal FPU befragen
+ 274                                    			
+PASM 68040 Macro Assembler  Version Feb  3 1992  (C) 91 Pure Software  Page   6
+Source File: D:\PC\FPU_EMU\LFED_5.S
+
+ 275 000001CE'                          rw_11:		;-------- %xxx11, take pre-instruction exception
+ 276 000001CE' 6000 00F8                			bra 		cop_error		;Error-Handler anspringen
+ 277                                    			;(hier sollte man eine genauere Fehleranalyse machen)!
+ 278                                    			
+ 279 000001D2'                          spezial:				;Sprungbefehle etc.
+ 280 000001D2' B27C 0040                			cmp.w		#%001000000,d1	;FScc, FDBcc oder FTRAPcc
+ 281 000001D6' 67 14                    			beq.s		s_trap
+ 282 000001D8' B27C 0080                			cmp.w		#%010000000,d1	;Branch mit 16Bit-Offset
+ 283 000001DC' 6700 0096                			beq			s_br16
+ 284 000001E0' 0A41 00C0                			eor.w		#%011000000,d1	;Branch mit 32Bit-Offset
+ 285 000001E4' 6700 00B8                			beq			s_br32
+ 286 000001E8' 6000 00DE                			bra			cop_error		;FSAVE/FRESTORE nicht unterstÅtzt
+ 287                                    			
+ 288 000001EC' 3010                     s_trap:		move.w		(a0),d0			;erstes Befehlswort nach D0
+ 289 000001EE' 3200                     			move.w		d0,d1			;und nach D1 retten
+ 290 000001F0' C07C 0038                			and.w		#%111000,d0		;wichtige Bits ausmaskieren
+ 291 000001F4' B07C 0008                			cmp.w		#%001000,d0		;FDBcc?
+ 292 000001F8' 67 34                    			beq.s		s_fdbcc			;JA -> springen
+ 293 000001FA' B07C 0038                			cmp.w		#%111000,d0		;FTRAP?
+ 294 000001FE' 6700 00C8                			beq			cop_error		;JA -> Fehler (s.o.)
+ 295                                    										;sonst FScc
+ 296 00000202' 3D68 0002 000E           			move.w		2(a0),condition(a6)	;Bedingung an FPU schicken
+ 297 00000208' 7001                     			moveq		#1,d0			;OperandenlÑnge=1 (fÅr calc_add)
+ 298 0000020A' 6100 00CC                			bsr			calc_add		;OperandenlÑnge berechnen
+ 299                                    			
+ 300 0000020E' 3016                     .l_1:		move.w		(a6),d0			;Response lesen
+ 301 00000210' 0800 0008                			btst		#8,d0			;IA-Bit testen
+ 302 00000214' 67 0E                    			beq.s		.l_2			;==0 -> fertig
+ 303 00000216' C07C 1800                			and.w		#%1100000000000,d0	;Bit 11 und 12 ausmaskieren
+ 304 0000021A' 0A40 1800                			eor.w		#%1100000000000,d0	;Beide gesetzt?
+ 305 0000021E' 66 EE                    			bne.s		.l_1			;nicht Beide ==1 -> warten
+ 306 00000220' 6000 00A6                			bra			cop_error		;sonst Exception aufgetreten
+ 307                                    			
+ 308 00000224' 0800 0000                .l_2:		btst		#0,d0			;Antwortbit testen
+ 309 00000228' 56D1                     			sne			(a1)			;je nach Bit setzen/lîschen
+ 310 0000022A' 6000 FE82                			bra			do_ca			;nochmal FPU befragen
+ 311                                    			
+ 312 0000022E' 3D68 0002 000E           s_fdbcc:	move.w		2(a0),condition(a6)	;Bedingung an FPU schicken
+ 313 00000234' C27C 0007                			and.w		#%111,d1		;Registernummer maskieren (D1=(A0))
+ 314 00000238' E549                     			lsl.w		#2,d1			;D1=Nummer*4
+ 315 0000023A' 43F3 1000                			lea			(a3,d1.w),a1	;A1 enthÑlt Adresse des Datenregisters
+ 316 0000023E' 2211                     			move.l		(a1),d1			;Dn holen
+ 317 00000240' 5341                     			subq.w		#1,d1			;Dn=Dn-1
+ 318 00000242' 2281                     			move.l		d1,(a1)			;Dn zurÅckschreiben
+ 319 00000244' 2448                     			movea.l		a0,a2			;alten PC nach A2 holen
+ 320 00000246' 5488                     			addq.l		#2,a0			;PC 2 weiter (fÅr "nicht springen")
+ 321                                    						
+ 322 00000248' 3016                     .l_1:		move.w		(a6),d0			;Response lesen
+ 323 0000024A' 0800 0008                			btst		#8,d0			;IA-Bit testen
+ 324 0000024E' 67 0C                    			beq.s		.l_2			;==0 -> fertig
+ 325 00000250' C07C 1800                			and.w		#%1100000000000,d0	;Bit 11 und 12 ausmaskieren
+ 326 00000254' 0A40 1800                			eor.w		#%1100000000000,d0	;Beide gesetzt?
+ 327 00000258' 66 EE                    			bne.s		.l_1			;nicht Beide ==1 -> warten
+ 328 0000025A' 606C                     			bra			cop_error		;sonst Exception aufgetreten
+ 329                                    			
+ 330 0000025C' 0800 0000                .l_2:		btst		#0,d0			;Antwortbit testen
+PASM 68040 Macro Assembler  Version Feb  3 1992  (C) 91 Pure Software  Page   7
+Source File: D:\PC\FPU_EMU\LFED_5.S
+
+ 331 00000260' 6600 FE4C                			bne			do_ca			;TRUE -> das war's schon
+ 332 00000264' D4EA 0004                			adda.w		4(a2),a2		;16Bit Sprungdist. add. (A2=PC)
+ 333 00000268' 5241                     			addq.w		#1,d1			;Dn==1 ?
+ 334 0000026A' 6700 FE42                			beq			do_ca			;JA -> kein Sprung (Schleifenende)
+ 335 0000026E' 204A                     			movea.l		a2,a0			;sonst "Sprung" (neuen PC laden)
+ 336 00000270' 6000 FE3C                			bra			do_ca			;nochmal FPU befragen
+ 337                                    			
+ 338 00000274' 3D50 000E                s_br16:		move.w		(a0),condition(a6)	;Bedingung an FPU schicken
+ 339  
+ 340 00000278' 3016                     .l_1:		move.w		(a6),d0			;Response lesen
+ 341 0000027A' 0800 0008                			btst		#8,d0			;IA-Bit testen
+ 342 0000027E' 67 0C                    			beq.s		.l_2			;==0 -> fertig
+ 343 00000280' C07C 1800                			and.w		#%1100000000000,d0	;Bit 11 und 12 ausmaskieren
+ 344 00000284' 0A40 1800                			eor.w		#%1100000000000,d0	;Beide gesetzt?
+ 345 00000288' 66 EE                    			bne.s		.l_1			;nicht Beide ==1 -> warten
+ 346 0000028A' 603C                     			bra			cop_error		;sonst Exception aufgetreten
+ 347                                    			
+ 348 0000028C' 0800 0000                .l_2:		btst		#0,d0			;Antwortbit testen
+ 349 00000290' 6700 FE1C                			beq			do_ca			;FALSE -> das war's schon
+ 350 00000294' D0E8 0002                			adda.w		2(a0),a0		;16Bit Sprungdistanz addieren
+ 351 00000298' 5588                     			subq.l		#2,a0			;ein Wort zurÅck (weil spÑter
+ 352                                    			;noch addiert wird und nur 2 addiert werden mÅûte)
+ 353 0000029A' 6000 FE12                			bra			do_ca			;nochmal FPU befragen
+ 354                                    			
+ 355 0000029E' 3D50 000E                s_br32:		move.w		(a0),condition(a6)	;Bedingung an FPU schicken
+ 356  
+ 357 000002A2' 3016                     .l_1:		move.w		(a6),d0			;Response lesen
+ 358 000002A4' 0800 0008                			btst		#8,d0			;IA-Bit testen
+ 359 000002A8' 67 0E                    			beq.s		.l_2			;==0 -> fertig
+ 360 000002AA' C07C 1800                			and.w		#%1100000000000,d0	;Bit 11 und 12 ausmaskieren
+ 361 000002AE' 0A40 1800                			eor.w		#%1100000000000,d0	;Beide gesetzt?
+ 362 000002B2' 66 EE                    			bne.s		.l_1			;nicht Beide ==1 -> warten
+ 363 000002B4' 6012                     			bra			cop_error		;sonst Exception aufgetreten
+ 364 000002B6' 5488                     			addq.l		#2,a0			;Befehl ist 3 Worte lang
+ 365                                    										;(nun: (A0)=Distanz)			
+ 366 000002B8' 0800 0000                .l_2:		btst		#0,d0			;Antwortbit testen
+ 367 000002BC' 6700 FDF0                			beq			do_ca			;TRUE -> das war's schon
+ 368 000002C0' D1D0                     			adda.l		(a0),a0			;32Bit Sprungdistanz addieren
+ 369 000002C2' 5988                     			subq.l		#4,a0			;ein Wort zurÅck (weil spÑter
+ 370                                    			;noch addiert wird und nur 2 addiert werden mÅûte)
+ 371 000002C4' 6000 FDE8                			bra			do_ca			;nochmal FPU befragen
+ 372                                    			
+ 373 000002C8'                          cop_error:		;Error_Handler fÅr einen TRAP der FPU (sehr einfach gehalten).
+ 374                                    				;Es wird ein Reset der FPU durchgefÅhrt und das aktuelle
+ 375                                    				;Programm terminiert. Return-Code = 881.
+ 376 000002C8' 3D7C 0000 0002           			move.w		#0,control(a6)	;FPU-Reset (kein clr.w verwenden!)
+ 377 000002CE' 3F3C 0371                			move.w		#881,-(sp)		;Return-Code
+ 378 000002D2' 3F3C 004C                			move.w		#$4c,-(sp)		;Funktion Pterm(881)
+ 379 000002D6' 4E41                     			trap		#1				;des GEMDOS aufrufen
+ 380                                    			
+ 381 000002D8'                          calc_add:
+ 382                                    	;Operandenadresse berechnen. A0 muû die Adresse des Line-F-Befehls 
+ 383                                    	;enthalten, D0 im unteren Byte die OperandenlÑnge. Die zu berechnende
+ 384                                    	;Adresse wird in A1 abgelegt. A0 wird um die LÑnge der zusÑtzlichen
+ 385                                    	;Daten erhîht. ZusÑtzlichen wird in D1 die LÑnge des Operanden zurÅck-
+ 386                                    	;gegeben (in Bytes, als Langwort). D2, D3, A2 werden zerstîrt. Bei den
+PASM 68040 Macro Assembler  Version Feb  3 1992  (C) 91 Pure Software  Page   8
+Source File: D:\PC\FPU_EMU\LFED_5.S
+
+ 387                                    	;Adressierungsarten -(An), (An)+ steht in A2 ein Zeiger auf die Stelle,
+ 388                                    	;in der der Inhalt des Adressregisters An steht (wird fÅr FMOVEM 
+ 389                                    	;gebraucht).
+ 390                                    	
+ 391 000002D8' 4281                     			clr.l		d1				;LÑnge als Langwort lîschen
+ 392 000002DA' 1200                     			move.b		d0,d1			;und Byte einkopieren
+ 393 000002DC' 3410                     			move.w		(a0),d2			;Erstes Befehlswort nach D2
+ 394 000002DE' 3602                     			move.w		d2,d3			;und nach D3 retten
+ 395 000002E0' C67C 0038                			and.w		#%111000,d3		;Adressierungsart ausmaskieren
+ 396 000002E4' E24B                     			lsr.w		#1,d3			;D3=Adressierungsart*4 (Langworte!)
+ 397 000002E6' 43F9 00000000`           			lea			cs_tab,a1		;Sprungtabellenadresse nach A1
+ 398 000002EC' 2271 3000                			move.l		(a1,d3.w),a1	;Adresse der Routine nach A1
+ 399 000002F0' 4ED1                     			jmp			(a1)			;und Routine anspringen
+ 400                                    			
+ 401 000002F2'                          c_drd:		;%000	Data Register Direct:		Dn
+ 402 000002F2'                          c_ard:		;%001	Address Register Direct:	An
+ 403 000002F2' 43D3                     			lea			(a3),a1			;A1 auf Registerfeld
+ 404 000002F4' C47C 000F                			and.w		#%1111,d2		;Registernummer ausmaskieren
+ 405                                    			;(und ein Bit vom Modus, 0 fÅr Daten-, 1 fÅr Adressregister)
+ 406 000002F8' E54A                     			lsl.w		#2,d2			;D2="Registernummer"*4 (+Modusbit!)
+ 407 000002FA' 5842                     			addq.w		#4,d2			;+4 (fÅr OperandenlÑnge)
+ 408 000002FC' 9441                     			sub.w		d1,d2			;wahre LÑnge abziehen
+ 409 000002FE' D2C2                     			adda.w		d2,a1			;Offset auf Registerfeldanfang add.
+ 410 00000300' 4E75                     			rts
+ 411                                    			
+ 412 00000302'                          c_ari:		;%010	Address Register Indirect:	(An)
+ 413 00000302' C47C 0007                			and.w		#%111,d2		;Registernummer ausmaskieren
+ 414 00000306' E54A                     			lsl.w		#2,d2			;D2="Registernummer"*4 
+ 415 00000308' 2273 2020                			move.l		32(a3,d2.w),a1	;Adresse nach A1
+ 416 0000030C' 4E75                     			rts
+ 417                                    			
+ 418 0000030E'                          c_arpo:		;%011	ARI with Postincrement:		(An)+
+ 419 0000030E' C47C 0007                			and.w		#%111,d2		;Registernummer ausmaskieren
+ 420 00000312' E54A                     			lsl.w		#2,d2			;D2="Registernummer"*4 
+ 421 00000314' 45F3 2020                			lea 		32(a3,d2.w),a2	;Adresse Adressregister nach A2
+ 422 00000318' 2252                     			movea.l		(a2),a1			;Adresse (Inhalt A.-Reg.) nach A1
+ 423 0000031A' 0801 0000                			btst		#0,d1			;D1 ungerade? (Byteoperand)
+ 424 0000031E' 66 04                    			bne.s		.l_2			;JA -> Spezialbehandlung
+ 425                                    			
+ 426 00000320' D392                     .l_1:		add.l		d1,(a2)			;Inkrement durchfÅhren
+ 427 00000322' 4E75                     			rts
+ 428                                    			
+ 429 00000324' B47C 001C                .l_2:		cmp.w		#4*7,d2			;ist A7 gemeint?
+ 430 00000328' 66 F6                    			bne.s		.l_1			;NEIN -> normal vorgehen
+ 431 0000032A' 5492                     			addq.l		#2,(a2)			;sonst (bei Byte) 2 addieren,
+ 432 0000032C' 4E75                     			rts							;damit Stack gerade bleibt!
+ 433                                    			
+ 434 0000032E'                          c_arpr:		;%100	ARI with Predecrement:		-(An)
+ 435 0000032E' C47C 0007                			and.w		#%111,d2		;Registernummer ausmaskieren
+ 436 00000332' E54A                     			lsl.w		#2,d2			;D2="Registernummer"*4 
+ 437 00000334' 45F3 2020                			lea 		32(a3,d2.w),a2	;Adresse Adressregister nach A2
+ 438 00000338' 0801 0000                			btst		#0,d1			;D1 ungerade? (Byteoperand)
+ 439 0000033C' 66 06                    			bne.s		.l_2			;JA -> Spezialbehandlung
+ 440                                    			
+ 441 0000033E' 9392                     .l_1:		sub.l		d1,(a2)			;Inkrement durchfÅhren
+ 442 00000340' 2252                     			movea.l		(a2),a1			;Adresse (Inhalt des A.-Reg.) nach A1
+PASM 68040 Macro Assembler  Version Feb  3 1992  (C) 91 Pure Software  Page   9
+Source File: D:\PC\FPU_EMU\LFED_5.S
+
+ 443 00000342' 4E75                     			rts
+ 444                                    			
+ 445 00000344' B47C 001C                .l_2:		cmp.w		#4*7,d2			;ist A7 gemeint?
+ 446 00000348' 66 F4                    			bne.s		.l_1			;NEIN -> normal vorgehen
+ 447 0000034A' 5592                     			subq.l		#2,(a2)			;sonst (bei Byte) 2 subtrahieren,
+ 448                                    			   							;damit Stack gerade bleibt!
+ 449 0000034C' 2252                     			movea.l		(a2),a1			;Adresse (Inhalt A.-Reg.) nach A1
+ 450 0000034E' 4E75                     			rts
+ 451                                    			
+ 452 00000350'                          c_ar16:		;%101	ARI with Displacement:		d16(An)
+ 453 00000350' C47C 0007                			and.w		#%111,d2		;Registernummer ausmaskieren
+ 454 00000354' E54A                     			lsl.w		#2,d2			;D2="Registernummer"*4 
+ 455 00000356' 2273 2020                			movea.l		32(a3,d2.w),a1	;Adresse nach A1
+ 456 0000035A' 3428 0004                			move.w		4(a0),d2		;3. Befehlswort nach D2 (Offset)
+ 457 0000035E' D2C2                     			adda.w		d2,a1			;Offset auf Adresse addieren
+ 458 00000360' 5488                     			addq.l		#2,a0			;A0 ein Wort (d16) weiter
+ 459 00000362' 4E75                     			rts
+ 460                                    			
+ 461 00000364'                          c_ar08:		;%110	ARI with Index:				d8(An,Xn)
+ 462 00000364' C47C 0007                			and.w		#%111,d2		;Registernummer ausmaskieren
+ 463 00000368' E54A                     			lsl.w		#2,d2			;D2="Registernummer"*4 
+ 464 0000036A' 2273 2020                			movea.l		32(a3,d2.w),a1	;Adresse nach A1
+ 465 0000036E' 3428 0004                			move.w		4(a0),d2		;3. Befehlswort nach D2 (Offset)
+ 466 00000372' 3602                     			move.w		d2,d3			;und nach D3
+ 467 00000374' C67C 00FF                			and.w		#$ff,d3			;Byte ausmaskieren (Byte-Offset)
+ 468 00000378' D2C3                     			adda.w		d3,a1			;Offset auf Adresse addieren
+ 469 0000037A' 0802 000B                			btst		#11,d2			;1=long, 0=word
+ 470 0000037E' 66 10                    			bne.s		c_ar81
+ 471 00000380' C47C F000                			and.w		#%1111000000000000,d2	;Nummer von Dn und Modusbit
+ 472 00000384' EA4A                     			lsr.w		#5,d2					;maskieren
+ 473 00000386' EA4A                     			lsr.w		#5,d2			;D2=Registernummer*4 (+Modusbit)
+ 474 00000388' D2F3 2002                			adda.w		2(a3,d2.w),a1	;16Bit-Index auf A1 addieren
+ 475 0000038C' 5488                     			addq.l		#2,a0			;A0 ein Wort (Kram & d8) weiter
+ 476 0000038E' 4E75                     			rts
+ 477                                    			
+ 478 00000390' C47C F000                c_ar81:		and.w		#%1111000000000000,d2	;Nummer von Dn und Modusbit
+ 479 00000394' EA4A                     			lsr.w		#5,d2					;maskieren
+ 480 00000396' EA4A                     			lsr.w		#5,d2			;D2=Registernummer*4 (+Modusbit)
+ 481 00000398' D3F3 2000                			adda.l		(a3,d2.w),a1	;32Bit-Index auf A1 addieren
+ 482 0000039C' 5488                     			addq.l		#2,a0			;A0 ein Wort (Kram & d8) weiter
+ 483 0000039E' 4E75                     			rts
+ 484                                    			
+ 485 000003A0'                          c_pc:		;%111	absolut short/long, PC-Relativ (ohne/mit Index)
+ 486                                    			;oder direkt
+ 487 000003A0' 0802 0002                			btst		#2,d2			;Immidiate?
+ 488 000003A4' 66 20                    			bne.s		immi			;!=0 -> JA
+ 489 000003A6' 0802 0001                			btst		#1,d2			;PC-Relativ?
+ 490 000003AA' 66 22                    			bne.s		pc_rel			;!=0 -> JA
+ 491 000003AC' 0802 0000                			btst		#0,d2			;Long?
+ 492 000003B0' 66 0C                    			bne.s		c_long			;!=0 -> JA
+ 493                                    										;sonst Short
+ 494 000003B2' 3428 0004                			move.w		4(a0),d2		;Wortadresse holen,
+ 495 000003B6' 48C2                     			ext.l		d2				;Auf Langwort erweitern
+ 496 000003B8' 2242                     			movea.l		d2,a1			;und als Operandenadresse merken
+ 497 000003BA' 5488                     			addq.l		#2,a0			;A0 ein Wort (Short-Addr.) weiter
+ 498 000003BC' 4E75                     			rts
+PASM 68040 Macro Assembler  Version Feb  3 1992  (C) 91 Pure Software  Page  10
+Source File: D:\PC\FPU_EMU\LFED_5.S
+
+ 499  
+ 500 000003BE' 2268 0004                c_long:		movea.l		4(a0),a1		;Langwortadresse holen
+ 501 000003C2' 5888                     			addq.l		#4,a0			;A0 zwei Worte (Long-Addr.) weiter
+ 502 000003C4' 4E75                     			rts
+ 503                                    			
+ 504 000003C6' 2248                     immi:		movea.l		a0,a1   		;Langwortadresse holen
+ 505 000003C8' 5889                     			addq.l		#4,a1			;Beide Befehlsworte Åberspringen
+ 506 000003CA' D1C1                     			adda.l		d1,a0			;A0 Åber Operand hinwegsetzen
+ 507 000003CC' 4E75                     			rts
+ 508                                    			
+ 509 000003CE' 0802 0000                pc_rel:		btst		#0,d2			;mit Index?
+ 510 000003D2' 66 0C                    			bne.s		pc_idx			;!=0 -> JA
+ 511 000003D4' 2248                     			movea.l		a0,a1			;PC nach A1
+ 512 000003D6' D2E8 0004                			adda.w		4(a0),a1		;Offset addieren
+ 513 000003DA' 5889                     			addq.l		#4,a1			;+4 fÅr LÑnge des FPU-Befehls
+ 514 000003DC' 5488                     			addq.l		#2,a0			;A0 zwei (16Bit-Offset) weiter
+ 515 000003DE' 4E75                     			rts
+ 516                                    			
+ 517 000003E0' 2248                     pc_idx:		move.l		a0,a1			;PC nach A1
+ 518 000003E2' 4242                     			clr.w		d2				;oberes Byte lîschen
+ 519 000003E4' 1428 0005                			move.b		5(a0),d2		;Offset nach D2
+ 520 000003E8' D2C2                     			adda.w		d2,a1			;und addieren
+ 521 000003EA' 5889                     			addq.l		#4,a1			;+4 fÅr LÑnge des FPU-Befehls
+ 522 000003EC' 1428 0004                			move.b		4(a0),d2			;D2=Registernummer*16 und Modusbit
+ 523                                    										;(high-byte ist noch 0)
+ 524 000003F0' 0802 0003                			btst		#3,d2			;Long-Bit testen
+ 525 000003F4' 66 0E                    			bne.s		pc_i_l			;!=0 -> Long-Index
+ 526 000003F6' C47C 01F0                			and.w		#%111110000,d2	;Restinformation ausblenden
+ 527 000003FA' E44A                     			lsr.w		#2,d2			;D2=Registernummer*4 und Modusbit
+ 528 000003FC' D2F3 2002                			adda.w		2(a3,d2.w),a1	;Word-Index addieren
+ 529 00000400' 5488                     			addq.l		#2,a0			;A0 zwei (16Bit-Offset) weiter
+ 530 00000402' 4E75                     			rts
+ 531                                    			
+ 532 00000404' C47C 01F0                pc_i_l:		and.w		#%111110000,d2	;Restinformation ausblenden
+ 533 00000408' E44A                     			lsr.w		#2,d2			;D2=Registernummer*4 und Modusbit
+ 534 0000040A' D3F3 2000                			adda.l		(a3,d2.w),a1	;Long-Index addieren
+ 535 0000040E' 5488                     			addq.l		#2,a0			;A0 zwei (16Bit-Offset) weiter
+ 536 00000410' 4E75                     			rts			;ENDE von calc_add ***
+ 537  
+ 538                                    ;-------------- installation-handler ---------------------------------
+ 539  
+ 540 00000412' 2078 002C                Install:	movea.l		lineF,a0 		;Vektor nach A0
+ 541 00000416' 2028 FFF4                        	move.l		(-12.b,a0),d0	;falls "XBRA" -> jetzt in D0
+ 542 0000041A' 2228 FFF8                			move.l		(-8.b,a0),d1	;falls "LFED" -> jetzt in D1
+ 543 0000041E' 4E75                     			rts 
+ 544                                    			
+ 545 00000420' 4879 00000000`           Terminate:	pea			failure			;Fehlermeldung
+ 546 00000426' 3F3C 0009                			move.w		#9,-(sp)		;Cconws
+ 547 0000042A' 4E41                     			trap		#1				;GEMDOS
+ 548 0000042C' 3F3C 0000                			move.w		#0,-(sp)		;richtig terminieren
+ 549 00000430' 4E41                     			trap		#1				;mit Pterm(0)/GEMDOS
+ 550 00000432'                          						
+ 551                                    ;-------------- data-segment -----------------------------------------
+ 552                                    			
+ 553                                    			.DATA
+ 554                                    			
+PASM 68040 Macro Assembler  Version Feb  3 1992  (C) 91 Pure Software  Page  11
+Source File: D:\PC\FPU_EMU\LFED_5.S
+
+ 555 00000000` 00000000'00000000'
+     00000008` 00000000'00000000'       cs_tab:		.dc.l	c_drd,c_ard,c_ari,c_arpo	;Sprungtabelle fÅr
+ 556 00000010` 00000000'00000000'
+     00000018` 00000000'00000000'       			.dc.l	c_arpr,c_ar16,c_ar08,c_pc	;Adressierungsarten
+ 557  
+ 558 00000020` 0A0D 1B70                titel:      .dc.b 	10, 13, 27, 112	;CR/invers on
+ 559 00000024` 2020 4C69 6E65 2D46 
+     0000002C` 2D45 6D75 6C61 7469 
+     00000034` 6F6E 2D44 7269 7665 
+     0000003C` 7220 4C46 4544 2020 
+     00000044` 0A0D                     			.ASCII	"  Line-F-Emulation-Driver LFED  ", 10, 13 
+ 560 00000046` 2020 2020 2020 2020 
+     0000004E` 5665 7273 696F 6E20 
+     00000056` 322E 3030 2020 2020 
+     0000005E` 2020 2020 2020 2020 
+     00000066` 0A0D                                 .ASCII	"        Version 2.00            ", 10, 13
+ 561 00000068` 1B71                     			.dc.b	27, 113         ;invers off
+ 562 0000006A` 2020 2028 6329 2062 
+     00000072` 7920 536D 6172 7420 
+     0000007A` 5379 7374 656D 7320 
+     00000082` 2739 320A 0D             			.ASCII  "   (c) by Smart Systems '92", 10, 13
+ 563 00000087` 204D 6963 6861 656C 
+     0000008F` 2048 6175 7363 6869 
+     00000097` 6C64 202F 2053 6565 
+     0000009F` 6C7A 650A 0D             			.ASCII  " Michael Hauschild / Seelze", 10, 13
+ 564 000000A4` 2050 686F 6E65 3A20 
+     000000AC` 3035 3133 3720 2F20 
+     000000B4` 3920 3230 2030 390A 
+     000000BC` 0D00                     			.ASCII  " Phone: 05137 / 9 20 09", 10, 13, 0
+ 565  
+ 566 000000BE` 0A0D                     failure:	.dc.b	10, 13	;CR
+ 567 000000C0` 204C 4645 4420 616C 
+     000000C8` 7265 6164 7920 696E 
+     000000D0` 7374 616C 6C65 6400      			.ASCIIZ	" LFED already installed"
+ 568 000000D8` 0A0D                     			.dc.b	10, 13	;CR
+ 569 000000DA`                          			
+ 570                                    ;-------------- blockstorage-segment ---------------------------------
+ 571                                    			
+ 572                                    			.BSS
+ 573  
+ 574 00000000"                          dregs:		.ds.l	(8+7)	;Platz fÅr Register (D0-D7/A0-A6)
+ 575 0000003C"                          rusp:		.ds.l	1		;Platz fÅr USP (A7)
+ 576 00000040"  
+ 577                                    ;-------------- end of code ------------------------------------------
+ 578                                    			.END
+PASM 68040 Macro Assembler  Version Feb  3 1992  (C) 91 Pure Software  Page  12
+Source File: D:\PC\FPU_EMU\LFED_5.S
+
+
+
+Symbols:
+========
+
+Name                  Value      Scope      Relocation base
+
+.l_1                  0000014A   Local      TEXT
+.l_1                  00000162   Local      TEXT
+.l_1                  0000020E   Local      TEXT
+.l_1                  00000248   Local      TEXT
+.l_1                  00000278   Local      TEXT
+.l_1                  000002A2   Local      TEXT
+.l_1                  00000320   Local      TEXT
+.l_1                  0000033E   Local      TEXT
+.l_1                  0000010E   Local      TEXT
+.l_1                  00000120   Local      TEXT
+.l_2                  000002B8   Local      TEXT
+.l_2                  0000016C   Local      TEXT
+.l_2                  00000224   Local      TEXT
+.l_2                  0000025C   Local      TEXT
+.l_2                  0000028C   Local      TEXT
+.l_2                  00000154   Local      TEXT
+.l_2                  00000324   Local      TEXT
+.l_2                  0000012E   Local      TEXT
+.l_2                  00000344   Local      TEXT
+.l_2                  00000118   Local      TEXT
+Install               00000412   File       TEXT
+Terminate             00000420   File       TEXT
+__DATE__              ********   External   
+__PUREC__             ********   External   
+again                 000000A0   File       TEXT
+c_ar08                00000364   File       TEXT
+c_ar16                00000350   File       TEXT
+c_ar81                00000390   File       TEXT
+c_ard                 000002F2   File       TEXT
+c_ari                 00000302   File       TEXT
+c_arpo                0000030E   File       TEXT
+c_arpr                0000032E   File       TEXT
+c_drd                 000002F2   File       TEXT
+c_long                000003BE   File       TEXT
+c_pc                  000003A0   File       TEXT
+calc_add              000002D8   File       TEXT
+command               0000000A   File       EQUATE
+condition             0000000E   File       EQUATE
+control               00000002   File       EQUATE
+cop_error             000002C8   File       TEXT
+cs_tab                00000000   File       DATA
+do_ca                 000000AE   File       TEXT
+dregs                 00000000   File       BSS
+failure               000000BE   File       DATA
+immi                  000003C6   File       TEXT
+ins_add               00000018   File       EQUATE
+lineF                 0000002C   File       EQUATE
+my_trap               00000076   File       TEXT
+oldtrap               00000072   File       TEXT
+operand               00000010   File       EQUATE
+pc_i_l                00000404   File       TEXT
+pc_idx                000003E0   File       TEXT
+pc_rel                000003CE   File       TEXT
+r_11                  0000018C   File       TEXT
+r_bw                  00000196   File       TEXT
+r_byte                000001A2   File       TEXT
+r_pred                0000011E   File       TEXT
+reg_selec             00000014   File       EQUATE
+response              00FFFA40   File       EQUATE
+restore               00000006   File       EQUATE
+rusp                  0000003C   File       BSS
+rw_00                 000000F8   File       TEXT
+rw_11                 000001CE   File       TEXT
+rw_1x                 00000176   File       TEXT
+rw_sngl               000000EC   File       TEXT
+s_br16                00000274   File       TEXT
+s_br32                0000029E   File       TEXT
+s_fdbcc               0000022E   File       TEXT
+s_trap                000001EC   File       TEXT
+save                  00000004   File       EQUATE
+setvec                00000058   File       TEXT
+spezial               000001D2   File       TEXT
+start                 00000018   File       TEXT
+titel                 00000020   File       DATA
+w_00                  0000013C   File       TEXT
+w_10                  000001A8   File       TEXT
+w_11                  000001B2   File       TEXT
+w_bw                  000001BC   File       TEXT
+w_byte                000001C8   File       TEXT
+w_post                0000015C   File       TEXT
+xb_id                 0000006E   File       TEXT
+xb_magic              0000006A   File       TEXT
