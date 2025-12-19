@@ -1,0 +1,155 @@
+;***************************************************************
+;
+;	Stereo Flange for the DSP56001 processor
+;	Developed by Quinn Jensen (jensenq@npd.novell.com)
+;
+;***************************************************************
+include 'tdsg.basic.a56'
+
+dot
+	org	x:$20
+
+; Sample rate              32.5500 kc         
+; 
+; Delay time (1-12)         6.0000 ms         
+; Depth (1-10)             10.0000
+; Speed (1-10)              1.0000
+; Regen (1-10)              9.0000
+; 
+; max depth +/-             6.0000 ms         
+; min delay                 1.0000 ms         
+; max delay                12.0000 ms         
+; 1/2 cycle period          4.5100 s          
+; samples per 1/2 cyc  146800.5000
+; time delta/samp           0.0817 us         
+; offset samp/samp          0.0027
+; 
+  doff_i equ                               -33
+  ddeltaf equ                     0.0026607539
+  dspeed_i equ                          146800
+  dregen equ                      0.8888888889
+
+delay	equ	$2000
+dmax	equ	4096		;125 ms
+doff	dc	doff_i    	;current delay distance
+	org	y:doff
+	dc	0
+
+	org	x:doff+1
+ddelta	dc	0		;
+	org	y:ddelta
+	dc	ddeltaf
+
+	org	x:ddelta+1
+
+dspeed	dc	dspeed_i
+dtoggle	dc	0		;
+delayout
+	dc	0
+
+	org	y:$0
+
+	org	p:dot		;go back to P-space
+;
+; non-interrupt code
+;
+
+hf_init
+	move	#delay,r1			;delay line input
+ 	movec	#dmax-1,m1			;
+	move	#doff_i,n1			;distance to output
+	rts
+
+;
+; fs = 32.552083 kHz
+;
+
+hf_comp
+	jsr	<saveregs
+;
+;	output and input mix
+;
+	clr	a	#.4375,x1		;clr a, get input scale
+	clr	b	#.5,y1			;clr b, get output scaler
+
+	move		x:<delayout,y0		;get delay out
+
+	move		#.70,x0			;do regen term
+	macr	x0,y0,a
+	macr	x0,y0,a
+
+	move		#.75,x0
+
+	macr	y0,x0,b	x:<in_l,x0		;b = .5 * delay, x0=in_l
+	macr	x0,y1,b		b,y0       	;b += .5 * in_l, y0=b
+	macr	x0,x1,a b,x:<out_l		;a += x1 * in_l, L = b
+	move			y0,b		;b = -y0
+	neg	b	x:<in_r,x0		;x0 = in_r
+	macr	x0,y1,b				;b += .5 * in_r
+	macr	x0,x1,a	b,x:<out_r		;R = b, a += x1 * in_r
+;
+;	delay line in
+;
+	move		a,x:(r1)+
+;
+;	delay line length modulation
+;
+	move		l:<doff,a		;a = current offset
+	move		l:<ddelta,x		;x = current delta
+	add	x,a
+	move		a,l:<doff		;new offset = a + x
+	move		a1,n1
+
+	move		x1,b			;save delta for later use
+
+; smoothly transition between delay-line offsets by
+; interpolating the current sample with the previous or next
+; one depending on whether the delay is currently getting longer or
+; shorter.  Otherwise, an obnoxious click results when the offset snaps
+; to the next integral value.
+
+	move			y:<doff,a	;compute |frac(doff)|
+	lsr	a	#$800000,x0
+	or	x0,a	#.5,x1
+	move		a1,x0
+	mpy	-x0,x1,a
+	tst	b		a,y0		;y0 = 0.5 * |frac(doff)|
+	jpl	shorter				;on positive delta, the
+						;delay is shortening
+
+	move		(r1)-			;get previous sample
+	move		x:(r1+n1),x0
+	mpy	y0,x0,a	#.5,b			;scale
+	sub	y0,b	(r1)+			;compute scale for cur sample
+	move			b,y0
+	move		x:(r1+n1),x0		;get cur sample
+	mac	x0,y0,a				;scale and sum
+	jmp	endpan
+
+shorter
+	move		x:(r1+n1),x0		;get cur sample
+	mpy	y0,x0,a	#.5,b			;scale
+	sub	y0,b	(r1)+			;compute scale for next sample
+	move			b,y0
+	move		x:(r1+n1),x0		;get next sample
+	mac	x0,y0,a	(r1)-			;scale and sum
+endpan
+	move		a,x:<delayout		;store resulting output
+
+; update the triangle wave modulation
+
+	move		x:<dtoggle,a		;decrement toggle count
+	move		#>1,x0
+	sub	x0,a
+	move		a,x:<dtoggle
+	jgt	notogg				;time to toggle?
+	move		x:<dspeed,x0		;yes, negate delta and reset
+	move		l:<ddelta,a
+	neg	a	x0,x:<dtoggle
+	move		a,l:<ddelta
+notogg
+bypass
+	jsr	<restregs
+	rts
+
+	end

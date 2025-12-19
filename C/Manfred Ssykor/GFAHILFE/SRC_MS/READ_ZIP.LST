@@ -1,0 +1,401 @@
+'
+' MODULE  'Read ZIP'  (C) 1.0 05.10.93 M. Ssykor, HÅttenstr. 46, 52068 Aachen
+'
+' Die verwendung dieses Modul's in eigenen programmen ist jedem freigestellt.
+' Voraussetzung ist, das ich - Manfred Ssykor - IM PROGRAMM 'verewigt' werde!
+' Soll heissen, es MUSS im programm vermerkt werden, das diese Routine von
+' mir ist! Ansonsten ist jegliche Art der benutzung, sei es Privat und/oder
+' Kommerziell, erlaubt.
+'
+'
+' Aufruf:
+' @read_zip(dat$,max%,array_belegen!,auf_monitor!,inhalt_schreiben!,zielpfad$,error%)
+' öbergabeparameter:
+' dat$              Kommpletter Pfad und Dateiname des Archiv's..
+' max%              Arrays mit max% Dimensionieren.. (wenn array_belegen!=FALSE, dann kann hier NULL (0) Åbergeben werden)
+' array_belegen!    TRUE, wenn alle Array's mit den Filedaten belegt sollen, sonst FALSE
+' auf_monitor!      TRUE, wenn auch auf dem Bildschirm ausgegeben werden soll, sonst FALSE
+' inhalt_schreiben! TRUE, wenn zusÑtzlich Inhaltsdatei auf Disk geschrieben werden soll...
+'                   FALSE, "   KEINE Inhaltsdatei geschrieen werden soll...
+' zielpfad$         "" Åbergeben, wenn die Inhaltsdatei dort geschrieben werden
+'                   soll, wo auch das Archiv ist. Kann bei Laufwerk A: oder B:
+'                   manchmal schlecht sein (zuwenig platz oder so).
+'                   Ansonsten Åbergibt man hier einen Zielpfad, in dem dann
+'                   die Inhaltsdateien geschrieben werden.
+' RÅckgabe variable:
+' error%            Fehler der aufgetreten ist
+' error% kann sein:
+' -33 öbergebenes Archiv nicht gefunden
+' -99 öbergebenes archiv ist KEIN Zip-Archiv
+' 0   Alles in Ordnung
+'
+' GLOBALE Variablen:
+'
+' anz_files%            Anzahl der Files im ZIP-Archiv
+' zip_kom$              Kommentar des ZIP-Archiv's
+' comment_len&          LÑnge des Kommentar's des Archiv's
+' gesamt_compr%         GesamtlÑnge aller dateien Komprimiert
+' gesamt_uncompr%       GesamtlÑnge aller dateien Unkomprimiert
+'
+' arc_                  Es handelt sich um eine Variable, die das Archiv
+'                       selbst betrifft...
+' arc_name$             Name des Archiv's
+' arc_pfad$             Pfad, in dem das Archiv liegt!
+' arc_zeit$             Zeit der letzten Aktualisierung des Archiv's
+' arc_datum$            Datum der letzten Aktualisierung des Archiv's
+' arc_len%              LÑnge des Archiv's
+'
+' dat_xxx()             Es handelt sich um ein Array, in dem die Informationen
+'                       der einzelnen dateien untergelegt sind.
+' dat_name$()           Pfad und Name der Datei
+' dat_zeit$()           Erstellungszeit der Datei
+' dat_datum$()          Erstellungsdatum der Datei
+' dat_len_compr%()      Grîsse der Datei (Komprimiert)
+' dat_len_uncompr%()    Grîsse der Datei (Unkomprimiert)
+' dat_crc$()            CRC Summe der Datei (32-Bit)
+' dat_method$()         Packmethode
+' dat_comment$()        Dateikommentar
+'
+'
+> PROCEDURE read_zip(dat$,max%,array_belegen!,moni!,datei!,zielpfad$,VAR error%)
+  '
+  '
+  ' Aufrufe: read_zip_rechner,read_zip_method
+  '
+  ' Benîtigte Definitionen:
+  ' null$(5,2) ergibt 05 und null$(5,5) hingegen 00005
+  DEFFN null$(a%,b%)=RIGHT$(STRING$(b%,"0")+STR$(a%),b%)
+  DEFFN space$(a%,b%)=RIGHT$(STRING$(b%," ")+STR$(a%),b%)
+  ' Extrahiert Pfadname
+  DEFFN pfad$(select$)=LEFT$(select$,RINSTR(select$,"\"))
+  ' Extrahiert Dateiname
+  DEFFN filename$(select$)=MID$(select$,RINSTR(select$,"\")+1)
+  '
+  ' Lokale Variablen:
+  LOCAL a%,a$,datum$,i%,found!,extra_field_len%,file_comment_len%,filename_len%
+  LOCAL method2$,pos%,size_of_dir%,start_of_dir%,z$,last_mod_date%
+  LOCAL last_mod_time%,logdat$,o%
+  '
+  ' Dimensionierung lîschen und auf den Åbergebenen wert max% neu Dimensionieren:
+  ERASE dat_name$(),dat_crc$(),dat_len_compr%(),dat_len_uncompr%()
+  ERASE dat_comment$()
+  ERASE dat_method$(),dat_zeit$(),dat_datum$()
+  '
+  ' erase internal_file_attr%()
+  ' erase external_file_attr%()
+  ' erase version_made_by$()
+  ' erase dat_rechner$()
+  ' erase version_needed$()
+  ' erase version_needed$()
+  '
+  ' Variablen 'auf Null' setzen
+  anz_files%=0
+  zip_kom$=""
+  comment_len&=0
+  gesamt_compr%=0
+  gesamt_uncompr%=0
+  arc_name$=""
+  arc_pfad$=""
+  arc_zeit$=""
+  arc_datum$=""
+  arc_len%=0
+  ~FRE(0)
+  IF array_belegen!=FALSE
+    max%=1
+  ENDIF
+  DIM dat_name$(max%),dat_crc$(max%),dat_len_compr%(max%),dat_len_uncompr%(max%)
+  DIM dat_comment$(max%),dat_method$(max%),dat_zeit$(max%),dat_datum$(max%)
+  '
+  ' dim internal_file_attr%(max%)
+  ' dim external_file_attr%(max%)
+  ' dim version_made_by$(max%)
+  ' dim dat_rechner$(max%)
+  ' dim version_needed$(max%)
+  ' dim version_needed$(max%)
+  '
+  a%=FSFIRST(dat$,63)
+  IF a%=-33
+    error%=a%
+  ELSE
+    arc_len%={FGETDTA()+26}
+    arc_zeit$=@zeit$(CARD{FGETDTA()+22})
+    arc_datum$=@datum$(CARD{FGETDTA()+24})
+    arc_pfad$=@pfad$(dat$)
+    arc_name$=@filename$(dat$)
+    OPEN "I",#88,dat$
+    a$="  "
+    BGET #88,V:a$,2
+    IF a$<>"PK"
+      error%=-99
+    ELSE
+      SEEK #88,arc_len%-5
+      pos%=arc_len%-5
+      found!=FALSE
+      DO
+        a$=SPACE$(12)
+        BGET #88,V:a$,4
+        ADD pos%,4
+        IF LEFT$(a$,4)="PK"+CHR$(5)+CHR$(6)
+          found!=TRUE
+        ELSE
+          SEEK #88,pos%-5
+          SUB pos%,5
+        ENDIF
+      LOOP UNTIL found!=TRUE
+      SEEK #88,pos%+6
+      BGET #88,V:a$,12
+      anz_files%=VAL("&H"+HEX$(ASC(MID$(a$,2,1)),2)+HEX$(ASC(LEFT$(a$,1)),2))
+      size_of_dir%=VAL("&H"+HEX$(ASC(MID$(a$,6,1)),2)+HEX$(ASC(MID$(a$,5,1)),2)+HEX$(ASC(MID$(a$,4,1)),2)+HEX$(ASC(MID$(a$,3,1)),2))
+      start_of_dir%=VAL("&H"+HEX$(ASC(MID$(a$,10,1)),2)+HEX$(ASC(MID$(a$,9,1)),2)+HEX$(ASC(MID$(a$,8,1)),2)+HEX$(ASC(MID$(a$,7,1)),2))
+      comment_len%=VAL("&H"+HEX$(ASC(MID$(a$,12,1)),2)+HEX$(ASC(MID$(a$,11,1)),2))
+      a$=SPACE$(comment_len%)
+      BGET #88,V:a$,comment_len%
+      zip_kom$=a$
+      SEEK #88,start_of_dir%
+      gesamt_compr%=0
+      gesamt_uncompr%=0
+      IF datei!=TRUE
+        IF zielpfad$=""
+          OPEN "O",#50,arc_pfad$+LEFT$(arc_name$,INSTR(arc_name$,"."))+"INH"
+        ELSE
+          OPEN "O",#50,zielpfad$+LEFT$(arc_name$,INSTR(arc_name$,"."))+"INH"
+        ENDIF
+      ENDIF
+      @ausgeben(moni!,datei!,"Searching:  "+UPPER$(dat$))
+      @ausgeben(moni!,datei!,"")
+      IF zip_kom$<>""
+        @ausgeben(moni!,datei!,zip_kom$)
+      ENDIF
+      @ausgeben(moni!,datei!,"Name"+SPACE$(29)+"Normal  Packed  CF    Method   Date      Time")
+      @ausgeben(moni!,datei!,STRING$(32,"-")+" "+STRING$(7,"-")+" "+STRING$(7,"-")+" "+STRING$(5,"-")+" "+STRING$(8,"-")+" "+STRING$(9,"-")+" "+STRING$(5,"-"))
+      i%=0
+      DO
+        INC o%
+        IF array_belegen!=TRUE
+          INC i%
+        ENDIF
+        IF o% MOD 50=1
+          ~FRE(0)
+        ENDIF
+        a$=SPACE$(60)
+        BGET #88,V:a$,20
+        '
+        ' version_made_by$(i%)=STR$(ASC(MID$(a$,5,1))/10)
+        ' dat_rechner$(i%)=@read_zip_rechner$(ASC(MID$(a$,6,1)))
+        ' version_needed$(i%)=STR$(ABS(ASC(MID$(a$,7,1))/10))
+        ' IF LEN(version_needed$(i%))=1
+        ' version_needed$(i%)=version_needed$(i%)+".0"
+        ' ENDIF
+        '
+        dat_method$(i%)=@read_zip_method$(ASC(MID$(a$,11,1)))
+        '
+        ' GENERAL BIT FLAG
+        a%=VAL("&H"+HEX$(ASC(MID$(a$,10,1)),2)+HEX$(ASC(MID$(a$,9,1)),2))
+        IF dat_method$(i%)="Defl."
+          SELECT a%
+          CASE 0
+            z$="med"
+          CASE 2
+            z$="bst"
+          CASE 4
+            z$="fst"
+          ENDSELECT
+          dat_method$(i%)=dat_method$(i%)+z$
+        ENDIF
+        last_mod_time%=VAL("&H"+HEX$(ASC(MID$(a$,14,1)),2)+HEX$(ASC(MID$(a$,13,1)),2))
+        last_mod_date%=VAL("&H"+HEX$(ASC(MID$(a$,16,1)),2)+HEX$(ASC(MID$(a$,15,1)),2))
+        dat_zeit$(i%)=@zeit$(last_mod_time%)
+        dat_datum$(i%)=@datum$(last_mod_date%)
+        ' dat_zeit$(i%)=@null$(((last_mod_time% DIV 2048) AND 31),2)+":"+@null$(((last_mod_time% DIV 32) AND 63),2)+":"+@null$(((last_mod_time% AND 31)*2),2)
+        ' dat_datum$(i%)=@space$((last_mod_date% AND 31),2)+" "+@monat$(((last_mod_date% DIV 32) AND 15))+" "+RIGHT$(@null$((((last_mod_date% DIV 512) AND 31)+1980),4),2)
+        dat_crc$(i%)=HEX$(ASC(MID$(a$,20,1)),2)+HEX$(ASC(MID$(a$,19,1)),2)+HEX$(ASC(MID$(a$,18,1)),2)+HEX$(ASC(MID$(a$,17,1)),2)
+        a$=SPACE$(26)
+        BGET #88,V:a$,26
+        dat_len_compr%(i%)=VAL("&H"+HEX$(ASC(MID$(a$,4,1)),2)+HEX$(ASC(MID$(a$,3,1)),2)+HEX$(ASC(MID$(a$,2,1)),2)+HEX$(ASC(MID$(a$,1,1)),2))
+        dat_len_uncompr%(i%)=VAL("&H"+HEX$(ASC(MID$(a$,8,1)),2)+HEX$(ASC(MID$(a$,7,1)),2)+HEX$(ASC(MID$(a$,6,1)),2)+HEX$(ASC(MID$(a$,5,1)),2))
+        ADD gesamt_compr%,dat_len_compr%(i%)
+        ADD gesamt_uncompr%,dat_len_uncompr%(i%)
+        filename_len%=VAL("&H"+HEX$(ASC(MID$(a$,10,1)))+HEX$(ASC(MID$(a$,9,1))))
+        extra_field_len%=VAL("&H"+HEX$(ASC(MID$(a$,12,1)))+HEX$(ASC(MID$(a$,11,1))))
+        file_comment_len%=VAL("&H"+HEX$(ASC(MID$(a$,14,1)))+HEX$(ASC(MID$(a$,13,1))))
+        '
+        ' internal_file_attr%(i%)=VAL("&H"+HEX$(ASC(MID$(a$,18,1)),2)+HEX$(ASC(MID$(a$,17,1)),2))
+        ' external_file_attr%(i%)=VAL("&H"+HEX$(ASC(MID$(a$,22,1)),2)+HEX$(ASC(MID$(a$,21,1)),2)+HEX$(ASC(MID$(a$,20,1)),2)+HEX$(ASC(MID$(a$,19,1)),2))
+        '
+        a$=SPACE$(256)
+        BGET #88,V:a$,filename_len%
+        dat_name$(i%)=TRIM$(a$)
+        BGET #88,V:a$,extra_field_len%
+        a$=SPACE$(256)
+        BGET #88,V:a$,file_comment_len%
+        dat_comment$(i%)=TRIM$(a$)
+        a$=TRIM$(RIGHT$(dat_name$(i%),32))
+        a$=a$+SPACE$(33-LEN(a$))+@space$(dat_len_uncompr%(i%),7)+" "+@space$(dat_len_compr%(i%),7)+" "
+        b$=RIGHT$(SPACE$(2)+@spar$(dat_len_compr%(i%),dat_len_uncompr%(i%))+"%",5)
+        a$=a$+b$+" "+dat_method$(i%)+" "+dat_datum$(i%)+" "+LEFT$(dat_zeit$(i%),5)
+        @ausgeben(moni!,datei!,a$)
+      LOOP UNTIL o%=anz_files%
+      error%=0
+      a$="Total  "+STR$(anz_files%)+" files"
+      a$=a$+SPACE$(33-LEN(a$))+@space$(gesamt_uncompr%,7)+" "+@space$(gesamt_compr%,7)+" "+@spar$(gesamt_compr%,gesamt_uncompr%)+"%          "+arc_datum$+" "+LEFT$(arc_zeit$,5)
+      @ausgeben(moni!,datei!,STRING$(32,"-")+" "+STRING$(7,"-")+" "+STRING$(7,"-")+" "+STRING$(5,"-")+" "+STRING$(8,"-")+" "+STRING$(9,"-")+" "+STRING$(5,"-"))
+      @ausgeben(moni!,datei!,a$)
+      CLOSE #50
+    ENDIF
+    CLOSE #88
+    IF array_belegen!=FALSE
+      ERASE dat_name$(),dat_crc$(),dat_len_compr%(),dat_len_uncompr%()
+      ERASE dat_method$(),dat_zeit$(),dat_datum$()
+      '
+      ' erase internal_file_attr%()
+      ' erase external_file_attr%()
+      ' erase version_made_by$()
+      ' erase dat_rechner$()
+      ' erase version_needed$()
+      ' erase version_needed$()
+      '
+      ~FRE(0)
+    ENDIF
+  ENDIF
+RETURN
+> PROCEDURE ausgeben(moni!,datei!,a$)
+  IF moni!=TRUE
+    PRINT a$
+  ENDIF
+  IF datei!=TRUE
+    PRINT #50,a$
+  ENDIF
+RETURN
+> FUNCTION read_zip_method$(nr&)
+' Globale Variablen: keine
+' Aufrufe: keine
+' Aufgerufen von: read_zip
+' RÅckgabe: Packmethode
+SELECT nr&
+CASE 0
+  RETURN "Stored  "
+CASE 1
+  RETURN "Shrunk  "
+CASE 2
+  RETURN "Kompr. 1"
+CASE 3
+  RETURN "Kompr. 2"
+CASE 4
+  RETURN "Kompr. 3"
+CASE 5
+  RETURN "Kompr. 4"
+CASE 6
+  RETURN "Implode "
+CASE 7
+  RETURN "Unknown "
+CASE 8
+  RETURN "Defl."
+CASE 9 TO 255
+  RETURN "Unknown "
+ENDSELECT
+ENDFUNC
+> FUNCTION read_zip_rechner$(nr&)
+' Globale Variablen: keine
+' Felder: keine
+' Aufrufe: keine
+' Aufgerufen von: read_zip
+' RÅckgabe: Rechner, auf dem das Archiv erstellt wurde
+SELECT nr&
+CASE 0
+RETURN "MS-DOS"
+CASE 1
+RETURN "Amiga"
+CASE 2
+RETURN "VMS"
+CASE 3
+RETURN "*NIX"
+CASE 4
+RETURN "VM/CMS"
+CASE 5
+RETURN "Atari ST"
+CASE 6
+RETURN "OS/2 H.P.F.S."
+CASE 7
+RETURN "Macintosh"
+CASE 8
+RETURN "Z-System"
+CASE 9
+RETURN "CP/M"
+CASE 10 TO 255
+RETURN "Unknown"
+ENDSELECT
+ENDFUNC
+'
+> FUNCTION monat$(nr&)
+m$="JanFebMarAprMaiJunJulAugSepOktNovDec"
+IF nr&>0 AND nr&<13
+RETURN MID$(m$,((nr&-1)*3)+1,3)
+ELSE
+RETURN "---"
+ENDIF
+ENDFUNC
+> FUNCTION zeit$(i%)
+RETURN @null$(((i% DIV 2048) AND 31),2)+":"+@null$(((i% DIV 32) AND 63),2)+":"+@null$(((i% AND 31)*2),2)
+ENDFUNC
+> FUNCTION datum$(i%)
+LOCAL t%,m%,j%
+t%=i% AND 31
+m%=(i% DIV 32) AND 15
+j%=((i% DIV 512) AND 31)+1980
+IF t%>0 AND t%<31
+a$=@space$(t%,2)+" "
+ELSE
+a$="-- "
+ENDIF
+a$=a$+@monat$(m%)+" "
+IF j%<1980 OR j%>VAL(RIGHT$(DATE$,4))
+a$=a$+"--"
+ELSE
+a$=a$+RIGHT$(@null$(j%,4),2)
+ENDIF
+RETURN a$
+' RETURN @space$((i% AND 31),2)+" "+@monat$(((i% DIV 32) AND 15))+" "+RIGHT$(@null$((((i% DIV 512) AND 31)+1980),4),2)
+ENDFUNC
+'
+> FUNCTION spar$(compr%,uncompr%)
+LOCAL a$
+' Berechnet ersparnis (Aufruf: a$=@spar$(gepackte_laenge,ungepackte_laenge) )
+IF compr%=0 AND uncompr%=0
+RETURN "0.0"
+ELSE
+a$=STR$(@round(((100-(compr%*100)/uncompr%)),1))
+a&=INSTR(a$,".")
+IF a&=0
+a$=a$+".0"
+ENDIF
+RETURN a$
+ENDIF
+ENDFUNC
+' ---------------------------------------------------
+' Ersetzt das fehlerhafte ROUND bzw. gleichbedeutende
+' Matrizen die aufgrund der Rechenungenauigkeit von
+' GFA-BASIC zu Rundungsfehler fÅhren kînnen!
+' Michael Wedding, Sep 22 1993
+> FUNCTION round(wert#,stellen|)
+LOCAL flt$,last|,pos|,wert$
+IF stellen|<=0
+RETURN INT(wert#)
+ENDIF
+wert$=STR$(wert#)
+pos|=INSTR(wert$,".")
+IF pos|
+flt$=MID$(wert$,SUCC(pos|))
+IF LEN(flt$)>stellen|
+last|=VAL(MID$(flt$,stellen|,1))
+IF VAL(MID$(flt$,SUCC(stellen|),1))>=5
+INC last|
+ENDIF
+RETURN INT(wert#)+VAL("."+LEFT$(flt$,PRED(stellen|))+STR$(last|))
+ENDIF
+ENDIF
+RETURN wert#
+ENDFUNC
+' ---------------------------------------------------
+'
+' END-MODULE
+'

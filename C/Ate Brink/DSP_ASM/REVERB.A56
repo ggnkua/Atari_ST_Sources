@@ -1,0 +1,309 @@
+;***************************************************************
+; 
+; A stereo reverb for the DSP56001 signal processor.
+; Developed by Quinn Jensen (jensenq@npd.novell.com) using
+; Dr. Vercoe and company's csound code as a reference for the 
+; configuration and gain values.
+; 
+; This program fragment implements a stereo reberb effect
+; on a DSP56001 processor.  The "depth" and wet/dry mix are
+; adjustable.  The following filter configuration is employed:
+;
+;
+;  Left in ------+------- "dry" gain -----------> sum -----> Left out
+;                |                                 ^
+;                v                                 |
+;               sum --> reverb --> "wet" gain -----+
+;                ^                                 |
+;                |                                 v -
+;  Right in -----+------- "dry" gain -----------> sum -----> Right out
+;
+;
+; Note that the reverb path output is negated before summing with the
+; right input signal.  This throws in 180 degrees of phase shift
+; making for interesting results even with mono inputs 
+; (i.e. Left in == Right in).
+; 
+; The reverb element looks like this:
+;
+;
+; Input ----+-----> comb1 ------+
+;           |                   |
+;           +-----> comb2 ---\  v
+;           |                  sum -----> allpass1 --> allpass2 ---> output
+;           +-----> comb3 ---/  ^
+;           |                   |
+;           +-----> comb4 ------+
+;
+; Each comb stage looks like this:
+;
+;                        +---- gain <-----+
+;                        |                |
+;                        v                |
+; Input ---> gain ----> sum ---> delay ---+--> out
+;
+;
+; The allpass stages look like:
+;
+;                         +--------- gain <---------+
+;                         |                         |
+;                         v                         |
+; Input ---> gain --+--> sum ---> delay ---> sum ---+----> out
+;                   |                         ^
+;                   |                         |
+;                   +--------> gain ----------+
+;
+; or,
+;
+;                             +-------> gain ----+
+;                             |                  |
+;                             |                  v
+; Input ---> gain ----> sum --+--> delay --+--> sum -----> out
+;                        ^                 |
+;                        |                 |
+;                        +----- gain <-----+
+;
+;
+; I've seen both configurations in the literature, so I plotted the
+; Z-transform and they are equivalent in the steady state.  They are indeed
+; all-pass in the steady state but are supposed to have a subtle, discernable
+; effect in "transient" audio signals.
+;
+; I think it could really use a couple more comb stages to fill in some of the 
+; graininess.  The best possible "diffusion" is desired.  By the way, 
+; I'd enjoy seeing any optimizations to the code.
+;
+; Quinn Jensen (jensenq@npd.novell.com or jensenq@qcj.icon.com)
+;
+
+include 'tdsg.basic.a56'	;hardware specific initialization code
+
+;***************************************************************
+;
+;	Data and constants
+;
+;***************************************************************
+
+dot				;remember where we were in P-space
+	org	x:$10		;put runtime variables in on-chip X-space
+
+; A spreadsheet was used to calculate the following numbers
+;
+; The gain of each feedback stage is given by
+;
+;	feedback gain = exp(delay * ln(.001)/duration)
+;
+; where "delay" is the delay of the comb or allpass stage in seconds,
+; and "duration" is the time in seconds for the reverberated sound
+; to decay to 1/1000 of its original amplitude.
+;
+
+;  Reverb filter lengths and coefficients  
+;  Sun Aug  4 16:36:16 1991    
+;  
+;      Sample rate               32.5520830 kHz      
+;      Reverb duration            4.0000000 s        
+;  
+;  stage    delay(ms)    length        gain    actual
+;  -----------------------------------------------------       
+;  Comb1   29.7000000       967   0.9500031     29.71
+;  Comb2   37.1000000      1208   0.9379399     37.11
+;  Comb3   41.1000000      1338   0.9314831     41.10
+;  Comb4   43.7000000      1423   0.9273101     43.71
+;  All-1    5.0000000       163   0.9914025      5.01
+;  All-2    1.7000000        55   0.9970685      1.69
+
+in_atten equ                      0.3409091
+comb_atten equ                    0.0416667
+dry_init equ                      0.4000000	; initial "dry" gain
+reverb_init equ  	          0.9900000	; initial "wet" gain
+
+; comb 1 data and parameters
+
+c1d equ                   $4000
+c1r  dc                     c1d
+c1m equ                     966
+c1c equ                           0.9500031
+
+; comb 2 data and parameters
+
+c2d equ          c1d+      2048
+c2r  dc                     c2d
+c2m equ                    1207
+c2c equ                           0.9379399
+
+; comb 3 data and parameters
+
+c3d equ          c2d+      2048
+c3r  dc                     c3d
+c3m equ                    1337
+c3c equ                           0.9314831
+
+; comb 4 data and parameters
+
+c4d equ          c3d+      2048
+c4r  dc                     c4d
+c4m equ                    1422
+c4c equ                           0.9273101
+
+; allpass 1 data and parameters
+
+a1d equ          c4d+      2048
+a1r  dc                     a1d
+a1m equ                     162
+a1c equ                           0.9914025
+
+; allpass 2 data and parameters
+
+a2d equ          a1d+      2048
+a2r  dc                     a2d
+a2m equ                      54
+a2c equ                           0.9970685
+
+	org	y:$0
+
+reverb_on equ	reverb_init
+reverb_off equ	0
+
+reverb_gain
+	dc	reverb_on
+dry_gain
+	dc	dry_init
+
+	org	p:dot		;go back to P-space
+
+;*****************************************************
+;
+; reverb initialization code
+;
+;*****************************************************
+
+hf_init
+	rts
+
+;*****************************************************
+;
+; run-time controls
+;
+;*****************************************************
+
+eff1_on		;enable reverb
+	move			#reverb_on,y0
+	move			y0,y:<reverb_gain
+	rts
+
+eff1_off	;bypass reverb
+	move			#reverb_off,y0
+	move			y0,y:<reverb_gain
+	rts
+
+;*****************************************************
+;
+; interrupt time calculations
+;
+;*****************************************************
+
+;
+; fs = 32.552083 kHz
+;
+
+hf_comp
+	jsr	<saveregs
+;
+;	L/R mix
+;
+	clr	a	#in_atten,x1		;clr a, get scale for mix
+	move		x:<in_l,x0		;get left in
+	move		x0,x:<in_ls		;save
+	macr	x0,x1,a x:<in_r,x0		;a = scale * left, get right
+	macr	x0,x1,a	x0,x:<in_rs		;a += scale * right, save right
+	clr	b		a,y0		;y0 goes to the combs, b is sum
+;
+;	comb 1 
+;
+	move		x:<c1r,r0
+	movec		#c1m,m0
+	move			y0,a
+	move		x:(r0),x1
+	add	x1,b	#c1c,x0
+	macr	x0,x1,a
+	move		a,x:(r0)+
+	move		r0,x:<c1r
+;
+;	comb 2
+;
+	move		x:<c2r,r0
+	movec		#c2m,m0
+	move			y0,a
+	move		x:(r0),x1
+	add	x1,b	#c2c,x0
+	macr	x0,x1,a
+	move		a,x:(r0)+
+	move		r0,x:<c2r
+;
+;	comb 3
+;
+	move		x:<c3r,r0
+	movec		#c3m,m0
+	move			y0,a
+	move		x:(r0),x1
+	add	x1,b	#c3c,x0
+	macr	x0,x1,a
+	move		a,x:(r0)+
+	move		r0,x:<c3r
+;
+;	comb 4
+;
+	move		x:<c4r,r0
+	movec		#c4m,m0
+	move			y0,a
+	move		x:(r0),x1
+	add	x1,b	#c4c,x0
+	macr	x0,x1,a
+	move		a,x:(r0)+
+	move		r0,x:<c4r
+;
+;	scale
+;
+	move		#comb_atten,x0	b,y0
+	mpyr	x0,y0,b
+
+;
+;	allpass 1
+;
+	move		x:<a1r,r0
+	movec		#a1m,m0
+	move		#a1c,x0
+	move		x:(r0),x1
+	macr	x0,x1,b	x1,a
+	move			b,y0
+	macr	-x0,y0,a b,x:(r0)+
+	move		r0,x:<a1r
+;
+;	allpass 2
+;
+	move		x:<a2r,r0
+	movec		#a2m,m0
+	move		#a2c,x0
+	move		x:(r0),x1
+	macr	x0,x1,a	x1,b
+	move			a,y0
+	macr	-x0,y0,b a,x:(r0)+
+	move		r0,x:<a2r
+;
+;	output mix
+;
+	move		b,x0
+	move			y:<reverb_gain,y0
+	mpyr	x0,y0,b		y:<dry_gain,y0
+	move		x:<in_ls,x0
+	move		b,a
+	macr	x0,y0,a	x:<in_rs,x0
+	macr	x0,y0,b	a,x:<out_l
+	move		b,x:<out_r
+
+	jsr	<restregs
+	rts
+
+	end
+

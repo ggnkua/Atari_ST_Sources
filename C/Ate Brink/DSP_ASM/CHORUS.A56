@@ -1,0 +1,236 @@
+;***************************************************************
+; 
+; Stereo chorus for the DSP56001 signal processor.
+; Developed by Quinn Jensen (jensenq@npd.novell.com).
+; 
+; This program fragment implements a stereo "chorus" effect
+; on a DSP56001 processor.  Chorus adds depth and warmth to
+; sound by creating the illusion that more instruments
+; are involved in the sound than really are.  It does this by
+; mixing together a delayed version of the input with the input
+; itself.  This program uses the following signal flow.
+;
+;
+;  Left in ------+------- "dry" gain -----------> sum -----> Left out
+;                |                                 ^
+;                v                                 |
+;               sum --> delay ---> "wet" gain -----+
+;                ^                                 |
+;                |                                 v -
+;  Right in -----+------- "dry" gain -----------> sum -----> Right out
+;
+;
+; Note that the delay line output is negated before summing with the
+; right input signal.  This throws in 180 degrees of phase shift
+; making for interesting results even with mono inputs 
+; (i.e. Left in == Right in).
+; 
+; Chorus uses a delay time of between about 10 and 50ms in some commercial
+; units.  This program can be configured for longer delays.
+; In the chorus effect, the delay time is slowly varied, adding a very
+; subtle pitch shift.  The depth and speed of the delay-time modulation
+; are adjustable to taste.  The greater the depth or speed, the greater
+; the coloration of the signal.
+;
+; Variations in this algorithm are possible and encouraged.  I came
+; up with this code after studying the impulse response and characteristics
+; of a commercial stereo chorus pedal and reading various articles in magazines
+; and on usenet over the years.  My somewhat dry TX81 synthesizer sounds pretty
+; good with this and other effects I run on the 56001.
+;
+; A recent article with a pretty good not-too-technical overview of chorus 
+; and other effects:  Gary Hall, "From the Top: Effects, the Essential Musical
+; Spice," _Electronic Musician_, August 1991, pp. 62-68.
+;
+; I would enjoy seeing any improvements to the code.
+;
+include 'tdsg.basic.a56'	;hardware specific initialization code
+
+;***************************************************************
+;
+;	Data and constants
+;
+;***************************************************************
+
+dot				;remember where we were in P-space
+	org	x:$20		;put runtime variables in on-chip X-space
+
+; A spreadsheet was used to calculate the following numbers
+
+; Sample rate              32.5500 kc         
+; 
+; Delay time (4-52)        28.0000 ms		delay time knob
+; Depth (1-10)             10.0000		depth knob (I like it deep)
+; Speed (1-10)              0.0000		speed knob (I like it slow)
+; 
+; max depth +/-            24.0000 ms         
+; min delay                 4.0000 ms         
+; max delay                52.0000 ms         
+; 1/2 cycle period          5.0000 s          
+; samples per 1/2 cyc  162750.0000
+; time delta/samp           0.2949 us         
+; offset samp/samp          0.0096
+; 
+  doff_i equ                              -130	;initial delay offset (tap)
+  ddeltaf equ                           0.0096	;delta-delay, per sample
+  dspeed_i equ                          162750	;number of samples per
+						;half cycle of triangle wave
+						;delay-time modulator
+; 
+; Delay time (ms)              tap                   tap     delay
+; 
+;                   1      32.5500                     1      0.03
+;                   2      65.1000                     2      0.06
+;                   4     130.2000                     4      0.12
+;                   5     162.7500                     8      0.25
+;                   8     260.4000                    16      0.49
+;                  10     325.5000                    32      0.98
+;                  20     651.0000                    64      1.97
+;                  25     813.7500                   128      3.93
+;                  40    1302.0000                   256      7.86
+;                  50    1627.5000                   512     15.73
+;                  60    1953.0000                  1024     31.46
+;                  70    2278.5000                  2048     62.92
+;                  80    2604.0000                  4096    125.84
+;                  90    2929.5000                  8192    251.67
+;                 100    3255.0000                 16384    503.35
+
+;
+;	The delay line is in off-chip X memory
+;
+delay	equ	$2000
+dmax	equ	4096		;125 ms (probably way too long)
+;
+; doff and ddelta are 48-bit quantities
+;
+doff	dc	doff_i    	;current delay distance
+	org	y:doff
+	dc	0
+
+	org	x:doff+1
+ddelta	dc	0		;delta delay per sample
+	org	y:ddelta
+	dc	ddeltaf
+
+	org	x:ddelta+1
+
+dspeed	dc	dspeed_i	;samples per half cycle of triangle modulator
+dtoggle	dc	0		;current sample count
+delayout
+	dc	0		;current delay-line output
+
+	org	y:$0
+
+	org	p:dot		;go back to P-space
+;***************************************************************
+;
+; Initialization code
+;
+;***************************************************************
+hf_init
+	move	#delay,r1			;delay line input
+ 	movec	#dmax-1,m1			;
+	move	#doff_i,n1			;distance to output
+	rts
+;
+;***************************************************************
+;
+;	Sample-rate computations.  Call chorus_compute at
+;	interrupt time when both left and right inputs are
+;	ready.
+;
+;	fs = 32.552083 kHz
+;
+;	x:<in_l		left-channel input
+;	x:<in_r		right-channel input
+;	x:<out_l	left-channel output
+;	x:<out_r	right-channel output
+;
+;***************************************************************
+
+hf_comp
+	jsr	<saveregs
+;
+;	output and input mix
+;
+	clr	a	#.4375,x1		;clr a, get input scale
+	clr	b	#.5,y1			;clr b, get output scaler
+
+	move		x:<delayout,y0		;get delay out
+
+	macr	y0,y1,b	x:<in_l,x0		;b = .5 * delay, x0=in_l
+	macr	x0,y1,b		b,y0       	;b += .5 * in_l, y0=b
+	macr	x0,x1,a b,x:<out_l		;a = x1 * in_l, L = b
+	move			y0,b		;b = -y0
+	neg	b	x:<in_r,x0		;x0 = in_r
+	macr	x0,y1,b				;b += .5 * in_r
+	macr	x0,x1,a	b,x:<out_r		;R = b, a += x1 * in_r
+;
+;	delay line in
+;
+	move	a,x:(r1)+
+;
+;	delay line length modulation.  A simple triangle-wave modulator
+;	is used.  A sine-wave modulator would be much better, especially
+;	with deeper and/or faster settings.
+;
+	move		l:<doff,a		;a = current offset
+	move		l:<ddelta,x		;x = current delta
+	add	x,a
+	move		a,l:<doff		;new offset = a + x
+	move		a1,n1
+
+	move		x1,b			;save delta for later use
+;
+; smoothly transition between delay-line offsets by
+; interpolating the current sample with the previous or next
+; one depending on whether the delay is currently getting longer or
+; shorter.  Otherwise, an obnoxious click results when the offset snaps
+; to the next integral value.  This does have a low-pass effect on the
+; delayed signal path but it is not objectionable.
+;
+	move			y:<doff,a	;compute |frac(doff)|
+	lsr	a	#$800000,x0
+	or	x0,a	#.5,x1
+	move		a1,x0
+	mpy	-x0,x1,a
+	tst	b		a,y0		;y0 = 0.5 * |frac(doff)|
+	jpl	shorter				;on positive delta, the
+						;delay is shortening
+
+	move		(r1)-			;get previous sample
+	move		x:(r1+n1),x0
+	mpy	y0,x0,a	#.5,b			;scale
+	sub	y0,b	(r1)+			;compute scale for cur sample
+	move			b,y0
+	move		x:(r1+n1),x0		;get cur sample
+	mac	x0,y0,a				;scale and sum
+	jmp	endpan
+
+shorter
+	move		x:(r1+n1),x0		;get cur sample
+	mpy	y0,x0,a	#.5,b			;scale
+	sub	y0,b	(r1)+			;compute scale for next sample
+	move			b,y0
+	move		x:(r1+n1),x0		;get next sample
+	mac	x0,y0,a	(r1)-			;scale and sum
+endpan
+	move		a,x:<delayout		;store resulting output
+;
+; update the triangle wave modulation (sinewave would be better)
+;
+	move		x:<dtoggle,a		;decrement toggle count
+	move		#>1,x0
+	sub	x0,a
+	move		a,x:<dtoggle
+	jgt	notogg				;time to toggle?
+	move		x:<dspeed,x0		;yes, negate delta and reset
+	move		l:<ddelta,a
+	neg	a	x0,x:<dtoggle
+	move		a,l:<ddelta
+notogg
+bypass
+	jsr	<restregs
+	rts
+
+	end

@@ -1,0 +1,2 @@
+Please take these scripts as educational samples; they are very depending on my own configuration.
+This is just to give you an idea of how VISION scripting works, they are not intended to be working in general as image file location is surely not identical.

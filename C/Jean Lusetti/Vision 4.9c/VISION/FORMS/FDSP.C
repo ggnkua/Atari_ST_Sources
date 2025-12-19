@@ -1,0 +1,115 @@
+#include <string.h>
+#include "..\tools\gwindows.h"
+
+#include "actions.h"
+
+#ifndef __VISION_H
+#define __VISION_H
+#include "langues\francais\vision.h"
+#endif
+
+typedef struct
+{
+  DSP_INFO confdsp ;
+}
+WEXTENSION_DSP ;
+
+
+static void OnInitDialogDSP(void* w)
+{
+  GEM_WINDOW*     wnd = (GEM_WINDOW*) w ;
+  WEXTENSION_DSP* wext = wnd->DlgData->UserData ;
+  OBJECT*         adr_prefdsp = wnd->DlgData->BaseObject ;
+
+  memcpy( &wext->confdsp, &DspInfo, sizeof(DSP_INFO) ) ;
+  checkbox_setstate( DspInfo.use, adr_prefdsp, PDSP_USE ) ;
+
+  deselect( adr_prefdsp, PDSPLOCK_WARN ) ;
+  deselect( adr_prefdsp, PDSPLOCK_FORCE ) ;
+  deselect( adr_prefdsp, PDSPLOCK_IGNORE ) ;
+  deselect( adr_prefdsp, PDSPLOCK_CANCEL ) ;
+  switch( DspInfo.WhatToDoIfLocked )
+  {
+    case DSPLOCK_WARN   : select( adr_prefdsp, PDSPLOCK_WARN ) ;
+                          break ;
+    case DSPLOCK_FORCE  : select( adr_prefdsp, PDSPLOCK_FORCE ) ;
+                          break ;
+    case DSPLOCK_IGNORE : select( adr_prefdsp, PDSPLOCK_IGNORE ) ;
+                          break ;
+    case DSPLOCK_CANCEL : select( adr_prefdsp, PDSPLOCK_CANCEL ) ;
+                          break ;
+  }
+}
+
+static void radio_sel(OBJECT* adr_prefdsp, int sel)
+{
+  int indexes[] = { PDSPLOCK_WARN, PDSPLOCK_IGNORE, PDSPLOCK_FORCE, PDSPLOCK_CANCEL } ;
+
+  if ( !selected( adr_prefdsp, sel ) ) radio_select( adr_prefdsp, indexes, ARRAY_SIZE(indexes), sel ) ;
+}
+
+static int OnObjectNotifyDSP(void* w, int obj)
+{
+  GEM_WINDOW*     wnd = (GEM_WINDOW*) w ;
+  WEXTENSION_DSP* wext = wnd->DlgData->UserData ;
+  OBJECT*         adr_prefdsp = wnd->DlgData->BaseObject ;
+  int             code = -1 ;
+
+  switch( obj )
+  {
+    case PDSP_USE         :
+    case PDSP_TUSE        : inv_select( adr_prefdsp, PDSP_USE ) ;
+                            break ;
+    case PDSPLOCK_WARN    : inv_select( adr_prefdsp, obj ) ;
+    case PDSPLOCK_TWARN   : radio_sel( adr_prefdsp, PDSPLOCK_WARN ) ;
+                            break ;
+    case PDSPLOCK_IGNORE  : inv_select( adr_prefdsp, obj ) ;
+    case PDSPLOCK_TIGNORE : radio_sel( adr_prefdsp, PDSPLOCK_IGNORE ) ;
+                            break ;
+    case PDSPLOCK_FORCE   : inv_select( adr_prefdsp, obj ) ;
+    case PDSPLOCK_TFORCE  : radio_sel( adr_prefdsp, PDSPLOCK_FORCE ) ;
+                            break ;
+    case PDSPLOCK_CANCEL  : inv_select( adr_prefdsp, obj ) ;
+    case PDSPLOCK_TCANCEL : radio_sel( adr_prefdsp, PDSPLOCK_CANCEL ) ;
+                            break ;
+     case PDSP_OK         : code = IDOK ;
+                            break ;
+     case PDSP_CANCEL     : code = IDCANCEL ;
+                            break ;
+  }
+  GWObjcDraw( wnd, adr_prefdsp, PDSPLOCK_WARN ) ;
+  GWObjcDraw( wnd, adr_prefdsp, PDSPLOCK_IGNORE ) ;
+  GWObjcDraw( wnd, adr_prefdsp, PDSPLOCK_FORCE ) ;
+  GWObjcDraw( wnd, adr_prefdsp, PDSPLOCK_CANCEL ) ;
+
+  if ( code == IDOK )
+  {
+    if ( selected( adr_prefdsp, PDSP_USE ) ) wext->confdsp.use = 1 ;
+    else                                     wext->confdsp.use = 0 ;
+    if ( selected(adr_prefdsp, PDSPLOCK_WARN) )   wext->confdsp.WhatToDoIfLocked = DSPLOCK_WARN ;
+    if ( selected(adr_prefdsp, PDSPLOCK_FORCE) )  wext->confdsp.WhatToDoIfLocked = DSPLOCK_FORCE ;
+    if ( selected(adr_prefdsp, PDSPLOCK_IGNORE) ) wext->confdsp.WhatToDoIfLocked = DSPLOCK_IGNORE;
+    if ( selected(adr_prefdsp, PDSPLOCK_CANCEL) ) wext->confdsp.WhatToDoIfLocked = DSPLOCK_CANCEL ;
+  }
+
+  return code ;
+}
+
+void pref_dsp(void)
+{
+  WEXTENSION_DSP wext ;
+  DLGDATA        dlg_data ;
+
+  GWZeroDlgData( &dlg_data ) ;
+  dlg_data.RsrcId         = FORM_DSP ;
+  strcpy( dlg_data.Title, vMsgTxtGetMsg(MSG_WFNAMES)  ) ;
+  dlg_data.UserData       = &wext ;
+  dlg_data.OnInitDialog   = OnInitDialogDSP ;
+  dlg_data.OnObjectNotify = OnObjectNotifyDSP ;
+
+  if ( GWCreateAndDoModal( &dlg_data, 0 ) == IDOK )
+  {
+    config.dspuse = DspInfo.use                     = wext.confdsp.use ;
+    config.dsphandlelock = DspInfo.WhatToDoIfLocked = wext.confdsp.WhatToDoIfLocked ;
+  }
+}

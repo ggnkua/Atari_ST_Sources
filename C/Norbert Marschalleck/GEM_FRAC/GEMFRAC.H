@@ -1,0 +1,13 @@
+#define MENUE 0
+#define ABOUT 9
+#define BLOWUP 19
+#define NEU 21
+#define SAVE 23
+#define LOAD 24
+#define DRUCKE 26
+#define QUIT 28
+#define LOW 31
+#define MEDIUM 32
+#define HIGH 33
+#define BW 36
+#define GREY 37
