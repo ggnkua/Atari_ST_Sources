@@ -1,0 +1,440 @@
+"code.doc", documentation for scm.
+   Copyright (C) 1990, 1991, 1992 Aubrey Jaffer.
+
+This program is free software; you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation; either version 1, or (at your option)
+any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+
+The author can be reached at jaffer@ai.mit.edu or
+Aubrey Jaffer, 84 Pleasant St., Wakefield MA 01880
+
+Scm is a portable Scheme implementation written in C.  Scm provides a
+machine independent platform for JACAL, a symbolic algebra system.
+SCM runs under VMS, MS-DOS, MacOS, Unix and similar systems.
+
+Scm conforms to Revised^4 Report on the Algorithmic Language Scheme
+and the IEEE P1178 specification.  Scm is interpreted and implements
+tail recursion for interpreted code.  Scm has inexacts and 30 bit
+immediate integers.  Scm uses and garbage collects off the C-stack.
+This allows routines to be written in C without regard to GC
+visibility.  Full call-with-current-continuations are supported.
+ASCII and EBCDIC are supported.
+
+			   PROJECT HISTORY
+
+Siod, written by George Carrette, was the starting point for scm.
+Here is the Siod notice:
+/* Scheme In One Defun, but in C this time.
+ 
+ *			  COPYRIGHT (c) 1989 BY				    *
+ *	  PARADIGM ASSOCIATES INCORPORATED, CAMBRIDGE, MASSACHUSETTS.	    *
+ *			   ALL RIGHTS RESERVED				    *
+
+Permission to use, copy, modify, distribute and sell this software
+and its documentation for any purpose and without fee is hereby
+granted, provided that the above copyright notice appear in all copies
+and that both that copyright notice and this permission notice appear
+in supporting documentation, and that the name of Paradigm Associates
+Inc not be used in advertising or publicity pertaining to distribution
+of the software without specific, written prior permission.
+
+PARADIGM DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE, INCLUDING
+ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS, IN NO EVENT SHALL
+PARADIGM BE LIABLE FOR ANY SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR
+ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
+WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
+ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS
+SOFTWARE.
+
+gjc@paradigm.com
+
+Paradigm Associates Inc		 Phone: 617-492-6079
+29 Putnam Ave, Suite 6
+Cambridge, MA 02138
+*/
+
+The innovation from Siod which scm uses is being able to garbage
+collect off the c-stack.  All the code has been rewritten.  See the
+file "ChangeLog" for a log of recent changes that have been made to
+scm.
+
+			    SCM DATA TYPES
+
+			     IMMEDIATEs:
+inum:		immediate 30 bit integers
+ichr:		immediate characters
+iflags:		#t, #f, (), #[eof], #[undefined], and #[unspecified]
+		 `=>', `else', `unquote', and `unquote-splicing'
+isym:		immediate special symbols `and', `begin', `case', `cond',
+		`define', `do', `if', `lambda', `let', `let*',
+		`letrec', `or', `quasiquote', `quote', `set!'
+iloc		descriptor of variable's location in environment
+pointer:	pointer to a cell
+				CELLs:
+cons:		cell returned by (cons arg1 arg2).  Cells can further
+		be classified as having imcar (immediate car) or
+		nimcar (non-immediate car) since the type code for a
+		cons and the type code for an immediate type in its
+		car are adjacent in the cons cell.
+cons with gloc:	memoized pointer to symbol's value in car.  Only in code.
+closure:	applicable object returned by (lambda (args) ...)
+symbol:		scheme symbol
+			       MALLOCs:
+vector:		scheme vector
+string:		scheme string
+spare:		spare tc7 type code.
+contin:		applicable object produced by call-with-current-continuation
+				SUBRs:
+subr_0:		C function of no arguments.
+subr_1:		C function of one argument.
+cxr:		car, cdr, cadr, cddr, ...
+subr_3:		C function of 3 arguments.
+
+subr_2:		C function of 2 arguments.
+subr_2x:	C function of 2 interchanged arguments.
+subr_1o:	C function of one optional argument.
+subr_2o:	C function of 1 required and 1 optional argument.
+			       LSUBRs:
+lsubr:		C function of list of arguments.
+lsubr_2:	C function of 2 arguments and a list of arguments.
+asubr:		associative C function of 2 arguments.
+				SMOBS:
+free_cell:	unused cell on the freelist.
+inport:		input port.
+outport:	output port.
+ioport:		input-output port.
+inpipe:		input pipe.
+outpipe:	output pipe.
+flo:		single-precision float.
+dblr:		double-precision float.
+dblc:		double-precision complex.
+bigpos:		positive bignum.
+bigneg:		negative bignum.
+promise:	made by DELAY.
+arbiter:	synchronization object.
+cptr:		C object interface from Andrew Wilcox <andrew@astro.psu.edu>
+record:		user defined data types.
+recons:		constructor for record.
+recacc:		accessor for record.
+recmod:		modifier for record.
+recpred:	predicate for record.
+
+		      DATA TYPE REPRESENTATIONS
+IMMEDIATE:	B=data bit, C=flag code, P=pointer address bit
+	................................
+inum	BBBBBBBBBBBBBBBBBBBBBBBBBBBBBB10
+ispcsym			000CCCC00CCCC100
+isym			CCCCCCC001110100
+iflag			CCCCCCC101110100
+ichr	BBBBBBBBBBBBBBBBBBBBBBBB11110100
+iloc	0DDDDDDDDDDDDDDDEFFFFFFF11111100
+pointer PPPPPPPPPPPPPPPPPPPPPPPPPPPPP000
+   HEAP CELL:	G=gc_mark; 1 during mark, 0 other times.
+	1s and 0s here indicate type.	  G missing means sys (not GC'd)
+cons	..........SCM car..............0  ...........SCM cdr.............G
+cons with gloc in car
+	..........SCM car............001  ...........SCM cdr.............G
+closure ..........SCM code...........011  ...........SCM env.............G
+symbol	..........SCM name...........101  ...........SCM vcell...........G
+	MALLOCs:
+vector	.........long length....G0000111  ...........SCM **elts...........
+string	.........long length....G0001111  ..........char *chars...........
+spare				G0010111  
+contin	.........long length....G0011111  .......jmp_buf *stack...........
+	SUBRs:
+subr_0	..........int hpoff.....00100111  ...........SCM (*f)()...........
+subr_1	..........int hpoff.....00101111  ...........SCM (*f)()...........
+cxr	..........int hpoff.....00110111  ...........SCM (*f)()...........
+subr_3	..........int hpoff.....00111111  ...........SCM (*f)()...........
+		SUBR2s:
+subr_2	..........int hpoff.....01000111  ...........SCM (*f)()...........
+subr_2x	..........int hpoff.....01001111  ...........SCM (*f)()...........
+subr_1o	..........int hpoff.....01010111  ...........SCM (*f)()...........
+subr_2o	..........int hpoff.....01011111  ...........SCM (*f)()...........
+		LSUBRs:
+lsubr	..........int hpoff.....01100111  ...........SCM (*f)()...........
+lsubr_2	..........int hpoff.....01101111  ...........SCM (*f)()...........
+asubr	..........int hpoff.....01110111  ...........SCM (*f)()...........
+			SMOBS:
+free_cell
+	00000000000000000000000001111111  ...........*free_cell........000
+flo	000000000000000000000001G1111111  ...........float num............
+dblr	000000000000000100000001G1111111  ..........double *real..........
+dblc	000000000000001100000001G1111111  .........complex *cmpx..........
+bignum	...int length...0000001 G1111111  .........short *digits..........
+bigpos	...int length...00000010G1111111  .........short *digits..........
+bigneg	...int length...00000011G1111111  .........short *digits..........
+   port		    0   00000100G1111111  ..........FILE *stream..........
+ inport	000000000000001100000100G1111111  ..........FILE *stream..........
+outport	000000000000010100000100G1111111  ..........FILE *stream..........
+ ioport	000000000000011100000100G1111111  ..........FILE *stream..........
+   pipe		    1   00000100G1111111  ..........FILE *stream..........
+ inpipe	000000000000101100000100G1111111  ..........FILE *stream..........
+outpipe	000000000000110100000100G1111111  ..........FILE *stream..........
+promise 000000000000000f00000101G1111111  ...........SCM val..............
+arbiter	000000000000000l00000110G1111111  ...........SCM name.............
+cptr	...int length...00000111G1111111  ..........char *ptr.............
+
+record	...int length...00001000G1111111  ...........SCM **elts...........
+recons	...int length...00001001G1111111  ...........SCM rtd..............
+recacc	....int pos.....00001010G1111111  ...........SCM rtd..............
+recmod	....int pos.....00001011G1111111  ...........SCM rtd..............
+recpred			00001100G1111111  ...........SCM rtd..............
+
+				SMOBS
+
+SMOBs are a collection of miscellaneous types.  The type code and
+GCMARK bit occupy the lower order 16 bits of the CAR half of the cell.
+The rest of the CAR can be used for sub-type or other information.
+The CDR contains data of size long.
+
+Inexact data types are subtypes of type tc16_flo.  If the sub-type is:
+0 - a single precision float is contained in the CDR.
+1 - CDR is a pointer to a malloced double.
+3 - CDR is a pointer to a malloced pair of doubles.
+
+			  GARBAGE COLLECTION
+
+The garbage collector is in the latter half of sys.c.  There is a heap
+(which can grow but not shrink) in which all cons cells and type
+headers reside.  All objects in the heap are the same size (8 bytes).
+Strings, vectors, continuations, and bignums are managed by malloc.
+There is only one pointer to each malloc object from its type header.
+This allows malloc objects to be freed when the associated heap object
+is garbage collected.
+
+To garbage collect, first certain protected objects are marked (such
+as the obarray).  Then the stack (and marked continuations) are
+traversed.  Each longword in the stack is tried to see if it is a
+valid SCM pointer into the heap.  If it is, the object is marked.  If
+not, it is ignored.  If the stack is word rather than longword
+aligned (#define WORD_ALIGN), both alignments are tried.
+
+The heap is then swept.  If a type header cell pointing to malloc
+space is collected the malloc object is then freed.
+
+This arrangement will occasionally mark objects which are no longer
+used.  These objects can be collected at any later time.  This has not
+been a problem in practice and the advantage of using the c-stack far
+outweighs it.
+
+			      INTERRUPTS
+
+If they are supported by the C implementation, init_signals() in scm.c
+sets up handlers for SIGINT and SIGALRM.  The low level handlers for
+SIGINT and SIGALRM are int_signal() and alrm_signal().  All of the
+signal handlers immediately reestablish themselves by a call to
+signal().
+
+If an interrupt handler is defined when the interrupt is received, the
+code is interpreted.  If the code returns execution resumes from where
+the interrupt happened.  Call-with-current-continuation allows the
+stack to be saved and restored.
+
+SCM does not use any signal masking system calls.  These are not a
+portable feature.  However, code can run uninterrupted by use of the C
+macros DEFER_INTS and ALLOW_INTS.  DEFER_INTS sets the global variable
+ints_disabled to 1.  If an interrupt occurs during a time when
+ints_disabled is 1 one of the global variables sig_deferred or
+alrm_deferred is set to 1 and the handler returns.  When ALLOW_INTS is
+executed the deferred variables are checked and if set the appropriate
+handler is called.
+
+DEFER_INTS can not be nested.  An ALLOW_INTS must happen before
+another DEFER_INTS can be done.  In order to check that this
+constraint is satisfied #define CAREFUL_INTS in config.h.
+
+			     CHANGING SCM
+
+When writing C-code a precaution is recommended.  If your routine
+allocates from the heap and accesses some malloc object make sure that
+some local variable in your routine points to the type header of the
+malloc object.  This will prevent the malloc object from being freed
+before you are done with it.
+
+Also, if you maintain a static pointer to some (non-immediate) SCM
+object, you must either make your pointer be the value cell of a
+symbol (see errobj for an example) or make your pointer be one of the
+sys_protects (see symhash for an example).
+
+The macro ASSERT(_cond,_arg,_pos,_subr) signals an error if the
+expression (_cond) is 0.  _arg is the offending object, _subr is the
+string naming the subr, and _pos indicates the position or type of
+error.  _pos can be one of
+	`ARG1',
+	`ARG2',
+	`ARG3',
+	`ARG4',
+	`ARG5',
+	`WNA' (wrong number of args),
+	`OVFLOW'
+	`OUTOFRANGE'
+	`NALLOC'
+	`EXIT'
+	`HUP_SIGNAL'
+	`INT_SIGNAL'
+	`FPE_SIGNAL'
+	`BUS_SIGNAL'
+	`SEGV_SIGNAL'
+	`ALRM_SIGNAL'
+	or a C string (char *).
+
+Error checking is not done by ASSERT if the flag RECKLESS
+is defined.  An error condition can still be signaled in this case
+with a call to wta(_arg,_pos,_subr).
+
+To add a C routine to scm:
+  [1] choose the appropriate subr type from the type list.
+  [2] write the code and put into scm.c.
+  [3] add a make_subr call to init_scm.  Or put an entry into the
+      appropriate iproc structure.
+
+To add a package of new procedures to scm (see subr.c for example):
+  [1] create a new C file (foo.c).
+  [2] at the front of foo.c put declarations for strings for your
+      procedure names.
+	static char s_twiddle_bits[]="twiddle-bits!";
+	static char s_bitsp[]="bits?";
+  [3] choose the appropriate subr types from the type list in code.doc.
+  [4] write the code for the procedures and put into foo.c
+  [5] create one iproc structure for each subr type used in foo.c
+	static iproc subr3s[]={
+		{s_twiddle-bits,twiddle-bits},
+		{s_bitsp,bitsp},
+		{0,0}};
+  [6] create an init_<name of file> routine at the end of the
+      file which calls init_iprocs with the correct type for each
+      of the iprocs created in step 5.
+	void init_foo()
+	{
+	  init_iprocs(subr1s, tc7_subr_1);
+	  init_iprocs(subr3s, tc7_subr_3);
+	}
+  [7] put any scheme code which needs to be run as part of your
+      package into Ifoo.scm.
+  [8] put an IF into Init.scm which calls Ifoo.scm if your
+      package is included:
+	(if (defined? twiddle-bits!)
+	    (load (in-vicinity (implementation-vicinity)
+			       "Ifoo"
+			       (scheme-file-suffix))))
+  [9] put documentation of the new procedures into foo.doc
+  [10] add lines to your makefile to compile and link SCM with your
+       object file.  Add a line INITS = initfoo() at the beginning of
+       the makefile.
+
+These steps should allow your package to be linked into SCM with a
+minimum of difficulty.  Your package should also work with dynamic
+loading when SCM gets this capability.
+
+Special forms (new syntax) can be added to scm.
+  [1] define a new MAKISYM in scm.h and increment NUM_XSPCSYMS.
+  [2] add a string with the new name in the corresponding place
+      in isymnames in sys.c.
+  [3] add case clause to ceval near I_QUASIQUOTE (in eval.c).
+
+To add a new type to scm:
+  [1] choose an unused SMOB type code from the previous type table.
+  [2] add #define tc16_???? ???? to scm.h to define your type.
+  [3] add code to gc_mark and gc_sweep in the case tc7_smob:
+      sections (sys.c).
+  [4] add code to iprin1 (in repl.c) in the case tc7_smob: section
+      to print your type (if desired).
+  [5] add code to equalp (in subr.c) to compare 2 objects of the
+      new type (if desired).
+
+To use scm from another program call init_scm or run_scm as is done in
+main() in "scm.c".
+
+			    CONTINUATIONS
+
+The scm procedure call-with-current-continuation calls it's argument
+with an object of type `contin'.
+
+If CHEAP_CONTINUATIONS is #defined (in "config.h") the contin just
+contains a jmp_buf.  When the contin is applied, a longjmp of the
+jmp_buf is done.
+
+If CHEAP_CONTINUATIONS is not #defined the contin contains the jmp_buf
+and a copy of the C stack between the call_cc stack frame and
+stack_start_ptr.  When the contin is applied:
+  [1] the stack is grown larger than the saved stack, if neccessary.
+  [2] the saved stack is copied back into it's original position.
+  [3] longjmp of the jmp_buf is called.
+
+On systems with nonlinear stack disciplines (multiple stacks or
+non-contiguous stack frames) copying the stack will not work properly.
+These systems need to #define CHEAP_CONTINUATIONS in "config.h".
+
+			       INTEGERS
+
+Scm has 30 bit immediate signed numbers called INUMs.  An INUM instead
+of a pointer to a cell is flagged by a `1' in the second to low order
+bit position.  Since cells are always 8 byte aligned a pointer to a
+cell has the low order 3 bits `0'.  The high order 30 bits are used
+for the integer's value.
+
+Computations on INUMs are performed by converting the arguments to C
+integers (by a shift), operating on the integers, and converting the
+result to an INUM.  The result is checked for overflow by converting
+back to integer and checking the reverse operation.
+
+The shifts used for conversion need to be signed shifts.  If the C
+implementation does not support signed right shift this fact is
+detected in a #if statement in scm.h and one is constructed in terms
+of unsigned right shift.
+
+			      EVALUATION
+
+Whenever a symbol's value is found in the local environment the
+pointer to the symbol in the code is replaced with an immediate object
+(ILOC) which specifies how many environment frames down and how far in
+to go for the value.  When this immediate object is subsequently
+encountered, the value can be retrieved quickly.
+
+Pointers to symbols not defined in local environments are incremented.
+This incremented pointer is called a GLOC.  The low order bit is
+normally reserved for GCmark; But, since references to variables in
+the code always occur in the CAR position and the GCmark is in the
+CDR, there is no conflict.
+
+Number of argument checks for closures are made only when the function
+position (whose value is the closure) of a combination is not an ILOC
+or GLOC.  When the function position of a combination is a symbol it
+will be checked only the first time it is evaluated because it will
+then be replaced with an ILOC or GLOC.
+
+			 IMPROVEMENTS TO MAKE
+
+If an open fails because there are no unused file handles, GC should
+be done so that file handles which are no longer used can be
+collected.
+
+Copying all of the stack is wasteful of storage.  Any time a
+call-with-current-continuation is called the stack could be re-rooted
+with a frame which calls the contin just created.  This in combination
+with checking stack depth could also be used to allow stacks deeper
+than 64K on the IBM PC.
+
+If the symhash array is specially marked in garbage collection symbols
+with value #[undefined] which have no pointers to them can be
+collected.  In Maclisp this was called GCTWA.
+
+Compaction could be done to malloced objects by freeing and reallocing
+all the malloc objects encountered in a scan of the heap.  Whether
+compactions would actually occur is system depenedent.
+
+Unamed (let ((var ..))) expressions are destructively replaced with
+the equivalent lambda expression.  (do ((var val)) ...) binding
+clauses without <step> clauses can be moved up and out of the `do'
+into a new surrounding let or lambda.
