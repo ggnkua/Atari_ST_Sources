@@ -583,7 +583,7 @@ void wpath_tree(WININFO *win) {
 	/* Verzeichniseintr„ge */
 	if (wpath->index.text) {
 		/* Als Text */
-	} else {
+	} else { char *bigger_txt=NULL;
 		wpath->wicon = pmalloc(sizeof(WICON) * (long) wpath->e_total);
 		if (!wpath->wicon) {
 			wpath_tfree(win);
@@ -597,9 +597,11 @@ void wpath_tree(WININFO *win) {
 		namelen = 0;
 		for (i = 0; i < wpath->e_total; i++) {
 			entry = wpath->lptr[i];
-			n = calc_small_text_width(entry->smallname);
-			if (n > namelen)
+			n = strlen(entry->smallname);
+			if (n > namelen) {
 				namelen = n;
+				bigger_txt = entry->smallname;
+			}
 			/* Ergaenzung: Maximale Iconhoehe/-breite ermitteln und ggf.
 			 'namelen' anpassen */
 			tiblk = entry->iconimg->iconblk;
@@ -608,9 +610,11 @@ void wpath_tree(WININFO *win) {
 			if (tiblk->ib_wicon > iw)
 				iw = tiblk->ib_wicon;
 		}
+		if(bigger_txt) namelen = calc_small_text_width(bigger_txt);
 		ih += 1;
 		ih &= ~1;
 		iw += 1;
+		iw += 8;
 		iw &= ~1;
 		n = namelen + 8;
 		/* Ergaenzung: Falls Icons breiter als Text, dann anpassen */

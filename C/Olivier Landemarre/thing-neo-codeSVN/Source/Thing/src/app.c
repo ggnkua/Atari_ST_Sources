@@ -411,6 +411,81 @@ short run_conwin(APPLINFO *aptr, char *cmd, short argv, char *env, char *oldenv,
 }
 
 /**
+ * fix_messag
+ *
+ * gere les messages en attente
+ *
+ */
+static void fix_messag(void)
+{ EVENT kevent;
+	kevent.ev_mwich =  MU_MESAG;
+	kevent.ev_mflags = MU_MESAG | MU_TIMER;
+	kevent.ev_mtlocount = 0;
+	kevent.ev_mthicount = 0;
+	while(kevent.ev_mwich &  MU_MESAG){
+		EvntMulti(&kevent);
+		if (kevent.ev_mwich & MU_MESAG) {
+				switch (kevent.ev_mmgpbuf[0]) {
+				case WM_M_BDROPPED:
+				case WM_BOTTOMED:
+				case WM_UNTOPPED:
+				case WM_REDRAW:
+				case WM_NEWTOP:
+				case WM_ONTOP:
+				case WM_FULLED:
+				case WM_ARROWED:
+				case WM_HSLID:
+				case WM_VSLID:
+				case WM_SIZED:
+				case WM_MOVED:
+				case WM_TOPPED:
+					handle_win(kevent.ev_mmgpbuf[3], kevent.ev_mmgpbuf[0],
+							kevent.ev_mmgpbuf[4], kevent.ev_mmgpbuf[5],
+							kevent.ev_mmgpbuf[6], kevent.ev_mmgpbuf[7],
+							kevent.ev_mmokstate);
+					break;
+				case AV_PROTOKOLL:
+					avs_protokoll(kevent.ev_mmgpbuf);
+					break;
+				case AV_ACCWINDOPEN:
+					avs_accwindopen(kevent.ev_mmgpbuf);
+					break;
+				case AV_ACCWINDCLOSED:
+					avs_accwindclosed(kevent.ev_mmgpbuf);
+					break;
+				case AV_EXIT:
+					avs_exit(kevent.ev_mmgpbuf);
+					break;
+				case AV_GETSTATUS:
+					avs_getstatus(kevent.ev_mmgpbuf);
+					break;
+				case AV_STATUS:
+					avs_status(kevent.ev_mmgpbuf);
+					break;
+				case AV_WHAT_IZIT:
+					aesmsg[0] = VA_THAT_IZIT;
+					aesmsg[3] = tb.app_id;
+					appl_write(kevent.ev_mmgpbuf[1], 16, aesmsg);
+					break;
+				case AP_TERM: /* Shutdown zu diesem Zeitpunkt nicht moeglich! */
+					aesmsg[0] = AP_TFAIL;
+					aesmsg[1] = 1;
+					aesmsg[2] = 0;
+					aesmsg[3] = 0;
+					aesmsg[4] = 0;
+					aesmsg[5] = 0;
+					aesmsg[6] = 0;
+					aesmsg[7] = 0;
+					shel_write(SHW_AESSEND, 0, 0, (char *) aesmsg, 0L);
+					break;
+				default :
+					break;
+				}
+			}
+	}
+}
+
+/**
  * run_app
  *
  * Startet eine Applikation unter einem Multitaskingsystem nach.
@@ -801,6 +876,7 @@ else aptr=appl;
 			pfree(path);
 			return (0);
 		}
+		fix_messag();
 	}
 
 app_start1:
