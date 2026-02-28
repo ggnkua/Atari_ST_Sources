@@ -1,0 +1,44 @@
+ /*  Resource C-Header-File v1.95 fÅr ResourceMaster ab v2.06 by ARDISOFT  */
+
+#define EZ_INFO 0  /* form/dial */
+#define EZ_INFO_HEAD_BOX 0  /* BOX in tree EZ_INFO */
+#define EZ_INFO_BOX 1  /* BOXTEXT in tree EZ_INFO */
+#define EZ_INFO_BULLE_ON_OFF 2  /* BOXTEXT in tree EZ_INFO */
+#define EZ_INFO_ONG_MASTER 3  /* BOXTEXT in tree EZ_INFO */
+#define EZ_INFO_ONG_CONTAINER 4  /* BOXTEXT in tree EZ_INFO */
+#define EZ_INFO_ONG_INDEX 5  /* BOXTEXT in tree EZ_INFO */
+#define EZ_INFO_DELETE_LIST_IND 6  /* CICON in tree EZ_INFO */
+#define EZ_INFO_DELETE_LIST_ALL_02 8  /* CICON in tree EZ_INFO */
+#define EZ_INFO_LOAD_INDEX 10  /* CICON in tree EZ_INFO */
+#define EZ_INFO_ONG_LOGOUT 12  /* BOXTEXT in tree EZ_INFO */
+#define EZ_INFO_DELETE_LIST_LOGOUT 13  /* CICON in tree EZ_INFO */
+#define EZ_INFO_DELETE_LIST_ALL_00 15  /* CICON in tree EZ_INFO */
+#define EZ_INFO_LOAD_LOG 17  /* CICON in tree EZ_INFO */
+#define EZ_INFO_ONG_INTDEP 19  /* BOXTEXT in tree EZ_INFO */
+#define EZ_INFO_DELETE_LIST_INTDEP 20  /* CICON in tree EZ_INFO */
+#define EZ_INFO_DELETE_LIST_ALL_01 22  /* CICON in tree EZ_INFO */
+#define EZ_INFO_UPDATE_INTDEP 24  /* CICON in tree EZ_INFO */
+#define EZ_INFO_UPDATE_ALL_INTDEP 26  /* CICON in tree EZ_INFO */
+#define EZ_INFO_LOAD_INTDEP 28  /* CICON in tree EZ_INFO */
+#define EZ_INFO_LOAD_INCLDEF 30  /* CICON in tree EZ_INFO */
+#define EZ_INFO_INCL_PATH 32  /* BOXTEXT in tree EZ_INFO */
+#define EZ_INFO_ONG_FONCT 33  /* BOXTEXT in tree EZ_INFO */
+#define EZ_INFO_UPDATE 34  /* CICON in tree EZ_INFO */
+#define EZ_INFO_UPDATE_ALL 36  /* CICON in tree EZ_INFO */
+#define EZ_INFO_DELETE_LIST 38  /* CICON in tree EZ_INFO */
+#define EZ_INFO_TRIER_LIST 40  /* CICON in tree EZ_INFO */
+#define EZ_INFO_DELETE_LIST_ALL 42  /* CICON in tree EZ_INFO */
+#define EZ_INFO_TRIER_LIST_ALL 44  /* CICON in tree EZ_INFO */
+#define EZ_INFO_INFO_TITLE 46  /* TEXT in tree EZ_INFO */
+#define EZ_INFO_VERT_DOWN 47  /* BOXTEXT in tree EZ_INFO */
+#define EZ_INFO_FORM1_WIDG_DOWN 48  /* CICON in tree EZ_INFO */
+#define EZ_INFO_VERT_BAR 49  /* BOXTEXT in tree EZ_INFO */
+#define EZ_INFO_VERT_ASC 50  /* BOXTEXT in tree EZ_INFO */
+#define EZ_INFO_VERT_UP 53  /* BOXTEXT in tree EZ_INFO */
+#define EZ_INFO_FORM1_WIDG_UP 54  /* CICON in tree EZ_INFO */
+#define EZ_INFO_HORZ_BAR 55  /* BOXTEXT in tree EZ_INFO */
+#define EZ_INFO_HORZ_ASC 56  /* BOXTEXT in tree EZ_INFO */
+#define EZ_INFO_HORZ_RIGHT 59  /* BOXTEXT in tree EZ_INFO */
+#define EZ_INFO_FORM1_WIDG_UP_01 60  /* CICON in tree EZ_INFO */
+#define EZ_INFO_HORZ_LEFT 61  /* BOXTEXT in tree EZ_INFO */
+#define EZ_INFO_FORM1_WIDG_UP_00 62  /* CICON in tree EZ_INFO */

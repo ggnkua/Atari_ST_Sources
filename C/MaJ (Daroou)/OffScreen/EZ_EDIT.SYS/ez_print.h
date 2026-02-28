@@ -1,0 +1,45 @@
+/* Indices du fichier ressource pour EZ_PRINT */
+
+#define PRT_DIALOGUE     0   /* Formulaire/Dialogue */
+#define MLT_DLG_CONTENER 0   /* BOX dans l'arbre PRT_DIALOGUE */
+#define MLT_DLG_SLAVE_CO 1   /* BOXTEXT dans l'arbre PRT_DIALOGUE */
+#define PRT_ONG_IMPRIME  2   /* BOXTEXT dans l'arbre PRT_DIALOGUE */
+#define PRT_PG_DEB       5   /* FBOXTEXT dans l'arbre PRT_DIALOGUE */
+#define PRT_PG_END       7   /* FBOXTEXT dans l'arbre PRT_DIALOGUE */
+#define PRT_NB_EXPL      9   /* FBOXTEXT dans l'arbre PRT_DIALOGUE */
+#define PRT_CHK_COLOR    11  /* BOXTEXT dans l'arbre PRT_DIALOGUE */
+#define PRT_DRV_SCROLBOX 12  /* BOXTEXT dans l'arbre PRT_DIALOGUE */
+#define PRT_DRV_UP_ARR   13  /* BOXTEXT dans l'arbre PRT_DIALOGUE */
+#define PRT_DRV_DWN_ARR  14  /* BOXTEXT dans l'arbre PRT_DIALOGUE */
+#define PRT_DRV_BAR      15  /* BOXTEXT dans l'arbre PRT_DIALOGUE */
+#define PRT_DRV_SLIDE    16  /* BOXTEXT dans l'arbre PRT_DIALOGUE */
+#define PRT_DRV_INFO     17  /* BOXTEXT dans l'arbre PRT_DIALOGUE */
+#define PRT_ONG_CADRAGE  18  /* BOXTEXT dans l'arbre PRT_DIALOGUE */
+#define PRT_PAGEPAINTBOX 19  /* BUTTON dans l'arbre PRT_DIALOGUE */
+#define PRT_MRG_TOP_LEFT 21  /* USERDEF dans l'arbre PRT_DIALOGUE */
+#define PRT_MRG_TOP_RIGH 22  /* USERDEF dans l'arbre PRT_DIALOGUE */
+#define PRT_MRG_LEFT_SUP 23  /* USERDEF dans l'arbre PRT_DIALOGUE */
+#define PRT_MRG_LEFT_INF 24  /* USERDEF dans l'arbre PRT_DIALOGUE */
+#define PRT_MRG_LEFT     26  /* FBOXTEXT dans l'arbre PRT_DIALOGUE */
+#define PRT_MRG_TOP      27  /* FBOXTEXT dans l'arbre PRT_DIALOGUE */
+#define PRT_MRG_RIGHT    30  /* FBOXTEXT dans l'arbre PRT_DIALOGUE */
+#define PRT_MRG_BOTTOM   32  /* FBOXTEXT dans l'arbre PRT_DIALOGUE */
+#define PRT_LST_FONT     34  /* BOXTEXT dans l'arbre PRT_DIALOGUE */
+#define PRT_SIZE_FONT    35  /* FBOXTEXT dans l'arbre PRT_DIALOGUE */
+#define PRT_PG_TXTCADR   41  /* FBOXTEXT dans l'arbre PRT_DIALOGUE */
+#define PRT_ONG_REDUIRE  50  /* BOXTEXT dans l'arbre PRT_DIALOGUE */
+#define PRT_PAINTBOX_RED 51  /* BUTTON dans l'arbre PRT_DIALOGUE */
+#define PRT_CHK_HEAD     53  /* BOXTEXT dans l'arbre PRT_DIALOGUE */
+#define ONG_EZ06_DOCU    54  /* BOXTEXT dans l'arbre PRT_DIALOGUE */
+#define PRT_HEADEDIT     55  /* BOXTEXT dans l'arbre PRT_DIALOGUE */
+#define PRT_FOOTEDIT     57  /* BOXTEXT dans l'arbre PRT_DIALOGUE */
+#define PRT_CHK_FOOT     58  /* BOXTEXT dans l'arbre PRT_DIALOGUE */
+#define PRT_SAV_HEAD     59  /* BOXTEXT dans l'arbre PRT_DIALOGUE */
+#define PRT_SAV_FOOT     60  /* BOXTEXT dans l'arbre PRT_DIALOGUE */
+#define MLT_DLG_TOP_DIAL 61  /* BOXTEXT dans l'arbre PRT_DIALOGUE */
+#define PRT_IMPRIMER     62  /* BOXTEXT dans l'arbre PRT_DIALOGUE */
+#define MLT_DLG_MASTER   63  /* BOXTEXT dans l'arbre PRT_DIALOGUE */
+#define BULLE_ON_OFF     64  /* BOXTEXT dans l'arbre PRT_DIALOGUE */
+#define PRT_PRINT_ALL    65  /* BOXTEXT dans l'arbre PRT_DIALOGUE */
+#define PRT_NB_PAGES     66  /* BOXTEXT dans l'arbre PRT_DIALOGUE */
+#define PRT_NBLGN        69  /* BOXTEXT dans l'arbre PRT_DIALOGUE */
