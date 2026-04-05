@@ -1,0 +1,399 @@
+/* ***************************** */
+/* * 30/01/2013 MaJ 21/12/2018 * */
+/* ***************************** */
+
+
+
+
+#ifndef ___FCM_CREATE_SURFACE_C___
+#define ___FCM_CREATE_SURFACE_C___
+
+
+
+
+#include	"Fcm_create_surface.h"
+#include	"Fcm_open_offscreen_bitmap.c"
+#include	"Fcm_reserve_vram_ct60.c"
+#include	"Fcm_reserve_vram_milan.c"
+
+
+/*
+
+  Les profils d'allocation de RAM doivent etre fait pour les micro de base.
+  Si une carte graphique est ajouté, le profile n'est plus bon.
+  exemple: TT de base, la ST Ram est plus rapide que la TT ram pour le shifter video
+           mais si une carte graphique est ajouté (bus VME), alors c'est la TT Ram qui
+		   devient plus efficace...
+
+	idem Falcon, mega Stx...
+
+
+  A faire:  avant le test de machine de base, faire des test pour les config ameliorer
+			verifier la presence d'un carte graphique sur TT par exemple (test de l'adresse ecran ?)
+
+*/
+
+
+
+int32 Fcm_create_surface( SURFACE *surface, MFDB *mfdb );
+
+
+
+
+/* Fonction */
+int32 Fcm_create_surface( SURFACE *surface, MFDB *mfdb )
+{
+	uint32 taille_surface=0;
+	uint32 adr_buffer=FALSE;
+
+
+	#ifdef LOG_FILE
+	sprintf( buf_log, CRLF"# Fcm_create_surface(surface:$%p, MFDB:$%p)"CRLF, (void*)surface, (void*)mfdb );
+	log_print(FALSE);
+	sprintf( buf_log, "  surface->nb_plan=%d surface->width=%d surface->height=%d"CRLF, surface->nb_plan, surface->width, surface->height );
+	log_print(FALSE);
+	sprintf( buf_log, "  Fcmgfx_CreateSurface_ram_type_select=%d"CRLF, Fcmgfx_CreateSurface_ram_type_select );
+	log_print(FALSE);
+	sprintf( buf_log, "  surface->ram_type=%d"CRLF""CRLF, surface->ram_type );
+	log_print(FALSE);
+	#endif
+
+/* impossible, defini dans le .h sur auto 
+	if( Fcmgfx_CreateSurface_ram_type_select == 0 )
+	{
+		char texte_surface[80];
+
+		sprintf( texte_surface, "Fcmgfx_CreateSurface_ram_type_select non defini !!! (%d)", Fcmgfx_CreateSurface_ram_type_select );
+		v_gtext( vdihandle, 1*16, 16*2, texte_surface);
+
+		#ifdef LOG_FILE
+		sprintf( buf_log, "ERREUR !!! Fcmgfx_CreateSurface_ram_type_select non defini !!! (%d)"CRLF, Fcmgfx_CreateSurface_ram_type_select );
+		log_print(FALSE);
+		#endif
+	}
+*/
+
+	/* valeur par defaut */
+	/*surface->handle_VDIoffscreen=0;*/
+	surface->adresse_buffer=0;
+
+
+
+	/* **************************************************************** */
+	/* * Calcul de la taille de la surface                            * */
+	/* **************************************************************** */
+	{
+		uint16  nb_plan;
+		uint16 largeur_image;
+
+		/* multiple de 16 */
+		largeur_image = surface->width & 0xffffff0;
+		
+		/* la largeur doit être un multiple de 16pixels pour la VDI */
+		/* un plan par word (16bits) pour les resolutions bit plan  */ 
+		if( largeur_image != surface->width )
+		{
+			largeur_image = largeur_image + 16;
+		}
+
+		taille_surface = (uint32)(largeur_image * surface->height);
+
+		switch( surface->nb_plan )
+		{
+			case 0:
+				nb_plan= (uint16)Fcm_screen.nb_plan;
+
+				if( nb_plan==15 )
+				{
+					nb_plan=16;
+				}
+
+				if( nb_plan >= 8 )
+				{
+					taille_surface=taille_surface*(nb_plan/8);
+				}
+				else
+				{
+					taille_surface=taille_surface/(uint32)(8/nb_plan);
+				}
+				break;
+
+			case 1:
+				nb_plan=1;
+				taille_surface=taille_surface/8;
+				break;
+
+			default:
+				nb_plan=surface->nb_plan;
+
+				if( nb_plan==15 )
+				{
+					nb_plan=16;
+				}
+
+				if( nb_plan >= 8 )
+				{
+					taille_surface=taille_surface*(nb_plan/8);
+				}
+				else
+				{
+					taille_surface=taille_surface/(uint32)(8/nb_plan);
+				}
+
+				printf( "create_surface() nb_plan inattendu !!!"CRLF);
+				#ifdef LOG_FILE
+				sprintf( buf_log, "ERREUR !!! create_surface() nb_plan inattendu !!! (surface->nb_plan=%d)"CRLF, surface->nb_plan );
+				log_print(FALSE);
+				#endif
+				break;
+		}
+
+
+		#ifdef LOG_FILE
+		sprintf( buf_log, "1. taille SURFACE=%ld w=%d h=%d nbplan=%d"CRLF, taille_surface, surface->width, surface->height, nb_plan );
+		log_print(FALSE);
+		#endif
+
+		/* taille surface doit etre un multiple de 16bits */  /* un plan par word (16bits) */
+		/* pour les modes nb_plan inf‚rieur … 8 bits      */
+
+		/*taille_surface = (taille_surface+1) & 0xffffffe;*/
+
+/*		#ifdef LOG_FILE
+		sprintf( buf_log, "2. taille SURFACE=%ld w=%d h=%d nbplan=%d"CRLF, taille_surface, surface->width, surface->height, nb_plan );
+		log_print(FALSE);
+		#endif*/
+
+		/* on veut une adresse de buffer multiple de 256 */
+		/* on ajoute donc un espace de 256 octets        */
+		taille_surface=taille_surface+256;
+
+		#ifdef LOG_FILE
+		sprintf( buf_log, "3. taille SURFACE=%ld w=%d h=%d nbplan=%d (+256)"CRLF, taille_surface, surface->width, surface->height, nb_plan );
+		log_print(FALSE);
+		#endif
+
+	}
+
+
+
+	/* **************************************************************** */
+	/* * selection du type de RAM en fonction des profiles des micros * */
+	/* **************************************************************** */
+	if( Fcmgfx_CreateSurface_ram_type_select == SURFACE_RAM_TYPE_SELECT_AUTO )
+	{
+		#ifdef LOG_FILE
+		sprintf( buf_log, "creation surface mode AUTO - Profil Machine upgrade"CRLF );
+		log_print(FALSE);
+		#endif
+
+		/* a faire, faudra tester si le buffer a ete alloue dans le profil de base */
+		/* if( adr_buffer==FALSE )  (premiere selection de type ram) */
+
+
+		#ifdef LOG_FILE
+		sprintf( buf_log, "creation surface mode AUTO - Profil Machine de base"CRLF );
+		log_print(FALSE);
+		#endif
+
+		switch(Fcm_systeme.machine_modele)
+		{
+			case FCM_MACHINE_FIREBEE:
+				/* ------------------------------------------ */
+				/* CT060VRAM -> ST RAM -> TT RAM              */
+				/* ------------------------------------------ */
+
+				surface->ram_type = SURFACE_RAM_TYPE_CT60_VRAM;
+				adr_buffer = Fcm_reserve_vram_ct60( (int32)taille_surface );
+
+				if( adr_buffer==FALSE )
+				{
+					surface->ram_type = SURFACE_RAM_TYPE_ST_RAM;
+					adr_buffer = Fcm_reserve_ram( (int32)taille_surface, MX_PREFSTRAM);
+
+					/* c'est de la ST RAM ou TT RAM ? */
+					if( adr_buffer & 0xff000000 )
+					{
+						surface->ram_type = SURFACE_RAM_TYPE_TT_RAM;
+					}
+				}
+
+				if( adr_buffer==FALSE )
+				{
+					surface->ram_type = 0;
+				}
+				break;
+
+
+			case FCM_MACHINE_INCONNU:
+			case FCM_MACHINE_ST:
+			case FCM_MACHINE_STE:
+			case FCM_MACHINE_MEGA_STE:      /* idem TT */
+			case FCM_MACHINE_TT:			/* TT de base. Avec carte graphique, la TT RAM doit etre mieux ? */
+				/* ------------------------------------------ */
+				/* ST RAM -> TT RAM                           */
+				/* ------------------------------------------ */
+				surface->ram_type = SURFACE_RAM_TYPE_ST_RAM;
+				adr_buffer = Fcm_reserve_ram( (int32)taille_surface, MX_PREFSTRAM);
+
+				/* c'est de la ST RAM ou TT RAM ? */
+				if( adr_buffer & 0xff000000 )
+				{
+					surface->ram_type = SURFACE_RAM_TYPE_TT_RAM;
+				}
+				
+				if( adr_buffer==FALSE )
+				{
+					surface->ram_type = 0;
+				}
+				break;
+
+			default:
+/*			case FCM_MACHINE_FALCON:
+			case FCM_MACHINE_MEDUSA:
+			case FCM_MACHINE_HADES:
+			case FCM_MACHINE_MILAN:
+			case FCM_MACHINE_ARANYM:*/
+
+				/* CT060VRAM -> MilanVRAM -> TT RAM -> ST RAM */
+				/* ------------------------------------------ */
+				surface->ram_type = SURFACE_RAM_TYPE_CT60_VRAM;
+				adr_buffer = Fcm_reserve_vram_ct60( (int32)taille_surface );
+
+				if( adr_buffer==FALSE )
+				{
+					surface->ram_type =  SURFACE_RAM_TYPE_MILAN_VRAM;
+					adr_buffer = Fcm_reserve_vram_milan( (int32)taille_surface );
+				}
+
+				if( adr_buffer==FALSE )
+				{
+					surface->ram_type = SURFACE_RAM_TYPE_ST_RAM;
+					adr_buffer = Fcm_reserve_ram( (int32)taille_surface, MX_PREFTTRAM);
+
+					if( adr_buffer & 0xff000000 )
+					{
+						surface->ram_type = SURFACE_RAM_TYPE_TT_RAM;
+					}
+				}
+
+				if( adr_buffer==FALSE )
+				{
+					surface->ram_type = 0;
+				}
+				break;
+
+		}
+
+	}
+
+
+
+	/* **************************************************************** */
+	/* * on reserve la surface dans la RAM souhaité                   * */
+	/* **************************************************************** */
+	if( Fcmgfx_CreateSurface_ram_type_select != SURFACE_RAM_TYPE_SELECT_AUTO )
+	{
+		#ifdef LOG_FILE
+		sprintf( buf_log, "creation surface mode manuel"CRLF );
+		log_print(FALSE);
+		#endif
+
+		switch(Fcmgfx_CreateSurface_ram_type_select)
+		{
+			case SURFACE_RAM_TYPE_SELECT_ST_RAM:
+				surface->ram_type = SURFACE_RAM_TYPE_ST_RAM;
+				adr_buffer = Fcm_reserve_ram( (int32)taille_surface, MX_STRAM);
+				break;
+
+			case SURFACE_RAM_TYPE_SELECT_TT_RAM:
+				surface->ram_type = SURFACE_RAM_TYPE_TT_RAM;
+				adr_buffer = Fcm_reserve_ram( (int32)taille_surface, MX_TTRAM);
+				break;
+
+			case SURFACE_RAM_TYPE_SELECT_CT60_VRAM:
+				surface->ram_type = SURFACE_RAM_TYPE_CT60_VRAM;
+				adr_buffer = Fcm_reserve_vram_ct60( (int32)taille_surface );
+				break;
+
+			case SURFACE_RAM_TYPE_SELECT_MILAN_VRAM:
+				surface->ram_type =  SURFACE_RAM_TYPE_MILAN_VRAM;
+				adr_buffer = Fcm_reserve_vram_milan( (int32)taille_surface );
+				break;
+
+			default:
+				{
+					char texte_surface[80];
+					sprintf( texte_surface, "Fcm_create_surface:switch(Fcmgfx_CreateSurface_ram_type_select inconnu)(%d)", Fcmgfx_CreateSurface_ram_type_select );
+					v_gtext( vdihandle, 1*16, 2*16, texte_surface);
+				}
+				#ifdef LOG_FILE
+				sprintf( buf_log, "ERREUR !!! switch(Fcmgfx_CreateSurface_ram_type_select inconnu) !!! (%d)"CRLF, Fcmgfx_CreateSurface_ram_type_select );
+				log_print(FALSE);
+				#endif
+				break;
+		}
+	}
+
+
+
+
+
+	/* ********************************************************************************** */
+	/* * le buffer a pu etre reserver                                                   * */
+	/* ********************************************************************************** */
+	if( adr_buffer != FALSE )
+	{
+		/* on memorise l'adresse du bloc memoire pour pouvoir la liberer */
+		surface->adresse_malloc = adr_buffer;
+		/* adresse multiple de 256 octets pour la surface */
+		surface->adresse_buffer = (adr_buffer+255) & 0xFFFFFF00;
+
+		/* 0 pour le nombre de plan de l'ecran physique */
+		if( surface->nb_plan == 0 )
+		{
+			surface->nb_plan = (uint16)Fcm_screen.nb_plan;
+		}
+
+		/* Le nombre de plan doit egale a '1' mono, ou le nombre de plan */
+		/* de l'ecran physique (ou '0' pour reference a l'ecran)         */
+		/* MFDB bitmap offscreen VDI */
+		mfdb->fd_addr    = (uint32 *)surface->adresse_buffer;
+		mfdb->fd_w       = (int16)surface->width;
+		mfdb->fd_h       = (int16)surface->height;
+		mfdb->fd_wdwidth = (surface->width + 15) / 16;
+		mfdb->fd_stand   = 0;
+		mfdb->fd_nplanes = (int16)surface->nb_plan;
+		mfdb->fd_r1      = 0;
+		mfdb->fd_r2      = 0;
+		mfdb->fd_r3      = 0;
+
+
+		if( surface->handle_VDIoffscreen == SURFACE_OPEN_VDI_OFFSCREEN_BITMAP )
+		{
+			/* on essaie de la creer en buffer offscreen VDI */
+			Fcm_open_offscreen_bitmap( surface, mfdb );
+		}
+		else
+		{
+			/* pas d'offscreen bitmap pour cette surface */
+			surface->handle_VDIoffscreen=0;
+			#ifdef LOG_FILE
+			sprintf( buf_log, "Pas de mode Offscreen bitmap pour cette surface."CRLF );
+			log_print(FALSE);
+			#endif
+		}
+
+		return TRUE;
+	}
+
+
+	/* erreur, surface non allouer */
+	return FALSE;
+
+
+}
+
+
+#endif /* ___FCM_CREATE_SURFACE_C___ */
+
