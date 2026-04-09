@@ -1,0 +1,1493 @@
+; Goal.TXT Copyright (C) 1989 Level 9 Computing.
+;
+; for Floor Map Editor.
+;
+; N.W.Austin 28/6/89
+;
+;-----
+
+;The FLOOR.DAT floor map is compressed; obstacles are marked
+;as 1 bit on a fine grid 4-pixels apart; Info for corrective
+;action (avoidance pointer) is stored as 4 bits on a coarse
+;grid 8 pixels apart. Height of the 'floor' (e.g. depth of a
+;river) is 4 bits on a coarse grid 8 pixels apart.
+
+;Thus there are 4 points on the fine grid for every point on
+;the coarse grid (the four points are a square, NOT linear)
+
+;'Blocked' points do not need a height; 'Unblockd' do not need
+;an avoidance pointer. To compress, where not all of each group
+;of 4 points (on the fine grid) are 'blocked' the height is
+;assumed to that of surrounding squares; thus only 8 bits stores
+;the height, avoidance and blocked info for each coarse point.
+
+;The header (NOT IMPLEMENTED) stores the ObjectNumber, Margin
+;X/Z, Width and Height so that walls need not be stored.
+;Typically for each room about 446 bytes are stored (100 rooms
+;44K bytes)
+
+;-----
+
+const
+ ACBspOffset=2
+ WaitedTooLong=200 ; ignore collision after WaitedTooLong iterations
+
+begin
+
+;-----
+
+.AAMLGotCoords1Vec
+ goto @AAMLGotCoords1
+
+;-----
+
+; If ACBList(dx4) setup by AAInitGD takes ACB one step
+; further to destination. If not setup then does nothing.
+; ACBList+ACBstatus(dx4) is return code, if not 254 then
+; ACB GD has ended
+;
+.GDinProgress
+ gosub @GDinProgress1
+;
+; work out if we've got any closer to our target
+ x1=DestX
+ sub x1,GoalNowX
+ if x1<32000 then gotabsxdist
+ x2=x1
+ x1=0
+ sub x1,x2
+.gotabsxdist ; x1 is abs x distance
+ x3=DestZ
+ sub x3,GoalNowZ
+ if x3<32000 then gotabszdist
+ x4=x3
+ x3=0
+ sub x3,x4
+.gotabsZdist ; x3 is abs z distance
+ add x1,x3 ; x1 is combined distance (no diagonals allowed)
+;
+ asr x1
+ asr x1
+ asr x1
+ asr x1 ; distance in steps of 16 pixels
+;
+ x2=ACBPreviousDistance
+ add x2,ACBHeader
+ &x3=ACBList(x2) ; x3 is previous distance
+ if x1>x3 then notgettingthere
+ if x1=x3 then notgettingthere
+ &ACBList(x2)=x1 ; reset distance if getting closer
+.notgettingthere
+ x2=ACBSearchTime
+ add x2,ACBHeader ; point x2 to 'stuck' timer
+ x4=0
+ if x1<x3 then weregettingthere ; getting nearer - zero 'stuck' timer
+;
+; we're not getting any nearer...
+ &x4=ACBList(x2)
+ add x4,c1 ; ...so increment 'stuck' timer
+;
+.weregettingthere
+ &ACBList(x2)=x4
+ return
+
+;-----
+
+.GDinProgress1
+ &v1=ACBList(dx4) ;get animation sequence
+ dir=1
+ if v1=2501 then GIPwalk
+ dir=3
+ if v1=2503 then GIPwalk
+ dir=5
+ if v1=2505 then GIPwalk
+ dir=7
+ if v1=2507 then GIPwalk
+ dir=0
+.GIPwalk
+
+ v1=ACBintendedDirection
+ add v1,dx4
+ IntendedDir=ACBList(v1)
+
+ v1=ACBdestX
+ add v1,dx4
+ &DestX=ACBList(v1)
+
+ v1=ACBdestZ
+ add v1,dx4
+ &DestZ=ACBList(v1)
+
+ v1=ACBxOffset
+ add v1,dx4
+ &GoalNowX=ACBList(v1)
+
+ v1=ACBzOffset
+ add v1,dx4
+ &GoalNowZ=ACBList(v1)
+
+ x1=ACBstatus
+ add x1,dx4
+ x1=ACBList(x1)
+ x2=32
+ if x1=ACBFindNpc then destisnotdoor ; coarse accuracy if dest is person
+ if x1=ACBGoDoor then destisnotdoor ; or a 'go door' command
+ x2=4 ; fine accuracy if dest is e.g. a chair
+ if x1>15 then destisnotdoor
+ x2=8 ; medium accuracy if dest is a door
+.destisnotdoor
+ x1=DestX
+ sub x1,x2 ; width of X precision
+ if GoalNowX<x1 then @GSS1 ; too far to left.
+ add x1,x2
+ add x1,x2
+ if GoalNowX>x1 then @GSS1 ; too far to right.
+ asr x2 ; z precision is x precision / 2
+ x1=DestZ
+ sub x1,x2 ; width of Z precision
+ if GoalNowZ<x1 then @GSS1 ; too far north.
+ add x1,x2
+ add x1,x2
+ if GoalNowZ>x1 then @GSS1 ; too far south.
+
+;reached destination
+.GDHaveArrived
+ v1=ACBstatus
+ add v1,dx4
+;
+; Don't set 'arrived' flag if we've only been pushed out of 
+; someone's way on a temporary GD path
+ v3=ACBList(v1)
+ v2=0
+ if v3=ACBPushedAway then GdTempArrived
+ v2=253 ;Arrived
+.GdTempArrived
+ ACBList(v1)=v2
+; Don't face target if it's a door
+ if dir=0 then GetFacingDir
+ if v3<16 then @GotFacingDir
+
+.GDstandStill
+ if dir=0 then GetFacingDir ; If dir=0, then generate one
+;
+; Don't face target if temporarily halted
+ x1=ACBHaltDelay
+ add x1,ACBHeader
+ x2=ACBList(x1) ; get freeze delay (if any)
+ if x2<>0 then GotFacingDir
+;
+; If we are over 16 pixels east or west of our target, then 
+; face east or west. Otherwise face north or south.
+.GetFacingDir
+ x1=DestX
+ sub x1,GoalNowX ; x1 +ve=distance east, -ve=distance west
+ x2=x1
+ if x1<32768 then absxdist
+ x1=0
+ sub x1,x2 ; get abs xdist
+.absxdist
+ if x1<16 then facenorthsouth ; not far enough to the side of our target
+;
+; face east or west
+ dir=3
+ if x2<32768 then gotfacingdir ; face east
+ dir=7 ; face west
+ goto gotfacingdir
+;
+; face north or south
+.facenorthsouth
+ x1=DestZ
+ sub x1,GoalNowZ ; x1 +ve=distance south, -ve=distance north
+ dir=5
+ if x1<32768 then gotfacingdir ; face south
+ dir=1 ; face north
+.gotfacingdir
+;
+ ObjectNumber=2510
+ add ObjectNumber,dir
+ push dx4
+ gosub @ChangeACBdx4
+ pop dx4
+.GSSstop
+ goto @GDstoreACB
+
+.GSS1
+
+;; if dir=0 then GSS2 ;we are not moving...
+
+;;;Some animation sequences start by displaying the new view 
+;;;so check that at least one SHIFT instruction is executed
+;; gosub @GDGetFinePos
+;; v1=ACBFinePosOffset ;misnomer
+;; add v1,dx4
+;; v1=ACBList(v1)
+;; if v1<>v2 then GSS2
+;; goto @GDstoreACB
+
+;If we are clear of obstacles then execute a simple go-in-one-
+;direction until axis-coord is the same; turn Left/Right; go-
+;at-right-angles until booth coords are the same.
+.GSS2
+
+ if IntendedDir=0 then @GDclearSpace
+
+; IntendedDir is direction we were going in before the
+; last collision. Can we go in that direction now?
+ TryDir=IntendedDir
+
+;;; GMJ 30/10/89 ;; Move if stuck on a blocked square
+; StartX=GoalNowX
+; StartY=GoalNowZ
+; gosub @GDtryLookAhead
+; if returncode=0 then @GDMakeMove
+
+ gosub @GDtryDirection
+ if ReturnCode=999 then @GDStandStill
+ if ReturnCode=0 then @CantGoIntended
+; We can go in IntendedDir at last, but if we can only go one
+; square that way, then do a 'slide'...
+ if dir=IntendedDir then @GDAvoidOver ;; GMJ 20/10/89
+ StartX=GoalNowX
+ StartY=GoalNowZ
+ gosub @AdvanceTryDir
+ gosub @AdvanceTryDir ; test 2 squares ahead
+ gosub @GDtryLookAhead
+ if ReturnCode<>0 then @GDavoidOver
+; Can only go one square in IntendedDir, so do a 'slide' 
+; in IntendedDir, and keep moving in the current direction...
+.SlideIntendedDir
+ x1=4
+ if IntendedDir=5 then SlideIntendedZ ; slide S
+ if IntendedDir=3 then SlideIntendedX ; slide E
+ x1=65532 ; -4
+ if IntendedDir=1 then SlideIntendedZ ; slide N
+; slide W
+.SlideIntendedX
+; Don't slide any more if we're close to the axis
+ x2=GoalNowX ;;
+ sub x2,DestX ;;
+ if x2<5 then GDAvoidOver ;;
+ if x2>65533 then GDAvoidOver ;;
+ dx2=x1
+ return
+.SlideIntendedZ
+; Don't slide any more if we're close to the axis
+ x2=GoalNowZ ;;
+ sub x2,DestZ ;;
+ if x2<5 then GDAvoidOver ;;
+ if x2>65533 then GDAvoidOver ;;
+ dx3=x1
+ return
+;
+; Can't go in IntendedDir, so can we keep going in the 
+; direction we're currently moving?
+.CantGoIntended
+ TryDir=Dir
+
+;;; GMJ 30/10/89 ;; Move if stuck on a blocked square
+; StartX=GoalNowX
+; StartY=GoalNowZ
+; gosub @GDtryLookAhead
+; if returncode=0 then @GDMakeMove
+
+ gosub @GDtryDirection
+ if ReturnCode=999 then @GDStandStill
+ if ReturnCode<>0 then @GDmakeMove
+ goto @GDavoidObstacle
+
+; Do a move...
+.GDavoidOver
+ IntendedDir=0
+ goto @GDmakeMove
+
+.GDclearSpace
+ gosub @GDcalcFastest ; work out best route if we're not moving
+ gosub @GDtryDirection
+ if ReturnCode=999 then @GDStandStill
+ if ReturnCode<>0 then @GDmakeMove
+;
+ TryDir=Dir
+ gosub @GDtryDirection
+ if ReturnCode=999 then @GDStandStill
+ if ReturnCode<>0 then @GDmakeMove
+ IntendedDir=Dir ;remember direction that made us first collide
+;
+.GDavoidObstacle
+;'CurrentSquare' is an obstacle
+ if dir=1 then @GDavoidEW
+ if dir=3 then @GDavoidNS
+ if dir=5 then @GDavoidEW
+ if dir=7 then @GDavoidNS
+;Start 'Find' in a blocked position
+ gosub @GDcalcFastest
+ IntendedDir=TryDir
+;
+; GDCalcFastest now gives a route to the nearest object, VALUE 
+; being the distance to that object. If we're immediately up 
+; against the object, then execute the 'avoid' code.
+ if value>1 then @GDmakeMove
+ dir=trydir
+ if dir=1 then @GDavoidEW
+ if dir=3 then @GDavoidNS
+ if dir=5 then @GDavoidEW
+ if dir=7 then @GDavoidNS
+ goto @GDStuck
+
+.GDavoidEW
+ gosub @gdIntelLorR
+ if TryDir=7 then GDA1
+
+ v1=32 ;0010 0000 E
+ and v1,CurrentSquare
+ if v1=0 then GDA1
+ TryDir=3
+ gosub @GDtryDirection
+ if ReturnCode=999 then @GDStandStill
+ if ReturnCode=0 then GDA1
+ gosub @TestNSafterEW
+ if result=false then @GDmakeMove
+ return
+
+.GDA1
+ v1=16 ;0001 0000 W
+ and v1,CurrentSquare
+ if v1=0 then GDA2
+ TryDir=7
+ gosub @GDtryDirection
+ if ReturnCode=999 then @GDStandStill
+ if ReturnCode=00 then GDA2
+ gosub @TestNSafterEW
+ if result=false then @GDmakeMove
+ return
+
+.GDA2
+ v1=32 ;0010 0000 E
+ and v1,CurrentSquare
+ if v1=0 then GDA3
+ TryDir=3
+ gosub @GDtryDirection
+ if ReturnCode=999 then @GDStandStill
+ if ReturnCode<>0 then GDA3
+ gosub @TestNSafterEW
+ if result=false then @GDmakeMove
+ return
+
+.GDA3
+ goto @GDnoPreference
+
+.GDavoidNS
+ gosub @gdIntelUorD
+ if TryDir=5 then GDA4
+
+ v1=128 ;1000 0000 N
+ and v1,CurrentSquare
+ if v1=0 then GDA4
+ TryDir=1
+ gosub @GDtryDirection
+ if ReturnCode=999 then @GDStandStill
+ if ReturnCode=0 then GDA4
+ gosub @TestEWafterNS
+ if result=false then @GDmakeMove
+ return
+
+.GDA4
+ v1=64 ;0100 0000 S
+ and v1,CurrentSquare
+ if v1=0 then GDA5
+ TryDir=5
+ gosub @GDtryDirection
+ if ReturnCode=999 then @GDStandStill
+ if ReturnCode=0 then GDA5
+ gosub @TestEWafterNS
+ if result=false then @GDmakeMove
+ return
+
+.GDA5
+ v1=128 ;1000 0000 N
+ and v1,CurrentSquare
+ if v1=0 then GDA6
+ TryDir=1
+ gosub @GDtryDirection
+ if ReturnCode=999 then @GDStandStill
+ if ReturnCode=0 then GDA6
+ gosub @TestEWafterNS
+ if result=false then @GDmakeMove
+ return
+.GDA6
+
+;-----
+
+; No specific floor pointers to help us avoid object...
+.GDnoPreference
+ if dir=1 then GNP1
+ if dir=5 then GNP1
+;
+; Avoid N/S
+ gosub @gdIntelUorD
+ gosub @GDtryDirection
+ if ReturnCode=999 then @GDStandStill
+ if ReturnCode=0 then GNP10
+ gosub @TestEWafterNS
+ if result=false then @GDmakeMove
+ return
+;
+; can't go in desired N/S direction, so try reversed N/S dir...
+.GNP10
+ x1=startreversaltable
+ add x1,trydir
+ trydir=list5(x1)
+ gosub @GDtryDirection
+ if ReturnCode=999 then @GDStandStill
+ if ReturnCode=0 then @GNPstuck
+ gosub @TestEWafterNS
+ if result=false then @GDmakeMove
+ return
+;
+; Avoid E/W
+.GNP1
+ gosub @gdIntelLorR
+ gosub @GDtryDirection
+ if ReturnCode=999 then @GDStandStill
+ if ReturnCode=0 then GNP20
+ gosub @TestNSafterEW
+ if result=false then @GDmakeMove
+ return
+;
+; can't go in desired E/W direction, so try reversed E/W dir...
+.GNP20
+ x1=startreversaltable
+ add x1,trydir
+ trydir=list5(x1)
+ gosub @GDtryDirection
+ if ReturnCode=999 then @GDStandStill
+ if ReturnCode=0 then GNPstuck
+ gosub @TestNSafterEW
+ if result=false then @GDmakeMove
+ return
+;
+; We can't avoid at 90 degrees, so try going backwards
+.GNPStuck
+ x1=startreversaltable
+ add x1,dir
+ trydir=list5(x1)
+ gosub @GDABStryDir ; because GDTryDirection won't allow for 
+; a reverse!!!
+ if ReturnCode=999 then @GDStandStill
+ if ReturnCode=0 then @GDstuck ; can't go backwards!!
+;
+; Work out a new IntendedDir at a right-angle to the 
+; reverse direction...
+push trydir
+ if trydir=3 then GNPud
+ if trydir=7 then GNPud
+ gosub @GDLeftOrRight
+ goto GNPnewIntended
+.GNPud
+ gosub @GDUpOrDown
+.GNPnewIntended
+ IntendedDir=TryDir
+pop trydir
+;
+ goto @GDmakeMove
+
+; Can't go backwards! We seem to be rather stuck!
+.GDStuck
+;; v1=ACBstatus
+;; add v1,dx4
+;; v2=252 ;Stuck
+;; ACBList(v1)=v2
+ goto @GDstandStill
+
+;-----
+
+.AdjustPersonHeightVec2
+ goto @AdjustPersonHeightVec
+
+;-----
+
+; N/S is currently blocked, so we are avoiding by going 
+; E/W (trydir). 
+;
+; TestNSafterEW tests to see if the N/S is blocked AFTER the 
+; E/W move, so that we can slide E/W, while still facing N/S.
+; This avoids 'zig-zagging' when going e.g. N/W/N/W etc
+;
+; RESULT=TRUE if the E/W slide is carried out.
+;
+.TestNSafterEW
+ gosub @LookAheadDiagonal ; look ahead diagonally
+ result=false
+ if ReturnCode=999 then TNSAEWret ; blocked
+ if ReturnCode=0 then TNSAEWret ; blocked
+ dx2=StartX
+ sub dx2,GoalNowX ; get x distance to slide
+ result=true ; slide done
+;
+.TNSAEWret
+ return
+
+;-----
+
+.TestEWafterNS
+push trydir
+ trydir=dir ; swap dir & trydir
+pop dir
+ gosub @LookAheadDiagonal
+ result=false
+ if ReturnCode=999 then TEWANSret ; blocked
+ if ReturnCode=0 then TEWANSret ; blocked
+ dx3=StartY
+ sub dx3,GoalNowZ ; get z distance to slide
+ result=true ; slide done
+;
+.TEWANSret
+push trydir
+ trydir=dir ; swap back dir & trydir
+pop dir
+ return
+
+;-----
+
+; Look ahead diagonally, using DIR for N/S and TRYDIR for E/W
+.LookAheadDiagonal
+ returncode=0
+ v1=4 ; v1 is the adjustment to look ahead
+ if dir=5 then AddNSmove
+ if dir<>1 then @TNSAEWret ; dir is not N/S
+ v1=65532 ; -4
+.AddNSmove
+ StartY=GoalNowZ
+ add StartY,v1 ; StartY is the new Z pos
+;
+ v1=4
+ if trydir=3 then AddEWmove
+ if trydir<>7 then @TNSAEWret ; trydir is not E/W
+ v1=65532 ; -4
+.AddEWmove
+ StartX=GoalNowX
+ add StartX,v1 ; StartX is the new X pos
+;
+ goto @GDtryLookAhead
+
+;-----
+
+.AdvanceTryDir
+;Predict where 'TryDir' move will take us...
+ if TryDir<>1 then GTD5
+ sub StartY,c4
+.GTD5
+ if TryDir<>3 then GTD6
+ add StartX,c4
+.GTD6
+ if TryDir<>5 then GTD7
+ add StartY,c4
+.GTD7
+ if TryDir<>7 then GTD8
+ sub StartX,c4
+.GTD8
+ return
+
+;-----
+
+.GDtryDirection
+ if TryDir=0 then @GTL2
+
+ if Dir<>1 then GTD1
+ if TryDir=5 then @GTL2
+.GTD1
+ if Dir<>3 then GTD2
+ if TryDir=7 then @GTL2
+.GTD2
+ if Dir<>5 then GTD3
+ if TryDir=1 then @GTL2
+.GTD3
+ if Dir<>7 then GTD4
+ if TryDir=3 then @GTL2
+.GTD4
+
+.GDAbsTryDir
+ StartX=GoalNowX
+ StartY=GoalNowZ
+ gosub @AdvanceTryDir
+
+.GDtryLookAhead
+; First, make sure we don't go through any doors unless 
+; we're supposed to...
+ push dv2
+ push dv3
+ push dv4
+ push dx2
+ push dx3
+ push dx4
+ gActorX=StartX
+ gActorZ=StartY
+ g2=1
+.GDCheckExitColl
+push g2
+ gosub @CheckForExitCollisionVec
+ g1=g2
+pop g2
+ if g1=true then GDExitCollision
+ add g2,c1
+ if g2<16 then GDCheckExitColl
+.GDExitCollision
+ pop dx4
+ pop dx3
+ pop dx2
+ pop dv4
+ pop dv3
+ pop dv2
+ if g1=false then @GDNoExitCollision ; no collisions with exits
+ v1=ACBStatus
+ add v1,ACBHeader
+ v2=ACBList(v1) ; get status
+ if v2=ACBGoDoor then @GDTLAArrived ;; GMJ 30/10/89
+ if v2=g2 then @GDNoExitCollision ; we're trying to find this exit!
+push v1
+push v2
+push dir
+ dir=g2
+ gosub @RealToPhysicalDirVec ; get physical dir to enter exit we've hit
+ x1=dir
+pop dir
+pop v2
+pop v1
+ if trydir<>x1 then GDNoExitCollision ; Can't move in dir of exit
+;; if v2=ACBGoDoor then @GDTLAArrived ;; GMJ 30/10/89
+ if v2<>ACBPushedAway then GDHitExit
+ ACBList(v1)=c0 ; clear status if being pushed
+.GDHitExit
+ ReturnCode=999 ;; 30/10/89 ; Force a CalcFastestRoute
+ return ;; goto @GTL2
+.GDNoExitCollision
+;
+;; REMOVED GMJ 30/10/89 - GD code relies on collisions nowadays!
+;;; failsafe code to allow to ignore all collisions if we haven't 
+;;; got anywhere in ages...
+;; if actor=user then GDCheckPeopleCollisions ; (except for player)
+;;; don't walk through things if we're only being pushed...
+;; x1=ACBSearchTime
+;; add x1,ACBHeader
+;; &x3=ACBList(x1)
+;; if x3<WaitedTooLong then GDCheckPeopleCollisions
+;;.GDCheckMapColl
+;;push CursorX
+;;push CursorZ
+;; CursorX=StartX
+;; CursorZ=StartY
+;; gosub @GDpointOnMap ; don't go off the map, though!
+;;pop CursorZ
+;;pop CursorX
+;; if ReturnCode=0 then GTL2
+;; goto @AvoidCollisions
+;;.GDCheckPeopleCollisions
+;
+ push CursorX
+ push CursorZ
+ CursorX=StartX
+ CursorZ=StartY
+ gosub @GDpointOnMap
+ CurrentSquare=48 ; off map -> walkable
+ if ReturnCode=0 then GTL1
+ gosub @GDreadSquare ;current square=collision byte
+ gosub @GDquadMask ;v1=mask
+.GTL1
+ pop CursorZ
+ pop CursorX
+ and v1,CurrentSquare
+ if v1=0 then GTL3
+.GTL2
+ ReturnCode=0 ;blocked
+ return
+.GTL3
+;
+; Check for collisions with static npcs that can be detoured...
+ push dv2
+ push dv3
+ push dx2
+ push dx3
+ dv2=StartX
+ dv3=StartY
+ dx2=0
+ dx3=0
+ x1=24 ; xdist
+ x2=4 ; zdist
+ if trydir=3 then GDTLACPC0fine
+ if trydir<>7 then GDTLACPC0
+.GDTLACPC0fine
+ x2=2 ; use fine z accuracy if we intend to go horizontally
+.GDTLACPC0
+ gosub @CPC0x1x2vec ; dx1=0 if no npc's in our way
+ pop dx3
+ pop dx2
+ pop dv3
+ pop dv2
+ if dx1=0 then @NoPeopleCollision ; no npcs in the way
+;
+; Is the npc we've bumped into the one we're trying to find?
+ gosub @IsDx1TargetNpc ; are we trying to find this npc?
+ if result=false then HitNpcDx1 ; no - so treat as collision
+;
+; We've hit the npc we're trying to find...
+.GDTLAArrived
+ x1=ACBStatus
+ add x1,ACBHeader
+ x2=ACBArrived
+ ACBList(x1)=x2
+ ReturnCode=999 ; special code to prevent further decisions
+ return
+;
+.NoPeopleCollision
+ ReturnCode=1
+ return
+;
+; We've bumped into an npc of no importance
+.HitNpcDx1
+;
+; If ACBHeader is player, and an npc is stood on our target, 
+; then say 'NPC was in the way' and halt
+ if executingracetrack=true then @HNDNotPlayer
+ if ACBHeader<>PlayerACB then @HNDNotPlayer
+ x1=dx1
+ gosub @IsPersonStoodOnTarget
+ if result=false then @notstuckyet ; person not on target
+code -
+ message cr
+code +
+ v1=dx1
+ gosub @SetV1Actor ; return v1=object/actor for header v1
+ lastwordprinted=0
+ x1=v1
+ gosub @printtheobjectx1 ; <npc>
+code -
+ message 2840 ; was in sam's way
+ message dot
+code +
+ x1=ACBStatus
+ add x1,PlayerACB
+ ACBList(x1)=c0 ; quit GD
+ goto @MakeNpcStandStill ; make player halt
+.HNDnotPlayer
+;
+; failsafe code to prevent us getting stuck if we haven't got any 
+; closer to our destination for quite a while...
+;
+ x1=ACBSearchTime
+ add x1,ACBHeader
+ &x3=ACBList(x1)
+;
+; reduce collision distance depending on how long we've waited...
+;
+ if x3>120 then @AvoidCollisions ; no collisions
+ x2=4 ; zdist
+ if trydir=3 then HNDnpFine
+ if trydir<>7 then HNDnpCoarse
+.HNDnpFine
+ x2=2 ; use fine z accuracy if we intend to go horizontally
+.HNDnpCoarse
+ x1=1
+ if x3>110 then testnewcollision
+ x1=2
+ if x3>100 then testnewcollision
+ x1=3
+ if x3>90 then testnewcollision
+ x1=4
+ if x3>80 then testnewcollision
+ goto @notstuckyet ; not waited long enough
+;
+.testnewcollision
+ push dv2
+ push dv3
+ push dx2
+ push dx3
+ dv2=StartX
+ dv3=StartY
+ dx2=0
+ dx3=0
+ gosub @CPC0x1x2Vec
+ pop dx3
+ pop dx2
+ pop dv3
+ pop dv2
+ if dx1<>0 then NotStuckYet
+; decrement PreviousDistance so that we pass the npc before 
+; collision detection returns to normal...
+.AvoidCollisions
+ x2=ACBPreviousDistance
+ add x2,ACBHeader
+ &x3=ACBList(x2) ; x3 is previous distance
+ sub x3,c1 ; a step of 16 pixels should be sufficient
+ if x3<32000 then SetNewPreviousDist
+ x3=0
+.SetNewPreviousDist
+ &ACBList(x2)=x3
+ goto @NoPeopleCollision ; no npcs in the way
+;
+; Can we push the obstructing npc out of the way?
+.notstuckyet
+ x1=ACBStatus
+ add x1,dx1
+ x1=ACBList(x1)
+ if x1=ACBPushedAway then @MakeNpcStandStill ; no - already being pushed
+ x1=ACBStatus
+ add x1,ACBHeader
+ x1=ACBList(x1)
+ if x1=ACBPushedAway then @GTL2 ; no - we're being pushed instead
+;
+; Only push the person out of the way if he's stationary
+ x1=ACBHaltDelay
+ add x1,dx1
+ x1=ACBList(x1)
+ if x1<>0 then @GTL2 ; But never when he's frozen!!
+ &x1=ACBList(dx1)
+ if x1<StandingAnimation then @GTL2
+ sub x1,c8
+ if x1>StandingAnimation then @GTL2
+ goto @PushNpcDx1
+;
+; Make the npc we've collided with move away from us at a right angle 
+; to the direction in which we wish to move...
+.PushNpcDx1
+push ACBHeader
+push GoalNowX
+push GoalNowZ
+ x4=ACBXOffset
+ add x4,dx1 ; x4 points to obstruction x pos
+ &GoalNowX=ACBList(x4) ; current obstruction x pos
+ add x4,c2
+ &GoalNowZ=ACBList(x4) ; current obstruction x pos
+ x1=GoalNowX
+ ScanNoTargetNpc=true ; treat target npcs as obstacles
+ ACBHeader=dx1
+ if trydir=3 then @DontPushNpcX ; we're currently moving along x axis!
+ if trydir=7 then @DontPushNpcX ; we're currently moving along x axis!
+;
+; In which x direction can we move the furthest?
+push trydir
+push destx
+ trydir=3
+ destx=GoalNowX
+ add destx,c32
+ add destx,c16
+push dx1
+ gosub @ScanRoute
+pop dx1
+ x3=48
+ if result=false then pushnpcx ; can move full 40 pixels east
+;
+push value ; value is distance we could travel east
+ trydir=7
+ destx=GoalNowX
+ sub destx,c32
+ sub destx,c16
+push dx1
+ gosub @ScanRoute
+pop dx1
+pop x5 ; x5 is distance we could travel east
+ x3=65488 ; -48
+ if result=false then pushnpcx ; can move full 40 pixels west
+;
+; can't move full 40 pixels east or west, so choose the route 
+; which we can move the furthest
+ if value>x5 then pushnpcx ; can travel furthest west
+ value=x5
+ x3=48 ; can travel furthest east
+.PushNpcX
+pop destx
+pop trydir
+ x1=GoalNowX
+ add x1,x3
+.DontPushNpcX
+push x1 ; save the new obstruction x dest
+;
+ x2=GoalNowZ
+ if trydir=1 then @DontPushNpcZ ; we're currently moving along z axis!
+ if trydir=5 then @DontPushNpcZ ; we're currently moving along z axis!
+;
+; In which z direction can we move the furthest?
+push trydir
+push destz
+ trydir=5
+ destz=GoalNowZ
+ add destz,c16
+ add destz,c8
+push dx1
+ gosub @ScanRoute
+pop dx1
+ x3=24
+ if result=false then pushnpcz ; can move full 20 pixels south
+;
+push value ; value is distance we could travel south
+ trydir=1
+ destz=GoalNowZ
+ sub destz,c16
+ sub destz,c8
+push dx1
+ gosub @ScanRoute
+pop dx1
+pop x5 ; x5 is distance we could travel south
+ x3=65512 ; -24
+ if result=false then pushnpcz ; can move full 20 pixels north
+;
+; can't move full 20 pixels north or south, so choose the route 
+; which we can move the furthest
+ if value>x5 then pushnpcz ; can travel furthest north
+ value=x5
+ x3=24 ; can travel furthest south
+.PushNpcZ
+pop destz
+pop trydir
+ x2=GoalNowZ
+ add x2,x3 ; x2 is new obstruction z dest
+.DontPushNpcZ
+pop x1 ; x1 is new obstruction x dest
+ ScanNoTargetNpc=false ; use ScanRoute as normal in future
+pop GoalNowZ
+pop GoalNowX
+; use a standard GD routine so that we don't send the obstruction to 
+; a blocked square...
+ object=255 ; safe code to show we're not trying to find a person
+push value
+push dx4
+ dx4=dx1
+ collidewithself=true ; make sure we don't stay in same place!
+ gosub @AAMLGotCoords1Vec ; use goal code in aamakelocal
+ collidewithself=false
+ x3=ACBStatus
+ add x3,ACBHeader
+ x2=ACBPushedAway
+ ACBList(x3)=x2 ; set temporary 'pushed' status, so as not to 
+; set the 'arrived' flag when the obstruction reaches his temporary 
+; destination
+pop dx4
+pop value
+pop ACBHeader
+; VALUE is distance we can be pushed (in multiples of 4 pixels). 
+; If it's too little, then we must detour the npc as well as push him...
+ if value<7 then @GTL2
+; Stand still a while the obstructing little npc gets out of the way...
+;
+.MakeNpcStandStill
+ ReturnCode=999 ; special code to prevent further decisions
+ x1=ACBPreviousStatus
+ add x1,ACBHeader
+ ACBList(x1)=trydir
+ x1=ACBHaltDelay
+ add x1,ACBHeader
+ ACBList(x1)=c4 ; freeze for a few npc cycles
+ return
+;---
+; Is person with header x1 stood on our target?
+.IsPersonStoodOnTarget
+ result=false
+ x2=ACBXOffset
+ add x2,x1
+ &x1=ACBList(x2) ; x1 is person x pos
+ add x2,c2
+ &x2=ACBList(x2) ; x2 is person y pos
+ x3=24 ; x3 is xdist for person width
+ x4=DestX
+ sub x4,x3 ; width of X precision
+ if x1<x4 then IPSOTRet ; too far to left.
+ add x4,x3
+ add x4,x3
+ if x1>x4 then IPSOTRet ; too far to right.
+ x3=4 ; x3 is zdist for person depth
+ x4=DestZ
+ sub x4,x3 ; width of Z precision
+ if x2<x4 then IPSOTRet ; too far north.
+ add x4,x3
+ add x4,x3
+ if x2>x4 then IPSOTRet ; too far south.
+ result=true
+.IPSOTRet
+ return
+;---
+.GDcalcFastest
+ StartX=GoalNowX
+ StartY=GoalNowZ
+ if dir=1 then @GDsetNEW
+ if dir=3 then @GDsetNES
+ if dir=5 then @GDsetESW
+ if dir=7 then @GDsetNSW
+;
+.CalcFastestRoute
+ gosub @CalcfastestRoute1
+ if result=false then ReverseRoute
+ IntendedDir=TryDir
+ return
+;
+; can't go in desired direction, so reverse
+.ReverseRoute
+; reverse vertically
+ gosub @GDUpOrDown
+ DestZ=GoalNowZ
+ if trydir=5 then ReverseSubZ
+ add DestZ,c32 ; dir is 1, reverse by making dest greater
+ goto ReverseH
+.ReverseSubZ
+ sub DestZ,c32
+;
+; reverse horizontally
+.ReverseH
+ gosub @GDleftOrRight
+ DestX=GoalNowX
+ if trydir=3 then ReverseSubX
+ add DestX,c32 ; dir is 7, reverse by making dest greater
+ goto SetTempDest
+.ReverseSubX
+ sub DestX,c32
+.SetTempDest
+ gosub @CalcFastestRoute1 ; calc fastest reversed route
+;
+; Work out a new IntendedDir at a right-angle to the 
+; reverse direction...
+push trydir
+ if trydir=3 then CFRud
+ if trydir=7 then CFRud
+ gosub @GDLeftOrRight
+ goto CFRnewIntended
+.CFRud
+ gosub @GDUpOrDown
+.CFRnewIntended
+ IntendedDir=TryDir
+pop trydir
+;
+ return
+;---
+; Calculate fastest route by scanning both horizontal and 
+; vertical routes - Graham
+.CalcFastestRoute1
+;
+; How far can we go horizontally then vertically?
+ gosub @GDleftOrRight
+push trydir
+ gosub @ScanRoute
+push value
+ if result=true then GotHVRoute
+; no horizontal collision, so continue with vertical
+push GoalNowX
+ GoalNowX=DestX
+ gosub @GDUpOrDown
+ gosub @ScanRoute
+pop GoalNowX
+pop x1 ; horizontal value
+ add value,x1 ; add horizontal distance
+;
+; If HV route is collision-free, then use it straight away
+ if result=true then HVNotFree
+pop trydir
+ result=true ; ok to use this route
+ return
+;
+.HVNotFree
+push value
+.GotHVRoute
+push result
+;
+; How far can we go vertically then horizontally?
+ gosub @GDUpOrDown
+push trydir
+ gosub @ScanRoute
+ if result=true then GotVHRoute
+; no vertical collision, so continue with horizontal
+push value
+push GoalNowZ
+ GoalNowZ=DestZ
+ gosub @GDLeftOrRight
+ gosub @ScanRoute
+pop GoalNowZ
+pop x1 ; vertical value
+ add value,x1 ; add vertical distance
+.GotVHRoute
+pop trydir
+;
+; pop values for HV search
+pop x2 ; RESULT if we hit anything in horizontal search
+pop x5 ; VALUE for horizonral dist
+pop x1 ; TRYDIR for horizontal search
+;
+; If VH route is collision-free, then use it straight away
+ if result=false then UseVHRoute
+;
+; Choose the route which we can walk the longest without 
+; hitting anything...
+.BothSearchesHit
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+ if x5>1 then BothNotBlocked
+ if value<2 then UseVHRoute ; both routes blocked - fall through 
+; and eventually do a reverse
+.BothNotBlocked
+; both routes not blocked, so use shortest route and make a better
+; decision when we hit an object
+ if Value<x5 then UseVHRoute
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; if value>x5 then UseVHRoute ; can move furthest using VH route
+.UseHVRoute
+ TryDir=x1 ; resume HV trydir
+ Value=x5
+.UseVHRoute
+ result=false
+ if value<2 then GDCFRet ; longest route is closely blocked
+ result=true ; found route
+.GDCFRet
+ return
+;---
+; Code to handle changes of direction without collisions...
+.GDsetESW ;Pick south, else EW
+ gosub @GDupOrDown
+ if v1=0 then GDLeftOrRight
+ if TryDir=1 then GDLeftOrRight
+ return
+
+.GDsetNEW ;Pick north, else EW
+ gosub @GDupOrDown
+ if v1=0 then GdLeftOrRight
+ if TryDir=5 then GDLeftOrRight
+ return
+
+.GDsetNSW ;Pick west, else NS
+ gosub @GDleftOrRight
+ if v2=0 then GDUpOrDown
+ if TryDir=3 then GDUpOrDown
+ return
+
+.GDsetNES ;Pick east, else NS
+ gosub @GDleftOrRight
+ if v2=0 then GDUpOrDown
+ if TryDir=7 then GDUpOrDown
+ return
+
+.GDleftOrRight
+ v2=DestX    ;destination X
+ sub v2,GoalNowX ;end-start
+ TryDir=3 ;right
+ if v2<32768 then GLR1
+ TryDir=7 ;left
+.GLR1
+ return
+
+.GDupOrDown
+ v1=DestZ ;destination Z
+ sub v1,GoalNowZ ;end-start
+ TryDir=5 ;down
+ if v1<32768 then GUD1
+ TryDir=1 ;up
+.GUD1
+ return
+;---
+; Slightly more intelligent versions of GDupOrDown/leftOrRight
+; to avoid objects by finding the nearest edge unless the 
+; destination is somewhere along the object
+.GDIntelLorR
+ gosub @GDUpOrDown
+ if v1<5 then @GDLeftOrRight
+ if v1>65532 then @GDLeftOrRight
+ x1=4
+ if dir=5 then GDILR1
+ x1=65532 ; -4
+.GDILR1
+ StartY=GoalNowZ
+ add StartY,x1
+ StartX=GoalNowX
+; StartX,StartY is the blocked square we just tried to 
+; move onto. Look ahead east & west to find the nearest 
+; unblocked square at the edge of the shape and choose 
+; that direction...
+ trydir=3 ; try east
+ gosub @SearchForUnblocked ; value is distance to unblocked square
+push value
+ trydir=7 ; try west
+ gosub @SearchForUnblocked ; value is distance to unblocked square
+pop x1
+ if value<x1 then GDILRret ; west is shortest route
+ trydir=3 ; east is shortest route
+.GDILRret
+ return
+;---
+.GDIntelUorD
+ gosub @GDLeftOrRight
+ if v2<5 then @GDUpOrDown
+ if v2>65532 then @GDUpOrDown
+ x1=4
+ if dir=3 then GDIUD1
+ x1=65532 ; -4
+.GDIUD1
+ StartX=GoalNowX
+ add StartX,x1
+ StartY=GoalNowZ
+; StartX,StartY is the blocked square we just tried to 
+; move onto. Look ahead north & south to find the nearest 
+; unblocked square at the edge of the shape and choose 
+; that direction...
+ trydir=1 ; try north
+ gosub @SearchForUnblocked ; value is distance to unblocked square
+push value
+ trydir=5 ; try south
+ gosub @SearchForUnblocked ; value is distance to unblocked square
+pop x1
+ if value<x1 then GDIUDret ; south is shortest route
+ trydir=1 ; north is shortest route
+.GDIUDret
+ return
+;---
+; Search from StartX,StartY in direction TryDir until we reach 
+; a UNBLOCKED square...
+.SearchForUnblocked
+push dx2
+push dx3
+push dv2
+push dv3
+ dx2=0
+ dx3=0 ; zero scan adjustments to dv2,dv3
+ dv2=StartX
+ dv3=StartY
+ value=0
+.ScanUnblocked
+ gosub @CheckMapVec ; square unblocked?
+ if PointOnMap=false then SUoffMap ; off-map
+ if v1=0 then FoundUnblocked
+ add value,c1 ; increment distance scanned
+ if trydir=3 then SUaddX
+ if trydir=7 then SUsubX
+ if trydir=5 then SUaddZ
+ sub dv3,c4
+ goto ScanUnblocked
+.SUaddZ
+ add dv3,c4
+ goto ScanUnblocked
+.SUaddX
+ add dv2,c4
+ goto ScanUnblocked
+.SUsubX
+ sub dv2,c4
+ goto ScanUnblocked
+.SUoffMap
+ value=65000 ; huge value if search went off-map
+.FoundUnblocked
+pop dv3
+pop dv2
+pop dx3
+pop dx2
+; VALUE is distance to the next unblocked square in direction TRYDIR
+ return
+;---
+; Scan a route in direction TRYDIR until we reach the target
+.ScanRoute
+push dx2
+push dx3
+push dv2
+push dv3
+ dx2=0
+ dx3=0 ; zero scan adjustments to dv2,dv3
+ dv2=GoalNowX
+ dv3=GoalNowZ
+ value=0
+.DoScan
+ gosub @CheckMapVec
+ if v1<>0 then @EndScan ; object in the way
+ gosub @CPC0vec ; dx1=0 if no npc's in our way
+ if dx1=0 then ScanNoCollision
+ if ScanNoTargetNpc=true then @EndScan ; treat target npcs as obstacles
+ gosub @IsDx1TargetNpc ; are we trying to find this npc?
+ if result=false then @EndScan ; no - so treat as collision
+.ScanNoCollision
+ add value,c1
+ if trydir=3 then TestXScanGreater
+ if trydir=7 then TestXScanLess
+ if trydir=5 then TestZScanGreater
+ sub dv3,c4 ;; GMJ 13/10/89 ;; c2
+ if dv3>DestZ then @DoScan
+ goto EndScanNoCollision
+.TestZScanGreater
+ add dv3,c4 ;; GMJ 13/10/89 ;; c2
+ if dv3<DestZ then @DoScan
+ goto EndScanNoCollision
+.TestXScanLess
+ sub dv2,c4
+ if dv2>DestX then @DoScan
+ goto EndScanNoCollision
+.TestXScanGreater
+ add dv2,c4
+ if dv2<DestX then @DoScan
+.EndScanNoCollision
+ result=false ; no collisions encountered
+ goto EndScanOk
+.EndScan
+ result=true ; collisions encountered
+.EndScanOk
+pop dv3
+pop dv2
+pop dx3
+pop dx2
+; VALUE is distance we can move in TRYDIR
+; RESULT true if we collided with something
+ return
+;---
+; Is dx1 the npc Actor is trying to find?
+.IsDx1TargetNpc
+ gosub @SetActorAttributes
+ gosub @GetCurrentCommand ; noun1 is the npc we're trying to find
+ if verb=igdfind then FollowingDx1
+ if verb<>ifollow then Dx1NotTarget
+.FollowingDx1
+ object=noun1
+ gosub @getobjectposx2 ; returns x4 as last object on the ground 
+; in the containment chain
+ noun1=x4
+ g1=ACBObjectOffset
+ add g1,dx1
+ &g1=ACBList(g1) ; g1 is npc we've collided with
+ if noun1<>g1 then Dx1NotTarget ; it's not the one we're trying to find
+ result=true
+ return
+.Dx1NotTarget
+ result=false
+ return
+;---
+.GDmakeMove
+; Adjust person's height to that of the terrain...
+ x1=15
+ and x1,currentsquare
+ if x1<>0 then NotChangeHeight ; not a height-coded currentsquare
+ gosub @AdjustPersonHeightVec2
+ dv4=x2 ; set the desired height
+ x1=ACBHoffset
+ add x1,ACBHeader
+ &ACBList(x1)=dv4
+.NotChangeHeight
+
+ if dir=TryDir then GSD1
+ dir=TryDir
+ goto GSD2
+.GSD1
+ goto GDstoreACB
+
+.GSD2
+ ObjectNumber=2500
+ add ObjectNumber,dir
+ push dx4
+ gosub @ChangeACBdx4
+ pop dx4
+
+.GDstoreACB
+ v1=ACBintendedDirection
+ add v1,dx4
+ ACBList(v1)=IntendedDir
+ gosub GDGetFinePos
+ v1=ACBFinePosOffset ;misnomer
+ add v1,dx4
+ ACBList(v1)=v2
+ return
+
+;-----
+
+.GDGetFinePos ;puts low 4 bits of X/Z position in v2
+ v1=ACBxOffset
+ add v1,dx4
+ &v1=ACBList(v1)
+ v3=15
+ and v3,v1
+
+ add v3,v3
+ add v3,v3
+ add v3,v3
+ add v3,v3 ;v3 = xxxx0000
+
+ v1=ACBzOffset
+ add v1,dx4
+ &v1=ACBList(v1)
+ v2=15
+ and v2,v1 ;v2 = 0000zzzz
+
+ or v2,v3 ;v2 = xxxxzzzz
+ return
+
+;-----
+
+.GDpointOnMap
+cif BadRoomOK
+ if CurrentRoom=0 then GPM1 ;for editor, must INIT room first
+cend
+ if CurrentRoom=0 then GPM2 ;for games, room is walkable
+ if CursorX<MarginX then GPM1 ;*
+ v1=MarginX
+ add v1,Sizex
+ if CursorX>v1 then GPM1
+ if CursorX=v1 then GPM1 ;*
+ if CursorZ<MarginZ then GPM1
+ v1=MarginZ
+ add v1,SizeZ
+ if CursorZ<v1 then GPM2
+.GPM1
+ ReturnCode=0
+ return
+
+.GPM2
+ ReturnCode=1
+ return
+
+;-----
+
+.GDquadMask
+;Calculate mask for current quadrant
+ v2=CursorZ
+ and v2,c4 ;0=top row 1=bottom row
+ v3=CursorX
+ and v3,c4 ;0=left, 1=right
+
+ if v2<>0 then GQM1
+ v1=1 ;0001
+ if v3=0 then GQM2
+ v1=2 ;0010
+ goto GQM2
+.GQM1
+ v1=4 ;0100
+ if v3=0 then GQM2
+ v1=8 ;1000
+.GQM2
+ return
+
+;-----
+
+.GDreadSquare
+ if CurrentRoom=0 then NoData ;*
+ gosub GDsquareAddr
+ CurrentSquare=FloorMap(v1)
+ return
+.NoData ;*
+ CurrentSquare=48 ;00110000 height=0
+ return
+
+.GDsquareAddr
+ v3=CursorZ
+ sub v3,MarginZ
+ asr v3 ;each byte represents an 8x8 area
+ asr v3
+ asr v3
+; (320-32)/4=72
+ v2=SizeX
+ asr v2
+ asr v2
+ asr v2
+ v1=0
+.CSA1
+ if v2=0 then CSA2
+ add v1,v3
+ sub v2,c1
+ if v2>0 then CSA1
+
+.CSA2
+ v2=CursorX
+ sub v2,MarginX
+ asr v2
+ asr v2
+ asr v2
+ add v1,v2
+
+ add v1,CurrentRoom
+ return
+
+;-----

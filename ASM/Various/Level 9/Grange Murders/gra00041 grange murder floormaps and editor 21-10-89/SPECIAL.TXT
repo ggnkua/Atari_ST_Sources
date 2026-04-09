@@ -1,0 +1,3315 @@
+; Special.TXT Copyright (C) 1989 Level 9 Computing.
+;
+; for Floor Map Editor.
+;
+; N.W.Austin 28/6/89
+;
+;-----
+
+; draw flags are...
+; dRemoveRedraw=65535  -1 Remove and redraw
+; dInsert=0            insert
+; dPlot=1              plot as sprite
+; dInsertRedraw=2      insert and redraw
+; dMarkPreload=3       mark to preload
+; dSetProtect=4        set protection mark
+; dUnsetProtect=5      unset protection mark
+
+const
+ Animation=0 ;* 1
+ BadRoomOK=0 ;must be 0 for floor map editor
+ CacheOn=0   ;must be 0 for floor map editor
+ CacheOff=1  ;must be 1 for floor map editor
+
+ HOIMnormal=0
+ HOIMhelp1=1
+ HOIMdir=2
+ HOIMcache=3
+ HOIMhelp2=4
+ HOIMhelp3=5
+ HOIMhelp4=6
+
+ DefaultX=208
+ DefaultZ=128
+ DefaultH=64
+
+;two boxes are displayed bottom right;
+;  corner box - where cursor is in current coarse-grid
+;  quadrant box - pointers for the surrounding four squares
+
+ BoxX288=304 ;'corner' box
+ BoxX289=305
+ BoxX304=312 ;'quadrant' box
+ BoxX305=313
+ BoxX308=316
+
+ BoxY192=192 ;'box' coords
+ BoxY193=193
+ BoxY196=196
+
+ FloorMapList=18
+
+table
+ FloorMap=18
+ HeightTable=15
+
+var
+ x5 HighestPossible Negative ;parse decimal input
+
+ CursorSprite ;sprite displayed at cursor position
+ CursorX CursorZ CursorH ;Cursor position
+
+;* ReturnCode
+ KeyCode
+;* CurrentSquare
+ MarginX SizeX MarginZ SizeZ
+
+ AnimationACB AnimationNumber
+ HelpOrInfoMode MapOn ViewOn
+ HoldOn       ;0=off, 1=XZ, 2=XZH, 3=on F5
+ BulkMode     ;0=off, 1=copy height (unblock), 2=Copy avoidance (block)
+ BulkValue
+
+ MapNumber    ;ascii suffix of filename (0..9, A..Z)
+ RoomNum      ;room (XZH) number
+ CurrentRoom  ;offset of room data
+ SourceRoom   ;'CurrentRoom' value for Source/Dest operations
+ Modified     ;non zero if FloorMap() altered since last save
+ CurrentCache ;address to start load/save
+ Flash        ;odd/even frame builds
+ dir destx destz
+
+ TestPointX TestPointY 
+ FillMask FillDirPtr List25Index
+ LastDisplayHeight ;For Cursor Sprite ONLY
+
+ CheckRoom1 CheckRoom2 CheckRoom3 CheckRoom4 CheckRoom5 CheckRoom6
+ CheckSum1  CheckSum2  CheckSum3  CheckSum4  CheckSum5  CheckSum6
+ ChecksumStage
+
+begin
+.Start3D
+
+ gosub @AAEssentialInit
+ gosub @MCHeroOnceOnlyInit
+ gosub @Initialise
+
+ cif NotPC
+  gosub @MCClearScreen
+  gosub @DisplayFrame
+  gosub @WaitForFrame
+  gosub @MCClearScreen
+ cend
+
+ gosub @SetUpPhysicalTextPtr
+ &WordWS(WordCursorXpos)=c0
+ &WordWS(WordCursorYpos)=c0
+
+ cif PC
+  v1=4          ;list4
+  &v2=list4(14) ;? palette
+  v3=16         ;number of colours (sets all drivers)
+  gosub @MCSetpalette
+  v1=0   ;X1
+  v2=319 ;X2
+  v3=0   ;Y1
+  v4=191 ;Y2
+  gosub @MCSetGraphicsWindow
+ cend 
+
+ cif ST ;*****
+  &v2=list4(16) ;ST palette
+  v1=32
+  add v2,v1
+  v1=4          ;list4
+  gosub @MCSetpalette
+ cend 
+
+cif ST
+ v1=1
+ gosub @MCinitJoystic
+cend
+ 
+ gosub @SetUpPhysicalTextPtr
+
+ &LongWS(LoLongRandomSeed)=c0
+ &LongWS(HiLongRandomSeed)=c0
+
+ MarginZ=0
+ SizeZ=0
+ MarginX=0
+ SizeX=0
+ HelpOrInfoMode=HOIMnormal
+ MapOn=0
+ ViewOn=1
+ BulkMode=0
+
+ RoomNum=0
+ CursorZ=DefaultH
+ CursorX=0
+ CursorH=DefaultH
+ AnimationACB=0
+ CurrentCache=0
+ CurrentRoom=0
+ Flash=0
+ CheckSumStage=0
+
+cif Animation
+ ObjectNumber=2501
+ AnimationNumber=ObjectNumber
+ dv2=DefaultX
+ dv3=DefaultZ
+ dv4=CursorH
+ gosub @StartFreeACB
+ AnimationACB=dx4
+cend ;Animation
+
+cif CacheOn
+ MapNumber=0
+ v1=200 ;table size (50 rooms)
+ gosub @FCinitFloorCache
+ gosub @FCloadFloor
+cend
+
+cif CacheOff
+ MapNumber=49 ;'1'
+ &FloorMap(c0)=c0 ;if no map, clear memory
+ gosub @LoadMap
+ gosub @FindRoom
+cend
+
+.DangerousRestart
+ RasterOffset=0
+
+ dv1=100
+ gosub @PreLoad100
+
+cif Animation
+ dv1=500
+ dv2=1100
+.xPLLoop2
+ push dv2 ;count
+ dv2=16 ; x
+ dv3=92 ; z
+ dv4=DefaultH ; h
+ dv5=dMarkPreload
+ dv6=0 ; non-reflected
+ gosub @MCDrawObjectdV1
+ add dv1,c1
+ pop dv2 ;count
+ sub dv2,c1
+ if dv2>0 then xPLLoop2
+
+ gosub @MCPreLoadCells
+cend ;Animation
+
+ gosub @MCinit3d ;* mcemptyroom
+
+ dv1=RoomNum
+ gosub @PreLoadAndInsertdv1 ; DrawObjectdv1
+
+ gosub @MCBuildViewMap
+
+ CursorSprite=1
+
+.MainLoop
+ gosub @ScanKeyboard
+ gosub @ScanJoystick
+ gosub @ExecuteCommand
+ if KeyCode<>0 then MainLoop
+ gosub @DisplayEverything
+
+ push v1
+ push v2
+ push v3
+ push v4
+ add CheckSumStage,c1
+ v1=15
+ and CheckSumStage,v1
+ if CheckSumStage<>0 then NoCheck
+ gosub @VerifyCheckSums
+ gosub @SetCheckSums
+.NoCheck
+ pop v4
+ pop v3
+ pop v2
+ pop v1
+
+ goto MainLoop
+
+;-----
+
+.ScanKeyboard
+ gosub @MCosrdch
+ Keycode=v2
+ return
+
+;-----
+
+.SetFileName
+ v1=70 ;'f'
+ list17(8)=v1
+ v1=76 ;'l'
+ list17(9)=v1
+ v1=79 ;'o'
+ list17(10)=v1
+ v1=79 ;'o'
+ list17(11)=v1
+ v1=82 ;'r'
+ list17(12)=v1
+ list17(13)=MapNumber
+ v1=46 ;'.'
+ list17(14)=v1
+ v1=68 ;'d'
+ list17(15)=v1
+ v1=65 ;'a'
+ list17(16)=v1
+ v1=84 ;'t'
+ list17(17)=v1
+
+ return
+
+.SaveFile ;ESC or QUIT
+ if HelpOrInfoMode<>HOIMnormal then ExitHelp ;in HELP or DIR function
+
+ if Modified=0 then NoSave
+
+ gosub @TextOnTopLine
+ code-
+ prs "Save FLOORx.MAP "
+ code+
+ v1=80
+ &WordWS(WordCursorXpos)=v1
+ v1=MapNumber
+ gosub @MCOswrchV1
+ v1=128
+ &WordWS(WordCursorXpos)=v1
+ gosub @AskYN
+ if ReturnCode<>1 then NoSave
+
+ push RoomNum
+ push CurrentRoom ;**** Why doesn't this work?
+ RoomNum=0 ;find word after terminator
+ gosub @FindRoom
+
+ gosub @SetFileName
+ v1=FloorMapList
+ v2=CurrentCache
+ v5=0           ;length, hi
+ v6=CurrentRoom ;length, lo
+ sub v6,v2
+ gosub @MCSaveFile
+ Modified=0
+ pop CurrentRoom
+ pop RoomNum
+.NoSave
+ return
+
+;-----
+
+.TextOnTopLine
+ code-
+ message cr
+ code+
+ gosub @ClearTopLine
+ gosub @SetUpPhysicalTextPtr
+ return
+
+;-----
+
+.AskYN
+ code-
+ prs "Y/N? "
+ code+
+.Ask1
+ gosub @ScanKeyboard
+ if KeyCode=1 then ReturnESC
+ if KeyCode=21 then ReturnYes
+ if KeyCode=49 then ReturnNo
+ goto Ask1
+.ReturnYes
+ gosub @ClearTopLine
+ ReturnCode=1
+ return
+.ReturnNo
+ gosub @ClearTopLine
+ ReturnCode=0
+ return
+.ReturnESC
+ ReturnCode=2
+ return
+
+;-----
+
+.ScanJoystick
+ return
+
+;-----
+
+.ExecuteCommand
+; if KeyCode=2 then CourtRoom ;*****
+
+cif Animation
+ if KeyCode=15 then @RestartAnimation  ;tab
+ if KeyCode=24 then @SetRaster         ;O set raster offset
+ if KeyCode=GSXspace then @ResetCoords
+
+ if KeyCode=20 then @TestPoint         ;T Goal seek start point
+ if KeyCode=30 then @Again             ;A goal-seek
+ if KeyCode=34 then @GoalFind          ;G local goal-seek
+ if KeyCode=59 then @AnimationPrevious ;F1
+ if KeyCode=60 then @AnimationNext     ;F2
+ if KeyCode=63 then @DebugAnimation    ;F5 Set animation sequence
+ if KeyCode=64 then @SetRaster         ;F6 set raster offset
+ if KeyCode=65 then @ToggleHold        ;F7 lock coords
+ if KeyCode=61 then @RasterPrevious    ;F3
+ if KeyCode=62 then @RasterNext        ;F4
+ if KeyCode=66 then @InsertStructure   ;F8 insert cursor
+cend ;Animation
+
+ if KeyCode=1 then @SaveFile    ;ESC save current map
+ if KeyCode=16 then @Quit       ;Q abort
+ if KeyCode=17 then @West       ;W toggle West direction
+ if KeyCode=18 then @East       ;E toggle East direction
+ if KeyCode=19 then @SetRoom    ;R switch room
+; if KeyCode=20 then @TestPoint  ;T Goal seek start point
+; if KeyCode=21 then @Bulk       ;Y toggle bulk mode
+ if KeyCode=22 then @Unblock    ;U unblock
+; if KeyCode=23 then @NewRoom    ;I create (initialise) new room
+cif CacheOn
+ if KeyCode=25 then @DisplayCache ;P
+cend
+ if KeyCode=28 then @ExitHelp    ;return
+; if KeyCode=30 then @AreaFill    ;A floor ptr fill
+ if KeyCode=31 then @South       ;S toggle South-direction
+; if KeyCode=32 then @DeleteRoom  ;D delete current map
+ if KeyCode=32 then @DisplayMenu ;D display menu
+; if KeyCode=33 then @Filename    ;F filename
+ if KeyCode=33 then @FileMenu   ;F menu
+; if KeyCode=34 then @GoalFind    ;G local goal-seek
+ if KeyCode=35 then @SetHeight   ;H height of current square
+; if KeyCode=38 then @ListRooms   ;L directory
+ if KeyCode=44 then @SetZ        ;Z set cursor absolute
+ if KeyCode=45 then @SetX        ;X set cursor absolute
+; if KeyCode=46 then @SetCursor   ;C set object to use as cursor
+ if KeyCode=46 then @Bulk        ;C toggle COPY mode
+; if KeyCode=47 then @ToggleView        ;V toggle room display
+ if KeyCode=48 then @Block       ;B block square
+ if KeyCode=49 then @North       ;N toggle north direction
+ if KeyCode=50 then @MiscMenu    ;M select map mode
+ if KeyCode=72 then @CursorUp
+ if KeyCode=75 then @CursorLeft
+ if KeyCode=77 then @CursorRight
+ if KeyCode=80 then @CursorDown
+ if KeyCode=98 then @Help
+ if KeyCode=104 then @CursorUp ;pad 8
+ if KeyCode=106 then @CursorLeft ;pad 4
+ if KeyCode=108 then @CursorRight ;pad 6
+ if KeyCode=110 then @CursorDown ;pad 2
+ return
+
+;-----
+
+;RoomNum is XZH number of room
+;returns RoomNum=0, CurrentRoom=terminator word if no floor map
+;        CurrentRoom=FloorData
+
+.FindRoom
+ CurrentRoom=CurrentCache
+.FR1
+ &v1=FloorMap(CurrentRoom)
+ if v1=RoomNum then Found
+ if v1=0 then EOF
+ add CurrentRoom,c2
+ &v2=FloorMap(CurrentRoom) ;Structure length-2
+ add CurrentRoom,v2
+ goto FR1
+ 
+.Found
+ add CurrentRoom,c4
+ &MarginX=FloorMap(CurrentRoom)
+ add CurrentRoom,c2
+ &MarginZ=FloorMap(CurrentRoom)
+ add CurrentRoom,c2
+ &SizeX=FloorMap(CurrentRoom)
+ add CurrentRoom,c2
+ &SizeZ=FloorMap(CurrentRoom)
+ add CurrentRoom,c2
+ return
+
+.EOF
+ RoomNum=0
+ return
+
+;-----
+
+.Quit       ;Q abort
+ gosub @SaveFile
+ goto @MCCloseDown
+
+;-----
+
+.West      ;W toggle West direction
+ gosub @GDpointOnMap
+ if ReturnCode=0 then NoWest
+ gosub @GDreadSquare
+ gosub @MakeDirection
+ v1=16 ;00010000
+ xor CurrentSquare,v1
+ gosub @GDwriteSquare
+.NoWest
+ return
+
+.East      ;E toggle East direction
+ gosub @GDpointOnMap
+ if ReturnCode=0 then NoEast
+ gosub @GDreadSquare
+ gosub @MakeDirection
+ v1=32 ;00100000
+ xor CurrentSquare,v1
+ gosub @GDwriteSquare
+.NoEast
+ return
+
+.SetRoom   ;R switch room
+ gosub @TextOnTopLine
+ code-
+ prs "Room? "
+ code+
+ gosub @GetInputNumber ; get x1 as number typed in by user
+ RoomNum=x1
+
+ gosub @MCinit3d ;* mcemptyroom
+ dv1=RoomNum
+ gosub @PreLoadAndInsertdv1 ; DrawObjectdv1
+ gosub @MCBuildViewMap
+
+ push RoomNum
+  cif CacheOn
+   gosub @FCloadFloor
+  cend
+  cif CacheOff
+   gosub @FindRoom
+  cend
+ if RoomNum<>0 then RoomOk
+ CurrentRoom=0
+.RoomOk
+ pop RoomNum
+
+ gosub @GDreadSquare
+ return
+
+;-----
+
+.Unblock    ;U unblock square
+ gosub @GDpointOnMap
+ if ReturnCode=0 then @NoBlock
+ gosub @GDreadSquare
+ v2=15 ;00001111
+ and v2,CurrentSquare
+ if v2=0 then HeightStored
+
+ gosub @GDquadMask
+ v2=65535
+ xor v1,v2 ;
+ and CurrentSquare,v1
+ v1=15 ;00001111 ;8x8 area unblocked?
+ and v1,CurrentSquare
+ if v1<>0 then StillBlocked
+ CurrentSquare=48 ;00110000 ;back to H=0
+.StillBlocked
+ gosub @GDwriteSquare
+.HeightStored
+ return
+
+;-----
+
+.NewRoom
+ if RoomNum=0 then NullRoom
+ if CurrentRoom<>0 then WipeRoom
+
+;Create floor map...
+
+ gosub @TextOnTopLine
+ code-
+ prs "Left Margin (e.g. 0)? "
+ code+
+ gosub @GetInputNumber
+ MarginX=504 ;1f8
+ and MarginX,x1
+
+ gosub @DisplayEverything ;restore screen. (bug fix, corrupts map)
+
+ gosub @TextOnTopLine
+ code-
+ prs "Top Margin (e.g. 80)? "
+ code+
+ gosub @GetInputNumber
+ MarginZ=248 ;0F8
+ and MarginZ,x1
+
+ gosub @DisplayEverything ;restore screen. (bug fix, corrupts map)
+
+ gosub @TextOnTopLine
+ code-
+ prs "Width (e.g. 296)? "
+ code+
+ gosub @GetInputNumber
+ SizeX=504 ;1f8
+ and SizeX,x1
+
+ gosub @DisplayEverything ;restore screen. (bug fix, corrupts map)
+
+ gosub @TextOnTopLine
+ code-
+ prs "Height (e.g. 88)? "
+ code+
+ gosub @GetInputNumber
+ SizeZ=248 ;0F8
+ and SizeZ,x1
+
+ gosub @DisplayEverything ;restore screen. (bug fix, corrupts map)
+
+ Modified=1
+ push RoomNum
+ gosub @FindRoom ;Find terminator word
+ pop RoomNum
+
+ &FloorMap(CurrentRoom)=RoomNum ;overwrite terminator
+ add CurrentRoom,c2
+ gosub @CalcLength
+ &FloorMap(CurrentRoom)=v1 ;StructureLength
+ add CurrentRoom,c2
+ &FloorMap(CurrentRoom)=MarginX ;margin x
+ add CurrentRoom,c2
+ &FloorMap(CurrentRoom)=MarginZ ;margin z
+ add CurrentRoom,c2
+ &FloorMap(CurrentRoom)=SizeX ;width
+ add CurrentRoom,c2
+ &FloorMap(CurrentRoom)=SizeZ ;height
+ add CurrentRoom,c2
+
+ gosub ClearRoom
+ &FloorMap(CurrentRoom)=c0 ;replace terminator
+ gosub @FindRoom
+.NullRoom
+ return
+
+;-----
+
+.ChangeMargin
+ if RoomNum=0 then NoChange
+ if CurrentRoom=0 then NoChange
+
+ gosub @TextOnTopLine
+ code-
+ prs "Left Margin (e.g. 0)? "
+ code+
+ gosub @GetInputNumber
+ MarginX=504 ;1f8
+ and MarginX,x1
+
+ gosub @DisplayEverything ;restore screen. (bug fix, corrupts map)
+
+ gosub @TextOnTopLine
+ code-
+ prs "Top Margin (e.g. 80)? "
+ code+
+ gosub @GetInputNumber
+ MarginZ=248 ;0F8
+ and MarginZ,x1
+
+ gosub @DisplayEverything ;restore screen. (bug fix, corrupts map)
+
+ Modified=1
+
+ c8=8
+ sub CurrentRoom,c8
+
+ &FloorMap(CurrentRoom)=MarginX
+ add CurrentRoom,c2
+ &FloorMap(CurrentRoom)=MarginZ
+
+ gosub @FindRoom ;restore CurrentRoom
+
+.NoChange
+ return
+
+;-----
+
+.DisplayCache ;P
+ HelpOrInfoMode=HOIMcache
+ return
+
+;-----
+
+.WipeRoom
+ gosub @TextOnTopLine
+ code-
+ prs "Initialise this room "
+ code+
+ gosub @AskYN
+ if ReturnCode=1 then WR1
+ return
+
+.WR1
+ gosub ClearRoom
+ gosub @FindRoom ;reset CurrentRoom pointer
+ return
+
+;-----
+
+.ClearRoom
+ Modified=1
+
+ v2=10
+ sub CurrentRoom,v2
+ &v1=FloorMap(CurrentRoom) ;length-2
+ add CurrentRoom,v2
+ sub v1,v2                 ;length-12 (length of data)
+
+ v2=48 ;0011 0000
+.CR1
+ FloorMap(CurrentRoom)=v2
+ add CurrentRoom,c1
+ sub v1,c1
+ if v1>0 then CR1
+
+ return
+
+;-----
+
+.CalcLength
+ v1=0
+ v2=SizeZ
+ asr v2 ;Divide by 4 (since on 4 pixel boundary)
+ asr v2
+.CL1
+ if v2=0 then CL2
+ sub v2,c1
+ add v1,SizeX
+ goto CL1
+.CL2
+ asr v1 ;each byte covers 8x8 pixels, so divide by 64
+ asr v1
+ asr v1
+ asr v1
+ v2=10
+ add v1,v2 ;v1=length-2
+
+ add v1,c1 ;round up/make even
+ or v1,c1
+ sub v1,c1
+
+ return
+
+;-----
+
+.ExitHelp  ;return
+ HelpOrInfoMode=HOIMnormal
+ gosub @NewView
+ return
+
+.South     ;S toggle South-direction
+ gosub @GDpointOnMap
+ if ReturnCode=0 then NoSouth
+ gosub @GDreadSquare
+ gosub @MakeDirection
+ v1=64 ;01000000
+ xor CurrentSquare,v1
+ gosub @GDwriteSquare
+.NoSouth
+ return
+
+.Again     ;A multiple goal-seeker
+ push CursorX
+ push CursorZ
+ CursorX=TestPointX
+ CursorZ=TestPointY
+ gosub @GDpointOnMap
+ if ReturnCode=0 then NewStart
+ gosub @GDreadSquare
+ v1=15
+ and v1,CurrentSquare
+ if v1=0 then AgainStart
+ gosub @GDquadMask
+ and v1,CurrentSquare
+ if v1=0 then AgainStart
+.NewStart
+ gosub @GenerateSafePoint
+ TestPointX=CursorX
+ TestPointY=CursorZ
+.AgainStart
+ gosub @GenerateSafePoint
+
+ if AnimationACB<>0 then Tset2
+ ObjectNumber=2515 ;standing
+ dv2=TestPointX
+ dv3=TestPointY
+ dv4=CursorH
+ gosub @StartFreeACB
+ AnimationACB=dx4
+.Tset2
+
+ v1=CursorX
+ v2=CursorZ
+ dx4=AnimationACB
+ gosub @AAinitGD
+
+.AGoalLoop
+ gosub @MCosrdch
+ if v2=1 then ExitAgain
+
+ dx4=AnimationACB
+ gosub @AAlocalGoalSeek
+
+;At destination or lost
+ v1=ACBstatus
+ add v1,AnimationACB
+ v1=ACBList(v1)
+ if v1=253 then AgainStart ;Arrived
+ if v1=252 then Fault ;stuck
+
+ gosub @DisplayEverything
+
+ goto AGoalLoop
+
+.Fault
+ goto Fault
+
+.ExitAgain
+ gosub @GDstandStill
+ pop CursorZ
+ pop CursorZ
+ return
+
+;-----
+
+.AreaFill
+ if CurrentRoom=0 then NoArea
+ if RoomNum=0 then NoArea
+
+ gosub @GDpointOnMap
+ if ReturnCode=0 then NoArea
+ gosub @GDreadSquare
+
+ gosub @GDquadMask
+ and v1,CurrentSquare
+ if v1<>0 then NoArea ;cursor point blocked
+;unblocked (or height)
+
+ HelpOrInfoMode=HOIMnormal
+
+ code-
+ message cr
+ code+
+ &WordWS(WordCursorXpos)=c0
+ &WordWS(WordCursorYpos)=c0
+ v2=48
+ gosub @ClearTopWindow
+ gosub @SetUpPhysicalTextPtr
+ FillDirPtr=0
+
+.Area1
+ code-
+ message cr
+ code+
+ &WordWS(WordCursorXpos)=c0
+ &WordWS(WordCursorYpos)=c0
+ code-
+ prs "set ptr (NSEW toggle) then Return: "
+ code+
+
+ gosub @ScanKeyboard
+
+ if KeyCode=1  then @NoArea    ;ESC
+ if KeyCode=17 then @AreaWest  ;W
+ if KeyCode=18 then @AreaEast  ;E
+ if KeyCode=28 then @StartFill ;return
+ if KeyCode=31 then @AreaSouth ;S
+ if KeyCode=49 then @AreaNorth ;N
+
+ v1=280
+ &WordWS(WordCursorXpos)=v1
+
+ v1=128 ;10000000 North
+ and v1,FillDirPtr
+ if v1=0 then Area2
+ v1=78 ;'n'
+ gosub @MCoswrchV1
+.Area2
+
+ v1=64 ;01000000 South
+ and v1,FillDirPtr
+ if v1=0 then Area3
+ v1=83 ;'s'
+ gosub @MCoswrchV1
+.Area3
+
+ v1=32 ;00100000 East
+ and v1,FillDirPtr
+ if v1=0 then Area4
+ v1=69 ;'e'
+ gosub @MCoswrchV1
+.Area4
+
+ v1=16 ;00010000 West
+ and v1,FillDirPtr
+ if v1=0 then Area5
+ v1=87 ;'w'
+ gosub @MCoswrchV1
+.Area5
+ v1=32
+ gosub @MCoswrchV1
+ goto Area1
+
+.AreaWest  ;W
+ v1=016 ;00010000 West
+ xor FillDirPtr,v1
+ goto Area1
+
+.AreaEast  ;E
+ v1=32 ;01000000 East
+ xor FillDirPtr,v1
+ goto Area1
+
+.AreaSouth ;S
+ v1=64 ;01000000 South
+ xor FillDirPtr,v1
+ goto Area1
+
+.AreaNorth ;N
+ v1=128 ;10000000 North
+ xor FillDirPtr,v1
+ goto Area1
+
+.NoArea
+ v1=48
+ gosub @ClearTopWindow
+ return
+
+;-----
+
+.DuplicateRoom
+ if RoomNum=0 then NoDupSource ;no room selected (to create)
+ if CurrentRoom=0 then NoDupSource ;no map for this room
+
+;Ask for source room
+
+ gosub @TextOnTopLine
+ code-
+ prs "Copy room/window from room? "
+ code+
+ gosub @GetInputNumber
+
+ push x1
+ gosub @DisplayEverything ;restore screen. (bug fix, corrupts map)
+ pop x1
+
+ push RoomNum
+ push CurrentRoom
+ RoomNum=x1
+;RoomNum is XZH number of room
+;returns RoomNum=0, CurrentRoom=terminator word if no floor map
+;        CurrentRoom=FloorData
+ gosub @FindRoom
+ if RoomNum=0 then NoDupSource
+ SourceRoom=CurrentRoom
+ pop CurrentRoom
+ pop RoomNum
+
+;Copy from (SourceRoom) to (CurrentRoom)
+
+ push CursorX
+ push CursorZ
+
+ CursorZ=0
+.DupYloop
+ CursorX=0
+.DupXloop
+
+ push CurrentRoom
+  CurrentRoom=SourceRoom
+  gosub @SwitchCurrentRoom         ;Source info
+  gosub @GDreadSquare              ;Set CurrentSquare
+  gosub @GDpointOnMap              ;Source?
+ pop CurrentRoom
+ gosub @SwitchCurrentRoom         ;Dest info
+
+ if ReturnCode=0 then NoDupHere ;Source?
+
+ gosub @GDpointOnMap
+ if ReturnCode=0 then NoDupHere ;Dest?
+ gosub @GDWriteSquare
+
+.NoDupHere
+ c8=8 ;copy byte-by-byte (8x8 pixels)
+ add CursorX,c8
+ if CursorX<320 then DupXloop
+ add CursorZ,c8
+ if CursorZ<200 then DupYloop
+
+ pop CursorZ
+ pop CursorX
+ return
+
+.NoDupSource
+ pop CurrentRoom
+ pop RoomNum
+ return
+
+;-----
+
+.SwitchCurrentRoom
+ v1=CurrentRoom
+ sub v1,c8 ;find 'size' entries
+ &MarginX=FloorMap(v1)
+ add v1,c2
+ &MarginZ=FloorMap(v1)
+ add v1,c2
+ &SizeX=FloorMap(v1)
+ add v1,c2
+ &SizeZ=FloorMap(v1)
+ return
+
+;-----
+
+.StartFill
+ List25Index=c0 ;size of fill heap
+.SF1
+
+;*****
+ MouseX=CursorX
+ MouseY=CursorZ
+ add MouseX,c1
+ add MouseY,c1
+
+ gosub @DisplayPhysicalMouse
+ add MouseX,c1
+ gosub @DisplayPhysicalMouse
+ add MouseY,c1
+ gosub @DisplayPhysicalMouse
+ sub MouseX,c1
+ gosub @DisplayPhysicalMouse
+;*****
+
+ v1=1
+ gosub @MCkeyDown
+ if v1<>0 then NoArea ;Escape key
+
+ FillMask=0
+
+ sub CursorX,c4
+ x1=16 ;0001 0000
+ gosub AddBlockMask ;left
+ add CursorX,c4
+ sub CursorZ,c4
+ x1=128 ;1000 0000
+ gosub AddBlockMask ;above
+ add CursorZ,c4
+ add CursorZ,c4
+ x1=64 ;0100 0000
+ gosub AddBlockMask ;below
+ sub CursorZ,c4
+ add CursorX,c4
+ x1=32 ;0010 0000
+ gosub AddBlockMask ;right
+ sub CursorX,c4
+
+ &WordWS(WordCursorXpos)=c0
+ &WordWS(WordCursorYpos)=c0
+
+ if FillMask=0  then  @MoveN         ;0000 0000
+ if FillMask=16 then  @MoveN         ;0001 0000
+ if FillMask=32 then  @MoveN         ;0010 0000
+ if FillMask=48 then  @MoveN         ;0011 0000
+ if FillMask=64 then  @MoveN         ;0100 0000
+ if FillMask=80 then  @MoveN         ;0101 0000
+ if FillMask=96 then  @MoveN         ;0110 0000
+ if FillMask=112 then @BlockAndMoveN ;0111 0000
+ if FillMask=128 then @MoveW         ;1000 0000
+ if FillMask=144 then @Branch ;* BlockAndMoveS ;1001 0000 -compromise
+ if FillMask=160 then @MoveW         ;1010 0000
+ if FillMask=176 then @BlockAndMoveS ;1011 0000
+ if Fillmask=192 then @MoveW         ;1100 0000
+ if FillMask=208 then @BlockAndMoveE ;1101 0000
+ if FillMask=224 then @BlockAndMoveW ;1110 0000
+                                     ;1111 0000
+ if List25Index=0 then @NoArea ;fill complete
+ sub List25Index,c2
+ &CursorZ=List25(List25Index)
+ sub List25Index,c2
+ &CursorX=List25(List25Index)
+
+ goto SF1
+
+.Branch ;* BlockAndMoveS ;1001 0000 -compromise
+ add CursorX,c4
+ &List25(List25Index)=CursorX
+ sub CursorX,c4
+ add List25Index,c2
+ &List25(List25Index)=CursorZ
+ add List25Index,c2
+
+ goto BlockAndMoveS
+
+;-----
+
+.AddBlockMask ;Check (CursorX,CursorZ) if blocked, OR FILLMASK,x1
+ gosub @GDpointOnMap
+ if ReturnCode=0 then ABM1 ;off map; blocked
+ gosub @GDreadSquare
+
+ gosub @GDquadMask
+ and v1,CurrentSquare
+ if v1=0 then ABM2 ;unblocked/height
+
+.ABM1
+ or Fillmask,x1
+
+.ABM2
+ return
+
+;-----
+
+.BlockFillSquare
+ gosub @GDreadSquare
+ gosub @MakeDirection
+ or CurrentSquare,FillDirPtr
+ gosub @GDquadMask
+ or CurrentSquare,v1
+ gosub @GDwriteSquare
+ return
+
+;-----
+
+.BlockAndMoveN ;0000 0000
+ gosub @BlockFillSquare
+.MoveN
+ sub CursorZ,c4
+ goto SF1
+
+.BlockAndMoveS ;1001 0000
+ gosub @BlockFillSquare
+ add CursorZ,c4
+ goto SF1
+
+.BlockAndMoveW ;1010 0000
+ gosub @BlockFillSquare
+.MoveW         ;1100 0000
+ sub CursorX,c4
+ goto SF1
+
+.BlockAndMoveE ;1101 0000
+ gosub @BlockFillSquare
+ add CursorX,c4
+ goto SF1
+
+;-----
+
+.GenerateSafePoint
+ v1=1 ;Escape key
+ gosub @MCkeyDown
+ if v1<>0 then GSP1
+
+ v3=CursorX
+ gosub RandomiseV1
+ CursorX=508 ;1FC
+ and CursorX,v1
+
+ v3=CursorZ
+ gosub RandomiseV1
+ CursorZ=508 ;1FC
+ and CursorZ,v1
+
+ gosub @GDpointOnMap
+ if ReturnCode=0 then GenerateSafePoint
+ gosub @GDreadSquare
+ v1=15
+ and v1,CurrentSquare
+ if v1=0 then GSP1
+ gosub @GDquadMask
+ and v1,CurrentSquare
+ if v1<>0 then GenerateSafePoint
+.GSP1
+ return
+
+.RandomiseV1
+ code-
+ random v1
+ code+
+ v2=7 ;0111
+ and v2,v1
+.RV1
+ v1=1 ;Escape key
+ gosub @MCkeyDown
+ if v1<>0 then RV2
+ sub v2,c1
+ code-
+ random v1
+ code+
+ if v2>0 then RV1
+ add v1,v3
+.RV2
+ return
+
+;-----
+
+.DeleteRoom    ;D delete current map
+ gosub @TextOnTopLine
+ code-
+ prs "Delete this room "
+ code+
+ gosub @AskYN
+ if ReturnCode<>1 then @NoDelete
+
+ if CurrentRoom=0 then @NoRoom
+
+ Modified=1
+
+ v1=10
+ sub CurrentRoom,v1
+ &v1=FloorMap(CurrentRoom) ;length-2
+ sub CurrentRoom,c2        ;overwrite ptr value
+ add v1,c2                 ;length of this room (inc. header)
+
+ add v1,CurrentRoom ;next room/map
+.DEL0
+ &v2=FloorMap(v1)
+ if v2=0 then DEL3
+
+ add v1,c2
+ &v3=FloorMap(v1)   ;length-2
+ sub v1,c2
+ add v3,c2
+
+.DEL1
+ &v2=FloorMap(v1)
+ &FloorMap(CurrentRoom)=v2
+ add CurrentRoom,c2
+ add v1,c2
+ sub v3,c2
+ if v3>0 then DEL1
+ goto DEL0
+.DEL3
+ &FloorMap(CurrentRoom)=c0 ;terminate
+ CurrentRoom=0
+.NoDelete
+ return
+
+.NoRoom
+ gosub @GDreadSquare
+ return
+
+;----
+
+.Filename   ;F filename
+ if Modified=0 then FN1
+ gosub @TextOnTopLine
+ code-
+ prs "Changes lost. New "
+ goto FN2
+ code+
+
+.FN1
+ gosub @TextOnTopLine
+ code-
+.FN2
+ prs "Map number (0..9, A..Z)? "
+ code+
+
+.FN3
+ gosub @MCosrdch
+ if v2=1 then @ClearTopLine
+ if v1<48 then FN3
+ if v1<58 then FN4
+ if v1<65 then FN3
+ if v1<91 then FN4
+ if v1<97 then FN3
+ if v1>122 then FN3
+
+ v2=32 ;convert to upper case
+ sub v1,v2
+.FN4
+ MapNumber=v1
+
+ gosub @ClearTopLine
+cif CacheOn
+ gosub @FCloadFloor
+cend
+cif CacheOff
+ &FloorMap(c0)=c0 ;if no map, clear memory
+ gosub @LoadMap
+cend
+ return
+
+;-----
+
+.LoadMap
+ gosub @SetFileName
+ &FloorMap(CurrentCache)=c0
+ v1=FloorMapList
+ v2=CurrentCache ;offset
+ gosub @MCloadFile
+ Modified=0
+ gosub @SetCheckSums ;*
+ return
+
+;----
+
+.GoalFind   ;G local goal-seek
+ if AnimationACB<>0 then Tset
+ ObjectNumber=2515 ;standing
+ dv2=TestPointX
+ dv3=TestPointY
+ dv4=CursorH
+ gosub @StartFreeACB
+ AnimationACB=dx4
+.Tset
+
+ v1=CursorX
+ v2=CursorZ
+ dx4=AnimationACB
+ gosub @AAinitGD
+
+ gosub @GDpointOnMap
+ if ReturnCode=0 then ExitGoal
+ gosub @GDreadSquare
+ v1=15
+ and v1,CurrentSquare
+ if v1=0 then GoalLoop ;height, so must be unblocked
+ gosub @GDquadMask
+ and v1,CurrentSquare
+ if v1<>0 then ExitGoal ;Blocked square
+
+.GoalLoop
+ gosub @MCosrdch
+ if v2=1 then ExitGoal
+
+ dx4=AnimationACB
+ gosub @AAlocalGoalSeek
+
+;At destination or lost ?
+ v1=ACBstatus
+ add v1,AnimationACB
+ v1=ACBList(v1)
+ if v1=10 then Continue
+ if v1=254 then Continue
+ return
+
+.Continue
+ gosub @DisplayEverything
+
+ goto GoalLoop
+
+.ExitGoal
+ gosub @GDstandStill
+ return
+
+;-----
+
+.SetHeight ;H height of current square
+ gosub @GDpointOnMap
+ if ReturnCode=0 then NoHeight
+ gosub @TextOnTopLine
+ code-
+ prs "New Height? "
+ code+
+ gosub @GDreadSquare
+ gosub @GetInputNumber ; get x1 as number typed in by user
+ gosub @ConvertHeight
+ add v1,v1
+ add v1,v1
+ add v1,v1
+ add v1,v1 ;stored as hhhh0000
+ CurrentSquare=v1
+ gosub @GDwriteSquare
+.NoHeight
+ return
+
+.ListRooms
+ HelpOrInfoMode=HOIMdir
+ return
+
+.SetZ      ;Z set cursor absolute
+ gosub @TextOnTopLine
+ code-
+ prs "Z coord? "
+ code+
+ gosub @GetInputNumber ; get x1 as number typed in by user
+ CursorZ=65532 ;0FFFC
+ and CursorZ,x1
+ gosub @GDreadSquare
+ gosub @SetLastHeight
+ return
+
+.SetCursor
+ gosub @TextOnTopLine
+ code-
+ prs "Cursor object? "
+ code+
+ gosub @GetInputNumber ; get x1 as number typed in by user
+ CursorSprite=x1
+ return
+
+.SetX      ;X set cursor absolute
+ gosub @TextOnTopLine
+ code-
+ prs "X coord? "
+ code+
+ gosub @GetInputNumber ; get x1 as number typed in by user
+ CursorX=65532 ;0FFFC
+ and CursorX,x1
+ gosub @GDreadSquare
+ gosub @SetLastHeight
+ return
+
+.ToggleView      ;V set room/cursor display
+ HelpOrInfoMode=HOIMnormal
+ v1=c1
+ sub v1,ViewOn
+ ViewOn=v1
+.NewView
+ if ViewOn>0 then VW1
+ gosub @MCinit3d ;* mcemptyroom
+ return
+.VW1
+ gosub @MCinit3d ;* mcemptyroom
+ dv1=RoomNum
+ gosub @PreLoadAndInsertdv1 ; DrawObjectdv1
+ gosub @MCBuildViewMap
+ return
+
+.Block    ;B block square
+ gosub @GDpointOnMap
+ if ReturnCode=0 then NoBlock
+ gosub @GDreadSquare
+ gosub @MakeDirection
+; v1=240 ;11110000
+; or CurrentSquare,v1
+ gosub @GDwriteSquare
+.NoBlock
+ return
+
+.North     ;N toggle north direction
+ gosub @GDpointOnMap
+ if ReturnCode=0 then NoNorth
+ gosub @GDreadSquare
+ gosub @MakeDirection
+ v1=128 ;10000000
+ xor CurrentSquare,v1
+ gosub @GDwriteSquare
+.NoNorth
+ return
+ 
+;-----
+
+.DisplayMenu
+ HelpOrInfoMode=HOIMnormal
+
+ code-
+ message cr
+ code+
+ &WordWS(WordCursorXpos)=c0
+ &WordWS(WordCursorYpos)=c0
+ v2=80
+ gosub @ClearTopWindow
+ gosub @SetUpPhysicalTextPtr
+ code-
+ prs "Select MAP mode"
+ message cr
+ prs " "
+ message cr
+ prs "   1. Toggle View"
+ message cr
+ prs "   2. map off"
+ message cr
+ prs "   3. Text"
+ message cr
+ prs "   4. Blocked squares"
+ message cr
+ prs "   5. non-zero height squares"
+ message cr
+ prs "   6. Set cursor sprite number"
+ message cr
+ prs " "
+ message cr
+ prs "Choose:"
+ message cr
+
+ code+
+.MM1
+ gosub @ScanKeyboard
+ if KeyCode=0 then MM1
+ if KeyCode>7 then MM1
+
+ v2=80
+ gosub @ClearTopWindow
+
+ if KeyCode=1 then MM2         ;ESC
+ if KeyCode=7 then SetCursor   ;6. Set cursor sprite number
+ if KeyCode=2 then @ToggleView ;1. Toggle View
+
+ gosub @NewView ;rebuild room display
+
+;2. Map off
+;3. Text
+;4. Blocked squares
+;5. non-zero height squares
+ MapOn=KeyCode ;Mapon=0..3; KeyCode=3..6
+ sub MapOn,c3
+
+.MM2 ;ESC
+ return
+
+;-----
+
+.FileMenu
+ HelpOrInfoMode=HOIMnormal
+
+ code-
+ message cr
+ code+
+ &WordWS(WordCursorXpos)=c0
+ &WordWS(WordCursorYpos)=c0
+ v2=72
+ gosub @ClearTopWindow
+ gosub @SetUpPhysicalTextPtr
+ code-
+ prs "File Menu"
+ message cr
+ prs " "
+ message cr
+ prs "   1. Load floor file"
+ message cr
+ prs "   2. Set current room number"
+ message cr
+ prs "   3. Delete room map"
+ message cr
+ prs "   4. Clear/Set room size"
+ message cr
+ prs "   5. List rooms for loaded file"
+ message cr
+ prs " "
+ message cr
+ prs "Choose:"
+ message cr
+
+ code+
+.FM1
+ gosub @ScanKeyboard
+ if KeyCode=0 then FM1
+ if KeyCode>6 then FM1
+
+ v2=72
+ gosub @ClearTopWindow
+
+ if KeyCode=2 then @FileName    ;1. Load floor file
+ if KeyCode=3 then @SetRoom     ;2. Set current room number
+ if KeyCode=4 then DeleteRoom   ;3. Delete room map
+ if KeyCode=5 then NewRoom      ;4. Set current room size
+ if KeyCode=6 then ListRooms    ;5. Floor map dir
+ return                         ;ESC
+
+;-----
+
+.MiscMenu
+ HelpOrInfoMode=HOIMnormal
+
+ code-
+ message cr
+ code+
+ &WordWS(WordCursorXpos)=c0
+ &WordWS(WordCursorYpos)=c0
+ v2=56
+ gosub @ClearTopWindow
+ gosub @SetUpPhysicalTextPtr
+ code-
+ prs "Misc menu"
+ message cr
+ prs " "
+ message cr
+ prs "   1. Duplicate room"
+ message cr
+ prs "   2. Fill Area"
+ message cr
+ prs "   3. Slide map (change margin)"
+ message cr
+ prs " "
+ message cr
+ prs "Choose:"
+ message cr
+
+ code+
+.Misc1
+ gosub @ScanKeyboard
+ if KeyCode=0 then Misc1
+ if KeyCode>4 then Misc1 ;1..3
+
+ v2=56
+ gosub @ClearTopWindow
+
+ if KeyCode=2 then DuplicateRoom ;1. Copy room
+ if KeyCode=3 then AreaFill      ;2. Area fill
+ if KeyCode=4 then ChangeMargin  ;3. Slide map
+ return                          ;ESC
+
+;-----
+
+.Help
+ if HelpOrInfoMode=HOIMhelp1 then HP1
+ if HelpOrInfoMode=HOIMhelp2 then HP2
+ if HelpOrInfoMode=HOIMhelp3 then HP3
+ if HelpOrInfoMode=HOIMhelp4 then HP4
+ HelpOrInfoMode=HOIMhelp1
+ gosub @MCinit3d ;* mcemptyroom
+ goto HP5
+.HP1
+ HelpOrInfoMode=HOIMhelp2
+ goto HP5
+.HP2
+ HelpOrInfoMode=HOIMhelp3
+ goto HP5
+.HP3
+
+cif Animation
+ HelpOrInfoMode=HOIMhelp4 ;help screen for animation
+ goto HP5
+cend
+
+.HP4
+ HelpOrInfoMode=HOIMnormal
+ gosub @NewView
+.HP5
+
+cif PC
+ &WordWS(WordCursorXpos)=c0
+ &WordWS(WordCursorYpos)=c0
+ v1=319
+ v2=199
+ gosub @MCClearRectangle
+cend
+
+ return
+
+;-----
+
+.CursorUp ;pad 8
+ sub CursorZ,c4
+ goto CheckBulkMode
+
+.CursorLeft ;pad 4
+ sub CursorX,c4
+ goto CheckBulkMode
+
+.CursorRight ;pad 6
+ add CursorX,c4
+ goto CheckBulkMode
+
+.CursorDown ;pad 2
+ add CursorZ,c4
+
+.CheckBulkMode
+ gosub @GDreadSquare
+ gosub @SetLastHeight
+;0=off, 1=copy height (unblock), 2=Copy avoidance (block)
+ if BulkMode=0 then NoBulk
+ if BulkMode=2 then CopyBlock
+
+ v2=15 ;00001111
+ and v2,CurrentSquare
+ if v2=0 then SetBlockHeight ;replace old height value
+ gosub @GDquadMask
+ and v1,CurrentSquare
+ if v1=0 then NoBulk         ;square already unblocked
+ gosub @GDquadMask
+ v2=65535
+ xor v2,v1
+ and CurrentSquare,v2        ;unblock point
+ v1=15 ;00001111
+ and v1,CurrentSquare
+ if v1=0 then SetBlockHeight ;last point unblocked, so set height
+ gosub @GDwriteSquare
+ return
+
+;all four points already unblocked, so just replace height value
+.SetBlockHeight
+ Currentsquare=240 ;11110000
+ and CurrentSquare,BulkValue
+ gosub @GDwriteSquare
+ return
+
+.CopyBlock
+ v2=15 ;00001111
+ and v2,CurrentSquare
+ if v2<>0 then RemoveHeight
+ CurrentSquare=0 ;remove old height value
+.RemoveHeight
+ gosub @GDquadMask
+ or CurrentSquare,v1 ;block this point
+
+ v1=15
+ and CurrentSquare,v1 ;remove old avoidance pointer
+ v1=240 ;11110000
+ and v1,BulkValue     ;Get new avoidance pointer
+ or CurrentSquare,v1
+ gosub @GDwriteSquare
+ return
+
+
+.NoBulk
+
+ return
+
+;-----
+
+.SetLastHeight
+ gosub @GDPointOnMap
+ if ReturnCode=0 then SLH1 ;no floor map for current point
+
+ v1=15
+ and v1,CurrentSquare
+ if v1<>0 then SLH1
+
+ LastDisplayHeight=CurrentSquare
+ v1=240 ;11110000
+ and v1,CurrentSquare
+ asr v1
+ asr v1
+ asr v1
+ asr v1
+ gosub @ConvertHeight2
+
+ LastDisplayHeight=x1
+ CursorH=DefaultH
+ add CursorH,x1
+
+.SLH1
+ return
+
+;-----
+
+cif Animation
+
+.SetRaster  ;F6 set raster offset
+ gosub @TextOnTopLine
+ code-
+ prs "Raster? "
+ code+
+ gosub @GetInputNumber ; get x1 as number typed in by user
+ RasterOffset=x1
+.NewRaster
+ v1=ACBRasterOffset
+ add v1,AnimationACB
+ &ACBList(v1)=RasterOffset
+ return
+
+.ResetCoords ;space
+ v1=ACBxOffset
+ add v1,AnimationACB
+ v2=DefaultX
+ &ACBList(v1)=v2
+
+ v1=ACBzOffset
+ add v1,AnimationACB
+ v2=DefaultZ
+ &ACBList(v1)=v2
+
+ v1=ACBhOffset
+ add v1,AnimationACB
+ if HoldOn>1 then RC1 ;F7=2 or 3, always force height
+
+ &v2=ACBList(v1) ;F7=1, check height within limits
+ if v2>99 then RC1
+ return
+
+.RC1
+ v2=DefaultH
+ &ACBList(v1)=v2
+ return
+
+.AnimationPrevious ;F1
+ sub AnimationNumber,c4
+.AnimationNext     ;F2
+ add AnimationNumber,c2
+
+.RestartAnimation  ;tab
+ dx4=AnimationACB
+ ObjectNumber=AnimationNumber
+ gosub @ChangeACBdx4
+ if HoldOn<>3 then RA1
+ gosub @ResetCoords
+.RA1
+ return
+
+.RasterPrevious    ;F3
+ v1=200
+ sub RasterOffset,v1
+.RasterNext        ;F4
+ v1=100
+ add RasterOffset,v1
+
+ goto @NewRaster
+
+.DebugAnimation    ;F5
+ gosub @TextOnTopLine
+ code-
+ prs "Animation? "
+ code+
+ gosub @GetInputNumber ; get x1 as number typed in by user
+ dx4=AnimationACB
+ AnimationNumber=x1
+ ObjectNumber=x1
+ gosub @ChangeACBdx4
+ if HoldOn<>3 then DA1
+ gosub @ResetCoords
+.DA1
+ return
+
+.ToggleHold        ;F7 lock coords
+ add HoldOn,c1
+ if HoldOn<4 then TH1
+ HoldOn=0
+.TH1
+ return
+
+.InsertStructure   ;F8 insert cursor
+ dv1=CursorSprite
+ dv2=CursorX
+ dv3=CursorZ
+ dv4=CursorH
+ gosub @PreLoadAndInsertXZHdv1
+ gosub @MCBuildViewMap
+
+ return
+
+cend ;Animation
+
+;-----
+
+.TestPoint  ;T Goal seek start point
+ break ;*****
+ gosub @GDpointOnMap
+;* if ReturnCode=0 then NoTestPoint
+
+ gosub @GDreadSquare
+ v1=15
+ and v1,CurrentSquare
+ if v1=0 then TP1 ;height, so must be unblocked
+ gosub @GDquadMask
+ and v1,CurrentSquare
+;* if v1<>0 then NoTestPoint ;Blocked square
+
+.TP1
+ TestPointX=CursorX
+ TestPointY=CursorZ
+
+;* if AnimationACB=0 then NoTestPoint ;Not initialised
+ v1=ACBxOffset
+ add v1,AnimationACB
+ &ACBList(v1)=TestPointX
+ v1=ACBzOffset
+ add v1,AnimationACB
+ &ACBList(v1)=TestPointY
+ v1=ACBhOffset
+ add v1,AnimationACB
+ &ACBList(v1)=CursorH
+
+.NoTestPoint
+ return
+
+;-----
+
+.Bulk       ;Y toggle bulk mode
+ if BulkMode<>0 then BulkOff
+
+;0=off, 1=copy height (unblock), 2=Copy avoidance (block)
+ gosub @GDpointOnMap
+ if ReturnCode=0 then BulkOff
+ gosub @GDreadSquare
+ BulkValue=CurrentSquare
+ v1=15 ;00001111
+ and v1,CurrentSquare
+ if v1=0 then BulkHeight
+ gosub @GDquadMask
+ and v1,CurrentSquare
+ if v1=0 then BulkUnblock
+ BulkMode=2
+ return
+.BulkUnblock
+ BulkValue=48 ;00110000 (height 0)
+ BulkMode=1
+ return
+.BulkHeight
+ BulkMode=1
+ return
+.BulkOff
+ BulkMode=0
+ return
+
+;-----
+
+.GDwriteSquare
+ gosub @GDpointOnMap
+ if ReturnCode=0 then GWS1
+ gosub GDsquareAddr
+ FloorMap(v1)=CurrentSquare
+ Modified=1
+.GWS1
+ return
+
+;-----
+
+.MakeDirection
+ gosub @GDpointOnMap
+ if ReturnCode=0 then @MaskUsed
+
+ gosub @GDquadMask
+
+ v2=15 ;00001111
+ and v2,CurrentSquare
+ if v2<>0 then NotHeight
+ CurrentSquare=0 ;Remove old height value
+.NotHeight
+ or CurrentSquare,v1 ;add new direction block
+
+.MaskUsed
+ return
+
+;-----
+
+.ConvertHeight
+ gosub @InitHeightTable
+ if Negative<>0 then @ReturnNegative
+
+;Table ranges from -ve to +ve, so find 'zero' start point
+
+ v1=0
+.CH0
+ v2=HeightTable(v1)
+ if v2=0 then CH1	;found 'zero'
+ if v1=15 then CH3	;no 'zero'
+ add v1,c1
+ goto CH0
+
+;HeightTable(v1) is zero
+
+.CH1
+ if x1=0 then CH3	;found
+ v2=HeightTable(v1)
+ if v2>x1 then CH2	;gone past (and v2 is not zero)
+ add v1,c1
+ if v1<>16 then CH1	;off end of table
+
+.CH2
+ sub v1,c1		;return table index
+.CH3
+ return
+
+; v1=3 ;0..3
+; if x1<3 then @ReturnV1
+; v1=4 ;4..7
+; if x1<7 then @ReturnV1
+; v1=5 ;8..11
+; if x1<11 then @ReturnV1
+; v1=6 ;12..15
+; if x1<15 then ReturnV1
+; v1=7
+; if x1<19 then ReturnV1 ;* if x1<25 then ReturnV1
+; v1=8
+; if x1<23 then ReturnV1 ;* if x1<41 then ReturnV1
+; v1=9
+; if x1<27 then ReturnV1 ;* if x1<57 then ReturnV1
+; v1=10
+; if x1<31 then ReturnV1 ;* if x1<73 then ReturnV1
+; v1=11
+; if x1<35 then ReturnV1 ;* if x1<89 then ReturnV1
+; v1=12
+; if x1<39 then ReturnV1 ;* if x1<105 then ReturnV1
+; v1=13
+; if x1<43 then ReturnV1 ;* if x1<121 then ReturnV1
+; v1=14
+; if x1<47 then ReturnV1 ;* if x1<137 then ReturnV1
+; v1=15
+;.ReturnV1
+; return
+
+.ReturnNegative
+; v1=2 ;-4..-1
+; if x1<4 then ReturnV1
+; v1=1 ;-8..-5
+; if x1<8 then ReturnV1
+; v1=0 ;-12..-9
+; return
+
+;Table ranges from -ve to +ve, so find 'zero' start point
+
+ v1=0
+
+.CH4
+ v2=HeightTable(v1)
+ if v2=0 then CH5	;past it
+ v3=256
+ sub v3,v2		;twos complement
+ if v3<x1 then CH5	;past it
+ add v1,c1
+ goto CH4
+
+.CH5
+ if v1=0 then CH6
+ sub v1,c1
+.CH6
+ return
+
+;-----
+
+.ConvertHeight2
+ gosub @InitHeightTable
+ x1=HeightTable(v1)
+ if x1<128 then CH7
+ v1=65280
+ add x1,v1
+.CH7
+ return
+
+; x1=65524 ;-12
+; if v1=0 then @ReturnX1
+; x1=65528 ;-8
+; if v1=1 then @ReturnX1
+; x1=65532 ;-4
+; if v1=2 then @ReturnX1
+; x1=0
+; if v1=3 then @ReturnX1
+; x1=4
+; if v1=4 then @ReturnX1
+; x1=8
+; if v1=5 then @ReturnX1
+; x1=12
+; if v1=6 then ReturnX1
+; x1=16
+; if v1=7 then ReturnX1
+; x1=20 ;* 32
+; if v1=8 then ReturnX1
+; x1=24 ;* 48
+; if v1=9 then ReturnX1
+; x1=28 ;* 64
+; if v1=10 then ReturnX1
+; x1=32 ;* 80
+; if v1=11 then ReturnX1
+; x1=36 ;* 96
+; if v1=12 then ReturnX1
+; x1=40 ;* 112
+; if v1=13 then ReturnX1
+; x1=44 ;* 128
+; if v1=14 then ReturnX1
+; x1=48 ;* 144
+;.ReturnX1
+ return
+
+;-----
+
+.PrintX1
+ if x1>32768 then PrintNegative
+code-
+ print x1
+code+
+ return
+.PrintNegative
+; push x1
+ v1=0
+ sub v1,x1
+code-
+ prs "-"
+ print v1
+code+
+; pop x1
+ return
+
+;-----
+
+.InitHeightTable
+ v4=65524 ;-12
+ HeightTable(0)=v4
+ v4=65528 ;-8
+ HeightTable(1)=v4
+ v4=65532 ;-4
+ HeightTable(2)=v4
+ v4=0
+ HeightTable(3)=v4
+ v4=4
+ HeightTable(4)=v4
+ v4=8
+ HeightTable(5)=v4
+ v4=16
+ HeightTable(6)=v4
+ v4=24
+ HeightTable(7)=v4
+ v4=32
+ HeightTable(8)=v4
+ v4=40
+ HeightTable(9)=v4
+ v4=48
+ HeightTable(10)=v4
+ v4=56
+ HeightTable(11)=v4
+ v4=64
+ HeightTable(12)=v4
+ v4=72
+ HeightTable(13)=v4
+ v4=80
+ HeightTable(14)=v4
+ v4=88
+ HeightTable(15)=v4
+ return
+
+;-----
+
+.ClearTopLine
+ v2=7
+.ClearTopWindow
+ &v1=LongWS(HiLongLogicalBase)
+ push v1
+ &v1=LongWS(LoLongLogicalBase)
+ push v1
+
+ &v1=LongWS(HiLongPhysicalBase)
+ &LongWS(HiLongLogicalBase)=v1
+ &v1=LongWS(LoLongPhysicalBase)
+ &LongWS(LoLongLogicalBase)=v1
+
+ &WordWS(WordCursorXpos)=c0
+ &WordWS(WordCursorYpos)=c0
+ v1=319
+ gosub @MCClearRectangle
+
+ pop v1
+ &LongWS(LoLongLogicalBase)=v1
+ pop v1
+ &LongWS(HiLongLogicalBase)=v1
+
+ return
+
+;-----
+
+.CalculateChecksum
+ push v1
+ push v2
+; push v3
+ push v4
+ add v1,c2 ;skip room #
+ &v2=FloorMap(v1) ;length-2
+ v3=10
+ add v1,v3
+ sub v2,v3
+ v3=0
+
+.Checksum
+ if v2=0 then GotChecksum
+ v4=FloorMap(v1)
+ add v3,v4
+ add v1,c1
+ sub v2,c1
+ goto Checksum
+.GotChecksum
+
+ pop v4
+; pop v3
+ pop v2
+ pop v1
+ return
+
+;-----
+
+.SetChecksums
+ CheckRoom1=0
+ CheckRoom2=0
+ CheckRoom3=0
+ CheckRoom4=0
+ CheckRoom5=0
+ CheckRoom6=0
+ CheckSum1=0
+ CheckSum2=0
+ CheckSum3=0
+ CheckSum4=0
+ CheckSum5=0
+ CheckSum6=0
+
+ v1=CurrentCache
+
+.SetNextRoom
+ &v2=FloorMap(v1) ;room number
+ if v2=0 then AllSet
+; push v2 ;room number
+ gosub @CalculateChecksum
+; pop v2
+
+;v1=address in cache
+;v2=room number
+;v3=checksum value
+
+ if CheckRoom1=0 then Set1
+ if CheckRoom2=0 then Set2
+ if CheckRoom3=0 then Set3
+ if CheckRoom4=0 then Set4
+ if CheckRoom5=0 then Set5
+ if CheckRoom6=0 then Set6
+;validation list full
+.AllSet
+ return
+
+.Set1
+ CheckRoom1=v2
+ CheckSum1=v3
+ goto RoomSet
+
+.Set2
+ CheckRoom2=v2
+ CheckSum2=v3
+ goto RoomSet
+
+.Set3
+ CheckRoom3=v2
+ CheckSum3=v3
+ goto RoomSet
+
+.Set4
+ CheckRoom4=v2
+ CheckSum4=v3
+ goto RoomSet
+
+.Set5
+ CheckRoom5=v2
+ CheckSum5=v3
+ goto RoomSet
+
+.Set6
+ CheckRoom6=v2
+ CheckSum6=v3
+
+.RoomSet
+ add v1,c2
+ &v2=FloorMap(v1) ;length-2
+ add v1,v2
+ goto SetNextRoom
+
+;-----
+
+.VerifyCheckSums
+ v1=CurrentCache
+
+.ChecknextRoom
+ &v2=FloorMap(v1) ;room number
+ if v2=0 then AllChecked
+ if v2=RoomNum then ThisRoomOk
+; push v2 ;room number
+ gosub @CalculateChecksum
+; pop v2
+
+;v1=address in cache
+;v2=room number
+;v3=checksum value
+
+ if v2=CheckRoom1 then Check1
+ if v2=CheckRoom2 then Check2
+ if v2=CheckRoom3 then Check3
+ if v2=CheckRoom4 then Check4
+ if v2=CheckRoom5 then Check5
+ if v2=CheckRoom6 then Check6
+;room not in validation list
+ v4=0 ;old checksum (not recorded)
+ goto BadRoom
+
+.Check1
+ v4=CheckSum1
+ goto CheckAny
+
+.Check2
+ v4=CheckSum2
+ goto CheckAny
+
+.Check3
+ v4=CheckSum3
+ goto CheckAny
+
+.Check4
+ v4=CheckSum4
+ goto CheckAny
+
+.Check5
+ v4=CheckSum5
+ goto CheckAny
+
+.Check6
+ v4=CheckSum6
+
+.CheckAny
+ if v3=v4 then ThisRoomOk
+
+.BadRoom
+ push v1
+ push v2
+
+ gosub @TextOnTopLine
+ code-
+ prs " Room "
+ print v2
+ prs " has changed to "
+ print v3
+ prs " (was "
+ print v4
+ prs ") "
+ code+
+
+.BadWait
+ gosub @MCosrdch
+ if v2<>1 then BadWait
+
+ gosub @TextOnTopLine
+
+ pop v2
+ pop v1
+
+.ThisRoomOk
+ add v1,c2
+ &v2=FloorMap(v1) ;length-2
+ add v1,v2
+ goto ChecknextRoom
+
+.AllChecked
+ return
+
+;-----
+
+.DisplayCursor
+ if HelpOrInfoMode<>HOIMnormal then NoCursor
+ if ViewOn=0 then NoCursor
+ dv1=CursorSprite
+ dv2=CursorX ;x
+ dv3=CursorZ ;z
+ dv4=CursorH ;h
+ dv6=0 ;non-reversed
+ dv5=dPlot
+ gosub @MCDrawObjectdv1
+.NoCursor
+ return
+
+;==========
+
+.SpecialDisLogical
+ add Flash,c1
+ and Flash,c1
+
+ gosub @SetUpLogicalTextPtr
+ &WordWS(WordCursorXpos)=c0
+
+ v1=184
+ &WordWS(WordCursorYpos)=v1
+ v1=319
+ v2=13
+ gosub @MCClearRectangle
+
+ code-
+ prs "FLOORx.DAT "
+ code+
+ v1=40
+ &WordWS(WordCursorXpos)=v1
+ v1=MapNumber
+ gosub @MCOswrchV1
+ v1=96
+ &WordWS(WordCursorXpos)=v1
+
+ code-
+ prs "Room="
+ print RoomNum
+ prs "   "
+ code+
+ if BulkMode=0 then AdviseHelp
+
+ ByteWS(ByteInvertFlag)=Flash
+ code-
+ prs "COPY MODE IS ON"
+ message cr
+ code+
+ ByteWS(ByteInvertFlag)=c0
+ goto BottomLine
+
+.AdviseHelp
+ code-
+ prs "Info on HELP key"
+ message cr ;flush
+ code+
+
+.BottomLine
+ &WordWS(WordCursorXpos)=c0
+ v1=192
+ &WordWS(WordCursorYpos)=v1
+
+cif Animation
+ if HoldOn=0 then NoHold
+ code-
+ prs "F7= "
+ code+
+ v1=HoldOn
+ v2=48
+ add v1,v2
+ gosub @MCOswrchV1
+.NoHold
+cend
+
+cif Animation
+ code-
+ prs " A="
+ print AnimationNumber
+ prs " O="
+ print RasterOffset
+ code+
+cend ;Animation
+
+ if CurrentRoom=0 then ReportNoMap
+ if RoomNum=0 then ReportNoMap
+
+ code-
+
+ prs "Point ("
+ print CursorX
+ prs ","
+ print CursorZ
+ prs ") "
+
+ code+
+ gosub @GDpointOnMap
+ code-
+ if ReturnCode=0 then @OffMap
+ code+
+ v2=15 ;00001111
+ and v2,CurrentSquare
+ code-
+
+;this 4x4 pixel area may be one of three types...
+
+ if v2=0 then @DisplayHeight   ;stored height
+
+ code+
+ gosub @GDquadMask
+ and v1,CurrentSquare
+ code-
+ if v1=0 then @ForcedUnblocked ;unblocked, but same quadrant as a blocked 4x4
+
+ prs "is blocked. Avoid="      ;blocked square
+ code+
+ v1=128 ;10000000 north
+ and v1,CurrentSquare
+ code-
+ if v1=0 then NotNorth
+ prs "N"
+.NotNorth
+
+ code+
+ v1=64 ;01000000 south
+ and v1,CurrentSquare
+ code-
+ if v1=0 then NotSouth
+ prs "S"
+.NotSouth
+
+ code+
+ v1=32 ;00100000 east
+ and v1,CurrentSquare
+ code-
+ if v1=0 then NotEast
+ prs "E"
+.NotEast
+
+ code+
+ v1=16 ;00010000 west
+ and v1,CurrentSquare
+ code-
+ if v1=0 then NotWest
+ prs "W"
+.NotWest
+ goto DisplayBlob
+
+.ForcedUnblocked ;unblocked, but same quadrant as a blocked 4x4
+ prs "is not blocked "
+ goto DisplayBlob
+
+.DisplayHeight
+ prs "has height="
+ code+
+ v1=240 ;11110000
+ and v1,CurrentSquare
+ asr v1
+ asr v1
+ asr v1
+ asr v1
+ gosub @ConvertHeight2
+ gosub @PrintX1
+ code-
+ goto DisplayBlob
+
+ code+
+.ReportNoMap
+ code-
+ prs "No map loaded (use FILE menu)"
+
+.DisplayBlob
+ prs " "
+ code+
+
+ gosub DisplayQuadrants
+ code-
+ goto Next
+
+.OffMap
+ prs "is outside map "
+
+.Next
+ message cr ;'DoCr' ignores newlines; this is 'flush'
+ code+
+ if HelpOrInfoMode<>HOIMnormal then NoDotCursor
+ if MapOn=0 then NoDotCursor
+ MouseX=CursorX
+ MouseY=CursorZ
+ add MouseX,c1
+ add MouseY,c1
+
+ goto Display4Pixels
+
+.NoDotCursor
+ return
+;-----
+.DisplayQuadrants
+ MouseX=BoxX288 ;Corner box...
+ gosub @DrawBox
+
+ v1=15 ;00001111
+ and v1,CurrentSquare
+ if v1=0 then NoPointer
+ MouseX=BoxX304 ;Quadrant box...
+ gosub @DrawBox
+.NoPointer
+
+;Fill in 'corner box;...
+
+ v1=4
+ and v1,CursorX
+ MouseX=BoxX289
+ if v1=0 then DQLeft
+ add MouseX,c3
+.DQLeft
+ v1=4
+ and v1,CursorZ
+ MouseY=BoxY193
+ if v1=0 then DQBottom
+ add MouseY,c3
+.DQBottom
+ gosub @Display4Pixels
+
+;Fill in 'quadrant box'...
+
+ v2=15 ;00001111
+ and v2,CurrentSquare
+ if v2=0 then @NoPointer2
+
+ MouseX=BoxX305
+ MouseY=BoxY193
+ v2=1 ;00000001
+ and v2,CurrentSquare
+ if v2=0 then NotTopLeft
+ gosub @Display4Pixels
+.NotTopLeft
+
+ MouseX=BoxX308
+ MouseY=BoxY193
+ v2=2 ;00000010
+ and v2,CurrentSquare
+ if v2=0 then NotTopRight
+ gosub @Display4Pixels
+.NotTopRight
+
+ MouseX=BoxX305
+ MouseY=BoxY196
+ v2=4 ;00000100
+ and v2,CurrentSquare
+ if v2=0 then NotBottomLeft
+ gosub @Display4Pixels
+.NotBottomLeft
+
+ MouseX=BoxX308
+ MouseY=BoxY196
+ v2=8 ;00001000
+ and v2,CurrentSquare
+ if v2=0 then NoPointer2
+ gosub @Display4Pixels
+.NoPointer2
+ return
+
+;-----
+
+.DrawBox
+ MouseY=BoxY192
+ v1=6
+.DB1
+ gosub @DisplayMouse
+ add MouseX,c1
+ sub v1,c1
+ if v1>0 then DB1
+ v1=6
+.DB2
+ gosub @DisplayMouse
+ add MouseY,c1
+ sub v1,c1
+ if v1>0 then DB2
+ v1=6
+.DB3
+ gosub @DisplayMouse
+ sub MouseX,c1
+ sub v1,c1
+ if v1>0 then DB3
+ v1=6
+.DB4
+ gosub @DisplayMouse
+ sub MouseY,c1
+ sub v1,c1
+ if v1>0 then DB4
+
+ add MouseX,c3
+ v1=7
+.DB5
+ gosub @DisplayMouse
+ add MouseY,c1
+ sub v1,c1
+ if v1>0 then DB5
+
+ sub MouseX,c3
+ sub MouseY,c4
+ v1=7
+.DB6
+ gosub @DisplayMouse
+ add MouseX,c1
+ sub v1,c1
+ if v1>0 then DB6
+
+ return
+;-----
+
+.MapBLocked
+ v1=MarginZ
+ c8=8
+ sub v1,c8
+ &WordWS(WordCursorYpos)=v1
+ gosub @SetUpLogicalTextPtr
+ push CursorX
+ push CursorZ
+ CursorZ=MarginZ
+
+.MB1
+ v1=MarginZ
+ add v1,SizeZ
+ if CursorZ=v1 then @MB6
+ if CursorZ>v1 then @MB6
+
+ CursorX=MarginX
+ &WordWS(WordCursorXpos)=MarginX
+ &v1=WordWS(WordCursorYpos)
+ c8=8
+ add v1,c8
+ &WordWS(WordCursorYpos)=v1
+
+.MB2
+ gosub @GDreadSquare
+ gosub @GDQuadMask
+ and v1,CurrentSquare
+ if v1=0 then MB4
+
+ MouseX=CursorX
+ MouseY=CursorZ
+ add MouseX,c1
+ add MouseY,c1
+ gosub @Display4pixels
+
+.MB4
+ add CursorX,c4
+ v1=MarginX
+ add v1,SizeX
+
+ if CursorX<v1 then @MB2
+.MB5
+
+ add CursorZ,c4
+ goto @MB1
+
+.MB6
+ pop CursorZ
+ pop CursorX
+ gosub @GDreadSquare
+
+ return
+
+;-----
+
+.MapHeight
+ v1=MarginZ
+ c8=8
+ sub v1,c8
+ &WordWS(WordCursorYpos)=v1
+ gosub @SetUpLogicalTextPtr
+ push CursorX
+ push CursorZ
+ CursorZ=MarginZ
+
+.MH1
+ v1=MarginZ
+ add v1,SizeZ
+ if CursorZ=v1 then @MH6
+ if CursorZ>v1 then @MH6
+
+ CursorX=MarginX
+ &WordWS(WordCursorXpos)=MarginX
+ &v1=WordWS(WordCursorYpos)
+ c8=8
+ add v1,c8
+ &WordWS(WordCursorYpos)=v1
+
+.MH2
+ gosub @GDreadSquare
+ v1=15
+ and v1,CurrentSquare
+ if v1<>0 then MH4 ;partially blocked
+ if CurrentSquare=48 then MH4 ;height=0
+
+ MouseX=CursorX
+ MouseY=CursorZ
+ add MouseX,c1
+ add MouseY,c1
+ gosub @Display4pixels
+
+.MH4
+ add CursorX,c4
+ v1=MarginX
+ add v1,SizeX
+
+ if CursorX<v1 then @MH2
+.MH5
+
+ add CursorZ,c4
+ goto @MH1
+
+.MH6
+ pop CursorZ
+ pop CursorX
+ gosub @GDreadSquare
+
+ return
+
+;-----
+
+.ExecuteTab
+ push x1
+ push v1
+
+ &v1=WordWS(WordCursorYpos)
+ push v1
+ code-
+ message cr
+ code+
+ pop v1
+ &WordWS(WordCursorYpos)=v1
+
+ pop v1
+ pop x1
+ &WordWS(WordCursorXpos)=x1
+ return
+
+;-----
+
+.SpecialDisplayRoom
+
+cif Animation
+ if HoldOn=0 then SDR1 ;off
+ if HoldOn=3 then SDR1 ;F5 only
+ gosub @ResetCoords
+
+.SDR1
+cend
+
+ if HelpOrInfoMode=HOIMhelp1 then @SDR4
+ if HelpOrInfoMode=HOIMhelp2 then @SDR5
+ if HelpOrInfoMode=HOIMhelp3 then @SDR6
+ if HelpOrInfoMode=HOIMhelp4 then @SDR7 ;animation
+ if HelpOrInfoMode=HOIMdir then @SDR2
+cif CacheOn
+ if HelpOrInfoMode=HOIMcache then @SDR3
+cend
+
+ if ViewOn=0 then NoView
+ gosub @MCDisplayViewMap
+.NoView
+
+ if MapOn=0 then @NoMap
+ if CurrentRoom=0 then @NoMap
+
+ if MapOn=1 then TextMap
+ if MapOn=3 then HeightMap
+ gosub @MapBlocked ;(MapOn=2)
+ goto NoMap
+
+.HeightMap
+ gosub @MapHeight
+ goto NoMap
+
+.TextMap
+ v1=MarginZ
+ c8=8
+ sub v1,c8
+ &WordWS(WordCursorYpos)=v1
+ gosub @SetUpLogicalTextPtr
+ push CursorX
+ push CursorZ
+ CursorZ=MarginZ
+
+.DisplayTextMap
+ v1=MarginZ
+ add v1,SizeZ
+ if CursorZ=v1 then @DTMend
+ if CursorZ>v1 then @DTMend
+
+ CursorX=MarginX
+ &WordWS(WordCursorXpos)=MarginX
+ &v1=WordWS(WordCursorYpos)
+ c8=8
+ add v1,c8
+ &WordWS(WordCursorYpos)=v1
+
+.DTMline
+ gosub @GDreadSquare
+ v1=15 ;00001111
+ and v1,CurrentSquare
+ if v1<>0 then TextDirection
+
+ v1=240 ;11110000
+ and v1,CurrentSquare
+ asr v1
+ asr v1
+ asr v1
+ asr v1
+ if v1>9 then DisplayHeight9
+ v2=48 ;"0"
+ add v1,v2
+ goto DTMheight0
+.DisplayHeight9
+ v2=55 ;'A'-10
+ add v1,v2
+.DTMheight0
+ ByteWS(ByteInvertFlag)=c0
+ goto DTMnextX
+
+.TextDirection
+ v1=240 ;11110000
+ and v1,CurrentSquare
+ v2=78 ;'N'
+ if v1=128 then DisplayDirection
+ v2=86 ;'V' North-South (Vertical)
+ if v1=192 then DisplayDirection
+ v2=83 ;'S'
+ if v1=64 then DisplayDirection
+ v2=69 ;'E'
+ if v1=32 then DisplayDirection
+ v2=72 ;'H' East-West (Horizontal)
+ if v1=48 then DisplayDirection
+ v2=87 ;'W'
+ if v1=16 then DisplayDirection
+ v2=76 ;'L' South-East (Left wall)
+ if v1=96 then DisplayDirection
+ v2=82 ;'R' South-West (Right wall)
+ if v1=80 then DisplayDirection
+ v2=67 ;'C' North-East
+ if v1=160 then DisplayDirection
+ v2=67 ;'C' North-West
+ if v1=144 then DisplayDirection
+ v2=65 ;'A' N+S+E+W
+ if v1=240 then DisplayDirection
+
+ v2=63 ;"?"
+.DisplayDirection
+ v1=v2
+ ByteWS(ByteInvertFlag)=c1
+
+.DTMnextX
+ gosub @MCoswrchV1
+ add CursorX,c8
+ v1=MarginX
+ add v1,SizeX
+
+ if CursorX<v1 then @DTMline
+.DTMnext
+
+ add CursorZ,c8
+ goto @DisplayTextMap
+
+.DTMend
+ pop CursorZ
+ pop CursorX
+ gosub @GDreadSquare
+
+.NoMap
+ ByteWS(ByteInvertFlag)=c0
+ return
+ 
+.SDR2
+ gosub @SetUpLogicalTextPtr
+ &WordWS(WordCursorXpos)=c0
+ &WordWS(WordCursorYpos)=c0
+
+ code-
+;     1234567890123456789012345678901234567890
+ prs " ROOM      X   Z   W   H   (SUM)"
+ message cr
+ code+
+
+ v1=CurrentCache
+.LR1
+ &v2=FloorMap(v1)
+ if v2=0 then LR2
+
+ push v1
+
+ code-
+ prs " "
+ print v2
+ code+
+
+ add v1,c4 ;skip length
+ &v2=Floormap(v1) ;Margin X
+
+ x1=88
+ gosub @ExecuteTab
+ code-
+ print v2
+ code+
+
+ add v1,c2
+ &v2=FloorMap(v1) ;Margin Z
+
+ x1=120
+ gosub @ExecuteTab
+ code-
+ print v2
+ code+
+
+ add v1,c2
+ &v2=FloorMap(v1) ;Size X
+
+ x1=152
+ gosub @ExecuteTab
+ code-
+ print v2
+ code+
+
+ add v1,c2
+ &v2=FloorMap(v1) ;Size Z
+
+ x1=184
+ gosub @ExecuteTab
+ code-
+ print v2
+
+ code+
+
+ pop v1
+
+ gosub @CalculateChecksum ;*
+;* push v1
+;* add v1,c2 ;skip room #
+;* &v2=FloorMap(v1) ;length-2
+;* v3=10
+;* add v1,v3
+;* sub v2,v3
+;* v3=0
+
+;*.Checksum
+;* if v2=0 then GotChecksum
+;* v4=FloorMap(v1)
+;* add v3,v4
+;* add v1,c1
+;* sub v2,c1
+;* goto Checksum
+;*.GotChecksum
+
+;* pop v1
+
+ x1=216
+ gosub @ExecuteTab
+ code-
+ print v3 ;Checksum
+ message cr
+ code+
+
+ add v1,c2
+ &v2=FloorMap(v1) ;length-2
+ add v1,v2
+ goto LR1
+
+.LR2
+ code-
+ prs "Return to continue "
+ message cr
+ code+
+ return
+
+cif CacheOn
+.SDR3
+ gosub @SetUpLogicalTextPtr
+ &WordWS(WordCursorXpos)=c0
+ &WordWS(WordCursorYpos)=c0
+ v2=0
+.LR3
+ &v1=FloorMap(v2)
+ if v1=0 then LR2
+ add v2,c2
+ code-
+ prs " room "
+ print v1
+ prs " map "
+ code+
+ &v1=FloorMap(v2)
+ gosub @MCoswrchV1
+ code-
+ message cr
+ code+
+ add v2,c2
+
+ goto LR3
+cend
+
+.SDR4 ;help page 1
+ gosub @SetUpLogicalTextPtr
+ &WordWS(WordCursorXpos)=c0
+ &WordWS(WordCursorYpos)=c0
+ code-
+
+;     1234567890123456789012345678901234567890
+ prs "Non-menu commands..."
+ message cr
+ prs " "
+ message cr
+ prs "  Q      quit"
+ message cr
+ prs "  XZ     set cursor coords"
+ message cr
+ prs "  NSEW   Toggle avoidance pointer"
+ message cr
+ prs "  B      block current square"
+ message cr
+ prs "  U      unblock square"
+ message cr
+ prs "  H      unblock a group of 4 squarea"
+ message cr
+ prs "         and/or set height"
+ message cr
+ prs "  C      toggle copy-mode (has bugs)"
+ message cr
+ prs "  D      display menu"
+ message cr
+ prs "  F      file menu"
+ message cr
+ prs "  M      misc menu"
+ message cr
+ prs "  R      switch room"
+ message cr
+
+; prs "  C      display object at cursor"
+; message cr
+; prs "  R      display room as background"
+; message cr
+; prs "  F8     insert 'cursor' into structure"
+; message cr
+ prs "  ESC    Save/ESC from prompts"
+ message cr
+ prs "  cursor keys to change X/Z"
+ message cr
+ prs " "
+ message cr
+ prs "Press HELP or RETURN to continue"
+
+ message cr ;'DoCr' ignores newlines; this is 'flush'
+ code+
+ return
+
+.SDR5 ;help page 2
+ gosub @SetUpLogicalTextPtr
+ &WordWS(WordCursorXpos)=c0
+ &WordWS(WordCursorYpos)=c0
+ code-
+
+ prs "File Menu..."
+ message cr
+ prs " "
+ message cr
+ prs "   1. Load floor file"
+ message cr
+; prs "   2. Set current room number"
+; message cr
+ prs "   3. Delete room map"
+ message cr
+ prs "   4. Set current room size"
+ message cr
+ prs "   5. Floor map directory"
+ message cr
+ prs " "
+ message cr
+ prs "Misc menu..."
+ message cr
+ prs " "
+ message cr
+ prs "   1. Duplicate room"
+ message cr
+ prs "   2. Fill (block) an area"
+ message cr
+ prs "   3. Slide map (change margin)"
+ message cr
+ prs " "
+ message cr
+
+; prs "Floor map editor (map selection)..."
+; message cr
+; prs "  ESC    save FLOOR.DAT (follow with R)"
+; message cr
+; prs "  F      load new floor map file"
+; message cr
+; prs "  R      switch rooms"
+; message cr
+; prs "  L      list maps stored"
+; message cr
+; prs "  I      create map"
+; message cr
+; prs "  D      delete map"
+; message cr
+; prs "  V      toggle room view"
+; message cr
+; prs "  M      toggle map view"
+; message cr
+; prs "  cursor/"
+; message cr
+; prs "  keypad move cursor 'dot'"
+; message cr
+ prs "Press HELP or RETURN to continue"
+
+ message cr ;'DoCr' ignores newlines; this is 'flush'
+ code+
+ return
+
+.SDR6 ;help page 3
+ gosub @SetUpLogicalTextPtr
+ &WordWS(WordCursorXpos)=c0
+ &WordWS(WordCursorYpos)=c0
+ code-
+
+ prs "Display menu..."
+ message cr
+ prs " "
+ message cr
+ prs "   1. Toggle View"
+ message cr
+ prs "   2. Map off"
+ message cr
+ prs "   3. Text"
+ message cr
+ prs "   4. Blocked squares"
+ message cr
+ prs "   5. non-zero height squares"
+ message cr
+ prs "   6. Set cursor sprite number"
+; prs "Floor map editor (updating room)..."
+; message cr
+; prs "  H      set unblocked/height of current square"
+; message cr
+; prs "  NSEW   Toggle avoidance pointer"
+; message cr
+; prs "  B      block current square"
+; message cr
+; prs "  U      unblock square"
+; message cr
+; prs "  Y      toggle copy-mode (has bugs)"
+; message cr
+; prs "  T      Set 'GOAL' start"
+; message cr
+; prs "  G      Run collision detection to cursor"
+; message cr
+; prs "  A      repeat to random X/Z (save first)"
+ message cr
+ prs " "
+ message cr
+ prs "Press RETURN to continue"
+
+ message cr ;'DoCr' ignores newlines; this is 'flush'
+ code+
+ return
+
+.SDR7 ;help page 4
+cif Animation
+ gosub @SetUpLogicalTextPtr
+ &WordWS(WordCursorXpos)=c0
+ &WordWS(WordCursorYpos)=c0
+ code-
+
+ prs "Animation..."
+ message cr
+ prs "  F1/F2  Step Animation"
+ message cr
+ prs "  F3/F4  Step Raster"
+ message cr
+ prs "  F5     Set Animation"
+ message cr
+ prs "  F6/O   Set Raster"
+ message cr
+ prs "  F7     1 Hold X=208 Z=128  coords"
+ message cr
+ prs "         2 Hold X=208 Z=128 H=64 coords"
+ message cr
+ prs "         3 Set coords only tab/F5/F1/F2"
+ message cr
+ prs "  space  Reset coords"
+ message cr
+ prs "  tab    Start Animation"
+ message cr
+ prs "Press HELP or RETURN to continue"
+
+ message cr ;'DoCr' ignores newlines; this is 'flush'
+ code+
+cend
+ return
+
+;-----
+.DisplaySpecialSprites
+; if CursorSprite=0 then NoArms
+ gosub @DisplayCursor
+;.NoArms
+ return
+;-----
+.SpecialACBkilled ;ACBList(ACBHeader) or dv1
+ return
+;-----
+.SpecialXZHObject
+ return
+;---
+.SpecialRasterObject
+ return
+;---
+.SpecialAniObject
+; object num has been requested by an animation sequence.
+; Do any intercepts, and change dv1-6 if you really
+; want to.
+ return
+;---
+
+.MCDrawObjectV1Vec
+ goto @MCDrawObjectV1
+
+.MCNoClipSpriteVec
+ goto @MCNoClipSprite
+
+.MCFindObjVec
+ goto @MCFindObj
+
+;-----
+
+.GetFileName
+code -
+ message 100 ; filename?
+code +
+
+.GetInput
+ x4=8 ; position in input buffer (List17)
+ gosub @SetUpPhysicalTextPtr
+ &list17(8)=c0
+ &list17(10)=c0
+ &list17(12)=c0
+ &list17(14)=c0
+
+.GFNLoop2
+
+.GFNLoop
+;; gosub @FlashCursor
+ gosub @MCOsrdch
+ if v1=0 then GFNLoop
+ if v2=1 then @MainLoop
+ if x4<9 then NoBackSpace
+ if v1<>8 then NoBackSpace
+ sub x4,c1
+ &x1=WordWS(WordCursorXPos)
+ x2=8
+ sub x1,x2
+ &WordWS(WordCursorXPos)=x1
+code -
+ prs " "
+code +
+ &WordWS(WordCursorXPos)=x1
+ goto GFNLoop2
+
+.NoBackSpace
+ if v1=13 then @GFNCr
+ if v1<32 then @GFNLoop2 ; unrecognized control code
+ list17(x4)=v1
+
+; write character to currently displayed screen...
+ gosub @MCOswrchV1
+ add x4,c1
+ goto @GFNLoop2
+
+.GFNCr
+ list17(x4)=c0
+ gosub @SetUpTextPtr
+ return
+
+;--------
+.GetInputNumber
+; get x1 as number typed in by user
+ gosub @GetInput
+
+.ParseInputNumber
+; input string is in List17(8..x4)
+ x1=0 ; result
+ x4=8 ; ptr to list17
+ x5=1 ; multiplier
+ Negative=false
+
+.GINLoop
+ x3=list17(x4)
+ if x3=0 then GINEnd
+ add x4,c1
+ if x3<>45 then GINNotNegative
+ Negative=true
+ goto GINLoop
+
+.GINNotNegative
+ x2=48 ; '0'
+ sub x3,x2 ; make into nuber
+ if x3>9 then GINRet
+; x1:=x1*10+x3
+ add x1,x1
+ x2=x1
+ add x1,x1
+ add x1,x1
+ add x1,x2
+ add x1,x3
+
+ goto @GINLoop
+
+.GINEnd
+.GINRet
+ if x1>8000 then @MainLoop ;error-trap
+ return
+;-------
+.ConvertNegative
+; convert x1 produced by GetInputNumber to a negative number
+; with  appropriate number of bits, if a negative sign
+; was specified by the user.
+ if Negative=false then CNRet
+ push HighestPossible
+  add HighestPossible,c1
+  sub HighestPossible,x1
+  x1=HighestPossible
+ pop HighestPossible
+.CNRet
+ return

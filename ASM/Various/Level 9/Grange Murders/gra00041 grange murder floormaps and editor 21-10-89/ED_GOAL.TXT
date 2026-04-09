@@ -1,0 +1,824 @@
+; Goal.TXT Copyright (C) 1989 Level 9 Computing.
+;
+; for Floor Map Editor.
+;
+; N.W.Austin 28/6/89
+;
+;-----
+
+;GOAL.TXT: handle local goal-direction movement.
+;Two entry points:
+;   AAInitGD        start GD movement
+;   AAlocalGoalSeek continue GD movement
+
+;-----
+
+;The FLOOR.DAT floor map is compressed; obstacles are marked
+;as 1 bit on a fine grid 4-pixels apart; Info for corrective
+;action (avoidance pointer) is stored as 4 bits on a coarse
+;grid 8 pixels apart. Height of the 'floor' (e.g. depth of a
+;river) is 4 bits on a coarse grid 8 pixels apart.
+
+;Thus there are 4 points on the fine grid for every point on
+;the coarse grid (the four points are a square, NOT linear)
+
+;'Blocked' points do not need a height; 'Unblockd' do not need
+;an avoidance pointer. To compress, where not all of each group
+;of 4 points (on the fine grid) are 'blocked' the height is
+;assumed to that of surrounding squares; thus only 8 bits stores
+;the height, avoidance and blocked info for each coarse point.
+
+;The header (NOT IMPLEMENTED) stores the ObjectNumber, Margin
+;X/Z, Width and Height so that walls need not be stored.
+;Typically for each room about 446 bytes are stored (100 rooms
+;44K bytes)
+
+;-----
+
+; draw flags are...
+; dRemoveRedraw=65535  -1 Remove and redraw
+; dInsert=0            insert
+; dPlot=1              plot as sprite
+; dInsertRedraw=2      insert and redraw
+; dMarkPreload=3       mark to preload
+; dSetProtect=4        set protection mark
+; dUnsetProtect=5      unset protection mark
+
+const
+ ACBspOffset=2
+ CheckForNPCs=0
+
+var
+;* IntendedDir       ;direction to escape from collision
+;* GoalNowX GoalNowZ ;coords right now
+;* TryDir            ;attempted next direction to travel
+;* StartX StartY     ;coords used for testing locns other than NowX,NowZ
+
+begin
+
+;-----
+
+;Set ACBList(dx4) to seek location (v1,v2)
+
+.AAInitGD
+ v3=ACBdestX
+ add v3,dx4
+ &ACBList(v3)=v1
+
+ v3=ACBdestZ
+ add v3,dx4
+ &ACBList(v3)=v2
+
+ v1=ACBintendedDirection
+ add v1,dx4
+ ACBList(v1)=c0
+
+ v1=ACBstatus
+ add v1,dx4
+ v2=254 ;interruptable GD
+ ACBList(v1)=v2
+ return
+
+;-----
+
+;If ACBList(dx4) setup by AAInitGD takes ACB one step
+;further to destination. If not setup then does nothing.
+;ACBList+ACBstatus(dx4) is return code, if not 254 then
+;ACB GD has ended
+
+.AAlocalGoalSeek
+;Extract info from dx4...
+
+ v1=ACBstatus
+ add v1,dx4
+ v1=ACBList(v1)
+ if v1=254 then GDinProgress
+ return
+
+.GDinProgress
+ &v1=ACBList(dx4) ;get animation sequence
+ dir=1
+ if v1=2501 then GIPwalk
+ dir=3
+ if v1=2503 then GIPwalk
+ dir=5
+ if v1=2505 then GIPwalk
+ dir=7
+ if v1=2507 then GIPwalk
+ dir=0
+.GIPwalk
+
+ v1=ACBintendedDirection
+ add v1,dx4
+ IntendedDir=ACBList(v1)
+
+ v1=ACBdestX
+ add v1,dx4
+ &DestX=ACBList(v1)
+ x1=65533
+ and destx,x1 ; make dest divisible by 4
+
+ v1=ACBdestZ
+ add v1,dx4
+ &DestZ=ACBList(v1)
+ x1=65533
+ and destz,x1 ; make dest divisible by 4
+
+ v1=ACBxOffset
+ add v1,dx4
+ &GoalNowX=ACBList(v1)
+ v1=65532 ;0FFFC
+ and GoalNowX,v1
+
+ v1=ACBzOffset
+ add v1,dx4
+ &GoalNowZ=ACBList(v1)
+ v1=65534 ;0FFFE
+ and GoalNowZ,v1
+
+ if GoalNowX<>DestX then GSS1
+ if GoalNowZ<>DestZ then GSS1
+
+;reached destination
+
+ v1=ACBstatus
+ add v1,dx4
+ v2=253 ;Arrived
+ ACBList(v1)=v2
+
+.GDstandStill
+ if dir=0 then GSSstop
+ ObjectNumber=2510
+ add ObjectNumber,dir
+ push dx4
+ gosub @ChangeACBdx4
+ pop dx4
+
+.GSSstop
+ v1=ACBhOffset
+ add v1,dx4
+ &ACBList(v1)=CursorH
+
+ goto @GDstoreACB
+
+.GSS1
+ if dir=0 then GSS2 ;we are not moving...
+
+;Some animation sequences start by displaying the new view 
+;so check that at least one SHIFT instruction is executed
+
+ gosub @GDGetFinePos
+;****************************** v1=ACBlastDirOffset ;misnomer
+ add v1,dx4
+ &v1=ACBList(v1)
+ if v1<>v2 then GSS2
+
+ goto @GDstoreACB
+
+.GSS2
+
+;If we are clear of obstacles then execute a simple go-in-one-
+;direction until axis-coord is the same; turn Left/Right; go-
+;at-right-angles until booth coords are the same.
+
+ if IntendedDir=0 then @GDclearSpace
+
+;Avoiding obstacle
+
+ StartX=GoalNowX
+ StartY=GoalNowZ
+ if dir=1 then @GDlookAheadN
+ if dir=3 then @GDlookAheadE
+ if dir=5 then @GDlookAheadS
+ if dir=7 then GDlookAheadW
+ goto @GDnotClear
+
+.GDlookAheadW
+ if IntendedDir<>3 then @GDnotClear
+; ??
+; .
+; UB
+ add StartY,c4
+ gosub @GDtryLookAhead
+ if ReturnCode=0 then NotTurnWS
+ add StartX,c4
+ gosub @GDtryLookAhead
+ if ReturnCode<>0 then NotTurnWS
+ TryDir=5
+ goto @GDtryUnblock
+.NotTurnWS
+; UB
+; .
+; ??
+ StartX=GoalNowX
+ StartY=GoalNowZ
+ sub StartY,c4
+ gosub @GDtryLookAhead
+ if ReturnCode=0 then @GDnotClear
+ add StartX,c4
+ gosub @GDtryLookAhead
+ if ReturnCode<>0 then @GDnotClear
+ TryDir=1
+ goto @GDtryUnblock
+
+.GDlookAheadE
+ if IntendedDir<>7 then @GDnotClear
+; ??
+;  .
+; BU
+ add StartY,c4
+ gosub @GDtryLookAhead
+ if ReturnCode=0 then NotTurnES
+ sub StartX,c4
+ gosub @GDtryLookAhead
+ if ReturnCode<>0 then NotTurnES
+ TryDir=5
+ goto @GDtryUnblock
+.NotTurnES
+; BU
+;  .
+; ??
+ StartX=GoalNowX
+ StartY=GoalNowZ
+ sub StartY,c4
+ gosub @GDtryLookAhead
+ if ReturnCode=0 then @GDnotClear
+ sub StartX,c4
+ gosub @GDtryLookAhead
+ if ReturnCode<>0 then @GDnotClear
+ TryDir=1
+ goto @GDtryUnblock
+
+.GDlookAheadN
+ if IntendedDir<>5 then @GDnotClear
+; U.?
+; B ?
+ sub StartX,c4
+ gosub @GDtryLookAhead
+ if ReturnCode=0 then NotTurnNW
+ add StartY,c4
+ gosub @GDtryLookAhead
+ if ReturnCode<>0 then NotTurnNW
+ TryDir=7
+ goto @GDtryUnblock
+.NotTurnNW
+; ?.U
+; ? B
+ StartX=GoalNowX
+ StartY=GoalNowZ
+ add StartX,c4
+ gosub @GDtryLookAhead
+ if ReturnCode=0 then @GDnotClear
+ add StartY,c4
+ gosub @GDtryLookAhead
+ if ReturnCode<>0 then @GDnotClear
+ TryDir=3
+ goto GDtryUnblock
+
+.GDlookAheadS
+ if IntendedDir<>1 then GDnotClear
+; B ?
+; U.?
+ sub StartX,c4
+ gosub @GDtryLookAhead
+ if ReturnCode=0 then NotTurnSW
+ sub StartY,c4
+ gosub @GDtryLookAhead
+ if ReturnCode<>0 then NotTurnSW
+ TryDir=7
+ goto GDtryUnblock
+.NotTurnSW
+; ? B
+; ?.U
+ StartX=GoalNowX
+ StartY=GoalNowZ
+ add StartX,c4
+ gosub @GDtryLookAhead
+ if ReturnCode=0 then GDnotClear
+ sub StartY,c4
+ gosub @GDtryLookAhead
+ if ReturnCode<>0 then GDnotClear
+ TryDir=3
+
+.GDtryUnblock
+ gosub @GDtryDirection
+ if ReturnCode<>0 then @GDmakeMove
+.GDnotClear ;can't follow object edge...
+
+ TryDir=IntendedDir
+ gosub @GDtryDirection
+ if ReturnCode<>0 then GDavoidOver
+
+ TryDir=Dir
+ gosub @GDtryDirection
+ if ReturnCode<>0 then @GDmakeMove
+ goto @GDavoidObstacle
+
+.GDavoidOver
+ IntendedDir=0
+ goto @GDmakeMove
+
+.GDclearSpace
+ gosub @GDcalcFastest ;Turn Left/Right ?
+ gosub @GDtryDirection
+ if ReturnCode<>0 then @GDmakeMove
+
+ TryDir=Dir         ;Current route OK?
+ gosub @GDtryDirection
+ if ReturnCode<>0 then @GDmakeMove
+
+ IntendedDir=Dir ;remember direction that made us first collide
+
+.GDavoidObstacle
+;'CurrentSquare' is an obstacle
+ if dir=1 then @GDavoidEW
+ if dir=3 then @GDavoidNS
+ if dir=5 then @GDavoidEW
+ if dir=7 then @GDavoidNS
+
+;Start 'Find' in a blocked position
+ gosub @GDcalcFastest
+ IntendedDir=TryDir
+
+ TryDir=1
+ gosub @GDtryDirection
+ if ReturnCode<>0 then @GDmakeMove
+ TryDir=3
+ gosub @GDtryDirection
+ if ReturnCode<>0 then @GDmakeMove
+ TryDir=5
+ gosub @GDtryDirection
+ if ReturnCode<>0 then @GDmakeMove
+ TryDir=7
+ gosub @GDtryDirection
+ if ReturnCode<>0 then @GDmakeMove
+
+ v1=ACBstatus
+ add v1,dx4
+ v2=252 ;Stuck
+ ACBList(v1)=v2
+
+ goto @GDstandStill
+
+.GDavoidEW
+ gosub @GDleftOrRight
+ if TryDir=7 then GDA1
+
+ v1=32 ;0010 0000 E
+ and v1,CurrentSquare
+ if v1=0 then GDA1
+
+ TryDir=3
+ gosub @GDtryDirection
+ if ReturnCode<>0 then @GDmakeMove
+.GDA1
+  
+ v1=16 ;0001 0000 W
+ and v1,CurrentSquare
+ if v1=0 then GDA2
+
+ TryDir=7
+ gosub @GDtryDirection
+ if ReturnCode<>0 then @GDmakeMove
+.GDA2
+ v1=32 ;0010 0000 E
+ and v1,CurrentSquare
+ if v1=0 then GDA3
+
+ TryDir=3
+ gosub @GDtryDirection
+ if ReturnCode<>0 then @GDmakeMove
+.GDA3
+ goto @GDnoPreference
+
+.GDavoidNS
+ gosub @GDupOrDown
+ if TryDir=5 then GDA4
+
+ v1=128 ;1000 0000 N
+ and v1,CurrentSquare
+ if v1=0 then GDA4
+
+ TryDir=1
+ gosub @GDtryDirection
+ if ReturnCode<>0 then @GDmakeMove
+.GDA4
+  
+ v1=64 ;0100 0000 S
+ and v1,CurrentSquare
+ if v1=0 then GDA5
+
+ TryDir=5
+ gosub @GDtryDirection
+ if ReturnCode<>0 then @GDmakeMove
+.GDA5
+ v1=128 ;1000 0000 N
+ and v1,CurrentSquare
+ if v1=0 then GDA6
+
+ TryDir=1
+ gosub @GDtryDirection
+ if ReturnCode<>0 then @GDmakeMove
+.GDA6
+
+;We can get here, e.g. when an outside corner square is hit,
+;since the
+;corners avoidance pointer only gives advice when approached 
+;from one direction, from the other we must bluff our way 
+; around the obstacle...
+
+.GDnoPreference
+ if dir=1 then GNP1
+ if dir=5 then GNP1
+ gosub @GDleftOrRight
+ goto GNP2
+.GNP1
+ gosub @GDupOrDown
+.GNP2
+ gosub @GDtryDirection
+ if ReturnCode<>0 then @GDmakeMove
+
+ TryDir=1
+ gosub @GDtryDirection
+ if ReturnCode<>0 then @GDmakeMove
+ TryDir=3
+ gosub @GDtryDirection
+ if ReturnCode<>0 then @GdMakeMove
+ TryDir=5
+ gosub @GDtryDirection
+ if ReturnCode<>0 then @GdMakeMove
+ TryDir=7
+ gosub @GDtryDirection
+ if ReturnCode<>0 then @GdMakeMove
+
+ v1=ACBstatus
+ add v1,dx4
+ v2=252 ;Stuck
+ ACBList(v1)=v2
+
+ goto @GDstandStill
+
+;-----
+
+.GDtryDirection
+ if TryDir=0 then @GTL2
+
+ if Dir<>1 then GTD1
+ if TryDir=5 then @GTL2
+.GTD1
+ if Dir<>3 then GTD2
+ if TryDir=7 then @GTL2
+.GTD2
+ if Dir<>5 then GTD3
+ if TryDir=1 then @GTL2
+.GTD3
+ if Dir<>7 then GTD4
+ if TryDir=3 then @GTL2
+.GTD4
+
+ StartX=GoalNowX
+ StartY=GoalNowZ
+
+;Predict where 'TryMove' move will take us...
+ if TryDir<>1 then GTD5
+ sub StartY,c4
+.GTD5
+ if TryDir<>3 then GTD6
+ add StartX,c4
+.GTD6
+ if TryDir<>5 then GTD7
+ add StartY,c4
+.GTD7
+ if TryDir<>7 then GDtryLookAhead
+ sub StartX,c4
+
+.GDtryLookAhead
+
+;;;;;;;;; goto @GTL3 ;;;;;;;;;;;;;DISABLED!!!!!!!!!
+
+ push CursorX
+ push CursorZ
+ CursorX=StartX
+ CursorZ=StartY
+ gosub @GDpointOnMap
+ CurrentSquare=15 ; off map -> walkable
+ if ReturnCode=0 then GTL1
+ gosub @GDreadSquare ;current square=collision byte
+ gosub @GDquadMask ;v1=mask
+.GTL1
+ pop CursorZ
+ pop CursorX
+ and v1,CurrentSquare
+ if v1=0 then GTL3
+.GTL2
+ ReturnCode=0 ;blocked
+ return
+.GTL3
+;
+;=====
+cif CheckForNPCs
+
+; Any people at our destination?
+ gosub @checkforpeople
+ if dx1=0 then @NoPeopleCollision
+;
+; When finding an npc, stop finding when we bump into our target
+ g1=ACBStatus
+ add g1,ACBHeader
+ g1=ACBList(g1) ; g1 is status
+ if g1<>ACBFindNpc then @GTL4 ;* GTL2 ; not finding npc, but 
+; still collided with somebody, so make a detour
+;
+; Is the npc we've bumped into the one we're trying to find?
+ gosub @SetActorAttributes
+ gosub @GetCurrentCommand ; noun1 is the npc we're trying to find
+ g1=ACBObjectOffset
+ add g1,dx1
+ &g1=ACBList(g1) ; g1 is npc we've collided with
+ if noun1<>g1 then @GTL4 ;* GTL2 ; we've bumped into the wrong 
+; npc, so make a detour
+;
+; We've hit the target npc...
+ x2=ACBArrived
+ x1=ACBStatus
+ add x1,ACBHeader
+ ACBList(x1)=x2
+.NoPeopleCollision
+
+cend ;CheckforNPCs
+
+;=====
+;
+ ReturnCode=1
+ return
+
+;============
+
+;7/8/89...
+cif CheckForNPCs
+
+.GTL4 ;hit NPC dx1.
+ &x1=ACBList(dx1)
+ if x1<MovingAnimation then @GTL2 ;NPC is not walking, so we must avoid him...
+ goto @GTL2
+ sub x1,c8
+ if x1>MovingAnimation then @GTL2 ;NPC is not walking, so we must avoid him...
+
+;NPC is walking (towards us?) so we stop, and let him avoid us.
+
+ v1=ACBintendedDirection
+ add v1,dx4
+ ACBList(v1)=dir
+
+ ObjectNumber=2510
+ add ObjectNumber,dir
+ push dx4
+ gosub @ChangeACBdx4
+ pop dx4
+ ReturnCode=1
+ return
+
+cend ;CheckForNPCs
+
+;=====
+cif CheckForNPCs
+
+; Check for people at StartX,StartY
+.checkforpeople
+ push dv2
+ push dv3
+ push dx2
+ push dx3
+ dv2=StartX
+ dv3=StartY
+ dx2=0
+ dx3=0
+ gosub @CPC0
+ pop dx3
+ pop dx2
+ pop dv3
+ pop dv2
+ return
+
+cend
+
+;=====
+
+;-----
+
+.GDcalcFastest
+ StartX=GoalNowX
+ StartY=GoalNowZ
+ v1=65532 ;0FFFC
+ and StartX,v1
+ and DestX,v1
+ v1=65534 ;0FFFE
+ and StartY,v1
+ and DestZ,v1
+
+ if dir=1 then GDsetNEW
+ if dir=3 then GDsetNES
+ if dir=5 then GDsetESW
+ if dir=7 then GDsetNSW
+ code-
+ random v1
+ code+
+ and v1,c3
+ if v1=0 then GDsetNEW
+ if v1=1 then GDsetNES
+ if v1=2 then GDsetNSW
+
+.GDsetESW ;Pick south, else EW
+ gosub GDupOrDown
+ if v1=0 then GDleftOrRight
+ if TryDir=1 then GDleftOrRight
+ return
+
+.GDsetNEW ;Pick north, else EW
+ gosub GDupOrDown
+ if v1=0 then GDleftOrRight
+ if TryDir=5 then GDleftOrRight
+ return
+
+.GDsetNSW ;Pick west, else NS
+ gosub GDleftOrRight
+ if v2=0 then GDupOrDown
+ if TryDir=3 then GDupOrDown
+ return
+
+.GDsetNES ;Pick east, else NS
+ gosub GDleftOrRight
+ if v2=0 then GDupOrDown
+ if TryDir=7 then GDupOrDown
+ return
+
+.GDleftOrRight
+ v2=DestX    ;destination X
+ sub v2,GoalNowX ;end-start
+ TryDir=3 ;right
+ if v2<32768 then GLR1
+ TryDir=7 ;left
+.GLR1
+ return
+
+.GDupOrDown
+ v1=DestZ ;destination Z
+ sub v1,GoalNowZ ;end-start
+ TryDir=5 ;down
+ if v1<32768 then GUD1
+ TryDir=1 ;up
+.GUD1
+ return
+
+;-----
+
+.GDmakeMove
+
+;=====
+; Special bodge to make sure we don't move once we've arrived at our 
+; dest. This is useful when an arrival is forced, such as when 
+; colliding with the person we are following.
+ x1=ACBStatus
+ add x1,ACBHeader
+ x2=ACBList(x1)
+ if x2=ACBArrived then @GDstandStill
+;=====
+
+ if dir=TryDir then GSD1
+
+ dir=TryDir
+ goto GSD2
+.GSD1
+ goto GDstoreACB
+
+.GSD2
+ ObjectNumber=2500
+ add ObjectNumber,dir
+ push dx4
+ gosub @ChangeACBdx4
+ pop dx4
+
+ v1=ACBhOffset
+ add v1,dx4
+ &ACBList(v1)=CursorH
+
+.GDstoreACB
+ v1=ACBintendedDirection
+ add v1,dx4
+ ACBList(v1)=IntendedDir
+
+ gosub GDGetFinePos
+;********** v1=ACBlastDirOffset ;misnomer
+ add v1,dx4
+ &ACBList(v1)=v2
+ return
+
+;-----
+
+.GDGetFinePos ;puts low 4 bits of X/Z position in v2
+ v1=ACBxOffset
+ add v1,dx4
+ &v1=ACBList(v1)
+ v3=15
+ and v3,v1
+
+ add v3,v3
+ add v3,v3
+ add v3,v3
+ add v3,v3 ;v3 = xxxx0000
+
+ v1=ACBzOffset
+ add v1,dx4
+ &v1=ACBList(v1)
+ v2=15
+ and v2,v1 ;v2 = 0000zzzz
+
+ or v2,v3 ;v2 = xxxxzzzz
+ return
+
+;-----
+
+.GDpointOnMap
+cif BadRoomOK
+ if CurrentRoom=0 then GPM1 ;for editor, must INIT room first
+cend
+ if CurrentRoom=0 then GPM2 ;for games, room is walkable
+ if CursorX<MarginX then GPM1 ;*
+ v1=MarginX
+ add v1,Sizex
+ if CursorX>v1 then GPM1
+ if CursorX=v1 then GPM1 ;*
+ if CursorZ<MarginZ then GPM1
+ v1=MarginZ
+ add v1,SizeZ
+ if CursorZ<v1 then GPM2
+.GPM1
+ ReturnCode=0
+ return
+
+.GPM2
+ ReturnCode=1
+ return
+
+;-----
+
+.GDquadMask
+;Calculate mask for current quadrant
+ v2=CursorZ
+ and v2,c4 ;0=top row 1=bottom row
+ v3=CursorX
+ and v3,c4 ;0=left, 1=right
+
+ if v2<>0 then GQM1
+ v1=1 ;0001
+ if v3=0 then GQM2
+ v1=2 ;0010
+ return
+.GQM1
+ v1=4 ;0100
+ if v3=0 then GQM2
+ v1=8 ;1000
+.GQM2
+ return
+
+;-----
+
+.GDreadSquare
+ if CurrentRoom=0 then NoData ;*
+ gosub GDsquareAddr
+ CurrentSquare=FloorMap(v1)
+ return
+.NoData ;*
+ CurrentSquare=48 ;00110000 height=0
+ return
+
+.GDsquareAddr
+ v3=CursorZ
+ sub v3,MarginZ
+ asr v3 ;each byte represents an 8x8 area
+ asr v3
+ asr v3
+; (320-32)/4=72
+ v2=SizeX
+ asr v2
+ asr v2
+ asr v2
+ v1=0
+.CSA1
+ if v2=0 then CSA2
+ add v1,v3
+ sub v2,c1
+ if v2>0 then CSA1
+
+.CSA2
+ v2=CursorX
+ sub v2,MarginX
+ asr v2
+ asr v2
+ asr v2
+ add v1,v2
+
+ add v1,CurrentRoom
+ return
+
+;-----

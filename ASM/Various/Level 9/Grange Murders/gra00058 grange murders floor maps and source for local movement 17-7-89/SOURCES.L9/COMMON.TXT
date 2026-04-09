@@ -1,0 +1,868 @@
+; COMMON.TXT Copyright (C) 1989 Level 9 Computing.
+;
+; display routines for Rocket Ranger Clone/Billy the Kid etc...
+;
+; N.W.Austin 5/6/89
+;
+;-----
+
+;Initialisation routines...
+;     SafeRestart/Initialise/SetPallette/PreLoad100/PreLoadAndInsertdv1
+
+;Display routines...
+;     DisplayEverything ErrorHandler
+
+;Keyboard emulation...
+;     AccessJoystick
+
+;Sound control...
+;     LoadSample StartSound
+
+;Animation control...
+;     StartFreeACB SetUpACBdx4 ChangeACBdx4
+
+;-----
+
+; draw flags are...
+; dRemoveRedraw=65535 ;  -1 Remove and redraw
+; dInsert=0 ;   0 insert
+; dPlot=1 ;   1 plot as sprite
+; dInsertRedraw=2 ;   2 insert and redraw
+; dMarkPreload=3 ;   3 mark to preload
+; dSetProtect=4 ;   4 set protection mark
+; dUnsetProtect=5 ;   5 unset protection mark
+
+const
+ true=1
+ false=0
+ cr=5
+ StructureBufferList=15
+
+ JoyF=128 ;Fire button
+ JoyR=8   ;Right
+ JoyL=4   ;Left
+ JoyD=2   ;Down
+ JoyU=1   ;Up
+
+ GSXcr=28
+ GSXspace=57
+ GSXpad7=103
+ GSXpad8=104
+ GSXpad9=105
+ GSXpad4=106
+ GSXpad5=107
+ GSXpad6=108
+ GSXpad1=109
+ GSXpad2=110
+ GSXpad3=111
+
+table
+ list4=4
+ list7=7
+
+var
+
+ X1 X2 X3 ; Temporary work variables
+ C0 C1 C2 C3 C8 ; "Constants" with corresponding values
+
+ x y
+
+ InitialHiresOffset
+
+; graphics task vars...
+ gxdirection gydirection
+ g1 g2 g3 g4
+
+ FrameCount Joystick
+
+ IBMScrollOffset
+ ACBsInitialised ;*
+
+begin
+code +
+;-----
+.SafeRestart
+ x1=0
+.SR1
+ sub x1,c1
+ if x1<>0 then SR1
+ gosub @MCEmptyRoom
+ gosub @InitACBs
+ ACBsInitialised=0 ;*
+ goto @DangerousRestart
+;-----
+.Escape
+ gosub @MCCloseDown
+;-----
+.ErrorHandler
+ gosub @SetUpPhysicalTextPtr
+ &WordWS(WordCursorXpos)=c0
+ &WordWS(WordCursorYpos)=c0
+ push dv1
+ &dv1=WordWS(66) ;WordErrorNumber
+ code-
+ prs "Error Handler ("
+ print dv1
+ prs ") press ESC"
+ message cr ;'DoCr' ignores newlines; this is 'flush'
+ code+
+ pop dv1
+
+.WaitKey ;for ESCape key
+ gosub @MCosrdch
+ if v2<>1 then WaitKey
+ return
+
+;=====
+.AccessJoystick
+ gosub @MCosrdch
+ if v2=1 then @Escape
+ if v2<>0 then AccessJoystick
+
+ Joystick=ByteWS(ByteJoystickStatus)
+
+ v1=GSXcr
+ gosub @MCkeyDown
+ if v1<>0 then KeyFire
+ v1=GSXspace
+ gosub @MCkeyDown
+ if v1<>0 then KeyFire
+ v1=GSXpad5
+ gosub @MCkeyDown
+ if v1=0 then NotPad5
+.KeyFire
+ v1=JoyF
+ or Joystick,v1
+.NotPad5
+
+ v1=GSXpad7
+ gosub @MCkeyDown
+ if v1=0 then NotPad7
+ v1=JoyL
+ or Joystick,v1
+ v1=JoyU
+ or Joystick,v1
+.NotPad7
+
+ v1=72
+ gosub @MCkeyDown
+ if v1<>0 then Pad8
+ v1=GSXpad8
+ gosub @MCkeyDown
+ if v1=0 then NotPad8
+.Pad8
+ v1=JoyU
+ or Joystick,v1
+.NotPad8
+
+ v1=GSXpad9
+ gosub @MCkeyDown
+ if v1=0 then Notpad9
+ v1=JoyU
+ or Joystick,v1
+ v1=JoyR
+ or Joystick,v1
+.Notpad9
+
+ v1=75
+ gosub @MCkeyDown
+ if v1<>0 then Pad4
+ v1=GSXpad4
+ gosub @MCkeyDown
+ if v1=0 then NotPad4
+.Pad4
+ v1=JoyL
+ or Joystick,v1
+.NotPad4
+
+ v1=77
+ gosub @MCkeyDown
+ if v1<>0 then Pad6
+ v1=GSXpad6
+ gosub @MCkeyDown
+ if v1=0 then NotPad6
+.Pad6
+ v1=JoyR
+ or Joystick,v1
+.NotPad6
+
+ v1=GSXpad1
+ gosub @MCkeyDown
+ if v1=0 then NotPad1
+ v1=JoyD
+ or Joystick,v1
+ v1=JoyL
+ or Joystick,v1
+.NotPad1
+
+ v1=80
+ gosub @MCkeyDown
+ if v1<>0 then Pad2
+ v1=GSXpad2
+ gosub @MCkeyDown
+ if v1=0 then Notpad2
+.Pad2
+ v1=JoyD
+ or Joystick,v1
+.Notpad2
+
+ v1=GSXpad3
+ gosub @MCkeyDown
+ if v1=0 then NotPad3
+ v1=JoyD
+ or Joystick,v1
+ v1=JoyR
+ or Joystick,v1
+.NotPad3
+
+ return
+
+;==========
+
+.DisplayEverything
+ cif NotPC
+  gosub @MCClearScreen
+ cend
+
+ cif pc
+  gosub @MCPlotLogicalScreen
+ cend
+
+ gosub @SpecialDisplayRoom ;should call 'MCDisplayRoom'
+
+ if ACBsInitialised=0 then NoACBs ;*
+ gosub @DisplayACBS
+ gosub @SortAndDisplayObjects
+.NoACBs ;*
+ gosub @DisplaySpecialSprites ;just return
+
+; upper limits...
+; 50 Hz 12.5 fps
+; 60 Hz 15   fps
+
+ if FrameCount>3 then SlowMachine
+.WaitFrame
+ if FrameCount<4 then WaitFrame
+
+ dv1=3628 ;speed-limiting cell
+ dv2=304 ;x
+ dv3=200 ;z
+ dv4=200 ;h
+ dv6=0 ; non-reversed
+ dv5=dPlot
+ gosub @MCDrawObjectdv1
+
+.SlowMachine
+ FrameCount=c0
+
+; gosub @MCCalcMatrix ;*
+; gosub @MCDrawVector ;*
+
+ gosub @SpecialDisLogical ;just return
+
+ cif pc
+  gosub @MCUpdateScreen
+ cend
+  gosub @DisplayFrame
+  gosub @WaitForFrame
+ cif pc
+  gosub @MCUnplotScreen
+ cend
+ return
+
+code-
+ .IsAlign
+  v2=7
+ code+
+  and v1,v2
+ code-
+  if v1=0 then align
+  prs "!"
+ .align
+  return
+code+
+;===========================
+
+.Initialise
+ VBLInitialised=false ; will prevent any task swaps during init.
+ ACBsInitialised=0 ;*
+ gosub @MCHeroInit
+
+ &x1=LongWS(HiLongPhysicalBase)
+ &LongWS(HiLongGraphicsScreenBase)=x1
+ &x1=LongWS(HiLongLogicalBase)
+ &LongWS(LoLongGraphicsScreenBase)=x1
+
+ gosub @AllocateWorkspaceLists
+ x1=0
+ &LongWS(HiLongRandomSeed)=x1
+ &LongWS(LoLongRandomSeed)=x1
+ &WordWS(WordSuspendTaskSwap)=c1 ; suspended during init
+cif PC
+ IBMScrollOffset=IBMTopOfText
+cend
+
+ gosub @LoadBackDrop
+ gosub @LoadStructures
+
+ gosub @AAEssentialInit
+ LeftMargin=0
+
+ gosub @SetUpTextPtr
+ x1=40
+ ByteWS(ByteWordWrapWidth)=x1
+ ACBsOnly=false
+ AniViewMode=1 ; display animation objects properly.
+ UseMc=true
+ &WordWS(WordUseVM)=c1 ; use vm for 3d plotting code.
+
+ v1=c0              ;X1   
+ v2=319             ;X2   
+ v3=c0              ;Y1   
+ v4=191             ;Y2   
+ gosub @MCSetGraphicsWindow
+;cif PC
+; IBMScrollOffset=c0       
+; v1=IBMTopOfText           
+; v2=IBMTextHeight          
+; gosub @MCSetTextWindow    
+; v1=7                      
+; gosub @MCEnableTextBuffer 
+;cend                       
+
+; initialise 3D.
+ v1=3900 ;* 3000 ; number of cells used. (will crash if too small)
+ v2=1000 ; 500 ;500 ; no. of links
+cif NotPC
+ v3=1000 ; 500 ;500 ; no. of composite cells
+cend
+cif PC
+ v3=200 ; no. of heap entries
+cend
+ v4=500 ;no. of cumulative transparency masks
+
+ gosub @MCSetUpVariablePtrs
+ gosub @MCInitBootPrg
+ gosub @MCEmptyRoom
+ &WordWS(WordRasterOffset)=c0
+ gosub @InitACBs
+
+ VBLInitialised=true
+ &WordWS(WordSuspendTaskSwap)=c0 ; start swapping!
+ &WordWS(WordCursorXPos)=c0
+ x1=128
+ &WordWS(WordCursorYPos)=x1
+
+; initialise offsets within list4...
+; &MenuText=list4(0)
+; &MenuData=list4(2)
+
+cif pc
+ x1=IBMTopOfText
+ &WordWS(WordCursorYPos)=x1
+cend
+ &WordWS(WordVBLDisabled)=c0 ; enable vbl
+
+cif pc
+ x1=192
+ &WordWS(WordCursorYPos)=x1
+cend
+ return
+;---
+;50/60 Hz interrupt
+.VBL
+ add FrameCount,c1
+ return
+;---
+.DoCr
+ push v1
+ &WordWS(WordCursorXpos)=c0
+ &v1=WordWS(WordCursorYpos)
+ c8=8
+ add v1,c8
+ if v1<193 then OnScreen
+ v1=0 ;wrap around (ok on demos)
+.OnScreen
+ &WordWS(WordCursorYpos)=v1
+ pop v1
+ return
+;-----
+.StrategyTask
+.BGSpecial
+.TextDisplayAnimation
+.SpecialAniShift
+.FGSpecials
+.ExtraTask
+.DamsSpecials
+.FGSpecialsMovedSprite
+.IRQScheduler
+.BGSpecials
+ return
+;---
+;.Ugh
+; v1=25 ; sound sample buffer
+; v2=0 ; offset within list
+; v3=1295 ; length to play in samples (5KHz)
+; gosub @StartSound
+; return
+
+;.Punch
+; v1=25 ; sound sample buffer
+; v2=4000 ; offset within list
+; v3=499 ; length to play in samples (5KHz)
+; gosub @StartSound
+; return
+
+;.ISAY
+; v1=25 ; sound sample buffer
+; v2=4500 ; offset within list
+; v3=3205 ; length to play in samples (5KHz)
+; gosub @StartSound
+; return
+
+; v1=25 ; sound sample buffer
+; v2=7800 ; offset within list
+; v3=2743 ; length to play in samples (5KHz)
+; gosub @StartSound
+; return
+
+;.OUCH
+; v1=25 ; sound sample buffer
+; v2=11000 ; offset within list
+; v3=1345 ; length to play in samples (5KHz)
+; gosub @StartSound
+; return
+;-----
+.ReadObjectAreas
+ MinXZH=1
+ &MinRaster=StructureBuffer(4)
+ add MinRaster,c1
+ &MinAnimation=StructureBuffer(10)
+ add MinAnimation,c1
+ &MinCompressed=StructureBuffer(16)
+ add MinCompressed,c1
+ &MinCell=StructureBUffer(28)
+.ADRRet
+ return
+;----
+.SuspendTaskSwap
+ vblInitialised=false ; stop irq-task swaps during the following
+; (because Sx1 might be changed by the other task)
+ &Sx1=WordWS(WordSuspendTaskSwap)
+ add Sx1,c1
+ &WordWS(WordSuspendTaskSwap)=Sx1
+ vblInitialised=true
+ return
+;----
+.ResumeTaskSwap
+ vblInitialised=false
+ &Sx1=WordWS(WordSuspendTaskSwap)
+ sub Sx1,c1
+ &WordWS(WordSuspendTaskSwap)=Sx1
+ vblInitialised=true
+ return
+;---
+.SetUpTextPtr
+; &tx1=LongWS(HiLongLogicalBase)
+; &LongWS(HiLongTextScreenBase)=tx1
+
+; &tx1=LongWS(LoLongLogicalBase)
+; &LongWS(LoLongTextScreenBase)=tx1
+
+ &tx1=list11(72) ; list 18's ptr
+ &LongWS(HiLongTextScreenBase)=tx1
+ &tx1=list11(74)
+ &LongWS(LoLongTextScreenBase)=tx1
+ return
+;-----
+.SetUpLogicalTextPtr
+ &tx1=LongWS(HiLongLogicalBase)
+ &LongWS(HiLongTextScreenBase)=tx1
+
+ &tx1=LongWS(LoLongLogicalBase)
+ &LongWS(LoLongTextScreenBase)=tx1
+ return
+;---
+.SetUpPhysicalTextPtr
+cif PC
+ v1=7                      
+ gosub @MCEnableTextBuffer 
+cend ;PC
+
+ &x1=LongWS(HiLongPhysicalBase)
+ &LongWS(HiLongTextScreenBase)=x1
+
+ &x1=LongWS(LoLongPhysicalBase)
+ &LongWS(LoLongTextScreenBase)=x1
+ return
+
+;---
+.LoadSample
+cif st
+
+ v1=25 ; load list 25
+ List17(8)=x1 ; file letter for sound sample - probably a digit.
+ x1=46 ; '.'
+ list17(9)=x1
+ x1=83 ; 's'
+ list17(10)=x1
+ x1=80 ; 'p'    78 ; 'n'
+ list17(11)=x1
+ x1=76 ; 'l'    68 ; 'd'
+ list17(12)=x1
+ goto @MCLoadFile ; gosub, return.
+
+cend
+ return
+;-----
+.LoadStructures
+; set up ACBList (14)
+ &x1=longws(HiLongFreeWorkspace)
+ &list11(56)=x1 ; set up list14
+ &x1=longws(LOLongFreeWorkspace)
+ &list11(58)=x1 ; set up list14
+ v1=6192 ;** probably excessive
+ gosub @MCReserveMemory
+
+; load file saved from structure editor as 'structur.dat'
+; which has been renamed to 's.dat'
+ &x1=longws(HiLongFreeWorkspace)
+ &list11(60)=x1 ; set up list15
+ &x1=longws(LOLongFreeWorkspace)
+ &list11(62)=x1 ; set up list15
+ v1=15 ; load list 15 (structureBuffer onwards)
+ v2=0 ; offset within list15
+ v3=0
+; x1=83 ; 's.dat'
+; gosub @LoadFile
+ x1=83 ; 's'
+ List17(8)=x1
+ x1=84 ; 't'
+ List17(9)=x1
+ x1=82 ; 'r'
+ List17(10)=x1
+ x1=85 ; 'u'
+ List17(11)=x1
+ x1=67 ; 'c'
+ List17(12)=x1
+ x1=84 ; 't'
+ List17(13)=x1
+ x1=85 ; 'u'
+ List17(14)=x1
+ x1=82 ; 'r'
+ List17(15)=x1
+ x1=46 ; '.'
+ list17(16)=x1
+ x1=68 ; 'd'
+ list17(17)=x1
+ x1=65 ; 'a'
+ list17(18)=x1
+ x1=84 ; 't'
+ list17(19)=x1
+ gosub @MCLoadFile
+ v1=32768
+ gosub @MCReserveMemory
+
+ v1=15 ; use list15, please
+ gosub @MCSetUpPtrs ; tell MC about ptrs
+ gosub @ReadObjectAreas ; read mincell, minraster, mincompressed
+ StartStructureBuffer=32
+
+; drop through to AAEssentialInit...
+
+.AAEssentialInit
+; things which must be initialised after clear etc.
+ c0=0 ;*****
+ c1=1
+ c2=2
+ c3=3
+ c4=4
+ return
+
+;============
+;---
+.LoadFile
+; load file with single char filename 'x1'.dat
+; at v2 bytes into listv1()
+; Set up filename...
+ List17(8)=x1
+ x1=46 ; '.'
+ list17(9)=x1
+ x1=68 ; 'd'
+ list17(10)=x1
+ x1=65 ; 'a'
+ list17(11)=x1
+ x1=84 ; 't'
+ list17(12)=x1
+ goto @MCLoadFile ; and load it...
+;----
+;-----
+.DisplayFrame
+ gosub @SetUpTextPtr
+ ByteWS(ByteFrameReadyFlag)=c1
+ return
+;------
+; wait for frame to be displayed
+.WaitForFrame
+cif NotPc ; don't wait on pc.
+ bx1=ByteWS(ByteFrameReadyFlag)
+ if bx1<>0 then WaitForFrame
+cend
+ return
+;----
+;.CalcPixelMask
+;; calculate vblX3 as mask for pixel x horizontally along in cell
+; X1=x
+; X2=16
+; gosub @ModX1X2
+
+.CalcPiXelMaskvblX1
+ vblX3=32768
+ if vblX1=0 then @WP1
+ vblX3=16384
+ if vblX1=1 then @WP1
+ vblX3=8192
+ if vblX1=2 then @WP1
+ vblX3=4096
+ if vblX1=3 then @WP1
+ vblX3=2048
+ if vblX1=4 then @WP1
+ vblX3=1024
+ if vblX1=5 then @WP1
+ vblX3=512
+ if vblX1=6 then @WP1
+ vblX3=256
+ if vblX1=7 then @WP1
+ vblX3=128
+ if vblX1=8 then @WP1
+ vblX3=64
+ if vblX1=9 then @WP1
+ vblX3=32
+ if vblX1=10 then @WP1
+ vblX3=16
+ if vblX1=11 then @WP1
+ vblX3=8
+ if vblX1=12 then @WP1
+ vblX3=4
+ if vblX1=13 then WP1
+ vblX3=2
+ if vblX1=14 then WP1
+ vblX3=1
+;; if x=15 then WP1
+.WP1
+.EBRet
+ return 
+;----
+.DivX1X2
+; x1:=x1/x2
+ x3=65535 ; result = 0 if x2>x1
+.DivLoop
+ add x3,c1
+ sub x1,x2
+ if x1<50000 then DivLoop
+ x1=x3
+ return
+;---
+.ModX1X2
+; x1:=x1 mod x2
+.ModLoop
+ x3=x1 ; trial result
+ sub x1,x2
+ if x1<50000 then ModLoop
+ x1=x3
+ return
+;---
+.LoadBackdrop
+ &x2=list4(16)
+ goto SetPallette
+
+.palletteScreen2
+ &x2=list4(16)
+ x1=32
+ add x2,x1
+
+.SetPallette
+cif ST
+; copy pallette (x2) to hardware
+; save list 19 ptr
+&x1=list11(76) ; list 19's ptr
+push x1
+&x1=list11(78)
+push x1
+ v1=19 ; change list19
+ v2=255 ; hi abs address of pallette registers. (FF8240)
+ v3=33344 ; hi abs address of pallette registers. (FF8240)
+ gosub @MCAbsChangeListPtr
+ x3=0          ; read ptr
+.PalletteLoop
+ &x1=List4(x2)
+ &list19(x3)=x1
+ add x2,c2
+ add x3,c2
+ if x3<32 then PalletteLoop
+pop x1
+&list11(78)=x1 ; list 19's ptr
+pop x1
+&list11(76)=x1
+
+ cend
+
+ return
+;-----------
+.AllocateWorkspaceLists
+ &x1=longws(HiLongFreeWorkspace)
+ &list11(68)=x1 ; set up list17
+ &x1=longws(LOLongFreeWorkspace)
+ &list11(70)=x1 ; set up list17
+ v1=2048 ; reserve space for list 17
+ gosub @MCReserveMemory
+
+; &x1=longws(HiLongFreeWorkspace)
+; &list11(48)=x1 ; set up list12 - Hires()
+; &x1=longws(LOLongFreeWorkspace)
+; &list11(50)=x1 ; set up list12
+; v1=SizeHiresList ; reserve space for list 12 - hires x,z,h,acbPtr
+; gosub @MCReserveMemory
+
+; allocate list27 (map)
+ &x1=longws(HiLongFreeWorkspace)
+ &list11(108)=x1 ; set up list27
+ &x1=longws(LOLongFreeWorkspace)
+ &list11(110)=x1 ; set up list27
+ v1=1024 ; 4096 ; reserve space for list 27
+ gosub @MCReserveMemory
+
+; reserve space in list25 for sound samples
+ &x1=longws(HiLongFreeWorkspace)
+ &list11(100)=x1 ; set up list25
+ &x1=longws(LOLongFreeWorkspace)
+ &list11(102)=x1 ; set up list25
+ v1=16000 ; reserve space for list 25
+ gosub @MCReserveMemory
+ 
+; and set up list18 to point to the start of free memory -
+; used for transient stuff during loading
+ &x1=longws(HiLongFreeWorkspace)
+ &list11(72)=x1 ; set up list18
+ &x1=longws(LOLongFreeWorkspace)
+ &list11(74)=x1 ; set up list18
+;*cif NotPc
+ v1=32768 ;*Now used for FLOOR.DAT
+ gosub @MCReserveMemory ; reserve space for list18.
+;*cend
+
+cif NotPc
+; and set up list25 for sampled sounds
+ &x1=longws(HiLongFreeWorkspace)
+ &list11(100)=x1 ; set up list25
+ &x1=longws(LOLongFreeWorkspace)
+ &list11(102)=x1 ; set up list25
+ v1=32768
+ gosub @MCReserveMemory ; reserve space for list17
+
+; and load in samples...
+; x1=49 ; '1'
+; v2=0
+; gosub @LoadSample
+
+; x1=50 ; '2'
+; v2=4000
+; gosub @LoadSample
+
+; x1=51 ; '3'
+; v2=4500
+; gosub @LoadSample
+
+; x1=52 ; '4'
+; v2=7800
+; gosub @LoadSample
+
+; x1=53 ; '5'
+; v2=11000
+; gosub @LoadSample
+cend
+
+ return
+;---
+.PreLoadAndInsertdv1
+ dv2=0
+ dv3=0
+ dv4=0
+.PreLoadAndInsertXZHdv1
+ dv6=0 ; non-reversed
+ dv5=dMarkPreload
+ gosub @MCDrawObjectdv1
+ gosub @MCPreLoadCells
+
+ dv5=dInsert ; insert into structure.
+ gosub @DrawObjectdv1
+ return
+;-----
+.RemoveDv1
+ dv5=dRemoveRedraw
+ dv6=0 ; non-reversed
+ goto @DrawObjectdv1
+;-----
+.PreLoad100 ; dv1 thru dv1+99
+ dv2=100
+.PLLoop2
+ push dv2 ;count
+ dv2=16 ; x
+ dv3=92 ; z
+ dv4=64 ; h
+ dv5=dMarkPreload
+ dv6=0 ; non-reflected
+ gosub @MCDrawObjectdV1
+ add dv1,c1
+ pop dv2 ;count
+ sub dv2,c1
+ if dv2>0 then PLLoop2
+
+ gosub @MCPreLoadCells
+ return
+;-----
+.StartFreeACB ;ObjectNumber, dv2, dv3, dv4; returns dx4
+ ACBsInitialised=1 ;*
+ dv1=ObjectNumber
+ gosub @FindObjectNumber
+ goto @SetupACB
+;-----
+.SetUpACBdx4
+ push dx4
+  gosub @FindObjectNumber
+  gosub @DecodeHeader
+ pop dx4
+ dv1=ObjectNumber
+ gosub @SUAGotBlankACB
+ return
+;---
+.ChangeACBdx4
+ push dx4
+  gosub @FindObjectNumber
+  gosub @DecodeHeader
+ pop dx4
+ dv1=ObjectNumber
+ gosub @SUAChangeACB
+ return
+;---
+
+;.SpecialAniObject
+;; object num has been requested by an animation sequence.
+;; Do any intercepts, and change dv1-6 if you really
+;; want to.
+
+.StartSound
+; start sound if nothing already playing.
+; (priorities?)
+ push v1
+ &v1=WordWS(58) ; snd_len - i.e. samples yet to play.
+ if v1>0 then SSEnd
+ pop v1
+ goto @MCStartSound
+
+.SSEnd
+ pop v1
+ return
+;---
+code -
+code +

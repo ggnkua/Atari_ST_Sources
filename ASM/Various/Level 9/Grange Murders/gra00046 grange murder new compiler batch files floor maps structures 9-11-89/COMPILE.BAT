@@ -1,0 +1,20 @@
+1mconst.txt
+1aahead.txt
+1aconst.txt
+1sconst.txt
+1pconst.txt
+1aaconst.txt
+1aavars.txt
+1aacore.txt
+1display.txt
+1aaprint.txt
+1aaspec.txt
+1aastand.txt
+1aaverbs.txt
+1aalogic.txt
+1aanpc.txt
+1menu.txt
+1floors.txt
+1goal.txt
+1cache.txt
+2B40 ;*** remember to change the EXIT table back to make it smaller!
