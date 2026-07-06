@@ -1,0 +1,239 @@
+' ****************************************************************************
+' *                        Program:  Verbose listing of an LZH file v1.1     *
+' * Programmed in GFA Basic 3.0 by:  Chris Carpinello                        *
+' *             Last Revision Date:  May 24th, 1990                          *
+' *                        Purpose:  Verbose listing of an .LZH file         *
+' *                          Notes:  This version now handles folders as     *
+' *                                  well and has greatly improved from v1.0 *
+' ****************************************************************************
+' * This code is 'freeware'.  It may be freely distributed, but not sold.    *
+' * Feel free to use this code in your own programs.  All I ask, if you use  *
+' * any of my code, please send me a registered copy of your completed prg.  *
+' * Also, please send me any worthwhile changes you make.                    *
+' ****************************************************************************
+' *     Compu$pend (CI$): 73520,2117                                         *
+' *                GEnie: C.CARPINELLO                                       *
+' *          (SysOp) BBS: [804] 422-6265 (96oo HST/1oo Megs)                 *
+' *          (FNet) Node: 226  [Running: ///Turbo Board ST]                  *
+' ****************************************************************************
+'
+' LHARC Header Format
+' Thanks to:   Bill Miller    ///Turbo Board Support BBS, Toronto
+'              Raymond Clay   (and his archive header format text file)
+'              John Harris    (J.HARRIS32, UnLZH author)
+'
+' 1 byte   - DB  - header size (from thrid byte)
+' 1 byte   - DB  - header checksum (starts at third byte, not null terminated
+'                - does not include 2 bytes for CRC after filename
+' 5 bytes  - ASC - compression method:
+'                     -lh0-   STORED (No Compression)
+'                     -lh1-   LZW, 4k buffer, Huffman for upper 6 bits of pos
+'                     -lz4-   LZW, Arithmetic Encoding
+'                     -lz5-   LZW, Arithmetic Encoding
+' 4 bytes  - HEX - length of compressed data (DOS Format)
+' 4 bytes  - HEX - length of uncompressed data (DOS Format)
+' 2 bytes  - DW  - file date (DOS Format)
+' 2 bytes  - DW  - file time (DOS Format)
+' 2 bytes  - DW  - file attributes (bit encoded: read only, hidden, system, etc.)
+' 1 byte   - DB  - length of filename
+' variable - DS  - filename
+' 2 bytes  - DW  - Cycle Redundancy Check (CRC) 16-bit
+'
+' variable -     - comment (length of comment = header size - filename length - 22)
+'                - there can be no comment as well (ie, comment%=0)
+'
+' When programs are transfered via a modem with a trasnfer protocol (other than
+' ASCII) padding characters are added to the end of the file (^Z's when transfered
+' with Zmodem.  LIST_LZH looks for ^Z's [Chr$(26)].
+'
+FILESELECT "\*.LZH","",file$
+IF file$<>""
+  @verbose(file$)
+ENDIF
+PROCEDURE verbose(file$)
+  LOCAL chksum%,hdr%,loc%,lof%,offset%,tclem%,tulen%,tot%,ulen%,eof!,bf$,clen$,crc$,temp$,tot$,type$,tulen$,tclen$,ulen$
+  ON ERROR GOSUB nonarc
+  IF EXIST(file$)
+    CLOSE #1
+    OPEN "I",#1,file$
+    lof%=LOF(#1)
+    bf$=STRING$(255,0)             ! Storage for header buffer
+    '                                1 byte has max potential of 255 characters
+    cr$=CHR$(13)+CHR$(10)
+    hdr%=0                              ! header size
+    chksum%=0                           ! checksum
+    tulen%=0                            ! total uncompressed length of all files
+    tclen%=0                            ! total compressed length of all files
+    tot%=0                              ! total number of files in LZH archive
+    subdirs%=0                          ! total number of subdirectories
+    loc%=0                              ! location of file pointer
+    offset%=0                           ! compressed length
+    ulen%=0                             ! uncompressed length
+    eof!=FALSE
+    hdr1$="============ ======== ==== ======== ==== ========== ======== ======="
+    CLS
+    PRINT file$+cr$+cr$+"   Name       Length   SF  Size Now CRC     Date      Time   Storage"+cr$+hdr1$
+    start:
+    IF NOT eof!
+      IF loc%+22<lof%
+        RELSEEK #1,offset%
+        BGET #1,VARPTR(bf$),1
+        hdr%=ASC(bf$)                             ! Length of the header file
+      ELSE
+        eof!=TRUE
+      ENDIF
+      IF hdr%=0
+        eof!=TRUE
+      ENDIF
+      IF NOT eof!
+        IF lof%-loc%-hdr%>=22                       ! check to see if another file exists
+          BGET #1,VARPTR(bf$),1
+          chksum%=ASC(bf$)                          ! Chksum of remaining bytes
+          BGET #1,VARPTR(bf$),hdr%
+          type$=MID$(bf$,1,5)                       ! Compression type
+          IF ASC(type$)=26
+            eof!=TRUE                               ! padded character found
+          ELSE
+            @f_length(6,7,8,9,clen%)                ! Compressed file size
+            IF clen%+loc%>lof%                      ! check for unexpected end of file
+              @end_of_file
+            ENDIF
+            fl%=ASC(MID$(bf$,20,1))                   ! Length of filename
+            IF UPPER$(type$)="-SUB-"                          ! subdirectory?
+              offset%=0
+              subdir!=TRUE
+              subdir$=RIGHT$(MID$(bf$,21,fl%),fl%-2)
+              ADD loc%,hdr%+2
+              INC subdirs%
+            ELSE
+              subdir$=""
+              offset%=clen%
+              ADD tclen%,offset%
+              ADD loc%,offset%+hdr%+2
+              subdir!=FALSE
+              temp$=SPACE$(12)
+              LSET temp$=MID$(bf$,21,fl%)               ! Filename, fl% chars long
+              clen$=SPACE$(8)
+              RSET clen$=STR$(clen%)
+              '
+              INC tot%                                  ! Total number of files in archive
+              crc$="0000"
+              RSET crc$=HEX$(ASC(MID$(bf$,22+fl%,1)))+HEX$(ASC(MID$(bf$,21+fl%,1)))
+              @str_time(ASC(MID$(bf$,14,1))+ASC(MID$(bf$,15,1))*256)
+              @str_date(ASC(MID$(bf$,16,1))+ASC(MID$(bf$,17,1))*256)
+              '
+              @f_length(10,11,12,13,ulen%)                 ! Uncompressed size of file
+              ulen$=SPACE$(8)
+              RSET ulen$=STR$(ulen%)
+              ADD tulen%,ulen%
+              @f_sf(offset%,ulen%,sf$)
+              PRINT temp$+" "+ulen$+"  "+sf$+" "+clen$+" "+crc$+" "+sdate$+" "+stime$+"  "+type$+" "
+            ENDIF
+            comment%=hdr%-fl%-22                      ! Comment length
+            IF subdir!
+              PRINT "*> ";subdir$+SPACE$(60-LEN(subdir$))+type$
+            ENDIF
+            IF comment%>0                             ! Is there a comment?
+              PRINT "*> ";MID$(bf$,fl%+23,comment%)   ! Yes, if comment% is > 0
+            ENDIF
+          ENDIF
+        ENDIF
+      ELSE
+        GOTO totals
+      ENDIF
+    ELSE
+      GOTO totals
+    ENDIF
+    GOTO start
+    totals:
+    CLOSE #1
+    @f_sf(tclen%,tulen%,sf$)
+    tot$=SPACE$(4)                   ! Max of 9999 files in LZH
+    tulen$=SPACE$(8)                 ! Max of 99,999,999 uncompressed bytes in archive
+    tclen$=tulen$                    ! Max of 99,999,999 compressed bytes in archive
+    RSET tot$=STR$(tot%)
+    RSET tulen$=STR$(tulen%)
+    RSET tclen$=STR$(tclen%)
+    PRINT hdr1$+cr$+"Files: "+tot$+"  "+tulen$+"  "+sf$+" "+tclen$
+    IF subdirs%>0
+      subdir$=SPACE$(4)
+      RSET subdir$=STR$(subdirs%)
+      PRINT " Subs: ";subdir$
+    ENDIF
+  ELSE
+    PRINT file$;" not found."
+  ENDIF
+RETURN
+' *****************************************************************************
+> PROCEDURE end_of_file
+  PRINT cr$+"<Unexpected End of File Reached>+cr$"
+  END
+RETURN
+> PROCEDURE nonarc ! In case of a bad header
+  PRINT cr$+"<"+file$+" has a bad header. Unable to continue.>"+cr$
+  END
+RETURN
+' *****************************************************************************
+PROCEDURE f_length(aa%,bb%,cc%,dd%,VAR lof%) ! Finds file length
+  lof%=ASC(MID$(bf$,aa%,1))+ASC(MID$(bf$,bb%,1))*256+ASC(MID$(bf$,cc%,1))*65536+ASC(MID$(bf$,dd%,1))*16777216
+RETURN
+' *****************************************************************************
+PROCEDURE f_sf(dd1%,dd%,VAR sf$) ! Finds percentage of compression
+  IF dd%=0 OR dd1%=0             ! Checks for 0 file length
+    sf%=0
+  ELSE
+    sf%=100-INT(100*(dd1%/dd%))
+  ENDIF
+  sf$="  %"
+  MID$(sf$,3-LEN(STR$(sf%)),LEN(STR$(sf%)))=STR$(sf%)
+RETURN
+' *****************************************************************************
+' * Converts 2 byte date value 'date' to a string ('sdate') in the format     *
+' * MM/DD/YYYY                                                                *
+' *****************************************************************************
+PROCEDURE str_date(date%)
+  LOCAL day%,month%,year%
+  day%=date% AND 31
+  month%=(date%/2^5) AND 15
+  year%=(date%/2^9) AND 127
+  sdate$=""
+  IF month%<10
+    sdate$=sdate$+"0"
+  ENDIF
+  sdate$=sdate$+STR$(month%)+"-"
+  IF (day%<10)
+    sdate$=sdate$+"0"
+  ENDIF
+  sdate$=sdate$+STR$(day%)+"-19"+STR$(year%+80)
+RETURN
+' *****************************************************************************
+' * Converts the 2 byte time value 'time' to a string 'sdate' in the format   *
+' * HH:MM xx                                                                  *
+' *****************************************************************************
+PROCEDURE str_time(time%)
+  LOCAL sec%,min%,hour%,hdigit%
+  sec%=time% AND 31
+  min%=(time%/2^5) AND 63
+  hour%=(time%/2^11) AND 31
+  hdigit%=hour%
+  IF hour%=0
+    hdigit%=12
+  ENDIF
+  IF hdigit%>12
+    hdigit%=hdigit%-12
+  ENDIF
+  stime$=""
+  IF hdigit%<10
+    stime$=" "
+  ENDIF
+  stime$=stime$+STR$(hdigit%)+":"
+  IF min%<10
+    stime$=stime$+"0"
+  ENDIF
+  stime$=stime$+STR$(min%)+" "
+  IF hour%>=12
+    stime$=stime$+"pm"
+  ELSE
+    stime$=stime$+"am"
+  ENDIF
+RETURN

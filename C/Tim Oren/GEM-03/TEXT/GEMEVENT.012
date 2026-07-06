@@ -1,0 +1,334 @@
+   ANTIC PUBLISHING INC.,COPYRIGHT 1986.  REPRINTED BY PERMISSION.
+
+                     PROFESSIONAL GEM By Tim Oren
+             Column #12:  GEM Events and Program Structure
+
+     So I fibbed a little.  This issue (#12) of ST PRO GEM started
+out to be another discussion of interface issues.  But, as Tolkien
+once said, the tale grew in the telling, and this is now the first
+of  a series of three articles.   This part will discuss AES event
+handling  and  its implications for GEM  program  structure.   The
+following  article will contain a "home brew" dialog handler  with
+some  new  features,  and  the third will,  finally,  take up  the
+discussion  of  interface design,  using the dialog handler as  an
+example.   (There is no download for this article.   The downloads
+will return, with a vengeance, in ST PRO GEM #13.)
+
+                    ALL FOR ONE,  AND ONE FOR ALL
+     A quick inspection of the AES documents  shows that there are
+five routines devoted  to  waiting for individual types of events,
+and one routine, evnt_multi, which is used when more than one type
+ is desired.   This article  will discuss  ONLY evnt_multi for two
+ reasons.   First, it is the most frequently used of the routines.
+Second, waiting for one type of event is a bad practice. Any event
+call turns the system over to the AES and suspends the application
+and its interaction with  the user.  In such cases,  some  "escape
+clause", such as a timer, should be inserted to revive the program
+and prompt the user if no event is  forthcoming.   Otherwise,  the
+application may  end  up apparently  (or  actually)  hung,  with a
+resulting  reboot,  and probably a very annoyed user.
+
+                            STARTING  AHEAD
+     One possible type of event is a message. Messages are usually
+sent to the  application by  the  AES,  and  are  associated  with
+windows or the menu.   Two previous articles  in this  series have
+discussed such messages.   ST PRO GEM number two considered window
+messages, and number  seven  handled  menu messages.  You may want
+to review these topics before proceeding.
+
+     The actual evnt_multi call is a horrendous thing:
+
+     ev_which = evnt_multi(ev_flags,
+               btn_clicks, btn_mask, btn_state,
+               r1_flags, r1_x, r1_y, r1_w, r1_h,
+               r2_flags, r2_x, r2_y, r2_w, r2_h,
+               &msg_buff,
+               time_lo, time_hi,
+               &mx, &my, &btn, &kbd, &char, &clicks);
+
+Each  of  the lines in the call relate to a different  event,  and
+they  will be discussed in the order in which they  appear.
+
+     Note  that a call with this number of parameters causes  some
+overhead  due  to stacking and retrieval of the values.   In  most
+cases,  this  should be of little concern on a machine as fast  as
+the ST.   However, where throughput is a concern, such as in close
+tracking  of the mouse cursor,  you may want to write a customized
+binding  for evnt_multi which dispenses with the  parameter  list.
+This  can  be accomplished by maintaining the values in  a  static
+array  and moving them as a block into the binding  arrays  int_in
+(for all values but &msg_buff), and addr_in (for &msg_buff).  Note
+that  you  may NOT simply leave the values in  int_in;  other  AES
+bindings reuse this space.
+
+     Ev_flags  and ev_which are both 16-bit integers  composed  of
+flag bits.  Bits set in ev_flags determine which event(s) the call
+will  wait  for;  those  set in ev_which  indicate  what  event(s)
+actually occurred.   Both use the following flag bit mnemonics and
+functions:
+
+     0x0001 - MU_KEYBD - Keyboard input
+     0x0002 - MU_BUTTON - Mouse button(s)
+     0x0004 - MU_M1 - Mouse rectangle #1
+     0x0008 - MU_M2 - Mouse rectangle #2
+     0x0010 - MU_MESAG - AES message
+     0x0020 - MU_TIMER - Timer
+
+The  appropriate mnemonics are ORed together to create the  proper
+ev_flags value.
+
+     There  is  one  common pitfall here.   Notice  that  multiple
+events  may  be reported from one evnt_multi.   Event  merging  is
+performed  by the AES in order to save space on the  application's
+event queue.   If events have been merged,  more than one bit will
+be  set in the ev_which word.   Your application must check ALL of
+the  bits  before  returning to a new  evnt_multi  call.   If  you
+don't do this, some events may be effectively lost.
+
+     The  first event to be considered is the mouse button.   This
+is probably the most difficult event to understand and use, and it
+has one major shortcoming.
+
+     The  parameter  btn_clicks tells GEM the  maximum  number  of
+clicks which you are interested in seeing.   This value is usually
+two,  if your program uses the double-click method, or one if only
+single  clicks  are used.   The AES returns the number  of  clicks
+which caused the event through &clicks, which must be a pointer to
+a word.
+
+     GEM determines the number of clicks by the following  method.
+When the first button-down is detected, a time delay is begun.  If
+another  complete button-up,  button-down cycle is detected before
+the time expires,  then the result is a double click.   Otherwise,
+the  event is a single click.    Note that the final state of  the
+buttons  is  returned via &btn,  as described below.   By checking
+this  final state,  you may determine whether a single click event
+ended with the button up (a full click),  or with the button still
+down  (which  may  be  interpreted as  the  beginning  of  a  drag
+operation).   Double clicking is meaningless,  and not checked, if
+the evnt_multi is waiting on more than one button (see below).
+
+     The double-click detection delay is variable,  and may be set
+by your program using the call
+
+     ev_dspeed = ev_dclick(ev_dnew, ev_dfunc);
+
+Ev_dfunc  is a flag which determines the purpose of the call.   If
+it  is  zero,  the  current  double click  speed  is  returned  in
+ev_dspeed.   If ev_dfunc is non-zero, then ev_dnew becomes the new
+double-click   speed.    Both  ev_dspeed  and  ev_dnew  are  words
+containing  a "magic number" between zero and four.   Zero is  the
+slowest  (i.e.,  longest)  double-click,  and four is the fastest.
+(These  correspond  to  the  slow-fast  range  in  the   Desktop's
+Preferences  dialog.)  In general,  you should not reset the click
+speed  unless  specifically requested,  because such a change  can
+throw off the user's timing and destroy the hand/eye  coordination
+involved in using the mouse.
+
+     GEM  was  originally designed to work with  a  single  button
+input device.   This allows GEM applications to function well with
+devices such as light pens and digitizing tablets.   However, some
+features are available for dealing with multi-button mice like the
+ST's.
+
+     The  evnt_multi parameters btn_mask and btn_state  are  words
+containing  flag bits corresponding to buttons.   The lowest order
+bit corresponds to the left-most button,  and so on.  A bit is set
+in  the  btn_mask parameter if the AES is to  watch  a  particular
+button.   The  corresponding bit in btn_state is set to the  value
+for  which  the program is waiting.   The word returned  via  &btn
+uses  the  same  bit system to show the state of  the  buttons  at
+completion.   It  is  important to notice that all of  the  target
+states in btn_state must occur SIMULTANEOUSLY for the event to  be
+triggered.
+
+     Note the limiting nature of this last statement.  It prevents
+a  program from waiting for EITHER the left or right button to  be
+pressed.  Instead, it must wait for BOTH to be pressed, which is a
+difficult  operation  at best.   As a result,  the standard  mouse
+button  procedure is practically useless if you want to take  full
+advantage  of  both buttons on the ST mouse.   In this case,  your
+program  must "poll" the mouse state and  determine  double-clicks
+itself.   (More  on  polling later.)  By the way,  many  designers
+(myself  included) believe that using both buttons  is  inherently
+confusing and should be avoided anyway.
+
+                           MOUSE RECTANGLES
+     One of GEM's nicer features is its ability to watch the mouse
+pointer's  position  for you,  and report  an event  only when  it
+enters or departs a given screen region.   Since you don't have to
+track  the  mouse  pixel  by  pixel,   this  eliminates  a lot  of
+application overhead.   The evnt_multi call gives you  the ability
+to  specify one or two rectangular areas  which  will  be watched.
+An event can be generated either when the mouse pointer enters the
+rectangle,  or when it leaves the rectangle.  The "r1_" series  of
+parameters specifies one of the  rectangles,  and the "r2_" series
+specifies the other, as follows:
+
+     r1_flag, r2_flag - zero if waiting to enter rectangle,
+                         one if waiting to leave rectangle
+     r1_x, r2_x - upper left X raster coordinate of wait rectangle
+     r1_y, r2_y - upper left Y raster coordinate of wait rectangle
+     r1_w, r2_w - width of wait rectangle in pixels
+     r1_h, r2_h - height of wait rectangle in pixels
+
+Each  rectangle  wait will only be active if its  associated  flag
+(MU_M1 or MU_M2) was set in ev_flags.
+
+     There  are two common uses of rectangle waits.   The first is
+used when creating mouse-sensitive regions on the screen.   Mouse-
+sensitive regions, also called "hot spots", are objects which show
+a  visual effect,  such as inversion or outlining,  when the mouse
+cursor  moves  over them.   The items in a menu dropdown,  or  the
+inversion  of  Desktop icons during a drag operation,  are  common
+examples.
+
+        Hot spots are commonly created by grouping  the  sensitive
+objects  into  one  or  two areas,  and then setting  up  a  mouse
+rectangle  wait  for  entering  the  area.    When  the  event  is
+generated,  the  &mx  and &my returns may be examined to find  the
+true  mouse coordinates,  and objc_find or some other search  will
+determine  the affected object.   The object is then  highlighted,
+and  a new wait for exiting the object rectangle is  posted.   (ST
+PRO  GEM  #13 will show how to create more  complex  effects  with
+rectangle waits.)
+
+     The  second common use of rectangle waits is in  animating  a
+drag operation.  In many cases, you can use standard AES animation
+routines such as graf_dragbox or graf_rubberbox.   In other cases,
+you  may  want  a figure other than a simple  box,  or  desire  to
+combine   waits  for  other  conditions  such  as  keystrokes   or
+collision with hotspots.  Then you will need to implement the drag
+operation  yourself,  using  the  mouse rectangles  to  track  the
+cursor.
+
+     If you want to track the cursor closely, simply wait for exit
+on a one pixel rectangle at the current position,  and perform the
+animation routine at each event.  If the drag operation only works
+on a grid,  such as character positions,  you can specify a larger
+wait  rectangle and only update the display when a legal  boundary
+is crossed.
+
+                               MESSAGES
+     The  &msg_buff parameter of evnt_multi gives  the address  of
+a 16 byte buffer to receive an AES  message.   As  noted above,  I
+have discussed standard AES messages elsewhere.  The  last  column
+also mentioned that messages may be used to  simulate  co-routines
+within  a single GEM program.
+
+     A  further possibility which bears examination is the use  of
+messages  to coordinate the activities of multiple  programs.   In
+single-tasking  GEM,  at least one of these programs would have to
+be  a  desk accessory.   In any such use of the GEM messages,  you
+should pay careful attention to the possibility of overloading the
+queue.   Only  eight  slots are provided per task,  and  messages,
+unlike events, cannot be merged by the AES.
+
+                                 TIMER
+     The  timer  event  gives  you  a way of  pacing action on the
+screen,  clocking out messages,  or providing a time-out exit  for
+an operation. Evnt_multi has two  16-bit  timer  input parameters,
+time_hi  and  time_lo,  which  are  the  top  and  bottom  halves,
+respectively,  of  a  32-bit  millisecond  count.   However,  this
+documented time resolution must be  taken  with a grain of salt on
+the ST, considering that its internal clock frequency is 200Hz!
+
+     The  timer  event is also extremely useful  for  polling  the
+event  queue.   A  "poll"  tests the queue  for  completed  events
+without going into a wait state if none are present.  In GEM, this
+is   done  by  generating  a  null  event  which   always   occurs
+immediately.  A timer count of zero will do just that.
+
+     Therefore,  you  can poll for any set of events by specifying
+them  in  the evnt_multi parameters.   A zero timer wait  is  then
+added to ensure immediate completion.   Upon return,  if any event
+bit(s) OTHER than MU_TIMER are set,  a significant event was found
+on the queue.  If only MU_TIMER is set, the poll failed to find an
+event.
+
+                               KEYBOARD
+     There  are  no input parameters for the  keyboard event.  The
+character  which  is read is returned as a 16-bit quantity through
+the &char parameter.   For  historical  reasons, the  codes  which
+are returned are  compatible with the  IBM  PC's  BIOS  level scan
+codes.  You can find this character table in Appendix D of the GEM
+VDI manual.   In general,  the  high  byte need only be considered
+if  the lower byte is zero.  If the low byte is  non-zero, it is a
+valid ASCII character.
+
+     Evnt_multi  also returns the status of several modifier  keys
+through  the &kbd parameter.   This word contains four significant
+bits as follows:
+
+     0x0001 - Right hand shift key
+     0x0002 - Left hand shift key
+     0x0004 - Control key
+     0x0008 - ALT key
+
+If  a  bit  is  one,  the key was depressed  when  the  event  was
+generated.   Otherwise,  the key was up.  Since the state of these
+keys  is already taken into account in generating the  &char  scan
+code,  the  &kbd word is most useful when creating enhanced  mouse
+functions, such as shift-click or control-drag.
+
+                        RANDOM NOTES ON EVENTS
+     Although the &mx,  &my,  &btn, and &kbd returns are nominally
+associated with particular event types,  they  are  valid  on  any
+return  from  evnt_multi  and  reflect the  last event  which  was
+merged into that return  by  the  AES.  If you  want more  current
+values,  you  may use  graf_mkstate to  resample  them.  Whichever
+method you  choose, be  consistent  within the  application, since
+the point of sampling has an effect on mouse  and keyboard timing.
+
+     Although  this and preceding columns have been  presented  in
+terms of a GEM application,  the event system has many interesting
+implications  for desk accessories.   Since the AES scheduler uses
+non-preemptive  dispatching,  accessories  have an event  priority
+effectively  equal  to  the main  application.   Though  "typical"
+accessories  wait  only for AC_OPEN or AC_CLOSE messages  when  in
+their  quiescent state,  this is not a requirement of the  system.
+Timer  and  other events may also be requested  by  an  accessory.
+(Indeed,  there  is  no  absolute requirement  that  an  accessory
+advertise  its presence with a menu_register call.)  The  aspiring
+GEM hacker might consider how these facts could be used to  create
+accessories  similar  to  "BUGS" on the Mac,  or  to  the  "Crabs"
+program  described  in  the September,  1985 issue  of  Scientific
+American.
+
+                   EVENTS  AND GEM PROGRAM STRUCTURE
+     Although the evnt_multi call might seem to be a small part of
+the entire GEM system,  its usage has deep  implications  for  the
+structure of any  application.  It is generally true that each use
+of evnt_multi corresponds to a mode in the program.  For instance,
+form_do contains its own evnt_multi,  and its invocation creates a
+moded dialog. While the dialog is in progress, other features such
+as   windows   and    menus   are  unusable.    The  graf_dragbox,
+graf_rubberbox, and graf_slidebox routines also contain evnt_multi
+calls.     They   create  a  mode   which   is   sometimes  called
+"spring-loaded",  since the  mode vanishes  when  some  continuing
+condition (a depressed mouse button) is removed.
+
+     In consequence,  a well-designed,  non-modal GEM program will
+contain only one explicit evnt_multi call.  This call is part of a
+top-level  loop  which  decodes events as they  are  received  and
+dispatches  control  to  the appropriate  handling  routine.   The
+dispatcher  must  always  distinguish  between  event  types.   In
+programs  where  multiple windows are used,  it may also  need  to
+determine which local data structure is associated with the active
+window.
+
+     This  construction  is  sometimes  called  a  "push"  program
+structure,  because  it  allows the user to drive the  application
+by generating events in any order.  This contrasts with the "pull"
+structure of traditional command line or menu programs,  where the
+application is in control and demands input at each step before it
+proceeds.    "Push"  structure  promotes  consistent  use  of  the
+user interface and a feeling of control on the part of the user.
+
+     The  next ST PRO GEM column will look more closely at  events
+and  program  structure in the context of a large piece  of  code.
+The  code  implements an alternate dialog  handler,  incorporating
+mouse-sensitive objects as part of the standard interface.   Since
+this  code  is  "open",  it may be modified and  merged  with  any
+application's main event loop, resulting in non-modal dialogs.
+

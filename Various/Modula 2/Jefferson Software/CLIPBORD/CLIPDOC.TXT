@@ -1,0 +1,235 @@
+Introduction
+
+The following routines are an implementation of a global clipboard facility.
+It is used in the ST HomePak package, and it has received the approval of Atari
+as the recommended way of handling passing data between programs.
+
+The Clipboard Manager is implemented in two parts.  The first part is a wedge
+into the Operating System, loaded as a boot process in the \AUTO folder.  There
+are a total of seven routines in the Manager, invoked via TRAP #10.  As such,
+it can be called by any program (and Desk Accessories!) and is a convenient,
+easy-to-use method to pass data between various processes.  The second part is
+the glue routines package which you must include in your program in order to
+properly reference the TRAP vector.
+
+The Clipboard Manager was written by Russ Wetmore, and has been released to the
+public domain in the hopes that it will help unite new programs by allowing
+them to share data.  You can include the CLIP.PRG wedge file with your programs
+at no charge, and you can use the routines below in your own source code.
+
+
+
+Using the Clipboard Manager
+
+The clipboard actually exists in two places: in memory, and on a disk storage
+file (usually) named CLIP.SYS in the root directory of the default drive.  When
+a program is first run, the first call should always be to InfoClip(), which
+tells you:
+         1) Whether or not the clipboard routines have been loaded.  The
+clipboard is accessed through calls to TRAP #10, and the routines must
+previously have been loaded and initialized at boot time in order for things to
+work.  It's more than possible that someone would try to run your program after
+copying it to another disk or forgetting to put CLIP.PRG on their boot disk.
+         2) Where the clipboard's variables are kept.  Your program needs
+constant access to several of these variables, and should keep a global
+variable handy which points to them.
+
+If InfoClip() doesn't return a favorable response, do NOT attempt to call the
+other routines (you'll be sorry.)  Inform the user to install CLIP.PRG in the
+\AUTO folder of their boot disk or, alternately, just disallow any clipboard
+calls.
+
+What happens next depends on whether or not you're an application or a desk
+accessory.  It is up to an application to perform the maintenance work on the
+clipboard.  Desk accessories are "guests in application's homes" and as such
+shouldn't ever do more than just read/write data to/from the clipboard.  The
+last thing an application wants is to have a desk accessory change the
+clipboard out from underneath it.
+
+An application then calls LoadClip() to read the clipboard disk file into the
+memory image.  Conversely, when your program is finished, you should call
+UnloadClip() to put the memory image back on disk, so that other programs can
+find it.
+
+You fetch data from the clipboard using the GetClip() call.  To write to the
+clipboard, you call PutClip().  ANY WRITES TO THE CLIPBOARD ACT STRICTLY ON THE
+MEMORY IMAGE.  Reads from the clipboard will only read in the data from disk if
+it hasn't previously been loaded in.  It is up to you to explicitly store the
+memory image back to the clipboard disk file when your program terminates with
+UnloadClip().  You can determine via InfoClip() whether or not the clipboard
+memory image is "dirty" and needs to be written back to disk.
+
+Desk accessories can fetch the current contents of the clipboard if desired,
+via the same GetClip() call that normal programs make.  This makes it possible
+to implement "note pads" and "scrap book" desk accessories similar to those
+available on the Macintosh, and for your program to export and import data from
+other programs.
+
+Four potential problems must be accounted for.
+         1) In order for the clipboard to work as transparently as possible,
+memory must be allocated (and re-allocated) from the stack space.  If your
+program doesn't shrink memory as part of its initialization, or if you're
+assuming that you have all of memory to yourself, the clipboard won't find
+enough room to operate (and you won't have a clipboard.)  In practice, this
+shouldn't affect too many programs - it's considered poor programming practice
+to allocate everything to yourself, especially in an open environment such as
+the ST uses.
+         2) The user can change disks out from underneath you at any time.  It
+is for this reason that you probably should limit your calls to LoadClip() and
+UnloadClip() to the very beginning and end of your program, so that you can
+specifically ask for the proper disk in case you can't find it. Also, keep disk
+errors in mind (they DO happen, you know.)
+         3) Since memory is allocated from the operating system's heap during
+the running of a process, any memory allocated to the clipboard will be
+released by the operating system when that process terminates.  Don't expect
+the clipboard data to remain in memory beyond the life of your application.
+However, there is an interesting subtle side effect of this having to do with
+running desk accessories from the Desktop.  The Desktop doesn't know about the
+clipboard, but it is ALWAYS in memory, and as such writes to the clipboard made
+while in the Desktop program will survive the launching of an application.  The
+Desktop doesn't know to UnloadClip() before an application is run, so the
+clipboard may in fact be active when your application is run.  In other words,
+don't expect a clean slate - the clipboard may already be in memory the first
+time you go looking for it.
+         4) The last problem has to do with the process by which data is "put"
+into the clipboard.  In order for there to be enough room for a "put" to
+clipboard to work, you must have enough memory to hold TWO copies of the data.
+This is because the clipboard must be written to in one fell swoop and must be
+copied from another area of memory.  A general workaround is this:  if you
+don't have enough memory left to write an existing RAM image to the clipboard,
+you can bypass the RAM clipboard altogether and write directly to the disk
+file.  You can obtain the name of the clipboard file via the InfoClip() call.
+
+As far as the _format_ of the clipboard data is concerned, it is not defined.
+Atari ST HomePak uses the IFF Interchange File Format protocol for formatting
+its clipboard data.  (Documentation on IFF can be obtained from Electronic Arts
+or from Commodore/Amiga).
+
+
+
+The Routines
+
+(A note on the nomenclature: for portability reasons, the following data types
+are used:
+         LONG      a 32-bit signed integer
+         WORD      a 16-bit signed integer
+         BYTE      an 8-bit unsigned character
+)
+
+There are seven routines in The Clipboard Manager.  They are:
+
+*************************************************************
+WORD InfoClip(info)
+     clipInfo **info;
+
+InfoClip() returns information about the clipboard.  The result of this routine
+is non-zero if the clipboard has been installed and is active.  In addition,
+this routine returns a pointer to a structure which gives useful (and
+necessary) information about the clipboard itself.  clipInfo is defined as:
+
+     typedef struct {
+          LONG size;          /* size of present clipboard   */
+          BYTE *location;     /* pointer to the data itself  */
+          WORD dirty;         /* data has changed flag       */
+          WORD where;         /* where clipboard data is now */
+          BYTE filename[16];  /* file name of clipboard file */
+     } clipInfo;
+
+'size' is the present size of the data "on the clipboard".  'location' is the
+memory location of the data itself, or is zero if the data isn't presently in
+memory (i.e. it's in the clipboard disk file).  'dirty' is a boolean flag which
+tells whether the clipboard has been changed since it was last stored to the
+clipboard disk file (non-zero if it has.)  'where' tells where the clipboard
+data currently resides: non-zero if in memory, zero if on disk (or if location
+is unknown, which means it needs loading from disk.)  'filename' is the ASCII
+filename of the clipboard disk file.  It is usually called "CLIP.SYS" at the
+root of the default drive.  UnloadClip() and LoadClip() will use this filename
+when they read/write from/to the disk.
+
+(NOTE: 'info' is a POINTER TO A POINTER!)
+
+*************************************************************
+VOID InitClip();
+
+InitClip() initializes the clipInfo variables.  If InfoClip() is called and it
+determines that the clipInfo area is invalid, it will call InitClip() for you,
+so you'll rarely, if ever, need to call it yourself.
+
+
+*************************************************************
+WORD UnloadClip();
+
+UnloadClip() writes the current clipboard data in memory to the clipboard disk
+file.  If the clipboard disk file's status is current (that is, the clipboard
+hasn't been changed and the data in memory matches the disk file) nothing is
+done.  UnloadClip() returns a zero result if no error occurs, otherwise it
+returns the offending TOS error code.
+
+
+*************************************************************
+WORD LoadClip();
+
+LoadClip() is the inverse of the UnloadClip() routine - it reads the clipboard
+disk file into memory.  LoadClip() returns an TOS error code, or zero if no
+error occurs.
+
+
+*************************************************************
+VOID ZeroClip();
+
+ZeroClip() initializes the clipboard in memory if it doesn't already exist.
+Otherwise, it clears its contents.
+
+
+*************************************************************
+WORD PutClip(length, source)
+     LONG length;
+     BYTE *source;
+
+PutClip() writes data to the clipboard, from the memory location pointed to by
+'source', for 'length' number of bytes.  If the clipboard doesn't as yet exist,
+it is initialized for you via ZeroClip().  All changes are made with reference
+to the clipboard in memory - that is, the clipboard disk file is not altered.
+Any previous contents of the clipboard are overwritten.  If you want to append
+to the present contents of the clipboard, you must first read it to local
+storage, append the new data yourself, and write the resultant data yourself as
+the new clipboard.  The only error that can occur is lack of available memory
+space, which is returned as the proper TOS error code.
+
+
+*************************************************************
+WORD GetClip(length, source, loadflag)
+     LONG *length;
+     BYTE **source;
+     BYTE loadflag;
+
+GetClip() is the inverse of PutClip() in that it allows you to fetch the
+clipboard's contents.  It is a misnomer, however, because all it really does is
+return a pointer to the data in memory, and how long that data really is.
+(NOTE: 'source' is a POINTER TO A POINTER!)  It is up to you to copy the data
+itself to your local physical storage area.  GetClip() will, however, load the
+clipboard memory from the clipboard disk file if it hasn't previously been read
+in.  'loadflag' is handy in the particular instance where the clipboard hasn't
+already been read into memory - if zero, GetClip() will simply determine the
+length of the clipboard data without reading it into memory if it isn't there
+already.  (This is useful for determining whether or not there is enough memory
+left to read the clipboard in off of disk in case it's very large.)
+
+If an error occurs, it is returned as the proper TOS error code, or zero for no
+error.
+
+
+
+The Source Code
+
+As mentioned before, in addition to the CLIP.PRG installer program, you must
+also include the proper "glue routines" in your code to properly set up the
+trap calls.  They are provided here written in C, and will compile under
+Megamax C or Alcyon (DRI) C, depending on a "#define".  Users of other
+languages will have to duplicate the function of these routines.  Personal
+Pascal programmers, for example, can compile these routines with Alcyon C (or
+assemble an equivalent with AS68 or the MetaComCo macro assembler) and
+reference them with the C directive.
+
+It is assumed that versions of these routines for most popular languages will
+be readily available via CompuServe and other services.

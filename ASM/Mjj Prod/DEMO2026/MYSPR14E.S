@@ -1,0 +1,2124 @@
+subpixel equ 8
+subpixel2 equ 8
+nbbob	equ 54 62 132 218 54 140 36  162 36  150 40  70 110 150 178 200 158 120 58 182  58 62 190 60 190 45 190 64  225 150 2 4 60  212  62 75  74
+spr_pi1	equ    1 
+rasterpower equ  0 1
+regcolor1	equ $FFFF8244
+regcolor2	equ $ffff8246
+tempmachine	equ  1
+dbug	equ    0
+couleur_fond	equ 0 $777 100  777 444 $421
+couleur3	equ 0 $276
+
+timer1count	equ  600   700
+	TEXT
+	jmp start0
+	NOP
+	include '2PIXGL5.S'
+	;include 'SC41INC.S'
+	TEXT
+	ifne rasterpower
+	include 'RASTER2.S'
+	TEXT
+	endc
+;	include 'ICEPAKER.S'
+;	TEXT
+;ice	lea dubmoo,a0
+;	lea dubmood,a1
+;	jsr decrunch
+;	rts
+start0:
+
+	jsr mjj_sys_init
+
+
+	;jsr initscrollerfx
+	jsr fixfct
+	;jsr ice
+
+	jsr pixbender2bitstart
+
+
+	move.b $ffff8260.w,d0
+	ext.w d0
+	move.w d0,old8260
+	
+	jsr prepare_segments
+
+
+
+	lea sin1pack,a0
+	move.l sin512,a1
+	jsr depackperiod 		
+	
+	
+
+	lea sin2pack,a0
+	move.l sin900,a1
+	jsr depackperiod
+
+
+	lea spritedeca,a0
+	move.w #16*2*16-1,d0
+.toto	clr.w (a0)+
+	dbf d0,.toto
+
+	jsr extractsprite
+
+
+; creation convx et convy 
+;	move.l #$8000,d0	;     offset,motif or
+;	lea convx,a0
+;.loopconvx
+;	rept subpixel
+;	  move.l d0,(a0)+
+;	endr
+;	lsr.w #1,d0
+;	bne.s .loopconvx
+;	add.l #$00088000,d0
+;	cmp.l #$00a08000,d0
+;	bne.s .loopconvx
+;
+;	move.w #0,d0
+;	move.w #199,d1
+;	lea convy,a0
+;.loopconvy
+;	rept subpixel
+;	move.w d0,(a0)+
+;	endr
+;	add #160,d0
+;	dbf d1,.loopconvy
+;
+
+	move.l ptrConvX,a0
+	lea codegenliste,a1
+	move.w #19,d0
+	moveq #0,d2
+.loop3
+	lea codegenliste,a1
+	lea codeeffliste,a3
+	moveq #15,d3
+.loop2
+	move.l (a3)+,d5
+	move.l (a1)+,d1
+	rept subpixel2
+	move.w d2,(a0)+		; offset
+	move.l d5,(a0)+		; code effacement
+	move.l d1,(a0)+		; code affichage
+
+	endr
+	addq.l #4,a3
+	addq.l #4,a1
+
+
+	dbf d3,.loop2
+	addq.w #8,d2
+	dbf d0,.loop3
+
+	move.l ptrConvY,a0
+	moveq #0,d2
+	move.w #160,d1
+	move.w #199,d0 		; pas de cliping pour l'instant
+	move.w #200*subpixel2,d7
+
+.1	move.w d2,(a0)+
+	dbf d7,.1
+
+.loop4
+	rept subpixel2
+	move.w d2,(a0)+
+	endr
+	add d1,d2
+	dbf d0,.loop4
+	jsr initcleartozerozero
+	ifne rasterpower
+	jsr initraster
+	endc
+	jsr waitvbl
+	jsr swap_screen
+
+	move.l #efface1lst,codecurefface
+	move.l log,d0
+	move.l d0,codelog
+	move.l d0,workscr
+	jsr convsinus
+	
+	;jsr dubmood
+
+	jmp main
+effaceallbob
+	move.l codelog,d1
+	move.l codecurefface,a6
+	move.w #nbbob-1,d6
+	moveq #0,d0
+	lea .bobo,a4
+.clear
+	move.w (a6)+,d1
+	move.l d1,a0
+	move.l (a6)+,a5
+	jmp (a5)
+.bobo
+	dbf d6,.clear
+	rts
+myitvbl
+	movem.l d0-d7/a0-a6,-(sp)
+
+	;jsr dubmood+8
+
+	ifne rasterpower
+	jsr eachtimevbl	
+	endc
+
+	move.l $466.w,d0
+	btst #0,d0
+	beq.s .ptrscr1
+	;bra.s .ptrscr2
+.ptrscr2
+	move.l ptrscr2,d0
+	move.l d0,log
+	move.l ptrscr1,d1
+	move.l d1,phys
+	move.l d1,codelog
+
+	add.l #4+160*16,d1
+	move.l d1,logscr
+
+	;add.l #160*16+4,d0
+	;move.l d0,logscr
+	
+	;jsr execscroller
+	bra.s .suite
+
+.ptrscr1
+	move.l ptrscr1,d0
+	move.l d0,log
+	move.l ptrscr2,d1
+	move.l d1,phys
+	move.l d1,codelog
+
+	add.l #4+160*16,d1
+	move.l d1,logscr
+
+	;add.l #160*16+4,d0
+	;move.l d0,logscr
+	;jsr execscroller
+.suite
+
+	move.l log,d0
+	add.l #160*16,d0
+	lsr.w #8,d0
+	move.l d0,$ffff8200.w
+
+
+	addq.l #1,$466.w
+	movem.l (sp)+,d0-d7/a0-a6
+
+	
+
+	rte
+
+
+
+	jsr waitvbl
+main
+
+	move.l #myitvbl,d0
+	move.w #$2700,sr
+
+	move.l $70.w,-(sp)
+	move.l d0,$70.w
+	move.w #$2300,sr
+
+
+
+
+
+;	move.l ptrscr1,a6
+;	lea 160*16(a6),a6
+;
+;	move.l ptrscr2,a5
+;	lea 160*16(a5),a5
+;
+;	MOVE.W #5,D6
+;.LINE0
+;;	MOVE.W #15,D7
+;.LINE
+;
+;CC	SET 0
+;	REPT 9
+;
+;	move.w #$FFFF,6+CC(a6)
+;	MOVE.W #$FFFF,16+6+CC(A6)
+;	move.w #$FFFF,6+CC(a5)
+;	MOVE.W #$FFFF,16+6+CC(A5)
+;CC	SET CC+16
+;	ENDR
+;
+;	LEA 160(A5),A5
+;	LEA 160(A6),A6
+;	DBF D7,.LINE
+;
+;	MOVE.W #15,D7
+;.LINE2
+;
+;CC	SET 0
+;	REPT 9
+;	MOVE.W #$FFFF,6+8+CC(A6)
+;	MOVE.W #$FFFF,16+6+8+CC(A6)
+;	MOVE.W #$FFFF,6+8+CC(A5)
+;	MOVE.W #$FFFF,16+6+8+CC(A5)
+;CC	SET CC+16
+	;ENDR
+	;;LEA 160(A5),A5
+	;LEA 160(A6),A6
+	;DBF D7,.LINE2
+	;
+	;DBF D6,.LINE0 
+
+
+main0
+	jsr waitvbl
+	tst.w flagtransition
+	beq.s .11
+	jsr transfo1
+.11
+;	;;move.l log,d0
+;
+;	add.l #160*16,d0
+;
+;	lsr.w #8,d0
+;	move.l d0,$ffff8200.w 
+
+	move.l #efface1lst,codecurefface
+	move.l log,d0
+	move.l d0,codelog
+
+	add.l #4+160*16,d0
+	move.l d0,logscr
+	;add.l #160*16+4,d0
+	;move.l d0,logscr
+	
+	
+
+	jsr effaceallbob
+	jsr majAngle
+	jsr calcAllPos
+
+	jsr demobitbender
+	
+	;movem.l d0-d7/a0-a6,-(sp)
+	*move.l ptrscr1,d0
+	*a*dd.l #160*16+4,d0
+	*move.l d0,logscr
+	*jsr execscroller
+
+	;movem.l (sp)+,d0-d7/a0-a6
+
+	jsr waitvbl
+	tst.w flagtransition
+	beq.s .12
+	jsr transfo1
+.12
+
+	;move.l log,d0		; ptrscr2
+
+	;add.l #160*16,d0
+	;lsr.w #8,d0
+	;move.l d0,$ffff8200.w
+
+	move.l #efface2lst,codecurefface
+	move.l log,d0
+	move.l d0,codelog
+
+	add.l #4+160*16,d0
+	move.l d0,logscr
+
+
+	;move.l ptrscr2,d7
+	;add.l #160*16+4,d7
+	;move.l d7,logscr	
+
+
+	jsr effaceallbob
+	jsr majAngle
+	jsr calcAllPos
+
+	jsr demobitbender
+
+
+	;move.l ptrscr2,d0
+	;add.l #160*16+4,d0
+	;move.l d0,logscr
+
+	;jsr execscroller
+
+
+	cmp.b #$b9,$fffffc02.w
+	beq.s .fin
+	jmp main0
+.fin
+	bsr waitvbl
+	move.w #$2700,sr
+	move.l (sp)+,$70.w
+	move.w #$2300,sr
+
+
+	;jsr dubmood+4
+	ifne rasterpower
+	jsr restoreIT
+	endc
+	move.l $44e.w,d0
+	lsr.w #8,d0
+	move.l d0,$ffff8200.w
+	bsr waitvbl
+   ; move.l $44e.w,d0  
+   ; MOVEQ #0,D1
+   ; MOVE.B OLD8260,D1 
+   ; move.w D1,-(sp)
+   ; move.l d0,-(sp)
+   ; move.l d0,-(sp)
+   ;move.w #5,-(sp)
+   ; trap #14
+;
+   ; lea 12(sp),sp
+
+	
+	move.w #couleur_fond,$ffff8240.w
+	MOVE.W #$777,D0
+	MOVE.W D0,$FFFF8242.W
+	move.w D0,$ffff825E.w
+	MOVE.W D0,$FFFF8244.W
+	MOVE.W D0,$FFFF8246.W
+	MOVE.W D0,$FFFF8248.W
+	MOVE.W D0,$FFFF824A.W
+	MOVE.W D0,$FFFF824C.W
+	MOVE.W D0,$FFFF824E.W
+	MOVE.W D0,$FFFF8250.W
+	MOVE.W D0,$FFFF8252.W
+	MOVE.W D0,$FFFF8254.W
+	MOVE.W D0,$FFFF8256.W
+	MOVE.W D0,$FFFF8258.W
+	MOVE.W D0,$FFFF825A.W
+	MOVE.W D0,$FFFF825C.W
+	
+
+	
+	ifeq dbug
+	jsr mjj_sys_fini	
+	endc
+	;	jsr wvbl
+	
+	;,move.l $44e.w,d0
+	;move.w old8260,-(sp)
+	;move.l d0,-(sp)
+	;move.l d0,-(sp)
+	;move.w #5,-(sp)
+	;trap #14
+	;lea 12(sp),sp
+	
+	
+	
+	
+	clr.w -(sp)
+	trap #1
+
+initcleartozerozero
+	moveq #0,d0
+	move.l codeeffliste,d4
+	lea ptrlsteff,a2
+	moveq #2-1,d7
+xx4
+	move.w #nbbob-1,d6
+	move.l (a2)+,a3	
+.clearall
+	move.w d0,(a3)+
+	move.l d4,(a3)+
+	dbf d6,.clearall
+
+	dbf d7,xx4
+	rts
+
+
+majangle
+	lea ajoutangle,a0
+	lea angles,a1
+	moveq #1,d7
+.loop
+	move.w (a0)+,d0
+	move.w (a1),d1
+	add d0,d1
+	and.w #511,d1
+	move.w d1,(a1)+
+
+	move.w (a0)+,d0
+	move.w (a1),d1
+	add d0,d1
+	cmp.w #900,d1
+	blt.s .1
+	sub.w #900,d1
+.1	move.w d1,(a1)+
+	dbf d7,.loop
+
+	moveq #1,d7
+.loop2
+	move.w (a0)+,d0
+	move.w (a1),d1
+	add d0,d1
+	and.w #511,d1
+	move.w d1,(a1)+
+
+	move.w (a0)+,d0
+	move.w (a1),d1
+	add d0,d1
+	cmp.w #900,d1
+	blt.s .2
+	sub.w #900,d1
+.2	move.w d1,(a1)+
+	dbf d7,.loop2
+
+	rts
+
+convsinus
+	move.l sinx1,a1
+	move.l sinx2,a2
+	move.l sin512,a0
+	move.w #511,d0
+	move.w ptrconvX+2,d4
+.loop
+	moveq #0,d1
+	move.w (a0)+,d1
+	add.w #32767,d1
+
+;	move.l d1,d2
+	mulu #(160-8)*subpixel2,d1
+;;	mulu #(159-8)*subpixel2,d2   ; 8 subpixel
+	;asl #1,d1
+	;asl #1,d2
+	swap d1
+	add.w #0*subpixel2,d1   ; additionner 5 pixel a x
+;;	swap d2
+; *10 = *8+*2 = *2(*4+1)
+
+	add d1,d1
+	move.w d1,d3
+    add.w d3,d3 *4
+    add.w d3,d3
+    add d3,d1	; d1 = d1 * 10
+;	and.w #-4,d1
+
+;	and.w #-4,d2
+
+;; 	add d2,d2
+;;	move.w d2,d3
+;;	add d3,d3
+;; 	add d3,d3
+;; 	add d3,d2
+
+ 	add d4,d1				; premiere table de sinus, on ajoute l'offset de convX
+	move.w d1,(a1)+
+;;	move.w d2,(a2)+
+	dbf d0,.loop
+
+	move.w #899,d0
+	move.l sinx2,a1
+	move.l sin900,a0
+	
+.loop2
+	moveq #0,d1
+	move.w (a0)+,d1
+	add.w #32767,d1
+
+	mulu #(159-8)*subpixel2,d1   ; 8 subpixel
+	;asl #1,d1
+	;asl #1,d2
+	swap d1
+;	add.w #5*subpixel2,d1   ; additionner 5 pixel a x
+;;	swap d2
+; *10 = *8+*2 = *2(*4+1)
+
+	add d1,d1
+	move.w d1,d3
+    add.w d3,d3 *4
+    add.w d3,d3
+    add d3,d1	; d1 = d1 * 10
+;	and.w #-4,d1
+
+;	and.w #-4,d2
+
+;; 	add d2,d2
+;;	move.w d2,d3
+;;	add d3,d3
+;; 	add d3,d3
+;; 	add d3,d2
+
+ ;	add d4,d1				; premiere table de sinus, on ajoute l'offset de convX
+	move.w d1,(a1)+
+;;	move.w d2,(a2)+
+	dbf d0,.loop2
+
+	move.w ptrConvY+2,d4
+	add.w #216*subpixel2*2,d4
+	move.l siny1,a1
+	;move.l siny2,a2
+	move.l sin512,a0
+	move.w #511,d0
+.loopy
+	moveq #0,d1
+	move.w (a0)+,d1
+	add.w #32767,d1
+;;	move.l d1,d2
+	mulu #(79-8)*subpixel2*2,d1
+;;	mulu #(119-8)*subpixel2*2,d2
+;	asl #1,d1
+;	asl #1,d2
+	swap d1
+;;	swap d2
+	and.w #-2,d1
+;;	and.w #-2,d2
+	add d4,d1			; ajoute l'offset segment
+	move.w d1,(a1)+
+	;;move.w d2,(a2)+
+	dbf d0,.loopy
+
+	;move.w ptrConvY+2,d4
+	;add.w #216*subpixel2*2,d4
+	move.l siny2,a1
+	;move.l siny2,a2
+	move.l sin900,a0
+	move.w #900-1,d0
+.loopy2
+	moveq #0,d1
+	move.w (a0)+,d1
+	add.w #32767,d1
+;;	move.l d1,d2
+;;	mulu #(80-8)*subpixel2*2,d1
+	mulu #(119-8)*subpixel2*2,d1
+;	asl #1,d1
+;	asl #1,d2
+	swap d1
+;;	swap d2
+	and.w #-2,d1
+;;	and.w #-2,d2
+;;;	add d4,d1			; ajoute l'offset segment
+	move.w d1,(a1)+
+	;;move.w d2,(a2)+
+.prout
+	dbf d0,.loopy2
+
+	
+; createContigustable
+;
+; a0 = ram
+; d0 = nombre d'element de la table sinus
+; d1 = pas interne
+; d2 = nombre de copie de valeurs
+; a3 = table de sinus d'amplitude final
+;
+; pendant le fonctionnement:
+; constante  d3,d4,d5 = pas interne,*2,*4
+;
+;
+;
+
+; retour:
+; a0 = ram
+; a1 = adresse table de d0 adresses  reftable pris a partir de la ram
+;  
+
+totoisback
+	move.l parametreInternStep,a6		; le seul registre dispo
+.automodif
+	lea angles,a5
+	move.w (a6)+,(a5)+	; cos
+	move.w (a6)+,(a5)+	; cos
+	move.w (a6)+,(a5)+	; sin
+	move.w (a6)+,(a5)+	; sin
+
+
+	lea ram3,a0
+	move.w #512,d0
+	move.w #nbbob,d2 ; nombre de copie de valeur
+	move.w (a6)+,d1
+	;move.w #512-13,d1		; pas interne 5 /512
+	move.l sinx1,a3
+	jsr createContigustable
+.auto1	move.l a1,ptrref1
+
+	move.w #900,d0
+	move.w (a6)+,d1
+	;move.w #14,d1
+	move.w #nbbob,d2
+	move.l sinx2,a3
+	jsr createContigustable
+.auto2	move.l a1,ptrref2
+
+	move.w #512,d0
+	move.w (a6)+,d1
+	;move.w #512-16,d1
+	move.w #nbbob,d2
+	move.l siny1,a3
+	jsr createContigustable
+.auto3	move.l a1,ptrref3
+
+	move.w #900,d0
+	;	move.w #19,d1
+	move.w (a6)+,d1	
+	move.w #nbbob,d2
+	move.l siny2,a3
+	jsr createContigustable
+.auto4	move.l a1,ptrref4
+
+
+	lea ajoutangle,a5
+	move.w (a6)+,(a5)+
+	move.w (a6)+,(a5)+
+	move.w (a6)+,(a5)+
+	move.w (a6)+,(a5)+
+;	lea angles,a5
+;	move.w #128,(a5)+
+;	move.w #128,(a5)+
+;	move.w #0,(a5)+
+;	move.w #0,(a5)
+
+	move.l a6,parametreInternStep
+	move.l (a6),d0
+tstt	cmp.l #$31415926,d0
+	bne.s .nolooop
+	move.l #fct,d0
+	move.l d0,parametreInternStep
+.nolooop
+	rts
+;	lea .automodif+2,a0
+;	move.l (a0),d0
+;	cmp.l #ram3,d0
+;	beq.s .modif1
+;	move.l #ram3,(a0)
+;	move.l #ptrref1,d1
+;	move.l d1,.auto1+2
+;	move.l #ptrref2,d1
+;	move.l d1,.auto2+2
+;	move.l #ptrref3,d1
+;	move.l d1,.auto3+2
+;	move.l #ptrref4,d1
+;	move.l d1,.auto4+2
+;
+	
+;.modif1
+;	move.l ptrscr3,d1	64k libre
+;;	move.l d1,(a0)
+;
+;	move.l #ptrref5,d1
+;	move.l d1,.auto1+2
+;	move.l #ptrref6,d1
+;	move.l d1,.auto2+2
+;	move.l #ptrref7,d1
+;	move.l d1,.auto3+2
+;	move.l #ptrref8,d1
+;	move.l d1,.auto4+2
+;	
+;	rts
+
+
+fixfct:
+; ajuste les valeurs 
+; de chaque fonctionne de maniere a ce que ca soit compris 
+; entre 0 et 511 ou entre 0 et 899
+
+	move.l parametreInternStep,a0
+	move.w #512,d3
+	move.w #900,d4
+.loop0
+	moveq #5,d2
+.loop1
+	move.w (a0),d0
+	move.w d3,d1
+	bsr .changed0
+	move.w d0,(a0)+
+	move.w (a0),d0
+	move.w d4,d1
+	bsr .changed0
+	move.w d0,(a0)+
+	dbf d2,.loop1
+
+	move.l (a0),d0
+	cmp.l #$31415926,d0
+	bne.s .loop0
+	rts
+
+.changed0
+	tst d0
+	bmi.s .1
+.2	sub.w d1,d0
+	bpl.s .2
+	add.w d1,d0
+	rts
+.1 add.w d1,d0
+   bmi.s .1
+	rts
+
+
+
+cossinm	macro
+	dc.w 128,225,0,0
+	endm
+
+cossinv macro 
+	dc.w 128+\1,225+\2,\3,\4
+	endm
+parametreInternStep	dc.l fct
+
+fct
+	cossinm
+	dc.w 40,900-40,512-40,40
+	dc.w 1,2,-2,-1
+
+	cossinv 10,5,4,3
+	dc.w 37,61,38,62
+	dc.w 2,2,1,1
+
+	cossinm
+	dc.w 20,19,22,18
+	dc.w +3,-1,1,-3
+	cossinm
+	dc.w 256+20,19,22,450+18
+	dc.w 3,-1,2,-3
+
+	cossinm
+	dc.w 4,4,4,4
+	dc.w 1,3,2,5 
+
+
+	cossinm
+	dc.w 18,3,18,4
+	dc.W 1,2,-2,-1
+
+
+	cossinm
+	dc.w 20,33,20,33
+	dc.w 2,2,2,2
+
+
+	
+
+	cossinm			; valeur classique cos sin cos sin
+	dc.w 4,8,7,3		; pas entre les bobs
+	dc.w -1,2,-3,4		; pas a chaque vbl
+
+
+	cossinv 10,10,20,10
+	dc.w 8,9,10,11
+	dc.w 1,3,2,1
+
+	cossinv 120,20,20,20		valeur de depart des cos et sin
+	dc.w 13,-5,7,9			pas entre les bobs (ce que j'apellais pas interne sans pouvoir preciser)
+	dc.w 4,1,2,3			pas a chaque vbl
+
+	cossinv 30,30,10,30
+	dc.w 4,20,3,10
+	dc.w -3,-2,-7,4
+
+
+	cossinv 120,10,-5,-7
+	dc.w 14,6,24,6
+	dc.w -1,2,-2,1
+	cossinm
+	dc.w 14,5,-4,9   1,-1,-1,1
+	dc.w 3,2,1,-2
+
+	cossinv 10,20,15,30
+	dc.w 10,22,10,23
+	dc.w 1,-1,2,1
+
+
+	cossinv 0,-20,-30,-40
+	dc.w -13,14,-16,11
+	dc.w -1,2,-3,1	
+  ; dc.w 3,4,7,6
+	cossinm
+	dc.w 4,11,-12,3
+        dc.w 4,-3,6,1
+	
+	cossinm
+	dc.w 10,-19,5,-15
+	   dc.w 2,4,1,3
+	cossinm
+	dc.w 10,2,30,4
+	   dc.w 1,4,-5,1
+	cossinm
+	  dc.w 5,15,10,-6
+	   dc.w 1,5,-2,4
+	cossinv 10,10,15,30	
+	dc.w 50,-45,42,43
+	dc.w 3,1,2,5
+	cossinm
+	dc.w 10,9,8,11
+	dc.w -2,1,5,3
+
+	cossinm
+	dc.w 5,6,7,8
+	dc.w 1,1,2,3
+
+	cossinm
+	dc.w 50,-59,-47,43
+	dc.w 1,2,1,4
+	
+	cossinm
+	dc.w 100,2,99,3
+	dc.w 2,3,3,5
+	
+	cossinm
+	dc.w 200,5,207,-6
+	dc.w 1,4,-3,4
+
+	dc.l $31415926
+
+
+
+changefct
+	jmp totoisback
+	; swap ptrref1..4 to ptrref5..8
+;	lea ptrref1,a0
+;	movem.l (a0),d0-d3
+;	lea ptrref5,a1
+;	movem.l (a1),d4-d7
+;	movem.l d0-d3,(a1)
+;	movem.l d4-d7,(a0)
+;	
+	;; to be continued
+		
+	;rts
+
+
+;superhackitVBL:			; remplace it 70.w
+;	addq.l #1,$466.w
+;	movem.l d0-d7/a0-a6,-(sp)
+;	lea (8+7)*4+2(sp),a0
+;	move.l (a0),d0		; adresse de retour de l'interuption
+;	cmp.l #waitvbl,d0    d0-waitvbl>0   d0>waitvbl
+;	bge.s .suitedutest
+;	
+;	jsr savejob
+;
+;	jmp .noprecalc
+;.suitedutest
+;	cmp.l #finwaitvbl,d0  d0-fin<0 d0<fin	; en fait metre toute les routine
+;						; qui calcul entre 2 adresse
+;	bge.s .noprecalc	
+;			
+;	jsr savejob
+;
+;.noprecalc
+;	movem.l (sp)+,d0-d7/a0-a6
+;	rte
+;savejob	move.l (a0),actualjob
+;	
+;
+calcAllpos
+	move.l ptrref1,a5
+	move.l ptrref2,a1
+	move.w ang1,d0
+	add d0,d0
+	add d0,d0
+	add.w d0,a5
+	move.w ang2,d0
+	add d0,d0
+	add.w d0,d0
+	add.w d0,a1
+
+	move.l ptrref3,a2
+	move.l ptrref4,a3
+	move.w ang3,d0
+	add d0,d0
+	add d0,d0
+	add d0,a2
+	move.w ang4,d0
+	add d0,d0
+	add d0,d0
+	add d0,a3
+
+	move.l (a5),a5
+	move.l (a1),a1
+	move.l (a2),a2
+	move.l (a3),a3
+
+	move.l codecurefface,a4
+
+	move.l ptrConvX,d0
+	move.l ptrConvY,d1
+	move.l log,d3
+
+	move.w #nbbob-1,d2
+	
+	moveq #0,d4
+	move.w seuil,d5
+	move.l #brabrabra,d7
+loopcalcul
+
+	move.w d5,d0
+	add.w (a2)+,d0
+	add.w (a3)+,d0
+
+	move.l d0,a6
+	move.w (a6),d3 			;  y*160
+
+	move.w (a5)+,d0
+	add.w (a1)+,d0
+
+	move.l d0,a6
+	add.w (a6)+,d3
+	move.w d3,(a4)+			; effacement offset
+	move.l (a6)+,(a4)+		; routine d'effacement
+
+	move.l (a6),a6			; routine d'affichage
+	move.l d3,a0
+	exg.l d7,a4
+	jmp (a6)
+brabrabra
+	exg.l a4,d7
+;	move.w d5,d0
+;	add.w (a2)+,d0
+;	add.w (a3)+,d0
+;
+;	move.l d0,a6
+;	move.w (a6),d3 			;  y*160
+;
+;	move.w (a5)+,d0
+;	add.w (a1)+,d0
+;
+;	move.l d0,a6
+;	add.w (a6)+,d3
+;	addq.w #4,d3
+;	move.w d3,(a4)+			; effacement offset
+;	move.l (a6)+,(a4)+		; routine d'effacement
+;
+;	move.l (a6),a6			; routine d'affichage
+;	move.l d3,a0
+;
+;	jsr (a6)
+	dbf d2,loopcalcul
+
+	
+	lea ang1,a0
+	lea 8(a0),a1
+	movem.w (a1),d0-d3
+
+	move.w (a0),d4
+	add.w d0,d4
+	move.w #511,d5
+	and d5,d4
+	move.w d4,(a0)+
+
+	move.w (a0),d4
+	add.w d1,d4
+	cmp.w #900,d4
+	blt.s .toto
+	sub.w #900,d4
+.toto	move.w d4,(a0)+
+
+	move.w (a0),d4
+	add.w d2,d4
+	and d5,d4
+	move.w d4,(a0)+
+
+	move.w (a0),d4
+	add.w d3,d4
+	cmp.w #900,d4
+	blt.s .toto2
+	sub.w #900,d4
+.toto2
+	move.w d4,(a0)+
+; maj angle fait
+
+	rts
+
+prepare_segments
+	
+	move.l #screenbuf,d0
+	moveq #4,d1
+	swap d1
+	jsr getmem1					; prepare 16 zone memoire allant de 32768 a 1 octet (puissance de 2)
+
+	lea ptrMem,a0
+	movem.l (a0)+,d0-d3			; 1 buffer de 32k un de 16k un de 8k un de 4k  pas aligné mais contigu au meme segment  
+
+;	move.l d3,sinX1			; sinx1 x2 y1 y2 devenu des pointeur sur
+							; 512 word
+;	move.l #1024,d5
+;	add.l d5,d3
+;	move.l d3,sinX2
+;	add.l d5,d3
+;	move.l d3,sinY1
+;	add.l d5,d3
+;	move.l d3,sinY2					; place pour 4k = 4 table de 512 word
+
+
+								; cad poid fort de l'adresse du buffer est toujours a la meme valeur 
+	move.l d0,ptrConvY			; 32k alloué pour convy: 1856*2 en comptant cliping haut bas de 16 pixel de hauteur et 4 subpixel
+	add.l #2*subpixel2*400+16*subpixel2*2,d0
+	; 30912 octet libre
+	move.l d0,ptrConvX	; 12800 octet pour 320 pixel 4 subpixel 10 octet (adresseEFF,adresseAFF,offset)
+	add.l #320*subpixel2*10,d0		; pile poil 4 subpixel  convy 232*8 subpixel*2 + 352*8 subpixel*10 octet
+	moveq #0,d4 				; 31872 octet sur 32768
+;	move.w #1024,d4
+;	lea sinx1,a1
+;	move.l d0,(a1)+
+;	add.l d4,d0
+;	move.l d0,(a1)+
+;	add.l d4,d0
+;	move.l d0,(a1)+
+;	add.l d4,d0
+;	move.l d0,(a1)+
+;	add.l d4,d0
+; 	move.l d0,flagtab  tab	
+
+	move.l d1,ptr16k
+	;move.l d2,ptrFlag			; 8k max pour les flag, sinus dont le nombre d'element ne depasse pas 8192
+	move.l d3,ptr4k
+
+	lea ptrMem+4*4,a0
+	movem.l (a0)+,d0-d3
+	move.l d0,ptrvariable
+	move.l d1,sin512
+	
+	
+
+	move.l #screenbuf,d0
+	moveq #1,d1
+	swap d1
+	clr.w d0
+	move.l d0,log
+	move.l d0,ptrscr1
+	add.l d1,d0
+	move.l d0,phys
+	move.l d0,ptrscr2
+	add.l d1,d0
+	*move.l d0,ptrscr3
+	*add.l d1,d0
+	*move.l d0,ptrscr4
+	
+	add.l #160*16,d0
+
+	move.l d0,sinx1
+	add.l #1024,d0
+	move.l d0,sinx2
+	add.l #1800,d0
+	move.l d0,siny1
+	add.l #1024,d0
+	move.l d0,siny2
+	add.l #1800,d0
+	move.l d0,sin900
+	add.l #1800,d0
+	move.l d0,flagtab
+
+;	add.l d1,d0
+;	move.l d0,convX
+;	add.l #320*subpixel*8,d0
+;	add.l d1,d0
+;	move.l d0,convY
+
+	rts
+
+flagword dc.w 0
+
+timer1	dc.w timer1count 1400
+waitvbl
+	subq.w #1,timer1
+	tst.w timer1
+	bne.s .titi
+	move.w #timer1count,timer1
+	move.w #1,flagtransition
+	
+	
+.titi
+	ifne tempmachine
+	not.w $ffff8240.w
+	rept 60
+	nop
+	endr
+	not.w $ffff8240.w
+	endc
+
+	move.w $468.w,d0
+.loop	cmp.w $468.w,d0
+	beq.s .loop
+	rts
+nowaitvbl
+swap_screen
+	move.l log,d0
+	move.l phys,d1
+	move.l d0,phys
+	move.l d1,log
+
+	add.l #16*160,d1
+	
+	lsr.w #8,d1
+	move.l d1,$ffff8200.w
+	rts
+
+extractsprite
+
+	ifne spr_pi1
+
+		lea pi1+2,a0
+		movem.w (a0),d0-d3
+		;move.w #couleur_fond,d0
+		
+		movem.w d0-d3,$ffff8250.w
+		movem.w d0-d3,$ffff8258.w
+		
+		move.w #couleur3,d0 ; $752,d0
+		;eor.w  #7,d1
+		;eor.w #7,d2
+		
+		;eor.w  #7,d3
+		movem.w d0-d3,$ffff8240.w
+		;movem.w d0-d3,$ffff8248.w
+
+		lea pi1+34,a0	
+		;move.W #$667,$ffff8240.w	
+
+		lea spritedeca,a1
+		moveq #0,d1
+		moveq #15,d7
+.loop0
+		move.l (a0),d0
+		lea 160(a0),a0
+		move.l d0,(a1)+
+		move.l d1,(a1)+
+		dbf d7,.loop0
+		move.w #16,d7
+		move.w d7,pal_and_sprite
+	endc
+
+	ifeq spr_pi1
+		lea pal_and_sprite+2,a0
+		movem.w (a0)+,d0-d3
+		move.w #$752,d0
+		;move.w #$777,d1
+		;move.w #$550,d2
+		;move.w #$666,d3
+		movem.w d0-d3,$ffff8248.w
+		movem.w d0-d3,$ffff8250.w
+		movem.w d0-d3,$ffff8258.w
+		
+		move.w #couleur_fond,d0
+		movem.w d0-d3,$ffff8240.w
+
+		lea spritedeca,a1
+		moveq #0,d1
+
+		move.w pal_and_sprite,d7
+		subq #1,d7
+
+		;moveq #15,d7
+.loop000
+		move.l (a0)+,d0
+		move.l d0,(a1)+
+ 	 	move.l d1,(a1)+
+	 	dbf d7,.loop000
+	endc
+	
+
+	moveq #14,d7
+	lea spritedeca,a1
+	move.l a1,a3
+
+	move.w #8,d6
+	ext.l d6
+	mulu pal_and_sprite,d6
+	move.w d6,.autoto+2
+	move.w d6,.autoto+6
+
+	lea (a1,d6),a2
+
+	sub.w #8,d6
+	move.w d6,autoto2+2
+
+	;lea 128(a1),a2
+	move.l a2,a4
+.copyandshift
+	move.w pal_and_sprite,d6
+	subq #1,d6	
+	;move.w #15,d6
+.ligne
+	MOVE.L (A1)+,(A2)+
+	MOVE.L (A1)+,(A2)+
+	LEA -8(A2),A2
+	MOVE.B #0,CCR
+	ROXR (A2)
+	ROXR 4(A2)
+	MOVE.B #0,CCR
+	ROXR 2(A2)
+	ROXR 6(a2)
+
+	lea 8(a2),a2
+	dbf d6,.ligne
+.autoto
+	lea 8*6(a3),a3
+	lea 8*6(a4),a4
+	move.l a3,a1
+	move.l a4,a2
+
+;	lea 4(a2),a2
+;	lea 4(a1),a1
+	dbf d7,.copyandshift
+	
+makecodegen
+	lea spritedeca,a0
+	lea ram,a1
+	lea codegenliste,a2
+	lea codeeffliste,a3
+	lea ram2,a4
+	moveq #15,d0
+loopSprite
+	;;;;move.l a0,-(sp)
+	;move.l a4,(a3)+
+	;move.l a1,(a2)+
+	moveq #1,d1
+	moveq #0,d6		; offset
+.loopligne
+;; bienvenue dans le hack super pouri
+;	TST.w d1
+;	bne.s .glk1
+;	move.l a4,64-4(a3)
+;	move.l a1,64-4(a2)
+;	bra.s .glk2
+;.glk1
+	move.l a4,(a3)+
+	move.l a1,(a2)+
+;.glk2
+; fin du hack super pouri
+	sf.b flagword
+
+	move.w d1,-(sp)
+
+	ifne spr_pi1
+	move.w #16,d1
+	endc
+	ifeq spr_pi1
+	move.w pal_and_sprite,d1
+	endc
+	subq #1,d1
+.loopCol
+	move.w (a0)+,d2
+	move.w (a0)+,d3
+    	;move.w (a0)+,d4
+	   ;move.w (a0)+,d5
+	tst.w d2
+	bne.s .1
+	tst.w d3
+	beq.s .suite			;nerienfaire
+	; or.w #d3,offset+2(a0)
+	move.w d3,d7
+	addq #2,d6
+	st.b flagword
+	bsr orwd7d6		;
+	subq #2,d6
+	
+	bra.s .suite
+.1	; d2 contient kekchose
+	tst.w d3
+	beq.s .wordd2
+	; or.l #d2d3,offset(a0)
+	move.w d2,d7
+	swap d7
+	move.w d3,d7
+	bsr orld7d6
+	bra.s .suite
+.wordd2
+	; or.w #d2,offset(a0)
+	move.w d2,d7
+	sf.b flagword
+	bsr orwd7d6
+.suite
+	add #160,d6
+	addq.l #4,a0 		;on saute la deuxieme colonne
+	dbf d1,.loopCol
+	move.w (sp)+,d1
+	ifne spr_pi1
+	lea -8*16+4(a0),a0
+	sub.w #160*16-8,d6
+	endc
+	ifeq spr_pi1
+	move.l d7,-(sp)
+	moveq #0,d7
+	move.w pal_and_sprite,d7
+	lsl.w #3,d7
+	sub.w #4,D7
+	SUB.w D7,A0
+	;lea -8*6+4(a0),a0
+	moveq #0,d7
+	MOVE.W pal_and_sprite,d7
+	mulu #160,d7
+	SUBq.W #8,D7
+	sub.w D7,d6
+	move.l (sp)+,d7
+	endc
+	dbf d1,.loopligne
+	
+	move.w #$4ed4,(a1)+	jmp (a4)
+	move.w #$4ed4,(a4)+
+	
+	;move.l (sp)+,a0
+
+
+*	lea 8*15(a0),a0
+
+autoto2	
+	lea 8*15(a0),a0	5
+
+	;l;ea 8*16-4(a0),a0
+	;lea 8*16(a0),a0
+
+	dbf d0,loopSprite
+	rts
+orwd7d6
+;	move.l d2,-(sp)
+	move.w d7,d2   ; plus besoin de d2
+	swap d2
+	move.w d7,d2
+	not.l d2
+
+	tst.w d2
+	beq.s .move
+
+	; and.l d2,d6(a0)   02a8
+
+	move.w #$02a8,(a1)+		; + 8 octet au code genere  and.l #D2,d6(a0)
+	move.l d2,(a1)+
+	move.w d6,(a1)+
+	tst flagword
+	beq.s .1
+	sub.W #2,-2(a1)
+.1
+	
+ 
+	bra.s .aa
+.move	;move.w #$2144,(a1)+
+
+	tst.w flagword
+	bne.s .111
+	;move.w d6,(a1)+
+	move.w #$317c,(a1)+		; move.w #,dep(a0)
+	move.w d7,(a1)+
+	move.w d6,(a1)+
+	move.w #$3144,(a1)+		 ; move.w d4,DEP(A0)
+	move.w d6,(a1)
+	addq.w #2,(a1)+
+
+	bra.s .vv
+.111
+	move.w #$3144,(a1)+
+	move.w d6,(a1)
+	subq.w #2,(a1)+
+	move.w #$317c,(a1)+
+	move.w d7,(a1)+
+	move.w d6,(a1)+
+	;addq.W #2,-2(a1)
+	bra.s .vv
+.aa
+	;move.w #$317c,(a1)+
+	move.w #$68,(a1)+		; OR.W #VALUE,DEP(A0)
+	move.w d7,(a1)+
+	move.w d6,(a1)+
+.vv
+	move.w #$2140,(a4)+		; since it's masked on 2 plan, the clearing is long instead of word 
+
+	tst flagword
+	beq.s .1111
+	
+	move.w d6,(a4)
+	subq.w #2,(a4)+
+	bra.s .22
+.1111
+	move.w d6,(A4)+			; ($2140 instead of $3140) (move.l d0,d6(a0) instead of ; move.w d0,d6(a0))
+.22
+;	move.l (sp)+,d2
+	rts
+orld7d6
+	; d7 = le data sur 2 plan
+	;
+	move.L d7,D2
+	AND.L #$FF00FF00,D2
+	TST.l D2
+	bEQ.w .partieplus1
+	move.l d7,d2
+	and.l #$00FF00FF,d2
+	tst.l d2
+	beq.w .partieplus0
+
+
+;	move.l d2,-(sp)
+;	move.l d3,-(sp)
+	move.w d7,d2
+	swap d7
+	or.w d7,d2
+	swap d7  	; remet d7 a la bonne valeur
+	not.w d2
+	move.w d2,d3
+	swap d2
+	move.w d3,d2
+	; d2.l = masque a partir des 2 valeur poid fort poid faible de d7
+
+	tst.l d2
+	bne.s .aa
+
+	; and.l #0 remplacer par un move.l d4,dep(a0)
+	;move.w #$2144,(a1)+
+	;move.w d6,(a1)+
+
+	move.w #$217c,(a1)+				; move.l #,dep(a0)
+	move.l d7,(a1)+
+	move.w d6,(a1)+
+	bra.s .cc
+
+	;bra.s .bb
+.aa
+	move.w #$02a8,(a1)+            ; and.l #,dep(a0)
+	move.l d2,(a1)+
+	move.w d6,(a1)+
+					; + 8 octets
+.bb
+	move.w #$00A8,(a1)+				; or.l #,dep(a0)
+	move.l d7,(a1)+
+	move.w d6,(a1)+
+.cc
+	move.w #$2140,(a4)+				; move.l d0,dep(a0)
+	move.w d6,(a4)+
+
+;	;move.l (sp)+,d3
+;	move.l (sp)+,d2
+	rts
+.value	dc.w 0,0
+.partieplus1				; 00AA00BB
+; la partie droite en movep.w
+
+	move.w d7,d2
+	swap d7
+	or.w d7,d2
+	swap d7  	; remet d7 a la bonne valeur
+;	d2= word or word bitmap = masque mais pas not masque
+	
+	
+
+	
+
+
+	move.l d7,d3
+	swap d3
+
+	lsl.w #8,d3 aa00
+	or.w d3,d7  aabb		; d7.w = 00aa00bb ->00xxaabb
+	;swap d7			aabb00aa
+
+;	move.w d2,D3			; MASQUE 0008 00FF 
+;	swap 
+;	lsl.w #8,d2
+;	or.w d3,d2
+	
+	moveq #0,d3
+	move.w d2,d3		; $00FF or 00dd
+        lsl.w #8,d3
+	move.b d2,d3
+	move.w d3,d2
+	
+	;not.w d2
+	
+	tst.w d2
+	beq.s .tomove2
+	not.w d2
+
+
+; D2 = VALEUR AND
+; D7 = VALEUR OR
+	MOVE.W #$0D08,(A1)+			; moveP.w dep(a0),d6
+	ADDQ.W #1,D6
+	MOVE.W D6,(A1)+
+	MOVE.W #$0246,(A1)+			; AND.W #,D6
+	MOVE.W D2,(A1)+
+	MOVE.W #$0046,(A1)+			; or.w #,d6
+	MOVE.W D7,(A1)+
+	MOVE.W #$0D88,(A1)+			; MOVEP.W D6,DEP(A0)
+	MOVE.W D6,(A1)+
+	bra.s .suite7
+.tomove2
+	move.w #$3c3c,(a1)+			; move.w #,d6
+	move.w d7,(a1)+
+	move.w #$0d88,(a1)+			; movep.w d6,dep(a0)
+	addq.w #1,d6
+	move.w d6,(a1)+				; d6=dep
+	
+
+.suite7
+	MOVE.W #$2140,(A4)+
+	SUBQ #1,D6
+	MOVE.W D6,(A4)+
+	RTS
+
+	
+.partieplus0
+; la partie gauche en movep.w
+
+	move.w d7,d2
+	swap d7
+	or.w d7,d2
+	swap d7  	; remet d7 a la bonne valeur
+	;not.w d2
+
+	;d7=aa00bb00
+	;d2=FF00FF00
+
+	moveq #0,d3
+	lsr.w #8,d7	aa00bb00 ->  aa00 00bb		; d7=ff0000ff
+	move.w d7,d3
+	swap d7        		  00bb	0000 
+	or.w d7,d3		; d7 =aa00aabb d7.w = 00aa00bb ->00xxaabb
+	move.w d3,d7
+	; d3 =
+
+	;swap d7			aabb00aa
+
+
+	move.w d2,D3			; MASQUE 0088 0044  = 00CC
+	lsr.w #8,d2	CC00
+	OR.W D3,D2	CCCC			MASQUE  FFFF 2 PLAN
+
+; D2 = VALEUR AND
+; D7 = VALEUR OR
+
+	; d2.w
+	;not.w d2
+
+	tst.w d2
+	beq.s .tomove
+	not.w d2
+
+	MOVE.W #$0D08,(A1)+		; movep , d6
+	;ADDQ.W #1,D6
+	MOVE.W D6,(A1)+
+	MOVE.W #$0246,(A1)+	; AND.W ,D6
+	MOVE.W D2,(A1)+
+	MOVE.W #$0046,(A1)+		; or.w #,d6
+	MOVE.W D7,(A1)+
+	MOVE.W #$0D88,(A1)+     movep.w d6,dep(a0)
+	MOVE.W D6,(A1)+
+	bra.S .suite5
+.tomove
+	move.w #$3c3c,(a1)+			move.w #$aabb,d6
+	move.w d7,(a1)+
+	move.w #$0D88,(a1)+			movep d6,dep(a0)
+	move.w d6,(a1)+
+
+.suite5
+	MOVE.W #$2140,(A4)+
+	MOVE.W D6,(A4)+
+
+	rts
+
+cpttransfo	dc.w 200/2-1
+steptransfo	dc.w -subpixel2*2*2
+transfo1
+	move.w steptransfo,d0
+	add.w d0,seuil
+	subq.w #1,cpttransfo
+	tst cpttransfo
+	bne.s .ok
+	tst.w steptransfo
+	bpl.s .stoptransition
+	move.w #200/2-1,cpttransfo
+	neg.w steptransfo
+	
+	jsr changefct
+	rts
+	
+.stoptransition
+	neg.w steptransfo
+	move.w #200/2-1,cpttransfo
+	move.w #timer1count,timer1
+	move.w #0,flagtransition
+.ok	rts
+
+flagtransition	dc.w 0
+createContigustable
+;
+; a0 = ram
+; d0 = nombre d'element de la table sinus
+; d1 = pas interne
+; d2 = nombre de copie de valeurs
+; a3 = table de sinus d'amplitude final
+;
+; pendant le fonctionnement:
+; constante  d3,d4,d5 = pas interne,*2,*4
+;
+;
+;
+
+; retour:
+; a0 = ram
+; a1 = adresse table de d0 adresses  reftable pris a partir de la ram
+;  
+
+	;movem.l d0-d3/a0-a6,-(sp)
+	
+	move.l flagtab,a2
+	moveq #0,d3
+	move.l #225-1,d4
+.clearflag
+	move.b d3,(a2)+
+	move.b d3,(a2)+
+	move.b d3,(a2)+
+	move.b d3,(a2)+
+	dbf d4,.clearflag
+
+
+;	move.l d3,(a2)+
+;	move.l d3,(a2)+
+;	lea 512-8(a2),a2
+;	move.l d3,a4
+;	move.l d3,a5
+;	move.l d3,d4
+;	;move.l d3,d5
+;	;move.l d3,d6
+;	move.l d3,d7
+;
+;	rept 18
+;	movem.l d3-d7/a4/a5,-(a2)   7 registre *4 = 28 octet 512/36=12 reste 8 octet
+;	endr
+;	SUBQ #8,a2 			; 36*14=504  512-504=8
+
+	move.l flagtab,a2
+	move.l a0,a1		; a1 = table refsin
+	move.l a1,-(sp)
+	move.w d0,d3
+	add.w d3,d3		; *2
+	move.l a3,a4
+	add.w d3,a4
+	add.w d3,d3		; *4
+	add.w d3,a0			; a0 =ram
+
+
+	;move.l flagtab,a2
+	move.l a2,a5
+	add.w d0,a5
+	
+
+
+	moveq #0,d5			; angle
+	
+	move.w d1,d3		; pas interne<>0
+	move.w d3,d4
+	add d4,d4			; pas interne*2
+	move.w d4,d5
+	add.w d5,d5			; pas interne*4
+	neg.w d0
+	move.w d0,.auto1+2			; nombre d'elements
+	move.w d0,.auto1b+2
+	add.w d0,d0
+	move.w d0,.auto2+2
+	move.w d0,.auto2b+2
+	move.w d0,.auto2c+2
+	add.w d0,d0
+	move.w d0,.auto3+2
+	move.w d0,.auto3b+2
+;----------------------------------------
+	bra.s .loop
+.loopaddq
+	addq.w #2,a3
+	addq.w #4,a1
+	; ps le tst.b (a2) deux ligne plus loin est redondant quand on sort de la boucle dans le code flaga1
+	move.w (a3),d7
+	bra.s .11
+.loop
+	move.w (a3),d7
+	tst.b (a2)
+	bne.s .flaga1
+.11	st.b (a2)
+	move.l a0,(a1)		; on stoque l'adresse de la valeur dans table refsin
+	move.w d7,(a0)+
+	; on met a jour a3 avec le pas interne*2
+	; on met a jour a2 avec le pas interne (flags)
+	add.w d3,a2
+	add.w d4,a3
+	add.w d5,a1
+
+	cmp.l a2,a5
+	bgt.s .loop
+.auto1
+	lea 0(a2),a2
+.auto2
+	lea 0(a3),a3
+.auto3
+	lea 0(a1),a1
+	bra.s .loop
+.flaga1
+	move.w d2,d6		; nombre de coPIE
+	subq.w #1,d6
+	;addq.w #1,d6
+
+	move.l a3,-(sp)
+.cpy
+	move.w d7,(a0)+
+	add.w d4,a3
+	cmp.l a3,a4
+	bgt.s .1
+.auto2b
+	lea 0(a3),a3
+
+.1
+	move.w (a3),d7
+	dbf d6,.cpy
+	move.l (sp)+,a3
+
+	addq.w #1,a2
+	cmp.l a2,a5
+	bgt.s .2
+.auto1b
+	lea 0(a2),a2
+.auto2c
+	lea 0(a3),a3
+.auto3b
+	lea 0(a1),a1
+.2
+	; s'assurer qu'on est pas en fin de tableau:
+	;
+	;
+
+	tst.b (a2)
+	beq.s .loopaddq
+.fin
+	move.l (sp)+,a1
+
+	rts	
+
+; depack periodictable
+; a0 = packed data
+; a1 = unpacked data
+depackperiod
+	lea extnibble,a2
+
+	move.w (a0)+,d0		; nombre d'element de la table finale
+	move.w (a0)+,d1		; tab[0]
+	move.w (a0)+,d2		; delta[0]=tab[1]-tab[0]
+	move.w d0,d3
+	subq #2,d3	    ; nombre de delta de delta: delta2[0]=delta[1]-delta[0]
+	lsr #1,d3
+.ok
+	subq #1,d3
+	;bset #0,d3			; si paire = nb impair d'element on set a +1
+						; si impair  nb pair d'lement on ne change rien
+	move.w d1,(a1)+		; tab[0]
+	
+.loop
+	add d2,d1			; tab[0]+delta[0]=tab[1]
+	move.w d1,(a1)+
+	
+	move.b (a0)+,d4		 lire 2 valeur
+	move.w d4,d5
+	and.w #$F0,d4
+	lsr #4,d4
+	move.b (a2,d4.w),d4
+	ext.w d4
+	add d4,d2			: delta2[0]=delta[1]-delta[0]  d2= delta[1]=tab[2]-tab[1]
+	
+	add d2,d1
+	move.w d1,(a1)+
+	and.w #$F,d5
+	move.b (a2,d5.w),d5
+	ext.w d5
+	add d5,d2
+
+	dbf d3,.loop
+	add d2,d1
+	move.w d1,(a1)+
+	rts
+
+;
+;
+;
+; mem lib
+;
+
+;; exemple d'utilisation
+;	move.l #buffer,d0
+;	move.l #8*65536,d1 taille totale du buffer aligné sur 64k
+;	jsr getmem1
+;	lea -16*4(a0),a0
+;	nop
+;	nop
+;	nop
+;	nop
+;	illegal
+; format de memoire
+;toto			; le label toto est la pour verifier l'algo
+;	ds.b 65536	
+;buffer	ds.l 65536*2    8*64k				; buffer sera aligné sur 64k donc un peu avant
+;fin											; et apres un peu de memoire libre entre fin buffer et label fin
+
+; warning ! extremely bugged edition of getmem1 ! (i must add 128k of unused ram)
+;
+getmem1:
+
+; d0 = adresse segment 64k non aligné
+; d1 = nombre de segment a la suite*64k
+; retour: a0 = liste d'adresse
+; (a0)+ = 32k buffer
+; (a0)+ = 16k buffer
+; (a0)+ = 8k buffer
+; (a0)+ = 4k buffer
+; (a0)+ = 2k
+; (a0)+ = 1k
+; (a0)+ = 512
+; (a0)+ = 256
+; (a0)+ = 128
+; (a0)+ = 64 octet
+; 
+; a0: 64 octet = 16 adresses
+
+	; metre le buffer start dans d4
+
+	moveq.w #1,d5
+	swap d5
+	move.l d0,d4
+	sub.l d5,d4		; start memoire basse
+	
+	move.l d0,d3
+	clr.w d3		;  debut multiple de 64k  fin memoire basse
+	; d3 = start segment
+	
+	
+	move.l d4,d7
+	sub.l d3,d7		; d7 = taille en bas
+	
+	
+	add.l d1,d3		; d3+ 4*64k = adresse start haut
+
+
+	
+	lea ptrMem,a0
+	moveq #0,d6
+	move.w #$8000,d6
+	
+.loop
+	move.w d6,d1
+	and.w d7,d1
+
+	; bit 15 a 0 ? 
+	tst.w d1
+	beq.s .before			; was beq
+	move.l d3,(a0)+
+	add.l d6,d3
+	
+	bra.s .suite
+.before
+	move.l d4,(a0)+
+	add.l d6,d4
+.suite
+	lsr.w #1,d6
+	tst.w d6
+	bne.s .loop			; ici ca s'arrete a un buffer de 1 octet il faudrai faire un meilleur test
+	
+	lea -64(a0),a0					; et s'arreter a un plus gros buffer 
+	rts
+		
+extnibble	dc.b 0,1,2,3,4,5,6,7,$F8,$f9,$fa,$fb,$fc,$fd,$fe,$ff
+	even
+ 	TEXT
+	include 'BASEROU2.S'
+	TEXT
+;	include 'MEMORY.S'
+;	include 'DERIVE.S'
+	
+
+	DATA
+codelog	dc.l 0
+cptdeca	dc.w 0
+angles	dc.w 128,128,50,70
+;ajoutangle	dc.w 0,0,0,0
+ptrlsteff	dc.l efface1lst
+			dc.l efface2lst
+			;dc.l efface3lst
+			;dc.l efface4lst
+
+ang1	dc.w 128
+ang2	dc.w 128
+ang3	dc.w 10
+ang4	dc.w 0
+ajoutangle	dc.w 0,0,0,0
+;ajoutang1	dc.w 1
+;ajoutang2 	dc.w 1
+;ajoutang3	dc.w 1-3
+;ajoutang4   dc.w 1
+	
+packed_sinus_table:
+	
+sin1pack
+    dc.w 512  ; nombre d'element depack
+	dc.w 0
+	dc.w 402
+
+	dc.b	  0,241,240,240,240,240,224,255,254,14,13,14,254,239,238,253
+	dc.b	  253,253,239,207,221,252,238,206,222,206,206,205,221,220,220,235
+	dc.b	  221,204,205,204,205,189,189,189,188,203,219,203,203,218,204,188
+	dc.b	  187,203,203,187,202,218,188,187,187,202,203,187,187,187,202,202
+	dc.b	  202,203,187,187,187,202,203,187,188,186,218,203,187,203,203,188
+	dc.b	  188,202,219,203,203,219,204,189,189,189,189,204,205,204,205,219
+	dc.b	  236,220,221,221,206,206,206,222,206,236,253,223,207,237,253,253
+	dc.b	  254,239,238,254,13,14,14,255,240,224,240,240,240,241,240,0
+	dc.b	  0,31,16,16,16,16,32,17,18,2,3,2,18,33,34,19
+	dc.b	  19,19,33,65,51,20,34,66,50,66,66,67,51,52,52,37
+	dc.b	  51,68,67,68,67,83,83,83,84,69,53,69,69,54,68,84
+	dc.b	  85,69,69,85,70,54,84,85,85,70,69,85,85,85,70,70
+	dc.b	  70,69,85,85,85,70,69,85,84,86,54,69,85,69,69,84
+	dc.b	  84,70,53,69,69,53,68,83,83,83,83,68,67,68,67,53
+	dc.b	  36,52,51,51,66,66,66,50,66,36,19,49,65,35,19,19
+	dc.b	  18,33,34,18,3,2,2,17,16,32,16,16,16,31,16,0
+	even
+
+sin2pack
+    dc.w 900  ; nombre d'element depack
+	dc.w 0
+	dc.w 228
+
+	dc.b	  16,241,15,31,0,0,15,31,0,15,0,15,0,15,0,240
+	dc.b	  240,15,0,240,240,240,240,240,240,255,0,255,240,14,0,224
+	dc.b	  240,255,240,255,255,15,255,14,15,255,240,239,14,15,254,15
+	dc.b	  254,15,224,254,14,240,239,254,14,14,255,224,239,255,239,255
+	dc.b	  224,238,14,254,255,254,255,239,239,255,238,14,239,254,254,255
+	dc.b	  239,239,239,239,254,239,239,254,239,254,239,239,239,239,239,238
+	dc.b	  254,254,254,254,239,239,238,254,254,254,239,238,255,238,239,254
+	dc.b	  238,255,238,239,254,239,238,254,254,254,239,239,238,254,254,254
+	dc.b	  254,239,239,239,239,239,238,255,238,255,239,238,255,239,239,239
+	dc.b	  239,254,254,255,238,14,239,255,239,239,254,255,254,254,14,224
+	dc.b	  239,255,239,255,224,239,254,14,14,255,224,254,14,240,239,14
+	dc.b	  255,14,255,14,15,224,255,255,14,15,240,224,255,240,255,240
+	dc.b	  240,224,14,0,255,240,15,240,240,240,240,240,240,240,15,0
+	dc.b	  240,240,15,0,15,0,15,0,15,31,0,0,15,31,1,240
+	dc.b	  16,240,31,1,241,0,0,1,241,0,1,0,1,0,1,0
+
+	dc.b	  16,16,1,0,16,16,16,16,16,16,17,0,17,16,2,0
+	dc.b	  32,16,17,16,17,17,1,17,2,1,17,16,33,2,1,18
+	dc.b	  1,18,1,32,18,2,16,33,18,2,2,17,32,33,17,33
+	dc.b	  17,32,34,2,18,17,18,17,33,33,17,34,2,33,18,18
+	dc.b	  17,33,33,33,33,18,33,33,18,33,18,33,33,33,33,33
+	dc.b	  34,18,18,18,18,33,33,34,18,18,18,33,34,17,34,33
+	dc.b	  18,34,17,34,33,18,33,34,18,18,18,33,33,34,18,18
+	dc.b	  18,18,33,33,33,33,33,34,17,34,17,33,34,17,33,33
+	dc.b	  33,33,18,18,17,34,2,33,17,33,33,18,17,18,18,2
+	dc.b	  32,33,17,33,17,32,33,18,2,2,17,32,18,2,16,33
+	dc.b	  2,17,2,17,2,1,32,17,17,2,1,16,32,17,16,17
+	dc.b	  16,16,32,2,0,17,16,1,16,16,16,16,16,16,16,1
+	dc.b	  0,16,16,1,0,1,0,1,0,1,241,0,0,1,241,15
+	dc.b	  16,0
+
+;fin
+
+	even
+
+	ifne spr_pi1
+pi1	incbin "CROIX2P.PI1"
+	;incbin "SPRITE4.PI1"		
+	endc
+
+pal_and_sprite
+	ifeq spr_pi1
+
+	incbin 'MINISPR.PAS'
+	endc
+	even
+	DATA
+seuil	dc.w segmenty
+	dc.w 0
+dubmood	incbin 'DB_VUEL.SND'
+		
+;sin900  dc.l sinbuffer900	
+	BSS
+		rsreset
+segmentX	rs.w 1
+segmentY	rs.w 1	
+codecurefface	ds.l 1
+;tempbuffer	ds.w 2048
+
+sin512 	ds.l 1 
+sin900 	ds.l 1
+ptrMem		ds.l 16  		; dans ram apres l'appel de getmem1 adresses contenant les bloc memoire utilisable comme on veut
+
+;;;    			; les label entour? de ;;; doivent etre dans l'ordre et contigu (ne pas deplacer l'un des label)
+;ptrtabsin1	ds.l 1
+;ptrtabsin2	ds.l 1
+;ptrtabsin3	ds.l 1
+;ptrtabsin4	ds.l 1
+ptr16k	ds.l 1
+ptr4k	ds.l 1
+;ptrflag	ds.l 1
+;;;
+
+	
+	ds.b 65536
+screenbuf
+	ds.w 65536
+;dubmood
+;	ds.w 65536
+	
+log	ds.l 1
+phys	ds.l 1
+
+ptrscr1	ds.l 1
+ptrscr2	ds.l 1
+ptrscr3	ds.l 1
+ptrscr4	ds.l 1
+
+
+;convx	ds.l 320*subpixel
+;convy	ds.w 200*subpixel
+ptrvariable	ds.l 1
+ptrconvX ds.l 1
+ptrconvY ds.l 1
+
+sinx1	ds.l 1   *ds.w 512
+sinx2	ds.l 1   *ds.w 512
+siny1	ds.l 1   *ds.w 512
+siny2	ds.l 1   *ds.w 512
+
+flagtab	ds.l 1
+
+ptrref1	ds.l 1
+ptrref2	ds.l 1
+ptrref3	ds.l 1
+ptrref4	ds.l 1
+
+ptrref5	ds.l 1
+ptrref6	ds.l 1
+ptrref7	ds.l 1
+ptrref8	ds.l 1
+
+
+efface1lst
+		ds.w nbbob*6
+efface2lst
+		ds.w nbbob*6
+;efface3lst
+;		ds.w nbbob*6
+;efface4lst
+;		ds.w nbbob*6
+
+OLD8260	DS.B 2
+
+codegenliste	ds.l 16+16
+codeeffliste	ds.l 16+16
+ram	ds.b ($b24dA-$b19f2)+2000+2000
+	ds.b 3000
+ram2	ds.b 5000+2000
+	ds.l 5000
+ram3	ds.b 16000+2000
+	
+;convxSprite	ds.l 320*2*subpixel
+	
+
+sinbuffer900	ds.w 900
+sprite	ds.w 32
+
+spritedeca
+	ds.w 128*16
+
+workscr		ds.l 1
+;logscr		ds.l 1
